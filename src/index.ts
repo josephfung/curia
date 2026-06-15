@@ -1577,12 +1577,6 @@ async function main(): Promise<void> {
   // (which the allowlist thunk depends on). Mirrors setAgentContactId's post-hoc injection.
   executionLayer.setSecretCaptureService(secretCaptureService);
 
-  // Resume-after-capture subscriber (#972) — listens for secret.captured (published by the
-  // capture endpoint on a successful redeem) and re-enters the originating agent with a
-  // synthetic agent.task so it can continue what it was blocked on. Pure router, no DB state.
-  const secretCaptureResumeSubscriber = new SecretCaptureResumeSubscriber(bus, logger);
-  secretCaptureResumeSubscriber.start();
-
   // Agents with enable_task_management: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
   const taskManagementAgents = new Set<string>();
@@ -1894,6 +1888,18 @@ async function main(): Promise<void> {
     outboundContextService,
   });
   dispatcher.register();
+
+  // Resume-after-capture subscriber (#972) — listens for secret.captured (published by the
+  // capture endpoint on a successful redeem) and re-enters the originating agent with a synthetic
+  // agent.task so it can continue what it was blocked on. Wired AFTER the dispatcher so it can
+  // seed routing for the synthetic task via registerExternalTaskRouting — without that the agent's
+  // resumed reply would find no routing entry and never reach the user.
+  const secretCaptureResumeSubscriber = new SecretCaptureResumeSubscriber(
+    bus,
+    logger,
+    (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
+  );
+  secretCaptureResumeSubscriber.start();
 
   // Conversation checkpoint processor — System Layer subscriber that runs background
   // memory skills (extract-relationships, etc.) at end of each conversation.

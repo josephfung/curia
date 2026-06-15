@@ -20,19 +20,38 @@ import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import type { BusEvent, SecretCapturedEvent } from '../bus/events.js';
 import { createAgentTask } from '../bus/events.js';
-import type { TaskOriginator } from '../contacts/types.js';
+
+/**
+ * Seeds channel routing for the synthetic resume task so the agent's response is delivered back
+ * to the originating channel. Without it, the dispatcher's handleAgentResponse finds no routing
+ * for the task id and drops the reply (the same path bullpen tasks take). In production this is
+ * `Dispatcher.registerExternalTaskRouting`; tests inject a spy.
+ */
+export type ResumeRoutingRegistrar = (
+  taskEventId: string,
+  routing: { channelId: string; conversationId: string; senderId: string; accountId?: string },
+) => void;
+
+/** Cap on the dedup set so a long-running process can't grow it without bound (one entry per
+ *  capture otherwise lives for the process lifetime). Generous — duplicates are rare — and FIFO
+ *  eviction of the oldest id is safe because the source (redeem) is idempotent, so an evicted id
+ *  re-arriving would at worst re-enter the agent once, which it tolerates (re-checks its history). */
+const MAX_DISPATCHED_IDS = 10_000;
 
 export class SecretCaptureResumeSubscriber {
   // In-memory guard against double-dispatch on duplicate event delivery. The redeem is already
   // idempotent on consumed_at (one capture → one event), so this only defends against the bus
   // delivering the same event id twice. A process restart clears it, which is fine: a re-emitted
   // event after a restart re-entering the agent once more is harmless (the agent re-checks its
-  // own history), and the set never needs to outlive the process.
+  // own history). Bounded to MAX_DISPATCHED_IDS with FIFO eviction so it never leaks.
   private readonly dispatched = new Set<string>();
 
   constructor(
     private readonly bus: EventBus,
     private readonly logger: Logger,
+    /** Optional: when provided, routing is registered before publish so the resumed response
+     *  reaches the user. Absent in tests that only assert the published task. */
+    private readonly registerRouting?: ResumeRoutingRegistrar,
   ) {}
 
   /** Subscribe to secret.captured. Call once at startup, alongside the bus/scheduler wiring. */
@@ -66,7 +85,7 @@ export class SecretCaptureResumeSubscriber {
 
     // Mark dispatched BEFORE publishing so a synchronous re-delivery during publish can't slip
     // through (mirrors the scheduler tracking its pending job before publish()).
-    this.dispatched.add(event.id);
+    this.markDispatched(event.id);
 
     const displayName = label ?? secretName;
     const intentLine = resumeIntent ? ` Original request: ${resumeIntent}.` : '';
@@ -75,29 +94,50 @@ export class SecretCaptureResumeSubscriber {
       `If you now have everything you need to continue, proceed. Otherwise, tell the user what ` +
       `is still outstanding (check your conversation history for any other secrets you asked for).`;
 
-    // Attribute the resumed turn to whoever started the chain, and preserve the originator so
-    // principal-identity / authorization gates resolve the same way they did on the original task.
-    const origin = originator as TaskOriginator | undefined;
-    const senderId = origin?.contactId ?? 'secret-capture';
+    // Attribute the resumed turn to whoever started the chain. originator is round-tripped from
+    // JSONB (typed Record<string, unknown>), so validate contactId is actually a string before
+    // using it as senderId — a malformed persisted value must not produce a non-string senderId.
+    // The originator object is still preserved verbatim on metadata so authorization gates resolve
+    // exactly as they did on the original task.
+    const contactId = originator?.['contactId'];
+    const senderId = typeof contactId === 'string' && contactId.length > 0 ? contactId : 'secret-capture';
+
+    // Build the task first so we know its id, then seed dispatcher routing BEFORE publishing —
+    // otherwise the agent's response could arrive before routing exists, or find none and be
+    // dropped (the dispatcher only auto-routes tasks that came through handleInbound).
+    const task = createAgentTask({
+      agentId,
+      conversationId,
+      channelId,
+      senderId,
+      content,
+      metadata: originator ? { originator } : undefined,
+      // Thread back to the originating agent.task when known so the causal chain is intact;
+      // fall back to this event's id otherwise (agent.task requires a parentEventId).
+      parentEventId: taskEventId ?? event.id,
+    });
 
     try {
-      await this.bus.publish('system', createAgentTask({
-        agentId,
-        conversationId,
-        channelId,
-        senderId,
-        content,
-        metadata: originator ? { originator } : undefined,
-        // Thread back to the originating agent.task when known so the causal chain is intact;
-        // fall back to this event's id otherwise (agent.task requires a parentEventId).
-        parentEventId: taskEventId ?? event.id,
-      }));
+      this.registerRouting?.(task.id, { channelId, conversationId, senderId });
+      await this.bus.publish('system', task);
       this.logger.info({ eventId: event.id, agentId, conversationId, secretName }, 'Resumed agent after secret capture');
     } catch (err) {
       // Roll back the dedup marker so a retry (e.g. operator replay) can re-attempt the resume,
-      // and surface the failure — a swallowed error here would silently strand the agent.
+      // log it, then propagate per the catch policy (the bus isolates subscriber errors, so this
+      // does not punish the publisher — it just ensures the failure is never silently swallowed).
       this.dispatched.delete(event.id);
       this.logger.error({ err, eventId: event.id, agentId, conversationId }, 'Failed to dispatch resume agent.task after secret capture');
+      throw err;
     }
+  }
+
+  /** Record an event id as handled, evicting the oldest when the bounded set is full. */
+  private markDispatched(eventId: string): void {
+    if (this.dispatched.size >= MAX_DISPATCHED_IDS) {
+      // Sets preserve insertion order, so the first key is the oldest — FIFO eviction.
+      const oldest = this.dispatched.values().next().value;
+      if (oldest !== undefined) this.dispatched.delete(oldest);
+    }
+    this.dispatched.add(eventId);
   }
 }

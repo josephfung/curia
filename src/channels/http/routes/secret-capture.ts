@@ -91,28 +91,31 @@ export async function secretCaptureRoutes(
       switch (result.status) {
         case 'ok':
           // The value is now in the vault. Publish secret.captured (name/routing only, NEVER the
-          // value) so the resume subscriber can re-enter the originating agent (#972). This is
-          // best-effort: the user's submission already succeeded, so a publish failure must not
-          // turn into a 500 — it only means the agent isn't auto-resumed. We log it and still 200.
+          // value) so the resume subscriber can re-enter the originating agent (#972).
+          //
+          // Fire-and-forget on purpose: this side effect is NOT awaited. Bus delivery is
+          // synchronous-and-awaited internally, and the resume subscriber re-enters the agent —
+          // which can run a full LLM turn. Awaiting here would block the user's POST for the
+          // entire downstream resume even though their value is already saved. We detach it and
+          // attach a .catch so a publish failure is logged (not swallowed) without delaying or
+          // failing the request — at worst the agent simply isn't auto-resumed.
           if (bus) {
-            try {
-              const c = result.captured;
-              await bus.publish('system', createSecretCaptured(
-                {
-                  secretName: c.secretName,
-                  label: c.label,
-                  conversationId: c.conversationId,
-                  agentId: c.agentId,
-                  channelId: c.channelId,
-                  taskEventId: c.taskEventId,
-                  resumeIntent: c.resumeIntent,
-                  originator: c.originator,
-                },
-                c.taskEventId,  // parentEventId traces back to the originating agent.task
-              ));
-            } catch (pubErr) {
+            const c = result.captured;
+            void bus.publish('system', createSecretCaptured(
+              {
+                secretName: c.secretName,
+                label: c.label,
+                conversationId: c.conversationId,
+                agentId: c.agentId,
+                channelId: c.channelId,
+                taskEventId: c.taskEventId,
+                resumeIntent: c.resumeIntent,
+                originator: c.originator,
+              },
+              c.taskEventId,  // parentEventId traces back to the originating agent.task
+            )).catch((pubErr: unknown) => {
               logger.error({ err: pubErr }, 'secret-capture: failed to publish secret.captured (value saved; agent not auto-resumed)');
-            }
+            });
           }
           return reply.send({ ok: true });
         case 'not_found':

@@ -278,7 +278,10 @@ export class SecretCaptureService implements SecretCaptureMinter {
     if (row.value_format === 'json') {
       try {
         parsed = JSON.parse(value);
-      } catch {
+      } catch (err) {
+        // Log (never the value) so a malformed submission is traceable, then surface invalid_json.
+        // The token is NOT burned — the user can fix and resubmit.
+        this.options.logger?.warn({ err }, 'secret-capture: invalid JSON payload during redeem — token left unspent for retry');
         return { status: 'invalid_json' };
       }
     }

@@ -12,7 +12,7 @@ import type { BusEvent, Layer } from '../../../bus/events.js';
 import { createSilentLogger } from '../../../logger.js';
 
 /** A scripted fake: returns the configured metadata/redeem outcome and records redeem calls. */
-function fakeService(opts: {
+function makeFakeService(opts: {
   metadata?: CaptureMetadata;
   redeem?: RedeemOutcome | (() => Promise<RedeemOutcome>);
 }): SecretCapturePort & { redeemCalls: Array<{ token: string; value: string }> } {
@@ -31,7 +31,7 @@ function fakeService(opts: {
 }
 
 /** A spy bus that records publishes — enough surface for the route, which only calls publish(). */
-function fakeBus(): EventBus & { published: Array<{ layer: Layer; event: BusEvent }> } {
+function makeFakeBus(): EventBus & { published: Array<{ layer: Layer; event: BusEvent }> } {
   const published: Array<{ layer: Layer; event: BusEvent }> = [];
   return {
     published,
@@ -59,26 +59,26 @@ describe('secret-capture routes', () => {
 
   describe('GET /api/secret-capture/:token', () => {
     it('returns label + value_format for a live token', async () => {
-      app = await build(fakeService({ metadata: { label: 'Flight password', valueFormat: 'string' } }));
+      app = await build(makeFakeService({ metadata: { label: 'Flight password', valueFormat: 'string' } }));
       const res = await app.inject({ method: 'GET', url: '/api/secret-capture/abc' });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ label: 'Flight password', value_format: 'string' });
     });
 
     it('returns 410 for an expired/consumed token', async () => {
-      app = await build(fakeService({ metadata: 'expired' }));
+      app = await build(makeFakeService({ metadata: 'expired' }));
       const res = await app.inject({ method: 'GET', url: '/api/secret-capture/abc' });
       expect(res.statusCode).toBe(410);
     });
 
     it('returns 404 for an unknown token', async () => {
-      app = await build(fakeService({ metadata: 'not_found' }));
+      app = await build(makeFakeService({ metadata: 'not_found' }));
       const res = await app.inject({ method: 'GET', url: '/api/secret-capture/abc' });
       expect(res.statusCode).toBe(404);
     });
 
     it('never includes the vault key in the response', async () => {
-      app = await build(fakeService({ metadata: { label: 'x', valueFormat: 'string' } }));
+      app = await build(makeFakeService({ metadata: { label: 'x', valueFormat: 'string' } }));
       const res = await app.inject({ method: 'GET', url: '/api/secret-capture/abc' });
       expect(res.body).not.toContain('secret_name');
       expect(res.body).not.toContain('user.');
@@ -87,7 +87,7 @@ describe('secret-capture routes', () => {
 
   describe('POST /api/secret-capture/:token', () => {
     it('redeems a value and returns { ok: true }', async () => {
-      const svc = fakeService({ redeem: { status: 'ok', captured: { secretName: 'user.x', label: null } } });
+      const svc = makeFakeService({ redeem: { status: 'ok', captured: { secretName: 'user.x', label: null } } });
       app = await build(svc);
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'hunter2' } });
       expect(res.statusCode).toBe(200);
@@ -96,7 +96,7 @@ describe('secret-capture routes', () => {
     });
 
     it('publishes secret.captured (name/routing only, never the value) on a successful redeem', async () => {
-      const svc = fakeService({
+      const svc = makeFakeService({
         redeem: {
           status: 'ok',
           captured: {
@@ -111,7 +111,7 @@ describe('secret-capture routes', () => {
           },
         },
       });
-      const bus = fakeBus();
+      const bus = makeFakeBus();
       app = await build(svc, { bus });
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'hunter2' } });
       expect(res.statusCode).toBe(200);
@@ -135,15 +135,15 @@ describe('secret-capture routes', () => {
     });
 
     it('does NOT publish when redeem is not ok (no event for expired/not_found/invalid_json)', async () => {
-      const bus = fakeBus();
-      app = await build(fakeService({ redeem: { status: 'expired' } }), { bus });
+      const bus = makeFakeBus();
+      app = await build(makeFakeService({ redeem: { status: 'expired' } }), { bus });
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'v' } });
       expect(res.statusCode).toBe(410);
       expect(bus.published).toHaveLength(0);
     });
 
     it('still returns 200 when the secret.captured publish throws (value already saved)', async () => {
-      const svc = fakeService({ redeem: { status: 'ok', captured: { secretName: 'user.x', label: null } } });
+      const svc = makeFakeService({ redeem: { status: 'ok', captured: { secretName: 'user.x', label: null } } });
       const bus = { async publish() { throw new Error('bus down'); } } as unknown as EventBus;
       app = await build(svc, { bus });
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'v' } });
@@ -153,7 +153,7 @@ describe('secret-capture routes', () => {
     });
 
     it('rejects a missing/empty value with 400 (and never calls redeem)', async () => {
-      const svc = fakeService({});
+      const svc = makeFakeService({});
       app = await build(svc);
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: '' } });
       expect(res.statusCode).toBe(400);
@@ -161,31 +161,31 @@ describe('secret-capture routes', () => {
     });
 
     it('rejects an oversized value with 400', async () => {
-      app = await build(fakeService({}));
+      app = await build(makeFakeService({}));
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'x'.repeat(9000) } });
       expect(res.statusCode).toBe(400);
     });
 
     it('maps expired → 410', async () => {
-      app = await build(fakeService({ redeem: { status: 'expired' } }));
+      app = await build(makeFakeService({ redeem: { status: 'expired' } }));
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'v' } });
       expect(res.statusCode).toBe(410);
     });
 
     it('maps not_found → 404', async () => {
-      app = await build(fakeService({ redeem: { status: 'not_found' } }));
+      app = await build(makeFakeService({ redeem: { status: 'not_found' } }));
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'v' } });
       expect(res.statusCode).toBe(404);
     });
 
     it('maps invalid_json → 400', async () => {
-      app = await build(fakeService({ redeem: { status: 'invalid_json' } }));
+      app = await build(makeFakeService({ redeem: { status: 'invalid_json' } }));
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'not json' } });
       expect(res.statusCode).toBe(400);
     });
 
     it('maps a vault-write throw → 500', async () => {
-      app = await build(fakeService({ redeem: () => Promise.reject(new Error('vault down')) }));
+      app = await build(makeFakeService({ redeem: () => Promise.reject(new Error('vault down')) }));
       const res = await app.inject({ method: 'POST', url: '/api/secret-capture/tok', payload: { value: 'v' } });
       expect(res.statusCode).toBe(500);
     });
@@ -196,7 +196,7 @@ describe('secret-capture routes', () => {
       // Register the route with a real (tiny) limit to prove the config is wired.
       const app2 = Fastify();
       await app2.register(rateLimit, { global: false });
-      await app2.register(secretCaptureRoutes, { secretCaptureService: fakeService({ metadata: 'not_found' }), logger: createSilentLogger() });
+      await app2.register(secretCaptureRoutes, { secretCaptureService: makeFakeService({ metadata: 'not_found' }), logger: createSilentLogger() });
       try {
         let last = 0;
         // The route declares max 10 / 15 min. The 11th request in the window should 429.
