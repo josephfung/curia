@@ -22,12 +22,22 @@ describe('parseSseEvent', () => {
     expect(parseSseEvent(data)).toEqual({ kind: 'reply', text: 'Hi', html: null });
   });
 
-  it('returns a rejected event with friendly text for message.rejected', () => {
-    const data = JSON.stringify({ type: 'message.rejected', reason: 'global_rate_limited' });
-    const result = parseSseEvent(data);
+  it('returns a rejected event with friendly text for both rate-limit reasons', () => {
+    // Both global_rate_limited and sender_rate_limited are real MessageRejectedEvent
+    // reason codes and must get the friendly rate-limit copy.
+    for (const reason of ['global_rate_limited', 'sender_rate_limited']) {
+      const result = parseSseEvent(JSON.stringify({ type: 'message.rejected', reason }));
+      expect(result?.kind).toBe('rejected');
+      if (result?.kind !== 'rejected') throw new Error('expected rejected');
+      expect(result.text).toMatch(/rate limit/i);
+    }
+  });
+
+  it('returns a rejected event naming the reason for non-rate-limit reasons', () => {
+    const result = parseSseEvent(JSON.stringify({ type: 'message.rejected', reason: 'blocked_sender' }));
     expect(result?.kind).toBe('rejected');
     if (result?.kind !== 'rejected') throw new Error('expected rejected');
-    expect(result.text).toMatch(/rate limit/i);
+    expect(result.text).toContain('blocked_sender');
   });
 
   it('returns null for skill.result events (not displayed)', () => {

@@ -2,12 +2,18 @@ import type { Message, SseEvent, HistoryMessage } from './types.js';
 
 /**
  * Friendly, user-facing text for a message.rejected reason code.
- * Falls back to a generic message naming the reason for unrecognized codes.
+ *
+ * Reason codes mirror MessageRejectedEvent.reason in src/bus/events.ts:
+ * unknown_sender | provisional_sender | blocked_sender | message_too_large
+ * | global_rate_limited | sender_rate_limited. Both rate-limit variants get the
+ * same friendly copy; everything else falls back to a generic message naming the
+ * reason (the sender-identity reasons can't normally occur on the CEO-only web
+ * channel, so a generic message is acceptable for them).
  */
 function rejectionText(reason: string): string {
   switch (reason) {
     case 'global_rate_limited':
-    case 'rate_limited':
+    case 'sender_rate_limited':
       return 'Rate limit reached. Please wait a moment and try again.';
     case 'message_too_large':
       return 'That message is too large to process.';
