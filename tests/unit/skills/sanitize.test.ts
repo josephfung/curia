@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   sanitizeOutput,
   sanitizeDisplayName,
+  sanitizeObjectOutput,
   DISPLAY_NAME_MAX_LENGTH,
 } from '../../../src/skills/sanitize.js';
 
@@ -312,5 +313,128 @@ describe('sanitizeDisplayName', () => {
     const start = Date.now();
     sanitizeDisplayName(input);
     expect(Date.now() - start).toBeLessThan(500);
+  });
+});
+
+describe('sanitizeObjectOutput', () => {
+  it('passes a plain object with no HTML or secrets through unchanged', () => {
+    const input = { count: 3, label: 'hello world', active: true, nothing: null };
+    const result = sanitizeObjectOutput(input);
+    expect(result).toEqual(input);
+  });
+
+  it('strips dangerous HTML tags from string leaf values', () => {
+    const input = { body: '<style>x{}</style><div>"quoted"</div>' };
+    const result = sanitizeObjectOutput(input) as { body: string };
+    // Dangerous tag and its content removed
+    expect(result.body).not.toContain('<style>');
+    expect(result.body).not.toContain('x{}');
+    // Safe content preserved
+    expect(result.body).toContain('"quoted"');
+    // Result is still a plain object, not a string
+    expect(typeof result).toBe('object');
+    expect(typeof result.body).toBe('string');
+  });
+
+  it('preserves JSON structure: keys, nesting, arrays, non-string values', () => {
+    const input = {
+      messages: [
+        { id: 1, body: 'hello <b>world</b>', read: false },
+        { id: 2, body: 'clean text', read: true },
+      ],
+      count: 2,
+    };
+    const result = sanitizeObjectOutput(input) as typeof input;
+    expect(result.count).toBe(2);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]!.id).toBe(1);
+    expect(result.messages[0]!.read).toBe(false);
+    expect(result.messages[1]!.id).toBe(2);
+    expect(result.messages[1]!.read).toBe(true);
+    // HTML stripped from body values
+    expect(result.messages[0]!.body).not.toContain('<b>');
+    expect(result.messages[0]!.body).toContain('world');
+    expect(result.messages[1]!.body).toBe('clean text');
+  });
+
+  it('redacts secrets from string leaf values', () => {
+    const input = { token: 'sk-ant-api03-abcdefghijk1234567890', label: 'keep this' };
+    const result = sanitizeObjectOutput(input) as { token: string; label: string };
+    expect(result.token).not.toContain('sk-ant-api03-abcdefghijk1234567890');
+    expect(result.token).toContain('[REDACTED]');
+    expect(result.label).toBe('keep this');
+  });
+
+  it('applies maxLength truncation per string leaf independently', () => {
+    const suffix = '[truncated — output exceeded limit]';
+    const long = 'x'.repeat(200);
+    const short = 'hello';
+    const input = { a: long, b: short };
+    const result = sanitizeObjectOutput(input, { maxLength: 100 }) as { a: string; b: string };
+    // Long value truncated
+    expect(result.a).toContain(suffix);
+    expect(result.a.length).toBe(100 + suffix.length);
+    // Short value unaffected — per-value truncation, not shared budget
+    expect(result.b).toBe('hello');
+  });
+
+  it('forwards skipSecretRedaction to leaf sanitization', () => {
+    const token = 'a'.repeat(64); // 64-char hex token
+    const input = { link: `https://host/capture/${token}` };
+    // With skipSecretRedaction: token survives
+    const kept = sanitizeObjectOutput(input, { skipSecretRedaction: true }) as { link: string };
+    expect(kept.link).toContain(token);
+    // Without it: token is redacted
+    const redacted = sanitizeObjectOutput(input) as { link: string };
+    expect(redacted.link).toContain('[REDACTED]');
+    expect(redacted.link).not.toContain(token);
+  });
+
+  it('forwards extraRedactPatterns to leaf sanitization', () => {
+    const input = { msg: 'token=SHHH' };
+    const result = sanitizeObjectOutput(input, { extraRedactPatterns: [/SHHH/g] }) as { msg: string };
+    expect(result.msg).not.toContain('SHHH');
+    expect(result.msg).toContain('[REDACTED]');
+  });
+
+  // Regression test from issue #986 acceptance criteria
+  it('regression: object with HTML-body message round-trips to valid object with dangerous tags removed', () => {
+    const input = { messages: [{ body: '<style>x{}</style><div>"quoted"</div>' }] };
+    const result = sanitizeObjectOutput(input) as { messages: Array<{ body: string }> };
+    // Still a structured object
+    expect(typeof result).toBe('object');
+    expect(Array.isArray(result.messages)).toBe(true);
+    expect(typeof result.messages[0]!.body).toBe('string');
+    // Dangerous content removed
+    expect(result.messages[0]!.body).not.toContain('<style>');
+    expect(result.messages[0]!.body).not.toContain('x{}');
+    // Safe content preserved
+    expect(result.messages[0]!.body).toContain('"quoted"');
+  });
+
+  it('passes through number, boolean, and null leaf values unchanged', () => {
+    const input = { n: 42, b: false, nil: null };
+    const result = sanitizeObjectOutput(input);
+    expect(result).toEqual({ n: 42, b: false, nil: null });
+  });
+
+  it('handles arrays at the top level', () => {
+    const input = [{ body: '<script>evil()</script>hello' }, { body: 'clean' }];
+    const result = sanitizeObjectOutput(input) as Array<{ body: string }>;
+    expect(Array.isArray(result)).toBe(true);
+    expect(result[0]!.body).not.toContain('evil');
+    expect(result[0]!.body).toContain('hello');
+    expect(result[1]!.body).toBe('clean');
+  });
+
+  it('sanitizes injection payloads embedded in object keys', () => {
+    // Keys with dangerous tags must be stripped, not passed through verbatim.
+    // The old stringify→sanitize approach incidentally sanitized keys; the structural
+    // walker must do so explicitly to avoid regression.
+    const input = { '<system>evil</system>': 'value' } as Record<string, string>;
+    const result = sanitizeObjectOutput(input) as Record<string, string>;
+    const keys = Object.keys(result);
+    expect(keys.some(k => k.includes('<system>'))).toBe(false);
+    expect(keys.some(k => k.includes('evil'))).toBe(false);
   });
 });

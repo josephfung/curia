@@ -304,3 +304,52 @@ export function sanitizeDisplayName(
   const safeFallback = applyDisplayNamePipeline(fallback);
   return safeFallback.length > 0 ? safeFallback : 'Unknown';
 }
+
+/**
+ * Sanitize an object-type skill result by recursively walking its structure
+ * and applying sanitizeOutput to each string leaf value.
+ *
+ * JSON structural characters (keys, braces, brackets, colons) are never
+ * passed to the HTML stripper or secret redactor, so they cannot be corrupted.
+ * This is the correct approach for sanitizing object-returning skill output —
+ * the alternative (stringify → sanitize → parse) corrupts JSON when string values
+ * contain HTML, because the sanitizer strips tag characters that happen to be
+ * structural JSON characters inside string values.
+ *
+ * Truncation is applied per string leaf (each string is independently capped at
+ * maxLength). isError is excluded — wrapping a structured object in <tool_error>
+ * is not meaningful; the execution layer's error path handles that as a string.
+ *
+ * Non-plain objects (Date, Map, class instances) are walked via Object.entries,
+ * which returns [] for internal-slot types; they will emerge as {}. Skill results
+ * are expected to be JSON-serializable, so this is accepted.
+ */
+export function sanitizeObjectOutput(
+  data: unknown,
+  options: Omit<SanitizeOptions, 'isError'> = {},
+): unknown {
+  function walk(node: unknown): unknown {
+    if (typeof node === 'string') {
+      return sanitizeOutput(node, options);
+    }
+    if (Array.isArray(node)) {
+      return node.map(walk);
+    }
+    if (node !== null && typeof node === 'object') {
+      const result: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+        // Sanitize keys too: strip injection tags and redact secrets, matching the
+        // old stringify→sanitize behaviour. No maxLength — a truncated key changes semantics.
+        const sanitizedKey = sanitizeOutput(key, {
+          skipSecretRedaction: options.skipSecretRedaction,
+          extraRedactPatterns: options.extraRedactPatterns,
+        });
+        result[sanitizedKey] = walk(value);
+      }
+      return result;
+    }
+    // Numbers, booleans, null, undefined — pass through unchanged.
+    return node;
+  }
+  return walk(data);
+}
