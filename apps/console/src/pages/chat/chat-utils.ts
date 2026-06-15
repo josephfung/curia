@@ -1,11 +1,31 @@
-import type { Message } from './types.js';
+import type { Message, SseEvent, HistoryMessage } from './types.js';
 
 /**
- * Parses a raw SSE event data string into a human-readable status label,
- * or returns null for events that should not be displayed in the thread.
- * Only skill.invoke events produce visible status messages.
+ * Friendly, user-facing text for a message.rejected reason code.
+ * Falls back to a generic message naming the reason for unrecognized codes.
  */
-export function parseSseEvent(data: string): string | null {
+function rejectionText(reason: string): string {
+  switch (reason) {
+    case 'global_rate_limited':
+    case 'rate_limited':
+      return 'Rate limit reached. Please wait a moment and try again.';
+    case 'message_too_large':
+      return 'That message is too large to process.';
+    default:
+      return `Message rejected (${reason}).`;
+  }
+}
+
+/**
+ * Parses a raw SSE event data string from GET /api/kg/chat/stream into a
+ * normalized SseEvent, or null for events the chat UI ignores.
+ *
+ * Ack-and-stream (#985): the POST only acks, so the `message` event is now the
+ * source of truth for the agent's final reply (terminal). `message.rejected` is
+ * a terminal error. `skill.invoke` is intermediate progress. Everything else
+ * (skill.result, malformed payloads, unknown types) returns null.
+ */
+export function parseSseEvent(data: string): SseEvent | null {
   let payload: unknown;
   try {
     payload = JSON.parse(data);
@@ -17,9 +37,41 @@ export function parseSseEvent(data: string): string | null {
   }
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as Record<string, unknown>;
-  if (p['type'] === 'skill.invoke') {
-    const skill = typeof p['skill'] === 'string' ? p['skill'] : 'skill';
-    return `invoking ${skill}`;
+
+  switch (p['type']) {
+    case 'skill.invoke': {
+      const skill = typeof p['skill'] === 'string' ? p['skill'] : 'skill';
+      return { kind: 'status', text: `invoking ${skill}` };
+    }
+    case 'message': {
+      const text = typeof p['content'] === 'string' ? p['content'] : '';
+      const html = typeof p['html'] === 'string' ? p['html'] : null;
+      return { kind: 'reply', text, html };
+    }
+    case 'message.rejected': {
+      const reason = typeof p['reason'] === 'string' ? p['reason'] : 'unknown';
+      return { kind: 'rejected', text: rejectionText(reason) };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Recovery helper for the client watchdog: given a page of chat history (oldest
+ * first) and the time we sent the current turn, return the most recent assistant
+ * reply that landed at or after the send time — the reply we may have missed if
+ * the SSE message event never arrived. Returns null if there's no such reply.
+ */
+export function pickRecoveredReply(
+  items: HistoryMessage[],
+  sentAtMs: number,
+): { text: string; html: string | null } | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const m = items[i]!;
+    if (m.role === 'assistant' && new Date(m.timestamp).getTime() >= sentAtMs) {
+      return { text: m.content, html: m.html };
+    }
   }
   return null;
 }

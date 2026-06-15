@@ -1,31 +1,37 @@
 import { describe, it, expect } from 'vitest';
-import { parseSseEvent, makeMessage, formatTimestamp, linkifyText } from './chat-utils.js';
+import { parseSseEvent, makeMessage, formatTimestamp, linkifyText, pickRecoveredReply } from './chat-utils.js';
 
 describe('parseSseEvent', () => {
-  it('returns status text for skill.invoke events', () => {
-    const data = JSON.stringify({
-      type: 'skill.invoke',
-      skill: 'memory.recall',
-      agent: 'coordinator',
-      conversation_id: 'c1',
-      timestamp: '2026-05-29T00:00:00Z',
-    });
-    expect(parseSseEvent(data)).toBe('invoking memory.recall');
+  it('returns a status event for skill.invoke', () => {
+    const data = JSON.stringify({ type: 'skill.invoke', skill: 'memory.recall', conversation_id: 'c1' });
+    expect(parseSseEvent(data)).toEqual({ kind: 'status', text: 'invoking memory.recall' });
   });
 
   it('falls back to "skill" when the skill field is absent', () => {
     const data = JSON.stringify({ type: 'skill.invoke', conversation_id: 'c1' });
-    expect(parseSseEvent(data)).toBe('invoking skill');
+    expect(parseSseEvent(data)).toEqual({ kind: 'status', text: 'invoking skill' });
+  });
+
+  it('returns a reply event with content and html for message events', () => {
+    const data = JSON.stringify({ type: 'message', content: 'Hello', html: '<p>Hello</p>' });
+    expect(parseSseEvent(data)).toEqual({ kind: 'reply', text: 'Hello', html: '<p>Hello</p>' });
+  });
+
+  it('returns a reply event with html: null when html is absent', () => {
+    const data = JSON.stringify({ type: 'message', content: 'Hi' });
+    expect(parseSseEvent(data)).toEqual({ kind: 'reply', text: 'Hi', html: null });
+  });
+
+  it('returns a rejected event with friendly text for message.rejected', () => {
+    const data = JSON.stringify({ type: 'message.rejected', reason: 'global_rate_limited' });
+    const result = parseSseEvent(data);
+    expect(result?.kind).toBe('rejected');
+    if (result?.kind !== 'rejected') throw new Error('expected rejected');
+    expect(result.text).toMatch(/rate limit/i);
   });
 
   it('returns null for skill.result events (not displayed)', () => {
-    const data = JSON.stringify({ type: 'skill.result', skill: 'memory.recall' });
-    expect(parseSseEvent(data)).toBeNull();
-  });
-
-  it('returns null for message events (handled via POST response)', () => {
-    const data = JSON.stringify({ type: 'message', content: 'Hello' });
-    expect(parseSseEvent(data)).toBeNull();
+    expect(parseSseEvent(JSON.stringify({ type: 'skill.result', skill: 'memory.recall' }))).toBeNull();
   });
 
   it('returns null for malformed JSON', () => {
@@ -39,6 +45,32 @@ describe('parseSseEvent', () => {
   it('returns null for non-object JSON', () => {
     expect(parseSseEvent('42')).toBeNull();
     expect(parseSseEvent('"hello"')).toBeNull();
+  });
+});
+
+describe('pickRecoveredReply', () => {
+  const sentAt = new Date('2026-06-15T12:00:00Z').getTime();
+
+  it('returns the most recent assistant reply that landed at or after the send time', () => {
+    const items = [
+      { id: '1', role: 'user' as const, content: 'q', html: null, timestamp: '2026-06-15T11:59:00Z' },
+      { id: '2', role: 'assistant' as const, content: 'old', html: null, timestamp: '2026-06-15T11:59:30Z' },
+      { id: '3', role: 'user' as const, content: 'q2', html: null, timestamp: '2026-06-15T12:00:00Z' },
+      { id: '4', role: 'assistant' as const, content: 'fresh', html: '<p>fresh</p>', timestamp: '2026-06-15T12:03:00Z' },
+    ];
+    expect(pickRecoveredReply(items, sentAt)).toEqual({ text: 'fresh', html: '<p>fresh</p>' });
+  });
+
+  it('returns null when no assistant reply landed after the send time', () => {
+    const items = [
+      { id: '1', role: 'user' as const, content: 'q', html: null, timestamp: '2026-06-15T12:00:00Z' },
+      { id: '2', role: 'assistant' as const, content: 'stale', html: null, timestamp: '2026-06-15T11:00:00Z' },
+    ];
+    expect(pickRecoveredReply(items, sentAt)).toBeNull();
+  });
+
+  it('returns null for an empty history page', () => {
+    expect(pickRecoveredReply([], sentAt)).toBeNull();
   });
 });
 
