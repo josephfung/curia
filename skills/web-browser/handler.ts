@@ -21,7 +21,7 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: false, error: 'browserService is not available — BrowserService failed to start or is not wired into ExecutionLayer' };
     }
 
-    const { action, url, selector, text, value, secret_ref, session_id, screenshot } = ctx.input as {
+    const { action, url, selector, text, value, secret_ref, session_id, screenshot, block_ads, incognito } = ctx.input as {
       action?: string;
       url?: string;
       selector?: string;
@@ -33,6 +33,12 @@ export class WebBrowserHandler implements SkillHandler {
       secret_ref?: string;
       session_id?: string;
       screenshot?: boolean;
+      // block_ads (#987): opt in to ad/tracker blocking. Off by default — login,
+      // authenticated, and form-fill flows must not carry a privacy-extension signal.
+      block_ads?: boolean;
+      // incognito (#987): run this session in a fresh, isolated context instead of the
+      // principal's persistent profile. For Curia's own logins or throwaway flows.
+      incognito?: boolean;
     };
 
     if (!action || typeof action !== 'string') {
@@ -71,7 +77,10 @@ export class WebBrowserHandler implements SkillHandler {
     // values for value-aware redaction (#973) and scrub them from returned content.
     let session: import('../../src/browser/browser-session.js').BrowserSession;
     try {
-      const result = await ctx.browserService.getOrCreateSession(session_id ?? undefined);
+      const result = await ctx.browserService.getOrCreateSession(session_id ?? undefined, {
+        incognito: incognito === true,
+        blockAds: block_ads === true,
+      });
       sessionId = result.sessionId;
       session = result.session;
       page = result.session.page as Page;

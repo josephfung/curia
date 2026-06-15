@@ -189,3 +189,38 @@ describe('web-browser type action with secret_ref (#973)', () => {
     expect(fill).toHaveBeenCalledWith('hello world');
   });
 });
+
+describe('web-browser block_ads + incognito inputs (#987)', () => {
+  it('forwards block_ads and incognito to getOrCreateSession', async () => {
+    // Build a mock page that satisfies the navigate action path:
+    // - page.goto() — called during navigate
+    // - page.url() — called when building the result
+    // - page.evaluate() — called by getCleanedContent
+    // We reuse makeMockPage (which has url+evaluate) and add goto to the result.
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const mockPage = {
+      ...makeMockPage('Example Domain', fill, 'https://example.com/'),
+      goto: vi.fn().mockResolvedValue(undefined),
+    };
+    const session = new BrowserSession({} as unknown as BrowserContext, mockPage as unknown as Page);
+
+    // Track the getOrCreateSession spy directly so we can assert its call args.
+    const getOrCreateSession = vi.fn().mockResolvedValue({ sessionId: 'sess-stealth', session });
+    const browserService = {
+      getOrCreateSession,
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+
+    const ctx = {
+      input: { action: 'navigate', url: 'https://example.com', block_ads: true, incognito: true },
+      log: logger,
+      browserService,
+    } as unknown as SkillContext;
+
+    await new WebBrowserHandler().execute(ctx);
+
+    // The handler must forward both flags as the second arg to getOrCreateSession.
+    // session_id was not supplied, so first arg must be undefined.
+    expect(getOrCreateSession).toHaveBeenCalledWith(undefined, { incognito: true, blockAds: true });
+  });
+});

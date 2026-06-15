@@ -759,14 +759,16 @@ async function main(): Promise<void> {
   // but web-browser skill invocations will fail at the ctx.browserService check.
   let browserService: BrowserService | undefined;
   try {
-    // TODO(#192): browserConfig should come from yamlConfig.browser, not this cast.
-    // The cast always resolves to undefined, so these values are always the hardcoded
-    // defaults and the YAML settings have no effect. Fix tracked in issue #204.
-    const browserConfig = (config as unknown as { browser?: { sessionTtlMs?: number; sweepIntervalMs?: number } }).browser;
+    const browserConfig = yamlConfig.browser;
     browserService = new BrowserService({
       logger,
       sessionTtlMs: browserConfig?.sessionTtlMs ?? 600_000,
       sweepIntervalMs: browserConfig?.sweepIntervalMs ?? 120_000,
+      profileDir: browserConfig?.profileDir,
+      channel: browserConfig?.channel,
+      locale: browserConfig?.locale,
+      // Align the browser timezone with the principal's configured timezone.
+      timezone: config.timezone,
     });
     await browserService.start();
     logger.info('Browser service started');

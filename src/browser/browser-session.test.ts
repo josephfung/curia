@@ -5,7 +5,7 @@
 // that value so any page content read back during the same session can be scrubbed
 // of it — the backstop against a hostile page reflecting the value into LLM context.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { BrowserSession } from './browser-session.js';
 import type { BrowserContext, Page } from 'playwright';
 
@@ -15,6 +15,34 @@ function makeSession(): BrowserSession {
   const fakePage = {} as unknown as Page;
   return new BrowserSession(fakeContext, fakePage);
 }
+
+/** A session backed by vi.fn() page/context so close() behavior can be asserted. */
+function makeClosableSession(opts: { incognito: boolean }) {
+  const page = { close: vi.fn().mockResolvedValue(undefined) } as unknown as Page;
+  const ownedContext = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserContext;
+  const sharedContext = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserContext;
+  const session = opts.incognito
+    ? new BrowserSession(ownedContext, page, ownedContext)
+    : new BrowserSession(sharedContext, page, null);
+  return { session, page, ownedContext, sharedContext };
+}
+
+describe('BrowserSession close lifecycle', () => {
+  it('persistent session closes only its page, not the shared context', async () => {
+    const { session, page, sharedContext } = makeClosableSession({ incognito: false });
+    await session.close();
+    expect((page as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalledOnce();
+    expect((sharedContext as unknown as { close: ReturnType<typeof vi.fn> }).close).not.toHaveBeenCalled();
+  });
+
+  it('incognito session closes its owned context (which closes the page)', async () => {
+    const { session, page, ownedContext } = makeClosableSession({ incognito: true });
+    await session.close();
+    expect((ownedContext as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalledOnce();
+    // We do NOT also call page.close() — context.close() tears the page down.
+    expect((page as unknown as { close: ReturnType<typeof vi.fn> }).close).not.toHaveBeenCalled();
+  });
+});
 
 describe('BrowserSession injected-secret redaction', () => {
   it('redacts a registered secret value from text', () => {
