@@ -487,6 +487,25 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     throw new Error(`skillOutput.maxLength must be a positive integer, got: ${maxLength}`);
   }
 
+  // Validate the browser block. config/local.yaml is deep-merged above but not
+  // schema-validated, so a bad override (e.g. sweepIntervalMs: 0 or -1) would otherwise
+  // reach BrowserService and schedule near-continuous sweeps. Reject malformed values here.
+  const browser = config.browser;
+  if (browser !== undefined) {
+    const { sessionTtlMs, sweepIntervalMs, profileDir, channel, locale } = browser;
+    if (sessionTtlMs !== undefined && (!Number.isInteger(sessionTtlMs) || sessionTtlMs <= 0)) {
+      throw new Error(`browser.sessionTtlMs must be a positive integer, got: ${sessionTtlMs}`);
+    }
+    if (sweepIntervalMs !== undefined && (!Number.isInteger(sweepIntervalMs) || sweepIntervalMs <= 0)) {
+      throw new Error(`browser.sweepIntervalMs must be a positive integer, got: ${sweepIntervalMs}`);
+    }
+    for (const [key, value] of [['profileDir', profileDir], ['channel', channel], ['locale', locale]] as const) {
+      if (value !== undefined && typeof value !== 'string') {
+        throw new Error(`browser.${key} must be a string, got: ${typeof value}`);
+      }
+    }
+  }
+
   const checkpointDebounceMs = config.dispatch?.conversationCheckpointDebounceMs;
   if (checkpointDebounceMs !== undefined && (!Number.isInteger(checkpointDebounceMs) || checkpointDebounceMs <= 0)) {
     throw new Error(

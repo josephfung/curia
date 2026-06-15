@@ -81,9 +81,12 @@ export class BrowserService {
   // it (shared cookies/storage = "returning user"); incognito sessions get their own
   // ephemeral context spun off context.browser() (see getOrCreateSession).
   private context: BrowserContext | null = null;
-  // Set to true by stop() before closing the context so the 'disconnected' handler
-  // knows the disconnect is intentional and must NOT trigger a crash-recovery restart.
-  private stopping = false;
+  // Lifecycle flag: true between a successful start() and the start of stop(). The
+  // 'disconnected' crash-recovery handler consults it (a) to skip restarting when the
+  // disconnect is our own intentional context.close() during stop(), and (b) at the
+  // moment an async relaunch resolves — so a relaunch already in flight when stop() runs
+  // discards its fresh context instead of reviving a browser after shutdown.
+  private running = false;
   // True once a configured browser channel (e.g. 'chrome') failed to launch and we fell
   // back to bundled Chromium — a degraded fingerprint posture. Exposed via
   // isChannelFallbackActive() so health checks can surface the divergence (see #987).
@@ -122,7 +125,20 @@ export class BrowserService {
     }
 
     await this.maybeStartXvfb();
-    this.context = await this.contextFactory();
+    try {
+      this.context = await this.contextFactory();
+    } catch (err) {
+      // Roll back the Xvfb display we just spawned — otherwise a context-launch failure
+      // leaves a stray X server around that breaks later restarts (the stale-:99-lock bug
+      // we already guard against on the next start). stop() also kills it, but start()
+      // must clean up after itself for callers that don't call stop() on failure.
+      if (this.xvfbProcess) {
+        this.logger.error({ err }, 'Persistent context launch failed — killing the Xvfb display started for it');
+        this.xvfbProcess.kill();
+        this.xvfbProcess = null;
+      }
+      throw err;
+    }
 
     // Restart the persistent context automatically on disconnect (e.g., OOM kill).
     this.attachDisconnectedHandler(this.context);
@@ -130,6 +146,9 @@ export class BrowserService {
     this.sweepTimer = setInterval(() => void this.sweep(), this.sweepIntervalMs);
     this.sweepTimer.unref();
 
+    // Mark running only after a fully successful start, so the disconnect handler never
+    // tries to recover a service that never finished starting.
+    this.running = true;
     this.logger.info({ sessionTtlMs: this.sessionTtlMs }, 'BrowserService started');
   }
 
@@ -145,11 +164,12 @@ export class BrowserService {
       return;
     }
     browser.on('disconnected', () => {
-      // Intentional shutdown via stop() — do not restart. stop() sets this.stopping
-      // before calling context.close() so we can distinguish a deliberate close from
-      // an unexpected crash/OOM disconnect.
-      if (this.stopping) {
-        this.logger.debug('Browser disconnected during stop() — skipping crash-recovery restart');
+      // Intentional shutdown — do not restart. stop() flips `running` to false before
+      // closing the context, so a disconnect fired by our own teardown (or one that
+      // arrives after stop() already finished) is distinguished from an unexpected
+      // crash/OOM disconnect.
+      if (!this.running) {
+        this.logger.debug('Browser disconnected while not running (intentional stop) — skipping crash-recovery restart');
         return;
       }
       this.logger.error('Playwright browser disconnected — clearing sessions and restarting');
@@ -160,9 +180,20 @@ export class BrowserService {
       const orphaned = [...this.sessions.values()];
       this.sessions.clear();
       for (const session of orphaned) {
-        void session.close().catch(() => { /* browser likely gone — nothing to clean */ });
+        void session.close().catch(err =>
+          this.logger.debug({ err }, 'Failed to close orphaned session during disconnect cleanup (browser likely already gone)'),
+        );
       }
       void this.contextFactory().then(ctx => {
+        // stop() may have run while the relaunch was in flight. Reviving the browser now
+        // would leak a live context past shutdown, so discard the fresh one instead.
+        if (!this.running) {
+          this.logger.debug('Relaunch resolved after shutdown — discarding the recovered context');
+          void ctx.close().catch(err =>
+            this.logger.warn({ err }, 'Failed to close recovered context discarded after shutdown'),
+          );
+          return;
+        }
         this.context = ctx;
         this.attachDisconnectedHandler(ctx);
       }).catch(err => {
@@ -175,6 +206,11 @@ export class BrowserService {
    * Stop the browser service: close all sessions, close the browser, kill Xvfb.
    */
   async stop(): Promise<void> {
+    // Flip running=false up front: it tells the 'disconnected' handler that the imminent
+    // context.close() is intentional (skip crash-recovery), AND it makes any relaunch
+    // already in flight discard its fresh context when it resolves (no revival after stop).
+    this.running = false;
+
     if (this.sweepTimer) {
       clearInterval(this.sweepTimer);
       this.sweepTimer = null;
@@ -191,18 +227,11 @@ export class BrowserService {
     this.sessions.clear();
 
     if (this.context) {
-      // Signal the 'disconnected' handler that this disconnect is intentional so it
-      // does not trigger crash-recovery (which would try to relaunch the browser while
-      // we're tearing down, potentially racing with a restart that reuses the profile).
-      this.stopping = true;
       try {
         await this.context.close();
       } catch (err) {
         this.logger.error({ err }, 'Error closing browser context during shutdown');
       } finally {
-        // Reset stopping so the instance can be reused after stop() (e.g. in tests)
-        // and a future unexpected disconnect still triggers recovery.
-        this.stopping = false;
         this.context = null;
       }
     }
@@ -277,7 +306,9 @@ export class BrowserService {
           this.logger.error({ err: closeErr }, 'Failed to close incognito context during cleanup — possible resource leak');
         });
       } else if (page) {
-        await page.close().catch(() => {});
+        await page.close().catch(closeErr =>
+          this.logger.debug({ err: closeErr }, 'Failed to close page during session-creation cleanup'),
+        );
       }
       throw err;
     }
@@ -403,6 +434,11 @@ export class BrowserService {
       ],
       ...this.buildContextOptions(),
     };
+
+    // Reset before each attempt so the flag reflects the CURRENT launch, not a stale
+    // historical fallback — otherwise a later successful relaunch (crash recovery, or a
+    // start() after stop()) would still report a degraded channel forever.
+    this.channelFallbackActive = false;
 
     try {
       const context = await stealthChromium.launchPersistentContext(

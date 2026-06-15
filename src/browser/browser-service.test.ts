@@ -198,6 +198,37 @@ describe('BrowserService (unit — mocked browser)', () => {
     // Attached per opt-in session.
     expect(fakeBlocker.enableBlockingInPage).toHaveBeenCalledTimes(2);
   });
+
+  it('reports channel fallback inactive by default', () => {
+    expect(service.isChannelFallbackActive()).toBe(false);
+  });
+
+  it('does not restart the browser when a disconnect fires after stop()', async () => {
+    // Dedicated instance with a counting factory so we can assert no relaunch happens.
+    const page = makeMockPage();
+    const browser = makeMockBrowser();
+    const ctx = makeMockContext(page, browser);
+    const factory = vi.fn().mockResolvedValue(ctx);
+    const svc = new BrowserService({
+      logger,
+      sessionTtlMs: 1000,
+      sweepIntervalMs: 60000,
+      contextFactory: factory as never,
+    });
+    await svc.start();
+    expect(factory).toHaveBeenCalledOnce();
+
+    // Grab the 'disconnected' handler the service registered on the browser.
+    const onCall = browser.on.mock.calls.find(c => c[0] === 'disconnected');
+    expect(onCall).toBeDefined();
+    const disconnectHandler = onCall![1] as () => void;
+
+    await svc.stop();        // running -> false
+    disconnectHandler();     // simulate a late/teardown 'disconnected' after shutdown
+
+    // No crash-recovery relaunch: the factory is still called exactly once.
+    expect(factory).toHaveBeenCalledOnce();
+  });
 });
 
 // --- clearStaleX11Lock (stale Xvfb lock cleanup) ---
@@ -388,9 +419,12 @@ describe.skipIf(!runBrowserTests)('BrowserService (integration — real Chromium
   // beforeEach/afterEach service, and cleans up in finally regardless of outcome.
   it('persists cookies across a service restart (persistent profile)', async () => {
     const profileDir = mkdtempSync(join(tmpdir(), 'curia-profile-'));
+    // Both services are declared in the outer scope so finally can always stop them —
+    // a throw between s1.start() and s1.stop() must not leak a live browser/Xvfb process.
+    let s1: BrowserService | null = null;
     let s2: BrowserService | null = null;
     try {
-      const s1 = new BrowserService({ logger, sessionTtlMs: 30000, sweepIntervalMs: 60000, profileDir });
+      s1 = new BrowserService({ logger, sessionTtlMs: 30000, sweepIntervalMs: 60000, profileDir });
       await s1.start();
       const { session } = await s1.getOrCreateSession(undefined);
       await session.page.goto('https://example.com');
@@ -405,6 +439,7 @@ describe.skipIf(!runBrowserTests)('BrowserService (integration — real Chromium
         (globalThis as unknown as Win).document!.cookie = 'curia_test=1; path=/; max-age=3600';
       });
       await s1.stop();
+      s1 = null;
 
       // After context.close(), Playwright kills the browser process, but the OS may
       // take a moment to release the profile's SingletonLock. Retry s2.start() with
@@ -434,7 +469,9 @@ describe.skipIf(!runBrowserTests)('BrowserService (integration — real Chromium
       await s2.stop();
       s2 = null;
     } finally {
-      // Best-effort stop of s2 if the test threw after start() but before stop()
+      // Best-effort stop of either service if the test threw before its own stop() ran,
+      // so a failure mid-test can't leak a live browser/Xvfb process into later tests.
+      await s1?.stop().catch(() => { /* already stopped or never started */ });
       await s2?.stop().catch(() => { /* already stopped or never started */ });
       rmSync(profileDir, { recursive: true, force: true });
     }
