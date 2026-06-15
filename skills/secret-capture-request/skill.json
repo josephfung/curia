@@ -1,13 +1,14 @@
 {
   "name": "secret-capture-request",
-  "description": "Mint a one-time, single-use, 30-minute link the user can click to enter a NEW personal secret (e.g. a website password). The value is typed by the user into a secure web form and written straight to the vault under a `user.<slug>` key. You never see the value — this skill returns only the link, never the secret. Relay the returned capture_url to the user verbatim. Use when a task needs a secret the vault does not yet have.",
-  "version": "0.1.2",
+  "description": "Mint a one-time, single-use, 30-minute link the user can click to enter a NEW personal secret (e.g. a website password). The value is typed by the user into a secure web form and written straight to the vault under a `user.<slug>` key. You never see the value — this skill returns only the link, never the secret. Relay the returned capture_url to the user verbatim. When the user fills the link, you are automatically brought back into this conversation to continue. Use when a task needs a secret the vault does not yet have.",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
     "secret_name": "string (human description of the secret, e.g. 'my flight site password'; auto-namespaced to user.<slug>)",
     "label": "string? (text shown to the user on the form; defaults to the secret_name)",
-    "value_format": "string? ('string' (default) or 'json')"
+    "value_format": "string? ('string' (default) or 'json')",
+    "resume_intent": "string? (a short description of what you are trying to do, e.g. 'check the user's Aeroplan balance'; surfaced back to you when the secret is captured so you can continue)"
   },
   "outputs": {
     "capture_url": "string (the one-time link to send the user)",

@@ -82,11 +82,33 @@ export interface SecretCaptureMinter {
   mintSystemSecret(args: MintNameArgs): Promise<MintResult>;
 }
 
+/**
+ * Origin routing context captured at mint time (#972). Persisted on the token row alongside
+ * the metadata so that when the value is redeemed the capture endpoint can publish a
+ * `secret.captured` event with enough context to re-enter the originating agent. Holds NO
+ * secret material — only conversation/agent/channel routing and the original ask. Every field
+ * is optional: a token minted outside an agent context simply has no routable origin and is
+ * never resumed.
+ */
+export interface CaptureOrigin {
+  conversationId?: string;
+  channelId?: string;
+  agentId?: string;
+  /** The originating agent.task event id — threaded as parentEventId on the resume task. */
+  taskEventId?: string;
+  /** The TaskOriginator that started the chain. Round-tripped opaquely (stored as JSONB). */
+  originator?: Record<string, unknown>;
+  /** Natural-language description of what to resume, e.g. the original user ask. */
+  resumeIntent?: string;
+}
+
 export interface MintNameArgs {
   /** Raw, unresolved name from the skill input. Resolution depends on the policy. */
   rawName: string;
   label?: string;
   valueFormat?: CaptureValueFormat;
+  /** Origin routing context (#972), persisted so redeem can re-enter the agent. Optional. */
+  origin?: CaptureOrigin;
   // NOTE: TTL is intentionally NOT caller-controlled. The lifetime is a fixed security
   // property of the feature (single-use + 30 min, per #971), so callers cannot mint links
   // that are already dead, absurdly long-lived, or NaN. See DEFAULT_CAPTURE_TTL_MINUTES.
@@ -108,9 +130,36 @@ export interface SecretCaptureServiceOptions {
   logger?: Logger;
 }
 
-/** Outcome of a redeem attempt. Vault-write failures are not in this union — they rethrow
+/** Status of a redeem attempt. Vault-write failures are not in this union — they rethrow
  *  (after clearing consumed_at) so the route surfaces a 500 and the user can retry. */
-export type RedeemResult = 'ok' | 'expired' | 'not_found' | 'invalid_json';
+export type RedeemStatus = 'ok' | 'expired' | 'not_found' | 'invalid_json';
+
+/**
+ * Routing context returned on a successful redeem (#972). Carries the secret NAME/label and
+ * the origin captured at mint time — NEVER the value — so the capture endpoint can publish a
+ * `secret.captured` event without re-reading the DB. Mirrors CaptureOrigin plus the resolved
+ * secret name/label.
+ */
+export interface CapturedContext {
+  secretName: string;
+  label: string | null;
+  conversationId?: string;
+  channelId?: string;
+  agentId?: string;
+  taskEventId?: string;
+  originator?: Record<string, unknown>;
+  resumeIntent?: string;
+}
+
+/**
+ * Outcome of a redeem attempt. On 'ok' it carries the captured routing context; every other
+ * status carries nothing. Only a real (winning) claim returns 'ok' with context, so a replayed
+ * redeem of an already-consumed token returns 'expired' and the route publishes no event —
+ * exactly one secret.captured per capture.
+ */
+export type RedeemOutcome =
+  | { status: 'ok'; captured: CapturedContext }
+  | { status: 'expired' | 'not_found' | 'invalid_json' };
 
 export type CaptureMetadata =
   | { label: string | null; valueFormat: CaptureValueFormat }
@@ -130,7 +179,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
    * of a SecretCaptureService can bypass the `user.` namespace sandbox or the system allowlist
    * by passing an arbitrary secretName. TTL is fixed (not a parameter) for the same reason.
    */
-  private async mint(secretName: string, label: string | undefined, valueFormat: CaptureValueFormat): Promise<{ rawToken: string; expiresAt: Date }> {
+  private async mint(secretName: string, label: string | undefined, valueFormat: CaptureValueFormat, origin?: CaptureOrigin): Promise<{ rawToken: string; expiresAt: Date }> {
     // 128-bit raw token, base64url-encoded → a short (~22 char) mixed-case slug that reads
     // like an ordinary magic-link id, NOT a 64-char hex hash. Two reasons for this shape:
     //   1. The relaying LLM was self-redacting the old hex token (it pattern-matched a long
@@ -144,24 +193,38 @@ export class SecretCaptureService implements SecretCaptureMinter {
     // Compute expires_at from the DB clock (now() + TTL), not the app clock, and read it back.
     // Redemption/metadata also compare against the DB now(), so mint and redeem share one time
     // source — app/DB clock skew can never make a link expire early or linger past its TTL.
+    // The routing columns (#972) are nullable and round-tripped only — they hold no secret
+    // material. originator is passed as an object so node-postgres serializes it to the JSONB
+    // column; the rest are plain text. A mint with no origin writes NULLs (backward compatible
+    // with #971), and such a token is simply never resumed.
     const result = await this.pool.query<{ expires_at: Date }>(
-      `INSERT INTO secret_capture_tokens (token_hash, secret_name, label, value_format, expires_at)
-       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5))
+      `INSERT INTO secret_capture_tokens
+         (token_hash, secret_name, label, value_format, expires_at,
+          conversation_id, channel_id, agent_id, task_event_id, originator, resume_intent)
+       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5), $6, $7, $8, $9, $10, $11)
        RETURNING expires_at`,
-      [tokenHash, secretName, label ?? null, valueFormat, DEFAULT_CAPTURE_TTL_MINUTES],
+      [
+        tokenHash, secretName, label ?? null, valueFormat, DEFAULT_CAPTURE_TTL_MINUTES,
+        origin?.conversationId ?? null,
+        origin?.channelId ?? null,
+        origin?.agentId ?? null,
+        origin?.taskEventId ?? null,
+        origin?.originator ?? null,
+        origin?.resumeIntent ?? null,
+      ],
     );
     return { rawToken, expiresAt: result.rows[0]!.expires_at };
   }
 
   async mintUserSecret(args: MintNameArgs): Promise<MintResult> {
     const secretName = resolveUserSecretName(args.rawName);
-    const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string');
+    const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string', args.origin);
     return { rawToken, secretName, expiresAt };
   }
 
   async mintSystemSecret(args: MintNameArgs): Promise<MintResult> {
     const secretName = resolveSystemSecretName(args.rawName, this.options.getAllowedSystemNames());
-    const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string');
+    const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string', args.origin);
     return { rawToken, secretName, expiresAt };
   }
 
@@ -192,7 +255,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
    * single-use token (the user can fix and resubmit). The claim's WHERE clause re-checks
    * single-use/expiry atomically, so concurrent submissions cannot both win.
    */
-  async redeem(rawToken: string, value: string): Promise<RedeemResult> {
+  async redeem(rawToken: string, value: string): Promise<RedeemOutcome> {
     const tokenHash = hashToken(rawToken);
 
     // Peek to distinguish not_found / expired / invalid_json before mutating anything.
@@ -208,15 +271,18 @@ export class SecretCaptureService implements SecretCaptureMinter {
       [tokenHash],
     );
     const row = peek.rows[0];
-    if (!row) return 'not_found';
-    if (row.spent) return 'expired';
+    if (!row) return { status: 'not_found' };
+    if (row.spent) return { status: 'expired' };
 
     let parsed: unknown;
     if (row.value_format === 'json') {
       try {
         parsed = JSON.parse(value);
-      } catch {
-        return 'invalid_json';
+      } catch (err) {
+        // Log (never the value) so a malformed submission is traceable, then surface invalid_json.
+        // The token is NOT burned — the user can fix and resubmit.
+        this.options.logger?.warn({ err }, 'secret-capture: invalid JSON payload during redeem — token left unspent for retry');
+        return { status: 'invalid_json' };
       }
     }
 
@@ -226,15 +292,31 @@ export class SecretCaptureService implements SecretCaptureMinter {
     // We consume the token BEFORE writing to the vault (not after) so a crash between the two
     // can never leave a redeemable token whose value was already stored. The failure direction
     // is "capability lost, retry needed" rather than "single-use token still reusable".
-    const claim = await this.pool.query<{ secret_name: string; value_format: CaptureValueFormat }>(
+    //
+    // RETURNING also pulls the routing columns (#972) so the caller can publish secret.captured
+    // without a second read. Only the winning claim returns a row, so a replayed redeem of an
+    // already-consumed token falls through to 'expired' and yields no captured context — the
+    // route then publishes nothing, giving exactly one event per real capture.
+    const claim = await this.pool.query<{
+      secret_name: string;
+      value_format: CaptureValueFormat;
+      label: string | null;
+      conversation_id: string | null;
+      channel_id: string | null;
+      agent_id: string | null;
+      task_event_id: string | null;
+      originator: Record<string, unknown> | null;
+      resume_intent: string | null;
+    }>(
       `UPDATE secret_capture_tokens
           SET consumed_at = now()
         WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
-        RETURNING secret_name, value_format`,
+        RETURNING secret_name, value_format, label,
+                  conversation_id, channel_id, agent_id, task_event_id, originator, resume_intent`,
       [tokenHash],
     );
     const claimed = claim.rows[0];
-    if (!claimed) return 'expired';
+    if (!claimed) return { status: 'expired' };
 
     try {
       if (claimed.value_format === 'json') {
@@ -263,6 +345,20 @@ export class SecretCaptureService implements SecretCaptureMinter {
       }
       throw err; // always the original vault-write error, never the rollback error
     }
-    return 'ok';
+    // Return the routing context (NEVER the value) so the caller can publish secret.captured.
+    // Normalize SQL NULLs to undefined so the event payload omits absent fields cleanly.
+    return {
+      status: 'ok',
+      captured: {
+        secretName: claimed.secret_name,
+        label: claimed.label,
+        conversationId: claimed.conversation_id ?? undefined,
+        channelId: claimed.channel_id ?? undefined,
+        agentId: claimed.agent_id ?? undefined,
+        taskEventId: claimed.task_event_id ?? undefined,
+        originator: claimed.originator ?? undefined,
+        resumeIntent: claimed.resume_intent ?? undefined,
+      },
+    };
   }
 }

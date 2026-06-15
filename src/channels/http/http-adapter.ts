@@ -400,6 +400,8 @@ export class HttpAdapter implements Channel {
       await this.app.register(secretCaptureRoutes, {
         secretCaptureService: this.config.secretCaptureService,
         logger,
+        // Pass the bus so a successful redeem publishes secret.captured for agent resume (#972).
+        bus,
       });
     }
 

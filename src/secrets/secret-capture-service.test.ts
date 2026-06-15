@@ -138,6 +138,42 @@ describe('SecretCaptureService minting (via the public name-policy entry points)
     expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + 29 * 60_000);
     expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 31 * 60_000);
   });
+
+  it('persists the origin routing context on the token at mint time (#972)', async () => {
+    const { svc, queries } = makeService();
+    const originator = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' };
+    await svc.mintUserSecret({
+      rawName: 'Aeroplan password',
+      label: 'Aeroplan password',
+      origin: {
+        conversationId: 'conv-1',
+        channelId: 'email',
+        agentId: 'coordinator',
+        taskEventId: 'task-evt-9',
+        originator,
+        resumeIntent: 'check my Aeroplan balance',
+      },
+    });
+    const insert = queries.find(q => q.sql.includes('INSERT INTO secret_capture_tokens'));
+    expect(insert).toBeDefined();
+    // The INSERT must name the routing columns and carry their values as parameters.
+    expect(insert!.sql).toContain('conversation_id');
+    expect(insert!.sql).toContain('resume_intent');
+    expect(insert!.params).toContain('conv-1');
+    expect(insert!.params).toContain('email');
+    expect(insert!.params).toContain('coordinator');
+    expect(insert!.params).toContain('task-evt-9');
+    expect(insert!.params).toContain('check my Aeroplan balance');
+    expect(insert!.params).toContainEqual(originator);
+  });
+
+  it('mints with NULL routing when no origin is supplied (backward compatible with #971)', async () => {
+    const { svc, queries } = makeService();
+    await svc.mintUserSecret({ rawName: 'x' });
+    const insert = queries.find(q => q.sql.includes('INSERT INTO secret_capture_tokens'));
+    // The four routing params after the fixed columns + TTL should all be null when no origin.
+    expect(insert!.params.filter(p => p === null).length).toBeGreaterThanOrEqual(5);
+  });
 });
 
 describe('SecretCaptureService.mintUserSecret / mintSystemSecret', () => {
@@ -195,23 +231,23 @@ describe('SecretCaptureService.redeem', () => {
 
   it('returns not_found for an unknown token', async () => {
     const { svc } = makeService(router({ peek: [] }));
-    expect(await svc.redeem('deadbeef', 'val')).toBe('not_found');
+    expect(await svc.redeem('deadbeef', 'val')).toEqual({ status: 'not_found' });
   });
 
   it('returns expired for a consumed token', async () => {
     const { svc } = makeService(router({
       peek: [{ value_format: 'string', spent: true }],
     }));
-    expect(await svc.redeem('deadbeef', 'val')).toBe('expired');
+    expect(await svc.redeem('deadbeef', 'val')).toEqual({ status: 'expired' });
   });
 
   it('writes a string value into the vault and consumes the token', async () => {
     const { svc, secrets, queries } = makeService(router({
       peek: [{ value_format: 'string', spent: false }],
-      claim: [{ secret_name: 'user.flight', value_format: 'string' }],
+      claim: [{ secret_name: 'user.flight', value_format: 'string', label: 'Flight password' }],
     }));
     const result = await svc.redeem('deadbeef', 'hunter2');
-    expect(result).toBe('ok');
+    expect(result.status).toBe('ok');
     expect(secrets.setCalls).toEqual([{ name: 'user.flight', value: 'hunter2' }]);
     // The atomic claim guards consumed_at IS NULL AND expires_at > now() — single use.
     const claim = queries.find(q => q.sql.includes('SET consumed_at = now()'));
@@ -219,13 +255,46 @@ describe('SecretCaptureService.redeem', () => {
     expect(claim!.sql).toContain('expires_at > now()');
   });
 
+  it('returns the captured routing context on ok — never the value (#972)', async () => {
+    const { svc } = makeService(router({
+      peek: [{ value_format: 'string', spent: false }],
+      claim: [{
+        secret_name: 'user.aeroplan_password',
+        value_format: 'string',
+        label: 'Aeroplan password',
+        conversation_id: 'conv-1',
+        channel_id: 'email',
+        agent_id: 'coordinator',
+        task_event_id: 'task-evt-9',
+        originator: { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' },
+        resume_intent: 'check my Aeroplan balance',
+      }],
+    }));
+    const result = await svc.redeem('deadbeef', 'hunter2');
+    expect(result).toEqual({
+      status: 'ok',
+      captured: {
+        secretName: 'user.aeroplan_password',
+        label: 'Aeroplan password',
+        conversationId: 'conv-1',
+        channelId: 'email',
+        agentId: 'coordinator',
+        taskEventId: 'task-evt-9',
+        originator: { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' },
+        resumeIntent: 'check my Aeroplan balance',
+      },
+    });
+    // Privacy invariant: the submitted value must not appear anywhere in the captured context.
+    expect(JSON.stringify(result)).not.toContain('hunter2');
+  });
+
   it('writes JSON via setJSON when value_format is json', async () => {
     const { svc, secrets } = makeService(router({
       peek: [{ value_format: 'json', spent: false }],
-      claim: [{ secret_name: 'user.creds', value_format: 'json' }],
+      claim: [{ secret_name: 'user.creds', value_format: 'json', label: null }],
     }));
     const result = await svc.redeem('deadbeef', '{"a":1}');
-    expect(result).toBe('ok');
+    expect(result.status).toBe('ok');
     expect(secrets.setJSONCalls).toEqual([{ name: 'user.creds', obj: { a: 1 } }]);
   });
 
@@ -234,18 +303,20 @@ describe('SecretCaptureService.redeem', () => {
       peek: [{ value_format: 'json', spent: false }],
     }));
     const result = await svc.redeem('deadbeef', 'not json');
-    expect(result).toBe('invalid_json');
+    expect(result).toEqual({ status: 'invalid_json' });
     expect(secrets.setJSONCalls).toHaveLength(0);
     // No claim UPDATE should have fired — the token is still usable for a retry.
     expect(queries.find(q => q.sql.includes('SET consumed_at = now()'))).toBeUndefined();
   });
 
-  it('treats a lost claim race as expired (single-use)', async () => {
+  it('treats a lost claim race as expired (single-use) — replay yields no captured context', async () => {
     const { svc } = makeService(router({
       peek: [{ value_format: 'string', spent: false }],
       claim: [], // someone else consumed it between peek and claim
     }));
-    expect(await svc.redeem('deadbeef', 'val')).toBe('expired');
+    // A replayed (already-consumed) redeem returns expired with no captured context, so the
+    // route publishes nothing — exactly one secret.captured event per real capture (#972).
+    expect(await svc.redeem('deadbeef', 'val')).toEqual({ status: 'expired' });
   });
 
   it('clears consumed_at and rethrows when the vault write fails', async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
-import { createInboundMessage, createAgentError, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type MessageHeldEvent, type ContactUnknownEvent } from '../../../src/bus/events.js';
+import { createInboundMessage, createAgentError, createAgentTask, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type MessageHeldEvent, type ContactUnknownEvent } from '../../../src/bus/events.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -109,6 +109,63 @@ describe('Dispatcher', () => {
     expect(outbound).toHaveLength(1);
     expect(outbound[0]?.payload.content).toBe('Response from Coordinator');
     expect(outbound[0]?.payload.channelId).toBe('cli');
+  });
+});
+
+// #972: a synthetic agent.task (e.g. the secret-capture resume path) never passes through
+// handleInbound, so it needs registerExternalTaskRouting to seed routing — otherwise the
+// agent's response finds no routing entry and is dropped, never reaching the user.
+describe('Dispatcher.registerExternalTaskRouting (#972 resume path)', () => {
+  function buildHarness() {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const outbound: OutboundMessageEvent[] = [];
+    const mockProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'text' as const,
+        content: 'Resumed response',
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      }),
+    };
+    const coordinator = new AgentRuntime({ agentId: 'coordinator', systemPrompt: 'x', provider: mockProvider, bus, logger });
+    coordinator.register();
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+    bus.subscribe('outbound.message', 'channel', (event) => { outbound.push(event as OutboundMessageEvent); });
+    return { bus, dispatcher, outbound };
+  }
+
+  it('delivers the resumed agent response to the originating channel/conversation', async () => {
+    const { bus, dispatcher, outbound } = buildHarness();
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'ceo',
+      content: 'A secret was captured — continue.',
+      parentEventId: 'task-evt-9',
+    });
+    // Seed routing BEFORE publishing the synthetic task (mirrors the resume subscriber).
+    dispatcher.registerExternalTaskRouting(task.id, { channelId: 'email', conversationId: 'conv-1', senderId: 'ceo' });
+    await bus.publish('system', task);
+
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]!.payload.conversationId).toBe('conv-1');
+    expect(outbound[0]!.payload.channelId).toBe('email');
+    expect(outbound[0]!.payload.content).toBe('Resumed response');
+  });
+
+  it('drops the response when no routing was registered (proves the entry is required)', async () => {
+    const { bus, outbound } = buildHarness();
+    const task = createAgentTask({
+      agentId: 'coordinator', conversationId: 'conv-1', channelId: 'email',
+      senderId: 'ceo', content: 'no routing', parentEventId: 'task-evt-9',
+    });
+    // Intentionally skip registerExternalTaskRouting.
+    await bus.publish('system', task);
+    expect(outbound).toHaveLength(0);
   });
 });
 
