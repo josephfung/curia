@@ -1,8 +1,8 @@
 // apps/console/src/pages/chat/useChatSession.ts
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { apiFetch } from '../../api.js';
-import { makeMessage, parseSseEvent } from './chat-utils.js';
-import type { Message } from './types.js';
+import { makeMessage, parseSseEvent, pickRecoveredReply } from './chat-utils.js';
+import type { Message, HistoryMessage } from './types.js';
 
 // localStorage key for persisting the conversationId across page reloads.
 const CONV_ID_KEY = 'curia:chat:conversationId';
@@ -12,6 +12,19 @@ const KICKOFF_TEXT = 'Just finished setup — say hi!';
 
 const HISTORY_PAGE_SIZE = 25;
 
+// Ack-and-stream (#985): the reply arrives over SSE, not the POST. If no terminal
+// event arrives within this window (rare: a suppressed-duplicate turn or an agent
+// crash), the client fetches /history once to recover a missed reply, then shows a
+// soft notice and unlocks the composer WITHOUT closing the stream — a late reply
+// still renders. Deliberately long so legitimately slow tasks are never cut off.
+const REPLY_WATCHDOG_MS = 5 * 60_000;
+// How long to wait for the SSE connection to open before POSTing anyway. If the
+// stream is degraded the POST still publishes and the watchdog recovers the reply.
+const SSE_OPEN_TIMEOUT_MS = 3_000;
+// Shown when the watchdog fires and /history has no reply yet.
+const STILL_WORKING_TEXT =
+  'Still working on this — it is taking longer than usual. The reply will appear here when it is ready.';
+
 interface ChatSession {
   messages: Message[];
   sending: boolean;
@@ -19,14 +32,6 @@ interface ChatSession {
   loadingHistory: boolean;
   send: (text: string) => Promise<void>;
   loadMore: () => Promise<void>;
-}
-
-interface HistoryMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  html: string | null;
-  timestamp: string;
 }
 
 interface HistoryResponse {
@@ -197,6 +202,12 @@ export function useChatSession(): ChatSession {
     }
     const convId = conversationId.current;
 
+    // Close any stream left open by a prior turn's soft-recovery path before
+    // starting a new one, so we never leak a dangling EventSource.
+    sourceRef.current?.close();
+    sourceRef.current = null;
+
+    const sentAt = Date.now();
     // Optimistic append so the user sees their message immediately.
     setMessages((prev) => [
       ...prev,
@@ -205,30 +216,102 @@ export function useChatSession(): ChatSession {
     isSending.current = true;
     setSending(true);
 
-    // EventSource is created inside try so a synchronous constructor failure
-    // (e.g. CSP block) hits the catch block and resets the sending state.
     let source: EventSource | undefined;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+
+    // Unlock the composer (and stop the watchdog) without touching the stream —
+    // used by the soft-recovery path so a late reply can still render.
+    const unlock = () => {
+      if (watchdog) { clearTimeout(watchdog); watchdog = undefined; }
+      isSending.current = false;
+      setSending(false);
+    };
+    // Fully finish the turn: unlock and close the stream. Idempotent.
+    const finalize = () => {
+      if (settled) return;
+      settled = true;
+      unlock();
+      source?.close();
+      sourceRef.current = null;
+    };
+
+    // Watchdog recovery: fetch one history page and render a missed reply, else
+    // post a soft notice and unlock (leaving the stream open for a late reply).
+    const runRecovery = async () => {
+      try {
+        const res = await apiFetch(
+          `/api/kg/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
+        );
+        if (res.ok) {
+          const data = (await res.json()) as HistoryResponse;
+          const recovered = pickRecoveredReply(data.messages, sentAt);
+          if (recovered) {
+            setMessages((prev) => [
+              ...prev,
+              makeMessage('agent', recovered.text, { html: recovered.html ?? undefined, timestamp: new Date() }),
+            ]);
+            finalize();
+            return;
+          }
+        } else {
+          console.error('[useChatSession] recovery history fetch non-ok:', res.status);
+        }
+      } catch (err) {
+        console.error('[useChatSession] recovery history fetch failed:', err);
+      }
+      // Nothing to recover yet — soft notice, unlock, keep the stream open.
+      setMessages((prev) => [...prev, makeMessage('status', STILL_WORKING_TEXT)]);
+      unlock();
+    };
+
     try {
-      // Open the SSE stream BEFORE the POST to avoid racing a fast reply.
-      // withCredentials sends the session cookie, matching apiFetch behavior.
+      // Open the SSE stream and wait for it to connect BEFORE the POST, so a fast
+      // reply broadcast can't race past an unregistered stream. withCredentials
+      // sends the session cookie, matching apiFetch behavior.
       source = new EventSource(
         `/api/kg/chat/stream?conversationId=${encodeURIComponent(convId)}`,
         { withCredentials: true },
       );
-      sourceRef.current = source as EventSource;
+      sourceRef.current = source;
+
       source.onmessage = (event: MessageEvent<string>) => {
-        const statusText = parseSseEvent(event.data);
-        if (statusText) {
-          setMessages((prev) => [...prev, makeMessage('status', statusText)]);
+        const parsed = parseSseEvent(event.data);
+        if (!parsed) return;
+        if (parsed.kind === 'status') {
+          setMessages((prev) => [...prev, makeMessage('status', parsed.text)]);
+          return;
         }
+        if (parsed.kind === 'reply') {
+          // Terminal: the agent's final reply for this turn.
+          setMessages((prev) => [
+            ...prev,
+            makeMessage('agent', parsed.text, { html: parsed.html ?? undefined, timestamp: new Date() }),
+          ]);
+          finalize();
+          return;
+        }
+        // parsed.kind === 'rejected' — terminal error.
+        setMessages((prev) => [...prev, makeMessage('error', parsed.text)]);
+        finalize();
       };
+
       source.onerror = (event) => {
-        // SSE failures are non-fatal — the POST response is authoritative.
-        // Close immediately to prevent the browser's automatic reconnection loop.
-        console.error('[useChatSession] SSE stream error:', event);
-        // source is always defined here — onerror can only fire after construction.
-        source!.close();
+        // Non-fatal: EventSource auto-reconnects on transient errors. On a fatal
+        // close (readyState === CLOSED) the reply, if any, is recovered by the
+        // watchdog via /history. We do not finalize here so a reconnect can still
+        // deliver the terminal event.
+        console.error('[useChatSession] SSE stream error (readyState=%d):', source?.readyState, event);
       };
+
+      // Wait for the stream to open, but don't block forever — if it doesn't open
+      // within SSE_OPEN_TIMEOUT_MS, POST anyway and let the watchdog recover.
+      await new Promise<void>((resolve) => {
+        if (!source) { resolve(); return; }
+        if (source.readyState === EventSource.OPEN) { resolve(); return; }
+        const to = setTimeout(resolve, SSE_OPEN_TIMEOUT_MS);
+        source.onopen = () => { clearTimeout(to); resolve(); };
+      });
 
       const res = await apiFetch('/api/kg/chat/messages', {
         method: 'POST',
@@ -246,38 +329,20 @@ export function useChatSession(): ChatSession {
           console.error('[useChatSession] failed to parse error response body:', bodyErr);
         }
         setMessages((prev) => [...prev, makeMessage('error', errMsg)]);
+        finalize();
         return;
       }
 
-      const raw = await res.json() as unknown;
-      if (
-        typeof raw !== 'object' ||
-        raw === null ||
-        typeof (raw as Record<string, unknown>)['reply'] !== 'string'
-      ) {
-        console.error('[useChatSession] unexpected response shape:', raw);
-        setMessages((prev) => [...prev, makeMessage('error', 'Received an unexpected response.')]);
-        return;
-      }
-      // Runtime guard above confirmed `reply` is a string; cast through unknown
-      // per project convention for narrowing from Record<string, unknown>.
-      const data = raw as unknown as { reply: string; html: string | null; conversationId: string };
-      setMessages((prev) => [
-        ...prev,
-        makeMessage('agent', data.reply, {
-          html: data.html ?? undefined,
-          timestamp: new Date(),
-        }),
-      ]);
+      // 202 ack received. The reply arrives over SSE; arm the watchdog in case it
+      // never does (suppressed-duplicate turn or agent crash).
+      watchdog = setTimeout(() => { void runRecovery(); }, REPLY_WATCHDOG_MS);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Network error';
       setMessages((prev) => [...prev, makeMessage('error', msg)]);
-    } finally {
-      isSending.current = false;
-      source?.close();
-      sourceRef.current = null;
-      setSending(false);
+      finalize();
     }
+    // NOTE: no finally that clears sending/closes the stream — the turn is
+    // finished by the SSE terminal event, the watchdog, or an error path above.
   }
 
   return { messages, sending, hasMore, loadingHistory, send, loadMore };
