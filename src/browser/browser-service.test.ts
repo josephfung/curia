@@ -6,7 +6,10 @@
 //   RUN_BROWSER_TESTS=1 pnpm test src/browser/browser-service.test.ts
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { BrowserService } from './browser-service.js';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { BrowserService, clearStaleX11Lock } from './browser-service.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -144,6 +147,96 @@ describe('BrowserService (unit — mocked browser)', () => {
     await service.stop();
     expect(mockContext.close).toHaveBeenCalledTimes(2);
     expect(mockBrowser.close).toHaveBeenCalledOnce();
+  });
+});
+
+// --- clearStaleX11Lock (stale Xvfb lock cleanup) ---
+
+describe('clearStaleX11Lock', () => {
+  let dir: string;       // fake tmp dir standing in for /tmp
+  let lockPath: string;  // fake /tmp/.X99-lock
+  let socketPath: string; // fake /tmp/.X11-unix/X99
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'xvfb-lock-test-'));
+    mkdirSync(join(dir, '.X11-unix'), { recursive: true });
+    lockPath = join(dir, '.X99-lock');
+    socketPath = join(dir, '.X11-unix', 'X99');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('removes a stale lock + socket when no live process owns the display', () => {
+    // X servers write the owning PID left-padded to 10 chars with a trailing newline.
+    writeFileSync(lockPath, '      4242\n');
+    writeFileSync(socketPath, '');
+
+    const removed = clearStaleX11Lock({
+      displayNum: 99,
+      tmpDir: dir,
+      // Owning PID is dead — this is the crash-leftover case from the issue.
+      isProcessAlive: () => false,
+      logger,
+    });
+
+    expect(removed).toBe(true);
+    expect(existsSync(lockPath)).toBe(false);
+    expect(existsSync(socketPath)).toBe(false);
+  });
+
+  it('leaves the lock + socket intact when a live X server owns the display', () => {
+    writeFileSync(lockPath, '      4242\n');
+    writeFileSync(socketPath, '');
+
+    const removed = clearStaleX11Lock({
+      displayNum: 99,
+      tmpDir: dir,
+      // A genuinely live owner must never be clobbered.
+      isProcessAlive: () => true,
+      logger,
+    });
+
+    expect(removed).toBe(false);
+    expect(existsSync(lockPath)).toBe(true);
+    expect(existsSync(socketPath)).toBe(true);
+  });
+
+  it('treats an unparseable lock as stale and removes it (liveness check is skipped)', () => {
+    writeFileSync(lockPath, 'not-a-pid\n');
+    const aliveCheck = vi.fn().mockReturnValue(true);
+
+    const removed = clearStaleX11Lock({ displayNum: 99, tmpDir: dir, isProcessAlive: aliveCheck, logger });
+
+    expect(removed).toBe(true);
+    expect(existsSync(lockPath)).toBe(false);
+    // No PID to check, so the liveness probe should never run.
+    expect(aliveCheck).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when no lock or socket is present', () => {
+    const removed = clearStaleX11Lock({
+      displayNum: 99,
+      tmpDir: dir,
+      isProcessAlive: () => false,
+      logger,
+    });
+    expect(removed).toBe(false);
+  });
+
+  it('leaves a lockless socket untouched — no PID means ownership cannot be proven', () => {
+    // Socket present but no lock file. Without a recorded PID we can't prove the
+    // display is free, so we must not remove it (could clobber a live server). A
+    // genuinely stale lockless socket is harmless — the X server recreates it.
+    writeFileSync(socketPath, '');
+    const aliveCheck = vi.fn().mockReturnValue(false);
+
+    const removed = clearStaleX11Lock({ displayNum: 99, tmpDir: dir, isProcessAlive: aliveCheck, logger });
+
+    expect(removed).toBe(false);
+    expect(existsSync(socketPath)).toBe(true);
+    expect(aliveCheck).not.toHaveBeenCalled();
   });
 });
 

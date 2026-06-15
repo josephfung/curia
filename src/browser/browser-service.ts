@@ -25,6 +25,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { chromium, type Browser } from 'playwright';
 import { PlaywrightBlocker } from '@ghostery/adblocker-playwright';
 import type { Logger } from '../logger.js';
@@ -293,6 +294,13 @@ export class BrowserService {
       return;
     }
 
+    // Clear a stale :99 lock left by a previous unclean exit (crash, OOM, hard
+    // restart). stop() removes Xvfb on graceful shutdown, but cannot run on a hard
+    // crash — and the lock/socket survive in the container's writable layer across
+    // a `docker restart`, so cleanup-before-start is the only robust place to handle
+    // it. Guarded on a live X server so a genuinely active display is never clobbered.
+    clearStaleX11Lock({ displayNum: 99, logger: this.logger });
+
     this.logger.info('Spawning Xvfb virtual display on :99');
     this.xvfbProcess = spawn('Xvfb', [':99', '-screen', '0', '1280x720x24'], {
       stdio: 'ignore',
@@ -334,5 +342,106 @@ export class BrowserService {
       setTimeout(() => { cleanup(); resolve(); }, 500);
     });
     this.logger.info('Xvfb started on DISPLAY=:99');
+  }
+}
+
+interface ClearStaleX11LockOptions {
+  /** X display number (e.g. 99 for `:99`). */
+  displayNum: number;
+  logger: Logger;
+  /** Base tmp directory holding the lock + socket. Defaults to '/tmp'. Overridable for tests. */
+  tmpDir?: string;
+  /**
+   * Liveness probe for the PID recorded in the lock file. Defaults to a real
+   * check that the process is both alive AND an X server (to survive PID reuse).
+   * Overridable for tests.
+   */
+  isProcessAlive?: (pid: number) => boolean;
+}
+
+/**
+ * Remove a stale X11 lock file (`/tmp/.X<n>-lock`) and socket (`/tmp/.X11-unix/X<n>`)
+ * left behind by a previous unclean exit, but only when no live X server owns the
+ * display. Returns true if any stale file was removed.
+ *
+ * The whole check is gated on the lock file, because that is the authoritative signal
+ * of display ownership: an X server always creates `/tmp/.X<n>-lock` (recording its
+ * PID, left-padded to 10 chars) when it claims a display. We read that PID and probe
+ * liveness — if the owner is a genuinely live X server we leave everything untouched
+ * so an active display is never clobbered. If the PID is dead, missing, or unparseable,
+ * the lock is an orphan from a crash and we remove it together with its socket.
+ *
+ * We deliberately do NOT remove a socket when no lock file is present: with no recorded
+ * PID we can't prove the display is free, so removing it could clobber a live server
+ * (guard on a live process, not file presence). A genuinely orphaned lockless socket is
+ * harmless — the X server unlinks and recreates a stale socket itself on startup.
+ */
+export function clearStaleX11Lock(opts: ClearStaleX11LockOptions): boolean {
+  const { displayNum, logger, tmpDir = '/tmp', isProcessAlive = isLiveXServer } = opts;
+  const lockPath = `${tmpDir}/.X${displayNum}-lock`;
+  const socketPath = `${tmpDir}/.X11-unix/X${displayNum}`;
+
+  // No lock file → the X server considers `:${displayNum}` free. Nothing to clean,
+  // and without a recorded PID we have no safe basis to remove the socket.
+  if (!existsSync(lockPath)) return false;
+
+  // A lock file with a live X-server owner means the display is genuinely in use —
+  // bail out without touching anything.
+  const pid = readLockPid(lockPath);
+  if (pid !== null && isProcessAlive(pid)) {
+    logger.warn({ display: `:${displayNum}`, pid }, 'Xvfb lock owned by a live X server — leaving it alone');
+    return false;
+  }
+
+  // No live owner — remove the orphaned lock and socket from the prior unclean exit.
+  let removed = false;
+  for (const path of [lockPath, socketPath]) {
+    if (!existsSync(path)) continue;
+    try {
+      rmSync(path, { force: true });
+      removed = true;
+    } catch (err) {
+      logger.error({ err, path }, 'Failed to remove stale Xvfb file — Xvfb may fail to claim the display');
+    }
+  }
+  if (removed) {
+    logger.warn({ display: `:${displayNum}` }, 'Removed stale Xvfb lock/socket left by a previous unclean exit');
+  }
+  return removed;
+}
+
+/** Read the owning PID from an X11 lock file. Returns null if absent or unparseable. */
+function readLockPid(lockPath: string): number | null {
+  try {
+    // Format: PID left-padded to 10 chars plus a trailing newline. parseInt skips leading space.
+    const pid = Number.parseInt(readFileSync(lockPath, 'utf8').trim(), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    // Unreadable lock file — treat as no valid owner so the caller removes it.
+    return null;
+  }
+}
+
+/**
+ * Default liveness probe: true only if `pid` is alive AND looks like an X server.
+ * The X-server check (via /proc/<pid>/cmdline) guards against PID reuse, where the
+ * recorded PID has been recycled by some unrelated process. If liveness is confirmed
+ * but the command line can't be read, we conservatively assume the display is owned
+ * (better to skip cleanup than risk clobbering a live server).
+ */
+function isLiveXServer(pid: number): boolean {
+  try {
+    // Signal 0 performs no signal delivery — it only probes for the process's existence.
+    process.kill(pid, 0);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false; // no such process
+    // EPERM: the process exists but we can't signal it — still alive, fall through.
+  }
+  try {
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+    return cmdline.includes('Xvfb') || cmdline.includes('Xorg');
+  } catch {
+    // Couldn't inspect the command line; the process is alive, so assume it owns the display.
+    return true;
   }
 }
