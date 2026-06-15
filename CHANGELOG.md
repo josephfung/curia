@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Coordinator prompt (policy/reference split)** — tool-specific mechanics moved out of the coordinator prompt into the skill manifests the model already sees: config-store namespace conventions, the context_bridge shape, and decay-warning nudge phrasings now live on their respective skills; the `## Reference` region is removed. Drive-upload steps stay condensed in the prompt (their target `create_drive_file` is an MCP tool with no local manifest). (#958)
 - **`config-store` / `email-reply` / `email-send` / `signal-send` / `decay-warnings-list`** — descriptions/input docs expanded to carry the relocated mechanics; behavior unchanged. (#958)
 - **User chat bubble** — user messages now appear with a teal background (`--app-teal`) and white text, visually distinguishing them from agent replies.
+- **Web console chat (ack-and-stream)** — `POST /api/kg/chat/messages` now acks with `202` and the reply streams over SSE instead of blocking on a 120s synchronous wait, so long agent tasks (browser automation, delegation chains, research) complete without a 504. (#985)
 
 - **`secret-capture-request` (skill manifest schema)** — adds an optional `resume_intent` input and persists the minting agent's routing context on the token so the capture can re-enter the right conversation. (#972)
 

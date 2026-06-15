@@ -13,6 +13,7 @@ import type { EventBus } from '../../bus/bus.js';
 import type { BusEvent } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
 import type { ServerResponse } from 'node:http';
+import { markdownToHtml } from '../../utils/markdown-to-html.js';
 
 /**
  * Thrown by the event router when the dispatcher rejects a message. Typed
@@ -160,10 +161,30 @@ export class EventRouter {
       // Stream to all SSE clients (filtered by conversationId if set).
       // Wrap writes in try/catch so a dead client doesn't abort delivery
       // to the remaining clients in this dispatch cycle.
+      //
+      // Render markdown→HTML server-side so the SSE consumer (the web console)
+      // gets the same pre-rendered HTML the POST path used to return. Wrapped in
+      // try/catch: a render failure must degrade to html: null, never drop the
+      // message event. (#985)
+      let html: string | null = null;
+      try {
+        html = markdownToHtml(event.payload.content);
+      } catch (renderErr) {
+        // Include the content length so the failure is reproducible from the log
+        // (conversationId alone can't recover the offending content once working_memory
+        // rolls). Guard the .length read: content may be a non-string in the throw case.
+        const contentLength =
+          typeof event.payload.content === 'string' ? event.payload.content.length : undefined;
+        this.logger.warn(
+          { err: renderErr, conversationId: convId, contentLength },
+          'markdownToHtml failed for SSE message; sending html: null',
+        );
+      }
       const sseData = JSON.stringify({
         type: 'message',
         conversation_id: convId,
         content: event.payload.content,
+        html,
         timestamp: event.timestamp,
       });
       this.broadcastToSseClients(sseData, convId);

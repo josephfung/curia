@@ -1,11 +1,37 @@
-import type { Message } from './types.js';
+import type { Message, SseEvent, HistoryMessage } from './types.js';
 
 /**
- * Parses a raw SSE event data string into a human-readable status label,
- * or returns null for events that should not be displayed in the thread.
- * Only skill.invoke events produce visible status messages.
+ * Friendly, user-facing text for a message.rejected reason code.
+ *
+ * Reason codes mirror MessageRejectedEvent.reason in src/bus/events.ts:
+ * unknown_sender | provisional_sender | blocked_sender | message_too_large
+ * | global_rate_limited | sender_rate_limited. Both rate-limit variants get the
+ * same friendly copy; everything else falls back to a generic message naming the
+ * reason (the sender-identity reasons can't normally occur on the CEO-only web
+ * channel, so a generic message is acceptable for them).
  */
-export function parseSseEvent(data: string): string | null {
+function rejectionText(reason: string): string {
+  switch (reason) {
+    case 'global_rate_limited':
+    case 'sender_rate_limited':
+      return 'Rate limit reached. Please wait a moment and try again.';
+    case 'message_too_large':
+      return 'That message is too large to process.';
+    default:
+      return `Message rejected (${reason}).`;
+  }
+}
+
+/**
+ * Parses a raw SSE event data string from GET /api/kg/chat/stream into a
+ * normalized SseEvent, or null for events the chat UI ignores.
+ *
+ * Ack-and-stream (#985): the POST only acks, so the `message` event is now the
+ * source of truth for the agent's final reply (terminal). `message.rejected` is
+ * a terminal error. `skill.invoke` is intermediate progress. Everything else
+ * (skill.result, malformed payloads, unknown types) returns null.
+ */
+export function parseSseEvent(data: string): SseEvent | null {
   let payload: unknown;
   try {
     payload = JSON.parse(data);
@@ -17,9 +43,55 @@ export function parseSseEvent(data: string): string | null {
   }
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as Record<string, unknown>;
-  if (p['type'] === 'skill.invoke') {
-    const skill = typeof p['skill'] === 'string' ? p['skill'] : 'skill';
-    return `invoking ${skill}`;
+
+  switch (p['type']) {
+    case 'skill.invoke': {
+      const skill = typeof p['skill'] === 'string' ? p['skill'] : 'skill';
+      return { kind: 'status', text: `invoking ${skill}` };
+    }
+    case 'message': {
+      const text = typeof p['content'] === 'string' ? p['content'] : '';
+      const html = typeof p['html'] === 'string' ? p['html'] : null;
+      return { kind: 'reply', text, html };
+    }
+    case 'message.rejected': {
+      const reason = typeof p['reason'] === 'string' ? p['reason'] : 'unknown';
+      return { kind: 'rejected', text: rejectionText(reason) };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Recovery helper for the client watchdog: given a page of chat history (oldest
+ * first), return the assistant reply to the most recent user turn — i.e. the most
+ * recent assistant message positioned AFTER the last user message. Returns null
+ * when the latest turn is still unanswered (history ends on a user message) or
+ * there is no user turn yet.
+ *
+ * Uses message ORDERING, not wall-clock timestamps. The previous version compared
+ * a server-written timestamp against a client-side Date.now(), which a skewed
+ * client clock could trip — a valid reply judged "too old" and silently dropped.
+ * The server persists the inbound user turn (runtime addTurn) before producing a
+ * reply, so "an assistant message after the last user message" reliably identifies
+ * the reply to the current turn without depending on either clock. (#985)
+ */
+export function pickRecoveredReply(
+  items: HistoryMessage[],
+): { text: string; html: string | null } | null {
+  // Find the most recent user message; its reply (if any) sits after it.
+  let lastUserIdx = -1;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i]!.role === 'user') { lastUserIdx = i; break; }
+  }
+  if (lastUserIdx === -1) return null;
+
+  for (let i = items.length - 1; i > lastUserIdx; i--) {
+    const m = items[i]!;
+    if (m.role === 'assistant') {
+      return { text: m.content, html: m.html };
+    }
   }
   return null;
 }

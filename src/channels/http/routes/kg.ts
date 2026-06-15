@@ -7,7 +7,7 @@ import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import { ContactValidationError } from '../../../contacts/contact-service.js';
 import type { Contact, ContactCanonicalFields, ContactStatus, TrustLevel } from '../../../contacts/types.js';
-import { type EventRouter, mapWaitFailureToHttp } from '../event-router.js';
+import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
 import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
@@ -30,10 +30,6 @@ export interface KnowledgeGraphRouteOptions {
   // so both can accept the curia_session cookie for authentication.
   sessions: SessionStore;
 }
-
-// How long the chat POST waits for an agent response before timing out.
-// Mirrors RESPONSE_TIMEOUT_MS in src/channels/http/routes/messages.ts — keep in sync.
-const CHAT_RESPONSE_TIMEOUT_MS = 120_000;
 
 // Channel identifier used when the KG web app dispatches messages to the agent layer.
 // The 'web' channel is special-cased in contact-resolver.ts to auto-resolve to the CEO —
@@ -1047,14 +1043,17 @@ export async function knowledgeGraphRoutes(
   // (programmatic flow, e.g. tests and scripts).
 
   /**
-   * POST /api/kg/chat/messages — dispatch a chat message, wait for the agent response.
+   * POST /api/kg/chat/messages — publish a chat message and ack immediately.
    *
    * Body: { message: string, conversationId?: string }
-   * Response: { reply: string, conversationId: string }
+   * Response: 202 { conversationId }
    *
-   * Mirrors the publish/wait pattern in POST /api/messages: register the waiter BEFORE
-   * publishing so a fast response isn't missed, then map publish/timeout/rejection
-   * errors to structured HTTP status codes.
+   * Ack-and-stream (#985): the handler publishes the inbound message and returns
+   * 202 without waiting for the agent's reply. The final reply and intermediate
+   * progress (skill.invoke / skill.result) arrive over GET /api/kg/chat/stream,
+   * which is the source of truth for the assistant turn. This removes the former
+   * synchronous 120s wait that 504'd on long tasks (browser automation, delegation
+   * chains, research).
    */
   app.post('/api/kg/chat/messages', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
@@ -1069,9 +1068,6 @@ export async function knowledgeGraphRoutes(
         ? body.conversationId
         : `kg-web-${randomUUID()}`;
 
-    // Register the waiter BEFORE publishing so we don't race past a fast reply.
-    const responsePromise = eventRouter.waitForResponse(conversationId, CHAT_RESPONSE_TIMEOUT_MS);
-
     try {
       await bus.publish('channel', createInboundMessage({
         conversationId,
@@ -1083,47 +1079,14 @@ export async function knowledgeGraphRoutes(
         metadata: { trustLevel: 'medium' },
       }));
     } catch (publishErr) {
-      // Publish failed synchronously — cancel our pending waiter (still ours, nothing
-      // has had a chance to supersede it yet) and surface a 500.
-      eventRouter.cancelPending(conversationId);
-      const message = publishErr instanceof Error ? publishErr.message : String(publishErr);
+      // Log the real error server-side (full context) but return a fixed,
+      // client-safe message — don't echo internal bus/implementation detail back.
       logger.error({ err: publishErr, conversationId }, 'KG chat message publish failed');
-      return reply.status(500).send({ error: message });
+      return reply.status(500).send({ error: 'Failed to publish chat message.' });
     }
 
-    // waitForResponse never rejects — it resolves with a discriminated WaitResult.
-    // This is the crux of the #983 fix: a timeout/supersede firing after the client
-    // has disconnected can no longer escape as an unhandledRejection.
-    //
-    // The try/catch is belt-and-suspenders: the await itself can't reject, but the
-    // post-resolution work (markdownToHtml, reply.send, the exhaustiveness guard
-    // below) could, and any unexpected throw must route through the route's failure
-    // path as a clean 500 rather than escaping the handler.
-    try {
-      const result = await responsePromise;
-
-      if (result.ok) {
-        // Per-try/catch so a markdownToHtml failure falls back gracefully rather
-        // than turning a successful agent response into a 500.
-        let html: string | null = null;
-        try {
-          html = markdownToHtml(result.content);
-        } catch (convErr) {
-          logger.warn({ err: convErr, conversationId }, 'markdownToHtml failed for chat reply; sending plain text');
-        }
-        return reply.send({ reply: result.content, html, conversationId });
-      }
-
-      // Non-ok outcome — map to the shared HTTP status/message contract.
-      const { status, message } = mapWaitFailureToHttp(result);
-      logger.error({ conversationId, kind: result.kind }, 'KG chat message handling failed');
-      return reply.status(status).send({ error: message });
-    } catch (err) {
-      // Unexpected failure in the post-resolution path — log and return a clean 500
-      // rather than letting it escape the route handler.
-      logger.error({ err, conversationId }, 'KG chat message handling failed unexpectedly');
-      return reply.status(500).send({ error: 'Internal error handling chat message' });
-    }
+    // Ack: the reply is delivered over the SSE stream, not this response.
+    return reply.status(202).send({ conversationId });
   });
 
   /**

@@ -1,31 +1,47 @@
 import { describe, it, expect } from 'vitest';
-import { parseSseEvent, makeMessage, formatTimestamp, linkifyText } from './chat-utils.js';
+import { parseSseEvent, makeMessage, formatTimestamp, linkifyText, pickRecoveredReply } from './chat-utils.js';
 
 describe('parseSseEvent', () => {
-  it('returns status text for skill.invoke events', () => {
-    const data = JSON.stringify({
-      type: 'skill.invoke',
-      skill: 'memory.recall',
-      agent: 'coordinator',
-      conversation_id: 'c1',
-      timestamp: '2026-05-29T00:00:00Z',
-    });
-    expect(parseSseEvent(data)).toBe('invoking memory.recall');
+  it('returns a status event for skill.invoke', () => {
+    const data = JSON.stringify({ type: 'skill.invoke', skill: 'memory.recall', conversation_id: 'c1' });
+    expect(parseSseEvent(data)).toEqual({ kind: 'status', text: 'invoking memory.recall' });
   });
 
   it('falls back to "skill" when the skill field is absent', () => {
     const data = JSON.stringify({ type: 'skill.invoke', conversation_id: 'c1' });
-    expect(parseSseEvent(data)).toBe('invoking skill');
+    expect(parseSseEvent(data)).toEqual({ kind: 'status', text: 'invoking skill' });
+  });
+
+  it('returns a reply event with content and html for message events', () => {
+    const data = JSON.stringify({ type: 'message', content: 'Hello', html: '<p>Hello</p>' });
+    expect(parseSseEvent(data)).toEqual({ kind: 'reply', text: 'Hello', html: '<p>Hello</p>' });
+  });
+
+  it('returns a reply event with html: null when html is absent', () => {
+    const data = JSON.stringify({ type: 'message', content: 'Hi' });
+    expect(parseSseEvent(data)).toEqual({ kind: 'reply', text: 'Hi', html: null });
+  });
+
+  it('returns a rejected event with friendly text for both rate-limit reasons', () => {
+    // Both global_rate_limited and sender_rate_limited are real MessageRejectedEvent
+    // reason codes and must get the friendly rate-limit copy.
+    for (const reason of ['global_rate_limited', 'sender_rate_limited']) {
+      const result = parseSseEvent(JSON.stringify({ type: 'message.rejected', reason }));
+      expect(result?.kind).toBe('rejected');
+      if (result?.kind !== 'rejected') throw new Error('expected rejected');
+      expect(result.text).toMatch(/rate limit/i);
+    }
+  });
+
+  it('returns a rejected event naming the reason for non-rate-limit reasons', () => {
+    const result = parseSseEvent(JSON.stringify({ type: 'message.rejected', reason: 'blocked_sender' }));
+    expect(result?.kind).toBe('rejected');
+    if (result?.kind !== 'rejected') throw new Error('expected rejected');
+    expect(result.text).toContain('blocked_sender');
   });
 
   it('returns null for skill.result events (not displayed)', () => {
-    const data = JSON.stringify({ type: 'skill.result', skill: 'memory.recall' });
-    expect(parseSseEvent(data)).toBeNull();
-  });
-
-  it('returns null for message events (handled via POST response)', () => {
-    const data = JSON.stringify({ type: 'message', content: 'Hello' });
-    expect(parseSseEvent(data)).toBeNull();
+    expect(parseSseEvent(JSON.stringify({ type: 'skill.result', skill: 'memory.recall' }))).toBeNull();
   });
 
   it('returns null for malformed JSON', () => {
@@ -39,6 +55,50 @@ describe('parseSseEvent', () => {
   it('returns null for non-object JSON', () => {
     expect(parseSseEvent('42')).toBeNull();
     expect(parseSseEvent('"hello"')).toBeNull();
+  });
+});
+
+describe('pickRecoveredReply', () => {
+  // Timestamps are deliberately out of order vs. position to prove the function
+  // relies on message ORDERING, not wall-clock comparison (clock-skew safe).
+  it('returns the assistant reply that follows the last user message', () => {
+    const items = [
+      { id: '1', role: 'user' as const, content: 'q', html: null, timestamp: '2026-06-15T11:59:00Z' },
+      { id: '2', role: 'assistant' as const, content: 'old', html: null, timestamp: '2026-06-15T11:59:30Z' },
+      { id: '3', role: 'user' as const, content: 'q2', html: null, timestamp: '2026-06-15T12:00:00Z' },
+      { id: '4', role: 'assistant' as const, content: 'fresh', html: '<p>fresh</p>', timestamp: '2026-06-15T12:03:00Z' },
+    ];
+    expect(pickRecoveredReply(items)).toEqual({ text: 'fresh', html: '<p>fresh</p>' });
+  });
+
+  it('returns the reply even when its server timestamp predates the user turn (clock skew)', () => {
+    // Assistant row stamped BEFORE the user row — would be dropped by a wall-clock
+    // comparison, but ordering correctly identifies it as the reply.
+    const items = [
+      { id: '1', role: 'user' as const, content: 'q', html: null, timestamp: '2026-06-15T12:00:05Z' },
+      { id: '2', role: 'assistant' as const, content: 'reply', html: null, timestamp: '2026-06-15T12:00:00Z' },
+    ];
+    expect(pickRecoveredReply(items)).toEqual({ text: 'reply', html: null });
+  });
+
+  it('returns null when the latest turn is unanswered (history ends on a user message)', () => {
+    const items = [
+      { id: '1', role: 'user' as const, content: 'q', html: null, timestamp: '2026-06-15T11:00:00Z' },
+      { id: '2', role: 'assistant' as const, content: 'prior reply', html: null, timestamp: '2026-06-15T11:00:30Z' },
+      { id: '3', role: 'user' as const, content: 'q2', html: null, timestamp: '2026-06-15T12:00:00Z' },
+    ];
+    expect(pickRecoveredReply(items)).toBeNull();
+  });
+
+  it('returns null when there is no user turn', () => {
+    const items = [
+      { id: '1', role: 'assistant' as const, content: 'orphan', html: null, timestamp: '2026-06-15T12:00:00Z' },
+    ];
+    expect(pickRecoveredReply(items)).toBeNull();
+  });
+
+  it('returns null for an empty history page', () => {
+    expect(pickRecoveredReply([])).toBeNull();
   });
 });
 
