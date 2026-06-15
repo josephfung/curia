@@ -48,6 +48,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Stale Xvfb lock recovery** — `BrowserService` now clears an orphaned `/tmp/.X99-lock` + socket left by an unclean exit before spawning Xvfb, guarded on a live X server so an active display is never clobbered; the web-browser skill survives a crash-induced restart. (#982)
 - **Secret-capture link redaction** — the one-time capture URL's token was scrubbed to `[REDACTED]` by the output sanitizer; the two capture skills now declare `skip_secret_redaction` so the link reaches the user intact. (#971)
 - **Secret-capture link relayed verbatim** — the token is now a short base64url slug (not a 64-char hex hash) and the skill summaries instruct the agent to relay the URL verbatim, so the model no longer self-redacts the link as a credential. (#971)
+- **Chat waiter no longer crashes the process** — `EventRouter.waitForResponse` now resolves a discriminated result instead of rejecting, so a timeout/supersede firing after the client disconnects can't surface as an `unhandledRejection`; a process-level backstop logs and stays up. (#983)
 
 ### Security
 

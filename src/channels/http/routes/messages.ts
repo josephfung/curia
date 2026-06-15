@@ -13,7 +13,7 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { EventRouter } from '../event-router.js';
-import { MessageRejectedError } from '../event-router.js';
+import { WAIT_TIMEOUT_MESSAGE, WAIT_SUPERSEDED_MESSAGE } from '../event-router.js';
 
 export interface MessageRouteOptions {
   bus: EventBus;
@@ -75,34 +75,49 @@ export async function messageRoutes(
       return reply.status(500).send({ error: message });
     }
 
-    // Wait for the agent response. At this point the pending entry may have been
-    // superseded by a concurrent request with the same conversation_id — in that
-    // case our promise already rejected with "Superseded". We must NOT call
-    // cancelPending here because the entry now belongs to the newer request.
-    try {
-      const content = await responsePromise;
+    // Wait for the agent response. waitForResponse never rejects — it resolves with
+    // a discriminated WaitResult, so a timeout/supersede firing after the client has
+    // disconnected can't escape as an unhandledRejection and crash the process (#983).
+    // The pending entry may have been superseded by a concurrent request with the
+    // same conversation_id; in that case our promise resolves with kind 'superseded'.
+    const result = await responsePromise;
 
+    if (result.ok) {
       // TODO: agent_id is hardcoded — OutboundMessagePayload doesn't carry agentId.
       // Once we add agentId to the outbound event, extract it here for accuracy
       // in multi-agent delegation scenarios.
       return reply.send({
         conversation_id: conversationId,
-        content,
+        content: result.content,
         agent_id: 'coordinator',
       });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error({ err, conversationId }, 'HTTP message handling failed');
-
-      // Distinguish oversized (413), rate-limited (429), other rejections (403),
-      // timeout (504), and internal errors (500). Use instanceof + err.statusCode
-      // rather than string matching so wording changes can't silently break status codes.
-      const isRejected = err instanceof MessageRejectedError;
-      const isTooLarge = isRejected && err.reason === 'message_too_large';
-      const isTimeout = message.includes('timeout') || message.includes('Timeout');
-      const status = isTooLarge ? 413 : isRejected ? err.statusCode : isTimeout ? 504 : 500;
-      return reply.status(status).send({ error: message });
     }
+
+    // Non-ok outcome. Preserves prior status mapping: too-large → 413, rate-limited
+    // → 429, other policy rejections → 403, timeout → 504, supersede → 500.
+    let status: number;
+    let message: string;
+    switch (result.kind) {
+      case 'rejected':
+        status = result.error.reason === 'message_too_large' ? 413 : result.error.statusCode;
+        message = result.error.message;
+        break;
+      case 'timeout':
+        status = 504;
+        message = WAIT_TIMEOUT_MESSAGE;
+        break;
+      case 'superseded':
+        status = 500;
+        message = WAIT_SUPERSEDED_MESSAGE;
+        break;
+      default: {
+        // Exhaustiveness guard — a new WaitResult variant must be handled here.
+        const _exhaustive: never = result;
+        throw new Error(`Unhandled WaitResult: ${JSON.stringify(_exhaustive)}`);
+      }
+    }
+    logger.error({ conversationId, kind: result.kind }, 'HTTP message handling failed');
+    return reply.status(status).send({ error: message });
   });
 
   /**

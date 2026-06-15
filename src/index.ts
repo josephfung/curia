@@ -147,6 +147,26 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logLevel);
   logger.info('Curia starting...');
 
+  // Defense in depth for #983: keep a single stray unhandled rejection from
+  // taking the whole multi-agent process down. Node's default policy on an
+  // unhandledRejection is to terminate, so a rejected promise that loses its
+  // awaiter (e.g. a route waiter whose client disconnected) would crash every
+  // channel and agent at once. The primary fix is to never leak such rejections
+  // in the first place (EventRouter.waitForResponse resolves rather than
+  // rejects); this handler is the backstop. We log loudly at fatal and stay up
+  // rather than exit — the structured log surfaces the offending promise so a
+  // genuine bug is still loud in dev and CI.
+  process.on('unhandledRejection', (reason, promise) => {
+    // Normalize non-Error rejection values so the log always carries a stack. Capture
+    // the originating promise too — when `reason` isn't an Error it's often the only
+    // pointer back to the offending call site.
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logger.fatal(
+      { err, promise: String(promise), source: 'unhandledRejection' },
+      'Unhandled promise rejection — process kept alive (see #983)',
+    );
+  });
+
   // Surface the `.env.example` placeholder case so it's obvious in logs why
   // CEO_PRIMARY_EMAIL appears to be ignored. loadConfig() normalized the value
   // to undefined silently because the logger doesn't exist yet at that point;

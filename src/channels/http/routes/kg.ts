@@ -7,7 +7,7 @@ import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import { ContactValidationError } from '../../../contacts/contact-service.js';
 import type { Contact, ContactCanonicalFields, ContactStatus, TrustLevel } from '../../../contacts/types.js';
-import { MessageRejectedError, type EventRouter } from '../event-router.js';
+import { type EventRouter, WAIT_TIMEOUT_MESSAGE, WAIT_SUPERSEDED_MESSAGE } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
 import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
@@ -1091,29 +1091,48 @@ export async function knowledgeGraphRoutes(
       return reply.status(500).send({ error: message });
     }
 
-    try {
-      const content = await responsePromise;
+    // waitForResponse never rejects — it resolves with a discriminated WaitResult.
+    // This is the crux of the #983 fix: a timeout/supersede firing after the client
+    // has disconnected can no longer escape as an unhandledRejection.
+    const result = await responsePromise;
+
+    if (result.ok) {
       // Per-try/catch so a markdownToHtml failure falls back gracefully rather
       // than turning a successful agent response into a 500.
       let html: string | null = null;
       try {
-        html = markdownToHtml(content);
+        html = markdownToHtml(result.content);
       } catch (convErr) {
         logger.warn({ err: convErr, conversationId }, 'markdownToHtml failed for chat reply; sending plain text');
       }
-      return reply.send({ reply: content, html, conversationId });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error({ err, conversationId }, 'KG chat message handling failed');
-      // instanceof + reason check for rejection — string matching would silently break if the
-      // error wording changes. Timeout still falls back to substring because the event
-      // router doesn't expose a dedicated TimeoutError class.
-      const isRejected = err instanceof MessageRejectedError;
-      const isTooLarge = isRejected && err.reason === 'message_too_large';
-      const isTimeout = message.includes('timeout') || message.includes('Timeout');
-      const status = isTooLarge ? 413 : isRejected ? 403 : isTimeout ? 504 : 500;
-      return reply.status(status).send({ error: message });
+      return reply.send({ reply: result.content, html, conversationId });
     }
+
+    // Non-ok outcome. Preserves prior status mapping: too-large → 413, any other
+    // policy rejection → 403, timeout → 504, supersede → 500.
+    let status: number;
+    let message: string;
+    switch (result.kind) {
+      case 'rejected':
+        status = result.error.reason === 'message_too_large' ? 413 : 403;
+        message = result.error.message;
+        break;
+      case 'timeout':
+        status = 504;
+        message = WAIT_TIMEOUT_MESSAGE;
+        break;
+      case 'superseded':
+        status = 500;
+        message = WAIT_SUPERSEDED_MESSAGE;
+        break;
+      default: {
+        // Exhaustiveness guard — a new WaitResult variant must be handled here.
+        const _exhaustive: never = result;
+        throw new Error(`Unhandled WaitResult: ${JSON.stringify(_exhaustive)}`);
+      }
+    }
+    logger.error({ conversationId, kind: result.kind }, 'KG chat message handling failed');
+    return reply.status(status).send({ error: message });
   });
 
   /**
