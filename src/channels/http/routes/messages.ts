@@ -80,44 +80,57 @@ export async function messageRoutes(
     // disconnected can't escape as an unhandledRejection and crash the process (#983).
     // The pending entry may have been superseded by a concurrent request with the
     // same conversation_id; in that case our promise resolves with kind 'superseded'.
-    const result = await responsePromise;
+    //
+    // The try/catch is belt-and-suspenders: the await itself can't reject, but the
+    // post-resolution work (reply.send, the exhaustiveness guard below) could, and
+    // any unexpected throw must route through the route's failure path as a clean
+    // 500 rather than escaping the handler.
+    try {
+      const result = await responsePromise;
 
-    if (result.ok) {
-      // TODO: agent_id is hardcoded — OutboundMessagePayload doesn't carry agentId.
-      // Once we add agentId to the outbound event, extract it here for accuracy
-      // in multi-agent delegation scenarios.
-      return reply.send({
-        conversation_id: conversationId,
-        content: result.content,
-        agent_id: 'coordinator',
-      });
-    }
-
-    // Non-ok outcome. Preserves prior status mapping: too-large → 413, rate-limited
-    // → 429, other policy rejections → 403, timeout → 504, supersede → 500.
-    let status: number;
-    let message: string;
-    switch (result.kind) {
-      case 'rejected':
-        status = result.error.reason === 'message_too_large' ? 413 : result.error.statusCode;
-        message = result.error.message;
-        break;
-      case 'timeout':
-        status = 504;
-        message = WAIT_TIMEOUT_MESSAGE;
-        break;
-      case 'superseded':
-        status = 500;
-        message = WAIT_SUPERSEDED_MESSAGE;
-        break;
-      default: {
-        // Exhaustiveness guard — a new WaitResult variant must be handled here.
-        const _exhaustive: never = result;
-        throw new Error(`Unhandled WaitResult: ${JSON.stringify(_exhaustive)}`);
+      if (result.ok) {
+        // TODO: agent_id is hardcoded — OutboundMessagePayload doesn't carry agentId.
+        // Once we add agentId to the outbound event, extract it here for accuracy
+        // in multi-agent delegation scenarios.
+        return reply.send({
+          conversation_id: conversationId,
+          content: result.content,
+          agent_id: 'coordinator',
+        });
       }
+
+      // Non-ok outcome. Preserves prior status mapping: too-large → 413, rate-limited
+      // → 429, other policy rejections → 403, timeout → 504, supersede → 500.
+      let status: number;
+      let message: string;
+      switch (result.kind) {
+        case 'rejected':
+          status = result.error.reason === 'message_too_large' ? 413 : result.error.statusCode;
+          message = result.error.message;
+          break;
+        case 'timeout':
+          status = 504;
+          message = WAIT_TIMEOUT_MESSAGE;
+          break;
+        case 'superseded':
+          status = 500;
+          message = WAIT_SUPERSEDED_MESSAGE;
+          break;
+        default: {
+          // Exhaustiveness guard — a new WaitResult variant must be handled above.
+          // Throwing routes it through the catch below as a normalized 500.
+          const _exhaustive: never = result;
+          throw new Error(`Unhandled WaitResult: ${JSON.stringify(_exhaustive)}`);
+        }
+      }
+      logger.error({ conversationId, kind: result.kind }, 'HTTP message handling failed');
+      return reply.status(status).send({ error: message });
+    } catch (err) {
+      // Unexpected failure in the post-resolution path — log and return a clean 500
+      // rather than letting it escape the route handler.
+      logger.error({ err, conversationId }, 'HTTP message handling failed unexpectedly');
+      return reply.status(500).send({ error: 'Internal error handling message' });
     }
-    logger.error({ conversationId, kind: result.kind }, 'HTTP message handling failed');
-    return reply.status(status).send({ error: message });
   });
 
   /**

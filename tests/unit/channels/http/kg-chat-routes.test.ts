@@ -264,6 +264,42 @@ describe('KG chat routes', () => {
     await app.close();
   });
 
+  it('POST /api/kg/chat/messages — 429 when the message is rate-limited', async () => {
+    // Rate-limit rejections must surface their own status code (429), matching
+    // /api/messages — not a hardcoded 403. See CodeAnt review on PR #989.
+    const eventRouter = {
+      waitForResponse: vi.fn().mockResolvedValue({
+        ok: false,
+        kind: 'rejected',
+        error: new MessageRejectedError('sender_rate_limited'),
+      }),
+      cancelPending: vi.fn(),
+      addSseClient: vi.fn().mockReturnValue(() => {}),
+      setupSubscriptions: vi.fn(),
+    } as unknown as EventRouter;
+
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(knowledgeGraphRoutes, {
+      pool: createPool() as Pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'test-secret',
+      secureCookies: false,
+      bus: createMockBus(),
+      eventRouter,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/kg/chat/messages',
+      headers: { 'x-web-bootstrap-secret': 'test-secret' },
+      payload: { message: 'spam spam spam' },
+    });
+
+    expect(response.statusCode).toBe(429);
+    await app.close();
+  });
+
   // ── 503 when the secret is not configured ─────────────────────────────
 
   it('POST /api/kg/chat/messages — 503 when webAppBootstrapSecret is undefined', async () => {
