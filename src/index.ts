@@ -100,6 +100,7 @@ import { ExecutiveProfileService } from './executive/service.js';
 import { loadEncryptionKey } from './secrets/crypto.js';
 import { SecretsService } from './secrets/secrets-service.js';
 import { SecretCaptureService } from './secrets/secret-capture-service.js';
+import { SecretCaptureResumeSubscriber } from './secrets/secret-capture-resume-subscriber.js';
 import { channelCredentialKeys } from './channels/http/routes/vault.js';
 import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
@@ -145,6 +146,26 @@ async function main(): Promise<void> {
   const yamlConfig = loadYamlConfig(configDir);
   const logger = createLogger(config.logLevel);
   logger.info('Curia starting...');
+
+  // Defense in depth for #983: keep a single stray unhandled rejection from
+  // taking the whole multi-agent process down. Node's default policy on an
+  // unhandledRejection is to terminate, so a rejected promise that loses its
+  // awaiter (e.g. a route waiter whose client disconnected) would crash every
+  // channel and agent at once. The primary fix is to never leak such rejections
+  // in the first place (EventRouter.waitForResponse resolves rather than
+  // rejects); this handler is the backstop. We log loudly at fatal and stay up
+  // rather than exit — the structured log surfaces the offending promise so a
+  // genuine bug is still loud in dev and CI.
+  process.on('unhandledRejection', (reason, promise) => {
+    // Normalize non-Error rejection values so the log always carries a stack. Capture
+    // the originating promise too — when `reason` isn't an Error it's often the only
+    // pointer back to the offending call site.
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logger.fatal(
+      { err, promise: String(promise), source: 'unhandledRejection' },
+      'Unhandled promise rejection — process kept alive (see #983)',
+    );
+  });
 
   // Surface the `.env.example` placeholder case so it's obvious in logs why
   // CEO_PRIMARY_EMAIL appears to be ignored. loadConfig() normalized the value
@@ -1887,6 +1908,18 @@ async function main(): Promise<void> {
     outboundContextService,
   });
   dispatcher.register();
+
+  // Resume-after-capture subscriber (#972) — listens for secret.captured (published by the
+  // capture endpoint on a successful redeem) and re-enters the originating agent with a synthetic
+  // agent.task so it can continue what it was blocked on. Wired AFTER the dispatcher so it can
+  // seed routing for the synthetic task via registerExternalTaskRouting — without that the agent's
+  // resumed reply would find no routing entry and never reach the user.
+  const secretCaptureResumeSubscriber = new SecretCaptureResumeSubscriber(
+    bus,
+    logger,
+    (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
+  );
+  secretCaptureResumeSubscriber.start();
 
   // Conversation checkpoint processor — System Layer subscriber that runs background
   // memory skills (extract-relationships, etc.) at end of each conversation.

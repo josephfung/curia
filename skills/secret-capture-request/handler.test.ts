@@ -44,7 +44,9 @@ describe('SecretCaptureRequestHandler', () => {
     const data = (result as { success: true; data: Record<string, unknown> }).data;
     expect(data.capture_url).toBe('https://curia.example.com/secret-capture/abc123');
     expect(data.secret_name).toBe('user.flight');
-    expect(minter.userCalls).toEqual([{ rawName: 'my flight password', label: 'my flight password', valueFormat: 'string' }]);
+    // origin is always present (#972); with no routing on ctx its fields are undefined and
+    // resumeIntent falls back to the label. toEqual ignores undefined-valued properties.
+    expect(minter.userCalls).toEqual([{ rawName: 'my flight password', label: 'my flight password', valueFormat: 'string', origin: { resumeIntent: 'my flight password' } }]);
     // Timestamp-metadata contract: the field is `displayTimezone` (camelCase), not snake_case.
     expect(typeof data.displayTimezone).toBe('string');
     expect(data).not.toHaveProperty('display_timezone');
@@ -94,6 +96,36 @@ describe('SecretCaptureRequestHandler', () => {
     const minter = fakeMinter();
     const ctx = makeCtx({ secret_name: 'creds', value_format: 'json' }, { secretCapture: minter });
     await new SecretCaptureRequestHandler().execute(ctx);
-    expect(minter.userCalls).toEqual([{ rawName: 'creds', label: 'creds', valueFormat: 'json' }]);
+    expect(minter.userCalls).toEqual([{ rawName: 'creds', label: 'creds', valueFormat: 'json', origin: { resumeIntent: 'creds' } }]);
+  });
+
+  it('captures origin routing context from ctx for resume (#972)', async () => {
+    const minter = fakeMinter();
+    const originator = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' };
+    const ctx = makeCtx(
+      { secret_name: 'Aeroplan password', resume_intent: 'check the Aeroplan balance' },
+      {
+        secretCapture: minter,
+        conversationId: 'conv-1',
+        channelId: 'email',
+        agentId: 'coordinator',
+        taskEventId: 'task-evt-9',
+        taskMetadata: { originator },
+      },
+    );
+    await new SecretCaptureRequestHandler().execute(ctx);
+    expect(minter.userCalls).toEqual([{
+      rawName: 'Aeroplan password',
+      label: 'Aeroplan password',
+      valueFormat: 'string',
+      origin: {
+        conversationId: 'conv-1',
+        channelId: 'email',
+        agentId: 'coordinator',
+        taskEventId: 'task-evt-9',
+        originator,
+        resumeIntent: 'check the Aeroplan balance',
+      },
+    }]);
   });
 });

@@ -15,12 +15,14 @@
 
 import type { FastifyInstance } from 'fastify';
 import type { Logger } from '../../../logger.js';
-import type { CaptureMetadata, RedeemResult } from '../../../secrets/secret-capture-service.js';
+import type { CaptureMetadata, RedeemOutcome } from '../../../secrets/secret-capture-service.js';
+import type { EventBus } from '../../../bus/bus.js';
+import { createSecretCaptured } from '../../../bus/events.js';
 
 /** The narrow service surface these routes need: read metadata, redeem a value. No mint. */
 export interface SecretCapturePort {
   getMetadata(rawToken: string): Promise<CaptureMetadata>;
-  redeem(rawToken: string, value: string): Promise<RedeemResult>;
+  redeem(rawToken: string, value: string): Promise<RedeemOutcome>;
 }
 
 export interface SecretCaptureRouteOptions {
@@ -29,6 +31,10 @@ export interface SecretCaptureRouteOptions {
    *  `request.log` is a no-op — we log through this injected logger instead so failures on
    *  these security-sensitive endpoints are actually recorded. */
   logger: Logger;
+  /** Event bus — on a successful redeem the route publishes `secret.captured` (#972) so the
+   *  resume subscriber can re-enter the originating agent. Optional: if absent (e.g. a test
+   *  harness or a deployment without resume wired), redemption still works, just no resume. */
+  bus?: EventBus;
 }
 
 /** Generous ceiling for a captured value (API keys, passwords, small JSON credential sets).
@@ -39,7 +45,7 @@ export async function secretCaptureRoutes(
   app: FastifyInstance,
   options: SecretCaptureRouteOptions,
 ): Promise<void> {
-  const { secretCaptureService, logger } = options;
+  const { secretCaptureService, logger, bus } = options;
 
   // Tight per-route rate limit — the token is unauthenticated, so cap brute-force/abuse
   // per IP the same way POST /auth does. No-op if @fastify/rate-limit isn't registered.
@@ -82,8 +88,35 @@ export async function secretCaptureRoutes(
 
     try {
       const result = await secretCaptureService.redeem(token, value);
-      switch (result) {
+      switch (result.status) {
         case 'ok':
+          // The value is now in the vault. Publish secret.captured (name/routing only, NEVER the
+          // value) so the resume subscriber can re-enter the originating agent (#972).
+          //
+          // Fire-and-forget on purpose: this side effect is NOT awaited. Bus delivery is
+          // synchronous-and-awaited internally, and the resume subscriber re-enters the agent —
+          // which can run a full LLM turn. Awaiting here would block the user's POST for the
+          // entire downstream resume even though their value is already saved. We detach it and
+          // attach a .catch so a publish failure is logged (not swallowed) without delaying or
+          // failing the request — at worst the agent simply isn't auto-resumed.
+          if (bus) {
+            const c = result.captured;
+            void bus.publish('system', createSecretCaptured(
+              {
+                secretName: c.secretName,
+                label: c.label,
+                conversationId: c.conversationId,
+                agentId: c.agentId,
+                channelId: c.channelId,
+                taskEventId: c.taskEventId,
+                resumeIntent: c.resumeIntent,
+                originator: c.originator,
+              },
+              c.taskEventId,  // parentEventId traces back to the originating agent.task
+            )).catch((pubErr: unknown) => {
+              logger.error({ err: pubErr }, 'secret-capture: failed to publish secret.captured (value saved; agent not auto-resumed)');
+            });
+          }
           return reply.send({ ok: true });
         case 'not_found':
           return reply.status(404).send({ error: 'This capture link is not valid.' });

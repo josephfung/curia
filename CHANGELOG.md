@@ -20,12 +20,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **State filter pills** — Agents and Skills views gain All/Enabled/Installed/Ghost/Uninstalled pill filters with live counts; Channels gains All/Enabled/Installed/Uninstalled.
 - **Secret-by-reference injection** — the `web-browser` `type` action accepts `secret_ref` (a `user.*` vault key) to fill a stored credential; the value is dereferenced server-side and never enters the LLM context, tool call, result, or logs. (#973)
 - **`secretResolver` capability (skill manifest schema, public API)** — runtime by-reference resolution of dynamic `user.*` secrets; gated to a hard skill allowlist (`web-browser` only) and the `user.*` namespace. (#973)
+- **Agent resume after secret capture** — filling a capture link now publishes a `secret.captured` event (name/routing only, never the value) and a thin subscriber re-enters the originating agent so it can continue what it was blocked on. (#972)
+- **`secret.captured` bus event (public API)** — emitted by the capture endpoint on a successful redeem, carrying secret name/label + routing metadata and never the value. (#972)
 
 ### Changed
 
 - **Coordinator prompt (policy/reference split)** — tool-specific mechanics moved out of the coordinator prompt into the skill manifests the model already sees: config-store namespace conventions, the context_bridge shape, and decay-warning nudge phrasings now live on their respective skills; the `## Reference` region is removed. Drive-upload steps stay condensed in the prompt (their target `create_drive_file` is an MCP tool with no local manifest). (#958)
 - **`config-store` / `email-reply` / `email-send` / `signal-send` / `decay-warnings-list`** — descriptions/input docs expanded to carry the relocated mechanics; behavior unchanged. (#958)
 - **User chat bubble** — user messages now appear with a teal background (`--app-teal`) and white text, visually distinguishing them from agent replies.
+
+- **`secret-capture-request` (skill manifest schema)** — adds an optional `resume_intent` input and persists the minting agent's routing context on the token so the capture can re-enter the right conversation. (#972)
 
 - **Secret capture** — agents mint a one-time link to a web form so a user can add a new vault secret mid-conversation; the value never touches the LLM. Skills `secret-capture-request` and `system-secret-capture-request`. (#971)
 - **`skip_secret_redaction` (skill manifest schema, public API)** — opt a skill's output out of only the broad generic-hex secret scrub (structured credential patterns stay active); gated at startup to skills declaring `secretCapture`. For capability tokens (e.g. capture links) that must reach the LLM. (#971)
@@ -41,8 +45,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Stale Xvfb lock recovery** — `BrowserService` now clears an orphaned `/tmp/.X99-lock` + socket left by an unclean exit before spawning Xvfb, guarded on a live X server so an active display is never clobbered; the web-browser skill survives a crash-induced restart. (#982)
 - **Secret-capture link redaction** — the one-time capture URL's token was scrubbed to `[REDACTED]` by the output sanitizer; the two capture skills now declare `skip_secret_redaction` so the link reaches the user intact. (#971)
 - **Secret-capture link relayed verbatim** — the token is now a short base64url slug (not a 64-char hex hash) and the skill summaries instruct the agent to relay the URL verbatim, so the model no longer self-redacts the link as a credential. (#971)
+- **Chat waiter no longer crashes the process** — `EventRouter.waitForResponse` now resolves a discriminated result instead of rejecting, so a timeout/supersede firing after the client disconnects can't surface as an `unhandledRejection`; a process-level backstop logs and stays up. (#983)
+- **KG chat rate-limit status** — `POST /api/kg/chat/messages` now returns 429 for rate-limited rejections (was a hardcoded 403), matching `/api/messages`. (#983)
 
 ### Security
 

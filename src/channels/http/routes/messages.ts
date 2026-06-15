@@ -13,7 +13,7 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { EventRouter } from '../event-router.js';
-import { MessageRejectedError } from '../event-router.js';
+import { mapWaitFailureToHttp } from '../event-router.js';
 
 export interface MessageRouteOptions {
   bus: EventBus;
@@ -75,33 +75,39 @@ export async function messageRoutes(
       return reply.status(500).send({ error: message });
     }
 
-    // Wait for the agent response. At this point the pending entry may have been
-    // superseded by a concurrent request with the same conversation_id — in that
-    // case our promise already rejected with "Superseded". We must NOT call
-    // cancelPending here because the entry now belongs to the newer request.
+    // Wait for the agent response. waitForResponse never rejects — it resolves with
+    // a discriminated WaitResult, so a timeout/supersede firing after the client has
+    // disconnected can't escape as an unhandledRejection and crash the process (#983).
+    // The pending entry may have been superseded by a concurrent request with the
+    // same conversation_id; in that case our promise resolves with kind 'superseded'.
+    //
+    // The try/catch is belt-and-suspenders: the await itself can't reject, but the
+    // post-resolution work (reply.send, the exhaustiveness guard below) could, and
+    // any unexpected throw must route through the route's failure path as a clean
+    // 500 rather than escaping the handler.
     try {
-      const content = await responsePromise;
+      const result = await responsePromise;
 
-      // TODO: agent_id is hardcoded — OutboundMessagePayload doesn't carry agentId.
-      // Once we add agentId to the outbound event, extract it here for accuracy
-      // in multi-agent delegation scenarios.
-      return reply.send({
-        conversation_id: conversationId,
-        content,
-        agent_id: 'coordinator',
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error({ err, conversationId }, 'HTTP message handling failed');
+      if (result.ok) {
+        // TODO: agent_id is hardcoded — OutboundMessagePayload doesn't carry agentId.
+        // Once we add agentId to the outbound event, extract it here for accuracy
+        // in multi-agent delegation scenarios.
+        return reply.send({
+          conversation_id: conversationId,
+          content: result.content,
+          agent_id: 'coordinator',
+        });
+      }
 
-      // Distinguish oversized (413), rate-limited (429), other rejections (403),
-      // timeout (504), and internal errors (500). Use instanceof + err.statusCode
-      // rather than string matching so wording changes can't silently break status codes.
-      const isRejected = err instanceof MessageRejectedError;
-      const isTooLarge = isRejected && err.reason === 'message_too_large';
-      const isTimeout = message.includes('timeout') || message.includes('Timeout');
-      const status = isTooLarge ? 413 : isRejected ? err.statusCode : isTimeout ? 504 : 500;
+      // Non-ok outcome — map to the shared HTTP status/message contract.
+      const { status, message } = mapWaitFailureToHttp(result);
+      logger.error({ conversationId, kind: result.kind }, 'HTTP message handling failed');
       return reply.status(status).send({ error: message });
+    } catch (err) {
+      // Unexpected failure in the post-resolution path — log and return a clean 500
+      // rather than letting it escape the route handler.
+      logger.error({ err, conversationId }, 'HTTP message handling failed unexpectedly');
+      return reply.status(500).send({ error: 'Internal error handling message' });
     }
   });
 
