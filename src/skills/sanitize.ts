@@ -338,7 +338,13 @@ export function sanitizeObjectOutput(
     if (node !== null && typeof node === 'object') {
       const result: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-        result[key] = walk(value);
+        // Sanitize keys too: strip injection tags and redact secrets, matching the
+        // old stringify→sanitize behaviour. No maxLength — a truncated key changes semantics.
+        const sanitizedKey = sanitizeOutput(key, {
+          skipSecretRedaction: options.skipSecretRedaction,
+          extraRedactPatterns: options.extraRedactPatterns,
+        });
+        result[sanitizedKey] = walk(value);
       }
       return result;
     }

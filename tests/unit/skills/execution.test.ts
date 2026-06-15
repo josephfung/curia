@@ -730,6 +730,7 @@ describe('ExecutionLayer', () => {
       expect(typeof result.data).toBe('object');
       const data = result.data as { messages: Array<{ body: string }> };
       expect(Array.isArray(data.messages)).toBe(true);
+      expect(data.messages).toHaveLength(1);
       expect(typeof data.messages[0]!.body).toBe('string');
       // Dangerous content stripped
       expect(data.messages[0]!.body).not.toContain('<style>');
