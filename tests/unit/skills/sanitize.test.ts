@@ -390,6 +390,13 @@ describe('sanitizeObjectOutput', () => {
     expect(redacted.link).not.toContain(token);
   });
 
+  it('forwards extraRedactPatterns to leaf sanitization', () => {
+    const input = { msg: 'token=SHHH' };
+    const result = sanitizeObjectOutput(input, { extraRedactPatterns: [/SHHH/g] }) as { msg: string };
+    expect(result.msg).not.toContain('SHHH');
+    expect(result.msg).toContain('[REDACTED]');
+  });
+
   // Regression test from issue #986 acceptance criteria
   it('regression: object with HTML-body message round-trips to valid object with dangerous tags removed', () => {
     const input = { messages: [{ body: '<style>x{}</style><div>"quoted"</div>' }] };

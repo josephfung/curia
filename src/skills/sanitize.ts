@@ -319,6 +319,10 @@ export function sanitizeDisplayName(
  * Truncation is applied per string leaf (each string is independently capped at
  * maxLength). isError is excluded — wrapping a structured object in <tool_error>
  * is not meaningful; the execution layer's error path handles that as a string.
+ *
+ * Non-plain objects (Date, Map, class instances) are walked via Object.entries,
+ * which returns [] for internal-slot types; they will emerge as {}. Skill results
+ * are expected to be JSON-serializable, so this is accepted.
  */
 export function sanitizeObjectOutput(
   data: unknown,
