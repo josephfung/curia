@@ -81,6 +81,9 @@ export class BrowserService {
   // it (shared cookies/storage = "returning user"); incognito sessions get their own
   // ephemeral context spun off context.browser() (see getOrCreateSession).
   private context: BrowserContext | null = null;
+  // Set to true by stop() before closing the context so the 'disconnected' handler
+  // knows the disconnect is intentional and must NOT trigger a crash-recovery restart.
+  private stopping = false;
   // Ad blocker is loaded lazily on first opt-in (block_ads:true) and cached. Off by
   // default so login/auth/form-fill flows carry no privacy-extension signal.
   // These fields intentionally survive stop()/restart() — the blocklist is process-global
@@ -138,6 +141,13 @@ export class BrowserService {
       return;
     }
     browser.on('disconnected', () => {
+      // Intentional shutdown via stop() — do not restart. stop() sets this.stopping
+      // before calling context.close() so we can distinguish a deliberate close from
+      // an unexpected crash/OOM disconnect.
+      if (this.stopping) {
+        this.logger.debug('Browser disconnected during stop() — skipping crash-recovery restart');
+        return;
+      }
       this.logger.error('Playwright browser disconnected — clearing sessions and restarting');
       // Best-effort close of any live sessions before dropping them from the map. On a
       // genuine crash/OOM kill the pages are already gone and these close() calls no-op;
@@ -177,12 +187,20 @@ export class BrowserService {
     this.sessions.clear();
 
     if (this.context) {
+      // Signal the 'disconnected' handler that this disconnect is intentional so it
+      // does not trigger crash-recovery (which would try to relaunch the browser while
+      // we're tearing down, potentially racing with a restart that reuses the profile).
+      this.stopping = true;
       try {
         await this.context.close();
       } catch (err) {
         this.logger.error({ err }, 'Error closing browser context during shutdown');
+      } finally {
+        // Reset stopping so the instance can be reused after stop() (e.g. in tests)
+        // and a future unexpected disconnect still triggers recovery.
+        this.stopping = false;
+        this.context = null;
       }
-      this.context = null;
     }
 
     if (this.xvfbProcess) {

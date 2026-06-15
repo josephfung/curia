@@ -379,4 +379,65 @@ describe.skipIf(!runBrowserTests)('BrowserService (integration — real Chromium
     await service.closeSession(sessionId);
     expect(service.getSession(sessionId)).toBeUndefined();
   });
+
+  // Task 10: persistent profile survives a service restart
+  //
+  // Spins up two independent BrowserService instances sharing the SAME profileDir
+  // to prove that cookies written by the first survive into the second.
+  // Uses a local profileDir so these services never share state with the outer
+  // beforeEach/afterEach service, and cleans up in finally regardless of outcome.
+  it('persists cookies across a service restart (persistent profile)', async () => {
+    const profileDir = mkdtempSync(join(tmpdir(), 'curia-profile-'));
+    let s2: BrowserService | null = null;
+    try {
+      const s1 = new BrowserService({ logger, sessionTtlMs: 30000, sweepIntervalMs: 60000, profileDir });
+      await s1.start();
+      const { session } = await s1.getOrCreateSession(undefined);
+      await session.page.goto('https://example.com');
+      // Set a PERSISTENT cookie (max-age=3600 so it is written to the Cookies DB on
+      // disk, not just held in the browser's in-memory session-cookie store).
+      // Session cookies (no max-age/expires) are never flushed to disk and therefore
+      // cannot survive a browser restart. Must use globalThis cast because "dom" is
+      // not in this project's server tsconfig lib (mirrors the pattern from the
+      // full-flow integration test above).
+      await session.page.evaluate((): void => {
+        type Win = { document?: { cookie: string } };
+        (globalThis as unknown as Win).document!.cookie = 'curia_test=1; path=/; max-age=3600';
+      });
+      await s1.stop();
+
+      // After context.close(), Playwright kills the browser process, but the OS may
+      // take a moment to release the profile's SingletonLock. Retry s2.start() with
+      // exponential back-off for up to 5 seconds before giving up.
+      s2 = new BrowserService({ logger, sessionTtlMs: 30000, sweepIntervalMs: 60000, profileDir });
+      let lastErr: unknown;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        try {
+          await s2.start();
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+          const delayMs = 200 * Math.pow(2, attempt); // 200, 400, 800, 1600, 3200ms
+          await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+      if (lastErr !== undefined) throw lastErr;
+
+      const { session: session2 } = await s2.getOrCreateSession(undefined);
+      await session2.page.goto('https://example.com');
+      const cookie = await session2.page.evaluate((): string => {
+        type Win = { document?: { cookie: string } };
+        return (globalThis as unknown as Win).document?.cookie ?? '';
+      });
+      expect(cookie).toContain('curia_test=1');
+      await s2.stop();
+      s2 = null;
+    } finally {
+      // Best-effort stop of s2 if the test threw after start() but before stop()
+      await s2?.stop().catch(() => { /* already stopped or never started */ });
+      rmSync(profileDir, { recursive: true, force: true });
+    }
+  // Two full browser launches + navigations + stop/restart needs well over the 5s default.
+  }, 60_000);
 });
