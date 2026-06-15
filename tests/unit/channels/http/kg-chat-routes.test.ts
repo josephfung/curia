@@ -300,6 +300,36 @@ describe('KG chat routes', () => {
     await app.close();
   });
 
+  it('POST /api/kg/chat/messages — 500 when the waiter is superseded', async () => {
+    const eventRouter = {
+      waitForResponse: vi.fn().mockResolvedValue({ ok: false, kind: 'superseded' }),
+      cancelPending: vi.fn(),
+      addSseClient: vi.fn().mockReturnValue(() => {}),
+      setupSubscriptions: vi.fn(),
+    } as unknown as EventRouter;
+
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(knowledgeGraphRoutes, {
+      pool: createPool() as Pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'test-secret',
+      secureCookies: false,
+      bus: createMockBus(),
+      eventRouter,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/kg/chat/messages',
+      headers: { 'x-web-bootstrap-secret': 'test-secret' },
+      payload: { message: 'newer request won' },
+    });
+
+    expect(response.statusCode).toBe(500);
+    await app.close();
+  });
+
   // ── 503 when the secret is not configured ─────────────────────────────
 
   it('POST /api/kg/chat/messages — 503 when webAppBootstrapSecret is undefined', async () => {

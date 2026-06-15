@@ -13,7 +13,7 @@ import type { EventBus } from '../../../bus/bus.js';
 import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { EventRouter } from '../event-router.js';
-import { WAIT_TIMEOUT_MESSAGE, WAIT_SUPERSEDED_MESSAGE } from '../event-router.js';
+import { mapWaitFailureToHttp } from '../event-router.js';
 
 export interface MessageRouteOptions {
   bus: EventBus;
@@ -99,30 +99,8 @@ export async function messageRoutes(
         });
       }
 
-      // Non-ok outcome. Preserves prior status mapping: too-large → 413, rate-limited
-      // → 429, other policy rejections → 403, timeout → 504, supersede → 500.
-      let status: number;
-      let message: string;
-      switch (result.kind) {
-        case 'rejected':
-          status = result.error.reason === 'message_too_large' ? 413 : result.error.statusCode;
-          message = result.error.message;
-          break;
-        case 'timeout':
-          status = 504;
-          message = WAIT_TIMEOUT_MESSAGE;
-          break;
-        case 'superseded':
-          status = 500;
-          message = WAIT_SUPERSEDED_MESSAGE;
-          break;
-        default: {
-          // Exhaustiveness guard — a new WaitResult variant must be handled above.
-          // Throwing routes it through the catch below as a normalized 500.
-          const _exhaustive: never = result;
-          throw new Error(`Unhandled WaitResult: ${JSON.stringify(_exhaustive)}`);
-        }
-      }
+      // Non-ok outcome — map to the shared HTTP status/message contract.
+      const { status, message } = mapWaitFailureToHttp(result);
       logger.error({ conversationId, kind: result.kind }, 'HTTP message handling failed');
       return reply.status(status).send({ error: message });
     } catch (err) {
