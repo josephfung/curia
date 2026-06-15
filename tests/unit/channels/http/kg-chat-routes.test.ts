@@ -13,7 +13,7 @@ import type { Logger } from '../../../../src/logger.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { knowledgeGraphRoutes } from '../../../../src/channels/http/routes/kg.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
-import { MessageRejectedError, type EventRouter } from '../../../../src/channels/http/event-router.js';
+import { type EventRouter } from '../../../../src/channels/http/event-router.js';
 
 function createLogger(): Logger {
   return {
@@ -31,12 +31,11 @@ function createPool(): Pick<Pool, 'query'> {
   return { query: vi.fn() } as unknown as Pick<Pool, 'query'>;
 }
 
-// Create a mock EventRouter whose waitForResponse resolves immediately with a
-// canned reply so the route handler can complete synchronously in tests.
-// waitForResponse resolves a discriminated WaitResult (never rejects) — see #983.
-function createMockEventRouter(reply = 'Hello from Curia'): EventRouter {
+// The ack-and-stream POST no longer calls waitForResponse; it only publishes and
+// returns 202. We keep addSseClient/setupSubscriptions for the stream route wiring.
+function createMockEventRouter(): EventRouter {
   return {
-    waitForResponse: vi.fn().mockResolvedValue({ ok: true, content: reply }),
+    waitForResponse: vi.fn(),
     cancelPending: vi.fn(),
     addSseClient: vi.fn().mockReturnValue(() => { /* cleanup noop */ }),
     setupSubscriptions: vi.fn(),
@@ -104,9 +103,9 @@ describe('KG chat routes', () => {
 
   // ── Happy path: authenticated via x-web-bootstrap-secret header ───────
 
-  it('POST /api/kg/chat/messages — 200 with valid bootstrap-secret header', async () => {
+  it('POST /api/kg/chat/messages — 202 ack with valid bootstrap-secret header', async () => {
     const bus = createMockBus();
-    const eventRouter = createMockEventRouter('Hey there!');
+    const eventRouter = createMockEventRouter();
 
     const app = Fastify();
     await app.register(cookie);
@@ -126,14 +125,15 @@ describe('KG chat routes', () => {
       payload: { message: 'What is on the agenda?', conversationId: 'test-convo-1' },
     });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(202);
     const body = response.json();
-    expect(body.reply).toBe('Hey there!');
     expect(body.conversationId).toBe('test-convo-1');
+    // The reply now arrives over SSE, not in the POST body.
+    expect(body.reply).toBeUndefined();
 
-    // Verify the bus and eventRouter were called correctly.
+    // The inbound message was published; the handler does NOT block on a reply.
     expect(bus.publish).toHaveBeenCalledOnce();
-    expect(eventRouter.waitForResponse).toHaveBeenCalledWith('test-convo-1', expect.any(Number));
+    expect(eventRouter.waitForResponse).not.toHaveBeenCalled();
 
     await app.close();
   });
@@ -162,9 +162,37 @@ describe('KG chat routes', () => {
     await app.close();
   });
 
+  it('POST /api/kg/chat/messages — 500 when publish fails synchronously', async () => {
+    const bus = {
+      publish: vi.fn().mockRejectedValue(new Error('bus down')),
+      subscribe: vi.fn(),
+    } as unknown as EventBus;
+
+    const app = Fastify();
+    await app.register(cookie);
+    await app.register(knowledgeGraphRoutes, {
+      pool: createPool() as Pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'test-secret',
+      secureCookies: false,
+      bus,
+      eventRouter: createMockEventRouter(),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/kg/chat/messages',
+      headers: { 'x-web-bootstrap-secret': 'test-secret' },
+      payload: { message: 'hello', conversationId: 'c-fail' },
+    });
+
+    expect(response.statusCode).toBe(500);
+    await app.close();
+  });
+
   it('POST /api/kg/chat/messages — auto-generates conversationId when omitted', async () => {
     const bus = createMockBus();
-    const eventRouter = createMockEventRouter('reply');
+    const eventRouter = createMockEventRouter();
 
     const app = Fastify();
     await app.register(cookie);
@@ -184,149 +212,12 @@ describe('KG chat routes', () => {
       payload: { message: 'hi' },
     });
 
-    expect(response.statusCode).toBe(200);
-    // A generated conversationId should be returned and match the waiter call.
+    expect(response.statusCode).toBe(202);
     const body = response.json();
     expect(typeof body.conversationId).toBe('string');
     expect(body.conversationId.length).toBeGreaterThan(0);
-    expect(eventRouter.waitForResponse).toHaveBeenCalledWith(body.conversationId, expect.any(Number));
+    expect(eventRouter.waitForResponse).not.toHaveBeenCalled();
 
-    await app.close();
-  });
-
-  // ── WaitResult outcome mapping (#983) ─────────────────────────────────
-  //
-  // waitForResponse resolves a discriminated result rather than rejecting, so the
-  // handler maps each non-ok outcome to a status code without try/catch control flow.
-
-  it('POST /api/kg/chat/messages — 504 when the agent response times out', async () => {
-    const eventRouter = {
-      waitForResponse: vi.fn().mockResolvedValue({ ok: false, kind: 'timeout' }),
-      cancelPending: vi.fn(),
-      addSseClient: vi.fn().mockReturnValue(() => {}),
-      setupSubscriptions: vi.fn(),
-    } as unknown as EventRouter;
-
-    const app = Fastify();
-    await app.register(cookie);
-    await app.register(knowledgeGraphRoutes, {
-      pool: createPool() as Pool,
-      logger: createLogger(),
-      webAppBootstrapSecret: 'test-secret',
-      secureCookies: false,
-      bus: createMockBus(),
-      eventRouter,
-    });
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/kg/chat/messages',
-      headers: { 'x-web-bootstrap-secret': 'test-secret' },
-      payload: { message: 'slow one' },
-    });
-
-    expect(response.statusCode).toBe(504);
-    expect(response.json().error).toMatch(/timeout/i);
-    await app.close();
-  });
-
-  it('POST /api/kg/chat/messages — 403 when the message is rejected by policy', async () => {
-    const eventRouter = {
-      waitForResponse: vi.fn().mockResolvedValue({
-        ok: false,
-        kind: 'rejected',
-        error: new MessageRejectedError('blocked_sender'),
-      }),
-      cancelPending: vi.fn(),
-      addSseClient: vi.fn().mockReturnValue(() => {}),
-      setupSubscriptions: vi.fn(),
-    } as unknown as EventRouter;
-
-    const app = Fastify();
-    await app.register(cookie);
-    await app.register(knowledgeGraphRoutes, {
-      pool: createPool() as Pool,
-      logger: createLogger(),
-      webAppBootstrapSecret: 'test-secret',
-      secureCookies: false,
-      bus: createMockBus(),
-      eventRouter,
-    });
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/kg/chat/messages',
-      headers: { 'x-web-bootstrap-secret': 'test-secret' },
-      payload: { message: 'who are you' },
-    });
-
-    expect(response.statusCode).toBe(403);
-    await app.close();
-  });
-
-  it('POST /api/kg/chat/messages — 429 when the message is rate-limited', async () => {
-    // Rate-limit rejections must surface their own status code (429), matching
-    // /api/messages — not a hardcoded 403. See CodeAnt review on PR #989.
-    const eventRouter = {
-      waitForResponse: vi.fn().mockResolvedValue({
-        ok: false,
-        kind: 'rejected',
-        error: new MessageRejectedError('sender_rate_limited'),
-      }),
-      cancelPending: vi.fn(),
-      addSseClient: vi.fn().mockReturnValue(() => {}),
-      setupSubscriptions: vi.fn(),
-    } as unknown as EventRouter;
-
-    const app = Fastify();
-    await app.register(cookie);
-    await app.register(knowledgeGraphRoutes, {
-      pool: createPool() as Pool,
-      logger: createLogger(),
-      webAppBootstrapSecret: 'test-secret',
-      secureCookies: false,
-      bus: createMockBus(),
-      eventRouter,
-    });
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/kg/chat/messages',
-      headers: { 'x-web-bootstrap-secret': 'test-secret' },
-      payload: { message: 'spam spam spam' },
-    });
-
-    expect(response.statusCode).toBe(429);
-    await app.close();
-  });
-
-  it('POST /api/kg/chat/messages — 500 when the waiter is superseded', async () => {
-    const eventRouter = {
-      waitForResponse: vi.fn().mockResolvedValue({ ok: false, kind: 'superseded' }),
-      cancelPending: vi.fn(),
-      addSseClient: vi.fn().mockReturnValue(() => {}),
-      setupSubscriptions: vi.fn(),
-    } as unknown as EventRouter;
-
-    const app = Fastify();
-    await app.register(cookie);
-    await app.register(knowledgeGraphRoutes, {
-      pool: createPool() as Pool,
-      logger: createLogger(),
-      webAppBootstrapSecret: 'test-secret',
-      secureCookies: false,
-      bus: createMockBus(),
-      eventRouter,
-    });
-
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/kg/chat/messages',
-      headers: { 'x-web-bootstrap-secret': 'test-secret' },
-      payload: { message: 'newer request won' },
-    });
-
-    expect(response.statusCode).toBe(500);
     await app.close();
   });
 
