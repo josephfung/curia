@@ -137,18 +137,18 @@ describe('WebBrowserHandler', () => {
       expect(data.url).toBe(FAKE_URL);
       expect(typeof data.content).toBe('string');
     }
-    expect(mockBrowserService.getOrCreateSession).toHaveBeenCalledWith(undefined);
+    expect(mockBrowserService.getOrCreateSession).toHaveBeenCalledWith(undefined, { incognito: false, blockAds: false });
   });
 
   it('navigate: passes existing session_id to getOrCreateSession', async () => {
     await handler.execute(makeCtx({ action: 'navigate', url: FAKE_URL, session_id: FAKE_SESSION_ID }, mockBrowserService));
-    expect(mockBrowserService.getOrCreateSession).toHaveBeenCalledWith(FAKE_SESSION_ID);
+    expect(mockBrowserService.getOrCreateSession).toHaveBeenCalledWith(FAKE_SESSION_ID, { incognito: false, blockAds: false });
   });
 
   it('click: calls getOrCreateSession with session_id', async () => {
     const result = await handler.execute(makeCtx({ action: 'click', selector: 'Sign up button', session_id: FAKE_SESSION_ID }, mockBrowserService));
     expect(result.success).toBe(true);
-    expect(mockBrowserService.getOrCreateSession).toHaveBeenCalledWith(FAKE_SESSION_ID);
+    expect(mockBrowserService.getOrCreateSession).toHaveBeenCalledWith(FAKE_SESSION_ID, { incognito: false, blockAds: false });
   });
 
   it('type: succeeds with selector and text', async () => {

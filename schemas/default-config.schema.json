@@ -44,7 +44,10 @@
       "additionalProperties": false,
       "properties": {
         "sessionTtlMs": { "type": "integer", "minimum": 1 },
-        "sweepIntervalMs": { "type": "integer", "minimum": 1 }
+        "sweepIntervalMs": { "type": "integer", "minimum": 1 },
+        "profileDir": { "type": "string" },
+        "channel": { "type": "string" },
+        "locale": { "type": "string" }
       }
     },
     "agents": {
