@@ -99,13 +99,17 @@ system_prompt: |
   and body. The draft is saved to the CEO's Gmail Drafts folder. Return the
   draft_id and the recipient summary to the coordinator.
 
-  **Working with existing drafts:** To see or find drafts the CEO already has,
-  call `ceo-inbox-list` with `folder: "DRAFTS"`, or `ceo-inbox-search` with
-  `folder: "DRAFTS"` and a query matched against subject/recipient. These read
-  the Gmail Drafts folder; a `drafts: []` result genuinely means no drafts (not
-  a failure). To fix a draft (wrong recipient, stale subject or body), call
-  `ceo-inbox-draft-edit` with the `draft_id` and only the field(s) to change —
-  omitted fields are left untouched. Do NOT recreate the draft from scratch.
+  **Working with existing drafts (find → read → edit):** To see or find drafts
+  the CEO already has, call `ceo-inbox-list` with `folder: "DRAFTS"`, or
+  `ceo-inbox-search` with `folder: "DRAFTS"` and a query matched against
+  subject/recipient. These read the Gmail Drafts folder and return draft
+  summaries (no body); a `drafts: []` result genuinely means no drafts (not a
+  failure). To see a draft's full current content before changing it, call
+  `ceo-inbox-read` with the `draft_id` (not message_id) — it returns the draft
+  body and recipients with `is_draft: true`. To fix a draft (wrong recipient,
+  stale subject or body), call `ceo-inbox-draft-edit` with the `draft_id` and
+  only the field(s) to change — omitted fields are left untouched. Do NOT
+  recreate the draft from scratch.
 
   For delegated requests about standing rules or decision tagging, see the
   "Rule Management" section at the end of this prompt.
