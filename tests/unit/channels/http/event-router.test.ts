@@ -12,6 +12,7 @@ import { EventRouter, MessageRejectedError } from '../../../../src/channels/http
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { BusEvent } from '../../../../src/bus/events.js';
 import type { Logger } from '../../../../src/logger.js';
+import type { ServerResponse } from 'node:http';
 
 function createLogger(): Logger {
   return {
@@ -124,5 +125,50 @@ describe('EventRouter.waitForResponse', () => {
     }
 
     expect(captured).toEqual([]);
+  });
+});
+
+describe('EventRouter SSE — outbound.message html rendering', () => {
+  it('includes server-rendered html alongside markdown content', () => {
+    const { router, emit } = makeRouter();
+    const writes: string[] = [];
+    const res = { write: (chunk: string) => { writes.push(chunk); return true; } };
+    router.addSseClient({ res: res as unknown as ServerResponse, conversationId: 'c1' });
+
+    emit({
+      type: 'outbound.message',
+      timestamp: '2026-06-15T00:00:00.000Z',
+      payload: { channelId: 'web', conversationId: 'c1', content: 'hello **world**' },
+    } as unknown as BusEvent);
+
+    // The SSE frame is `data: <json>\n\n`. Strip the prefix/suffix and parse.
+    const frame = writes.find((w) => w.startsWith('data: '));
+    expect(frame).toBeDefined();
+    const payload = JSON.parse(frame!.slice('data: '.length).trim()) as {
+      type: string; content: string; html: string | null;
+    };
+    expect(payload.type).toBe('message');
+    expect(payload.content).toBe('hello **world**');
+    expect(payload.html).toContain('<strong>world</strong>');
+  });
+
+  it('falls back to html: null when markdown rendering throws', () => {
+    const { router, emit } = makeRouter();
+    const writes: string[] = [];
+    const res = { write: (chunk: string) => { writes.push(chunk); return true; } };
+    router.addSseClient({ res: res as unknown as ServerResponse, conversationId: 'c2' });
+
+    // A non-string content slips past the type system via the cast and makes
+    // markdownToHtml throw; the event must still be delivered with html: null.
+    emit({
+      type: 'outbound.message',
+      timestamp: '2026-06-15T00:00:00.000Z',
+      payload: { channelId: 'web', conversationId: 'c2', content: { not: 'a string' } },
+    } as unknown as BusEvent);
+
+    const frame = writes.find((w) => w.startsWith('data: '));
+    expect(frame).toBeDefined();
+    const payload = JSON.parse(frame!.slice('data: '.length).trim()) as { html: string | null };
+    expect(payload.html).toBeNull();
   });
 });
