@@ -111,10 +111,11 @@ describe('ConfidencePipeline', () => {
 
       // Use toBeCloseTo rather than toBe: the recency component uses `new Date()` for
       // decay calculation, so two calls milliseconds apart produce values that differ at
-      // floating-point epsilon (e.g. 0.375 vs 0.37499999997). The scores are functionally
-      // identical — the precision (10 decimal places) is far tighter than any meaningful
-      // confidence distinction.
-      expect(second!.contactConfidence).toBeCloseTo(first!.contactConfidence, 10);
+      // floating-point epsilon (e.g. 0.375 vs 0.3749999998). The scores are functionally
+      // identical. We assert to 9 decimal places (tolerance 5e-10); 10 places (5e-11) was
+      // too tight — observed jitter reached ~1.5e-10 and flaked CI. 9 places is still far
+      // tighter than any meaningful confidence distinction.
+      expect(second!.contactConfidence).toBeCloseTo(first!.contactConfidence, 9);
     });
 
     it('does not modify message counts or lastSeenAt', async () => {

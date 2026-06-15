@@ -50,6 +50,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Secret-capture link relayed verbatim** — the token is now a short base64url slug (not a 64-char hex hash) and the skill summaries instruct the agent to relay the URL verbatim, so the model no longer self-redacts the link as a credential. (#971)
 - **Chat waiter no longer crashes the process** — `EventRouter.waitForResponse` now resolves a discriminated result instead of rejecting, so a timeout/supersede firing after the client disconnects can't surface as an `unhandledRejection`; a process-level backstop logs and stays up. (#983)
 - **KG chat rate-limit status** — `POST /api/kg/chat/messages` now returns 429 for rate-limited rejections (was a hardcoded 403), matching `/api/messages`. (#983)
+- **Flaky confidence-pipeline idempotency test** — loosened the `fullRecompute` idempotency assertion from 10 to 9 decimal places; the recency component's `new Date()` jitter (~1.5e-10) exceeded the old 5e-11 tolerance and intermittently failed CI.
 
 ### Security
 
