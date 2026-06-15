@@ -470,6 +470,24 @@ interface SecretAccessedPayload {
   byReference?: boolean;
 }
 
+// SecretCapturedPayload — emitted when a user submits a value to a one-time capture link and
+// it is redeemed into the vault (#972). Carries the secret NAME/label and the routing context
+// needed to re-enter the originating agent — NEVER the value. The resume subscriber turns this
+// into a synthetic agent.task so the blocked agent can continue. originator is round-tripped
+// opaquely (it is the TaskOriginator JSONB stored on the token at mint time).
+interface SecretCapturedPayload {
+  secretName: string;     // the resolved vault key (e.g. 'user.aeroplan_password') — never the value
+  label: string | null;   // human-friendly label shown on the form
+  // Routing context captured at mint time from SkillContext. All optional: a token minted
+  // outside an agent context (or before #972) has no routable origin and is simply not resumed.
+  conversationId?: string;
+  agentId?: string;
+  channelId?: string;
+  taskEventId?: string;   // originating agent.task event id — threaded as parentEventId on resume
+  resumeIntent?: string;  // NL description of what the agent was trying to do
+  originator?: Record<string, unknown>;  // TaskOriginator that started the chain (preserved on resume)
+}
+
 // AutonomySkillBlockedPayload — published by the execution layer when a skill
 // invocation is blocked because the live autonomy score is below the skill's
 // action_risk threshold. Advisory-only — the agent receives a { success: false }
@@ -824,6 +842,16 @@ export interface SecretAccessedEvent extends BaseEvent {
   payload: SecretAccessedPayload;
 }
 
+// SecretCapturedEvent — published by the capture endpoint (trusted system infra) when a
+// one-time link is redeemed (#972). sourceLayer 'system' because the capture endpoint
+// self-authorizes via the token and writes to the vault, like the scheduler emitting its
+// own events. parentEventId traces to the originating agent.task. Never carries the value.
+export interface SecretCapturedEvent extends BaseEvent {
+  type: 'secret.captured';
+  sourceLayer: 'system';
+  payload: SecretCapturedPayload;
+}
+
 // AutonomySkillBlockedEvent — execution layer blocked a skill invocation
 // due to insufficient autonomy score.
 export interface AutonomySkillBlockedEvent extends BaseEvent {
@@ -964,6 +992,7 @@ export type BusEvent =
   | ContextBudgetEvent        // #24: context budget utilization per LLM call
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
+  | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | AutonomySkillBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
@@ -1461,6 +1490,20 @@ export function createSecretAccessed(
     timestamp: new Date(),
     type: 'secret.accessed',
     sourceLayer: 'execution',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createSecretCaptured(
+  payload: SecretCapturedPayload,
+  parentEventId?: string,
+): SecretCapturedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'secret.captured',
+    sourceLayer: 'system',
     payload,
     parentEventId,
   };

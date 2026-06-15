@@ -31,10 +31,11 @@ export class SecretCaptureRequestHandler implements SkillHandler {
       return { success: false, error: 'secret-capture-request requires the secretCapture capability in context.' };
     }
 
-    const { secret_name, label, value_format } = ctx.input as {
+    const { secret_name, label, value_format, resume_intent } = ctx.input as {
       secret_name?: unknown;
       label?: unknown;
       value_format?: unknown;
+      resume_intent?: unknown;
     };
 
     if (typeof secret_name !== 'string' || secret_name.trim().length === 0) {
@@ -50,11 +51,29 @@ export class SecretCaptureRequestHandler implements SkillHandler {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
 
+    // Capture the origin routing context (#972) so that when the user fills the link, the
+    // capture endpoint can re-enter THIS agent in THIS conversation to continue. Holds no
+    // secret material — only routing + the agent's own description of what it's doing. The
+    // originator is forwarded opaquely from the task metadata so the resumed task is attributed
+    // to whoever started the chain. resume_intent falls back to the label when not supplied.
+    const resumeIntent = typeof resume_intent === 'string' && resume_intent.trim()
+      ? resume_intent.trim()
+      : labelStr;
+    const originator = ctx.taskMetadata?.originator as Record<string, unknown> | undefined;
+
     try {
       const { rawToken, secretName, expiresAt } = await ctx.secretCapture.mintUserSecret({
         rawName: secret_name,
         label: labelStr,
         valueFormat,
+        origin: {
+          conversationId: ctx.conversationId,
+          channelId: ctx.channelId,
+          agentId: ctx.agentId,
+          taskEventId: ctx.taskEventId,
+          originator,
+          resumeIntent,
+        },
       });
       const captureUrl = buildCaptureUrl(ctx, rawToken);
       const expiresLocal = toLocalIso(Math.floor(expiresAt.getTime() / 1000), ctx.timezone);
