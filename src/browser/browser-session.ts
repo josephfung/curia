@@ -33,9 +33,19 @@ export class BrowserSession {
    */
   private readonly injectedSecretValues = new Set<string>();
 
-  constructor(context: BrowserContext, page: Page) {
+  /**
+   * For INCOGNITO sessions: the ephemeral BrowserContext this session OWNS and must
+   * tear down on close. Null for PERSISTENT sessions, whose page lives in the shared
+   * persistent profile context — closing that context would kill the whole browser, so
+   * a persistent session closes only its page instead. This single switch distinguishes
+   * the two session lifecycles (see #987 design).
+   */
+  private readonly ownedContext: BrowserContext | null;
+
+  constructor(context: BrowserContext, page: Page, ownedContext: BrowserContext | null = null) {
     this.context = context;
     this.page = page;
+    this.ownedContext = ownedContext;
     this.lastUsedAt = Date.now();
   }
 
@@ -80,8 +90,17 @@ export class BrowserSession {
     return Date.now() - this.lastUsedAt > ttlMs;
   }
 
-  /** Close the underlying browser context, releasing all associated resources. */
+  /**
+   * Release this session's browser resources.
+   * - Incognito: close the owned ephemeral context (also closes its page).
+   * - Persistent: close only the page; the shared profile context stays alive for
+   *   other sessions and to keep the profile warm.
+   */
   async close(): Promise<void> {
-    await this.context.close();
+    if (this.ownedContext) {
+      await this.ownedContext.close();
+    } else {
+      await this.page.close();
+    }
   }
 }
