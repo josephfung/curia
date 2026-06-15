@@ -15,14 +15,12 @@ import pino from 'pino';
 const logger = pino({ level: 'silent' });
 
 // Mock the Ghostery blocker so no real blocklist is fetched in unit tests.
-// fakeBlocker is exposed for the blocker-specific assertions Task 6 adds (it will
-// reference fakeBlocker.enableBlockingInPage); the void below keeps it from tripping
-// noUnusedLocals until then.
+// fakeBlocker is exposed for the blocker-specific assertions in Task 6
+// (see "does not fetch" and "attaches the blocker" tests below).
 const { fakeBlocker, fromPrebuilt } = vi.hoisted(() => {
   const fb = { enableBlockingInPage: vi.fn().mockResolvedValue(undefined) };
   return { fakeBlocker: fb, fromPrebuilt: vi.fn().mockResolvedValue(fb) };
 });
-void fakeBlocker;
 vi.mock('@ghostery/adblocker-playwright', () => ({
   PlaywrightBlocker: { fromPrebuiltAdsAndTracking: fromPrebuilt },
 }));
@@ -94,6 +92,9 @@ describe('BrowserService (unit — mocked browser)', () => {
       contextFactory: async () => mockContext as never,
     });
     await service.start();
+    // Reset blocker spies between tests so Task 6 assertions are per-test, not cumulative.
+    fromPrebuilt.mockClear();
+    fakeBlocker.enableBlockingInPage.mockClear();
   });
 
   afterEach(async () => {
@@ -158,6 +159,44 @@ describe('BrowserService (unit — mocked browser)', () => {
     await service.stop();
     expect(mockPage.close).toHaveBeenCalledTimes(2);
     expect(mockContext.close).toHaveBeenCalledOnce();
+  });
+
+  // Task 5: incognito session isolation
+  it('incognito session uses a fresh isolated context, not the persistent profile', async () => {
+    const incognitoPage = makeMockPage();
+    const incognitoContext = {
+      newPage: vi.fn().mockResolvedValue(incognitoPage),
+      close: vi.fn().mockResolvedValue(undefined),
+      browser: vi.fn().mockReturnValue(mockBrowser),
+      on: vi.fn(),
+    };
+    mockBrowser.newContext.mockResolvedValue(incognitoContext as never);
+
+    const { sessionId } = await service.getOrCreateSession(undefined, { incognito: true });
+
+    // Came from a fresh context off the browser, NOT the persistent profile.
+    expect(mockBrowser.newContext).toHaveBeenCalledOnce();
+    expect(mockContext.newPage).not.toHaveBeenCalled();
+
+    // Closing the session tears down the OWNED context (isolation), not just a page.
+    await service.closeSession(sessionId);
+    expect(incognitoContext.close).toHaveBeenCalledOnce();
+  });
+
+  // Task 6: opt-in lazy ad blocker
+  it('does not fetch or attach the blocker by default (off for login/form flows)', async () => {
+    await service.getOrCreateSession(undefined);
+    expect(fromPrebuilt).not.toHaveBeenCalled();
+    expect(fakeBlocker.enableBlockingInPage).not.toHaveBeenCalled();
+  });
+
+  it('attaches the blocker only when block_ads is true, fetching the list lazily once', async () => {
+    await service.getOrCreateSession(undefined, { blockAds: true });
+    await service.getOrCreateSession(undefined, { blockAds: true });
+    // Blocklist fetched once and cached across opt-ins.
+    expect(fromPrebuilt).toHaveBeenCalledOnce();
+    // Attached per opt-in session.
+    expect(fakeBlocker.enableBlockingInPage).toHaveBeenCalledTimes(2);
   });
 });
 
