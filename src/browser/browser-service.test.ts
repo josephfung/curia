@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BrowserService, clearStaleX11Lock } from './browser-service.js';
+import { BrowserService, clearStaleX11Lock, isXServerBinary } from './browser-service.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -237,6 +237,27 @@ describe('clearStaleX11Lock', () => {
     expect(removed).toBe(false);
     expect(existsSync(socketPath)).toBe(true);
     expect(aliveCheck).not.toHaveBeenCalled();
+  });
+});
+
+// --- isXServerBinary (X server detection for the liveness guard) ---
+
+describe('isXServerBinary', () => {
+  it('recognizes all common X server flavours, not just Xvfb/Xorg', () => {
+    for (const binary of ['X', 'Xvfb', 'Xorg', 'Xwayland', 'Xephyr', 'Xvnc', 'Xnest']) {
+      expect(isXServerBinary(binary)).toBe(true);
+    }
+  });
+
+  it('recognizes an unlisted server following the X<name> convention', () => {
+    expect(isXServerBinary('Xfoo')).toBe(true);
+  });
+
+  it('rejects non-X-server binaries that merely start with x or mention X', () => {
+    // These would be false positives under the old substring match.
+    for (const binary of ['node', 'bash', 'xterm', 'Xfce4-session', 'chrome']) {
+      expect(isXServerBinary(binary)).toBe(false);
+    }
   });
 });
 

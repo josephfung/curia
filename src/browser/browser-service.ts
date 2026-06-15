@@ -377,7 +377,9 @@ interface ClearStaleX11LockOptions {
  * harmless — the X server unlinks and recreates a stale socket itself on startup.
  */
 export function clearStaleX11Lock(opts: ClearStaleX11LockOptions): boolean {
-  const { displayNum, logger, tmpDir = '/tmp', isProcessAlive = isLiveXServer } = opts;
+  const { displayNum, logger, tmpDir = '/tmp' } = opts;
+  // Default probe needs the logger so it can surface (not swallow) /proc read failures.
+  const isProcessAlive = opts.isProcessAlive ?? ((pid: number) => isLiveXServer(pid, logger));
   const lockPath = `${tmpDir}/.X${displayNum}-lock`;
   const socketPath = `${tmpDir}/.X11-unix/X${displayNum}`;
 
@@ -387,7 +389,7 @@ export function clearStaleX11Lock(opts: ClearStaleX11LockOptions): boolean {
 
   // A lock file with a live X-server owner means the display is genuinely in use —
   // bail out without touching anything.
-  const pid = readLockPid(lockPath);
+  const pid = readLockPid(lockPath, logger);
   if (pid !== null && isProcessAlive(pid)) {
     logger.warn({ display: `:${displayNum}`, pid }, 'Xvfb lock owned by a live X server — leaving it alone');
     return false;
@@ -411,15 +413,34 @@ export function clearStaleX11Lock(opts: ClearStaleX11LockOptions): boolean {
 }
 
 /** Read the owning PID from an X11 lock file. Returns null if absent or unparseable. */
-function readLockPid(lockPath: string): number | null {
+function readLockPid(lockPath: string, logger: Logger): number | null {
   try {
     // Format: PID left-padded to 10 chars plus a trailing newline. parseInt skips leading space.
     const pid = Number.parseInt(readFileSync(lockPath, 'utf8').trim(), 10);
     return Number.isInteger(pid) && pid > 0 ? pid : null;
-  } catch {
-    // Unreadable lock file — treat as no valid owner so the caller removes it.
+  } catch (err) {
+    // Log rather than swallow, but deliberately do NOT propagate: this cleanup exists to
+    // keep BrowserService startup resilient, so an unreadable lock must degrade (treat as
+    // no valid owner → caller attempts removal) rather than throw and disable the skill.
+    logger.warn({ err, lockPath }, 'Could not read X11 lock PID — treating lock as having no live owner');
     return null;
   }
+}
+
+// X server binaries follow the convention of an executable named `X` or `X<name>`
+// (Xvfb, Xorg, Xwayland, Xephyr, Xvnc, …). We match the basename of argv[0] against
+// known names plus that convention, rather than substring-matching the whole command
+// line, so any live X server flavour is recognised (not just Xvfb/Xorg) and an
+// unrelated process that merely mentions "Xorg" in an argument is not misclassified.
+const X_SERVER_BINARIES = new Set(['X', 'Xvfb', 'Xorg', 'Xwayland', 'Xephyr', 'Xvnc', 'Xnest']);
+
+/**
+ * True if `binary` (an executable basename) is an X server: a known server name, or
+ * the `X<name>` convention (capital X + lowercase initial, alphanumeric, no separators —
+ * so `Xfoo` matches but `Xfce4-session`, `xterm`, and `node` do not).
+ */
+export function isXServerBinary(binary: string): boolean {
+  return X_SERVER_BINARIES.has(binary) || /^X[a-z][A-Za-z0-9]*$/.test(binary);
 }
 
 /**
@@ -429,7 +450,7 @@ function readLockPid(lockPath: string): number | null {
  * but the command line can't be read, we conservatively assume the display is owned
  * (better to skip cleanup than risk clobbering a live server).
  */
-function isLiveXServer(pid: number): boolean {
+function isLiveXServer(pid: number, logger: Logger): boolean {
   try {
     // Signal 0 performs no signal delivery — it only probes for the process's existence.
     process.kill(pid, 0);
@@ -438,10 +459,16 @@ function isLiveXServer(pid: number): boolean {
     // EPERM: the process exists but we can't signal it — still alive, fall through.
   }
   try {
-    const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
-    return cmdline.includes('Xvfb') || cmdline.includes('Xorg');
-  } catch {
-    // Couldn't inspect the command line; the process is alive, so assume it owns the display.
+    // cmdline is NUL-separated; argv[0] is the executable path. Compare its basename
+    // against the X-server naming convention so all server flavours are recognised.
+    const argv0 = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')[0] ?? '';
+    const binary = argv0.slice(argv0.lastIndexOf('/') + 1);
+    return isXServerBinary(binary);
+  } catch (err) {
+    // Couldn't inspect the command line; the process is alive, so conservatively assume
+    // it owns the display (never clobber a live server). Logged, not swallowed; not
+    // propagated, since that would defeat the resilient-startup purpose of this check.
+    logger.warn({ err, pid }, 'Could not inspect lock-owner cmdline — assuming the live process owns the display');
     return true;
   }
 }
