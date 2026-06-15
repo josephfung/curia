@@ -984,6 +984,13 @@ export class ExecutionLayer {
           maxLength: this.skillOutputMaxLength,
           skipSecretRedaction,
         });
+        // Rough post-sanitize size check for observability: if the sanitized object
+        // would serialize larger than the limit, at least one leaf was truncated.
+        // This is a warn-only signal — sanitizeObjectOutput already capped each leaf.
+        const sanitizedSize = JSON.stringify(sanitizedData).length;
+        if (sanitizedSize > this.skillOutputMaxLength) {
+          skillLogger.warn({ skillName, outputLength: sanitizedSize }, 'Skill output truncated to configured limit');
+        }
         return { success: true, data: sanitizedData };
       }
 
