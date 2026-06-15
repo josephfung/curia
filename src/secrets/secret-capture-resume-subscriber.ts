@@ -42,9 +42,12 @@ export class SecretCaptureResumeSubscriber {
   }
 
   private async handle(event: SecretCapturedEvent): Promise<void> {
-    // Duplicate-delivery guard: one capture must re-enter the agent exactly once.
+    // Duplicate-delivery guard: one capture must re-enter the agent exactly once. A duplicate of
+    // the same event id is genuinely unexpected (redeem is idempotent on consumed_at, so the
+    // source emits exactly one event per capture) — so log at info: a steady stream of these
+    // would point at a bus re-delivery bug worth noticing, not routine noise.
     if (this.dispatched.has(event.id)) {
-      this.logger.debug({ eventId: event.id }, 'secret.captured already handled — skipping duplicate');
+      this.logger.info({ eventId: event.id }, 'secret.captured already handled — skipping duplicate');
       return;
     }
 
