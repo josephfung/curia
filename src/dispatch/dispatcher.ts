@@ -163,6 +163,30 @@ export class Dispatcher {
     }
   }
 
+  /**
+   * Register channel routing for an agent.task that did NOT originate from handleInbound.
+   *
+   * Normal tasks get a routing entry inside handleInbound (keyed by task event id) so
+   * handleAgentResponse can turn the agent's reply into an outbound.message. A task published
+   * directly to the bus by trusted infra — the secret-capture resume path (#972) — never passes
+   * through handleInbound, so without this its response would find no routing and be dropped as
+   * "no routing info" (the same path bullpen tasks take), never reaching the user.
+   *
+   * accountId is optional: when absent the email adapter falls back to the default account.
+   */
+  registerExternalTaskRouting(
+    taskEventId: string,
+    routing: { channelId: string; conversationId: string; senderId: string; accountId?: string },
+  ): void {
+    this.taskRouting.set(taskEventId, {
+      channelId: routing.channelId,
+      conversationId: routing.conversationId,
+      senderId: routing.senderId,
+      accountId: routing.accountId,
+      humanReplySent: false,
+    });
+  }
+
   /** Clear all pending checkpoint timers. Call during graceful shutdown. */
   close(): void {
     for (const timer of this.checkpointTimers.values()) {
