@@ -11,6 +11,12 @@ const WATERMARK_KEY = 'last_processed_at';
 // Default lookback when no persisted watermark exists (first run).
 const FIRST_RUN_HOURS = 24;
 
+// Drafts live in a separate Nylas v3 resource (`/drafts`), not the `/messages`
+// collection. Listing them via the message path returns a silent empty array
+// (issue #1000), so we detect the drafts folder and route to listDrafts instead.
+// Both the Gmail UI name ("DRAFTS") and the API label ("DRAFT") map here.
+const DRAFTS_FOLDER_NAMES = new Set(['DRAFT', 'DRAFTS']);
+
 export class CeoInboxListHandler implements SkillHandler {
   // Namespace is injectable so integration tests can scope their writes to a
   // test-only namespace and avoid corrupting the production watermark.
@@ -50,6 +56,29 @@ export class CeoInboxListHandler implements SkillHandler {
       typeof input.folder === 'string' && input.folder.trim()
         ? input.folder.trim()
         : 'INBOX';
+
+    // ── Drafts branch (issue #1000) ──────────────────────────────────────────
+    //
+    // Drafts are a distinct Nylas resource — query `/drafts`, not `/messages`.
+    // Short-circuit here, BEFORE any watermark logic: drafts have no meaningful
+    // "received" date, so applying received_after would re-zero the result, and
+    // advancing the inbox triage watermark off a draft's date would corrupt it.
+    if (DRAFTS_FOLDER_NAMES.has(folder.toUpperCase())) {
+      ctx.log.info({ folder, limit }, 'ceo-inbox-list: listing drafts via /drafts');
+      try {
+        const drafts = await client.listDrafts({ limit });
+        return {
+          success: true,
+          // `drafts` (not `messages`) + an explicit `folder` make a genuine
+          // empty result distinguishable from the old silent-zero failure where
+          // the wrong endpoint was queried.
+          data: { drafts, count: drafts.length, folder: 'DRAFTS' },
+        };
+      } catch (err) {
+        ctx.log.error({ err }, 'ceo-inbox-list: failed to list drafts');
+        return { success: false, error: 'Failed to list CEO inbox drafts' };
+      }
+    }
 
     const unreadOnly = input.unread_only !== false; // default true
 

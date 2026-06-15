@@ -119,3 +119,79 @@ describe('CeoInboxSearchHandler — query parameter', () => {
     }
   });
 });
+
+describe('CeoInboxSearchHandler — drafts search (#1000)', () => {
+  let handler: CeoInboxSearchHandler;
+
+  const DRAFTS = [
+    { id: 'd1', thread_id: 't1', subject: 'Quarterly report', to: [{ email: 'alice@example.com', name: 'Alice' }], cc: [], snippet: '', date: 1 },
+    { id: 'd2', thread_id: 't2', subject: 'Lunch plans', to: [{ email: 'bob@example.com', name: 'Bob' }], cc: [], snippet: '', date: 2 },
+  ];
+
+  beforeEach(() => {
+    handler = new CeoInboxSearchHandler();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('routes to the /drafts resource when folder is DRAFTS', async () => {
+    const ctx = makeCtx({ query: 'report', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await handler.execute(ctx);
+
+    const url = new URL(fetchSpy.mock.calls[0][0] as string);
+    expect(url.pathname.endsWith('/drafts')).toBe(true);
+    expect(url.pathname).not.toContain('/messages');
+  });
+
+  it('does not send search_query_native to the drafts endpoint (filters client-side)', async () => {
+    const ctx = makeCtx({ query: 'report', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await handler.execute(ctx);
+
+    expect(extractQueryParam(fetchSpy, 'search_query_native')).toBeNull();
+  });
+
+  it('filters drafts by subject substring (case-insensitive)', async () => {
+    const ctx = makeCtx({ query: 'quarterly', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { data: { drafts: Array<{ id: string }>; count: number } }).data;
+    expect(data.count).toBe(1);
+    expect(data.drafts[0]!.id).toBe('d1');
+  });
+
+  it('filters drafts by recipient email address', async () => {
+    const ctx = makeCtx({ query: 'bob@example.com', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+
+    const data = (result as { data: { drafts: Array<{ id: string }>; count: number } }).data;
+    expect(data.count).toBe(1);
+    expect(data.drafts[0]!.id).toBe('d2');
+  });
+
+  it('filters drafts by recipient name', async () => {
+    const ctx = makeCtx({ query: 'Alice', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+
+    const data = (result as { data: { drafts: Array<{ id: string }>; count: number } }).data;
+    expect(data.count).toBe(1);
+    expect(data.drafts[0]!.id).toBe('d1');
+  });
+});

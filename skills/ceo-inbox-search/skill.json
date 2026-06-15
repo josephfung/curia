@@ -1,16 +1,18 @@
 {
   "name": "ceo-inbox-search",
-  "description": "Search the CEO's personal email inbox using Gmail-native query syntax. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
-  "version": "0.1.0",
+  "description": "Search the CEO's personal email inbox using Gmail-native query syntax. Pass folder: 'DRAFTS' to instead search unsent drafts by subject/recipient. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
-    "query": "string (Gmail-native search query, e.g. 'from:alice subject:invoice')",
+    "query": "string (for messages: Gmail-native search query, e.g. 'from:alice subject:invoice'. For drafts: a plain substring matched case-insensitively against subject and recipient name/email)",
+    "folder": "string? (omit to search messages; pass 'DRAFTS' to search unsent drafts instead)",
     "limit": "number? (max results, 1–50, default 10)"
   },
   "outputs": {
-    "messages": "array of { id, threadId, from, subject, date, snippet, unread, folders }",
-    "count": "number of messages returned"
+    "messages": "array of { id, threadId, from, subject, date, snippet, unread, folders } (when searching messages)",
+    "drafts": "array of { id, threadId, subject, to, cc, snippet, date } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
+    "count": "number of items returned"
   },
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id", "nylas_self_email"],

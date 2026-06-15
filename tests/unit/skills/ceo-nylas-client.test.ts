@@ -118,3 +118,110 @@ describe('CeoNylasClient.listMessages — folder alias normalization', () => {
     expect(url.searchParams.get('in')).toBe('Label_42');
   });
 });
+
+describe('CeoNylasClient — drafts (issue #1000)', () => {
+  const RAW_DRAFT_SUMMARY = {
+    id: 'draft-1',
+    thread_id: 'thread-1',
+    subject: 'Quarterly update',
+    to: [{ name: 'Alice', email: 'alice@example.com' }],
+    cc: [{ email: 'bob@example.com' }],
+    snippet: 'Hi Alice, here is the update',
+    date: 1_700_000_000,
+  };
+
+  describe('listDrafts', () => {
+    it('hits the /drafts collection — NOT /messages', async () => {
+      const fetchSpy = mockFetchSuccess([RAW_DRAFT_SUMMARY]);
+      const client = new CeoNylasClient('key', 'grant', logger);
+      await client.listDrafts({ limit: 25 });
+
+      const url = new URL(fetchSpy.mock.calls[0]![0] as string);
+      expect(url.pathname.endsWith('/drafts')).toBe(true);
+      expect(url.pathname).not.toContain('/messages');
+      expect(url.searchParams.get('limit')).toBe('25');
+    });
+
+    it('never sends a received_after / watermark param', async () => {
+      const fetchSpy = mockFetchSuccess([RAW_DRAFT_SUMMARY]);
+      const client = new CeoNylasClient('key', 'grant', logger);
+      await client.listDrafts({ limit: 10 });
+
+      const url = new URL(fetchSpy.mock.calls[0]![0] as string);
+      expect(url.searchParams.get('received_after')).toBeNull();
+    });
+
+    it('normalizes the raw draft into a summary with recipients', async () => {
+      mockFetchSuccess([RAW_DRAFT_SUMMARY]);
+      const client = new CeoNylasClient('key', 'grant', logger);
+      const drafts = await client.listDrafts({ limit: 10 });
+
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({
+        id: 'draft-1',
+        threadId: 'thread-1',
+        subject: 'Quarterly update',
+        to: [{ name: 'Alice', email: 'alice@example.com' }],
+        cc: [{ email: 'bob@example.com' }],
+        snippet: 'Hi Alice, here is the update',
+        date: 1_700_000_000,
+      });
+    });
+  });
+
+  describe('getDraft', () => {
+    it('GETs /drafts/{id} and returns the full draft with body', async () => {
+      const fetchSpy = mockFetchSuccess({
+        ...RAW_DRAFT_SUMMARY,
+        bcc: [{ email: 'carol@example.com' }],
+        body: '<p>Hi Alice</p>',
+      });
+      const client = new CeoNylasClient('key', 'grant', logger);
+      const draft = await client.getDraft('draft-1');
+
+      const call = fetchSpy.mock.calls[0]!;
+      const url = new URL(call[0] as string);
+      expect(url.pathname.endsWith('/drafts/draft-1')).toBe(true);
+      expect((call[1] as RequestInit).method).toBe('GET');
+      expect(draft.body).toBe('<p>Hi Alice</p>');
+      expect(draft.bcc).toEqual([{ name: undefined, email: 'carol@example.com' }]);
+    });
+  });
+
+  describe('updateDraft', () => {
+    it('PUTs /drafts/{id} with only the provided fields and returns the updated draft', async () => {
+      const fetchSpy = mockFetchSuccess({
+        ...RAW_DRAFT_SUMMARY,
+        to: [{ email: 'corrected@example.com' }],
+        subject: 'Corrected subject',
+        body: '<p>Updated</p>',
+        bcc: [],
+      });
+      const client = new CeoNylasClient('key', 'grant', logger);
+      const updated = await client.updateDraft('draft-1', {
+        to: [{ email: 'corrected@example.com' }],
+        subject: 'Corrected subject',
+        body: '<p>Updated</p>',
+      });
+
+      const call = fetchSpy.mock.calls[0]!;
+      const url = new URL(call[0] as string);
+      const init = call[1] as RequestInit;
+      expect(url.pathname.endsWith('/drafts/draft-1')).toBe(true);
+      expect(init.method).toBe('PUT');
+
+      const sentBody = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(sentBody).toEqual({
+        to: [{ email: 'corrected@example.com' }],
+        subject: 'Corrected subject',
+        body: '<p>Updated</p>',
+      });
+      // cc was not provided — it must be absent so we don't blank out the draft's existing CC.
+      expect(sentBody).not.toHaveProperty('cc');
+
+      expect(updated.to).toEqual([{ name: undefined, email: 'corrected@example.com' }]);
+      expect(updated.subject).toBe('Corrected subject');
+      expect(updated.body).toBe('<p>Updated</p>');
+    });
+  });
+});

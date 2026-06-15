@@ -1,8 +1,31 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { CeoNylasClient } from '../_shared/ceo-nylas-client.js';
+import { CeoNylasClient, type NylasDraftSummary } from '../_shared/ceo-nylas-client.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 10;
+
+// Folder names that mean "search the CEO's unsent drafts" (issue #1000).
+const DRAFTS_FOLDER_NAMES = new Set(['DRAFT', 'DRAFTS']);
+
+// Drafts have no native server-side search in Nylas v3, so we list-then-filter
+// client-side. Pull a generous page first; mailboxes rarely hold many drafts.
+const DRAFT_SCAN_LIMIT = 100;
+
+/**
+ * Case-insensitive substring match of `query` against a draft's subject and
+ * each recipient's email + display name. This is the searchable surface for
+ * drafts: by subject and by recipient (issue #1000 acceptance criteria).
+ */
+function draftMatchesQuery(draft: NylasDraftSummary, query: string): boolean {
+  const needle = query.toLowerCase();
+  if (draft.subject.toLowerCase().includes(needle)) return true;
+  const recipients = [...draft.to, ...draft.cc];
+  return recipients.some(
+    (p) =>
+      p.email.toLowerCase().includes(needle) ||
+      (p.name?.toLowerCase().includes(needle) ?? false),
+  );
+}
 
 export class CeoInboxSearchHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -34,6 +57,31 @@ export class CeoInboxSearchHandler implements SkillHandler {
         ? Math.floor(input.limit)
         : DEFAULT_LIMIT;
     const limit = Math.max(1, Math.min(rawLimit, MAX_LIMIT));
+
+    const folder = typeof input.folder === 'string' ? input.folder.trim() : '';
+
+    // ── Drafts branch (issue #1000) ──────────────────────────────────────────
+    //
+    // Drafts live in the `/drafts` resource and have no native search, so we
+    // list them and filter client-side by subject/recipient. Routed here when
+    // the caller scopes the search to the drafts folder.
+    if (folder && DRAFTS_FOLDER_NAMES.has(folder.toUpperCase())) {
+      ctx.log.info(
+        { queryLength: query.length, limit },
+        'ceo-inbox-search: searching drafts via /drafts (client-side filter)',
+      );
+      try {
+        const allDrafts = await client.listDrafts({ limit: DRAFT_SCAN_LIMIT });
+        const drafts = allDrafts.filter((d) => draftMatchesQuery(d, query)).slice(0, limit);
+        return {
+          success: true,
+          data: { drafts, count: drafts.length, folder: 'DRAFTS' },
+        };
+      } catch (err) {
+        ctx.log.error({ err }, 'ceo-inbox-search: draft search failed');
+        return { success: false, error: 'Failed to search CEO inbox drafts' };
+      }
+    }
 
     ctx.log.info(
       { queryLength: query.length, limit },

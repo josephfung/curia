@@ -44,6 +44,34 @@ export interface NylasDraft {
   cc: NylasParticipant[];
 }
 
+// Drafts are a *separate* Nylas v3 resource (`/drafts`), not part of the
+// `/messages` collection. Listing the DRAFTS folder via `/messages?in=DRAFT`
+// always returns an empty array regardless of how many drafts exist (issue #1000).
+export interface NylasDraftSummary {
+  id: string;
+  threadId: string;
+  subject: string;
+  to: NylasParticipant[];
+  cc: NylasParticipant[];
+  snippet: string;
+  date: number;
+}
+
+export interface NylasDraftFull extends NylasDraftSummary {
+  bcc: NylasParticipant[];
+  body: string;
+}
+
+// Partial update payload for an existing draft. Only the provided fields are
+// sent to Nylas — omitted fields are left untouched on the server, so e.g.
+// updating `to` alone must not blank out the draft's existing `cc`/`body`.
+export interface UpdateDraftOptions {
+  to?: NylasParticipant[];
+  cc?: NylasParticipant[];
+  subject?: string;
+  body?: string;
+}
+
 export interface NylasFolder {
   id: string;
   name: string;
@@ -226,6 +254,39 @@ export class CeoNylasClient {
       to: (data.to ?? []).map(normParticipant),
       cc: (data.cc ?? []).map(normParticipant),
     };
+  }
+
+  // List unsent drafts. Reads the dedicated `/drafts` resource — the `/messages`
+  // collection never contains drafts, so the old `listMessages({folder:'DRAFTS'})`
+  // path returned a silent empty array even when drafts existed (issue #1000).
+  // Note: drafts have no "received" date, so there is no watermark/received_after
+  // filter here — callers must not apply inbox watermarks to drafts.
+  async listDrafts(options: { limit?: number } = {}): Promise<NylasDraftSummary[]> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    const url = `${this.baseUrl}/drafts?${params}`;
+    const data = await this.request<NylasApiDraftFull[]>('GET', url, 'listDrafts');
+    return data.map(normalizeDraftSummary);
+  }
+
+  async getDraft(draftId: string): Promise<NylasDraftFull> {
+    const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
+    const data = await this.request<NylasApiDraftFull>('GET', url, 'getDraft');
+    return normalizeDraftFull(data);
+  }
+
+  // Update an existing draft (PUT /drafts/{id}). Only the provided fields are
+  // sent; omitted fields are preserved server-side. This is the capability that
+  // lets the CEO fix a wrong-recipient or wrong-body draft without recreating it.
+  async updateDraft(draftId: string, updates: UpdateDraftOptions): Promise<NylasDraftFull> {
+    const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
+    const payload: Record<string, unknown> = {};
+    if (updates.to !== undefined) payload.to = updates.to;
+    if (updates.cc !== undefined) payload.cc = updates.cc;
+    if (updates.subject !== undefined) payload.subject = updates.subject;
+    if (updates.body !== undefined) payload.body = updates.body;
+    const data = await this.request<NylasApiDraftFull>('PUT', url, 'updateDraft', payload);
+    return normalizeDraftFull(data);
   }
 
   // ── Message updates ──────────────────────────────────────────────────────
@@ -437,6 +498,19 @@ interface NylasApiDraft {
   cc?: NylasApiParticipant[];
 }
 
+// Full raw draft shape returned by GET/PUT /drafts and GET /drafts/{id}.
+interface NylasApiDraftFull {
+  id: string;
+  thread_id?: string;
+  subject?: string;
+  to?: NylasApiParticipant[];
+  cc?: NylasApiParticipant[];
+  bcc?: NylasApiParticipant[];
+  body?: string;
+  snippet?: string;
+  date?: number;
+}
+
 interface NylasApiFolder {
   id: string;
   name?: string;
@@ -494,6 +568,26 @@ function normalizeMessageSummary(msg: NylasApiMessage): NylasMessageSummary {
     unread: msg.unread ?? false,
     folders: msg.folders ?? [],
     attachments: normalizeAttachments(msg.attachments),
+  };
+}
+
+function normalizeDraftSummary(draft: NylasApiDraftFull): NylasDraftSummary {
+  return {
+    id: draft.id,
+    threadId: draft.thread_id ?? '',
+    subject: draft.subject ?? '',
+    to: (draft.to ?? []).map(normParticipant),
+    cc: (draft.cc ?? []).map(normParticipant),
+    snippet: draft.snippet ?? '',
+    date: draft.date ?? 0,
+  };
+}
+
+function normalizeDraftFull(draft: NylasApiDraftFull): NylasDraftFull {
+  return {
+    ...normalizeDraftSummary(draft),
+    bcc: (draft.bcc ?? []).map(normParticipant),
+    body: draft.body ?? '',
   };
 }
 
