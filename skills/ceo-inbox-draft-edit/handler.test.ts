@@ -127,6 +127,39 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it('rejects a malformed cc value (number) instead of silently clearing CC', async () => {
+    const ctx = buildCtx({ draft_id: 'draft-1', cc: 123 });
+    const result = await handler.execute(ctx);
+    expect(result).toMatchObject({ success: false, error: expect.any(String) });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a cc array containing non-string entries', async () => {
+    const ctx = buildCtx({ draft_id: 'draft-1', cc: ['ok@example.com', 5] });
+    const result = await handler.execute(ctx);
+    expect(result).toMatchObject({ success: false, error: expect.any(String) });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a to array containing non-string entries (no silent drop)', async () => {
+    const ctx = buildCtx({ draft_id: 'draft-1', to: ['ok@example.com', 5] });
+    const result = await handler.execute(ctx);
+    expect(result).toMatchObject({ success: false, error: expect.any(String) });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('clears cc when an explicit empty array is provided', async () => {
+    mockFetch.mockResolvedValue(new Response(JSON.stringify(draftResponse({ cc: [] })), { status: 200 }));
+
+    const ctx = buildCtx({ draft_id: 'draft-1', cc: [] });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const sent = JSON.parse((mockFetch.mock.calls[0]![1] as RequestInit).body as string) as Record<string, unknown>;
+    expect(sent).toHaveProperty('cc');
+    expect(sent.cc).toEqual([]);
+  });
+
   it('returns a structured error when the Nylas API call fails', async () => {
     mockFetch.mockResolvedValue(new Response('nope', { status: 404 }));
     const ctx = buildCtx({ draft_id: 'missing', subject: 'x' });

@@ -72,6 +72,15 @@ export class CeoInboxSearchHandler implements SkillHandler {
       );
       try {
         const allDrafts = await client.listDrafts({ limit: DRAFT_SCAN_LIMIT });
+        // The client-side filter only sees this first page. If we hit the scan
+        // cap, matches could exist beyond it — warn rather than truncate silently
+        // (mailboxes rarely hold 100+ drafts; full pagination is a follow-up).
+        if (allDrafts.length >= DRAFT_SCAN_LIMIT) {
+          ctx.log.warn(
+            { scanned: allDrafts.length, cap: DRAFT_SCAN_LIMIT },
+            'ceo-inbox-search: draft scan hit the cap — matches beyond the first page are not searched',
+          );
+        }
         const drafts = allDrafts.filter((d) => draftMatchesQuery(d, query)).slice(0, limit);
         return {
           success: true,

@@ -5,13 +5,30 @@ import { markdownToHtml } from '../../src/channels/email/markdown-to-html.js';
 const MAX_BODY_LENGTH = 50_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Normalise a `to`/`cc` input that may arrive as a single string or an array.
-function toEmailList(raw: unknown): string[] {
-  if (Array.isArray(raw)) {
-    return raw.filter((v) => typeof v === 'string' && v.trim()).map((v) => (v as string).trim());
+// Parse a `to`/`cc` input that may arrive as a single string or an array of
+// strings. Returns the trimmed addresses, or an `{ error }` when the input is
+// malformed (a non-string, or an array containing a non-string/blank entry).
+//
+// Malformed input MUST surface as an error rather than collapsing to an empty
+// list: for `cc`, an empty list is a legitimate "clear the CC line" instruction,
+// so silently turning `cc: 123` or `cc: [1, 2]` into `[]` would wipe the draft's
+// existing recipients without the caller intending it. (CodeAnt #1003)
+function parseEmailField(raw: unknown): { emails: string[] } | { error: string } {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    return { emails: trimmed ? [trimmed] : [] };
   }
-  if (typeof raw === 'string' && raw.trim()) return [raw.trim()];
-  return [];
+  if (Array.isArray(raw)) {
+    const emails: string[] = [];
+    for (const entry of raw) {
+      if (typeof entry !== 'string' || !entry.trim()) {
+        return { error: 'must be a string or an array of non-empty email strings' };
+      }
+      emails.push(entry.trim());
+    }
+    return { emails };
+  }
+  return { error: 'must be a string or an array of non-empty email strings' };
 }
 
 /**
@@ -59,27 +76,36 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
     const updates: UpdateDraftOptions = {};
 
     if (hasTo) {
-      const toStrings = toEmailList(input.to);
-      if (toStrings.length === 0) {
-        return { success: false, error: 'to was provided but contained no valid email addresses' };
+      const parsed = parseEmailField(input.to);
+      if ('error' in parsed) {
+        return { success: false, error: `to ${parsed.error}` };
       }
-      for (const email of toStrings) {
+      if (parsed.emails.length === 0) {
+        // Unlike cc, a draft can't have an empty `to` — that would leave it unsendable.
+        return { success: false, error: 'to was provided but contained no email addresses' };
+      }
+      for (const email of parsed.emails) {
         if (!EMAIL_REGEX.test(email)) {
           return { success: false, error: `Invalid email address in to: ${email}` };
         }
       }
-      updates.to = toStrings.map((email): NylasParticipant => ({ email }));
+      updates.to = parsed.emails.map((email): NylasParticipant => ({ email }));
     }
 
     if (hasCc) {
-      const ccStrings = toEmailList(input.cc);
-      for (const email of ccStrings) {
+      const parsed = parseEmailField(input.cc);
+      if ('error' in parsed) {
+        return { success: false, error: `cc ${parsed.error}` };
+      }
+      for (const email of parsed.emails) {
         if (!EMAIL_REGEX.test(email)) {
           return { success: false, error: `Invalid email address in cc: ${email}` };
         }
       }
-      // An explicit empty cc clears the CC list — a legitimate edit.
-      updates.cc = ccStrings.map((email): NylasParticipant => ({ email }));
+      // An explicit empty cc (`""` or `[]`) clears the CC list — a legitimate edit.
+      // Malformed cc was already rejected above, so this can only be an
+      // intentional clear, never a silent wipe from bad input.
+      updates.cc = parsed.emails.map((email): NylasParticipant => ({ email }));
     }
 
     if (hasSubject) {

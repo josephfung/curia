@@ -194,4 +194,20 @@ describe('CeoInboxSearchHandler — drafts search (#1000)', () => {
     expect(data.count).toBe(1);
     expect(data.drafts[0]!.id).toBe('d1');
   });
+
+  it('warns (does not silently truncate) when the draft scan cap is hit', async () => {
+    // 100 drafts == DRAFT_SCAN_LIMIT — there may be more beyond this page, so the
+    // skill must log a warning rather than quietly capping the search surface.
+    const manyDrafts = Array.from({ length: 100 }, (_, i) => ({
+      id: `d${i}`, thread_id: `t${i}`, subject: 'report', to: [], cc: [], snippet: '', date: i,
+    }));
+    const ctx = makeCtx({ query: 'report', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(manyDrafts);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await handler.execute(ctx);
+
+    const warnCalls = (ctx.log.warn as ReturnType<typeof vi.fn>).mock.calls;
+    expect(warnCalls.some((c: unknown[]) => typeof c[1] === 'string' && c[1].includes('cap'))).toBe(true);
+  });
 });
