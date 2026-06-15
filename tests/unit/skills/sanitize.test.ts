@@ -373,7 +373,7 @@ describe('sanitizeObjectOutput', () => {
     const result = sanitizeObjectOutput(input, { maxLength: 100 }) as { a: string; b: string };
     // Long value truncated
     expect(result.a).toContain(suffix);
-    expect(result.a.length).toBeLessThanOrEqual(100 + suffix.length);
+    expect(result.a.length).toBe(100 + suffix.length);
     // Short value unaffected — per-value truncation, not shared budget
     expect(result.b).toBe('hello');
   });
@@ -405,7 +405,7 @@ describe('sanitizeObjectOutput', () => {
     expect(result.messages[0]!.body).toContain('"quoted"');
   });
 
-  it('passes through number, boolean, null, and undefined leaf values unchanged', () => {
+  it('passes through number, boolean, and null leaf values unchanged', () => {
     const input = { n: 42, b: false, nil: null };
     const result = sanitizeObjectOutput(input);
     expect(result).toEqual({ n: 42, b: false, nil: null });
