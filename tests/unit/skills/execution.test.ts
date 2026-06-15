@@ -718,7 +718,7 @@ describe('ExecutionLayer', () => {
     const handler: SkillHandler = {
       execute: async () => ({
         success: true,
-        data: { messages: [{ body: '<style>x{}</style><div>"quoted"</div>' }] },
+        data: { messages: [{ body: '<style>.x{}</style> Reply &quot;yes&quot; to confirm' }] },
       }),
     };
     registry.register(makeManifest(), handler);
@@ -733,9 +733,11 @@ describe('ExecutionLayer', () => {
       expect(typeof data.messages[0]!.body).toBe('string');
       // Dangerous content stripped
       expect(data.messages[0]!.body).not.toContain('<style>');
-      expect(data.messages[0]!.body).not.toContain('x{}');
-      // Safe content preserved
-      expect(data.messages[0]!.body).toContain('"quoted"');
+      expect(data.messages[0]!.body).not.toContain('.x{}');
+      // HTML entity decoded, not left as &quot; literal
+      expect(data.messages[0]!.body).not.toContain('&quot;');
+      // Safe text preserved
+      expect(data.messages[0]!.body).toContain('yes');
     }
   });
 
