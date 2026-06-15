@@ -170,7 +170,15 @@ export class EventRouter {
       try {
         html = markdownToHtml(event.payload.content);
       } catch (renderErr) {
-        this.logger.warn({ err: renderErr, conversationId: convId }, 'markdownToHtml failed for SSE message; sending html: null');
+        // Include the content length so the failure is reproducible from the log
+        // (conversationId alone can't recover the offending content once working_memory
+        // rolls). Guard the .length read: content may be a non-string in the throw case.
+        const contentLength =
+          typeof event.payload.content === 'string' ? event.payload.content.length : undefined;
+        this.logger.warn(
+          { err: renderErr, conversationId: convId, contentLength },
+          'markdownToHtml failed for SSE message; sending html: null',
+        );
       }
       const sseData = JSON.stringify({
         type: 'message',

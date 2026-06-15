@@ -21,9 +21,17 @@ const REPLY_WATCHDOG_MS = 5 * 60_000;
 // How long to wait for the SSE connection to open before POSTing anyway. If the
 // stream is degraded the POST still publishes and the watchdog recovers the reply.
 const SSE_OPEN_TIMEOUT_MS = 3_000;
-// Shown when the watchdog fires and /history has no reply yet.
+// Shown when recovery ran, the /history fetch succeeded, but no reply has landed
+// yet. Phrased conditionally ("if it arrives") because we genuinely can't tell a
+// slow turn from a dropped one (e.g. an email-skill suppressed-duplicate turn that
+// produces no chat reply at all) — so we don't promise a reply that may never come.
 const STILL_WORKING_TEXT =
-  'Still working on this — it is taking longer than usual. The reply will appear here when it is ready.';
+  'This is taking longer than usual. The reply will appear here if it arrives — you can also resend.';
+// Shown when recovery itself failed (the /history fetch errored or returned non-ok,
+// e.g. an expired session or a server error). We have no basis to claim progress,
+// so we tell the user the status is unknown rather than implying a reply is coming.
+const RECOVERY_FAILED_TEXT =
+  'Could not confirm your message status — the connection may have dropped. You can resend.';
 
 interface ChatSession {
   messages: Message[];
@@ -227,6 +235,10 @@ export function useChatSession(): ChatSession {
 
     let source: EventSource | undefined;
     let settled = false;
+    // Guards runRecovery so it runs at most once per turn — both the watchdog
+    // timeout and a fatal stream close (onerror) can trigger it, and we never
+    // want two recovery passes (which could post two notices).
+    let recoveryStarted = false;
 
     // Unlock the composer (and stop the watchdog) without touching the stream —
     // used by the soft-recovery path so a late reply can still render. The
@@ -245,14 +257,24 @@ export function useChatSession(): ChatSession {
       sourceRef.current = null;
     };
 
-    // Watchdog recovery: fetch one history page and render a missed reply, else
-    // post a soft notice and unlock (leaving the stream open for a late reply).
+    // Recovery: fetch one history page and render a reply the SSE stream may have
+    // missed. Triggered by the watchdog timeout OR a fatal stream close. Three
+    // outcomes, each with honest feedback:
+    //   1. reply found      → render it + finalize.
+    //   2. fetch failed      → "couldn't confirm status, resend" (status unknown).
+    //   3. fetch ok, no reply → soft "taking longer" notice, leave the stream open.
+    // Runs at most once per turn (recoveryStarted guard).
     const runRecovery = async () => {
+      if (recoveryStarted || settled) return;
+      recoveryStarted = true;
+
+      let fetchOk = false;
       try {
         const res = await apiFetch(
           `/api/kg/chat/history?conversationId=${encodeURIComponent(convId)}&limit=${HISTORY_PAGE_SIZE}`,
         );
         if (res.ok) {
+          fetchOk = true;
           const data = (await res.json()) as HistoryResponse;
           const recovered = pickRecoveredReply(data.messages, sentAt);
           if (recovered) {
@@ -269,9 +291,19 @@ export function useChatSession(): ChatSession {
       } catch (err) {
         console.error('[useChatSession] recovery history fetch failed:', err);
       }
-      // Nothing to recover yet — soft notice, unlock, keep the stream open so a
-      // late reply still renders. This open stream is closed by one of: a late
-      // SSE reply (onmessage → finalize), the next send() (closes the prior
+
+      if (!fetchOk) {
+        // Recovery itself failed — we can't claim progress. Tell the user the
+        // status is unknown and finalize (close the dead stream; nothing more is
+        // coming through it).
+        setMessages((prev) => [...prev, makeMessage('error', RECOVERY_FAILED_TEXT)]);
+        finalize();
+        return;
+      }
+
+      // Fetch succeeded but no reply yet — soft notice, unlock, keep the stream
+      // open so a late reply still renders. This open stream is closed by one of:
+      // a late SSE reply (onmessage → finalize), the next send() (closes the prior
       // stream up top), or unmount cleanup. That closure contract is non-local.
       setMessages((prev) => [...prev, makeMessage('status', STILL_WORKING_TEXT)]);
       unlock();
@@ -309,11 +341,18 @@ export function useChatSession(): ChatSession {
       };
 
       source.onerror = (event) => {
-        // Non-fatal: EventSource auto-reconnects on transient errors. On a fatal
-        // close (readyState === CLOSED) the reply, if any, is recovered by the
-        // watchdog via /history. We do not finalize here so a reconnect can still
-        // deliver the terminal event.
+        // EventSource auto-reconnects on transient errors (readyState CONNECTING) —
+        // leave those alone so a reconnect can still deliver the terminal event.
+        // But on a FATAL close (readyState CLOSED, e.g. an expired session 401 or a
+        // dropped server) the browser will NOT reconnect: the terminal event can
+        // never arrive over this stream. Don't make the user wait out the full
+        // watchdog — recover immediately so a missed reply (or an honest "status
+        // unknown" notice) surfaces in seconds rather than minutes.
         console.error('[useChatSession] SSE stream error (readyState=%d):', source?.readyState, event);
+        if (source?.readyState === EventSource.CLOSED && !settled) {
+          if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
+          void runRecovery();
+        }
       };
 
       // Wait for the stream to open, but don't block forever — if it doesn't open
