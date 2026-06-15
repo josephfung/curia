@@ -84,6 +84,10 @@ export class BrowserService {
   // Set to true by stop() before closing the context so the 'disconnected' handler
   // knows the disconnect is intentional and must NOT trigger a crash-recovery restart.
   private stopping = false;
+  // True once a configured browser channel (e.g. 'chrome') failed to launch and we fell
+  // back to bundled Chromium — a degraded fingerprint posture. Exposed via
+  // isChannelFallbackActive() so health checks can surface the divergence (see #987).
+  private channelFallbackActive = false;
   // Ad blocker is loaded lazily on first opt-in (block_ads:true) and cached. Off by
   // default so login/auth/form-fill flows carry no privacy-extension signal.
   // These fields intentionally survive stop()/restart() — the blocklist is process-global
@@ -336,6 +340,15 @@ export class BrowserService {
     return this.sessions.get(sessionId);
   }
 
+  /**
+   * True if a configured browser channel failed to launch and the service degraded to
+   * bundled Chromium (a weaker fingerprint than configured). Lets health checks surface
+   * the configured-vs-actual divergence rather than leaving it buried in a log line (#987).
+   */
+  isChannelFallbackActive(): boolean {
+    return this.channelFallbackActive;
+  }
+
   // --- Private helpers ---
 
   /**
@@ -400,7 +413,17 @@ export class BrowserService {
       return context;
     } catch (err) {
       if (!this.channel) throw err; // no channel to fall back from — a genuine launch failure
-      this.logger.warn({ err, channel: this.channel }, 'Failed to launch with channel — falling back to bundled Chromium');
+      // Configured-vs-actual divergence: the operator asked for a real browser channel
+      // (the whole point of the fingerprint hardening) and we couldn't honour it — almost
+      // always a missing browser in the image. Degrade to bundled Chromium so the skill
+      // still works, but log at ERROR (not warn): production is now running a materially
+      // weaker fingerprint than configured, and that must be loud/alertable, not buried.
+      // `channelFallbackActive` exposes the degraded posture for health checks/greppability.
+      this.channelFallbackActive = true;
+      this.logger.error(
+        { err, requestedChannel: this.channel },
+        'Browser channel launch failed — DEGRADED to bundled Chromium (weaker fingerprint than configured); is the channel installed in the image?',
+      );
       const context = await stealthChromium.launchPersistentContext(
         this.profileDir,
         baseOptions,
