@@ -1,9 +1,9 @@
 // Unit tests for the KG web app chat endpoints:
-//   POST /api/kg/chat/messages — dispatch a message, await agent response
+//   POST /api/kg/chat/messages — publish a message and ack 202 (reply arrives over SSE)
 //   GET  /api/kg/chat/stream  — SSE event stream
 //
-// Focuses on the auth guard and the happy path. The full publish/wait contract
-// is covered by the integration test suite; here we only need to verify that
+// Focuses on the auth guard and the ack contract. The reply delivery is covered
+// by the SSE stream (see event-router tests); here we only need to verify that
 // the routes are wired up correctly and enforce the session/secret auth.
 
 import Fastify from 'fastify';
