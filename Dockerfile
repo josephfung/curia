@@ -1,9 +1,16 @@
 # Build stage: compile TypeScript and install dependencies
-FROM node:22-slim AS build
+#
+# Base image pinned by digest for a reproducible supply chain (clears the OpenSSF
+# Scorecard Pinned-Dependencies Docker finding). The tag is kept inline (not just
+# in a trailing comment) so Dependabot's docker ecosystem can read the semantic
+# version and apply the "don't chase Current majors" ignore rule in
+# .github/dependabot.yml — a bare `node@sha256:…` pin would otherwise track `latest`.
+# Node 24 "Krypton" is the Active LTS (node 22 is Maintenance, node 26 is Current).
+FROM node:24-slim@sha256:2c87ef9bd3c6a3bd4b472b4bec2ce9d16354b0c574f736c476489d09f560a203 AS build
 
 WORKDIR /app
 
-# Enable pnpm via corepack (ships with Node 22)
+# Enable pnpm via corepack (bundled with Node 24)
 RUN corepack enable
 
 # Install dependencies first (layer caching — deps change less often than src).
@@ -23,8 +30,10 @@ RUN pnpm exec tsup src/index.ts --format esm --no-dts
 COPY apps/console/ ./apps/console/
 RUN pnpm --filter @curia/console run build
 
-# Production stage: minimal runtime image
-FROM node:22-slim
+# Production stage: minimal runtime image.
+# Same node:24-slim digest pin as the build stage above (see that comment for the
+# Scorecard / Dependabot rationale). Both stages must stay on the same digest.
+FROM node:24-slim@sha256:2c87ef9bd3c6a3bd4b472b4bec2ce9d16354b0c574f736c476489d09f560a203
 
 # curl is needed for the HEALTHCHECK command
 # Copy uv/uvx binaries from the official signed image (Astral's recommended
@@ -33,7 +42,7 @@ FROM node:22-slim
 COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 
 # apt-get upgrade pulls the latest Debian 12 security patches for packages baked
-# into the node:22-slim base layer (e.g. libgnutls30, libgcrypt20). Without it the
+# into the node:24-slim base layer (e.g. libgnutls30, libgcrypt20). Without it the
 # image ships whatever versions were frozen when the base image was built, which
 # Trivy flags as known CVEs even though Debian has already published fixes.
 # Run upgrade before installing curl so curl is installed from the patched lists.
@@ -41,15 +50,6 @@ RUN apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/*
-
-# The global npm bundled in the base image carries its own transitive deps that
-# Trivy flags (picomatch, brace-expansion, ip-address). npm is never invoked at
-# runtime here — we use corepack/pnpm at build and tsx to run — but bumping it
-# pulls patched bundled deps (npm 11.16.0 ships picomatch 4.0.4, brace-expansion
-# 5.0.6, ip-address 10.2.0) and clears the findings rather than leaving stale
-# copies in the image. Pinned (not @latest) so rebuilds can't silently regress
-# the cleared CVEs; bump deliberately when a newer npm is needed.
-RUN npm install -g npm@11.16.0
 
 # Create a non-root system user/group for the runtime process.
 # UIDs/GIDs are pinned (not dynamic) so docker-compose tmpfs uid= options

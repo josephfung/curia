@@ -26,3 +26,34 @@ updates:
       actions:
         patterns:
           - "*"
+
+  # Docker base images — the root Dockerfile (node:24-slim, digest-pinned).
+  # Without this ecosystem the base image was never tracked and silently drifted
+  # (prod ended up on node 26 Current via curia-deploy#87). Dependabot keeps the
+  # @sha256 digest fresh within the pinned tag.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    ignore:
+      # node 24 is the Active LTS. Do NOT auto-bump the major: the next even
+      # release (26) is Current/unstable until it reaches LTS (~Oct 2026), and
+      # Node.js says production should run only Active/Maintenance LTS. Digest +
+      # minor/patch updates still flow; bump the major by hand when 26 goes LTS.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
+  # Docker base images — docker/postgres.Dockerfile (pgvector/pgvector:pg16,
+  # digest-pinned). Pin the pg major: a pg16→pg17 jump needs a deliberate DB
+  # upgrade, so block majors and let only digest/minor refreshes land.
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "pgvector/pgvector"
+        update-types: ["version-update:semver-major"]

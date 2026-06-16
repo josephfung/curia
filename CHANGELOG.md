@@ -32,6 +32,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`config-store` / `email-reply` / `email-send` / `signal-send` / `decay-warnings-list`** — descriptions/input docs expanded to carry the relocated mechanics; behavior unchanged. (#958)
 - **User chat bubble** — user messages now appear with a teal background (`--app-teal`) and white text, visually distinguishing them from agent replies.
 - **Web console chat (ack-and-stream)** — `POST /api/kg/chat/messages` now acks with `202` and the reply streams over SSE instead of blocking on a 120s synchronous wait, so long agent tasks (browser automation, delegation chains, research) complete without a 504. (#985)
+- **Node 22 → 24 (Active LTS)** — the `Dockerfile` build + runtime stages move to `node:24-slim`, matching the production image. The `RUN npm install -g npm@11.16.0` line is removed: node 24's bundled npm is unused (corepack/pnpm at build, tsx at runtime) and scans clean, clearing the Scorecard `npmCommand` finding. (#905)
 
 - **`secret-capture-request` (skill manifest schema)** — adds an optional `resume_intent` input and persists the minting agent's routing context on the token so the capture can re-enter the right conversation. (#972)
 
@@ -64,6 +65,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **Value-aware browser redaction** — secret values injected by reference are tracked per browser session and scrubbed (raw plus URL/HTML-encoded variants) from returned content, the page URL, and errors; screenshots are suppressed on a secret-fill action since an image can't be value-redacted. Blocks round-trip exfiltration via a page that reflects a typed credential back. (#973)
+- **Docker base images digest-pinned** — `Dockerfile` (node:24-slim, both stages) and `docker/postgres.Dockerfile` (pgvector/pgvector:pg16) are now pinned by `@sha256:` digest, clearing the Scorecard Pinned-Dependencies Docker findings. (#905)
+- **`docker` Dependabot ecosystem** — added to `.github/dependabot.yml` (watching `/` and `/docker`) so the base images are tracked; a `semver-major` ignore on `node` keeps it from drifting onto Current/non-LTS releases. (#905)
 
 ### Removed
 
