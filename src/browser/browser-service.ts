@@ -706,14 +706,14 @@ function defaultIsProcessAlive(pid: number): boolean {
   }
 }
 
-/** True if `path` is an existing symlink/file, probing the link itself (not its target). */
+/**
+ * True if `path` is an existing symlink/file, probing the link itself (not its target) so a
+ * dangling Singleton* symlink still counts as present. `throwIfNoEntry: false` turns a missing
+ * path into `undefined` instead of a thrown ENOENT — so there is no catch swallowing errors,
+ * and a genuine stat failure (EACCES, EIO) still throws rather than masquerading as "absent".
+ */
 function symlinkExists(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
+  return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 }
 
 /**
@@ -734,8 +734,14 @@ function readSingletonLockOwner(lockPath: string, logger: Logger): { hostname: s
   }
   const lastDash = target.lastIndexOf('-');
   if (lastDash <= 0) return null; // no hostname or no pid component
-  const pid = Number.parseInt(target.slice(lastDash + 1), 10);
-  if (!Number.isInteger(pid) || pid <= 0) return null;
+  // Strict digits-only: Number.parseInt is too lax (`parseInt('44garbage') === 44`), which
+  // would treat a corrupt target as a valid owner and — if that PID is live on this host —
+  // preserve an effectively-stale lock and keep Chrome wedged. A non-numeric pid component
+  // is unparseable → null → caller removes the lock (the safe direction).
+  const pidStr = target.slice(lastDash + 1);
+  if (!/^\d+$/.test(pidStr)) return null;
+  const pid = Number.parseInt(pidStr, 10);
+  if (pid <= 0) return null;
   return { hostname: target.slice(0, lastDash), pid };
 }
 
