@@ -304,11 +304,14 @@ Once the release PR is merged, `main` is the exact commit you are about to tag. 
 gh workflow run trivy.yml     # on-demand Trivy image scan (base image + OS package CVEs)
 gh workflow run codeql.yml    # fresh CodeQL security-extended pass (takes several minutes)
 gh workflow run scorecard.yml # repo-level supply-chain posture
+gh workflow run dast.yml      # OWASP ZAP passive DAST against the running HTTP API (slow: boots the full app)
 # Wait for each to finish, then review results:
 gh run list --limit 5
 ```
 
 Review **GitHub → Security → Code Scanning** for the results of all scanners. **Block the release on any unresolved CRITICAL finding.** A HIGH is a judgment call — fix it or document why it's accepted (e.g. unreachable code path, no fix available) before proceeding.
+
+The ZAP DAST scan (`zap-dast` category) is alert-only and review-only for now — until its first run is triaged into the `alertFilter` baseline in `.zap/plan.yaml`, its findings are informational and do not block a release. Once a triaged baseline exists (and `failOnError` flips), treat its unresolved CRITICALs the same as the other scanners.
 
 **8. Tag and publish**
 
