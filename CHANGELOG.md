@@ -69,7 +69,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Value-aware browser redaction** — secret values injected by reference are tracked per browser session and scrubbed (raw plus URL/HTML-encoded variants) from returned content, the page URL, and errors; screenshots are suppressed on a secret-fill action since an image can't be value-redacted. Blocks round-trip exfiltration via a page that reflects a typed credential back. (#973)
 - **Docker base images digest-pinned** — `Dockerfile` (node:24-slim, both stages) and `docker/postgres.Dockerfile` (pgvector/pgvector:pg16) are now pinned by `@sha256:` digest, clearing the Scorecard Pinned-Dependencies Docker findings. (#905)
 - **`docker` Dependabot ecosystem** — added to `.github/dependabot.yml` (watching `/` and `/docker`) so the base images are tracked; a `semver-major` ignore on `node` keeps it from drifting onto Current/non-LTS releases. (#905)
-- **`web-browser` per-frame SSRF gating** — now that content extraction and locator resolution reach into iframes, child frames pointing at private/internal hosts (loopback, RFC1918, link-local, cloud-metadata) or `file:` are skipped, so a malicious page can't exfiltrate internal resources through an embedded frame the navigate guard never saw.
+- **`web-browser` per-frame SSRF gating** — now that content extraction and locator resolution reach into iframes, child frames pointing at private/internal hosts (IPv4 loopback/RFC1918/link-local, IPv6 link-local + unique-local `fc00::/7` + IPv4-mapped forms, cloud-metadata) or `file:` are skipped, so a malicious page can't exfiltrate internal resources through an embedded frame the navigate guard never saw.
 
 ### Removed
 
