@@ -1,0 +1,154 @@
+name: Release Artifacts
+
+# Builds, signs, and attaches release artifacts on every published release:
+#   - sbom.spdx.json            (SPDX SBOM for the release commit)
+#   - curia-<tag>.tar.gz        (reproducible source tarball)
+#   - *.sigstore                (cosign keyless signature bundle per artifact)
+#
+# Signing is keyless via Sigstore + the GitHub OIDC token (id-token: write) —
+# no long-lived keys to manage. Verifiable with `cosign verify-blob` against the
+# GitHub Actions OIDC issuer.
+#
+# Unlike the old release-gated SBOM job (which ran green while silently skipping
+# the attach — that is how v0.34.0 shipped with no SBOM), every step here is
+# fatal: a failed generate, sign, upload, or verify turns the run red. The final
+# job re-reads the release assets and re-verifies the signatures, so "green" can
+# only mean the artifacts are actually present and valid on the release.
+#
+# workflow_dispatch with a `tag` input allows (re)building artifacts for an
+# existing release — used to backfill v0.34.0 and to recover from any failed run.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build + sign artifacts for (e.g. v0.34.0)"
+        required: true
+        type: string
+
+# Least privilege at the workflow level; jobs opt into the scopes they need.
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # Resolve the target tag from either trigger and validate its format BEFORE it
+  # is used anywhere (checkout ref, git archive, gh upload). The strict regex is
+  # the injection guard: the tag is the only externally-influenced value, and a
+  # workflow_dispatch input is operator-supplied free text.
+  resolve:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Resolve and validate tag
+        id: resolve
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${INPUT_TAG:-$EVENT_TAG}"
+          # Tags follow vMAJOR.MINOR.PATCH with an optional pre-release suffix.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
+            echo "::error::Invalid or missing release tag: '$TAG'" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Build, sign, attach
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # gh release upload attaches assets to the release
+      id-token: write   # cosign keyless signing via GitHub OIDC
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # Checkout the release tag. The ref is the format-validated tag from the
+      # resolve job, so it is safe to interpolate here. fetch-depth: 0 gives
+      # git archive the full object it needs to build the tarball.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Generate the SBOM for the release commit. Fatal on failure — a release
+      # without an SBOM is not an acceptable outcome.
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          format: spdx-json
+          output-file: sbom.spdx.json
+          path: .
+          upload-artifact: false
+
+      - name: Verify SBOM was written
+        run: |
+          if [ ! -s sbom.spdx.json ]; then
+            echo "::error::sbom.spdx.json is missing or empty after generation" >&2
+            exit 1
+          fi
+
+      # Reproducible source tarball for the tag. HEAD is the checked-out tag.
+      - name: Build source tarball
+        run: |
+          git archive --format=tar.gz --prefix="curia-${TAG}/" HEAD -o "curia-${TAG}.tar.gz"
+          if [ ! -s "curia-${TAG}.tar.gz" ]; then
+            echo "::error::source tarball curia-${TAG}.tar.gz is missing or empty" >&2
+            exit 1
+          fi
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Keyless sign each artifact, producing a self-contained Sigstore bundle
+      # (signature + cert + transparency-log entry) per file.
+      - name: Sign artifacts
+        run: |
+          cosign sign-blob --yes --bundle sbom.spdx.json.sigstore sbom.spdx.json
+          cosign sign-blob --yes --bundle "curia-${TAG}.tar.gz.sigstore" "curia-${TAG}.tar.gz"
+
+      - name: Attach artifacts to release
+        run: |
+          gh release upload "$TAG" \
+            sbom.spdx.json sbom.spdx.json.sigstore \
+            "curia-${TAG}.tar.gz" "curia-${TAG}.tar.gz.sigstore" \
+            --clobber
+
+      # Final gate: re-read the release from GitHub and re-verify the signatures
+      # against the GitHub Actions OIDC issuer. This is what makes a green run
+      # trustworthy — it proves the assets are present AND the signatures verify,
+      # rather than trusting that the upload step "probably" worked.
+      - name: Verify attached + signed
+        run: |
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          for f in sbom.spdx.json sbom.spdx.json.sigstore "curia-${TAG}.tar.gz" "curia-${TAG}.tar.gz.sigstore"; do
+            if ! printf '%s\n' "$ASSETS" | grep -Fxq "$f"; then
+              echo "::error::expected release asset '$f' is not attached to $TAG" >&2
+              exit 1
+            fi
+          done
+          # Identity is pinned to this workflow in this repo; issuer is pinned to
+          # GitHub's OIDC. The ref after @ varies (tag for release events, the
+          # default branch for workflow_dispatch backfills), so it is left open.
+          IDENTITY_REGEXP="^https://github.com/${GH_REPO}/.github/workflows/release.yml@"
+          cosign verify-blob \
+            --bundle sbom.spdx.json.sigstore \
+            --certificate-identity-regexp "$IDENTITY_REGEXP" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            sbom.spdx.json
+          cosign verify-blob \
+            --bundle "curia-${TAG}.tar.gz.sigstore" \
+            --certificate-identity-regexp "$IDENTITY_REGEXP" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "curia-${TAG}.tar.gz"
