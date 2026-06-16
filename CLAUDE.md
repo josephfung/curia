@@ -296,9 +296,23 @@ Write a haiku thematically aligned with the release — drawn from the changes, 
 - No other code changes — this PR is the release commit only
 - Watch CI; wait for merge before proceeding
 
-**7. After merge: tag and publish**
+**7. After merge: pre-release security gate**
 
-Once the release PR is merged, first confirm the merge landed, then tag `origin/main` directly (do not rely on local branch state — the release worktree is on `chore/release-X.Y.Z`, not `main`):
+Once the release PR is merged, `main` is the exact commit you are about to tag. Run the on-demand security scans against it and review the results **before** tagging. (Trivy fs, Semgrep, and Gitleaks already ran on the release PR; the gate below covers the scans that do *not* run on a normal push — the Docker image scan, a fresh CodeQL pass, and the repo-level Scorecard.)
+
+```bash
+gh workflow run trivy.yml     # on-demand Trivy image scan (base image + OS package CVEs)
+gh workflow run codeql.yml    # fresh CodeQL security-extended pass (takes several minutes)
+gh workflow run scorecard.yml # repo-level supply-chain posture
+# Wait for each to finish, then review results:
+gh run list --limit 5
+```
+
+Review **GitHub → Security → Code Scanning** for the results of all scanners. **Block the release on any unresolved CRITICAL finding.** A HIGH is a judgment call — fix it or document why it's accepted (e.g. unreachable code path, no fix available) before proceeding.
+
+**8. Tag and publish**
+
+Confirm the merge landed, then tag `origin/main` directly (do not rely on local branch state — the release worktree is on `chore/release-X.Y.Z`, not `main`):
 
 ```bash
 # Confirm the merge landed — grep must return a result before proceeding
@@ -325,6 +339,40 @@ gh release create vX.Y.Z \
 [haiku here]
 EOF
 )"
+```
+
+Tagging stays `git tag -a` (annotated, **unsigned**) — releases are signed at the artifact layer (step 9), not the tag.
+
+**9. Verify release artifacts (SBOM + signatures)**
+
+Publishing the release triggers `release.yml`, which generates an SPDX SBOM and a source tarball, signs both with cosign (keyless, via GitHub OIDC), and attaches all four files to the release. This step is **not optional and not silent** — the workflow fails loudly if anything is missing or a signature fails to verify (this is the fix for v0.34.0, which shipped with no SBOM because the old auto-attach skipped silently).
+
+Confirm the workflow succeeded and the four assets are present:
+
+```bash
+gh run list --workflow=release.yml --limit 1   # must be green
+gh release view vX.Y.Z --json assets --jq '.assets[].name'
+# expect: sbom.spdx.json, sbom.spdx.json.sigstore, curia-vX.Y.Z.tar.gz, curia-vX.Y.Z.tar.gz.sigstore
+```
+
+If the run failed or assets are missing, re-run it (do **not** consider the release done until they are present):
+
+```bash
+gh workflow run release.yml -f tag=vX.Y.Z
+```
+
+Anyone can verify a downloaded artifact against the GitHub Actions OIDC issuer:
+
+```bash
+# The signer identity is release.yml in this repo. The ref after @ is the tag
+# (refs/tags/vX.Y.Z) for a normally-published release, or refs/heads/main for a
+# release whose artifacts were built via the workflow_dispatch backfill path
+# (e.g. v0.34.0). The regexp below matches both; tighten the @ suffix if you
+# know which path produced a given release.
+cosign verify-blob --bundle sbom.spdx.json.sigstore \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/<owner>/curia/.github/workflows/release.yml@' \
+  sbom.spdx.json
 ```
 
 ## Scope Discipline
