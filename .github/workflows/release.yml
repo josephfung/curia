@@ -92,19 +92,39 @@ jobs:
           path: .
           upload-artifact: false
 
-      - name: Verify SBOM was written
+      - name: Verify SBOM was written and non-trivial
         run: |
           if [ ! -s sbom.spdx.json ]; then
             echo "::error::sbom.spdx.json is missing or empty after generation" >&2
             exit 1
           fi
+          # SPDX always emits a root document-describes package; require real
+          # entries beyond it. A syft run that scanned nothing (wrong path,
+          # unexpected layout) emits a valid-but-empty SBOM that the size check
+          # alone would wave through — same "green run, worthless artifact" trap
+          # this workflow exists to close.
+          PKGS=$(jq '.packages | length' sbom.spdx.json)
+          if [ "$PKGS" -lt 2 ]; then
+            echo "::error::SBOM contains $PKGS package(s) — generation likely scanned nothing" >&2
+            exit 1
+          fi
 
       # Reproducible source tarball for the tag. HEAD is the checked-out tag.
+      # git archive stamps every entry with the commit timestamp (fixed per tag)
+      # and `gzip -n` drops the gzip header's name+mtime, so re-running this
+      # workflow for the same tag (the documented backfill/recovery path) yields
+      # byte-identical output — a --clobber re-upload doesn't change what was
+      # signed, and a previously-pinned digest still matches.
       - name: Build source tarball
         run: |
-          git archive --format=tar.gz --prefix="curia-${TAG}/" HEAD -o "curia-${TAG}.tar.gz"
+          git archive --format=tar --prefix="curia-${TAG}/" HEAD | gzip -n > "curia-${TAG}.tar.gz"
           if [ ! -s "curia-${TAG}.tar.gz" ]; then
             echo "::error::source tarball curia-${TAG}.tar.gz is missing or empty" >&2
+            exit 1
+          fi
+          ENTRIES=$(tar -tzf "curia-${TAG}.tar.gz" | wc -l)
+          if [ "$ENTRIES" -lt 2 ]; then
+            echo "::error::source tarball has $ENTRIES entries — archive looks degenerate" >&2
             exit 1
           fi
 
@@ -125,16 +145,23 @@ jobs:
             "curia-${TAG}.tar.gz" "curia-${TAG}.tar.gz.sigstore" \
             --clobber
 
-      # Final gate: re-read the release from GitHub and re-verify the signatures
-      # against the GitHub Actions OIDC issuer. This is what makes a green run
-      # trustworthy — it proves the assets are present AND the signatures verify,
-      # rather than trusting that the upload step "probably" worked.
+      # Final gate: re-download the assets FROM the release and verify the
+      # signatures against the downloaded bytes — NOT the local build outputs.
+      # This is what makes a green run trustworthy: it proves the release
+      # actually carries the artifacts AND that the uploaded content (not merely
+      # a same-named file) verifies, so a consumer downloading this release will
+      # succeed too. Verifying the local copies would only re-confirm what we
+      # just signed and would miss a truncated/corrupt upload.
       - name: Verify attached + signed
         run: |
-          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          rm -rf verify && mkdir verify
+          # We attach exactly 4 assets, well within one API page; `gh release
+          # download` with no --pattern pulls them all. (If a release ever grows
+          # past one page of assets, switch to per-name --pattern fetches.)
+          gh release download "$TAG" --dir verify --clobber
           for f in sbom.spdx.json sbom.spdx.json.sigstore "curia-${TAG}.tar.gz" "curia-${TAG}.tar.gz.sigstore"; do
-            if ! printf '%s\n' "$ASSETS" | grep -Fxq "$f"; then
-              echo "::error::expected release asset '$f' is not attached to $TAG" >&2
+            if [ ! -s "verify/$f" ]; then
+              echo "::error::expected release asset '$f' is missing from $TAG" >&2
               exit 1
             fi
           done
@@ -143,12 +170,12 @@ jobs:
           # default branch for workflow_dispatch backfills), so it is left open.
           IDENTITY_REGEXP="^https://github.com/${GH_REPO}/.github/workflows/release.yml@"
           cosign verify-blob \
-            --bundle sbom.spdx.json.sigstore \
+            --bundle verify/sbom.spdx.json.sigstore \
             --certificate-identity-regexp "$IDENTITY_REGEXP" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            sbom.spdx.json
+            verify/sbom.spdx.json
           cosign verify-blob \
-            --bundle "curia-${TAG}.tar.gz.sigstore" \
+            --bundle "verify/curia-${TAG}.tar.gz.sigstore" \
             --certificate-identity-regexp "$IDENTITY_REGEXP" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            "curia-${TAG}.tar.gz"
+            "verify/curia-${TAG}.tar.gz"

@@ -364,6 +364,11 @@ gh workflow run release.yml -f tag=vX.Y.Z
 Anyone can verify a downloaded artifact against the GitHub Actions OIDC issuer:
 
 ```bash
+# The signer identity is release.yml in this repo. The ref after @ is the tag
+# (refs/tags/vX.Y.Z) for a normally-published release, or refs/heads/main for a
+# release whose artifacts were built via the workflow_dispatch backfill path
+# (e.g. v0.34.0). The regexp below matches both; tighten the @ suffix if you
+# know which path produced a given release.
 cosign verify-blob --bundle sbom.spdx.json.sigstore \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github.com/<owner>/curia/.github/workflows/release.yml@' \
