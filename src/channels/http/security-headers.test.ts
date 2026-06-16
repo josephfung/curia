@@ -8,8 +8,15 @@ import { registerSecurityHeaders } from './security-headers.js';
 let app: FastifyInstance | undefined;
 
 afterEach(async () => {
-  await app?.close();
-  app = undefined;
+  try {
+    await app?.close();
+  } catch (err) {
+    // Surface a teardown failure in the test report rather than letting it become an
+    // unhandled rejection between tests.
+    throw new Error(`test teardown: app.close() failed: ${(err as Error).message}`, { cause: err });
+  } finally {
+    app = undefined;
+  }
 });
 
 async function build(): Promise<FastifyInstance> {
@@ -23,7 +30,14 @@ async function build(): Promise<FastifyInstance> {
   instance.get('/blocked', {
     onRequest: async (_req, reply) => reply.status(401).send({ error: 'no' }),
   }, async () => ({ never: true }));
-  await instance.ready();
+  try {
+    await instance.ready();
+  } catch (err) {
+    // Close the half-initialized instance before propagating so a failed ready() never
+    // leaks an open server, and normalize the error with context.
+    await instance.close().catch(() => {});
+    throw new Error(`test Fastify instance failed to start: ${(err as Error).message}`, { cause: err });
+  }
   return instance;
 }
 
