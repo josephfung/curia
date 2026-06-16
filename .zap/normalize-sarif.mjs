@@ -25,12 +25,21 @@ if (!file) {
 const sarif = JSON.parse(readFileSync(file, 'utf8'));
 let rewritten = 0;
 
-// Strip scheme+host from an absolute http(s) URL, returning a repo-relative path.
-// A bare site root (no path) maps to `index` so the URI is non-empty and valid.
+// Reduce an absolute http(s) URL to a repo-relative path: the URL's pathname only,
+// with the leading slash stripped. Query string and fragment are intentionally dropped
+// — Code Scanning expects a file-like path, not URL components. A bare site root (empty
+// pathname) maps to `index` so the URI is non-empty and valid. Non-http(s) or already
+// relative URIs return null (left untouched).
 function toRelative(uri) {
-  const m = /^https?:\/\/[^/]+\/?(.*)$/.exec(uri);
-  if (!m) return null; // already relative or non-http — leave as-is
-  return m[1] === '' ? 'index' : m[1];
+  let parsed;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    return null; // not an absolute URL (already relative, or non-URL) — leave as-is
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  const path = parsed.pathname.replace(/^\/+/, '');
+  return path === '' ? 'index' : path;
 }
 
 function fixLocation(loc) {
@@ -38,8 +47,12 @@ function fixLocation(loc) {
   if (!al || typeof al.uri !== 'string') return;
   const relative = toRelative(al.uri);
   if (relative === null) return;
-  // Preserve the original URL for the human-readable report.
-  if (al.description === undefined) al.description = { text: al.uri };
+  // Always preserve the full original URL (incl. query/fragment dropped from the path)
+  // in the description, appending to any description ZAP already wrote rather than
+  // overwriting or skipping it.
+  const note = `ZAP scanned URL: ${al.uri}`;
+  const existing = typeof al.description?.text === 'string' ? al.description.text.trim() : '';
+  al.description = { text: existing ? `${existing} — ${note}` : note };
   al.uri = relative;
   rewritten++;
 }
