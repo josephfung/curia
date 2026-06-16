@@ -54,6 +54,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **DAST SARIF reaches the Security tab** — ZAP emits `http://` location URIs, which GitHub Code Scanning rejected (scheme mismatch vs the `file://` checkout); `dast.yml` now normalizes them to repo-relative paths via `.zap/normalize-sarif.mjs` before upload. (#568)
 - **Drafts reachable in the CEO inbox (find → read → edit)** — `ceo-inbox-list`/`ceo-inbox-search` now query Nylas's `/drafts` resource for the DRAFTS folder instead of `/messages` (which never contains drafts), so existing drafts are listed and searchable by subject/recipient; `ceo-inbox-read` accepts a `draft_id` to return a draft's full body before editing. Results key on `drafts` to distinguish a genuine "none" from the old silent-zero, and the inbox watermark is never applied to drafts. (#1000)
 - **Execution-layer output sanitization** — object-returning skills whose string values contain HTML (e.g. email bodies) no longer produce corrupted JSON. `sanitizeObjectOutput` walks the result structure and sanitizes string leaves directly; JSON structural characters are never exposed to the HTML stripper. Fixes the `ceo-inbox-search` retry loop incident. (#986)
 - **Stale Xvfb lock recovery** — `BrowserService` now clears an orphaned `/tmp/.X99-lock` + socket left by an unclean exit before spawning Xvfb, guarded on a live X server so an active display is never clobbered; the web-browser skill survives a crash-induced restart. (#982)

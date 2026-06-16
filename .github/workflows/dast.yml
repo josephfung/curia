@@ -141,6 +141,20 @@ jobs:
             dast.sarif.json
           if-no-files-found: warn
 
+      # GitHub Code Scanning is source-oriented and rejects SARIF whose result location
+      # URIs use a non-file scheme ("SARIF URI scheme http did not match the checkout URI
+      # scheme file"). ZAP, being a DAST tool, emits http(s) URLs. Rewrite them to
+      # repo-relative paths (original URL preserved in the report) so the upload is
+      # accepted. Runs only if ZAP produced the file.
+      - name: Normalize SARIF location URIs for Code Scanning
+        if: always()
+        run: |
+          if [ -f dast.sarif.json ]; then
+            node .zap/normalize-sarif.mjs dast.sarif.json
+          else
+            echo "::warning::dast.sarif.json not found — skipping normalization"
+          fi
+
       - name: Upload SARIF to the Security tab
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         if: always()
