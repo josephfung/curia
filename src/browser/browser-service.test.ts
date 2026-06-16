@@ -330,10 +330,9 @@ describe('clearStaleSingletonLock', () => {
   let socketPath: string; // <profile>/SingletonSocket
 
   // existsSync follows symlinks, so a dangling Singleton* symlink reads as "missing".
-  // Probe the link itself with lstat so presence/removal assertions are accurate.
-  const lexists = (p: string): boolean => {
-    try { lstatSync(p); return true; } catch { return false; }
-  };
+  // Probe the link itself with lstat (throwIfNoEntry:false → undefined instead of a thrown
+  // ENOENT, so no catch is needed) for accurate presence/removal assertions.
+  const lexists = (p: string): boolean => lstatSync(p, { throwIfNoEntry: false }) !== undefined;
 
   // Chrome writes SingletonLock as a symlink whose target is "<hostname>-<pid>".
   const seedLock = (target: string) => {
@@ -411,6 +410,19 @@ describe('clearStaleSingletonLock', () => {
     const aliveCheck = vi.fn().mockReturnValue(true);
 
     const removed = clearStaleSingletonLock({ profileDir, hostname: 'whatever', isProcessAlive: aliveCheck, logger });
+
+    expect(removed).toBe(true);
+    expect(lexists(lockPath)).toBe(false);
+    expect(aliveCheck).not.toHaveBeenCalled();
+  });
+
+  it('treats a numeric-prefix-garbage pid as unparseable and removes the lock', () => {
+    // parseInt('44garbage') === 44 would wrongly read this as a valid owner; a strict
+    // digits-only parse must reject it so a same-host live PID 44 can't preserve a corrupt lock.
+    seedLock('8e964171a188-44garbage');
+    const aliveCheck = vi.fn().mockReturnValue(true);
+
+    const removed = clearStaleSingletonLock({ profileDir, hostname: '8e964171a188', isProcessAlive: aliveCheck, logger });
 
     expect(removed).toBe(true);
     expect(lexists(lockPath)).toBe(false);
