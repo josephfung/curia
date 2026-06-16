@@ -47,8 +47,9 @@ against the actual code:
 
 ### 1. `.github/workflows/dast.yml`
 
-- **Triggers:** `workflow_dispatch` (optional `target_url` input, default the local
-  test server) + `schedule` weekly Monday 09:00 UTC (staggered after the Wed SAST jobs).
+- **Triggers:** `workflow_dispatch` (no inputs — the job always boots and scans a fresh
+  local instance; an arbitrary-URL input would be dead config) + `schedule` weekly
+  Monday 09:00 UTC (staggered after the Wed SAST jobs).
 - **Permissions:** top-level `contents: read`; the job adds `security-events: write`
   for the SARIF upload. No `issues: write` — we publish SARIF, not ZAP-created issues.
 - **Postgres service:** `pgvector/pgvector:pg16`, same creds as `ci.yml`.
