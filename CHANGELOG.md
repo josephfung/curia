@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Browser incognito sessions** — `incognito:true` on `web-browser` runs in a throwaway isolated context, keeping Curia's own logins out of the principal's profile. (#987)
 - **Persistent browser profile** — the browser now uses a persistent context on a mounted volume, so logins/cookies survive restarts. (#987)
 - **`ceo-inbox-draft-edit`** — new skill to update an existing draft's recipients, subject, or body, so a wrong-recipient or stale draft can be fixed without recreating it. (#1000)
+- **`web-browser` interaction actions** — adds `scroll`, `hover`, `press_key`, and `wait_for` so the browser can drive heavy JS widgets (e.g. OpenTable's date picker) that need waiting, hovering, or keyboard nav.
 
 ### Changed
 
@@ -33,6 +34,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **User chat bubble** — user messages now appear with a teal background (`--app-teal`) and white text, visually distinguishing them from agent replies.
 - **Web console chat (ack-and-stream)** — `POST /api/kg/chat/messages` now acks with `202` and the reply streams over SSE instead of blocking on a 120s synchronous wait, so long agent tasks (browser automation, delegation chains, research) complete without a 504. (#985)
 - **Node 22 → 24 (Active LTS)** — the `Dockerfile` build + runtime stages move to `node:24-slim`, matching the production image. The `RUN npm install -g npm@11.16.0` line is removed: node 24's bundled npm is unused (corepack/pnpm at build, tsx at runtime) and scans clean, clearing the Scorecard `npmCommand` finding. (#905)
+- **`web-browser` iframe awareness & adaptive waits** — `get_content` and selector resolution now reach into child frames (so embedded booking/date widgets are visible and clickable); `navigate` waits for network idle and fails fast with a clear "hand off" message on edge blocks ("Access Denied").
 
 - **`secret-capture-request` (skill manifest schema)** — adds an optional `resume_intent` input and persists the minting agent's routing context on the token so the capture can re-enter the right conversation. (#972)
 
@@ -67,6 +69,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Value-aware browser redaction** — secret values injected by reference are tracked per browser session and scrubbed (raw plus URL/HTML-encoded variants) from returned content, the page URL, and errors; screenshots are suppressed on a secret-fill action since an image can't be value-redacted. Blocks round-trip exfiltration via a page that reflects a typed credential back. (#973)
 - **Docker base images digest-pinned** — `Dockerfile` (node:24-slim, both stages) and `docker/postgres.Dockerfile` (pgvector/pgvector:pg16) are now pinned by `@sha256:` digest, clearing the Scorecard Pinned-Dependencies Docker findings. (#905)
 - **`docker` Dependabot ecosystem** — added to `.github/dependabot.yml` (watching `/` and `/docker`) so the base images are tracked; a `semver-major` ignore on `node` keeps it from drifting onto Current/non-LTS releases. (#905)
+- **`web-browser` per-frame SSRF gating** — now that content extraction and locator resolution reach into iframes, child frames pointing at private/internal hosts (IPv4 loopback/RFC1918/link-local, IPv6 link-local + unique-local `fc00::/7` + IPv4-mapped forms, cloud-metadata) or `file:` are skipped, so a malicious page can't exfiltrate internal resources through an embedded frame the navigate guard never saw.
 
 ### Removed
 
