@@ -16,6 +16,10 @@ export type BrowserAction =
   | 'click'
   | 'type'
   | 'select'
+  | 'scroll'
+  | 'hover'
+  | 'press_key'
+  | 'wait_for'
   | 'get_content'
   | 'screenshot'
   | 'close_session';
