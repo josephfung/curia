@@ -157,7 +157,7 @@ export class WebBrowserHandler implements SkillHandler {
           } catch (err) {
             ctx.log.debug({ err, sessionId }, 'Could not read page title for hard-block check');
           }
-          if (isHardBlock(status, pageTitle)) {
+          if (isHardBlock(pageTitle)) {
             ctx.log.warn({ sessionId, url: parsedUrl.toString(), status, pageTitle }, 'Navigation hit a hard edge block');
             return {
               success: false,
@@ -347,14 +347,17 @@ async function settleAfterInteraction(page: Page, ctx: SkillContext, sessionId: 
 }
 
 /**
- * Detect a hard edge block (Akamai/Cloudflare-style refusal). These are IP/edge-level
- * and won't resolve by re-driving the page, so the handler fails fast on them. Kept
- * conservative (403, or a small set of unambiguous challenge-page titles) to avoid
- * false positives on legitimate pages whose body merely mentions "denied".
+ * Detect a hard edge block (Akamai/Cloudflare/PerimeterX-style refusal). These are
+ * IP/edge-level and won't resolve by re-driving the page, so the handler fails fast.
+ *
+ * Detection is by challenge-page title only. A bare HTTP 403 is intentionally NOT treated
+ * as a hard block: many apps return 403 for ordinary auth/authorization the agent can
+ * still resolve (log in, switch URL). Requiring an unambiguous challenge marker avoids
+ * false "undrivable" handoffs — and since page content is now readable even on a block,
+ * the LLM can still see an unrecognized block page and decide for itself.
  */
-function isHardBlock(status: number | undefined, title: string): boolean {
-  if (status === 403) return true;
-  return /access denied|attention required|verify you are (?:a )?human|are you a robot/i.test(title);
+function isHardBlock(title: string): boolean {
+  return /access denied|attention required|verify you are (?:a )?human|are you a robot|pardon our interruption/i.test(title);
 }
 
 /**
@@ -551,28 +554,43 @@ async function getCleanedContent(page: Page, log: SkillContext['log']): Promise<
 }
 
 /**
- * True for hosts that must never be reached — loopback, private/link-local ranges, and
- * cloud metadata endpoints. Shared by the navigate guard and per-frame SSRF gating so
- * both use one definition.
+ * True for hosts that must never be reached — loopback, private/link-local ranges, IPv6
+ * unique-local/link-local, IPv4-mapped-IPv6 forms, and cloud metadata endpoints. Shared
+ * by the navigate guard and per-frame SSRF gating so both use one definition.
  */
 function isPrivateHost(hostname: string): boolean {
+  let h = hostname.toLowerCase();
+  // URL.hostname keeps brackets on IPv6 literals ([::1]) — strip them to normalize.
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  // IPv4-mapped IPv6 — re-check the embedded IPv4 against the rules below so a mapped
+  // loopback/private address can't slip through. The URL parser normalizes the dotted
+  // form (::ffff:127.0.0.1) to the hex form (::ffff:7f00:1), so decode both.
+  const mappedDotted = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(h);
+  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+  if (mappedDotted) {
+    h = mappedDotted[1]!;
+  } else if (mappedHex) {
+    const hi = parseInt(mappedHex[1]!, 16);
+    const lo = parseInt(mappedHex[2]!, 16);
+    h = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+  }
+
   return (
-    hostname === 'localhost' ||
-    hostname === '0.0.0.0' ||
-    hostname === '::1' ||
-    hostname === '[::1]' ||
-    // IPv4 private/loopback/link-local ranges
-    /^127\./.test(hostname) ||
-    /^10\./.test(hostname) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
-    /^192\.168\./.test(hostname) ||
-    /^169\.254\./.test(hostname) ||
-    // IPv6 link-local
-    hostname.startsWith('fe80:') ||
-    hostname.startsWith('[fe80:') ||
-    // Cloud metadata endpoints
-    hostname === '169.254.169.254' ||
-    hostname === 'metadata.google.internal'
+    h === 'localhost' ||
+    h === '0.0.0.0' ||
+    h === '::' ||
+    h === '::1' ||
+    h === 'metadata.google.internal' ||
+    // IPv4 loopback / private / link-local (169.254/16 also covers the cloud metadata IP)
+    /^127\./.test(h) ||
+    /^10\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+    /^192\.168\./.test(h) ||
+    /^169\.254\./.test(h) ||
+    // IPv6 link-local fe80::/10 (fe80:–febf:)
+    /^fe[89ab][0-9a-f]:/.test(h) ||
+    // IPv6 unique-local (ULA) fc00::/7 (fc00:–fdff:)
+    /^f[cd][0-9a-f]{2}:/.test(h)
   );
 }
 

@@ -256,7 +256,7 @@ describe('web-browser block_ads + incognito inputs (#987)', () => {
 
 describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)', () => {
   // Reach into the mock page's shared locator (the one every getBy/locator stub returns).
-  function locatorOf(session: BrowserSession) {
+  function getSharedLocator(session: BrowserSession) {
     return (session.page as unknown as { getByRole: ReturnType<typeof vi.fn> })
       .getByRole('button', { name: 'x' });
   }
@@ -267,7 +267,7 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
     });
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(true);
-    const loc = locatorOf(session) as unknown as { scrollIntoViewIfNeeded: ReturnType<typeof vi.fn> };
+    const loc = getSharedLocator(session) as unknown as { scrollIntoViewIfNeeded: ReturnType<typeof vi.fn> };
     expect(loc.scrollIntoViewIfNeeded).toHaveBeenCalled();
   });
 
@@ -285,7 +285,7 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
     });
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(true);
-    const loc = locatorOf(session) as unknown as { hover: ReturnType<typeof vi.fn> };
+    const loc = getSharedLocator(session) as unknown as { hover: ReturnType<typeof vi.fn> };
     expect(loc.hover).toHaveBeenCalled();
   });
 
@@ -317,7 +317,7 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
     });
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(true);
-    const loc = locatorOf(session) as unknown as { waitFor: ReturnType<typeof vi.fn> };
+    const loc = getSharedLocator(session) as unknown as { waitFor: ReturnType<typeof vi.fn> };
     expect(loc.waitFor).toHaveBeenCalledWith(expect.objectContaining({ state: 'visible' }));
   });
 
@@ -326,7 +326,7 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
       input: { action: 'wait_for', selector: 'never renders' },
     });
     // Make the shared locator's waitFor reject (timeout).
-    const loc = locatorOf(session) as unknown as { waitFor: ReturnType<typeof vi.fn> };
+    const loc = getSharedLocator(session) as unknown as { waitFor: ReturnType<typeof vi.fn> };
     loc.waitFor.mockRejectedValueOnce(new Error('Timeout 10000ms exceeded'));
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(false);
@@ -545,6 +545,53 @@ describe('web-browser frame SSRF gating + read-failure detection', () => {
     expect(internalGetByRole).not.toHaveBeenCalled();
   });
 
+  it('get_content skips IPv6 private frames (ULA fc00::/7 and IPv4-mapped loopback)', async () => {
+    const ulaEvaluate = vi.fn().mockResolvedValue('ULA internal');
+    const mappedEvaluate = vi.fn().mockResolvedValue('mapped loopback internal');
+    const mainFrame = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      name: vi.fn().mockReturnValue(''),
+      evaluate: vi.fn().mockResolvedValue('Innocent page'),
+    };
+    const ulaFrame = {
+      url: vi.fn().mockReturnValue('http://[fc00::1]/internal'),
+      name: vi.fn().mockReturnValue('ula'),
+      evaluate: ulaEvaluate,
+    };
+    const mappedFrame = {
+      url: vi.fn().mockReturnValue('http://[::ffff:127.0.0.1]/admin'),
+      name: vi.fn().mockReturnValue('mapped'),
+      evaluate: mappedEvaluate,
+    };
+    const page = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      title: vi.fn().mockResolvedValue('Page'),
+      screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
+      frames: vi.fn().mockReturnValue([mainFrame, ulaFrame, mappedFrame]),
+      mainFrame: vi.fn().mockReturnValue(mainFrame),
+    };
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-ssrf6', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = {
+      input: { action: 'get_content' },
+      log: logger,
+      browserService,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(ulaEvaluate).not.toHaveBeenCalled();
+    expect(mappedEvaluate).not.toHaveBeenCalled();
+    if (result.success) {
+      const data = result.data as { content: string };
+      expect(data.content).not.toContain('internal');
+    }
+  });
+
   it('get_content fails (does not report empty success) when every frame errors', async () => {
     const mainFrame = {
       url: vi.fn().mockReturnValue('https://example.com/'),
@@ -601,6 +648,29 @@ describe('web-browser hard-block detection', () => {
       // Actionable: tells the LLM to hand off rather than retry.
       expect(result.error).toMatch(/hand off|principal|draft/i);
     }
+  });
+
+  it('navigate does NOT hard-block a bare 403 with a normal title (app auth, still drivable)', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    // 403 is common for auth/authorization the agent can still resolve (log in); only a
+    // recognizable challenge title should trip the hard-block path.
+    const page = makeMockPage('Please log in to continue', fill, 'https://app.example.com/dashboard', {
+      status: 403,
+      title: 'Forbidden',
+    });
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-403', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = {
+      input: { action: 'navigate', url: 'https://app.example.com/dashboard' },
+      log: logger,
+      browserService,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+    expect(result.success).toBe(true);
   });
 
   it('navigate succeeds normally on a 200 page', async () => {
