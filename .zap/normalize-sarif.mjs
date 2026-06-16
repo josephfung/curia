@@ -13,16 +13,21 @@
 // helpUri / taxonomy / rule URLs are left untouched — only result *locations* matter
 // to the checkout-scheme validation.
 //
-// Usage: node .zap/normalize-sarif.mjs <sarif-file>   (rewrites the file in place)
+// Usage: node .zap/normalize-sarif.mjs <input-sarif> [output-sarif]
+//   - output defaults to the input path (in-place) when omitted.
+//   - In CI, pass a distinct output path: ZAP writes the report from inside its Docker
+//     container as a different uid, so the file is read-only to the runner and an
+//     in-place rewrite fails with EACCES. Writing a fresh, runner-owned file avoids that.
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const file = process.argv[2];
-if (!file) {
-  console.error('usage: node normalize-sarif.mjs <sarif-file>');
+const inputFile = process.argv[2];
+const outputFile = process.argv[3] ?? inputFile;
+if (!inputFile) {
+  console.error('usage: node normalize-sarif.mjs <input-sarif> [output-sarif]');
   process.exit(1);
 }
 
-const sarif = JSON.parse(readFileSync(file, 'utf8'));
+const sarif = JSON.parse(readFileSync(inputFile, 'utf8'));
 let rewritten = 0;
 
 // Reduce an absolute http(s) URL to a repo-relative path: the URL's pathname only,
@@ -64,5 +69,5 @@ for (const run of sarif.runs ?? []) {
   }
 }
 
-writeFileSync(file, JSON.stringify(sarif, null, 2));
-console.log(`normalized ${rewritten} location URI(s) in ${file}`);
+writeFileSync(outputFile, JSON.stringify(sarif, null, 2));
+console.log(`normalized ${rewritten} location URI(s): ${inputFile} -> ${outputFile}`);

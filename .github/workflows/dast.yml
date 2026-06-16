@@ -145,12 +145,14 @@ jobs:
       # URIs use a non-file scheme ("SARIF URI scheme http did not match the checkout URI
       # scheme file"). ZAP, being a DAST tool, emits http(s) URLs. Rewrite them to
       # repo-relative paths (original URL preserved in the report) so the upload is
-      # accepted. Runs only if ZAP produced the file.
+      # accepted. Write to a NEW file rather than in place: ZAP writes dast.sarif.json
+      # from inside its Docker container as a different uid, so it is read-only to the
+      # runner and an in-place rewrite fails with EACCES. Runs only if ZAP produced the file.
       - name: Normalize SARIF location URIs for Code Scanning
         if: always()
         run: |
           if [ -f dast.sarif.json ]; then
-            node .zap/normalize-sarif.mjs dast.sarif.json
+            node .zap/normalize-sarif.mjs dast.sarif.json dast.codescan.sarif.json
           else
             echo "::warning::dast.sarif.json not found — skipping normalization"
           fi
@@ -159,7 +161,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         if: always()
         with:
-          sarif_file: dast.sarif.json
+          sarif_file: dast.codescan.sarif.json
           category: zap-dast
 
       # Surface the server log on failure for debugging a boot/scan problem.
