@@ -72,12 +72,20 @@ against the actual code:
 
 ### 2. `.zap/plan.yaml` — ZAP Automation Framework plan
 
-- `env.contexts[0].urls`: `http://172.17.0.1:3000` — the ZAP container reaches the
-  host-bound server (the API listens on `0.0.0.0:3000`, see http-adapter.ts:413) via the
-  Docker bridge gateway. `localhost` inside the ZAP container would not reach the host.
+- `env.contexts[0].urls`: `http://172.17.0.1:3000/api/health` — the ZAP container reaches
+  the host-bound server (the API listens on `0.0.0.0:3000`, see http-adapter.ts:413) via
+  the Docker bridge gateway. `localhost` inside the ZAP container would not reach the host.
+- **Scope is restricted to `/api/*`** (`includePaths: …/api.*`). The root `/` is served by
+  the console SPA, which in CI (no `apps/console/dist` build) returns a 503 "Console not
+  built" placeholder with no crawlable links — so a root-seeded spider would achieve
+  near-zero coverage. Since the issue targets the *HTTP API*, we scope to `/api` and drive
+  coverage with an explicit `requestor` job rather than crawling. (Resolves the CodeAnt
+  review finding about root-503 / near-zero crawl coverage.)
 - `env.parameters.failOnError: false` — alert-only.
-- Jobs: `passiveScan-config` → `spider` → `passiveScan-wait` → `report`
-  (`sarif-json` → `/zap/wrk/dast.sarif.json`) → `report` (`traditional-html` →
+- Jobs: `passiveScan-config` → `requestor` (explicit GETs to the bearer-auth-exempt API
+  endpoints, so the passive scanner inspects each response; a JSON API has no link graph
+  to spider) → `spider` (short, scoped to `/api`, best-effort) → `passiveScan-wait` →
+  `report` (`sarif-json` → `/zap/wrk/dast.sarif.json`) → `report` (`traditional-html` →
   `/zap/wrk/dast.html`). `/zap/wrk/` maps to the workspace.
 - **Report filenames:** the `sarif-json` template's native extension is `.json` and
   ZAP appends it unless the name already ends in it, so we name the SARIF file
@@ -99,7 +107,7 @@ real suppression must carry an inline justification comment.
 
 ZAP runs in its own Docker container, so the scan target must be reachable from inside
 that container. On Linux GitHub runners the Docker bridge gateway is `172.17.0.1`, and
-the server binds `0.0.0.0`, so `http://172.17.0.1:3000` reaches it. This is the single
+the server binds `0.0.0.0`, so `http://172.17.0.1:3000/...` reaches it. This is the single
 most failure-prone detail; the health-check poll uses `localhost` (host side) while the
 ZAP plan uses the gateway IP (container side).
 

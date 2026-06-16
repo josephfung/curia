@@ -1,9 +1,15 @@
 # ZAP Automation Framework plan for the Curia DAST baseline scan (issue #568).
 # Driven by .github/workflows/dast.yml via the zaproxy/action-af GitHub Action.
 #
-# This is a PASSIVE baseline scan: spider the unauthenticated surface, let the passive
-# scanner finish, then emit SARIF (for the Security tab) and HTML (for the CI artifact).
-# No active attack scan — that is intentionally out of scope for the baseline.
+# This is a PASSIVE baseline scan: request the HTTP API surface, let the passive scanner
+# finish, then emit SARIF (for the Security tab) and HTML (for the CI artifact). No active
+# attack scan — that is intentionally out of scope for the baseline.
+#
+# Scope is restricted to `/api/*`. The root path `/` is served by the console SPA, which
+# in CI (no `apps/console/dist` build) returns a 503 "Console not built" placeholder with
+# no crawlable links — so a root-seeded spider would achieve near-zero coverage of the
+# actual target. This plan instead scopes to the API and drives it with an explicit
+# `requestor` job (below), since a JSON API has no link graph for a spider to follow.
 env:
   contexts:
     - name: curia
@@ -12,9 +18,10 @@ env:
         # `localhost`. The Curia HTTP API binds 0.0.0.0:3000 (see http-adapter.ts),
         # which is reachable from inside the container via the Docker bridge gateway.
         # On Linux GitHub runners that gateway is 172.17.0.1.
-        - http://172.17.0.1:3000
+        - http://172.17.0.1:3000/api/health
       includePaths:
-        - http://172.17.0.1:3000.*
+        # Scope to the HTTP API only — the console SPA at `/` is out of scope (see above).
+        - http://172.17.0.1:3000/api.*
   parameters:
     # Alert-only: never exit non-zero on findings. We keep the baseline non-blocking
     # until a stable, triaged baseline exists (issue #568). Revisit once findings are
@@ -31,11 +38,39 @@ jobs:
       maxAlertsPerRule: 10
       scanOnlyInScope: true
 
-  # Crawl the unauthenticated surface to discover endpoints for the passive scanner.
+  # Explicitly request the HTTP API surface so the passive scanner inspects each
+  # response (headers, cookies, error bodies, info disclosure). A JSON API exposes no
+  # link graph for a spider to follow, so we drive coverage with a fixed request list
+  # rather than relying on crawling. These are the bearer-auth-exempt GET endpoints
+  # (see the onRequest hook in http-adapter.ts); session-protected ones return 401/403,
+  # which is itself useful baseline coverage. Streaming/SSE and `:param` routes are
+  # omitted (a spider/requestor would hang on a stream, and param routes need values).
+  - type: requestor
+    requests:
+      - url: http://172.17.0.1:3000/api/health
+      - url: http://172.17.0.1:3000/api/setup/status
+      - url: http://172.17.0.1:3000/api/autonomy
+      - url: http://172.17.0.1:3000/api/autonomy/history
+      - url: http://172.17.0.1:3000/api/identity
+      - url: http://172.17.0.1:3000/api/identity/history
+      - url: http://172.17.0.1:3000/api/executive
+      - url: http://172.17.0.1:3000/api/executive/history
+      - url: http://172.17.0.1:3000/api/jobs
+      - url: http://172.17.0.1:3000/api/registry/agents
+      - url: http://172.17.0.1:3000/api/registry/skills
+      - url: http://172.17.0.1:3000/api/registry/channels
+      - url: http://172.17.0.1:3000/api/vault/status
+      - url: http://172.17.0.1:3000/api/kg/contacts
+      - url: http://172.17.0.1:3000/api/kg/graph
+      - url: http://172.17.0.1:3000/api/kg/nodes
+      - url: http://172.17.0.1:3000/api/kg/tasks
+
+  # Best-effort crawl within /api to pick up anything unexpectedly linked. Short by
+  # design — a JSON API yields little to follow, but it's cheap and catches surprises.
   - type: spider
     parameters:
       context: curia
-      maxDuration: 3 # minutes — the API surface is small; keep CI time bounded
+      maxDuration: 1 # minute — scoped to /api, which has no real link graph
       maxChildren: 0 # 0 = unlimited within the duration cap
 
   # Wait for the passive scanner to drain its queue before reporting.
