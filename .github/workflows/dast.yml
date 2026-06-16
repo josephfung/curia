@@ -1,0 +1,154 @@
+name: DAST — OWASP ZAP Baseline
+
+# Dynamic application security testing. Boots the Curia HTTP API in CI and runs an
+# OWASP ZAP passive (baseline) scan against the unauthenticated surface, then publishes
+# SARIF to the Security tab and an HTML report as an artifact.
+#
+# Release-prep only: this is NOT run per-PR. Booting Curia + Postgres and running ZAP
+# adds several minutes of overhead with low incremental value over the SAST jobs
+# (CodeQL, Semgrep, Trivy), so it runs weekly and on manual dispatch. The scan is
+# alert-only — `failOnError: false` in the AF plan means findings never fail the job
+# until a stable baseline is established (see issue #568).
+on:
+  # No inputs: this job always boots a fresh Curia instance in CI and scans it.
+  # Scanning an arbitrary external URL is intentionally unsupported here — all the
+  # Postgres/migrate/seed/boot steps exist to stand up that local target.
+  workflow_dispatch:
+  schedule:
+    # Weekly, Monday 09:00 UTC — staggered after the Wednesday SAST jobs
+    # (CodeQL 06:00, Semgrep 07:00, Trivy 08:00). Release-prep cadence.
+    - cron: '0 9 * * 1'
+
+# Least privilege: the workflow token defaults to read-only. The scan job grants
+# `security-events: write` at the job level for the SARIF upload (Scorecard
+# TokenPermissionsID).
+permissions:
+  contents: read
+
+jobs:
+  zap-baseline:
+    name: ZAP Baseline Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # required for the SARIF upload to the Security tab
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: curia_test
+          POSTGRES_USER: curia
+          POSTGRES_PASSWORD: curia_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U curia"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://curia:curia_test@localhost:5432/curia_test
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - name: Use Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Rebuild esbuild
+        run: pnpm rebuild esbuild
+
+      # The vault is encrypted with this key, and the server decrypts with it at boot,
+      # so the seed step and the server step MUST share one value. Generate it once and
+      # export to $GITHUB_ENV. CI-only, ephemeral DB — there is nothing real to protect.
+      - name: Generate vault encryption key
+        run: echo "SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Run database migrations
+        run: pnpm tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql
+
+      # Curia resolves its required secrets (api_token, anthropic_api_key,
+      # web_app_bootstrap_secret) from the encrypted vault, NOT from env — there is no
+      # env fallback (src/secrets/apply-vault-secrets.ts). So we must seed the vault
+      # after migrations (the `secrets` table) and before the server boots, with
+      # placeholder values: ZAP exercises the HTTP surface, not live LLM behavior.
+      # Invoke tsx directly rather than `pnpm run seed-vault` to bypass that script's
+      # hardcoded `--env-file=.env` (there is no .env in CI).
+      - name: Seed the secrets vault with CI placeholders
+        run: pnpm tsx scripts/seed-vault.ts
+        env:
+          API_TOKEN: ci-dast-token-not-a-real-secret
+          ANTHROPIC_API_KEY: sk-ant-ci-dast-placeholder
+          WEB_APP_BOOTSTRAP_SECRET: ci-dast-bootstrap-not-a-real-secret
+
+      # Start the HTTP API in the background. It binds 0.0.0.0:3000, so the ZAP
+      # container can reach it via the Docker bridge gateway (172.17.0.1) later.
+      - name: Start Curia HTTP API
+        run: pnpm tsx src/index.ts > curia-server.log 2>&1 &
+        env:
+          HTTP_PORT: "3000"
+          LOG_LEVEL: info
+
+      # Poll the unauthenticated health endpoint until the server is up. Fail loudly
+      # (and dump the log) if it never comes up, rather than letting the ZAP step hang
+      # until its own timeout on a server that silently failed to boot.
+      - name: Wait for the server to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000/api/health > /dev/null; then
+              echo "Curia HTTP API is up after $((i * 2))s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Curia HTTP API did not become ready within 120s"
+          echo "----- curia-server.log -----"
+          cat curia-server.log || true
+          exit 1
+
+      # ZAP Automation Framework (first-party, SHA-pinned). The plan drives a passive
+      # baseline scan and emits both SARIF and HTML into /zap/wrk/ (the workspace).
+      # The plan's failOnError is false, so this step never fails the job on findings.
+      - name: Run ZAP Automation Framework scan
+        uses: zaproxy/action-af@d186d5d9536d0f1380e5eaa58168432fefc8ed6d # v0.3.0
+        with:
+          plan: '.zap/plan.yaml'
+
+      # List what ZAP actually wrote (the reportFile naming has historically been
+      # surprising), so a failed upload is easy to diagnose from the run log.
+      - name: List ZAP reports
+        if: always()
+        run: ls -la dast.* || true
+
+      - name: Upload ZAP reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: zap-baseline-report
+          path: |
+            dast.html
+            dast.sarif.json
+          if-no-files-found: warn
+
+      - name: Upload SARIF to the Security tab
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        if: always()
+        with:
+          sarif_file: dast.sarif.json
+          category: zap-dast
+
+      # Surface the server log on failure for debugging a boot/scan problem.
+      - name: Dump server log on failure
+        if: failure()
+        run: cat curia-server.log || true
