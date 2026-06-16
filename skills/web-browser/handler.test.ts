@@ -444,6 +444,137 @@ describe('web-browser iframe awareness', () => {
   });
 });
 
+describe('web-browser frame SSRF gating + read-failure detection', () => {
+  it('get_content does NOT read a child frame pointing at an internal/metadata host', async () => {
+    const internalEvaluate = vi.fn().mockResolvedValue('AWS_SECRET=internal-only');
+    const mainFrame = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      name: vi.fn().mockReturnValue(''),
+      evaluate: vi.fn().mockResolvedValue('Innocent looking page'),
+    };
+    const internalFrame = {
+      url: vi.fn().mockReturnValue('http://169.254.169.254/latest/meta-data/'),
+      name: vi.fn().mockReturnValue('evil'),
+      evaluate: internalEvaluate,
+    };
+    const page = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      title: vi.fn().mockResolvedValue('Page'),
+      screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
+      frames: vi.fn().mockReturnValue([mainFrame, internalFrame]),
+      mainFrame: vi.fn().mockReturnValue(mainFrame),
+    };
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-ssrf', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = {
+      input: { action: 'get_content' },
+      log: logger,
+      browserService,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    // The internal frame must never be evaluated, and its content must not appear.
+    expect(internalEvaluate).not.toHaveBeenCalled();
+    if (result.success) {
+      const data = result.data as { content: string };
+      expect(data.content).not.toContain('AWS_SECRET');
+      expect(data.content).toContain('Innocent looking page');
+    }
+  });
+
+  it('resolveLocator does NOT reach into a private-host child frame', async () => {
+    const miss = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    // The internal frame would "match" if we ever queried it — but we must not.
+    const internalGetByRole = vi.fn().mockReturnValue({
+      count: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockReturnThis(),
+      click: vi.fn().mockResolvedValue(undefined),
+    });
+    const internalFrame = {
+      url: vi.fn().mockReturnValue('http://10.0.0.5/admin'),
+      name: vi.fn().mockReturnValue('evil'),
+      evaluate: vi.fn().mockResolvedValue(''),
+      getByRole: internalGetByRole,
+      getByLabel: vi.fn().mockReturnValue(miss),
+      getByText: vi.fn().mockReturnValue(miss),
+      locator: vi.fn().mockReturnValue(miss),
+    };
+    const mainFrame = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      name: vi.fn().mockReturnValue(''),
+      evaluate: vi.fn().mockResolvedValue('page'),
+      getByRole: vi.fn().mockReturnValue(miss),
+      getByLabel: vi.fn().mockReturnValue(miss),
+      getByText: vi.fn().mockReturnValue(miss),
+      locator: vi.fn().mockReturnValue(miss),
+    };
+    // Main page CSS fallback has a clickable element so the action still completes.
+    const mainClick = vi.fn().mockResolvedValue(undefined);
+    const page = {
+      url: vi.fn().mockReturnValue('https://attacker.example/page'),
+      title: vi.fn().mockResolvedValue('Page'),
+      screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      getByRole: vi.fn().mockReturnValue(miss),
+      getByLabel: vi.fn().mockReturnValue(miss),
+      getByText: vi.fn().mockReturnValue(miss),
+      locator: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(1), first: vi.fn().mockReturnThis(), click: mainClick }),
+      frames: vi.fn().mockReturnValue([mainFrame, internalFrame]),
+      mainFrame: vi.fn().mockReturnValue(mainFrame),
+    };
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-ssrf2', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = {
+      input: { action: 'click', selector: 'admin link' },
+      log: logger,
+      browserService,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    // The private frame must never be queried for a locator.
+    expect(internalGetByRole).not.toHaveBeenCalled();
+  });
+
+  it('get_content fails (does not report empty success) when every frame errors', async () => {
+    const mainFrame = {
+      url: vi.fn().mockReturnValue('https://example.com/'),
+      name: vi.fn().mockReturnValue(''),
+      evaluate: vi.fn().mockRejectedValue(new Error('Execution context was destroyed')),
+    };
+    const page = {
+      url: vi.fn().mockReturnValue('https://example.com/'),
+      title: vi.fn().mockResolvedValue('Example'),
+      screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
+      frames: vi.fn().mockReturnValue([mainFrame]),
+      mainFrame: vi.fn().mockReturnValue(mainFrame),
+    };
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-fail', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = {
+      input: { action: 'get_content' },
+      log: logger,
+      browserService,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('web-browser hard-block detection', () => {
   it('navigate returns a distinct, actionable error on an Access Denied page', async () => {
     const fill = vi.fn().mockResolvedValue(undefined);
