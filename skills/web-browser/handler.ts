@@ -171,7 +171,7 @@ export class WebBrowserHandler implements SkillHandler {
           if (!selector || typeof selector !== 'string') {
             return { success: false, error: 'click requires selector (string — describe the element in natural language)' };
           }
-          const clickTarget = await resolveLocator(page, selector);
+          const clickTarget = await resolveLocator(page, selector, ctx.log);
           await clickTarget.click();
           // Adaptive settle: a click may trigger navigation or an in-page update. Wait
           // briefly for the DOM to settle, but don't fail the action if nothing navigates.
@@ -183,7 +183,7 @@ export class WebBrowserHandler implements SkillHandler {
           // With a selector, scroll that element into view (reveals lazy-loaded widgets);
           // without one, scroll the viewport down a screen (infinite-scroll / "load more").
           if (selector && typeof selector === 'string') {
-            const scrollTarget = await resolveLocator(page, selector);
+            const scrollTarget = await resolveLocator(page, selector, ctx.log);
             await scrollTarget.scrollIntoViewIfNeeded();
           } else {
             await page.mouse.wheel(0, 800);
@@ -197,7 +197,7 @@ export class WebBrowserHandler implements SkillHandler {
             return { success: false, error: 'hover requires selector (string — describe the element in natural language)' };
           }
           // Many widgets (date-picker cells, menus) only reveal options on hover.
-          const hoverTarget = await resolveLocator(page, selector);
+          const hoverTarget = await resolveLocator(page, selector, ctx.log);
           await hoverTarget.hover();
           await settleAfterInteraction(page, ctx, sessionId);
           break;
@@ -220,7 +220,7 @@ export class WebBrowserHandler implements SkillHandler {
           }
           // The LLM's explicit lever for "wait until the widget renders" — for SPAs where
           // even networkidle isn't enough. Throws on timeout, caught below as a clear error.
-          const waitTarget = await resolveLocator(page, selector);
+          const waitTarget = await resolveLocator(page, selector, ctx.log);
           await waitTarget.waitFor({ state: 'visible', timeout: WAIT_FOR_TIMEOUT_MS });
           break;
         }
@@ -260,7 +260,7 @@ export class WebBrowserHandler implements SkillHandler {
             fillValue = text;
           }
 
-          const typeTarget = await resolveLocator(page, selector);
+          const typeTarget = await resolveLocator(page, selector, ctx.log);
           await typeTarget.fill(fillValue);
           break;
         }
@@ -274,7 +274,7 @@ export class WebBrowserHandler implements SkillHandler {
           }
           // Use resolveLocator for consistency with click/type — the LLM can use
           // natural language ("Country dropdown") and it will resolve via role/label/text.
-          const selectTarget = await resolveLocator(page, selector);
+          const selectTarget = await resolveLocator(page, selector, ctx.log);
           await selectTarget.selectOption(value);
           break;
         }
@@ -376,8 +376,13 @@ function isHardBlock(title: string): boolean {
  * SSRF: child frames pointing at private/internal hosts are skipped (see
  * isBlockedFrameUrl) — the navigate guard only validates the top-level URL, so without
  * this an attacker page could embed an internal iframe and have us interact with it.
+ *
+ * Resilience: each child-frame probe is wrapped so a frame that detaches mid-traversal
+ * (common on dynamic pages) is skipped rather than failing the whole action — the same
+ * defensive pattern as getCleanedContent. The main-frame paths are intentionally left
+ * unguarded: a detached main frame is a genuine failure the caller should surface.
  */
-async function resolveLocator(page: Page, selector: string): Promise<Locator> {
+async function resolveLocator(page: Page, selector: string, log: SkillContext['log']): Promise<Locator> {
   // Main frame first (the common case, and the cheapest).
   const top = await resolveInScope(page, selector);
   if (top) return top;
@@ -389,8 +394,12 @@ async function resolveLocator(page: Page, selector: string): Promise<Locator> {
     (frame) => frame !== mainFrame && !isBlockedFrameUrl(frame.url()),
   );
   for (const frame of childFrames) {
-    const inFrame = await resolveInScope(frame, selector);
-    if (inFrame) return inFrame;
+    try {
+      const inFrame = await resolveInScope(frame, selector);
+      if (inFrame) return inFrame;
+    } catch (err) {
+      log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during selector resolution (detached/error)');
+    }
   }
 
   // Raw CSS/XPath fallback — main frame, then eligible child frames (so a direct selector
@@ -399,9 +408,13 @@ async function resolveLocator(page: Page, selector: string): Promise<Locator> {
   const mainCssCount = await mainCss.count();
   if (mainCssCount > 0) return mainCssCount === 1 ? mainCss : mainCss.first();
   for (const frame of childFrames) {
-    const frameCss = frame.locator(selector);
-    const frameCssCount = await frameCss.count();
-    if (frameCssCount > 0) return frameCssCount === 1 ? frameCss : frameCss.first();
+    try {
+      const frameCss = frame.locator(selector);
+      const frameCssCount = await frameCss.count();
+      if (frameCssCount > 0) return frameCssCount === 1 ? frameCss : frameCss.first();
+    } catch (err) {
+      log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during CSS fallback (detached/error)');
+    }
   }
 
   // Last resort: return the (non-matching) main-frame locator so the caller's action
