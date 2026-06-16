@@ -24,6 +24,7 @@ import type { Logger } from '../../logger.js';
 import type { Pool } from 'pg';
 import type { AgentRegistry } from '../../agents/agent-registry.js';
 import { validateBearerToken } from './auth.js';
+import { registerSecurityHeaders } from './security-headers.js';
 import { EventRouter } from './event-router.js';
 import type { SchedulerService } from '../../scheduler/scheduler-service.js';
 import { healthRoutes } from './routes/health.js';
@@ -140,6 +141,11 @@ export class HttpAdapter implements Channel {
       origin: appOrigin ?? false,
       credentials: true, // needed so the browser sends the session cookie cross-origin
     });
+
+    // Baseline security headers (X-Content-Type-Options: nosniff) on every response.
+    // Registered BEFORE the auth hook so the header lands even on 401-short-circuited
+    // responses — Fastify stops running later onRequest hooks once one sends a reply.
+    registerSecurityHeaders(this.app);
 
     // Auth hook — runs before every request
     this.app.addHook('onRequest', async (request, reply) => {
