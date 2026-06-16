@@ -1,0 +1,90 @@
+# ZAP Automation Framework plan for the Curia DAST baseline scan (issue #568).
+# Driven by .github/workflows/dast.yml via the zaproxy/action-af GitHub Action.
+#
+# This is a PASSIVE baseline scan: spider the unauthenticated surface, let the passive
+# scanner finish, then emit SARIF (for the Security tab) and HTML (for the CI artifact).
+# No active attack scan — that is intentionally out of scope for the baseline.
+env:
+  contexts:
+    - name: curia
+      urls:
+        # ZAP runs in its own Docker container, so it cannot reach the host's
+        # `localhost`. The Curia HTTP API binds 0.0.0.0:3000 (see http-adapter.ts),
+        # which is reachable from inside the container via the Docker bridge gateway.
+        # On Linux GitHub runners that gateway is 172.17.0.1.
+        - http://172.17.0.1:3000
+      includePaths:
+        - http://172.17.0.1:3000.*
+  parameters:
+    # Alert-only: never exit non-zero on findings. We keep the baseline non-blocking
+    # until a stable, triaged baseline exists (issue #568). Revisit once findings are
+    # triaged and false positives are filtered.
+    failOnError: false
+    failOnWarning: false
+    progressToStdout: true
+
+jobs:
+  # Configure the passive scanner before any traffic is generated.
+  - type: passiveScan-config
+    parameters:
+      enableTags: false
+      maxAlertsPerRule: 10
+      scanOnlyInScope: true
+
+  # Crawl the unauthenticated surface to discover endpoints for the passive scanner.
+  - type: spider
+    parameters:
+      context: curia
+      maxDuration: 3 # minutes — the API surface is small; keep CI time bounded
+      maxChildren: 0 # 0 = unlimited within the duration cap
+
+  # Wait for the passive scanner to drain its queue before reporting.
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 3 # minutes
+
+  # --- Suppressions for known-safe Curia API behavior --------------------------------
+  # The AF equivalent of action-baseline's `.zap/rules.tsv` is an `alertFilter` job.
+  # It is intentionally NOT included yet: ZAP rejects an alertFilter job with an empty
+  # `alertFilters` list ("nofilters" error), and we should not guess at suppressions
+  # before seeing what the first run actually raises against a pure JSON API.
+  #
+  # To suppress an alert after triaging the first run, uncomment and adapt this block
+  # (place it before the report jobs). `newRisk` must be one of: 'False Positive',
+  # 'Info', 'Low', 'Medium', 'High'. Use 'False Positive' to drop an alert entirely.
+  # Every entry must carry a comment justifying why the alert is safe to suppress.
+  #
+  #   - type: alertFilter
+  #     parameters:
+  #       deleteGlobalAlerts: false
+  #     alertFilters:
+  #       - ruleId: 10020          # Anti-clickjacking (X-Frame-Options) header missing
+  #         newRisk: 'False Positive'  # irrelevant for a pure JSON API with no HTML UI
+  #       - ruleId: 10038          # Content-Security-Policy header missing
+  #         newRisk: 'False Positive'  # CSP protects HTML documents; this API serves JSON
+  # ------------------------------------------------------------------------------------
+
+  # SARIF report → consumed by github/codeql-action/upload-sarif for the Security tab.
+  # /zap/wrk/ maps to the GitHub workspace, so this lands at repo-root dast.sarif.json.
+  #
+  # Filename note: the sarif-json template's native extension is `.json`, and ZAP
+  # appends that extension unless reportFile already ends in it. We name the file
+  # `dast.sarif.json` (ends in `.json`, so no double-append) — and `.sarif.json` is one
+  # of the two extensions github/codeql-action/upload-sarif accepts (the other is
+  # `.sarif`). A bare `.json` would be rejected by that action.
+  - type: report
+    parameters:
+      template: sarif-json
+      reportDir: /zap/wrk/
+      reportFile: dast.sarif.json
+      reportTitle: Curia DAST — ZAP Baseline
+      reportDescription: Passive baseline scan of the Curia HTTP API.
+
+  # Human-readable HTML report → uploaded as a CI artifact.
+  - type: report
+    parameters:
+      template: traditional-html
+      reportDir: /zap/wrk/
+      reportFile: dast.html
+      reportTitle: Curia DAST — ZAP Baseline
+      reportDescription: Passive baseline scan of the Curia HTTP API.

@@ -72,6 +72,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`web-browser` per-frame SSRF gating** — now that content extraction and locator resolution reach into iframes, child frames pointing at private/internal hosts (IPv4 loopback/RFC1918/link-local, IPv6 link-local + unique-local `fc00::/7` + IPv4-mapped forms, cloud-metadata) or `file:` are skipped, so a malicious page can't exfiltrate internal resources through an embedded frame the navigate guard never saw.
 - **Signed release artifacts** — each published release now attaches an SPDX SBOM and a source tarball, each signed with cosign keyless (Sigstore + GitHub OIDC, no long-lived keys) via the new `release.yml`. Satisfies the OpenSSF Scorecard Signed-Releases check; verify with `cosign verify-blob`.
 - **Reliable release SBOMs** — release SBOM generation/attachment moved out of `sbom.yml` (which skipped silently and shipped v0.34.0 with no SBOM) into `release.yml`, where a failed generate/attach/verify fails the run loudly. `sbom.yml` is now push-to-main only.
+- **DAST baseline scan (`dast.yml`)** — weekly + manual OWASP ZAP passive scan of the running HTTP API via the ZAP Automation Framework; publishes SARIF to the Security tab and an HTML artifact. Alert-only for now. (#568)
 
 ### Removed
 
