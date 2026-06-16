@@ -1,7 +1,7 @@
 {
   "name": "web-browser",
-  "description": "Control a real web browser to interact with JS-rendered pages, fill forms, navigate multi-step flows, and interact with sites that have no API. Use this instead of web-fetch when a page requires JavaScript, login, or user interaction. Each call performs one action and returns the updated page state. Pass session_id back on subsequent calls to maintain browser context across actions. Actions: navigate (url required), click (selector required), type (selector + either text OR secret_ref), select (selector+value required), get_content, screenshot, close_session. To fill a stored credential into a form, pass secret_ref (a user.* secret name) instead of text — the value is filled server-side and never shown to you. Set block_ads:true ONLY for plain content browsing — never for login, authenticated, or form-fill flows (sites flag the ad blocker as a privacy extension). Set incognito:true to run in a throwaway, isolated session (e.g. logging in as Curia itself) instead of the principal's persistent profile; omit it for the principal's own accounts so sessions persist.",
-  "version": "1.2.0",
+  "description": "Control a real web browser to interact with JS-rendered pages, fill forms, navigate multi-step flows, and interact with sites that have no API. Use this instead of web-fetch when a page requires JavaScript, login, or user interaction. Each call performs one action and returns the updated page state (including content inside iframes, labelled '--- Frame: ... ---'). Pass session_id back on subsequent calls to maintain browser context across actions. Actions: navigate (url required), click (selector required), type (selector + either text OR secret_ref), select (selector+value required), scroll (optional selector — scrolls that element into view, else scrolls the viewport down), hover (selector required — reveals hover-only menus/date cells), press_key (key required — e.g. Enter, Tab, ArrowRight, Escape; for calendar/combobox keyboard nav), wait_for (selector required — waits up to 10s for an element to render; use this for heavy widgets like date pickers that load after the page), get_content, screenshot, close_session. Selectors resolve by accessible role/label/text and reach into iframes automatically. If a heavy widget (e.g. a date picker) seems missing, wait_for it before clicking. To fill a stored credential into a form, pass secret_ref (a user.* secret name) instead of text — the value is filled server-side and never shown to you. If navigate returns 'Site blocked automated access', the site refuses automation from the server; do not retry — hand off to the principal or draft the request instead. Set block_ads:true ONLY for plain content browsing — never for login, authenticated, or form-fill flows (sites flag the ad blocker as a privacy extension). Set incognito:true to run in a throwaway, isolated session (e.g. logging in as Curia itself) instead of the principal's persistent profile; omit it for the principal's own accounts so sessions persist.",
+  "version": "1.3.0",
   "sensitivity": "elevated",
   "action_risk": "medium",
   "inputs": {
@@ -10,6 +10,7 @@
     "selector": "string?",
     "text": "string?",
     "value": "string?",
+    "key": "string?",
     "secret_ref": "string?",
     "session_id": "string?",
     "screenshot": "boolean?",
