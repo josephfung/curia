@@ -256,6 +256,42 @@ not just "it works."
 
 A release is a deliberate, standalone step — separate from day-to-day PR work. Follow these steps in order.
 
+**Pre-flight — get `main` release-ready (before the numbered steps)**
+
+Both of the steps below happen *before* cutting the release, while there is still room to fix problems on a normal branch. They land as ordinary PRs — each with its own CHANGELOG entry, which then rolls into this release — and never inside the release PR itself, which carries no code changes (step 6).
+
+***A. Sync the documentation***
+
+Bring the docs in line with what actually shipped this batch. Do this first, so the security gate below scans the final pre-release state.
+
+- **`docs/specs/`** — update the architecture specs so they describe the system as it now behaves. New capability shipped → its spec reflects it; behavior changed → the affected spec is corrected.
+- **`docs/wip/`** — prune it. Remove artifacts whose work has shipped and been folded into `docs/specs/` (or is otherwise complete). Leave anything still in progress untouched.
+- **`docs/dev/`** — update the how-to guides (`adding-a-skill`, `adding-an-agent`, `configuration`, `setup`, etc.) wherever this release changed the steps they describe.
+- **curia-docs repo** — the public site (docs.meetcuria.com) lives in the separate `curia-docs` repo. Where this release changed user-facing behavior, update it there via its own PR. This is not part of the Curia release PR.
+
+***B. Pre-release security gate***
+
+Run the on-demand security scans against current `main` and clear them **before** cutting the release. Because the release PR carries no code changes (step 6), the commit you tag will be code-identical to what you scan here — so clearing the gate now means clearing it for the tag, while you can still fix findings on a normal branch instead of being stuck with a merged release commit you cannot tag.
+
+(Trivy fs, Semgrep, and Gitleaks already run on every push/PR; this gate covers the scans that do *not* — the Docker image scan, a fresh CodeQL pass, the repo-level Scorecard, and the OWASP ZAP passive DAST run.)
+
+```bash
+gh workflow run trivy.yml     # on-demand Trivy image scan (base image + OS package CVEs)
+gh workflow run codeql.yml    # fresh CodeQL security-extended pass (takes several minutes)
+gh workflow run scorecard.yml # repo-level supply-chain posture
+gh workflow run dast.yml      # OWASP ZAP passive DAST against the running HTTP API (slow: boots the full app)
+# Wait for each to finish, then review results:
+gh run list --limit 5
+```
+
+Review **GitHub → Security → Code Scanning** for the results of all scanners. **Block the release on any unresolved CRITICAL finding.** A HIGH is a judgment call — fix it or document why it's accepted (e.g. unreachable code path, no fix available) before proceeding.
+
+Don't merge other code PRs between clearing this gate and tagging. If code lands on `main` after the gate clears, re-run it — the release PR adds no code, so the gate is only meaningful if `main` hasn't moved underneath it.
+
+The ZAP DAST scan (`zap-dast` category) is alert-only and review-only for now — until its first run is triaged into the `alertFilter` baseline in `.zap/plan.yaml`, its findings are informational and do not block a release. Once a triaged baseline exists (and `failOnError` flips), treat its unresolved CRITICALs the same as the other scanners.
+
+With docs synced and the security gate clear, cut the release:
+
 **1. Read the unreleased changes**
 
 Open `CHANGELOG.md` and review all entries under `## [Unreleased]`. Read for themes: what capabilities shipped, what was fixed, what changed under the hood.
@@ -296,24 +332,7 @@ Write a haiku thematically aligned with the release — drawn from the changes, 
 - No other code changes — this PR is the release commit only
 - Watch CI; wait for merge before proceeding
 
-**7. After merge: pre-release security gate**
-
-Once the release PR is merged, `main` is the exact commit you are about to tag. Run the on-demand security scans against it and review the results **before** tagging. (Trivy fs, Semgrep, and Gitleaks already ran on the release PR; the gate below covers the scans that do *not* run on a normal push — the Docker image scan, a fresh CodeQL pass, and the repo-level Scorecard.)
-
-```bash
-gh workflow run trivy.yml     # on-demand Trivy image scan (base image + OS package CVEs)
-gh workflow run codeql.yml    # fresh CodeQL security-extended pass (takes several minutes)
-gh workflow run scorecard.yml # repo-level supply-chain posture
-gh workflow run dast.yml      # OWASP ZAP passive DAST against the running HTTP API (slow: boots the full app)
-# Wait for each to finish, then review results:
-gh run list --limit 5
-```
-
-Review **GitHub → Security → Code Scanning** for the results of all scanners. **Block the release on any unresolved CRITICAL finding.** A HIGH is a judgment call — fix it or document why it's accepted (e.g. unreachable code path, no fix available) before proceeding.
-
-The ZAP DAST scan (`zap-dast` category) is alert-only and review-only for now — until its first run is triaged into the `alertFilter` baseline in `.zap/plan.yaml`, its findings are informational and do not block a release. Once a triaged baseline exists (and `failOnError` flips), treat its unresolved CRITICALs the same as the other scanners.
-
-**8. Tag and publish**
+**7. Tag and publish**
 
 Confirm the merge landed, then tag `origin/main` directly (do not rely on local branch state — the release worktree is on `chore/release-X.Y.Z`, not `main`):
 
@@ -344,9 +363,9 @@ EOF
 )"
 ```
 
-Tagging stays `git tag -a` (annotated, **unsigned**) — releases are signed at the artifact layer (step 9), not the tag.
+Tagging stays `git tag -a` (annotated, **unsigned**) — releases are signed at the artifact layer (step 8), not the tag.
 
-**9. Verify release artifacts (SBOM + signatures)**
+**8. Verify release artifacts (SBOM + signatures)**
 
 Publishing the release triggers `release.yml`, which generates an SPDX SBOM and a source tarball, signs both with cosign (keyless, via GitHub OIDC), and attaches all four files to the release. This step is **not optional and not silent** — the workflow fails loudly if anything is missing or a signature fails to verify (this is the fix for v0.34.0, which shipped with no SBOM because the old auto-attach skipped silently).
 
