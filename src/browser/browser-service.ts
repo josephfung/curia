@@ -28,8 +28,8 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, readFileSync, rmSync, lstatSync, readlinkSync } from 'node:fs';
+import { homedir, hostname as osHostname } from 'node:os';
 import { join } from 'node:path';
 import { chromium as stealthChromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
@@ -425,6 +425,16 @@ export class BrowserService {
    * 'playwright' BrowserContext we type against.
    */
   private async launchPersistentContext(): Promise<BrowserContext> {
+    // Clear a stale Chrome SingletonLock left by a previous unclean exit. The profile
+    // lives on a persistent volume (so logins survive restarts), but Chrome records the
+    // lock owner as "<hostname>-<pid>" and Docker assigns a new hostname (container id) on
+    // every recreate. After a hard restart the lock names a now-dead container, so Chrome
+    // reads it as "in use on another computer" and refuses to launch — taking the real
+    // channel AND the bundled-Chromium fallback down with it (regression of #987). The profile is
+    // single-owner (only this service drives it, and start() launches only when context is
+    // null), so any lock present at launch is necessarily stale. Mirrors clearStaleX11Lock.
+    clearStaleSingletonLock({ profileDir: this.profileDir, logger: this.logger });
+
     const baseOptions = {
       headless: false,
       args: [
@@ -604,6 +614,129 @@ export function clearStaleX11Lock(opts: ClearStaleX11LockOptions): boolean {
     logger.warn({ display: `:${displayNum}` }, 'Removed stale Xvfb lock/socket left by a previous unclean exit');
   }
   return removed;
+}
+
+interface ClearStaleSingletonLockOptions {
+  /** The persistent Chrome profile directory holding the Singleton* lock files. */
+  profileDir: string;
+  logger: Logger;
+  /**
+   * This host's name — what Chrome compares the lock owner against. Defaults to
+   * os.hostname() (the Docker container id in production). Overridable for tests.
+   */
+  hostname?: string;
+  /**
+   * Liveness probe for the lock-owner PID. Only consulted when the lock was created by
+   * THIS host (same hostname) — a PID from another host is meaningless locally. Defaults
+   * to a real `process.kill(pid, 0)` existence check. Overridable for tests.
+   */
+  isProcessAlive?: (pid: number) => boolean;
+}
+
+/**
+ * Remove a stale Chrome `SingletonLock` (and its `SingletonCookie` / `SingletonSocket`
+ * siblings) from a persistent profile directory, left behind when Chrome exited uncleanly
+ * (crash, OOM, `docker kill`). Returns true if any file was removed.
+ *
+ * Chrome writes `SingletonLock` as a symlink whose target is `"<hostname>-<pid>"`, recording
+ * which machine+process owns the profile. On a persistent-profile volume this is a trap:
+ * the volume survives container restarts, but Docker assigns a fresh hostname (the container
+ * id) on every recreate. So after a hard restart the lock names a now-dead *previous*
+ * container; Chrome can't prove that owner is gone ("in use on another computer") and refuses
+ * to launch rather than steal the lock. Because this profile is single-owner — only
+ * BrowserService drives it, and it launches only when no context is live — any lock present
+ * at launch time is necessarily stale, with one exception we still guard: a lock created by
+ * THIS host whose PID is genuinely alive (a real concurrent owner) is left untouched.
+ *
+ * Gated on the lock symlink, mirroring `clearStaleX11Lock`: an unreadable/unparseable lock is
+ * treated as having no provable live owner and removed, so a corrupt lock can never wedge
+ * startup. We probe with lstat (not existsSync) because a dangling Singleton* symlink — its
+ * target never existed on this host — would otherwise read as "missing".
+ */
+export function clearStaleSingletonLock(opts: ClearStaleSingletonLockOptions): boolean {
+  const { profileDir, logger } = opts;
+  const hostname = opts.hostname ?? osHostname();
+  // Default probe: signal 0 delivers nothing, it only tests whether the PID exists.
+  const isProcessAlive = opts.isProcessAlive ?? defaultIsProcessAlive;
+
+  const lockPath = join(profileDir, 'SingletonLock');
+  const cookiePath = join(profileDir, 'SingletonCookie');
+  const socketPath = join(profileDir, 'SingletonSocket');
+
+  // No lock symlink → Chrome considers the profile free; nothing to clean. lstat (not
+  // existsSync) so a dangling symlink is still detected as present.
+  if (!symlinkExists(lockPath)) return false;
+
+  // A live owner on THIS host means a genuine concurrent Chrome — never clobber it.
+  // For any other case (different host, dead PID, unparseable target) the lock is an
+  // orphan and we remove it.
+  const owner = readSingletonLockOwner(lockPath, logger);
+  if (owner && owner.hostname === hostname && isProcessAlive(owner.pid)) {
+    logger.warn({ profileDir, pid: owner.pid }, 'Chrome SingletonLock owned by a live local process — leaving it alone');
+    return false;
+  }
+
+  let removed = false;
+  for (const path of [lockPath, cookiePath, socketPath]) {
+    if (!symlinkExists(path)) continue;
+    try {
+      rmSync(path, { force: true });
+      removed = true;
+    } catch (err) {
+      logger.error({ err, path }, 'Failed to remove stale Chrome Singleton* file — browser may refuse to claim the profile');
+    }
+  }
+  if (removed) {
+    logger.warn(
+      { profileDir, lockOwner: owner ? `${owner.hostname}-${owner.pid}` : 'unparseable' },
+      'Removed stale Chrome SingletonLock left by a previous unclean exit',
+    );
+  }
+  return removed;
+}
+
+/** Default liveness probe: true iff `pid` exists on this host (signal 0 = existence check). */
+function defaultIsProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH → no such process. EPERM → process exists but we can't signal it (still alive).
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** True if `path` is an existing symlink/file, probing the link itself (not its target). */
+function symlinkExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Parse Chrome's `SingletonLock` symlink target of the form `"<hostname>-<pid>"` into its
+ * owner. The hostname may itself contain hyphens, so we split on the LAST hyphen. Returns
+ * null if the lock can't be read or the pid component isn't a positive integer — callers
+ * treat that as "no provable live owner" and remove the lock.
+ */
+function readSingletonLockOwner(lockPath: string, logger: Logger): { hostname: string; pid: number } | null {
+  let target: string;
+  try {
+    target = readlinkSync(lockPath);
+  } catch (err) {
+    // Don't swallow, but don't propagate: this cleanup keeps startup resilient, so an
+    // unreadable lock must degrade to removal rather than throw and disable the skill.
+    logger.warn({ err, lockPath }, 'Could not read Chrome SingletonLock target — treating as stale');
+    return null;
+  }
+  const lastDash = target.lastIndexOf('-');
+  if (lastDash <= 0) return null; // no hostname or no pid component
+  const pid = Number.parseInt(target.slice(lastDash + 1), 10);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  return { hostname: target.slice(0, lastDash), pid };
 }
 
 /** Read the owning PID from an X11 lock file. Returns null if absent or unparseable. */

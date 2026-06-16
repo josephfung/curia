@@ -6,10 +6,10 @@
 //   RUN_BROWSER_TESTS=1 pnpm test src/browser/browser-service.test.ts
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BrowserService, clearStaleX11Lock, isXServerBinary } from './browser-service.js';
+import { BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isXServerBinary } from './browser-service.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -318,6 +318,108 @@ describe('clearStaleX11Lock', () => {
     expect(removed).toBe(false);
     expect(existsSync(socketPath)).toBe(true);
     expect(aliveCheck).not.toHaveBeenCalled();
+  });
+});
+
+// --- clearStaleSingletonLock (stale Chrome profile lock cleanup) ---
+
+describe('clearStaleSingletonLock', () => {
+  let profileDir: string;
+  let lockPath: string;   // <profile>/SingletonLock  (symlink -> "<host>-<pid>")
+  let cookiePath: string; // <profile>/SingletonCookie
+  let socketPath: string; // <profile>/SingletonSocket
+
+  // existsSync follows symlinks, so a dangling Singleton* symlink reads as "missing".
+  // Probe the link itself with lstat so presence/removal assertions are accurate.
+  const lexists = (p: string): boolean => {
+    try { lstatSync(p); return true; } catch { return false; }
+  };
+
+  // Chrome writes SingletonLock as a symlink whose target is "<hostname>-<pid>".
+  const seedLock = (target: string) => {
+    symlinkSync(target, lockPath);
+    symlinkSync('cookie-value', cookiePath);
+    symlinkSync('/tmp/some/SingletonSocket', socketPath);
+  };
+
+  beforeEach(() => {
+    profileDir = mkdtempSync(join(tmpdir(), 'chrome-profile-test-'));
+    lockPath = join(profileDir, 'SingletonLock');
+    cookiePath = join(profileDir, 'SingletonCookie');
+    socketPath = join(profileDir, 'SingletonSocket');
+  });
+
+  afterEach(() => {
+    rmSync(profileDir, { recursive: true, force: true });
+  });
+
+  it('removes a lock owned by a different host — the cross-container restart case', () => {
+    // The prod failure: the lock names a now-dead previous container (9847dc7d797d),
+    // while this container is 8e964171a188. Chrome refuses ("in use on another computer").
+    seedLock('9847dc7d797d-44');
+    const aliveCheck = vi.fn().mockReturnValue(true); // even if it claims alive, it's another host
+
+    const removed = clearStaleSingletonLock({
+      profileDir,
+      hostname: '8e964171a188',
+      isProcessAlive: aliveCheck,
+      logger,
+    });
+
+    expect(removed).toBe(true);
+    expect(lexists(lockPath)).toBe(false);
+    expect(lexists(cookiePath)).toBe(false);
+    expect(lexists(socketPath)).toBe(false);
+    // A PID from another host is meaningless locally, so liveness is never probed.
+    expect(aliveCheck).not.toHaveBeenCalled();
+  });
+
+  it('removes a same-host lock when the owning PID is dead', () => {
+    seedLock('8e964171a188-44');
+
+    const removed = clearStaleSingletonLock({
+      profileDir,
+      hostname: '8e964171a188',
+      isProcessAlive: () => false,
+      logger,
+    });
+
+    expect(removed).toBe(true);
+    expect(lexists(lockPath)).toBe(false);
+    expect(lexists(cookiePath)).toBe(false);
+    expect(lexists(socketPath)).toBe(false);
+  });
+
+  it('leaves a same-host lock intact when the owning PID is alive', () => {
+    seedLock('8e964171a188-44');
+
+    const removed = clearStaleSingletonLock({
+      profileDir,
+      hostname: '8e964171a188',
+      isProcessAlive: () => true,
+      logger,
+    });
+
+    expect(removed).toBe(false);
+    expect(lexists(lockPath)).toBe(true);
+    expect(lexists(cookiePath)).toBe(true);
+    expect(lexists(socketPath)).toBe(true);
+  });
+
+  it('treats an unparseable lock target as stale and removes it (no liveness probe)', () => {
+    seedLock('no-pid-here-'); // trailing dash → empty pid component
+    const aliveCheck = vi.fn().mockReturnValue(true);
+
+    const removed = clearStaleSingletonLock({ profileDir, hostname: 'whatever', isProcessAlive: aliveCheck, logger });
+
+    expect(removed).toBe(true);
+    expect(lexists(lockPath)).toBe(false);
+    expect(aliveCheck).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when no SingletonLock is present', () => {
+    const removed = clearStaleSingletonLock({ profileDir, hostname: 'host', isProcessAlive: () => false, logger });
+    expect(removed).toBe(false);
   });
 });
 
