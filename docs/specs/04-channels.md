@@ -92,6 +92,7 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - **Participant extraction:** From/To/CC addresses are extracted and auto-create contacts
 - **Attachments (inbound):** parsed and passed through as `Attachment[]`
 - **Attachments (outbound, v0.33):** all five outbound email skills (`email-send`, `email-reply`, `email-draft-save`, `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`) accept an `attachments` input. Files are read from `file://` URLs backed by `TempFileStore`, validated, and forwarded to Nylas (multipart `FormData` on the CEO-inbox path; `Buffer` content via the Nylas SDK on the Curia-outbound path), capped at 20 MB total / 10 attachments. The `drive-download-file` skill bridges Google Drive → `TempFileStore`, returning a `file://` URL so Drive files can be attached.
+- **CEO inbox drafts (v0.35):** the CEO inbox can now find, read, and edit unsent drafts. `ceo-inbox-list` / `ceo-inbox-search` query Nylas's `/drafts` resource (the DRAFTS folder) when scoped with `folder: 'DRAFTS'`; `ceo-inbox-read` accepts a `draft_id` to return a draft's full body; and the new `ceo-inbox-draft-edit` skill updates a draft's recipients/subject/body. Draft results key on `drafts` (not `messages`) so a genuine "none" is distinguishable from a silent zero, and the inbox poll watermark is not applied to drafts.
 - Secrets: `NYLAS_API_KEY`, `NYLAS_GRANT_ID`, `NYLAS_SELF_EMAIL`
 - Nylas abstracts away provider differences (Gmail, Outlook, IMAP) and handles OAuth
 

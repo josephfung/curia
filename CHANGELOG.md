@@ -51,6 +51,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Coordinator prompt** — re-derived around a three-way routing decision; delegation-hinted outbound replies now always transfer to the owning specialist. (#957)
 - **`web-browser` ad blocking is now opt-in** (`block_ads:true`) and off by default, so login/auth/form-fill flows no longer trip "privacy extension" bot detection. (#987)
 - **Browser fingerprint hardened** — real Chrome channel where available, current UA via `playwright-extra` + stealth, plus context locale/timezone/colorScheme. (#987)
+- **Docs synced for v0.35** — architecture specs (02/03/04/06/08/15) and dev guides (`setup`, `adding-a-skill`, `adding-an-agent`, `configuration`) refreshed for secret capture/by-reference, browser hardening, CEO-inbox drafts, web-console ack-and-stream, Node 24, and the coordinator restructure; shipped WIP design docs pruned.
 
 ### Fixed
 

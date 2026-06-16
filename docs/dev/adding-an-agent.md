@@ -246,6 +246,10 @@ that needs only read-only `task-list` access can still pin that one skill manual
 the flag — it just won't be heartbeat-eligible or get the injected block. See
 [spec 19 — Tasks & Backlog](../specs/19-tasks-and-backlog.md) for the full design.
 
+`task-create` accepts an optional `target_agent_id` input that assigns the task (and its
+wake-up) to another registered agent — for example, the Coordinator scheduling a debrief task
+for the `meeting-debrief` specialist. Omit it and the task is assigned to the calling agent.
+
 ### `memory` (optional)
 
 ```yaml

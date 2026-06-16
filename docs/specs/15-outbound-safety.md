@@ -133,6 +133,16 @@ The blocked content itself is never included, on either path. There is no review
 resend flow yet (see *What's Not Here Yet*), so a false positive currently means the agent's send
 is dropped and must be re-requested.
 
+### Value-aware browser secret redaction (v0.35.0)
+
+A complementary defense on the tool-output side, upstream of the outbound filter. When a
+secret is injected into the browser by reference (`web-browser` `secret_ref`), the value is
+never returned to the LLM in the first place: it is tracked per browser session and scrubbed —
+raw plus its URL- and HTML-encoded variants — from the returned page content, the page URL,
+and any error messages, so a hostile page cannot reflect the injected credential back into the
+model's context. Screenshots are suppressed on any action that fills a secret, since an image
+cannot be value-redacted. See [spec 03 — Output Sanitization](03-skills-and-execution.md#output-sanitization).
+
 ---
 
 ## Audience Partitioning (coordinator prompt guidance)

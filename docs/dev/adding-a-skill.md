@@ -163,6 +163,8 @@ Valid capability names and what they grant:
 | `tempFileStore` | `TempFileStore` | Writing binary buffers to a secure tmpfs mount; returns `file://` URLs for MCP tools that accept file paths. Used by email download skills for binary-correct attachment handoff. |
 | `infraLlm` | `InfraLlm` | Constrained LLM access — `classify()` and `extract()` only, no raw `chat()`. Routed through `ModelRouter` with full telemetry. For infrastructure skills that need LLM reasoning without unbounded access. |
 | `outboundContext` | `ScopedOutboundContext` | Register/release outbound-context entries (delegation-aware reply correlation). Used by send skills and any agent that wants to claim a reply thread. See [spec 11 §Outbound Context Bridge](../specs/11-entity-context-enrichment.md#outbound-context-bridge). |
+| `secretCapture` | `SecretCaptureMinter` (`ctx.secretCapture`) | Mint a one-time vault capture link so a user can add a new secret mid-conversation. The skill never sees the submitted value. Declaring this capability is also what unlocks the `skip_secret_redaction` manifest field (see below). |
+| `secretResolver` | `ctx.resolveSecretRef(ref)` | Resolve a `user.*` secret by reference at runtime (the value is returned to the handler for immediate use, never placed in LLM-facing output). Additionally hard-allowlisted in the execution layer to `web-browser` only — declaring it elsewhere has no effect. |
 
 Services NOT in this list (`contactService`, `entityContextAssembler`, `agentPersona`) are **universal** — available to every skill without declaration. Omit `capabilities` entirely if your skill only uses universal services.
 
@@ -243,6 +245,14 @@ Set higher for skills that call slow external APIs. Set lower for skills that sh
 ```json
 "timeout": 120000,   // 2 minutes for a research/browse skill
 "timeout": 10000     // 10 seconds for a fast lookup
+```
+
+#### `skip_secret_redaction` (optional, default: `false`)
+
+Opts this skill's output out of **only** the broad generic-long-hex secret scrub in output sanitization. The structured credential patterns (API keys, JWT/Bearer, AWS) still apply, as do tag-stripping and truncation. This exists for skills whose output legitimately carries a high-entropy capability token that must reach the LLM intact — for example, a one-time secret-capture link. It is gated at startup to skills that declare the `secretCapture` capability; setting it on any other skill is rejected.
+
+```json
+"skip_secret_redaction": true
 ```
 
 ---
@@ -350,6 +360,15 @@ interface SkillContext {
    *  Use to claim reply threads for delegation-aware reply routing. */
   outboundContext?: ScopedOutboundContext;
 
+  /** Secret-capture minter — declare "secretCapture" in capabilities.
+   *  Mints one-time vault capture links; the skill never sees the submitted value. */
+  secretCapture?: SecretCaptureMinter;
+
+  /** Resolve a `user.*` secret by reference — declare "secretResolver" in capabilities
+   *  (additionally hard-allowlisted to web-browser). The value is for immediate runtime
+   *  use only and must never be placed into LLM-facing output. */
+  resolveSecretRef?(ref: string): Promise<string>;
+
   // --- Universal fields (available to all skills) ---
 
   /** Caller identity (role, channel). Guaranteed non-null for elevated skills. */
@@ -357,6 +376,14 @@ interface SkillContext {
 
   /** Agent persona (display name, title, email signature) from coordinator config */
   agentPersona?: AgentPersona;
+
+  /** Public app origin, used to build capture-link URLs (falls back to
+   *  http://localhost:{httpPort} when unset). From config.appOrigin. */
+  appOrigin?: string;
+
+  /** Local HTTP port the SPA is served on — dev fallback origin for capture links.
+   *  From config.httpPort. */
+  httpPort?: number;
 }
 ```
 

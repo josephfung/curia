@@ -12,6 +12,8 @@ All external communication flows through a single **Coordinator agent** — the 
 4. The Coordinator synthesizes results and responds in its own voice
 5. The external recipient never knows multiple agents were involved
 
+As of v0.35.0 the Coordinator prompt was re-derived around an explicit three-way routing decision — handle directly, borrow-then-answer (pull work from a specialist, then reply in its own voice), or transfer-ownership (hand the whole interaction to a specialist that owns its lifecycle). The keystone rule: a reply to anything the Coordinator sent on a specialist's behalf (a delegation-hinted outbound) is always transfer-ownership and is routed back to that specialist, never answered directly. Tool-specific mechanics were relocated out of the prompt into the relevant skill manifests (`config-store`, `email-send`/`email-reply`, `signal-send`, `decay-warnings-list`), and the vestigial executive-voice block was removed — CEO-voice drafting lives in the ceo-inbox specialist.
+
 ### Coordinator Config
 
 ```yaml

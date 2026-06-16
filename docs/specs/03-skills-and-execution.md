@@ -39,8 +39,9 @@ skills/
 - `permissions`: declared capabilities, validated at load time
 - `timeout`: per-invocation timeout in ms; exceeded invocations return a failure result (default 30000)
 - `install.requires_secrets` (optional): vault secret keys that must already exist before the skill can be **installed or enabled** in the registry. `RegistryService` rejects install/enable until every listed key is present in the vault. This is the install/enable gate, distinct from the runtime `secrets` allowlist above. Example: `web-search` declares `"install": { "requires_secrets": ["tavily_api_key"] }`. (An `uninstall` block is parsed but currently inert.)
+- `skip_secret_redaction` (optional, boolean): opts the skill's output out of **only** the broad generic-long-hex secret scrub in output sanitization — the structured credential patterns (API keys, JWT/Bearer, AWS) still apply, as do tag-stripping and truncation. Gated at startup to skills that declare the `secretCapture` capability. Exists so a skill whose output legitimately carries a high-entropy capability token (e.g. the secret-capture one-time link) can relay it to the LLM intact. Default false.
 
-**Privilege access** — skills declare which privileged services they need via `"capabilities": [...]` in `skill.json`. The loader validates names against a fixed allowlist (`VALID_CAPABILITIES` in `src/skills/loader.ts`) at startup and rejects unknown names. The manifest is frozen after loading. The execution layer injects only declared services into `SkillContext` — skills cannot self-escalate at runtime. Universal services (`contactService`, `entityContextAssembler`, `agentPersona`) are available to all skills without declaration. See the `capabilities` section in `docs/dev/adding-a-skill.md` for the full capability reference.
+**Privilege access** — skills declare which privileged services they need via `"capabilities": [...]` in `skill.json`. The loader validates names against a fixed allowlist (`VALID_CAPABILITIES` in `src/skills/loader.ts`) at startup and rejects unknown names. The manifest is frozen after loading. The execution layer injects only declared services into `SkillContext` — skills cannot self-escalate at runtime. Universal services (`contactService`, `entityContextAssembler`, `agentPersona`) are available to all skills without declaration. Two capabilities were added in v0.35.0: `secretCapture` (grants `ctx.secretCapture` to mint one-time vault capture links) and `secretResolver` (grants `ctx.resolveSecretRef` to resolve a `user.*` secret by reference at runtime — additionally hard-allowlisted to `web-browser` in the execution layer). See the `capabilities` section in `docs/dev/adding-a-skill.md` for the full capability reference.
 
 **Caller restrictions** — skills can declare `"allowed_callers": ["agent-name", ...]` in `skill.json` to restrict which agents may invoke them. The execution layer checks the calling agent's name against this list after the elevated-skill gate but before score-based autonomy gates — this avoids creating pointless approval requests for structurally forbidden callers. If the caller is not in the list, the invocation is rejected with a structured failure. The special value `"system"` matches system-layer invocations (checkpoint processor, etc.). CEO-approved re-executions (`humanApproved: true`) bypass the caller gate. Names in `allowed_callers` are validated against known agent names at startup — unknown names cause a hard startup failure.
 
@@ -59,6 +60,10 @@ interface SkillContext {
   caller?: CallerContext;          // caller identity (guaranteed for elevated skills)
   contactService?: ContactService; // read-only contact lookups — available to all skills
   infraLlm?: InfraLlm;            // constrained LLM access (classify/extract only, no raw chat)
+  secretCapture?: SecretCaptureMinter;            // capability-gated by `secretCapture` — mints one-time vault capture links
+  resolveSecretRef?(ref: string): Promise<string>; // capability-gated by `secretResolver` — resolves a `user.*` secret server-side; value never enters LLM context; hard-allowlisted to web-browser
+  appOrigin?: string;            // available to all skills — public origin used to build capture-link URLs
+  httpPort?: number;             // available to all skills — local HTTP port, dev fallback origin for capture-link URLs
   // ...plus service-specific fields injected per-skill by name (bus, entityMemory, etc.)
 }
 
@@ -171,6 +176,8 @@ All skill results are sanitized before being included in the agent's LLM context
 - Redact patterns matching known secret formats (API keys, tokens) using a configurable regex list
 - Error strings are wrapped in a structured format (`<tool_error>...</tool_error>`) to prevent them from being interpreted as instructions
 
+**Value-aware secret redaction (v0.35.0).** Secrets injected into the browser by reference (`web-browser` `secret_ref`) are tracked per browser session and scrubbed — both the raw value and its URL- and HTML-encoded variants — from returned content, the page URL, and error messages, so a hostile page cannot reflect an injected credential back into the LLM. Screenshots are suppressed on any action that fills a secret (an image cannot be value-redacted). The manifest field `skip_secret_redaction` is a narrow opt-out of only the broad generic-hex scrub (see Skill Manifest above) — it does not affect value-aware redaction or the structured credential patterns.
+
 ### Resource Boundaries
 
 *Lesson from Zora: unbounded operations exhaust memory and block the system.*
@@ -214,7 +221,7 @@ The framework ships with these skills (in `skills/` as part of core):
 - `skill-registry` — search for available skills by keyword; injected into tool list for agents with `allow_discovery: true`
 - `delegate` — route a sub-task to a specialist agent via the bus
 - `web-fetch` — HTTP GET with configurable timeouts and size limits
-- `web-browser` — Playwright-backed browser for JS-rendered pages
+- `web-browser` — Playwright-backed browser for JS-rendered pages. v0.35.0 added: secret-by-reference fill (`secret_ref` — a `user.*` secret name; the value is filled server-side and never shown to the LLM), incognito sessions (`incognito: true` — ephemeral, isolated context off the principal's persistent profile), opt-in ad-blocking (`block_ads: true`, off by default — keep off for auth/login/form-fill flows), new interaction actions (`scroll`, `hover`, `press_key`, `wait_for`), iframe awareness with per-frame SSRF gating (private/internal child frames are skipped), a persistent profile (shared cookies/storage across sessions), and fingerprint hardening (real Chrome channel + stealth, no stale UA override)
 - `web-search` — web search via Tavily API
 - `scheduler-create` / `scheduler-list` / `scheduler-cancel` — create and manage scheduled jobs
 - `email-send` / `email-reply` — outbound email via Nylas (multi-account aware)
