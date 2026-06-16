@@ -1,0 +1,24 @@
+{
+  "name": "ceo-inbox-draft-edit",
+  "description": "Update an existing draft email in the CEO's personal inbox — change its recipients (to/cc), subject, or body. Use to fix a draft that was already created (e.g. wrong recipient or outdated body) without recreating it. Requires the draft_id from ceo-inbox-list {folder: 'DRAFTS'} or ceo-inbox-search {folder: 'DRAFTS'}. Intended for use by the ceo-inbox agent — accesses the CEO's personal email via dedicated secrets, do not call from other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "draft_id": "string (Nylas draft ID to update — obtain from ceo-inbox-list or ceo-inbox-search scoped to DRAFTS)",
+    "to": "string[]? (new recipient email addresses — replaces the existing to list)",
+    "cc": "string[]? (new CC email addresses — replaces the existing cc list; pass [] to clear)",
+    "subject": "string? (new subject line)",
+    "body": "string? (new email body; markdown supported, converted to HTML automatically)"
+  },
+  "outputs": {
+    "draft_id": "string (Nylas draft ID)",
+    "subject": "string (subject as saved)",
+    "to": "array of { name?, email }",
+    "cc": "array of { name?, email }"
+  },
+  "permissions": [],
+  "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
+  "timeout": 20000,
+  "capabilities": []
+}

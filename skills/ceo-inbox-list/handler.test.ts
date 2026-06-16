@@ -166,3 +166,79 @@ describe('CeoInboxListHandler — watermark handling (#866)', () => {
     expect(data.count).toBe(1);
   });
 });
+
+describe('CeoInboxListHandler — drafts routing (#1000)', () => {
+  let handler: CeoInboxListHandler;
+
+  beforeEach(() => {
+    handler = new CeoInboxListHandler();
+  });
+
+  function fetchedUrl(fetchMock: ReturnType<typeof vi.fn>): URL {
+    return new URL(fetchMock.mock.calls[0]![0] as string);
+  }
+
+  it('routes folder DRAFTS to the /drafts resource, not /messages', async () => {
+    const ctx = makeCtx({ folder: 'DRAFTS' }, { storedWatermark: '1700000000' });
+    const fetchSpy = mockFetchReturning([]);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await handler.execute(ctx);
+
+    const url = fetchedUrl(fetchSpy);
+    expect(url.pathname.endsWith('/drafts')).toBe(true);
+    expect(url.pathname).not.toContain('/messages');
+  });
+
+  it('also routes the DRAFT alias to /drafts', async () => {
+    const ctx = makeCtx({ folder: 'DRAFT' }, { storedWatermark: null });
+    const fetchSpy = mockFetchReturning([]);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await handler.execute(ctx);
+
+    expect(fetchedUrl(fetchSpy).pathname.endsWith('/drafts')).toBe(true);
+  });
+
+  it('does NOT apply received_after / watermark when listing drafts', async () => {
+    const ctx = makeCtx({ folder: 'DRAFTS' }, { storedWatermark: '1700000000' });
+    const fetchSpy = mockFetchReturning([]);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await handler.execute(ctx);
+
+    expect(extractReceivedAfter(fetchSpy)).toBeNull();
+  });
+
+  it('returns drafts under a `drafts` key, distinguishable from the messages path', async () => {
+    const raw = [
+      { id: 'd1', thread_id: 't1', subject: 'Hi', to: [{ email: 'a@b.com' }], cc: [], snippet: 's', date: 5 },
+    ];
+    const ctx = makeCtx({ folder: 'DRAFTS' }, { storedWatermark: null });
+    const fetchSpy = mockFetchReturning(raw);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = result.data as { drafts: Array<Record<string, unknown>>; count: number; folder: string };
+    expect(data.folder).toBe('DRAFTS');
+    expect(data.count).toBe(1);
+    expect(data.drafts).toHaveLength(1);
+    expect(data.drafts[0]).toMatchObject({ id: 'd1', subject: 'Hi' });
+  });
+
+  it('does not advance the inbox watermark when listing drafts', async () => {
+    // Drafts have no meaningful received date; the inbox triage watermark must
+    // stay untouched even if a draft carries a large `date` value.
+    const ctx = makeCtx({ folder: 'DRAFTS' }, { storedWatermark: '1700000000' });
+    const fetchSpy = mockFetchReturning([
+      { id: 'd1', thread_id: 't1', subject: 'x', to: [], cc: [], snippet: '', date: 9_999_999_999 },
+    ]);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await handler.execute(ctx);
+
+    expect(ctx.entityMemory!.storeFact as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+});

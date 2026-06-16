@@ -1,24 +1,27 @@
 {
   "name": "ceo-inbox-read",
-  "description": "Read a specific email message from the CEO's personal inbox, returning both plain text and HTML body. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
-  "version": "0.2.0",
+  "description": "Read a specific email message OR draft from the CEO's personal inbox, returning both plain text and HTML body. Pass message_id for a received message, or draft_id (from ceo-inbox-list/ceo-inbox-search scoped to DRAFTS) to read a draft's full content before editing it. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
+  "version": "0.3.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
-    "message_id": "string (Nylas message ID to fetch)"
+    "message_id": "string? (Nylas message ID to fetch — provide exactly one of message_id or draft_id)",
+    "draft_id": "string? (Nylas draft ID to fetch the full draft body before editing — provide exactly one of message_id or draft_id)"
   },
   "outputs": {
     "id": "string",
     "threadId": "string",
-    "from": "array of { name?, email }",
+    "from": "array of { name?, email } (messages only)",
     "to": "array of { name?, email }",
     "cc": "array of { name?, email }",
+    "bcc": "array of { name?, email } (drafts only)",
     "subject": "string",
     "body_plain": "string (plain text body)",
     "body_html": "string (HTML body)",
     "date": "number (unix timestamp)",
-    "labels": "array of strings",
-    "attachments": "array of { id, filename, contentType, size } (non-inline file attachments; pass id + message id to ceo-inbox-download-attachment)"
+    "labels": "array of strings (messages only)",
+    "attachments": "array of { id, filename, contentType, size } (messages only; non-inline file attachments; pass id + message id to ceo-inbox-download-attachment)",
+    "is_draft": "boolean (true when a draft was read; absent for messages)"
   },
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],

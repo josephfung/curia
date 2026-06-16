@@ -12,9 +12,49 @@ export class CeoInboxReadHandler implements SkillHandler {
 
     const messageId =
       typeof input.message_id === 'string' ? input.message_id.trim() : '';
+    const draftId =
+      typeof input.draft_id === 'string' ? input.draft_id.trim() : '';
 
-    if (!messageId) {
-      return { success: false, error: 'message_id is required' };
+    if (!messageId && !draftId) {
+      return { success: false, error: 'message_id or draft_id is required' };
+    }
+    // Reject ambiguous calls rather than silently picking one — a draft and a
+    // message are different resources, and guessing could read the wrong one.
+    if (messageId && draftId) {
+      return { success: false, error: 'Provide exactly one of message_id or draft_id, not both' };
+    }
+
+    // ── Draft path (issue #1000) ─────────────────────────────────────────────
+    //
+    // Drafts are a separate Nylas resource. Reading one returns its full body so
+    // the agent can review the current content before calling ceo-inbox-draft-edit
+    // (the find → read → edit workflow). List/search only return draft summaries.
+    if (draftId) {
+      ctx.log.info({ draftId }, 'ceo-inbox-read: fetching draft');
+      let draft: Awaited<ReturnType<typeof client.getDraft>>;
+      try {
+        draft = await client.getDraft(draftId);
+      } catch (err) {
+        ctx.log.error({ err, draftId }, 'ceo-inbox-read: failed to fetch draft');
+        return { success: false, error: 'Failed to read CEO inbox draft' };
+      }
+      return {
+        success: true,
+        data: {
+          id: draft.id,
+          threadId: draft.threadId,
+          to: draft.to,
+          cc: draft.cc,
+          bcc: draft.bcc,
+          subject: draft.subject,
+          body_plain: htmlToPlainText(draft.body),
+          body_html: draft.body,
+          date: draft.date,
+          // Flag the resource type so the agent knows this is an editable draft
+          // (pass id to ceo-inbox-draft-edit), not a received message.
+          is_draft: true,
+        },
+      };
     }
 
     ctx.log.info({ messageId }, 'ceo-inbox-read: fetching message');

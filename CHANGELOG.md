@@ -24,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`secret.captured` bus event (public API)** — emitted by the capture endpoint on a successful redeem, carrying secret name/label + routing metadata and never the value. (#972)
 - **Browser incognito sessions** — `incognito:true` on `web-browser` runs in a throwaway isolated context, keeping Curia's own logins out of the principal's profile. (#987)
 - **Persistent browser profile** — the browser now uses a persistent context on a mounted volume, so logins/cookies survive restarts. (#987)
+- **`ceo-inbox-draft-edit`** — new skill to update an existing draft's recipients, subject, or body, so a wrong-recipient or stale draft can be fixed without recreating it. (#1000)
 
 ### Changed
 
@@ -50,6 +51,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Drafts reachable in the CEO inbox (find → read → edit)** — `ceo-inbox-list`/`ceo-inbox-search` now query Nylas's `/drafts` resource for the DRAFTS folder instead of `/messages` (which never contains drafts), so existing drafts are listed and searchable by subject/recipient; `ceo-inbox-read` accepts a `draft_id` to return a draft's full body before editing. Results key on `drafts` to distinguish a genuine "none" from the old silent-zero, and the inbox watermark is never applied to drafts. (#1000)
 - **Execution-layer output sanitization** — object-returning skills whose string values contain HTML (e.g. email bodies) no longer produce corrupted JSON. `sanitizeObjectOutput` walks the result structure and sanitizes string leaves directly; JSON structural characters are never exposed to the HTML stripper. Fixes the `ceo-inbox-search` retry loop incident. (#986)
 - **Stale Xvfb lock recovery** — `BrowserService` now clears an orphaned `/tmp/.X99-lock` + socket left by an unclean exit before spawning Xvfb, guarded on a live X server so an active display is never clobbered; the web-browser skill survives a crash-induced restart. (#982)
 - **Secret-capture link redaction** — the one-time capture URL's token was scrubbed to `[REDACTED]` by the output sanitizer; the two capture skills now declare `skip_secret_redaction` so the link reaches the user intact. (#971)

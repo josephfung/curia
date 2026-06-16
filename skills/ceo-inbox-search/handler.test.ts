@@ -119,3 +119,118 @@ describe('CeoInboxSearchHandler — query parameter', () => {
     }
   });
 });
+
+describe('CeoInboxSearchHandler — drafts search (#1000)', () => {
+  let handler: CeoInboxSearchHandler;
+
+  const DRAFTS = [
+    { id: 'd1', thread_id: 't1', subject: 'Quarterly report', to: [{ email: 'alice@example.com', name: 'Alice' }], cc: [], snippet: '', date: 1 },
+    { id: 'd2', thread_id: 't2', subject: 'Lunch plans', to: [{ email: 'bob@example.com', name: 'Bob' }], cc: [], snippet: '', date: 2 },
+  ];
+
+  beforeEach(() => {
+    handler = new CeoInboxSearchHandler();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('routes to the /drafts resource when folder is DRAFTS', async () => {
+    const ctx = makeCtx({ query: 'report', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await handler.execute(ctx);
+
+    const url = new URL(fetchSpy.mock.calls[0][0] as string);
+    expect(url.pathname.endsWith('/drafts')).toBe(true);
+    expect(url.pathname).not.toContain('/messages');
+  });
+
+  it('does not send search_query_native to the drafts endpoint (filters client-side)', async () => {
+    const ctx = makeCtx({ query: 'report', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await handler.execute(ctx);
+
+    expect(extractQueryParam(fetchSpy, 'search_query_native')).toBeNull();
+  });
+
+  it('filters drafts by subject substring (case-insensitive)', async () => {
+    const ctx = makeCtx({ query: 'quarterly', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    const data = (result as { data: { drafts: Array<{ id: string }>; count: number } }).data;
+    expect(data.count).toBe(1);
+    expect(data.drafts[0]!.id).toBe('d1');
+  });
+
+  it('filters drafts by recipient email address', async () => {
+    const ctx = makeCtx({ query: 'bob@example.com', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+
+    const data = (result as { data: { drafts: Array<{ id: string }>; count: number } }).data;
+    expect(data.count).toBe(1);
+    expect(data.drafts[0]!.id).toBe('d2');
+  });
+
+  it('filters drafts by recipient name', async () => {
+    const ctx = makeCtx({ query: 'Alice', folder: 'DRAFTS' });
+    const fetchSpy = mockFetchReturning(DRAFTS);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+
+    const data = (result as { data: { drafts: Array<{ id: string }>; count: number } }).data;
+    expect(data.count).toBe(1);
+    expect(data.drafts[0]!.id).toBe('d1');
+  });
+
+  it('paginates across draft pages and finds a match beyond the first page', async () => {
+    // Page 1 (100 drafts, none matching) + a cursor, then page 2 with the match.
+    const page1 = Array.from({ length: 100 }, (_, i) => ({
+      id: `p1-${i}`, thread_id: `t${i}`, subject: 'noise', to: [], cc: [], snippet: '', date: i,
+    }));
+    const page2 = [{ id: 'match', thread_id: 'tm', subject: 'the quarterly report', to: [], cc: [], snippet: '', date: 999 }];
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: page1, next_cursor: 'CUR2' }) } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: page2 }) } as unknown as Response);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const ctx = makeCtx({ query: 'quarterly', folder: 'DRAFTS' });
+    const result = await handler.execute(ctx);
+
+    const data = (result as { data: { drafts: Array<{ id: string }>; count: number } }).data;
+    expect(data.count).toBe(1);
+    expect(data.drafts[0]!.id).toBe('match');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('warns (does not silently truncate) when more drafts exist than the scan cap', async () => {
+    // Every page is full and always returns a cursor, so the DRAFT_SCAN_LIMIT
+    // ceiling is hit with more pages still available → truncated → warn.
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      id: `d${i}`, thread_id: `t${i}`, subject: 'report', to: [], cc: [], snippet: '', date: i,
+    }));
+    const fetchSpy = vi
+      .fn()
+      .mockImplementation(async () => ({ ok: true, json: async () => ({ data: fullPage, next_cursor: 'MORE' }) } as unknown as Response));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const ctx = makeCtx({ query: 'report', folder: 'DRAFTS' });
+    await handler.execute(ctx);
+
+    const warnCalls = (ctx.log.warn as ReturnType<typeof vi.fn>).mock.calls;
+    expect(warnCalls.some((c: unknown[]) => typeof c[1] === 'string' && c[1].includes('cap'))).toBe(true);
+  });
+});

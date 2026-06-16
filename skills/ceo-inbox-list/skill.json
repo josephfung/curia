@@ -1,18 +1,19 @@
 {
   "name": "ceo-inbox-list",
   "description": "List recent messages from the CEO's personal email inbox. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "limit": "number? (max messages to return, 1–50, default 20)",
-    "folder": "string? (Gmail folder/label to list, default 'INBOX'; use 'SENT' for the Sent folder)",
-    "unread_only": "boolean? (if true, only return unread messages, default true)",
-    "received_after_hours": "number? (first-run fallback only — only return messages received in the last N hours; ignored when a persisted watermark exists in ConfigStore)"
+    "folder": "string? (Gmail folder/label to list, default 'INBOX'; use 'SENT' for the Sent folder, or 'DRAFTS' to list unsent drafts)",
+    "unread_only": "boolean? (if true, only return unread messages, default true; ignored for DRAFTS)",
+    "received_after_hours": "number? (first-run fallback only — only return messages received in the last N hours; ignored when a persisted watermark exists in ConfigStore, and ignored entirely for DRAFTS)"
   },
   "outputs": {
-    "messages": "array of { id, threadId, from, to, cc, subject, date, snippet, unread, folders, attachments: [{ id, filename, contentType, size }] }",
-    "count": "number of messages returned"
+    "messages": "array of { id, threadId, from, to, cc, subject, date, snippet, unread, folders, attachments: [{ id, filename, contentType, size }] } (for non-draft folders)",
+    "drafts": "array of { id, threadId, subject, to, cc, snippet, date } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
+    "count": "number of items returned"
   },
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id", "nylas_self_email"],

@@ -44,6 +44,34 @@ export interface NylasDraft {
   cc: NylasParticipant[];
 }
 
+// Drafts are a *separate* Nylas v3 resource (`/drafts`), not part of the
+// `/messages` collection. Listing the DRAFTS folder via `/messages?in=DRAFT`
+// always returns an empty array regardless of how many drafts exist (issue #1000).
+export interface NylasDraftSummary {
+  id: string;
+  threadId: string;
+  subject: string;
+  to: NylasParticipant[];
+  cc: NylasParticipant[];
+  snippet: string;
+  date: number;
+}
+
+export interface NylasDraftFull extends NylasDraftSummary {
+  bcc: NylasParticipant[];
+  body: string;
+}
+
+// Partial update payload for an existing draft. Only the provided fields are
+// sent to Nylas — omitted fields are left untouched on the server, so e.g.
+// updating `to` alone must not blank out the draft's existing `cc`/`body`.
+export interface UpdateDraftOptions {
+  to?: NylasParticipant[];
+  cc?: NylasParticipant[];
+  subject?: string;
+  body?: string;
+}
+
 export interface NylasFolder {
   id: string;
   name: string;
@@ -228,6 +256,78 @@ export class CeoNylasClient {
     };
   }
 
+  // List unsent drafts. Reads the dedicated `/drafts` resource — the `/messages`
+  // collection never contains drafts, so the old `listMessages({folder:'DRAFTS'})`
+  // path returned a silent empty array even when drafts existed (issue #1000).
+  // Note: drafts have no "received" date, so there is no watermark/received_after
+  // filter here — callers must not apply inbox watermarks to drafts.
+  async listDrafts(options: { limit?: number } = {}): Promise<NylasDraftSummary[]> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    const url = `${this.baseUrl}/drafts?${params}`;
+    const data = await this.request<NylasApiDraftFull[]>('GET', url, 'listDrafts');
+    return data.map(normalizeDraftSummary);
+  }
+
+  // Exhaustively list drafts by following Nylas's `next_cursor` pagination, up to
+  // `maxScan` total drafts (a safety ceiling so a runaway mailbox can't loop
+  // unbounded). Used by ceo-inbox-search, which filters client-side and would
+  // otherwise miss matches beyond the first page — the exact "agent concludes the
+  // draft doesn't exist" failure this work is fixing (issue #1000). `truncated`
+  // is true when the ceiling was hit with more pages still available.
+  async listAllDrafts(
+    options: { maxScan?: number; pageSize?: number } = {},
+  ): Promise<{ drafts: NylasDraftSummary[]; truncated: boolean }> {
+    const maxScan = options.maxScan ?? 500;
+    const pageSize = options.pageSize ?? 100;
+
+    const drafts: NylasDraftSummary[] = [];
+    let pageToken: string | undefined;
+    let truncated = false;
+
+    for (;;) {
+      const params = new URLSearchParams();
+      params.set('limit', String(pageSize));
+      if (pageToken) params.set('page_token', pageToken);
+      const url = `${this.baseUrl}/drafts?${params}`;
+
+      const { data, nextCursor } = await this.requestWithCursor<NylasApiDraftFull[]>('GET', url, 'listAllDrafts');
+      drafts.push(...data.map(normalizeDraftSummary));
+
+      // An empty page with a cursor would otherwise spin forever — bail out.
+      if (data.length === 0) break;
+
+      if (drafts.length >= maxScan) {
+        truncated = Boolean(nextCursor);
+        break;
+      }
+      if (!nextCursor) break;
+      pageToken = nextCursor;
+    }
+
+    return { drafts: drafts.slice(0, maxScan), truncated };
+  }
+
+  async getDraft(draftId: string): Promise<NylasDraftFull> {
+    const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
+    const data = await this.request<NylasApiDraftFull>('GET', url, 'getDraft');
+    return normalizeDraftFull(data);
+  }
+
+  // Update an existing draft (PUT /drafts/{id}). Only the provided fields are
+  // sent; omitted fields are preserved server-side. This is the capability that
+  // lets the CEO fix a wrong-recipient or wrong-body draft without recreating it.
+  async updateDraft(draftId: string, updates: UpdateDraftOptions): Promise<NylasDraftFull> {
+    const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
+    const payload: Record<string, unknown> = {};
+    if (updates.to !== undefined) payload.to = updates.to;
+    if (updates.cc !== undefined) payload.cc = updates.cc;
+    if (updates.subject !== undefined) payload.subject = updates.subject;
+    if (updates.body !== undefined) payload.body = updates.body;
+    const data = await this.request<NylasApiDraftFull>('PUT', url, 'updateDraft', payload);
+    return normalizeDraftFull(data);
+  }
+
   // ── Message updates ──────────────────────────────────────────────────────
 
   async markAsRead(messageId: string): Promise<void> {
@@ -379,6 +479,18 @@ export class CeoNylasClient {
     operation: string,
     body?: unknown,
   ): Promise<T> {
+    const { data } = await this.requestWithCursor<T>(method, url, operation, body);
+    return data;
+  }
+
+  // Same as request<T>, but also surfaces Nylas's `next_cursor` for paginated
+  // list endpoints. request<T> delegates here and drops the cursor.
+  private async requestWithCursor<T>(
+    method: string,
+    url: string,
+    operation: string,
+    body?: unknown,
+  ): Promise<{ data: T; nextCursor?: string }> {
     this.log.debug({ operation, method }, `nylas: ${operation}`);
 
     const init: RequestInit = { method, headers: this.headers };
@@ -400,8 +512,8 @@ export class CeoNylasClient {
       throw new NylasApiError(res.status, operation, `Nylas ${operation}: HTTP ${res.status} — ${text}`);
     }
 
-    const json = (await res.json()) as { data: T };
-    return json.data;
+    const json = (await res.json()) as { data: T; next_cursor?: string };
+    return { data: json.data, nextCursor: json.next_cursor };
   }
 }
 
@@ -435,6 +547,19 @@ interface NylasApiDraft {
   subject?: string;
   to?: NylasApiParticipant[];
   cc?: NylasApiParticipant[];
+}
+
+// Full raw draft shape returned by GET/PUT /drafts and GET /drafts/{id}.
+interface NylasApiDraftFull {
+  id: string;
+  thread_id?: string;
+  subject?: string;
+  to?: NylasApiParticipant[];
+  cc?: NylasApiParticipant[];
+  bcc?: NylasApiParticipant[];
+  body?: string;
+  snippet?: string;
+  date?: number;
 }
 
 interface NylasApiFolder {
@@ -494,6 +619,26 @@ function normalizeMessageSummary(msg: NylasApiMessage): NylasMessageSummary {
     unread: msg.unread ?? false,
     folders: msg.folders ?? [],
     attachments: normalizeAttachments(msg.attachments),
+  };
+}
+
+function normalizeDraftSummary(draft: NylasApiDraftFull): NylasDraftSummary {
+  return {
+    id: draft.id,
+    threadId: draft.thread_id ?? '',
+    subject: draft.subject ?? '',
+    to: (draft.to ?? []).map(normParticipant),
+    cc: (draft.cc ?? []).map(normParticipant),
+    snippet: draft.snippet ?? '',
+    date: draft.date ?? 0,
+  };
+}
+
+function normalizeDraftFull(draft: NylasApiDraftFull): NylasDraftFull {
+  return {
+    ...normalizeDraftSummary(draft),
+    bcc: (draft.bcc ?? []).map(normParticipant),
+    body: draft.body ?? '',
   };
 }
 
