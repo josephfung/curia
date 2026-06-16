@@ -106,6 +106,7 @@ Starts Postgres (with pgvector) + the framework. Config from `default.yaml` + `l
 Docker container deployed via the existing `ceo-deploy` repo:
 - Config from `default.yaml` + `production.yaml` + env vars from `.env`
 - Single Docker image containing the framework + built-in skills
+- **Runtime: Node 24 (Active LTS).** Both the Dockerfile build and runtime stages use `node:24-slim` (digest-pinned). The global `npm install` step was removed — bundled npm is unused (corepack/pnpm handle the build, tsx runs the app), so there is nothing to install globally.
 - **Non-root execution** — the production image runs as a dedicated `curia` user, not root. The Dockerfile creates the user in the build stage and pre-creates any directories the process needs at runtime (e.g., `/tmp/.google_workspace_mcp`).
 - MCP servers as separate containers if needed
 - Caddy reverse proxy for HTTPS (already configured in ceo-deploy)
@@ -207,6 +208,10 @@ On SIGTERM/SIGINT:
 5. Exit
 
 This ensures Docker stop and process managers don't lose in-flight work.
+
+### Web Console Chat API
+
+As of v0.35.0, `POST /api/kg/chat/messages` acknowledges with `202 { conversationId }` immediately after publishing the inbound message, rather than blocking on a synchronous wait for the agent's reply. The reply and intermediate progress events stream back over the existing `GET /api/kg/chat/stream` SSE endpoint. This removes the old 120s synchronous wait, so long agent tasks (browser automation, multi-agent delegation chains, research) no longer hit a 504 timeout. Rate-limited chat requests return `429`.
 
 ---
 
@@ -342,7 +347,7 @@ curia/
 |---|---|
 | Layered YAML config — `default.yaml` / `local.yaml` / `production.yaml` with env var interpolation | Done |
 | `docker-compose.yml` — postgres (pgvector) + curia services with healthchecks | Done |
-| `Dockerfile` — multi-stage build, Node 22, tsx at runtime | Done |
+| `Dockerfile` — multi-stage build, Node 24 (`node:24-slim`, digest-pinned), tsx at runtime; global npm install removed | Done |
 | `GET /health` endpoint — database, agents, skills, uptime | Done |
 | Structured logging via pino — correct log levels, no `console.log` | Done |
 | No-`console.log` lint rule (ESLint `no-console: error`) | Done |

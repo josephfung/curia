@@ -39,7 +39,8 @@ written to the audit log:
 
 | Event | Emitted by | Purpose |
 |---|---|---|
-| `secret.accessed` | execution | Records every `ctx.secret()` call — which secret, when, and the resolution `source` (`vault` \| `env`). The value is never recorded. |
+| `secret.accessed` | execution | Records every `ctx.secret()` call — which secret, when, and the resolution `source` (`vault` \| `env`). The payload also carries an optional `byReference` flag: `true` when the secret was resolved dynamically by reference (`ctx.resolveSecretRef`, e.g. web-browser form-fill), absent/false for declared-secret access. The value is never recorded. |
+| `secret.captured` | system | Emitted when a one-time vault capture link is redeemed (a user submits a value through the capture form). Carries the secret name/label plus routing metadata used to resume the originating agent. The value is never recorded. |
 | `outbound.blocked` | system | An outbound message was blocked by the content filter. Payload: `blockId`, `conversationId`, `channelId`, `content`, `recipientId`, `reason`, `findings[]`. See [spec 15](15-outbound-safety.md). |
 | `outbound.suppressed_duplicate` | system | A duplicate agent-response→outbound was suppressed because a human-facing reply already shipped for the routing task (reason `'human_reply_already_sent'`). See [spec 05](05-error-recovery.md). |
 | `channel.poll` | channel | Emitted once per email poll cycle for operator visibility. See [spec 04](04-channels.md). |
@@ -175,6 +176,8 @@ For launch, this is data collection (audit log captures everything). Active bloc
 | **Email** | Nylas provider-level validation (SPF/DKIM/DMARC handled by email provider) | `low` | **High** (headers spoofable) |
 
 `trustLevel` is a structural property of the channel's authentication mechanism. It reflects what the protocol guarantees about sender identity at the transport layer — not how trusted any individual contact is. It is fixed per channel and does not vary per message.
+
+A baseline `X-Content-Type-Options: nosniff` header is set on **all** HTTP API responses (a Fastify `onSend` hook, so it covers 401s, CORS short-circuits, and static console assets as well as normal route handlers).
 
 ### Contact Trust Registry
 

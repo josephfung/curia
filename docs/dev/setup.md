@@ -16,7 +16,7 @@ Complete each tier before moving to the next.
 
 Install these before anything else:
 
-- **Node.js 22+** — check with `node --version`
+- **Node.js 24+** — check with `node --version`
 - **Docker and Docker Compose** — Postgres runs in Docker; install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or the standalone CLI
 - **pnpm** — `npm install -g pnpm`
 - **openssl** — used by `pnpm run setup` to generate secrets; usually
@@ -39,7 +39,7 @@ pnpm run setup
 `pnpm run setup` runs `scripts/setup.sh`, which handles every Tier 1 step
 for you:
 
-1. Checks prerequisites (`docker`, `docker compose`, Node 22+, `pnpm`, `openssl`).
+1. Checks prerequisites (`docker`, `docker compose`, Node 24+, `pnpm`, `openssl`).
 2. Generates `DB_PASSWORD`, `API_TOKEN`, and `WEB_APP_BOOTSTRAP_SECRET`
    with `openssl rand -hex 32`.
 3. Prompts for your **Anthropic API key** (validated against `sk-ant-...`,
