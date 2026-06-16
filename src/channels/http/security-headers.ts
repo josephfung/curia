@@ -4,9 +4,13 @@ import type { FastifyInstance } from 'fastify';
 /**
  * Set baseline security headers on every HTTP response.
  *
- * Register this BEFORE the auth hook so the header is applied even on responses that a
- * later onRequest hook short-circuits (Fastify stops running subsequent hooks once one
- * sends a reply, so a header set by an earlier hook is the only one that survives a 401).
+ * Uses an `onSend` hook, not `onRequest`. `onSend` runs for *every* reply that is sent —
+ * including ones short-circuited by an earlier plugin's `onRequest` hook, which a later
+ * `onRequest` hook would miss. That matters because `@fastify/cors` (preflight OPTIONS
+ * responses) and `@fastify/rate-limit` (429 rejections) terminate the request in their
+ * own `onRequest` hooks before any hook we register afterwards runs. `onSend` fires
+ * before headers are flushed, so `reply.header()` still applies; the payload is returned
+ * unchanged.
  *
  * Currently sets `X-Content-Type-Options: nosniff`, which tells browsers not to
  * MIME-sniff a response away from its declared Content-Type. It's cheap and correct even
@@ -14,7 +18,8 @@ import type { FastifyInstance } from 'fastify';
  * DAST baseline finding for rule 10021 (X-Content-Type-Options Header Missing). See #568.
  */
 export function registerSecurityHeaders(app: FastifyInstance): void {
-  app.addHook('onRequest', async (_request, reply) => {
+  app.addHook('onSend', async (_request, reply, payload) => {
     reply.header('X-Content-Type-Options', 'nosniff');
+    return payload;
   });
 }

@@ -143,8 +143,9 @@ export class HttpAdapter implements Channel {
     });
 
     // Baseline security headers (X-Content-Type-Options: nosniff) on every response.
-    // Registered BEFORE the auth hook so the header lands even on 401-short-circuited
-    // responses — Fastify stops running later onRequest hooks once one sends a reply.
+    // Implemented as an onSend hook, so it covers replies short-circuited by the cors /
+    // rate-limit plugins above (preflight OPTIONS, 429) and the auth 401 below alike —
+    // hook registration order does not affect onSend coverage.
     registerSecurityHeaders(this.app);
 
     // Auth hook — runs before every request
