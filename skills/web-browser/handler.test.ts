@@ -402,6 +402,61 @@ describe('web-browser iframe awareness', () => {
     expect(frameLocator.click).toHaveBeenCalled();
   });
 
+  it('resolveLocator skips a child frame that throws (detached) and continues', async () => {
+    const miss = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    // This child frame detaches mid-traversal: every locator query throws.
+    const detached = new Error('Frame was detached');
+    const detachedFrame = {
+      url: vi.fn().mockReturnValue('https://www.opentable.com/stale-widget'),
+      name: vi.fn().mockReturnValue('stale'),
+      evaluate: vi.fn().mockResolvedValue(''),
+      getByRole: vi.fn().mockImplementation(() => { throw detached; }),
+      getByLabel: vi.fn().mockImplementation(() => { throw detached; }),
+      getByText: vi.fn().mockImplementation(() => { throw detached; }),
+      locator: vi.fn().mockImplementation(() => { throw detached; }),
+    };
+    const mainFrameD = {
+      url: vi.fn().mockReturnValue('https://www.opentable.com/r/cambridge-mill'),
+      name: vi.fn().mockReturnValue(''),
+      evaluate: vi.fn().mockResolvedValue('page'),
+      getByRole: vi.fn().mockReturnValue(miss),
+      getByLabel: vi.fn().mockReturnValue(miss),
+      getByText: vi.fn().mockReturnValue(miss),
+      locator: vi.fn().mockReturnValue(miss),
+    };
+    // Main-frame CSS fallback has a clickable match, so the action still completes.
+    const mainClick = vi.fn().mockResolvedValue(undefined);
+    const pageD = {
+      url: vi.fn().mockReturnValue('https://www.opentable.com/r/cambridge-mill'),
+      title: vi.fn().mockResolvedValue('Cambridge Mill'),
+      screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      getByRole: vi.fn().mockReturnValue(miss),
+      getByLabel: vi.fn().mockReturnValue(miss),
+      getByText: vi.fn().mockReturnValue(miss),
+      locator: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(1), first: vi.fn().mockReturnThis(), click: mainClick }),
+      frames: vi.fn().mockReturnValue([mainFrameD, detachedFrame]),
+      mainFrame: vi.fn().mockReturnValue(mainFrameD),
+    };
+    const sessionD = new BrowserSession({} as unknown as BrowserContext, pageD as unknown as Page);
+    const browserServiceD = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-detach', session: sessionD }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctxD = {
+      input: { action: 'click', selector: 'Reserve' },
+      log: logger,
+      browserService: browserServiceD,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctxD);
+
+    // The detached frame's throw must NOT fail the action — it's skipped and the main
+    // frame's CSS fallback resolves instead.
+    expect(result.success).toBe(true);
+    expect(mainClick).toHaveBeenCalled();
+  });
+
   it('get_content includes labelled iframe content', async () => {
     const mainFrame = {
       url: vi.fn().mockReturnValue('https://www.opentable.com/r/cambridge-mill'),
