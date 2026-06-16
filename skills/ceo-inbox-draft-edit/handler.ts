@@ -58,13 +58,16 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
       return { success: false, error: 'draft_id is required' };
     }
 
-    // Detect which fields the caller wants to change. Only `to`/`cc`/`subject`/
-    // `body` keys that are actually present become part of the update — we never
-    // send an omitted field, so a partial edit can't blank out the rest of the draft.
+    // Detect which fields the caller wants to change by KEY PRESENCE, not by type.
+    // Only `to`/`cc`/`subject`/`body` keys that are actually present become part of
+    // the update — we never send an omitted field, so a partial edit can't blank out
+    // the rest of the draft. Presence (not `typeof === 'string'`) is deliberate: a
+    // malformed value like `subject: 123` must be rejected, not silently skipped, or
+    // the caller gets a success response that misrepresents what was applied.
     const hasTo = input.to !== undefined;
     const hasCc = input.cc !== undefined;
-    const hasSubject = typeof input.subject === 'string';
-    const hasBody = typeof input.body === 'string';
+    const hasSubject = input.subject !== undefined;
+    const hasBody = input.body !== undefined;
 
     if (!hasTo && !hasCc && !hasSubject && !hasBody) {
       return {
@@ -109,11 +112,19 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
     }
 
     if (hasSubject) {
-      updates.subject = (input.subject as string).trim();
+      // Reject non-string or whitespace-only subjects. A blank subject would
+      // silently clear the draft's existing subject line on an accidental input.
+      if (typeof input.subject !== 'string' || !input.subject.trim()) {
+        return { success: false, error: 'subject must be a non-empty string' };
+      }
+      updates.subject = input.subject.trim();
     }
 
     if (hasBody) {
-      const body = (input.body as string).trim();
+      if (typeof input.body !== 'string' || !input.body.trim()) {
+        return { success: false, error: 'body must be a non-empty string' };
+      }
+      const body = input.body.trim();
       if (body.length > MAX_BODY_LENGTH) {
         return { success: false, error: `body must be ${MAX_BODY_LENGTH} characters or fewer` };
       }

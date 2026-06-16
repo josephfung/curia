@@ -148,6 +148,34 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it('rejects a non-string subject even when another field is valid (no silent skip)', async () => {
+    const ctx = buildCtx({ draft_id: 'draft-1', to: ['ok@example.com'], subject: 123 });
+    const result = await handler.execute(ctx);
+    expect(result).toMatchObject({ success: false, error: expect.any(String) });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-string body even when another field is valid', async () => {
+    const ctx = buildCtx({ draft_id: 'draft-1', to: ['ok@example.com'], body: 123 });
+    const result = await handler.execute(ctx);
+    expect(result).toMatchObject({ success: false, error: expect.any(String) });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a whitespace-only subject instead of silently clearing it', async () => {
+    const ctx = buildCtx({ draft_id: 'draft-1', subject: '   ' });
+    const result = await handler.execute(ctx);
+    expect(result).toMatchObject({ success: false, error: expect.any(String) });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a whitespace-only body', async () => {
+    const ctx = buildCtx({ draft_id: 'draft-1', body: '   ' });
+    const result = await handler.execute(ctx);
+    expect(result).toMatchObject({ success: false, error: expect.any(String) });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('clears cc when an explicit empty array is provided', async () => {
     mockFetch.mockResolvedValue(new Response(JSON.stringify(draftResponse({ cc: [] })), { status: 200 }));
 

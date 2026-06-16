@@ -169,6 +169,64 @@ describe('CeoNylasClient — drafts (issue #1000)', () => {
     });
   });
 
+  describe('listAllDrafts (pagination)', () => {
+    function pageResponse(data: unknown[], nextCursor?: string) {
+      const body: Record<string, unknown> = { data };
+      if (nextCursor) body.next_cursor = nextCursor;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    it('follows next_cursor across pages until it is absent', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(pageResponse([{ id: 'd1', subject: 'a', to: [], cc: [] }], 'CUR2'))
+        .mockResolvedValueOnce(pageResponse([{ id: 'd2', subject: 'b', to: [], cc: [] }]));
+      const client = new CeoNylasClient('key', 'grant', logger);
+
+      const { drafts, truncated } = await client.listAllDrafts({ pageSize: 1, maxScan: 100 });
+
+      expect(drafts.map((d) => d.id)).toEqual(['d1', 'd2']);
+      expect(truncated).toBe(false);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      // Second request carries the cursor from the first page.
+      const url2 = new URL(fetchSpy.mock.calls[1]![0] as string);
+      expect(url2.searchParams.get('page_token')).toBe('CUR2');
+    });
+
+    it('stops at maxScan and reports truncated when more pages remain', async () => {
+      // Every page returns one draft AND a cursor, so pagination would never end
+      // on its own — the maxScan ceiling must stop it. A fresh Response per call
+      // is required because a Response body can only be read once.
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async () => pageResponse([{ id: 'x', subject: 's', to: [], cc: [] }], 'MORE'));
+      const client = new CeoNylasClient('key', 'grant', logger);
+
+      const { drafts, truncated } = await client.listAllDrafts({ pageSize: 1, maxScan: 3 });
+
+      expect(drafts).toHaveLength(3);
+      expect(truncated).toBe(true);
+      // 3 pages of 1 each — never runs away past the ceiling.
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('stops if a page returns no drafts (defends against an empty-page loop)', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValue(pageResponse([], 'MORE'));
+      const client = new CeoNylasClient('key', 'grant', logger);
+
+      const { drafts, truncated } = await client.listAllDrafts({ pageSize: 50, maxScan: 500 });
+
+      expect(drafts).toEqual([]);
+      expect(truncated).toBe(false);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('getDraft', () => {
     it('GETs /drafts/{id} and returns the full draft with body', async () => {
       const fetchSpy = mockFetchSuccess({

@@ -195,16 +195,39 @@ describe('CeoInboxSearchHandler — drafts search (#1000)', () => {
     expect(data.drafts[0]!.id).toBe('d1');
   });
 
-  it('warns (does not silently truncate) when the draft scan cap is hit', async () => {
-    // 100 drafts == DRAFT_SCAN_LIMIT — there may be more beyond this page, so the
-    // skill must log a warning rather than quietly capping the search surface.
-    const manyDrafts = Array.from({ length: 100 }, (_, i) => ({
-      id: `d${i}`, thread_id: `t${i}`, subject: 'report', to: [], cc: [], snippet: '', date: i,
+  it('paginates across draft pages and finds a match beyond the first page', async () => {
+    // Page 1 (100 drafts, none matching) + a cursor, then page 2 with the match.
+    const page1 = Array.from({ length: 100 }, (_, i) => ({
+      id: `p1-${i}`, thread_id: `t${i}`, subject: 'noise', to: [], cc: [], snippet: '', date: i,
     }));
-    const ctx = makeCtx({ query: 'report', folder: 'DRAFTS' });
-    const fetchSpy = mockFetchReturning(manyDrafts);
+    const page2 = [{ id: 'match', thread_id: 'tm', subject: 'the quarterly report', to: [], cc: [], snippet: '', date: 999 }];
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: page1, next_cursor: 'CUR2' }) } as unknown as Response)
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: page2 }) } as unknown as Response);
     vi.stubGlobal('fetch', fetchSpy);
 
+    const ctx = makeCtx({ query: 'quarterly', folder: 'DRAFTS' });
+    const result = await handler.execute(ctx);
+
+    const data = (result as { data: { drafts: Array<{ id: string }>; count: number } }).data;
+    expect(data.count).toBe(1);
+    expect(data.drafts[0]!.id).toBe('match');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('warns (does not silently truncate) when more drafts exist than the scan cap', async () => {
+    // Every page is full and always returns a cursor, so the DRAFT_SCAN_LIMIT
+    // ceiling is hit with more pages still available → truncated → warn.
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      id: `d${i}`, thread_id: `t${i}`, subject: 'report', to: [], cc: [], snippet: '', date: i,
+    }));
+    const fetchSpy = vi
+      .fn()
+      .mockImplementation(async () => ({ ok: true, json: async () => ({ data: fullPage, next_cursor: 'MORE' }) } as unknown as Response));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const ctx = makeCtx({ query: 'report', folder: 'DRAFTS' });
     await handler.execute(ctx);
 
     const warnCalls = (ctx.log.warn as ReturnType<typeof vi.fn>).mock.calls;

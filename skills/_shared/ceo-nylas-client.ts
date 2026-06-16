@@ -269,6 +269,45 @@ export class CeoNylasClient {
     return data.map(normalizeDraftSummary);
   }
 
+  // Exhaustively list drafts by following Nylas's `next_cursor` pagination, up to
+  // `maxScan` total drafts (a safety ceiling so a runaway mailbox can't loop
+  // unbounded). Used by ceo-inbox-search, which filters client-side and would
+  // otherwise miss matches beyond the first page — the exact "agent concludes the
+  // draft doesn't exist" failure this work is fixing (issue #1000). `truncated`
+  // is true when the ceiling was hit with more pages still available.
+  async listAllDrafts(
+    options: { maxScan?: number; pageSize?: number } = {},
+  ): Promise<{ drafts: NylasDraftSummary[]; truncated: boolean }> {
+    const maxScan = options.maxScan ?? 500;
+    const pageSize = options.pageSize ?? 100;
+
+    const drafts: NylasDraftSummary[] = [];
+    let pageToken: string | undefined;
+    let truncated = false;
+
+    for (;;) {
+      const params = new URLSearchParams();
+      params.set('limit', String(pageSize));
+      if (pageToken) params.set('page_token', pageToken);
+      const url = `${this.baseUrl}/drafts?${params}`;
+
+      const { data, nextCursor } = await this.requestWithCursor<NylasApiDraftFull[]>('GET', url, 'listAllDrafts');
+      drafts.push(...data.map(normalizeDraftSummary));
+
+      // An empty page with a cursor would otherwise spin forever — bail out.
+      if (data.length === 0) break;
+
+      if (drafts.length >= maxScan) {
+        truncated = Boolean(nextCursor);
+        break;
+      }
+      if (!nextCursor) break;
+      pageToken = nextCursor;
+    }
+
+    return { drafts: drafts.slice(0, maxScan), truncated };
+  }
+
   async getDraft(draftId: string): Promise<NylasDraftFull> {
     const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
     const data = await this.request<NylasApiDraftFull>('GET', url, 'getDraft');
@@ -440,6 +479,18 @@ export class CeoNylasClient {
     operation: string,
     body?: unknown,
   ): Promise<T> {
+    const { data } = await this.requestWithCursor<T>(method, url, operation, body);
+    return data;
+  }
+
+  // Same as request<T>, but also surfaces Nylas's `next_cursor` for paginated
+  // list endpoints. request<T> delegates here and drops the cursor.
+  private async requestWithCursor<T>(
+    method: string,
+    url: string,
+    operation: string,
+    body?: unknown,
+  ): Promise<{ data: T; nextCursor?: string }> {
     this.log.debug({ operation, method }, `nylas: ${operation}`);
 
     const init: RequestInit = { method, headers: this.headers };
@@ -461,8 +512,8 @@ export class CeoNylasClient {
       throw new NylasApiError(res.status, operation, `Nylas ${operation}: HTTP ${res.status} — ${text}`);
     }
 
-    const json = (await res.json()) as { data: T };
-    return json.data;
+    const json = (await res.json()) as { data: T; next_cursor?: string };
+    return { data: json.data, nextCursor: json.next_cursor };
   }
 }
 

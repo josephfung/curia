@@ -8,8 +8,11 @@ const DEFAULT_LIMIT = 10;
 const DRAFTS_FOLDER_NAMES = new Set(['DRAFT', 'DRAFTS']);
 
 // Drafts have no native server-side search in Nylas v3, so we list-then-filter
-// client-side. Pull a generous page first; mailboxes rarely hold many drafts.
-const DRAFT_SCAN_LIMIT = 100;
+// client-side. listAllDrafts paginates through the mailbox up to this ceiling so
+// matches aren't missed beyond the first page; beyond it we warn rather than
+// silently return an incomplete result.
+const DRAFT_SCAN_LIMIT = 500;
+const DRAFT_PAGE_SIZE = 100;
 
 /**
  * Case-insensitive substring match of `query` against a draft's subject and
@@ -71,14 +74,18 @@ export class CeoInboxSearchHandler implements SkillHandler {
         'ceo-inbox-search: searching drafts via /drafts (client-side filter)',
       );
       try {
-        const allDrafts = await client.listDrafts({ limit: DRAFT_SCAN_LIMIT });
-        // The client-side filter only sees this first page. If we hit the scan
-        // cap, matches could exist beyond it — warn rather than truncate silently
-        // (mailboxes rarely hold 100+ drafts; full pagination is a follow-up).
-        if (allDrafts.length >= DRAFT_SCAN_LIMIT) {
+        // Paginate the full drafts collection (bounded by DRAFT_SCAN_LIMIT) so a
+        // match isn't missed on a mailbox with more than one page of drafts.
+        const { drafts: allDrafts, truncated } = await client.listAllDrafts({
+          maxScan: DRAFT_SCAN_LIMIT,
+          pageSize: DRAFT_PAGE_SIZE,
+        });
+        // Only when there are genuinely more drafts than the ceiling do we warn —
+        // the result is then knowingly incomplete rather than silently so.
+        if (truncated) {
           ctx.log.warn(
             { scanned: allDrafts.length, cap: DRAFT_SCAN_LIMIT },
-            'ceo-inbox-search: draft scan hit the cap — matches beyond the first page are not searched',
+            'ceo-inbox-search: draft scan hit the cap — some drafts beyond the limit were not searched',
           );
         }
         const drafts = allDrafts.filter((d) => draftMatchesQuery(d, query)).slice(0, limit);
