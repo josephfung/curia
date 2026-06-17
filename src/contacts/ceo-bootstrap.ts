@@ -38,23 +38,37 @@ export interface CeoContactBootstrapResult {
  * migration-055 column defaults ('unknown'/'person') — or any older downgraded value —
  * self-heals instead of persisting reduced capability for the run. (#945)
  */
-export async function repairPrincipalMetadata(contactId: string, pool: DbPool): Promise<void> {
-  await pool.query(
-    `UPDATE contacts
-       SET role = 'ceo',
-           trust_level = 'ceo',
-           system_role = 'principal',
-           tier = 'principal',
-           kind = 'principal',
-           updated_at = now()
-     WHERE id = $1
-       AND (role IS DISTINCT FROM 'ceo'
-         OR trust_level IS DISTINCT FROM 'ceo'
-         OR system_role IS DISTINCT FROM 'principal'
-         OR tier IS DISTINCT FROM 'principal'
-         OR kind IS DISTINCT FROM 'principal')`,
-    [contactId],
-  );
+export async function repairPrincipalMetadata(contactId: string, pool: DbPool, logger: Logger): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE contacts
+         SET role = 'ceo',
+             trust_level = 'ceo',
+             system_role = 'principal',
+             tier = 'principal',
+             kind = 'principal',
+             updated_at = now()
+       WHERE id = $1
+         AND (role IS DISTINCT FROM 'ceo'
+           OR trust_level IS DISTINCT FROM 'ceo'
+           OR system_role IS DISTINCT FROM 'principal'
+           OR tier IS DISTINCT FROM 'principal'
+           OR kind IS DISTINCT FROM 'principal')`,
+      [contactId],
+    );
+  } catch (err) {
+    // Log with context, then propagate. A failure to apply the canonical principal
+    // capability metadata means the CEO's trust gates (e.g. PII-redaction bypass)
+    // may not apply, so every caller treats this as fatal rather than silently
+    // continuing with a possibly-downgraded principal. Centralizing the log+rethrow
+    // here keeps all four call sites (bootstrap main + race winners + ensure-principal)
+    // consistent. Uses a plain Error (consistent with this module's existing throws).
+    logger.error(
+      { err, contactId },
+      'repairPrincipalMetadata: failed to repair principal capability metadata (role/trust_level/system_role/tier/kind) — principal trust gates may not apply until resolved',
+    );
+    throw err;
+  }
 }
 
 /**
@@ -104,15 +118,8 @@ export async function bootstrapCeoContact(
     // filter's trust check. Setting role keeps metadata consistent even if the contact was
     // initially auto-created without a role.
     // tier='principal' and kind='principal' are the new equivalents (issue #945).
-    try {
-      await repairPrincipalMetadata(contact_id, pool);
-    } catch (err) {
-      logger.error(
-        { err, contactId: contact_id },
-        'ceo-bootstrap: failed to set trust_level=ceo/tier=principal on CEO contact — PII redaction bypass will not apply until this is resolved',
-      );
-      throw err;
-    }
+    // repairPrincipalMetadata logs with context and rethrows on failure (see its body).
+    await repairPrincipalMetadata(contact_id, pool, logger);
 
     // Backfill KG node if missing. This handles existing deployments where the contact
     // was created without a KG node (pre-#380 fix). Uses the contact's existing display_name
@@ -234,7 +241,7 @@ export async function bootstrapCeoContact(
         }
         // Self-heal: the winner may be an older writer that left tier/kind at
         // migration defaults. Repair before returning (mirrors the main path).
-        await repairPrincipalMetadata(winnerContactId, pool);
+        await repairPrincipalMetadata(winnerContactId, pool, logger);
         logger.info({ contactId: winnerContactId, kgNodeId: winnerKgNodeId, email: ceoPrimaryEmail }, 'ceo-bootstrap: concurrent startup race resolved — existing CEO contact used');
         return { contactId: winnerContactId, kgNodeId: winnerKgNodeId, alreadyExisted: true };
       }

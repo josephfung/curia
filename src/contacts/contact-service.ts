@@ -547,7 +547,14 @@ export class ContactService {
     // derivation; a concurrent block landed after our getContact read above would be overwritten by
     // the updateContact write below, leaving a blocked contact with tier='trusted'. Needs a
     // conditional UPDATE or SELECT FOR UPDATE if concurrent same-contact writes become real.
-    const newTier = deriveTierFromTrustLevelUpdate(trustLevel, contact.status);
+    // Never demote the principal via a trust-level change: trust_level is a per-contact
+    // override, but the principal's capability is structural (system_role). Clearing or
+    // lowering trust_level (null/low/medium) must not drop the principal below 'principal'.
+    // (CodeAnt review — deriveTierFromTrustLevelUpdate would otherwise fall back to the
+    // status-derived 'known' for a confirmed principal.)
+    const newTier = contact.systemRole === 'principal'
+      ? 'principal'
+      : deriveTierFromTrustLevelUpdate(trustLevel, contact.status);
 
     const updated: Contact = {
       ...contact,
