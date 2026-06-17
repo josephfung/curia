@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **hono** — bumped override floor from 4.12.18 to 4.12.25, resolving 5 CVEs including CORS credential reflection (CVE-2026-54290, HIGH 7.1), body-limit bypass (CVE-2026-54288), path traversal in serve-static (CVE-2026-54286), Set-Cookie header merging (CVE-2026-54287), and Lambda@Edge header dropping (CVE-2026-54289).
+
 ## [0.35.0] — 2026-06-16 — "Garak"
 
 > **Elim Garak** *(Star Trek: Deep Space Nine, 1993, Rick Berman & Michael Piller)* — the "plain, simple tailor" who is anything but: an exiled Cardassian spy whose entire craft is discretion, disguise, and never revealing more than the moment demands. This release teaches Curia the same trade — secrets now pass through it to where they are needed without ever being shown to the agent doing the work, and the browser learned to wear a convincing disguise.

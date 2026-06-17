@@ -18,7 +18,7 @@ blockExoticSubdeps: true
 #     that still ships a CommonJS build, which the CJS Nylas SDK requires; uuid@12+
 #     is ESM-only and would break `require('uuid')`.
 overrides:
-  hono: '>=4.12.18'
+  hono: '>=4.12.25'
   fast-uri: '>=3.1.2'
   vite: '>=8.0.5'
   qs: '>=6.15.2'
