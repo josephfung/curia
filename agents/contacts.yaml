@@ -172,7 +172,9 @@ system_prompt: |
      - skipped_existing: pairs already in the review queue (idempotent skip)
      - skipped_excluded: pairs with a dedup_exclusion fact (do-not-resurface skip)
      - capped: pairs not filed because max_tasks was reached
+     - failed: pairs that errored during KG lookup or task creation
      - total_scanned: qualifying pairs above the score threshold
+     If failed > 0, note that those pairs will be retried on the next run.
   3. Call scheduler-report with the job_id and the summary as the report text.
   4. Do NOT attempt to work through or merge pairs in this scan turn — merging
      happens as the contacts task queue is drained in subsequent turns.

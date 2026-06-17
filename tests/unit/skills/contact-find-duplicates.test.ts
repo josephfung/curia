@@ -377,12 +377,14 @@ describe('ContactFindDuplicatesHandler', () => {
         skipped_existing: number;
         skipped_excluded: number;
         capped: number;
+        failed: number;
         total_scanned: number;
       };
       expect(data.filed).toBe(1);
       expect(data.skipped_existing).toBe(1);
       expect(data.skipped_excluded).toBe(0);
       expect(data.capped).toBe(0);
+      expect(data.failed).toBe(0);
       expect(data.total_scanned).toBe(2);
     }
   });
@@ -427,6 +429,36 @@ describe('ContactFindDuplicatesHandler', () => {
       expect(data.filed).toBe(1);
       expect(data.skipped_existing).toBe(0);
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Per-pair error isolation
+  // ---------------------------------------------------------------------------
+
+  it('continues scan and increments failed count when createTask throws for one pair', async () => {
+    const pairs = [
+      makePair(UUID_A, 'Alice', null, UUID_B, 'Bob', null, 0.96),   // createTask fails
+      makePair(UUID_A, 'Alice', null, UUID_C, 'Carol', null, 0.95), // succeeds
+    ];
+    const contactService = { findDuplicates: async () => pairs };
+    let callCount = 0;
+    const createTask = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) throw new Error('DB pool exhausted');
+      return { id: 'task-1' };
+    });
+    const taskRepo = { listTasks: async () => [], createTask };
+
+    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+
+    // Scan reports success (partial), not failure
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { filed: number; failed: number };
+      expect(data.filed).toBe(1);  // second pair succeeded
+      expect(data.failed).toBe(1); // first pair failed
+    }
+    expect(createTask).toHaveBeenCalledTimes(2);
   });
 
   // ---------------------------------------------------------------------------

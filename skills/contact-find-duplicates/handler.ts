@@ -124,14 +124,21 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
       };
     }
 
+    // Capture as local variables so closures below don't need non-null assertions.
+    const taskRepo = ctx.taskRepo;
+    const entityMemory = ctx.entityMemory;
+
     ctx.log.info({ minScore, maxTasks }, 'contact-find-duplicates: starting scan');
 
+    // -- Setup phase: failures here abort the scan entirely before any writes --
+    let pairs: DuplicatePair[];
+    let existingPairKeys: Set<string>;
     try {
       // Fetch all pairs at the base floor (0.7) then filter to the requested threshold.
       // This avoids changing the ContactService/DedupService interface for a per-call
       // numeric threshold, while keeping the hot path (DB + identity load) a single pass.
       const allPairs = await ctx.contactService.findDuplicates('probable');
-      const pairs = allPairs.filter((p: DuplicatePair) => p.score >= minScore);
+      pairs = allPairs.filter((p: DuplicatePair) => p.score >= minScore);
 
       ctx.log.info(
         { basePairs: allPairs.length, qualifyingPairs: pairs.length, minScore },
@@ -141,50 +148,66 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
       // Load all open dedup tasks for the idempotency check. The limit is high
       // enough to capture any realistic backlog; pairs already in the queue are
       // silently skipped so repeated runs don't accumulate duplicate tasks.
-      const existingTasks = await ctx.taskRepo.listTasks({
+      const existingTasks = await taskRepo.listTasks({
         statuses: OPEN_STATUSES,
         tag: 'dedup',
         limit: EXISTING_TASK_FETCH_LIMIT,
       });
-      const existingPairKeys = new Set<string>();
+
+      existingPairKeys = new Set<string>();
+      let unparseable = 0;
       for (const task of existingTasks) {
         const ids = extractPairIds(task.description ?? null);
         if (ids) {
           existingPairKeys.add(pairKey(ids.aId, ids.bId));
         } else {
-          // A dedup-tagged task whose description doesn't contain the expected
-          // "Contact A/B ID: <uuid>" lines is invisible to the idempotency check —
-          // the pair will be re-filed if it comes up again. Log so operators can
-          // investigate (e.g. manually-created tasks, old format, truncated description).
-          ctx.log.warn({ taskId: task.id }, 'contact-find-duplicates: dedup task has no parseable contact IDs — excluded from idempotency check');
+          unparseable++;
         }
       }
+      if (unparseable > 0) {
+        // Dedup-tagged tasks without parseable contact IDs (manually created, old format,
+        // or truncated description) are invisible to the idempotency check — those pairs
+        // may be re-filed. Operators can fix by adding "Contact A/B ID: <uuid>" lines
+        // to the description, or removing the 'dedup' tag to suppress this warning.
+        ctx.log.warn(
+          { count: unparseable },
+          'contact-find-duplicates: some dedup-tagged tasks have no parseable contact IDs — those pairs may be re-filed',
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.log.error({ err }, 'contact-find-duplicates: setup phase failed (findDuplicates or listTasks)');
+      return { success: false, error: `Failed to scan for duplicates: ${message}` };
+    }
 
-      // Memoize KG fact lookups for the duration of the run — a contact that appears
-      // in multiple pairs would otherwise re-fetch its facts each time. Exclusion
-      // facts are permanent and not written by this skill, so caching is safe.
-      const factsCache = new Map<string, KgNode[]>();
-      const cachedGetFacts = async (nodeId: string): Promise<KgNode[]> => {
-        const cached = factsCache.get(nodeId);
-        if (cached !== undefined) return cached;
-        const facts = await ctx.entityMemory!.getFacts(nodeId);
-        factsCache.set(nodeId, facts);
-        return facts;
-      };
+    // Memoize KG fact lookups for the duration of the run — a contact that appears
+    // in multiple pairs would otherwise re-fetch its facts each time. Exclusion
+    // facts are permanent and not written by this skill, so caching is safe.
+    const factsCache = new Map<string, KgNode[]>();
+    const cachedGetFacts = async (nodeId: string): Promise<KgNode[]> => {
+      const cached = factsCache.get(nodeId);
+      if (cached !== undefined) return cached;
+      const facts = await entityMemory.getFacts(nodeId);
+      factsCache.set(nodeId, facts);
+      return facts;
+    };
 
-      let filed = 0;
-      let skippedExisting = 0;
-      let skippedExcluded = 0;
-      let capped = 0;
+    let filed = 0;
+    let skippedExisting = 0;
+    let skippedExcluded = 0;
+    let capped = 0;
+    let failed = 0;
 
-      for (const pair of pairs) {
-        const key = pairKey(pair.contactA.id, pair.contactB.id);
+    // -- Per-pair processing: errors are isolated so one failing pair doesn't abort the scan --
+    for (const pair of pairs) {
+      const key = pairKey(pair.contactA.id, pair.contactB.id);
 
-        if (existingPairKeys.has(key)) {
-          skippedExisting++;
-          continue;
-        }
+      if (existingPairKeys.has(key)) {
+        skippedExisting++;
+        continue;
+      }
 
+      try {
         const excluded = await checkExclusion(
           pair.contactA.id,
           pair.contactB.id,
@@ -215,7 +238,7 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
           `Please verify these are the same person, then either merge them or mark them as not duplicates (which will prevent future re-surfacing).`,
         ].join('\n');
 
-        await ctx.taskRepo.createTask({
+        await taskRepo.createTask({
           agentId: 'contacts',
           title: `Review possible duplicate: ${pair.contactA.displayName} / ${pair.contactB.displayName}`,
           description,
@@ -230,27 +253,33 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
           'contact-find-duplicates: filed review task',
         );
         filed++;
+      } catch (pairErr) {
+        // Fail open: log and continue so one pair error doesn't abort the entire scan.
+        // The pair is not counted as filed, so the idempotency check will attempt it again
+        // on the next weekly run — the risk of re-filing is preferable to losing all progress.
+        failed++;
+        ctx.log.error(
+          { pairErr, contactAId: pair.contactA.id, contactBId: pair.contactB.id },
+          'contact-find-duplicates: error processing pair — skipping and continuing',
+        );
       }
-
-      ctx.log.info(
-        { filed, skippedExisting, skippedExcluded, capped, totalScanned: pairs.length },
-        'contact-find-duplicates: scan complete',
-      );
-
-      return {
-        success: true,
-        data: {
-          filed,
-          skipped_existing: skippedExisting,
-          skipped_excluded: skippedExcluded,
-          capped,
-          total_scanned: pairs.length,
-        },
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'contact-find-duplicates failed');
-      return { success: false, error: `Failed to scan for duplicates: ${message}` };
     }
+
+    ctx.log.info(
+      { filed, skippedExisting, skippedExcluded, capped, failed, totalScanned: pairs.length },
+      'contact-find-duplicates: scan complete',
+    );
+
+    return {
+      success: true,
+      data: {
+        filed,
+        skipped_existing: skippedExisting,
+        skipped_excluded: skippedExcluded,
+        capped,
+        failed,
+        total_scanned: pairs.length,
+      },
+    };
   }
 }
