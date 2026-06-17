@@ -62,6 +62,14 @@ WORKDIR /app
 
 RUN corepack enable
 
+# Upgrade npm to 11.17.0 to clear CVEs in npm's own bundled packages:
+#   - CVE-2026-53655: node-tar < 7.5.14 (PAX size override / file smuggling)
+#   - CVE-2026-45149: brace-expansion < 5.0.6 (arbitrary string generation)
+#   - CVE-2026-42338: ip-address < 10.1.1 (XSS via improper HTML escaping)
+# npm@11.17.0 bundles tar@7.5.16, brace-expansion@5.0.6, ip-address@10.2.0.
+# This does not affect pnpm or the app's own node_modules.
+RUN npm install -g npm@11.17.0
+
 # Copy manifest and lockfile, then install production deps only
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
