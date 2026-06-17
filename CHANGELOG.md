@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+## [0.35.0] — 2026-06-16 — "Garak"
+
+> **Elim Garak** *(Star Trek: Deep Space Nine, 1993, Rick Berman & Michael Piller)* — the "plain, simple tailor" who is anything but: an exiled Cardassian spy whose entire craft is discretion, disguise, and never revealing more than the moment demands. This release teaches Curia the same trade — secrets now pass through it to where they are needed without ever being shown to the agent doing the work, and the browser learned to wear a convincing disguise.
+
 ### Added
 
 - **URL auto-linking in chat** — bare `http`/`https` URLs in both agent and user messages are automatically wrapped in clickable anchor tags; URLs inside code spans are excluded.
@@ -35,16 +39,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Web console chat (ack-and-stream)** — `POST /api/kg/chat/messages` now acks with `202` and the reply streams over SSE instead of blocking on a 120s synchronous wait, so long agent tasks (browser automation, delegation chains, research) complete without a 504. (#985)
 - **Node 22 → 24 (Active LTS)** — the `Dockerfile` build + runtime stages move to `node:24-slim`, matching the production image. The `RUN npm install -g npm@11.16.0` line is removed: node 24's bundled npm is unused (corepack/pnpm at build, tsx at runtime) and scans clean, clearing the Scorecard `npmCommand` finding. (#905)
 - **`web-browser` iframe awareness & adaptive waits** — `get_content` and selector resolution now reach into child frames (so embedded booking/date widgets are visible and clickable); `navigate` waits for network idle and fails fast with a clear "hand off" message on edge blocks ("Access Denied").
-
 - **`secret-capture-request` (skill manifest schema)** — adds an optional `resume_intent` input and persists the minting agent's routing context on the token so the capture can re-enter the right conversation. (#972)
-
 - **Secret capture** — agents mint a one-time link to a web form so a user can add a new vault secret mid-conversation; the value never touches the LLM. Skills `secret-capture-request` and `system-secret-capture-request`. (#971)
 - **`skip_secret_redaction` (skill manifest schema, public API)** — opt a skill's output out of only the broad generic-hex secret scrub (structured credential patterns stay active); gated at startup to skills declaring `secretCapture`. For capability tokens (e.g. capture links) that must reach the LLM. (#971)
 - **`task-create`** — optional `target_agent_id` assigns a new task (and its wake-up) to another registered agent, so the coordinator or ceo-inbox can schedule work for a specialist like meeting-debrief. (#880)
 - **`bullpen`** — `reply` accepts `close_after: true` to close a thread atomically with the reply, `formatBullpenContext()` nudges agents to use it, and the dispatcher skips reply-task fan-out for closed threads so a concluding reply doesn't create dead-end tasks. (#881)
-
-### Changed
-
 - **`SkillContext` (public API)** — adds optional `secretCapture` capability and `appOrigin`/`httpPort` fields (backward compatible). (#971)
 - **`SkillContext` (public API)** — adds optional `resolveSecretRef(ref)` method, injected only for allowlisted skills declaring `secretResolver` (backward compatible). (#973)
 - **`SecretAccessedEvent` (bus event types, public API)** — payload gains optional `byReference` flag distinguishing dynamic by-reference resolution from declared-secret access (backward compatible). (#973)
