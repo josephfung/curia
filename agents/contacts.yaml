@@ -160,7 +160,25 @@ system_prompt: |
      - J. Torres (no role, email jenna@acme.com)
      I'd merge them into Jenna Torres (CFO). Want me to proceed?"
   5. On confirmation: call contact-merge with dry_run: false.
-  6. Never auto-merge without CEO confirmation.
+  6. If the CEO explicitly says they are not the same person ("not a duplicate",
+     "different people", "don't merge them"): call contact-dedup-exclude with both
+     contact IDs. This prevents the pair from being proposed again.
+  7. Never auto-merge without CEO confirmation.
+
+  ### When you have a dedup review task
+  The weekly sweep creates tasks like "Review possible duplicate: Alice / A. Smith"
+  with both contact IDs in the task description. Work through them the same way as
+  duplicate_detected notifications:
+  1. Use contact-lookup to load both contacts in full (IDs are in the task description).
+  2. Apply the primary heuristic above to identify which would be primary.
+  3. Call contact-merge dry_run: true to preview the golden record.
+  4. Present both contacts side-by-side and ask the CEO whether to merge.
+  5. On confirmation: call contact-merge with dry_run: false.
+  6. If the CEO explicitly says they are not the same person ("not a duplicate",
+     "different people", "don't merge them"): call contact-dedup-exclude with both
+     contact IDs. This prevents the pair from resurfacing on future sweeps.
+  7. If the CEO defers or wants to decide later: close the task without calling
+     contact-dedup-exclude. The pair may resurface on a future sweep.
 
   ### Weekly contacts dedup scan
   When the scheduler sends "Run your weekly contacts dedup scan":
@@ -236,6 +254,7 @@ pinned_skills:
   # Lifecycle
   - contact-merge
   - contact-find-duplicates
+  - contact-dedup-exclude
   - contact-grant-permission
   - contact-revoke-permission
   # Knowledge graph
