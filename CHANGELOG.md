@@ -16,10 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Contact `tier` + `kind` model (migration 055)** — ordered capability `tier` and descriptive `kind`, backfilled from legacy fields. (#945)
-- **Contact de-duplication sweep (`dedup:contacts`)** — maintenance script that auto-merges structural duplicates (shared channel identity / same `kg_node_id` / exact name), files Curia-owned tasks for fuzzy matches, skips `dedup_exclusion` pairs, and never auto-merges the principal. Supports `--dry-run`. (#944)
-- **`dedup-classifier`** — pure module classifying a contact pair as `structural` or `fuzzy`; name/JW similarity is always fuzzy (never auto-merge). (#944)
-- **`writeExclusion` / `hasExclusion` helpers** — permanent `dedup_exclusion` KG facts so a declined pair is never re-surfaced. (#944)
-- **`dedup:contacts` sweep-local tuning flags** — `--no-tasks` (merge-only), `--min-score <n>` / `--max-score <n>` (run a fuzzy-score band), and `--max-tasks <n>` (cap review tasks), so a sweep over a large un-deduped contact set doesn't flood the queue. `--max-score` enables incremental band runs (a lower-threshold pass that doesn't re-create tasks an earlier run already surfaced). Leaves the global `DedupService` threshold untouched. (#944, #1034)
+- **Contact de-duplication (`dedup:contacts`)** — maintenance sweep that auto-merges structurally-proven duplicates (shared verified identity / same `kg_node_id` / exact normalized name) and files Curia-owned review tasks for fuzzy matches, never auto-merging the principal and never re-surfacing a declined pair. Tunable for controlled rollout via `--dry-run`, `--no-tasks`, `--min-score`/`--max-score` bands, and `--max-tasks`, and shipped in the production image. (#944, #1034)
 
 ### Changed
 
@@ -30,12 +27,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Removed
 
 - **`pending-actions-digest` skill** — removed; coordinator composes the daily digest directly from `list-pending-actions` and `task-list`.
-
-### Fixed
-
-- **Docker image now ships `scripts/`** — maintenance commands (`dedup:contacts`, `backfill-*`) were absent from the runtime image, so they failed in prod with "file not found"; the Dockerfile now copies `scripts/`.
-- **`dedup:contacts` merge-audit completeness** — `contact.merged` publishes are now drained before the process exits, so every merge persists an `audit_log` row (a prior run lost 1 of 14 to an exit race); a lost publish now fails the run's exit code instead of being silently logged. (#1034)
-- **`dedup:contacts` suppressed-task logging** — the "creating review task" line is logged after the suppression gate, so `--no-tasks` / capped runs no longer print a "creating" line for every pair they suppress. (#1034)
 
 ### Security
 
