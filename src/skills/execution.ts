@@ -19,7 +19,7 @@
 
 import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
-import { isPrincipalOriginated } from '../contacts/principal.js';
+import { isPrincipalOriginated, isSystemOriginated } from '../contacts/principal.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput, sanitizeObjectOutput } from './sanitize.js';
 import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
@@ -363,19 +363,31 @@ export class ExecutionLayer {
       }
     }
 
-    // Elevated-skill gate: require principal origination, not just caller role.
-    // The originator (who started the task chain) is the authorization signal,
-    // not the caller (who is executing this specific skill call).
+    // Elevated-skill gate: require principal or system origination.
+    // Principal = CEO in an active conversation. System = operator-declared YAML job,
+    // version-controlled and reviewed — more trustworthy than agent-self-scheduled.
+    // Agent-originated tasks (systemRole: "agent") are deliberately excluded: those
+    // are autonomously invented by the LLM and must not have standing access to the
+    // approval queue.
+    //
+    // Handler-level defense-in-depth: skills that must never accept system origination
+    // (approve/deny/dismiss — require active CEO authorization) retain their own
+    // isPrincipalOriginated() checks. Read-only elevated skills (list-pending-actions)
+    // mirror this gate's logic. When changing this gate, audit elevated handler.ts files.
     // See docs/wip/2026-05-10-principal-identity-design.md
     if (manifest.sensitivity === 'elevated') {
-      if (!isPrincipalOriginated(options?.taskMetadata)) {
+      if (!isPrincipalOriginated(options?.taskMetadata) && !isSystemOriginated(options?.taskMetadata)) {
         this.logger.warn(
-          { skillName, caller: caller ? { role: caller.role, channel: caller.channel } : null },
-          'Elevated skill blocked: task not originated by principal',
+          {
+            skillName,
+            caller: caller ? { role: caller.role, channel: caller.channel } : null,
+            originator: (options?.taskMetadata as Record<string, unknown> | undefined)?.originator ?? null,
+          },
+          'Elevated skill blocked: task not originated by principal or system',
         );
         return {
           success: false,
-          error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — task was not originated by the principal`),
+          error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — task was not originated by the principal or a system-declared job`),
         };
       }
     }

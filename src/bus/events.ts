@@ -177,7 +177,6 @@ interface OutboundSuppressedDuplicatePayload {
 //   - 'contact_rate_limited': CEO alert that contact auto-creation was throttled due to rate limits
 //   - 'approval_requested':   CEO alert that an autonomy gate blocked a skill and approval is needed
 //   - 'approval_expired':     CEO alert that pending approvals expired without response (approval-expiry-sweep)
-//   - 'pending_actions_digest': Daily summary of open approvals awaiting CEO decision (pending-actions-digest)
 //   - 'schedule_suspended': CEO alert that a scheduled job was auto-suspended after consecutive failures (#538)
 //   - 'schedule_recovered': CEO alert that a stuck job was auto-recovered (reset to pending or suspended) (#207)
 export interface OutboundNotificationPayload {
@@ -187,7 +186,6 @@ export interface OutboundNotificationPayload {
     | 'contact_rate_limited'
     | 'approval_requested'
     | 'approval_expired'        // batched expiry notification (approval-expiry-sweep)
-    | 'pending_actions_digest'  // daily pending-actions summary (pending-actions-digest)
     | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
     | 'schedule_recovered';     // stuck job auto-recovered after exceeding timeout threshold (#207)
   /** Recipient email for this notification (always the CEO email today). */
