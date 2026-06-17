@@ -361,9 +361,12 @@ export class ContactService {
       });
       return { kgNodeId: entity.id, kind: 'organization' };
     } catch (err) {
-      // KG operations are best-effort: if they fail (e.g. DB unavailable during
-      // entity lookup), fall through to the person-node path rather than blocking
-      // contact creation entirely.
+      // Programming errors (wrong arg types, shape mismatches) indicate a bug and
+      // should propagate rather than being silently swallowed as a "KG is down" case.
+      if (err instanceof TypeError || err instanceof RangeError) throw err;
+
+      // KG I/O failures (DB unavailable, transient network error) are best-effort:
+      // fall through to person-node creation rather than blocking contact creation.
       this.logger?.error(
         { err, email, domain, step: 'resolveOrCreateOrgNode' },
         'resolveOrCreateOrgNode: KG operation failed — falling back to person node',
@@ -421,12 +424,19 @@ export class ContactService {
         if (orgResult) {
           kgNodeId = orgResult.kgNodeId;
           resolvedKind = orgResult.kind;
-          // Warn when org routing overrides an explicitly caller-supplied kind so
-          // the override is visible in logs rather than silent.
           if (options.kind && options.kind !== orgResult.kind) {
+            // Warn when caller explicitly passed a kind that was overridden — this
+            // is likely a caller bug (e.g. passing kind:'person' for an org email).
             this.logger?.warn(
               { requestedKind: options.kind, resolvedKind: orgResult.kind, email: options.primaryEmail },
               'createContact: org routing overrode caller-supplied kind',
+            );
+          } else {
+            // Debug trace on every org routing application so misclassifications
+            // are detectable retroactively even when kind defaulted to 'person'.
+            this.logger?.debug(
+              { resolvedKind: orgResult.kind, email: options.primaryEmail },
+              'createContact: org routing applied',
             );
           }
         }
@@ -525,7 +535,17 @@ export class ContactService {
         );
         contact.kgNodeId = null;
         contact.kind = 'person';
-        await this.backend.createContact(contact);
+        try {
+          await this.backend.createContact(contact);
+        } catch (retryErr) {
+          // The retry itself failed — log with context so the caller can distinguish
+          // a double-collision (astronomically rare) from a transient DB error.
+          this.logger?.error(
+            { err: retryErr, contactId: contact.id, step: 'createContact_kg_collision_retry' },
+            'Contact creation failed on retry after KG collision',
+          );
+          throw retryErr;
+        }
       } else {
         // TODO: The KG node auto-created above is now orphaned — it exists in the knowledge
         // graph with no corresponding contact row. Clean up once EntityMemory exposes a

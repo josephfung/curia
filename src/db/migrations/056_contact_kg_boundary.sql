@@ -105,7 +105,7 @@ FROM (
     AND system_role IS NULL
   ORDER BY lower(display_name), created_at ASC
 ) unmatched
-ON CONFLICT (lower(label), type) WHERE type != 'fact' DO NOTHING;
+ON CONFLICT (lower(label), type) WHERE type != 'fact' AND archived_at IS NULL DO NOTHING;
 
 -- -------------------------------------------------------------------------
 -- Part B — Step 3: link newly-inserted nodes back to contacts

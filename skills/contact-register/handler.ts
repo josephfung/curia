@@ -143,7 +143,13 @@ export class ContactRegisterHandler implements SkillHandler {
           linked = true;
         } catch (linkErr) {
           const pgCode = (linkErr as { code?: string }).code;
-          if (pgCode !== '23505') throw linkErr;
+          if (pgCode !== '23505') {
+            ctx.log.warn(
+              { linkErr, orphanId: contact.id, channel, identifier },
+              'contact-register: linkIdentity failed with non-constraint error — rethrowing',
+            );
+            throw linkErr;
+          }
 
           ctx.log.info(
             { channel, orphanId: contact.id },
