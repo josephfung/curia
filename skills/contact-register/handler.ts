@@ -144,8 +144,10 @@ export class ContactRegisterHandler implements SkillHandler {
         } catch (linkErr) {
           const pgCode = (linkErr as { code?: string }).code;
           if (pgCode !== '23505') {
+            // Omit identifier from the log — it is a raw email or phone number (PII) and the
+            // handler deliberately avoids logging identifiers elsewhere for the same reason.
             ctx.log.warn(
-              { linkErr, orphanId: contact.id, channel, identifier },
+              { linkErr, orphanId: contact.id, channel },
               'contact-register: linkIdentity failed with non-constraint error — rethrowing',
             );
             throw linkErr;
