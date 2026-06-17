@@ -60,6 +60,10 @@ describe('ListPendingActionsHandler', () => {
   });
 
   it('rejects agent-originated tasks', async () => {
+    // Provide a repo so that if the auth guard accidentally regresses and lets the
+    // agent-originated task through, the test still fails (rather than passing due
+    // to the separate missing-repo check returning success:false for the wrong reason).
+    const repo = makeMockRepo();
     const handler = new ListPendingActionsHandler();
     const result = await handler.execute(makeCtx({
       taskMetadata: {
@@ -70,9 +74,13 @@ describe('ListPendingActionsHandler', () => {
           initiatedAt: new Date().toISOString(),
         },
       },
+      actionLogRepo: repo,
     }));
     expect(result.success).toBe(false);
-    expect(result).toHaveProperty('error');
+    // Assert the authorization error specifically, not the missing-repo error.
+    expect(result).toHaveProperty('error', 'This skill requires principal or system authorization.');
+    // Confirm the repo was never touched — auth must reject before any DB access.
+    expect(repo.findAllPending).not.toHaveBeenCalled();
   });
 
   it('returns error when actionLogRepo is not available', async () => {
