@@ -85,3 +85,13 @@ END
 WHERE c.system_role IS NOT NULL
    OR c.kg_node_id IS NOT NULL;
 -- (contacts with NULL system_role and NULL kg_node_id keep kind='person', the default)
+
+-- Down Migration
+--
+-- Reverses the schema additions only. The legacy `status`/`trust_level` columns
+-- were never touched by the Up migration, so they need no restoration here.
+-- Dropping the columns automatically drops their CHECK constraints and the
+-- partial index, but we drop the index explicitly first for clarity.
+DROP INDEX IF EXISTS idx_contacts_tier;
+ALTER TABLE contacts DROP COLUMN IF EXISTS tier;
+ALTER TABLE contacts DROP COLUMN IF EXISTS kind;
