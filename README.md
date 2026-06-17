@@ -10,7 +10,7 @@
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.35.0-blueviolet" alt="Version: 0.35.0" /></a>
   <img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="Status: Pre-Alpha" />
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" />
-  <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="Node >= 22" />
+  <img src="https://img.shields.io/badge/node-%3E%3D24-brightgreen" alt="Node >= 24" />
   <img src="https://img.shields.io/badge/typescript-ESM-blue" alt="TypeScript ESM" />
   <a href="https://securityscorecards.dev/viewer/?uri=github.com/josephfung/curia"><img src="https://api.securityscorecards.dev/projects/github.com/josephfung/curia/badge" alt="OpenSSF Scorecard" /></a>
   <a href="https://www.bestpractices.dev/projects/13136"><img src="https://www.bestpractices.dev/projects/13136/badge" alt="OpenSSF Best Practices" /></a>
@@ -96,7 +96,7 @@ Skills come in two flavours (local handlers and MCP servers) behind a single int
 
 ## Quickstart
 
-**Prerequisites:** [Docker](https://docs.docker.com/get-docker/), Node >= 22, pnpm, and an [Anthropic API key](https://console.anthropic.com).
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/), Node >= 24, pnpm, and an [Anthropic API key](https://console.anthropic.com).
 
 ```bash
 git clone https://github.com/josephfung/curia.git
