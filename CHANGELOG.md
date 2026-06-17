@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Contact de-duplication sweep (`dedup:contacts`)** — maintenance script that auto-merges structural duplicates (shared channel identity / same `kg_node_id` / exact name), files Curia-owned tasks for fuzzy matches, skips `dedup_exclusion` pairs, and never auto-merges the principal. Supports `--dry-run`. (#944)
 - **`dedup-classifier`** — pure module classifying a contact pair as `structural` or `fuzzy`; name/JW similarity is always fuzzy (never auto-merge). (#944)
 - **`writeExclusion` / `hasExclusion` helpers** — permanent `dedup_exclusion` KG facts so a declined pair is never re-surfaced. (#944)
+- **`dedup:contacts` sweep-local tuning flags** — `--no-tasks` (merge-only), `--min-score <n>` (raise the fuzzy bar for this run), and `--max-tasks <n>` (cap review tasks), so a first sweep over a large un-deduped contact set doesn't flood the queue. Leaves the global `DedupService` threshold untouched. (#944)
 
 ### Changed
 

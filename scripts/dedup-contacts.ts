@@ -57,6 +57,10 @@ export interface DedupRunResult {
   wouldMergeCount: number;
   /** Number of pairs that would have had tasks created (dry-run report). */
   wouldCreateTaskCount: number;
+  /** Number of fuzzy pairs skipped because their score was below the sweep's --min-score. */
+  skippedLowScoreCount: number;
+  /** Number of would-be review tasks suppressed by --no-tasks or the --max-tasks cap. */
+  suppressedTaskCount: number;
   /** Number of errors during merge/task-create operations. */
   errorCount: number;
 }
@@ -64,6 +68,23 @@ export interface DedupRunResult {
 /** Dependency-injected callbacks used by runDedup() — allows unit testing without a DB. */
 export interface DedupRunOptions {
   dryRun: boolean;
+  /**
+   * Sweep-local minimum score for FUZZY matches (0–1). Fuzzy pairs scoring below this
+   * are skipped (counted in skippedLowScoreCount). Does NOT affect structural matches and
+   * does NOT change the global DedupService THRESHOLD_PROBABLE — it only raises the bar for
+   * this maintenance run. Undefined = accept whatever the classifier returns (≥ 0.7).
+   */
+  minScore?: number;
+  /**
+   * Hard cap on the number of review tasks this sweep creates. Once reached, further
+   * would-be tasks are skipped (counted in suppressedTaskCount). Undefined = no cap.
+   */
+  maxTasks?: number;
+  /**
+   * Merge-only mode: apply structural auto-merges but create NO review tasks (every
+   * would-be task is counted in suppressedTaskCount). Equivalent to maxTasks = 0.
+   */
+  noTasks?: boolean;
   /** Calls ContactService.mergeContacts (or equivalent). Returns a MergeResult. */
   mergeContacts: (primaryId: string, secondaryId: string) => Promise<unknown>;
   /** Calls TaskRepo.createTask (or equivalent). */
@@ -197,7 +218,7 @@ export async function runDedup(
   identityMap: Map<string, ChannelIdentity[]>,
   opts: DedupRunOptions,
 ): Promise<DedupRunResult> {
-  const { dryRun, mergeContacts, createTask, getFacts } = opts;
+  const { dryRun, mergeContacts, createTask, getFacts, minScore, maxTasks, noTasks } = opts;
 
   // Memoize getFacts per KG node for the duration of the sweep. The exclusion check
   // runs inside the O(n²) pair loop, and a contact that appears in many candidate
@@ -221,6 +242,8 @@ export async function runDedup(
     principalSkippedCount: 0,
     wouldMergeCount: 0,
     wouldCreateTaskCount: 0,
+    skippedLowScoreCount: 0,
+    suppressedTaskCount: 0,
     errorCount: 0,
   };
 
@@ -357,6 +380,15 @@ export async function runDedup(
           result.errorCount++;
         }
       } else {
+        // Sweep-local --min-score: drop FUZZY pairs below the bar before any task
+        // accounting. Structural+principal pairs are always surfaced (the principal
+        // guard is about safety, not similarity score). This filters this sweep only —
+        // the global DedupService threshold is untouched.
+        if (classification.type === 'fuzzy' && minScore !== undefined && classification.score < minScore) {
+          result.skippedLowScoreCount++;
+          continue;
+        }
+
         // ------------------------------------------------------------------
         // Fuzzy pair OR structural pair involving the principal → task
         // ------------------------------------------------------------------
@@ -378,6 +410,16 @@ export async function runDedup(
             { contactAId: a.id, contactBId: b.id, classification },
             'dedup: fuzzy match — creating recommendation task',
           );
+        }
+
+        // --no-tasks (merge-only) or the --max-tasks cap: suppress task creation. Compare
+        // against tasks already acted on (real run: taskCount; dry-run: wouldCreateTaskCount)
+        // so the cap behaves identically in both modes and the dry-run preview reflects
+        // exactly what a real run with the same flags would create.
+        const tasksActedOn = dryRun ? result.wouldCreateTaskCount : result.taskCount;
+        if (noTasks || (maxTasks !== undefined && tasksActedOn >= maxTasks)) {
+          result.suppressedTaskCount++;
+          continue;
         }
 
         if (dryRun) {
@@ -573,6 +615,34 @@ async function loadContactsAndIdentities(pool: pg.Pool): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// CLI argument helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a numeric CLI flag supporting both `--flag value` and `--flag=value`.
+ * Returns undefined if the flag is absent. Exits the process with a clear error if
+ * the flag is present but its value is missing or not a finite number — better to
+ * fail loudly than to silently ignore an operator's tuning intent on a prod sweep.
+ */
+function parseNumericFlag(argv: string[], flag: string): number | undefined {
+  const eq = argv.find(a => a.startsWith(`${flag}=`));
+  let raw: string | undefined;
+  if (eq) {
+    raw = eq.slice(flag.length + 1);
+  } else {
+    const idx = argv.indexOf(flag);
+    if (idx === -1) return undefined;
+    raw = argv[idx + 1];
+  }
+  const n = raw === undefined ? NaN : Number(raw);
+  if (!Number.isFinite(n)) {
+    logger.error({ flag, raw }, `dedup-contacts: ${flag} requires a numeric value`);
+    process.exit(1);
+  }
+  return n;
+}
+
+// ---------------------------------------------------------------------------
 // CLI entry point
 // ---------------------------------------------------------------------------
 
@@ -585,8 +655,35 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
 
   const dryRun = process.argv.includes('--dry-run');
 
+  // Sweep-local tuning flags — these tune THIS run only; the global DedupService
+  // threshold is never changed. See DedupRunOptions for semantics.
+  //   --no-tasks       merge-only: apply structural merges, create no review tasks
+  //   --min-score <n>  only create fuzzy tasks at/above this Jaro-Winkler score (0–1)
+  //   --max-tasks <n>  cap the number of review tasks created this run
+  const noTasks = process.argv.includes('--no-tasks');
+  const minScore = parseNumericFlag(process.argv, '--min-score');
+  const maxTasks = parseNumericFlag(process.argv, '--max-tasks');
+
+  if (minScore !== undefined && (minScore < 0 || minScore > 1)) {
+    logger.error({ minScore }, 'dedup-contacts: --min-score must be between 0 and 1');
+    process.exit(1);
+  }
+  if (maxTasks !== undefined && (maxTasks < 0 || !Number.isInteger(maxTasks))) {
+    logger.error({ maxTasks }, 'dedup-contacts: --max-tasks must be a non-negative integer');
+    process.exit(1);
+  }
+
   if (dryRun) {
     logger.info('dedup-contacts: running in DRY-RUN mode — no writes will be made');
+  }
+  if (noTasks) {
+    logger.info('dedup-contacts: --no-tasks — merge-only; no review tasks will be created');
+  }
+  if (minScore !== undefined) {
+    logger.info({ minScore }, 'dedup-contacts: --min-score active — fuzzy pairs below this score are skipped');
+  }
+  if (maxTasks !== undefined) {
+    logger.info({ maxTasks }, 'dedup-contacts: --max-tasks active — review tasks capped');
   }
 
   const pool = new Pool({ connectionString: databaseUrl });
@@ -654,6 +751,10 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       // Build injected callbacks — all delegate to real services, no hand-rolled SQL
       const opts: DedupRunOptions = {
         dryRun,
+        // Sweep-local tuning (see DedupRunOptions) — passed straight through.
+        minScore,
+        maxTasks,
+        noTasks,
 
         // ContactService.mergeContacts handles: identity dedup (resolves the unique-email
         // constraint violation the old UPDATE would have caused), kg_node_id repointing,
@@ -678,6 +779,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
         logger.info({
           wouldMergeCount: result.wouldMergeCount,
           wouldCreateTaskCount: result.wouldCreateTaskCount,
+          skippedLowScoreCount: result.skippedLowScoreCount,
+          suppressedTaskCount: result.suppressedTaskCount,
           skippedExcludedCount: result.skippedExcludedCount,
           principalSkippedCount: result.principalSkippedCount,
           // F5: Include errorCount in the dry-run summary — otherwise an operator
@@ -689,6 +792,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
         logger.info({
           mergedCount: result.mergedCount,
           taskCount: result.taskCount,
+          skippedLowScoreCount: result.skippedLowScoreCount,
+          suppressedTaskCount: result.suppressedTaskCount,
           skippedExcludedCount: result.skippedExcludedCount,
           principalSkippedCount: result.principalSkippedCount,
           errorCount: result.errorCount,
