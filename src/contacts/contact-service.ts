@@ -107,6 +107,70 @@ export function deriveTierFromTrustLevelUpdate(
   return deriveInitialTier(status);
 }
 
+// ---------------------------------------------------------------------------
+// Email sender classification (issue #946)
+// ---------------------------------------------------------------------------
+// Helpers to decide whether an email sender should be stored as a person or
+// routed to an organization KG node. Exported for unit testing.
+
+/** Well-known personal webmail domains that should never generate org nodes. */
+const PERSONAL_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com',
+  'yahoo.com', 'ymail.com',
+  'hotmail.com', 'hotmail.co.uk', 'hotmail.ca',
+  'outlook.com',
+  'live.com', 'live.ca', 'live.co.uk',
+  'icloud.com', 'me.com', 'mac.com',
+  'aol.com',
+  'msn.com',
+  'protonmail.com', 'proton.me', 'pm.me',
+]);
+
+/**
+ * Local-part prefixes that clearly belong to a system/org role rather than a
+ * specific person. Anything matching this → classify as organization.
+ */
+const NON_PERSON_LOCAL_RE =
+  /^(no[_.-]?reply|noreply|info|support|hello|help|admin|contact|billing|notification|notifications|alert|alerts|news|newsletter|updates?|feedback|team|sales|marketing|legal|security|postmaster|mailer[_.-]?daemon|bounce|bounces|unsubscribe|do[._-]?not[._-]?reply|donotreply|service|services|order|orders|invoice|invoices|accounts?|system|automated|auto)$/i;
+
+/**
+ * Local-part pattern for a personal name address (first.last or first_last).
+ * Two alphabetic words separated by a dot, underscore, or hyphen.
+ */
+const PERSON_LOCAL_RE = /^[a-zA-Z]+[._-][a-zA-Z]+$/;
+
+/**
+ * Classify an email sender as a person or an organization/automated sender.
+ *
+ * Rules applied in order:
+ * 1. Personal webmail domain → person
+ * 2. Local part matches org/system role pattern → organization
+ * 3. Local part looks like first.last name → person
+ * 4. Default → person (conservative; a false negative on org is less harmful
+ *    than a false positive that merges a real person under an org node)
+ */
+export function classifyEmailSender(email: string): 'person' | 'organization' {
+  const atIdx = email.indexOf('@');
+  if (atIdx === -1) return 'person'; // malformed — safe default
+
+  const localPart = email.slice(0, atIdx);
+  const domain = email.slice(atIdx + 1).toLowerCase();
+
+  if (PERSONAL_EMAIL_DOMAINS.has(domain)) return 'person';
+  if (NON_PERSON_LOCAL_RE.test(localPart)) return 'organization';
+  if (PERSON_LOCAL_RE.test(localPart)) return 'person';
+  return 'person'; // default
+}
+
+/**
+ * Derive a human-readable label from an email domain.
+ * Strips the TLD and capitalizes: 'github.com' → 'Github', 'stripe.io' → 'Stripe'.
+ */
+function deriveOrgLabelFromDomain(domain: string): string {
+  const name = domain.split('.')[0] ?? domain;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 // -- Backend interface --
 
 interface ContactServiceBackend {
@@ -238,8 +302,70 @@ export class ContactService {
   }
 
   /**
+   * For a business email address, resolve or create an organization KG node and
+   * return its ID along with the 'organization' kind. Returns null when the sender
+   * should be treated as a person (personal webmail domain, firstname.lastname address,
+   * or no entityMemory available).
+   *
+   * @param email          The sender's email address (used for classification + domain lookup)
+   * @param safeName       Sanitized display name (used as org label when human-readable)
+   * @param rawDisplayName Original display name before sanitization (used to detect email-shaped names)
+   * @param source         Provenance tag for newly created KG nodes
+   *
+   * Resolution order:
+   *   1. classifyEmailSender() → null if person
+   *   2. findEntities(domain) filtered to 'organization' → existing node
+   *   3. findEntities(safeName) filtered to 'organization' → existing node (human-readable names only)
+   *   4. createEntity('organization') → new node
+   */
+  private async resolveOrCreateOrgNode(
+    email: string,
+    safeName: string,
+    rawDisplayName: string,
+    source: string,
+  ): Promise<{ kgNodeId: string; kind: ContactKind } | null> {
+    if (!this.entityMemory) return null;
+
+    if (classifyEmailSender(email) !== 'organization') return null;
+
+    const atIdx = email.indexOf('@');
+    if (atIdx === -1) return null;
+    const domain = email.slice(atIdx + 1);
+
+    // Try domain as label (e.g. 'github.com' → existing 'github.com' org node)
+    const domainMatches = await this.entityMemory.findEntities(domain);
+    const domainOrg = domainMatches.find((n) => n.type === 'organization');
+    if (domainOrg) return { kgNodeId: domainOrg.id, kind: 'organization' };
+
+    // The raw display name (before sanitization) tells us whether the caller used a
+    // human-readable name like "GitHub" or fell back to the email address itself.
+    // Sanitization strips '@', so the safe check is on the pre-sanitization value.
+    const rawIsEmailShaped = rawDisplayName.includes('@');
+
+    if (!rawIsEmailShaped) {
+      // Try the human-readable display name as a label
+      const nameMatches = await this.entityMemory.findEntities(safeName);
+      const nameOrg = nameMatches.find((n) => n.type === 'organization');
+      if (nameOrg) return { kgNodeId: nameOrg.id, kind: 'organization' };
+    }
+
+    // Create a new organization node. Use the human-readable display name when
+    // available; otherwise derive a label from the domain.
+    const orgLabel = rawIsEmailShaped ? deriveOrgLabelFromDomain(domain) : safeName;
+    const { entity } = await this.entityMemory.createEntity({
+      type: 'organization',
+      label: orgLabel,
+      properties: { domain },
+      source,
+    });
+    return { kgNodeId: entity.id, kind: 'organization' };
+  }
+
+  /**
    * Create a new contact. If entityMemory is available and no kgNodeId is provided,
-   * auto-creates a KG person node and links it to the contact.
+   * auto-creates or resolves a KG node and links it to the contact. When primaryEmail
+   * is set and classifies as an org sender, routes to an organization KG node instead
+   * of minting a person node.
    */
   async createContact(options: CreateContactOptions): Promise<Contact> {
     const now = new Date();
@@ -266,25 +392,46 @@ export class ContactService {
       );
     }
 
-    // Auto-create a KG person node if we have entityMemory and no explicit kgNodeId
+    // Resolve a KG node. Priority:
+    //   1. Explicit kgNodeId provided by caller — use as-is (no lookup needed)
+    //   2. primaryEmail set and classifies as org → resolveOrCreateOrgNode()
+    //   3. Fall through to person-node auto-creation
     let kgNodeId: string | null = options.kgNodeId ?? null;
+    let resolvedKind: ContactKind = options.kind ?? 'person';
+
     if (!kgNodeId && this.entityMemory) {
-      const { entity, created } = await this.entityMemory.createEntity({
-        type: 'person',
-        label: safeName,
-        properties: options.role ? { role: options.role } : {},
-        source: options.source,
-      });
-      if (!created && options.role) {
-        // A KG node already existed for this label. Apply the role property if
-        // it isn't already set — the existing node may have been created without
-        // one (e.g. by extract-relationships which always passes empty properties).
-        const { node } = await this.entityMemory.updateNode(entity.id, {
-          properties: { ...entity.properties, role: options.role },
+      if (options.primaryEmail) {
+        const orgResult = await this.resolveOrCreateOrgNode(
+          options.primaryEmail,
+          safeName,
+          options.displayName,
+          options.source,
+        );
+        if (orgResult) {
+          kgNodeId = orgResult.kgNodeId;
+          resolvedKind = orgResult.kind;
+        }
+      }
+
+      // If no org node was resolved, auto-create a person KG node as before.
+      if (!kgNodeId) {
+        const { entity, created } = await this.entityMemory.createEntity({
+          type: 'person',
+          label: safeName,
+          properties: options.role ? { role: options.role } : {},
+          source: options.source,
         });
-        kgNodeId = node.id;
-      } else {
-        kgNodeId = entity.id;
+        if (!created && options.role) {
+          // A KG node already existed for this label. Apply the role property if
+          // it isn't already set — the existing node may have been created without
+          // one (e.g. by extract-relationships which always passes empty properties).
+          const { node } = await this.entityMemory.updateNode(entity.id, {
+            properties: { ...entity.properties, role: options.role },
+          });
+          kgNodeId = node.id;
+        } else {
+          kgNodeId = entity.id;
+        }
       }
     }
 
@@ -301,8 +448,9 @@ export class ContactService {
     // after the contact exists.
     const contactTier: ContactTier = options.tier ?? deriveInitialTier(contactStatus);
 
-    // Derive kind for new contacts. Default to 'person' unless overridden.
-    const contactKind: ContactKind = options.kind ?? 'person';
+    // Derive kind: org routing in resolveOrCreateOrgNode() takes precedence over
+    // the caller-supplied kind, which in turn overrides the 'person' default.
+    const contactKind: ContactKind = resolvedKind;
 
     const contact: Contact = {
       id: randomUUID(),

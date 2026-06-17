@@ -120,6 +120,10 @@ export class ContactRegisterHandler implements SkillHandler {
           fallbackDisplayName: identifier,
           status: 'provisional',
           source: 'agent_called',
+          // Pass primaryEmail/primaryPhone so createContact() can route business
+          // senders to an org KG node rather than minting a person node (issue #946).
+          ...(channel === 'email' ? { primaryEmail: identifier } : {}),
+          ...(channel === 'phone' ? { primaryPhone: identifier } : {}),
         });
 
         // Link the identity, guarding against a concurrent call that may have created
