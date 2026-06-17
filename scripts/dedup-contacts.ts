@@ -305,11 +305,18 @@ export async function runDedup(
         // ------------------------------------------------------------------
         // Structural pair — auto-merge
         // ------------------------------------------------------------------
-        // Choose the primary: prefer the contact with the lower string ID (arbitrary
-        // but stable tiebreaker). In practice the contacts specialist may have a smarter
-        // selection policy, but for the maintenance script determinism is more important
-        // than optimal selection.
-        const [primaryId, secondaryId] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];
+        // Choose the survivor (primary). mergeContacts() keeps the primary row and only
+        // merges KG nodes when BOTH contacts have one; if the primary has no kg_node_id and
+        // the secondary does, the secondary's KG linkage is deleted with it (the survivor
+        // ends up with no KG node). So when exactly one side has a kg_node_id, that side
+        // MUST be the survivor. When both or neither have a KG node, fall back to the lower
+        // string ID — an arbitrary but stable, deterministic tiebreaker.
+        const aHasKg = a.kgNodeId !== null;
+        const bHasKg = b.kgNodeId !== null;
+        const [primaryId, secondaryId] =
+          aHasKg !== bHasKg
+            ? (aHasKg ? [a.id, b.id] : [b.id, a.id])
+            : (a.id < b.id ? [a.id, b.id] : [b.id, a.id]);
 
         logger.info(
           { primaryId, secondaryId, reason: classification.reason },
@@ -356,11 +363,15 @@ export async function runDedup(
         // Name/embedding similarity alone is never enough to auto-merge (see design).
         // Also, any pair touching the principal must go through human review even when
         // structural proof exists — identity mistakes for the principal are too costly.
-        if (involvePrincipal) {
+        // principalSkippedCount counts ONLY structural pairs withheld from auto-merge by
+        // the principal guard (see the DedupRunResult contract). A fuzzy pair involving the
+        // principal would never auto-merge anyway — it's an ordinary recommendation task —
+        // so counting it here would inflate the metric and misreport operator-facing results.
+        if (classification.type === 'structural' && involvePrincipal) {
           result.principalSkippedCount++;
           logger.info(
             { contactAId: a.id, contactBId: b.id, reason: classification.reason },
-            'dedup: principal contact involved — routing to task instead of auto-merge',
+            'dedup: principal contact involved — routing structural pair to task instead of auto-merge',
           );
         } else {
           logger.info(
@@ -593,9 +604,14 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       //     event (audit-logged by the write-ahead hook in EventBus).
       //   - createTask: uses TaskRepo.createTask(), which publishes task.created events.
       //   - storeFact/getFacts: use EntityMemory, which embeds labels and validates facts.
+      // A real sweep merges KG entity nodes (entityMemory.mergeEntities), which embeds fact
+      // labels and therefore needs OpenAI credentials. A dry-run only READS facts
+      // (getFacts → KG node reads, no embedding), so it can run with a fake embedding backend
+      // and no API key — keeping the preview usable in CI / minimal environments. Fail fast
+      // only for a real run.
       const openaiApiKey = process.env['OPENAI_API_KEY'];
-      if (!openaiApiKey) {
-        logger.error('dedup-contacts: OPENAI_API_KEY is required (entity memory — needed for storeFact / getFacts)');
+      if (!dryRun && !openaiApiKey) {
+        logger.error('dedup-contacts: OPENAI_API_KEY is required for a real sweep (KG entity merge embeds fact labels). Re-run with --dry-run to preview without it.');
         process.exit(1);
       }
 
@@ -609,7 +625,12 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       );
 
       const modelRegistry = new ModelRegistry(logger);
-      const embeddingService = EmbeddingService.createWithOpenAI(openaiApiKey, logger, bus, modelRegistry);
+      // With a key, use the real OpenAI-backed embeddings. Without one (dry-run only — the
+      // check above exits a real run that lacks a key), fall back to the fake backend; the
+      // dry-run path never embeds, so its results are unaffected.
+      const embeddingService = openaiApiKey
+        ? EmbeddingService.createWithOpenAI(openaiApiKey, logger, bus, modelRegistry)
+        : EmbeddingService.createForTesting();
       const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
       const validator = new MemoryValidator(kgStore, embeddingService);
       const entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
