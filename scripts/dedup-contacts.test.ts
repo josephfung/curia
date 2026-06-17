@@ -160,6 +160,23 @@ describe('runDedup — unit', () => {
     expect(result.mergedCount).toBe(1);
   });
 
+  it('picks the contact WITH a kg_node_id as the survivor, regardless of ID order', async () => {
+    // c1 < c2 lexicographically, but only c2 has a KG link. mergeContacts() keeps the
+    // primary and would orphan c2's KG node if c1 were chosen — so c2 must be the primary.
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Otto Becker' }),
+      makeContact({ id: 'c2', displayName: 'otto becker', kgNodeId: 'kg-c2' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, opts);
+
+    expect(mergeMock).toHaveBeenCalledOnce();
+    // Survivor (primary) is c2 (the KG-bearing side); c1 is the secondary that gets deleted.
+    expect(mergeMock).toHaveBeenCalledWith('c2', 'c1');
+    expect(result.mergedCount).toBe(1);
+  });
+
   // -------------------------------------------------------------------------
   // Test 2: fuzzy pair → task (no merge)
   // -------------------------------------------------------------------------
@@ -231,6 +248,26 @@ describe('runDedup — unit', () => {
     // Exact name match is structural, but principal is involved → task
     expect(mergeMock).not.toHaveBeenCalled();
     expect(result.principalSkippedCount).toBe(1);
+  });
+
+  it('does NOT count a FUZZY principal pair toward principalSkippedCount', async () => {
+    // Similar-but-not-identical names (fuzzy, not structural) where one side is the principal.
+    // A fuzzy pair never auto-merges anyway, so it is an ordinary recommendation task and
+    // must NOT inflate principalSkippedCount (which counts only structural pairs withheld
+    // from auto-merge by the principal guard).
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Mikael Sorensen', systemRole: 'principal' }),
+      makeContact({ id: 'c2', displayName: 'Michael Sorenson' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, opts);
+
+    // Fuzzy → a task is created, no merge, and the principal counter stays at 0.
+    expect(mergeMock).not.toHaveBeenCalled();
+    expect(createTaskMock).toHaveBeenCalledOnce();
+    expect(result.taskCount).toBe(1);
+    expect(result.principalSkippedCount).toBe(0);
   });
 
   // -------------------------------------------------------------------------
