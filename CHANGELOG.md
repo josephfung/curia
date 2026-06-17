@@ -24,6 +24,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Tier-based capability gating** — dispatcher, outbound gateway, and Signal trust now gate via `meetsMinimumTier()`; legacy `status`/`trust_level` deprecated (removal in #955). (#945)
+- **Elevated-skill gate** — YAML-declared scheduled jobs (`systemRole: "system"`) now pass the elevated-skill gate; agent-originated tasks remain blocked.
+- **Coordinator 8am digest** — scheduler entry rewritten with explicit step-by-step instructions; skips sending if both pending approvals and open tasks are empty.
+
+### Removed
+
+- **`pending-actions-digest` skill** — removed; coordinator composes the daily digest directly from `list-pending-actions` and `task-list`.
 
 ### Fixed
 
@@ -36,16 +42,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`@opentelemetry/core`** — pinned to `>=2.8.0`, clearing GHSA-8988-4f7v-96qf (unbounded memory allocation in W3C Baggage header parsing).
 - **`protobufjs`** — targeted override on `onnxruntime-web` to `>=7.6.3 <8`, clearing GHSA-f38q-mgvj-vph7 (schema-derived names shadowing runtime properties).
 - **`npm` (Docker runtime image)** — upgraded npm to 11.17.0 in the production Docker image, clearing CVE-2026-53655 (`node-tar` PAX file smuggling), CVE-2026-45149 (`brace-expansion` arbitrary string generation), and CVE-2026-42338 (`ip-address` XSS) from npm's own bundled packages.
-
-### Changed
-
-- **Elevated-skill gate** — `execution.ts` now permits `systemRole: "system"` (YAML-declared scheduled jobs via `makeSystemOriginator()`) through the elevated-skill gate in addition to `"principal"` (active CEO conversation). Agent-originated tasks (`systemRole: "agent"`) remain blocked. The `list-pending-actions` handler-level guard updated to match. Handler-level `isPrincipalOriginated()` guards on `approve-action`, `deny-action`, and `dismiss-action` are unchanged — those actions still require active CEO authorization.
-- **Coordinator 8am digest task** — scheduler entry rewritten from vague natural language to explicit step-by-step instructions: fetch pending approvals via `list-pending-actions`, fetch open tasks via `task-list` (owner `"ceo"` and `"external"`), compose summary, send via email. Skips sending if both return empty.
-- **`OutboundNotificationPayload.notificationType` (bus event types, public API)** — `'pending_actions_digest'` variant removed from the discriminated union in `src/bus/events.ts`.
-
-### Removed
-
-- **`pending-actions-digest` skill** — over-specialized batch skill deleted; the coordinator now composes the daily digest directly using `list-pending-actions` and `task-list`, giving the LLM full control over channel selection and digest content.
 
 ## [0.35.0] — 2026-06-16 — "Garak"
 
