@@ -454,6 +454,28 @@ describe('classifyPair — structural: single-token org/automated name match', (
       expect(result.type).not.toBe('structural');
     }
   });
+
+  it('does NOT classify as structural on single-token exact match for kind=principal', () => {
+    // principal contacts are handled by the dedup principal guard, not the org exemption
+    const a = makeContact({ id: 'c1', displayName: 'Curia', kind: 'principal' });
+    const b = makeContact({ id: 'c2', displayName: 'curia', kind: 'principal' });
+
+    const result = classifyPair(a, [], b, []);
+    if (result !== null) {
+      expect(result.type).not.toBe('structural');
+    }
+  });
+
+  it('does NOT classify as structural on single-token exact match for kind=agent', () => {
+    // agent contacts (e.g. Curia itself) do not benefit from the org single-token exemption
+    const a = makeContact({ id: 'c1', displayName: 'Curia', kind: 'agent' });
+    const b = makeContact({ id: 'c2', displayName: 'curia', kind: 'agent' });
+
+    const result = classifyPair(a, [], b, []);
+    if (result !== null) {
+      expect(result.type).not.toBe('structural');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
