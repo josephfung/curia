@@ -26,7 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Contacts agent decline paths** — three explicit "not a duplicate" branches added: duplicate notification, dedup review task, and weekly scan. "Skip this one" remains a temporary defer that does not write an exclusion. (#1027)
 
 ### Changed
-- **`writeExclusion` / `hasExclusion`** — extracted from `scripts/dedup-contacts.ts` into `src/contacts/dedup-exclusions.ts` so the sweep and the new skill share one implementation. The script re-exports them for backward compatibility.
+- **`writeExclusion` / `hasExclusion`** — extracted from `scripts/dedup-contacts.ts` into `src/contacts/dedup-exclusions.ts`; `contact-find-duplicates` now uses the shared `hasExclusion` instead of its own local copy. The script re-exports them for backward compatibility.
 
 ### Added
 
