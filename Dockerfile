@@ -101,6 +101,14 @@ COPY config/ ./config/
 # computed from src/index.ts (../schemas), which resolves to /app/schemas here.
 COPY schemas/ ./schemas/
 COPY src/ ./src/
+# Maintenance scripts (e.g. dedup-contacts, backfill-*) are run as one-off commands
+# in the running container via `tsx scripts/<name>.ts`. They import from src/ (copied
+# above) and rely on tsx + prod node_modules, both present at runtime. Without this
+# COPY the scripts simply aren't in the image, so the commands fail with "file not
+# found" — copy the whole dir so new maintenance scripts are available without a
+# Dockerfile edit each time. (The handful of *.test.ts files here are inert: vitest
+# isn't installed in the prod image, so they can't run; they just ride along.)
+COPY scripts/ ./scripts/
 
 # node_modules were installed as root above, so we chown the entire /app tree
 # to the non-root user before dropping privileges. /usr/local/bin/uv,

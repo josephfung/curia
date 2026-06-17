@@ -24,6 +24,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Tier-based capability gating** — dispatcher, outbound gateway, and Signal trust now gate via `meetsMinimumTier()`; legacy `status`/`trust_level` deprecated (removal in #955). (#945)
 
+### Fixed
+
+- **Docker image now ships `scripts/`** — maintenance commands (`dedup:contacts`, `backfill-*`) were absent from the runtime image, so they failed in prod with "file not found"; the Dockerfile now copies `scripts/`.
+
 ### Security
 
 - **hono** — bumped override floor from 4.12.18 to 4.12.25, resolving 5 CVEs including CORS credential reflection (CVE-2026-54290, HIGH 7.1), body-limit bypass (CVE-2026-54288), path traversal in serve-static (CVE-2026-54286), Set-Cookie header merging (CVE-2026-54287), and Lambda@Edge header dropping (CVE-2026-54289).
