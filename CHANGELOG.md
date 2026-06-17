@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **hono** — bumped override floor from 4.12.18 to 4.12.25, resolving 5 CVEs including CORS credential reflection (CVE-2026-54290, HIGH 7.1), body-limit bypass (CVE-2026-54288), path traversal in serve-static (CVE-2026-54286), Set-Cookie header merging (CVE-2026-54287), and Lambda@Edge header dropping (CVE-2026-54289).
+- **`markdown-to-html`** — `href` attribute now explicitly encodes `"` as `&quot;` in auto-linked URLs, closing CodeQL XSS alert #158.
 
 ## [0.35.0] — 2026-06-16 — "Garak"
 

@@ -98,7 +98,11 @@ function applyInline(text: string): string {
         stripped = stripped.slice(0, -1);
       }
       const suffix = url.slice(stripped.length);
-      return `<a href="${stripped}" target="_blank" rel="noopener noreferrer">${stripped}</a>${suffix}`;
+      // Escape " for the href attribute context; & < > are already escaped by the
+      // earlier escapeHtml call, and the URL regex excludes " from matching, but
+      // we encode it explicitly here for defense in depth (CodeQL alert #158).
+      const hrefValue = stripped.replace(/"/g, '&quot;');
+      return `<a href="${hrefValue}" target="_blank" rel="noopener noreferrer">${stripped}</a>${suffix}`;
     },
   );
 
@@ -108,6 +112,10 @@ function applyInline(text: string): string {
   return out;
 }
 
+// Intentionally does NOT encode " — escapeHtml runs before URL auto-linking, and encoding
+// " to &quot; would cause the URL regex [^\s<>"] to match greedily through what were
+// intended as " boundaries in the raw text. The href attribute is protected separately
+// by the hrefValue.replace(/"/g, '&quot;') call at the point of attribute construction.
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
