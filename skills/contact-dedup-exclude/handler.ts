@@ -45,10 +45,19 @@ export class ContactDedupExcludeHandler implements SkillHandler {
       const source = ctx.memoryWriteSource ?? 'contacts-dedup';
       const storeFact = ctx.entityMemory.storeFact.bind(ctx.entityMemory);
 
-      // Write on A's node naming B
+      // Write on A's node naming B. Each side is independent: if A's write fails (e.g.
+      // KG conflict), we still attempt B — hasExclusion is bidirectional so a single
+      // side is enough to prevent the pair from resurfacing.
       if (contactA.kgNodeId !== null) {
-        await writeExclusion({ contactBId, kgNodeId: contactA.kgNodeId, storeFact, source });
-        contactAExcluded = true;
+        try {
+          await writeExclusion({ contactBId, kgNodeId: contactA.kgNodeId, storeFact, source });
+          contactAExcluded = true;
+        } catch (writeErrA) {
+          ctx.log.error(
+            { writeErrA, contactAId, contactBId },
+            'contact-dedup-exclude: failed to write exclusion on A — still attempting B',
+          );
+        }
       } else {
         // A has no KG node — exclusion written on B only (best-effort); if B's node is
         // later lost the exclusion may not be checkable. Logged so operators can audit.
@@ -58,19 +67,25 @@ export class ContactDedupExcludeHandler implements SkillHandler {
       // Write on B's node naming A — bidirectional so hasExclusion finds it regardless of
       // which contact's node is checked first
       if (contactB.kgNodeId !== null) {
-        await writeExclusion({ contactBId: contactAId, kgNodeId: contactB.kgNodeId, storeFact, source });
-        contactBExcluded = true;
+        try {
+          await writeExclusion({ contactBId: contactAId, kgNodeId: contactB.kgNodeId, storeFact, source });
+          contactBExcluded = true;
+        } catch (writeErrB) {
+          ctx.log.error(
+            { writeErrB, contactAId, contactBId, contactAExcluded },
+            'contact-dedup-exclude: failed to write exclusion on B',
+          );
+        }
       } else {
         ctx.log.warn({ contactAId, contactBId }, 'contact-dedup-exclude: contact B has no KG node — exclusion written on A only');
       }
 
-      // If neither contact has a KG node yet, the exclusion cannot be stored anywhere.
-      // Return failure so the agent knows to retry rather than telling the CEO it's done.
+      // Both sides failed (no KG nodes, or both writes errored) — nothing was stored.
       if (!contactAExcluded && !contactBExcluded) {
-        ctx.log.warn({ contactAId, contactBId }, 'contact-dedup-exclude: neither contact has a KG node; exclusion could not be written');
+        ctx.log.warn({ contactAId, contactBId, contactA: !!contactA.kgNodeId, contactB: !!contactB.kgNodeId }, 'contact-dedup-exclude: exclusion could not be written on either contact');
         return {
           success: false,
-          error: 'Neither contact has a KG node yet — the exclusion cannot be stored. Retry after the contacts have been enriched.',
+          error: 'Could not write dedup exclusion on either contact — exclusion not stored. Retry after enrichment or resolve the KG conflict.',
         };
       }
 
@@ -84,10 +99,11 @@ export class ContactDedupExcludeHandler implements SkillHandler {
         },
       };
     } catch (err) {
+      // Outer catch: only contact lookup failures reach here (writeExclusion errors
+      // are handled above with their own per-side try/catch)
       const message = err instanceof Error ? err.message : String(err);
-      // Include partial-write state so operators can tell which write failed
-      ctx.log.error({ err, contactAId, contactBId, contactAExcluded, contactBExcluded }, 'contact-dedup-exclude: failed to write exclusion facts');
-      return { success: false, error: `Failed to write dedup exclusion: ${message}` };
+      ctx.log.error({ err, contactAId, contactBId }, 'contact-dedup-exclude: contact lookup failed');
+      return { success: false, error: `Failed to look up contacts: ${message}` };
     }
   }
 }
