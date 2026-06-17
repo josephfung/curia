@@ -48,6 +48,7 @@ function makeIdentity(
   contactId: string,
   channel: string,
   channelIdentifier: string,
+  overrides: Partial<ChannelIdentity> = {},
 ): ChannelIdentity {
   return {
     id: `${contactId}-${channel}-id`,
@@ -61,6 +62,7 @@ function makeIdentity(
     source: 'email_participant',
     createdAt: new Date('2026-01-01'),
     updatedAt: new Date('2026-01-01'),
+    ...overrides,
   };
 }
 
@@ -101,6 +103,60 @@ describe('classifyPair — structural: shared channel identity', () => {
     const result = classifyPair(a, aIds, b, bIds);
     expect(result).not.toBeNull();
     expect(result!.type).toBe('structural');
+  });
+
+  // F1: verified requirement for structural channel-identity proof
+  it('classifies as structural when both contacts share a VERIFIED channel identity', () => {
+    // Both identities are verified (default) → structural
+    const a = makeContact({ id: 'c1', displayName: 'Alice Smith' });
+    const b = makeContact({ id: 'c2', displayName: 'A. Smith' });
+    const aIds = [makeIdentity('c1', 'email', 'alice@example.com', { verified: true })];
+    const bIds = [makeIdentity('c2', 'email', 'alice@example.com', { verified: true })];
+
+    const result = classifyPair(a, aIds, b, bIds);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('structural');
+  });
+
+  it('does NOT classify as structural when the shared identity is unverified on contact a', () => {
+    // a's identity is unverified — must NOT be structural (falls through to fuzzy)
+    const a = makeContact({ id: 'c1', displayName: 'Alice Smith' });
+    const b = makeContact({ id: 'c2', displayName: 'A. Smith' });
+    const aIds = [makeIdentity('c1', 'email', 'alice@example.com', { verified: false, verifiedAt: null })];
+    const bIds = [makeIdentity('c2', 'email', 'alice@example.com', { verified: true })];
+
+    const result = classifyPair(a, aIds, b, bIds);
+    // Unverified shared identity → must NOT be structural
+    if (result !== null) {
+      expect(result.type).not.toBe('structural');
+    }
+  });
+
+  it('does NOT classify as structural when the shared identity is unverified on contact b', () => {
+    // b's identity is unverified — must NOT be structural (falls through to fuzzy)
+    const a = makeContact({ id: 'c1', displayName: 'Alice Smith' });
+    const b = makeContact({ id: 'c2', displayName: 'A. Smith' });
+    const aIds = [makeIdentity('c1', 'email', 'alice@example.com', { verified: true })];
+    const bIds = [makeIdentity('c2', 'email', 'alice@example.com', { verified: false, verifiedAt: null })];
+
+    const result = classifyPair(a, aIds, b, bIds);
+    // Unverified shared identity on b's side → must NOT be structural
+    if (result !== null) {
+      expect(result.type).not.toBe('structural');
+    }
+  });
+
+  it('does NOT classify as structural when both identities are unverified (even if they match)', () => {
+    // Neither side verified — unverified shared identity must never be structural
+    const a = makeContact({ id: 'c1', displayName: 'Alice Smith' });
+    const b = makeContact({ id: 'c2', displayName: 'A. Smith' });
+    const aIds = [makeIdentity('c1', 'email', 'alice@example.com', { verified: false, verifiedAt: null })];
+    const bIds = [makeIdentity('c2', 'email', 'alice@example.com', { verified: false, verifiedAt: null })];
+
+    const result = classifyPair(a, aIds, b, bIds);
+    if (result !== null) {
+      expect(result.type).not.toBe('structural');
+    }
   });
 
   it('does NOT classify as structural when channel types differ (email vs phone)', () => {
@@ -213,6 +269,39 @@ describe('classifyPair — structural: exact normalized name match', () => {
     // "smith john" === "smith john" after normalization — structural
     const result = classifyPair(a, [], b, []);
     expect(result?.type).toBe('structural');
+  });
+
+  // F3: single-token names must NOT be structural
+  it('does NOT classify as structural on a single-token exact match ("Acme" === "acme")', () => {
+    // Single-token match is too weak — a name like "Acme" could refer to many different
+    // entities. Must fall through to fuzzy (or null), never auto-merge.
+    const a = makeContact({ id: 'c1', displayName: 'Acme' });
+    const b = makeContact({ id: 'c2', displayName: 'acme' });
+
+    const result = classifyPair(a, [], b, []);
+    if (result !== null) {
+      expect(result.type).not.toBe('structural');
+    }
+  });
+
+  it('does NOT classify as structural on a single-token match even with punctuation stripped ("Smith" === "smith")', () => {
+    const a = makeContact({ id: 'c1', displayName: 'Smith' });
+    const b = makeContact({ id: 'c2', displayName: 'smith' });
+
+    const result = classifyPair(a, [], b, []);
+    if (result !== null) {
+      expect(result.type).not.toBe('structural');
+    }
+  });
+
+  it('classifies as structural on a two-token full name exact match', () => {
+    // Two tokens, length ≥ 5 — this is the minimum for structural name proof.
+    const a = makeContact({ id: 'c1', displayName: 'John Doe' });
+    const b = makeContact({ id: 'c2', displayName: 'john doe' });
+
+    const result = classifyPair(a, [], b, []);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('structural');
   });
 
   it('classifies as fuzzy on similar but not identical names (no shared variants)', () => {

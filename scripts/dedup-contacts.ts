@@ -76,8 +76,9 @@ export interface DedupRunOptions {
     sourceAgentId: string;
     tags: string[];
   }) => Promise<unknown>;
-  /** Calls EntityMemory.storeFact (or equivalent). */
-  storeFact: (options: StoreFactOptions) => Promise<unknown>;
+  // storeFact is intentionally NOT included here: the sweep never writes exclusion facts
+  // itself. The decline→exclusion write is performed by the contacts agent's decline flow
+  // (not yet wired; tracked as a follow-up). Only writeExclusion() has its own storeFact param.
   /** Calls EntityMemory.getFacts for a KG node — returns fact nodes. */
   getFacts: (kgNodeId: string) => Promise<KgNode[]>;
 }
@@ -87,7 +88,10 @@ export interface DedupRunOptions {
 // ---------------------------------------------------------------------------
 
 export interface WriteExclusionOptions {
-  contactAId: string;
+  // contactAId is intentionally omitted: the exclusion fact is always written on
+  // kgNodeId (which is A's KG node) and names contactBId as the excluded party.
+  // The caller already knows which node belongs to A — passing A's contact ID into
+  // the helper adds no value and would just be ignored.
   contactBId: string;
   /** KG node on which to record the exclusion fact. */
   kgNodeId: string;
@@ -105,9 +109,15 @@ export interface WriteExclusionOptions {
  *   label: "dedup_exclusion: <otherContactId>"
  *   properties.attribute = 'dedup_exclusion'
  *   properties.value     = otherContactId
+ *
+ * NOTE: This function is intentionally NOT called by runDedup() / the sweep.
+ * The decline→exclusion write is performed by the contacts agent's decline flow
+ * (i.e. when a human reviews a fuzzy recommendation task and declines to merge).
+ * That wiring is not yet implemented; tracked as a follow-up. This function is
+ * therefore NOT dead code — it is the target of that future call site.
  */
 export async function writeExclusion(opts: WriteExclusionOptions): Promise<void> {
-  const { contactAId: _contactAId, contactBId, kgNodeId, storeFact } = opts;
+  const { contactBId, kgNodeId, storeFact } = opts;
   await storeFact({
     entityNodeId: kgNodeId,
     label: `dedup_exclusion: ${contactBId}`,
@@ -187,7 +197,7 @@ export async function runDedup(
   identityMap: Map<string, ChannelIdentity[]>,
   opts: DedupRunOptions,
 ): Promise<DedupRunResult> {
-  const { dryRun, mergeContacts, createTask, storeFact, getFacts } = opts;
+  const { dryRun, mergeContacts, createTask, getFacts } = opts;
 
   const result: DedupRunResult = {
     dryRun,
@@ -205,6 +215,11 @@ export async function runDedup(
   // Track pairs we've already handled to avoid double-processing (A,B) and (B,A).
   const processedPairs = new Set<string>();
 
+  // F2: Track contacts that have been merged away (deleted) so we can skip
+  // subsequent pairs that reference them. Without this guard, a pair (c2, c3)
+  // would attempt to merge a row that was already deleted by the (c1, c2) merge.
+  const mergedAwayIds = new Set<string>();
+
   // We need a canonical ordering for pair keys
   function pairKey(aId: string, bId: string): string {
     return aId < bId ? `${aId}:${bId}` : `${bId}:${aId}`;
@@ -215,6 +230,12 @@ export async function runDedup(
       const a = contacts[i]!;
       const b = contacts[j]!;
 
+      // F2: Skip if either contact was already merged away in a prior iteration.
+      // This can happen when c1≡c2 (structural, merged) and c2≡c3 (structural):
+      // after the c1/c2 merge, c2 is deleted — trying to merge c2 again would
+      // hit a DB constraint or a silent no-op depending on the implementation.
+      if (mergedAwayIds.has(a.id) || mergedAwayIds.has(b.id)) continue;
+
       const key = pairKey(a.id, b.id);
       if (processedPairs.has(key)) continue;
       processedPairs.add(key);
@@ -222,21 +243,39 @@ export async function runDedup(
       const aIdentities = identityMap.get(a.id) ?? [];
       const bIdentities = identityMap.get(b.id) ?? [];
 
-      // Classify the pair: structural, fuzzy, or null (below threshold)
-      const classification = classifyPair(a, aIdentities, b, bIdentities);
-      if (classification === null) continue;
+      // F4: Wrap the exclusion check and classification in a try-catch so that
+      // a transient DB error (e.g. getFacts throws) does not abort the entire
+      // sweep. On error we FAIL CLOSED: the pair is skipped (never merged)
+      // and errorCount is incremented so the operator knows something went wrong.
+      let classification;
+      let excluded: boolean;
+      try {
+        // Classify the pair: structural, fuzzy, or null (below threshold)
+        classification = classifyPair(a, aIdentities, b, bIdentities);
+        if (classification === null) continue;
 
-      // ------------------------------------------------------------------
-      // Check for a prior dedup_exclusion in either direction
-      // ------------------------------------------------------------------
-      // We check regardless of classification type — exclusions apply to all matches.
-      const excluded = await hasExclusion({
-        contactAId: a.id,
-        contactBId: b.id,
-        kgNodeIdA: a.kgNodeId,
-        kgNodeIdB: b.kgNodeId,
-        getFacts,
-      });
+        // ------------------------------------------------------------------
+        // Check for a prior dedup_exclusion in either direction
+        // ------------------------------------------------------------------
+        // We check regardless of classification type — exclusions apply to all matches.
+        excluded = await hasExclusion({
+          contactAId: a.id,
+          contactBId: b.id,
+          kgNodeIdA: a.kgNodeId,
+          kgNodeIdB: b.kgNodeId,
+          getFacts,
+        });
+      } catch (err) {
+        // Fail closed: any error during classification or exclusion check means
+        // we DO NOT proceed to merge. Log and move on to the next pair.
+        logger.error(
+          { err, contactAId: a.id, contactBId: b.id },
+          'dedup: error during classification/exclusion check — skipping pair (fail closed)',
+        );
+        result.errorCount++;
+        continue;
+      }
+
       if (excluded) {
         logger.debug({ contactAId: a.id, contactBId: b.id }, 'dedup: skipped — dedup_exclusion fact present');
         result.skippedExcludedCount++;
@@ -271,6 +310,10 @@ export async function runDedup(
         try {
           await mergeContacts(primaryId!, secondaryId!);
           result.mergedCount++;
+          // F2: Record the deleted (secondary) contact as merged away so that any
+          // subsequent pair referencing it is skipped. This prevents attempting to
+          // merge an already-deleted row (e.g. c2 appears in both (c1,c2) and (c2,c3)).
+          mergedAwayIds.add(secondaryId!);
           logger.info({ primaryId, secondaryId }, 'dedup: merge complete');
         } catch (err) {
           logger.error({ err, primaryId, secondaryId }, 'dedup: merge failed — continuing');
@@ -541,6 +584,10 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       const contactService = ContactService.createWithPostgres(pool, entityMemory, logger, {
         dedupService,
         // Publish contact.merged to the bus so the write-ahead audit hook records it.
+        // TODO: a bus.publish failure here is logged but not reflected in the exit code
+        // or errorCount. This is acceptable for a maintenance script (the merge itself
+        // succeeded, the audit gap is narrow), but revisit if audit-gap detection becomes
+        // a hard requirement.
         onContactMerged: (primaryContactId, secondaryContactId, mergedAt) => {
           bus.publish('dispatch', createContactMerged({ primaryContactId, secondaryContactId, mergedAt }))
             .catch((err: unknown) => logger.error({ err }, 'Failed to publish contact.merged — audit trail may be incomplete'));
@@ -562,8 +609,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
         // TaskRepo.createTask publishes task.created and handles progress/error_budget cols.
         createTask: (params) => taskRepo.createTask(params),
 
-        // EntityMemory.storeFact embeds the label and validates via MemoryValidator.
-        storeFact: (options) => entityMemory.storeFact(options),
+        // storeFact is NOT included in DedupRunOptions — the sweep never writes exclusion
+        // facts directly. See writeExclusion() and its doc comment for the intended call site.
 
         // EntityMemory.getFacts returns fact nodes linked to the KG entity node.
         getFacts: (kgNodeId) => entityMemory.getFacts(kgNodeId),
@@ -578,6 +625,10 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
           wouldCreateTaskCount: result.wouldCreateTaskCount,
           skippedExcludedCount: result.skippedExcludedCount,
           principalSkippedCount: result.principalSkippedCount,
+          // F5: Include errorCount in the dry-run summary — otherwise an operator
+          // sees a clean "DRY-RUN complete" message while the process exits 1,
+          // making it impossible to tell from the summary that something went wrong.
+          errorCount: result.errorCount,
         }, 'dedup-contacts: DRY-RUN complete (no changes made)');
       } else {
         logger.info({
