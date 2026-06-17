@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.8.2"
+version: "0.8.3"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -627,12 +627,16 @@ schedule:
 
   - cron: "0 8 * * *"
     task: >
-      Send the CEO a daily digest. Use list-pending-actions to get all open
-      approval requests. Use task-list to get open tasks (run it twice: once
-      with owner "ceo", once with owner "external"). Compose a clear summary
-      and send it via email using the CEO's address from the Principal Contact
-      Details block. Skip sending entirely if list-pending-actions returns no
-      pending approvals and task-list returns no ceo or external tasks. If
-      list-pending-actions returns an error, include a brief note in the digest
-      that pending approvals could not be retrieved, then send anyway.
+      Send the CEO a daily digest. Steps: (1) Use list-pending-actions to get
+      all open approval requests. (2) Use task-list three times: owner "ceo"
+      with no date filter (all open CEO tasks); owner "ceo" with due_before set
+      to end of today (overdue or due today); owner "external" with no date
+      filter (waiting-on-others tasks). (3) Compose a clear summary. Lead with
+      any overdue or due-today CEO tasks — flag these prominently. Follow with
+      the full open-task counts and pending approvals. Send via email using the
+      CEO's address from the Principal Contact Details block. Skip sending
+      entirely if all three task-list calls return empty and list-pending-actions
+      returns no pending approvals. If list-pending-actions returns an error,
+      include a brief note that pending approvals could not be retrieved, then
+      send anyway.
     expectedDurationSeconds: 360
