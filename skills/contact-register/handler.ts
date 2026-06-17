@@ -122,7 +122,8 @@ export class ContactRegisterHandler implements SkillHandler {
           source: 'agent_called',
           // Pass primaryEmail/primaryPhone so createContact() can route business
           // senders to an org KG node rather than minting a person node (issue #946).
-          ...(channel === 'email' ? { primaryEmail: identifier } : {}),
+          // Guard on '@' so a malformed identifier doesn't get passed as a primary email.
+          ...(channel === 'email' && identifier.includes('@') ? { primaryEmail: identifier } : {}),
           ...(channel === 'phone' ? { primaryPhone: identifier } : {}),
         });
 

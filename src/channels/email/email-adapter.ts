@@ -914,8 +914,9 @@ export class EmailAdapter implements Channel {
           try {
             await contactService.deleteContact(contact.id);
           } catch (deleteErr) {
+            // Include linkErr so both failure modes are co-located in the log entry.
             logger.warn(
-              { deleteErr, orphanId: contact.id },
+              { deleteErr, linkErr, orphanId: contact.id },
               'extractParticipants: could not clean up orphaned contact after linkIdentity failure',
             );
           }
