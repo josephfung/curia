@@ -39,7 +39,7 @@ function makeTaskRow(aId: string, bId: string, aName = 'A', bName = 'B'): Partia
   };
 }
 
-function makeCtx(
+function makeContext(
   input: Record<string, unknown>,
   overrides: {
     contactService?: { findDuplicates: () => Promise<DuplicatePair[]> };
@@ -78,14 +78,14 @@ describe('ContactFindDuplicatesHandler', () => {
   // ---------------------------------------------------------------------------
 
   it('returns failure when contactService is not available', async () => {
-    const result = await handler.execute(makeCtx({}));
+    const result = await handler.execute(makeContext({}));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('contactService');
   });
 
   it('returns failure when taskRepo is not available', async () => {
     const contactService = { findDuplicates: async () => [] };
-    const result = await handler.execute(makeCtx({}, { contactService }));
+    const result = await handler.execute(makeContext({}, { contactService }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('taskRepo');
   });
@@ -93,7 +93,7 @@ describe('ContactFindDuplicatesHandler', () => {
   it('returns failure when entityMemory is not available', async () => {
     const contactService = { findDuplicates: async () => [] };
     const taskRepo = { listTasks: async () => [], createTask: async () => ({}) };
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('entityMemory');
   });
@@ -105,7 +105,7 @@ describe('ContactFindDuplicatesHandler', () => {
   it('rejects min_score outside [0, 1]', async () => {
     const contactService = { findDuplicates: async () => [] };
     const result = await handler.execute(
-      makeCtx({ min_score: 1.5 }, { contactService, taskRepo: emptyTaskRepo as never, entityMemory: noFactsEntityMemory }),
+      makeContext({ min_score: 1.5 }, { contactService, taskRepo: emptyTaskRepo as never, entityMemory: noFactsEntityMemory }),
     );
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('min_score');
@@ -114,7 +114,7 @@ describe('ContactFindDuplicatesHandler', () => {
   it('rejects non-integer max_tasks', async () => {
     const contactService = { findDuplicates: async () => [] };
     const result = await handler.execute(
-      makeCtx({ max_tasks: 1.5 }, { contactService, taskRepo: emptyTaskRepo as never, entityMemory: noFactsEntityMemory }),
+      makeContext({ max_tasks: 1.5 }, { contactService, taskRepo: emptyTaskRepo as never, entityMemory: noFactsEntityMemory }),
     );
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('max_tasks');
@@ -132,7 +132,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const createTask = vi.fn().mockResolvedValue({ id: 'task-1' });
     const taskRepo = { listTasks: async () => [], createTask };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -151,7 +151,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const createTask = vi.fn().mockResolvedValue({ id: 'task-1' });
     const taskRepo = { listTasks: async () => [], createTask };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -171,7 +171,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const createTask = vi.fn().mockResolvedValue({ id: 'task-1' });
     const taskRepo = { listTasks: async () => [], createTask };
 
-    const result = await handler.execute(makeCtx({ min_score: 0.7 }, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({ min_score: 0.7 }, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -196,7 +196,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const createTask = vi.fn().mockResolvedValue({ id: 'task-1' });
     const taskRepo = { listTasks: async () => [], createTask };
 
-    const result = await handler.execute(makeCtx({ max_tasks: 1 }, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({ max_tasks: 1 }, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -215,7 +215,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const createTask = vi.fn().mockResolvedValue({ id: 'task-1' });
     const taskRepo = { listTasks: async () => [], createTask };
 
-    const result = await handler.execute(makeCtx({ max_tasks: 0 }, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({ max_tasks: 0 }, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -241,7 +241,7 @@ describe('ContactFindDuplicatesHandler', () => {
       createTask,
     };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -264,7 +264,7 @@ describe('ContactFindDuplicatesHandler', () => {
       createTask,
     };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -294,7 +294,7 @@ describe('ContactFindDuplicatesHandler', () => {
       },
     };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -321,7 +321,7 @@ describe('ContactFindDuplicatesHandler', () => {
       },
     };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -341,7 +341,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const getFacts = vi.fn().mockResolvedValue([]);
     const entityMemory = { getFacts };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory }));
 
     expect(result.success).toBe(true);
     // getFacts should never be called because both kgNodeIds are null
@@ -368,7 +368,7 @@ describe('ContactFindDuplicatesHandler', () => {
       createTask,
     };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -394,7 +394,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const createTask = vi.fn();
     const taskRepo = { listTasks: async () => [], createTask };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -419,7 +419,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const malformedTask = { id: 'manual-task', description: 'Manually filed dedup task — no IDs', tags: ['dedup'] };
     const taskRepo = { listTasks: async () => [malformedTask], createTask };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     // Should not crash, and should still file the task since the malformed entry
     // is not recognized as an existing task for this pair
@@ -449,7 +449,7 @@ describe('ContactFindDuplicatesHandler', () => {
     });
     const taskRepo = { listTasks: async () => [], createTask };
 
-    const result = await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     // Scan reports success (partial), not failure
     expect(result.success).toBe(true);
@@ -473,7 +473,7 @@ describe('ContactFindDuplicatesHandler', () => {
     const createTask = vi.fn().mockResolvedValue({ id: 'task-1' });
     const taskRepo = { listTasks: async () => [], createTask };
 
-    await handler.execute(makeCtx({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+    await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(createTask).toHaveBeenCalledOnce();
     const callArg = createTask.mock.calls[0]![0] as { description: string };
