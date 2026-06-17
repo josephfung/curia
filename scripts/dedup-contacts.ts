@@ -318,6 +318,11 @@ export async function runDedup(
 
         if (dryRun) {
           result.wouldMergeCount++;
+          // M3: mirror real control flow in dry-run — mark the would-be secondary
+          // as merged away so later pairs referencing it are skipped, keeping the
+          // dry-run counts and recommendations accurate (no double-counting a
+          // contact that a real run would already have removed).
+          mergedAwayIds.add(secondaryId!);
           continue;
         }
 
@@ -328,6 +333,17 @@ export async function runDedup(
           // subsequent pair referencing it is skipped. This prevents attempting to
           // merge an already-deleted row (e.g. c2 appears in both (c1,c2) and (c2,c3)).
           mergedAwayIds.add(secondaryId!);
+          // M4: reflect the DB-side identity reattachment in memory. mergeContacts
+          // moves the secondary's channel identities onto the primary, so later pairs
+          // (primaryId, X) must see the combined identity set to catch transitive
+          // structural merges that only become provable after this merge consolidates
+          // identities. Without this, the in-memory identityMap stays stale.
+          const mergedIdentities = [
+            ...(identityMap.get(primaryId!) ?? []),
+            ...(identityMap.get(secondaryId!) ?? []),
+          ];
+          identityMap.set(primaryId!, mergedIdentities);
+          identityMap.delete(secondaryId!);
           logger.info({ primaryId, secondaryId }, 'dedup: merge complete');
         } catch (err) {
           logger.error({ err, primaryId, secondaryId }, 'dedup: merge failed — continuing');

@@ -57,6 +57,18 @@ function normalizeDisplayName(name: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Identity key canonicalization (must match DedupService exactly)
+// ---------------------------------------------------------------------------
+
+function canonicalIdentityKey(channel: string, identifier: string): string {
+  // Emails are matched case-insensitively (migration 044's LOWER() unique index),
+  // so lowercase them before comparison; phone/signal are already normalized at write.
+  // Without this, mixed-case email identities for the same address fail structural proof.
+  const id = channel === 'email' ? identifier.toLowerCase() : identifier;
+  return `${channel}:${id}`;
+}
+
+// ---------------------------------------------------------------------------
 // classifyPair
 // ---------------------------------------------------------------------------
 
@@ -88,13 +100,13 @@ export function classifyPair(
   // it falls through to the fuzzy path (recommendation, not auto-merge).
   // This is O(|aIds| + |bIds|).
   const aIdKeys = new Set(
-    aIdentities.filter(i => i.verified).map(i => `${i.channel}:${i.channelIdentifier}`),
+    aIdentities.filter(i => i.verified).map(i => canonicalIdentityKey(i.channel, i.channelIdentifier)),
   );
   for (const bId of bIdentities) {
     // Both sides must be verified: a's key was built from verified-only identities,
     // and we check bId.verified here before looking up the key.
     if (!bId.verified) continue;
-    const key = `${bId.channel}:${bId.channelIdentifier}`;
+    const key = canonicalIdentityKey(bId.channel, bId.channelIdentifier);
     if (aIdKeys.has(key)) {
       return {
         type: 'structural',
@@ -146,18 +158,16 @@ export function classifyPair(
   // Any match returned here is fuzzy — name similarity never proves identity.
   // Use checkForDuplicates with a single-item candidate list as a thin adapter
   // to the existing scoring logic, then re-interpret the result.
-  const pairs = dedupService.checkForDuplicates(
-    a,
-    aIdentities,
-    [b],
-    new Map([[b.id, bIdentities]]),
-  );
+  // Direct pair scoring — NOT checkForDuplicates, which applies name-blocking and
+  // would drop genuinely-similar pairs whose blocking keys differ (returning null
+  // instead of a fuzzy match/task). The caller iterates explicit pairs, so we score
+  // this pair directly with no blocking.
+  const pair = dedupService.scorePair(a, aIdentities, b, bIdentities);
+  if (pair === null) return null;
 
-  if (pairs.length === 0) return null;
-
-  const pair = pairs[0]!;
-  // The DedupService may still return 'certain' for channel overlap (already handled
-  // above) or for high JW. Under the new design, any non-structural match is fuzzy.
+  // Any non-structural match is fuzzy — name similarity never proves identity.
+  // scorePair may return 1.0 for an UNVERIFIED shared identity; that is intentionally
+  // a fuzzy recommendation here, never an auto-merge.
   return {
     type: 'fuzzy',
     score: pair.score,

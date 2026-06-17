@@ -120,6 +120,19 @@ describe('classifyPair — structural: shared channel identity', () => {
     expect(result!.type).toBe('structural');
   });
 
+  it('classifies as structural when emails match case-insensitively (Major-1)', () => {
+    // Emails are matched case-insensitively (migration 044's LOWER index). Mixed-case
+    // spellings of the same address must still count as a structural shared identity.
+    const a = makeContact({ id: 'c1', displayName: 'Alice Smith' });
+    const b = makeContact({ id: 'c2', displayName: 'A. Smith' });
+    const aIds = [makeIdentity('c1', 'email', 'Alice@Example.com', { verified: true })];
+    const bIds = [makeIdentity('c2', 'email', 'alice@example.com', { verified: true })];
+
+    const result = classifyPair(a, aIds, b, bIds);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('structural');
+  });
+
   it('does NOT classify as structural when the shared identity is unverified on contact a', () => {
     // a's identity is unverified — must NOT be structural (falls through to fuzzy)
     const a = makeContact({ id: 'c1', displayName: 'Alice Smith' });
@@ -412,12 +425,26 @@ describe('classifyPair — edge cases', () => {
     expect(result).toBeNull();
   });
 
-  it('handles contacts with no identities and no kg_node_id', () => {
-    const a = makeContact({ id: 'c1', displayName: 'Completely Unique Name XYZQ' });
-    const b = makeContact({ id: 'c2', displayName: 'Another Unique Name ABCD' });
+  it('handles contacts with no identities and no kg_node_id (dissimilar names → null)', () => {
+    const a = makeContact({ id: 'c1', displayName: 'Zachary Tremblay' });
+    const b = makeContact({ id: 'c2', displayName: 'Priya Nair' });
 
     const result = classifyPair(a, [], b, []);
-    // Very different names — should be null (below threshold)
+    // No structural proof and no name similarity → null (below threshold).
     expect(result).toBeNull();
+  });
+
+  it('scores a similar pair as fuzzy even when name-blocking keys differ (no blocking in classifyPair)', () => {
+    // "Catherine Lee" vs "Katherine Lee" differ at the first character, so a
+    // first-3-char blocking key ("cat" vs "kat") would separate them and
+    // DedupService.checkForDuplicates would never score the pair. classifyPair
+    // scores the explicit pair directly (no blocking), so the high JW similarity
+    // is surfaced as a fuzzy match rather than dropped to null. (Major-2 fix)
+    const a = makeContact({ id: 'c1', displayName: 'Catherine Lee' });
+    const b = makeContact({ id: 'c2', displayName: 'Katherine Lee' });
+
+    const result = classifyPair(a, [], b, []);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('fuzzy');
   });
 });

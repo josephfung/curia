@@ -389,15 +389,12 @@ describe('runDedup — unit', () => {
   // F2: merged-away contacts must be skipped in subsequent pairs
   // -------------------------------------------------------------------------
 
-  it('skips a pair where one contact was already merged away by a prior pair', async () => {
-    // c1≡c2 (structural — shared email identity).
-    // c2≡c3 (structural — shared email identity).
-    // c1 and c3 do NOT share an identity and have different names, so (c1,c3) is NOT structural.
-    //
-    // Loop order: (c1,c2) merges first, c2 added to mergedAwayIds.
-    // Then (c1,c3) is checked — not structural (different names, no shared identity) → skipped (null).
-    // Then (c2,c3) is checked — c2 is in mergedAwayIds → skipped (no merge, no task).
-    // So mergeContacts is called exactly once (for c1/c2) and not again for the dead c2.
+  it('merges transitively after a prior merge and skips the merged-away contact (M4 + F2)', async () => {
+    // c1≡c2 (shared email A) and c2≡c3 (shared email B); c2 bridges all three as one entity.
+    // Loop: (c1,c2) merges → c2 is merged away AND c1 absorbs c2's identities, incl. email B (M4).
+    // Then (c1,c3) now shares email B → transitive structural merge.
+    // (c2,c3) is skipped because c2 is merged away (F2).
+    // Net: all three collapse into c1 via two merges — (c1,c2) then (c1,c3).
     const contacts: Contact[] = [
       makeContact({ id: 'c1', displayName: 'Lena Kovacs Alpha' }),
       makeContact({ id: 'c2', displayName: 'Lena Kovacs' }),
@@ -416,12 +413,41 @@ describe('runDedup — unit', () => {
 
     const result = await runDedup(contacts, identityMap, opts);
 
-    // Only the first structural pair (c1, c2) should be merged.
-    // The (c2, c3) pair must be skipped because c2 was merged away.
-    expect(mergeMock).toHaveBeenCalledTimes(1);
-    // errorCount must be 0 — the skipped pair is not an error
+    // Two merges: (c1,c2) then the transitive (c1,c3). (c2,c3) is skipped because c2 is
+    // merged away, so c2 is never used as a merge argument again.
+    expect(mergeMock).toHaveBeenCalledTimes(2);
+    expect(mergeMock).toHaveBeenNthCalledWith(1, 'c1', 'c2');
+    expect(mergeMock).toHaveBeenNthCalledWith(2, 'c1', 'c3');
     expect(result.errorCount).toBe(0);
-    expect(result.mergedCount).toBe(1);
+    expect(result.mergedCount).toBe(2);
+  });
+
+  it('dry-run marks would-be-merged contacts away so counts are not inflated (M3)', async () => {
+    // c1≡c2 (shared email A), c2≡c3 (shared email B); names are dissimilar so the only
+    // matches are the structural identity ones. In dry-run nothing is written and
+    // identities are not reattached, so (c1,c3) is not transitive here — but (c2,c3)
+    // must still be skipped because c2 is marked merged-away. Without M3 it would be
+    // double-counted as a second would-merge.
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Alpha One' }),
+      makeContact({ id: 'c2', displayName: 'Beta Two' }),
+      makeContact({ id: 'c3', displayName: 'Gamma Three' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>([
+      ['c1', [makeIdentity('c1', 'email', 'one@example.com')]],
+      ['c2', [
+        makeIdentity('c2', 'email', 'one@example.com'),
+        makeIdentity('c2', 'email', 'two@example.com'),
+      ]],
+      ['c3', [makeIdentity('c3', 'email', 'two@example.com')]],
+    ]);
+
+    const result = await runDedup(contacts, identityMap, { ...opts, dryRun: true });
+
+    // Only (c1,c2) counted; (c2,c3) skipped because c2 is marked merged-away. No real merges.
+    expect(result.wouldMergeCount).toBe(1);
+    expect(mergeMock).not.toHaveBeenCalled();
+    expect(result.mergedCount).toBe(0);
   });
 
   // -------------------------------------------------------------------------
