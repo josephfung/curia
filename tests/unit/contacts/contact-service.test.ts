@@ -102,6 +102,7 @@ describe('ContactService', () => {
       });
       expect(contact.kind).toBe('person');
       const nodes = await entityMemory.findEntities('John Smith');
+      expect(nodes.length).toBeGreaterThan(0);
       expect(nodes[0]!.type).toBe('person');
     });
 
@@ -186,8 +187,8 @@ describe('ContactService', () => {
       expect(contact.kgNodeId).toBe(existingOrg.id);
     });
 
-    it('second org contact from same domain reuses the same org node', async () => {
-      // First contact creates the org node
+    it('second org contact from same domain with different display name gets its own org node', async () => {
+      // First contact creates an org node labeled 'Shopify'.
       const first = await service.createContact({
         displayName: 'Shopify',
         primaryEmail: 'noreply@shopify.com',
@@ -195,7 +196,10 @@ describe('ContactService', () => {
         status: 'provisional',
       });
 
-      // Second contact from the same domain — org node already exists with label 'Shopify'
+      // Second contact from the same domain but a different display name.
+      // Domain lookup ('shopify.com') searches by label, not by domain property, so it
+      // won't find the 'Shopify' node. Name lookup ('Shopify Order') also won't match.
+      // A new 'Shopify Order' org node is created — dedup merges nodes over time.
       const second = await service.createContact({
         displayName: 'Shopify Order',
         primaryEmail: 'orders@shopify.com',
@@ -204,12 +208,9 @@ describe('ContactService', () => {
       });
 
       expect(second.kind).toBe('organization');
-      // Both should reference the same KG node (found via display-name lookup on second call)
-      // Note: first contact created a 'Shopify' org node; second call finds it by display name
-      // 'Shopify Order' won't match 'Shopify' exactly, but domain 'shopify.com' won't match
-      // either (it was stored as 'Shopify', not 'shopify.com'). A new 'Shopify Order' org node
-      // will be created. This is acceptable — dedup handles merging over time.
       expect(second.kgNodeId).toBeDefined();
+      // Distinct display names → distinct org nodes (no exact-label match found).
+      expect(second.kgNodeId).not.toBe(first.kgNodeId);
     });
 
     it('does not route to org when no primaryEmail provided', async () => {
@@ -220,7 +221,7 @@ describe('ContactService', () => {
       expect(contact.kind).toBe('person');
     });
 
-    it('explicit kind override is preserved for person emails', async () => {
+    it('org routing overrides explicit kind for org-classified emails', async () => {
       // A caller can still override kind explicitly
       const contact = await service.createContact({
         displayName: 'Automated Bot',

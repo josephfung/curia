@@ -330,7 +330,8 @@ export class ContactService {
 
     const atIdx = email.indexOf('@');
     if (atIdx === -1) return null;
-    const domain = email.slice(atIdx + 1);
+    // Normalise to lowercase so 'Github.com' and 'github.com' resolve to the same node.
+    const domain = email.slice(atIdx + 1).toLowerCase();
 
     try {
       // Try domain as label (e.g. 'github.com' → existing 'github.com' org node)
@@ -460,6 +461,17 @@ export class ContactService {
           kgNodeId = node.id;
         } else {
           kgNodeId = entity.id;
+        }
+
+        // Org routing did not fire or returned null (KG transient failure), so we fell
+        // back to a person node. Downgrade kind to 'person' to match — leaving kind as
+        // 'organization' on a person-linked row violates the invariant checked elsewhere.
+        if (resolvedKind === 'organization') {
+          this.logger?.warn(
+            { requestedKind: options.kind, email: options.primaryEmail },
+            'createContact: org routing did not resolve an org node — downgrading kind to person',
+          );
+          resolvedKind = 'person';
         }
       }
     }

@@ -47,22 +47,44 @@ WHERE id IN (
   LEFT JOIN contact_channel_identities cci ON cci.contact_id = c.id
   WHERE cci.id IS NULL
     AND c.system_role IS NULL   -- never touch principal / agent rows
+    -- Honour the "explicit relationship/grant" carve-out: preserve any contact that has
+    -- at least one active (non-revoked) auth override. Deleting such a row would cascade
+    -- away the override, silently removing a deliberate permission grant or deny.
+    AND NOT EXISTS (
+      SELECT 1
+      FROM contact_auth_overrides cao
+      WHERE cao.contact_id = c.id
+        AND cao.revoked_at IS NULL
+    )
 );
 
 -- -------------------------------------------------------------------------
 -- Part B — Step 1: match surviving contacts to existing KG nodes by label
 -- -------------------------------------------------------------------------
--- ROW_NUMBER() ensures we claim at most one contact per KG node
--- (idx_contacts_kg_node_unique is a partial unique index on kg_node_id).
+-- Two ROW_NUMBER() windows prevent nondeterminism:
+--   node_rn : at most one contact claims each KG node (oldest contact wins)
+--   contact_rn : at most one node is assigned to each contact (organization
+--                preferred over person when a label exists for both; then
+--                oldest node wins to keep the assignment stable across re-runs)
+-- Also updates contacts.kind to match the linked node's type so kind/KG stay
+-- in sync (a contact linked to an org node should have kind='organization').
 
 WITH ranked AS (
   SELECT
     c.id         AS contact_id,
     k.id         AS node_id,
+    k.type       AS node_type,
     ROW_NUMBER() OVER (
       PARTITION BY k.id
       ORDER BY c.created_at ASC, c.id ASC
-    ) AS rn
+    ) AS node_rn,
+    ROW_NUMBER() OVER (
+      PARTITION BY c.id
+      ORDER BY
+        CASE k.type WHEN 'organization' THEN 0 ELSE 1 END,
+        k.created_at ASC,
+        k.id ASC
+    ) AS contact_rn
   FROM contacts c
   JOIN kg_nodes k
     ON  lower(c.display_name) = lower(k.label)
@@ -77,10 +99,12 @@ WITH ranked AS (
     )
 )
 UPDATE contacts c
-SET    kg_node_id = r.node_id
+SET    kg_node_id = r.node_id,
+       kind = CASE WHEN r.node_type = 'organization' THEN 'organization' ELSE 'person' END
 FROM   ranked r
 WHERE  c.id = r.contact_id
-  AND  r.rn = 1;
+  AND  r.node_rn = 1
+  AND  r.contact_rn = 1;
 
 -- -------------------------------------------------------------------------
 -- Part B — Step 2: insert person KG nodes for still-unmatched contacts
