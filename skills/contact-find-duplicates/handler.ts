@@ -23,8 +23,11 @@ const DEFAULT_MIN_SCORE = 0.93;
 const OPEN_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
 
 // Upper bound on how many open dedup tasks we load for the idempotency check.
-// With a per-run max_tasks cap, the realistic ceiling is much lower — but 1000
-// ensures we never silently miss existing tasks and re-file them.
+// With max_tasks=20 and a weekly cadence, reaching 1000 open dedup tasks would
+// require ~50 weeks with zero task resolution — well outside normal operation.
+// listTasks has no offset support, so true pagination isn't possible without a
+// schema change; document this as an accepted ceiling. If it ever becomes an
+// issue, adding offset to ListTasksFilters and paginating here is the right fix.
 const EXISTING_TASK_FETCH_LIMIT = 1000;
 
 // Regex to extract contact IDs from task descriptions filed by this skill or
