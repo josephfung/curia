@@ -25,7 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Tier-based capability gating** — dispatcher, outbound gateway, and Signal trust now gate via `meetsMinimumTier()`; legacy `status`/`trust_level` deprecated (removal in #955). (#945)
 - **Elevated-skill gate** — YAML-declared scheduled jobs (`systemRole: "system"`) now pass the elevated-skill gate; agent-originated tasks remain blocked.
-- **Coordinator 8am digest** — scheduler entry rewritten with explicit step-by-step instructions; skips sending if both pending approvals and open tasks are empty.
+- **Coordinator 8am digest** — scheduler entry rewritten with explicit step-by-step instructions; overdue and due-today CEO tasks now surfaced first; skips sending if everything is empty.
 
 ### Removed
 
