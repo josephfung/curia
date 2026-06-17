@@ -631,22 +631,6 @@ describe('hasExclusion', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Integration tests — guarded by DATABASE_URL
-// ---------------------------------------------------------------------------
-
-const DATABASE_URL = process.env['DATABASE_URL'];
-const describeIf = DATABASE_URL ? describe : describe.skip;
-
-describeIf('runDedup — integration', () => {
-  // Integration tests exercising the full script against a real DB.
-  // Uses explicit DELETE cleanup in afterAll per project convention.
-  //
-  // NOTE: These are intentionally minimal — they verify the script can
-  // load and run against real tables. The full behavioral coverage is in the
-  // unit tests above. See src/contacts/dedup-classifier.test.ts for classifier
-  // coverage and tests/integration/contacts.test.ts for ContactService coverage.
-
-  // TODO: Add integration tests that create real contacts, run the sweep,
-  //       and verify DB state (merge applied, task created, exclusion respected).
-});
+// Full-script integration coverage against a real Postgres (create contacts,
+// run the real merge path, assert DB state + audit row) lives in
+// tests/integration/dedup-contacts-merge.test.ts.
