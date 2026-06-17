@@ -884,22 +884,53 @@ export class EmailAdapter implements Channel {
         // Display name sanitization happens inside createContact() (see issue #39).
         // We pass the email as fallbackDisplayName so that if the participant name
         // sanitizes to empty (e.g., pure injection text), the email is used instead.
+        // primaryEmail is passed so createContact() can route business senders to an
+        // existing or new organization KG node instead of minting a person node.
         const contact = await contactService.createContact({
           displayName: p.name || p.email,
           fallbackDisplayName: p.email,
           source: 'email_participant',
           status: 'provisional',
-        });
-        await contactService.linkIdentity({
-          contactId: contact.id,
-          channel: 'email',
-          channelIdentifier: p.email,
-          source: 'email_participant',
+          primaryEmail: p.email,
         });
 
-        createdThisMessage++;
-        this.hourlyContactCount++;
-        logger.info({ email: p.email, name: p.name }, 'Auto-created contact from email participant');
+        // Link the identity, guarding against a concurrent call that may have created
+        // and linked the same identity between our resolveByChannelIdentity check and
+        // now. If linkIdentity hits a unique-constraint violation (23505), the concurrent
+        // caller won — clean up our orphaned contact (issue #946: no identity-less rows)
+        // and skip. For any other error, clean up the orphan then rethrow to the outer
+        // catch so the participant is skipped with a warning.
+        let linked = false;
+        try {
+          await contactService.linkIdentity({
+            contactId: contact.id,
+            channel: 'email',
+            channelIdentifier: p.email,
+            source: 'email_participant',
+          });
+          linked = true;
+        } catch (linkErr) {
+          const pgCode = (linkErr as { code?: string }).code;
+          try {
+            await contactService.deleteContact(contact.id);
+          } catch (deleteErr) {
+            logger.warn(
+              { deleteErr, orphanId: contact.id },
+              'extractParticipants: could not clean up orphaned contact after linkIdentity failure',
+            );
+          }
+          if (pgCode !== '23505') throw linkErr;
+          logger.info(
+            { email: p.email, orphanId: contact.id },
+            'extractParticipants: concurrent link conflict — orphan removed, participant already linked',
+          );
+        }
+
+        if (linked) {
+          createdThisMessage++;
+          this.hourlyContactCount++;
+          logger.info({ email: p.email, name: p.name }, 'Auto-created contact from email participant');
+        }
       } catch (err) {
         // Warn rather than error — participant auto-creation is best-effort.
         // The inbound message will still be published even if contact creation fails.

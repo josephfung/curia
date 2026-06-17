@@ -13,6 +13,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Contact/KG boundary enforcement** — business email senders are now routed to existing or new organization KG nodes (`kind = organization`) instead of always minting a person node; personal webmail domains and `first.last` address patterns remain person-typed. (#946)
+
+### Fixed
+
+- **Identity-less contacts demoted** — migration 056 removes the 23 contact rows that had no channel identity (knowledge preserved in KG nodes) and backfills `kg_node_id` for the 19 contacts missing it. (#946)
+- **Orphan contact cleanup in `extractParticipants`** — if `linkIdentity` fails after `createContact`, the adapter now deletes the identity-less orphan (mirrors the existing guard in `contact-register`). (#946)
+
 ### Security
 
 - **Insecure temp directory in loader test** — replaced predictable hardcoded temp path with `fs.mkdtempSync()` to eliminate CWE-377 (insecure temporary file creation) CodeQL alert #159.
