@@ -318,12 +318,23 @@ export const TIER_RANK: Record<ContactTier, number> = {
  * This is the canonical helper for tier comparisons. ALL call sites must use this
  * function — never compare specific tier values directly. This ensures a single
  * source of truth for the ordering and makes future reorderings safe.
+ *
+ * Throws if either argument is not a recognized tier value. Matches the convention
+ * in authorization.ts (which throws on unknown trustLevel) — a silent wrong answer
+ * at a trust comparison is worse than an early crash.
  */
 export function meetsMinimumTier(
   actual: ContactTier,
   required: ContactTier,
 ): boolean {
-  return TIER_RANK[actual] >= TIER_RANK[required];
+  const actualRank = TIER_RANK[actual];
+  const requiredRank = TIER_RANK[required];
+  if (actualRank === undefined || requiredRank === undefined) {
+    throw new Error(
+      `meetsMinimumTier: unrecognized tier value(s) — actual='${actual}', required='${required}'`,
+    );
+  }
+  return actualRank >= requiredRank;
 }
 
 /**

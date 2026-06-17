@@ -542,6 +542,11 @@ export class ContactService {
     // Derive new tier from the trust level change, keeping existing tier context.
     // trust_level='ceo' → principal, 'high' → trusted, 'medium'/'low' → fall back to status-derived tier.
     // trust_level=null → revert to status-derived tier.
+    //
+    // TODO(#945-followup): TOCTOU — concurrent setStatus('blocked') can be clobbered by this tier
+    // derivation; a concurrent block landed after our getContact read above would be overwritten by
+    // the updateContact write below, leaving a blocked contact with tier='trusted'. Needs a
+    // conditional UPDATE or SELECT FOR UPDATE if concurrent same-contact writes become real.
     const newTier = deriveTierFromTrustLevelUpdate(trustLevel, contact.status);
 
     const updated: Contact = {
@@ -917,14 +922,23 @@ export class ContactService {
 
       // Write the golden record fields onto the primary contact.
       // Also re-derive tier from the merged status to keep them in sync.
+      //
+      // Survivorship takes the MORE CAPABLE of the two tiers, then re-derives via
+      // deriveTierFromStatusUpdate so a blocked golden record always wins.
+      // Rationale: tier represents a CEO grant (e.g. the CEO explicitly trusted a
+      // secondary contact). Merging should never silently downgrade that grant —
+      // losing a 'trusted' tier because the primary happened to be 'known' is
+      // incorrect, especially since #944's dedup calls mergeContacts.
+      const mergedExistingTier = TIER_RANK[primary.tier] >= TIER_RANK[secondary.tier]
+        ? primary.tier
+        : secondary.tier;
       const updatedPrimary: Contact = {
         ...primary,
         displayName: goldenRecord.displayName,
         role: goldenRecord.role,
         notes: goldenRecord.notes,
         status: goldenRecord.status,
-        // Re-derive tier from merged status, preserving any elevated tier on the primary.
-        tier: deriveTierFromStatusUpdate(goldenRecord.status, primary.tier),
+        tier: deriveTierFromStatusUpdate(goldenRecord.status, mergedExistingTier),
         updatedAt: new Date(),
       };
       await this.backend.updateContact(updatedPrimary);
@@ -1374,14 +1388,32 @@ class PostgresContactBackend implements ContactServiceBackend {
       trustLevel: (Object.keys(TRUST_RANK) as TrustLevel[]).includes(row.trust_level as TrustLevel)
         ? row.trust_level as TrustLevel
         : null,
-      // Validate tier against the allowed enum — guard against corrupt DB values.
-      // Default to 'unknown' (safe/conservative) if the DB value is not a known tier.
-      tier: (Object.keys(TIER_RANK) as ContactTier[]).includes(row.tier as ContactTier)
-        ? row.tier as ContactTier
-        : 'unknown',
-      kind: (['person', 'organization', 'automated', 'principal', 'agent'] as ContactKind[]).includes(row.kind as ContactKind)
-        ? row.kind as ContactKind
-        : 'person',
+      // Validate tier against the allowed enum — fail-closed on corrupt DB values.
+      // null/undefined (column absent pre-migration) → 'unknown' (benign, conservative).
+      // A PRESENT but unrecognized value is a data integrity problem: log at ERROR and
+      // return 'blocked' so a corrupted 'blocked' row cannot be un-blocked by bad data.
+      tier: (() => {
+        if (row.tier == null) return 'unknown' as ContactTier;
+        if ((Object.keys(TIER_RANK) as ContactTier[]).includes(row.tier as ContactTier)) {
+          return row.tier as ContactTier;
+        }
+        this.logger.error(
+          { contactId: row.id, rawTier: row.tier },
+          'contacts: unrecognized tier value in DB — failing closed to blocked',
+        );
+        return 'blocked' as ContactTier;
+      })(),
+      kind: (() => {
+        if (row.kind == null) return 'person' as ContactKind;
+        if ((['person', 'organization', 'automated', 'principal', 'agent'] as ContactKind[]).includes(row.kind as ContactKind)) {
+          return row.kind as ContactKind;
+        }
+        this.logger.error(
+          { contactId: row.id, rawKind: row.kind },
+          'contacts: unrecognized kind value in DB',
+        );
+        return 'person' as ContactKind;
+      })(),
     };
   }
 
@@ -1622,14 +1654,33 @@ class PostgresContactBackend implements ContactServiceBackend {
       trustLevel: (Object.keys(TRUST_RANK) as TrustLevel[]).includes(row.trust_level as TrustLevel)
         ? row.trust_level as TrustLevel
         : null,
-      // New capability axis (migration 055). Guard against corrupt DB values — default to
-      // 'unknown' (safe/conservative) and 'person' respectively.
-      tier: (Object.keys(TIER_RANK) as ContactTier[]).includes(row.tier as ContactTier)
-        ? row.tier as ContactTier
-        : 'unknown',
-      kind: (['person', 'organization', 'automated', 'principal', 'agent'] as ContactKind[]).includes(row.kind as ContactKind)
-        ? row.kind as ContactKind
-        : 'person',
+      // New capability axis (migration 055). Fail-closed on corrupt DB values:
+      // null/undefined (column absent pre-migration) → safe default.
+      // A PRESENT but unrecognized tier is a data integrity problem — log at ERROR
+      // and return 'blocked' so a corrupted 'blocked' row cannot be un-blocked by
+      // bad data. For kind (not a security gate), log at ERROR but keep 'person'.
+      tier: (() => {
+        if (row.tier == null) return 'unknown' as ContactTier;
+        if ((Object.keys(TIER_RANK) as ContactTier[]).includes(row.tier as ContactTier)) {
+          return row.tier as ContactTier;
+        }
+        this.logger.error(
+          { contactId: row.id, rawTier: row.tier },
+          'contacts: unrecognized tier value in DB — failing closed to blocked',
+        );
+        return 'blocked' as ContactTier;
+      })(),
+      kind: (() => {
+        if (row.kind == null) return 'person' as ContactKind;
+        if ((['person', 'organization', 'automated', 'principal', 'agent'] as ContactKind[]).includes(row.kind as ContactKind)) {
+          return row.kind as ContactKind;
+        }
+        this.logger.error(
+          { contactId: row.id, rawKind: row.kind },
+          'contacts: unrecognized kind value in DB',
+        );
+        return 'person' as ContactKind;
+      })(),
       // PostgreSQL returns NUMERIC as a string via node-pg.
       // Guard against NaN — if migration 020 hasn't run, the column is absent and
       // parseFloat(undefined) = NaN, which would silently corrupt trust score computation.
