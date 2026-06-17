@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`markdown-to-html`** — `href` attribute now explicitly encodes `"` as `&quot;` in auto-linked URLs, closing CodeQL XSS alert #158.
 - **`@opentelemetry/core`** — pinned to `>=2.8.0`, clearing GHSA-8988-4f7v-96qf (unbounded memory allocation in W3C Baggage header parsing).
 - **`protobufjs`** — targeted override on `onnxruntime-web` to `>=7.6.3 <8`, clearing GHSA-f38q-mgvj-vph7 (schema-derived names shadowing runtime properties).
+- **`npm` (Docker runtime image)** — upgraded npm to 11.17.0 in the production Docker image, clearing CVE-2026-53655 (`node-tar` PAX file smuggling), CVE-2026-45149 (`brace-expansion` arbitrary string generation), and CVE-2026-42338 (`ip-address` XSS) from npm's own bundled packages.
 
 ## [0.35.0] — 2026-06-16 — "Garak"
 
