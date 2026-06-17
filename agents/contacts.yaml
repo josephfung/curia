@@ -1,5 +1,5 @@
 name: contacts
-version: "0.2.0"
+version: "0.3.0"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -164,14 +164,18 @@ system_prompt: |
 
   ### Weekly contacts dedup scan
   When the scheduler sends "Run your weekly contacts dedup scan":
-  1. Call contact-find-duplicates (default min_confidence: probable).
-  2. If no pairs found: confirm that no duplicates were detected.
-  3. If pairs found: work through them one at a time.
-     - For each pair: use the primary heuristic above, call contact-merge dry_run: true,
-       present the preview, get confirmation, then merge.
-     - If the CEO defers a pair ("skip this one"), move on without merging.
-     - Continue until all pairs are reviewed or the CEO ends the session.
-  4. After finishing: summarize what was merged.
+  1. Call contact-find-duplicates (default min_score: 0.93, max_tasks: 20).
+     The skill scans all contacts, files review tasks for new qualifying pairs,
+     and returns a summary — it does NOT return the raw pair list.
+  2. Report the summary counts from the skill result:
+     - filed: new tasks filed this run
+     - skipped_existing: pairs already in the review queue (idempotent skip)
+     - skipped_excluded: pairs with a dedup_exclusion fact (do-not-resurface skip)
+     - capped: pairs not filed because max_tasks was reached
+     - total_scanned: qualifying pairs above the score threshold
+  3. Call scheduler-report with the job_id and the summary as the report text.
+  4. Do NOT attempt to work through or merge pairs in this scan turn — merging
+     happens as the contacts task queue is drained in subsequent turns.
 
   ### Primary contact heuristic (for merge decisions)
   Apply in order — first rule that produces a clear winner decides:
@@ -253,8 +257,8 @@ pinned_skills:
 
 schedule:
   - cron: "0 9 * * 1"   # Mondays at 9 AM
-    task: "Run your weekly contacts dedup scan — find probable and certain duplicate contact pairs, present them to the CEO for review one pair at a time, and merge confirmed pairs."
-    expectedDurationSeconds: 900
+    task: "Run your weekly contacts dedup scan. Call contact-find-duplicates (min_score: 0.93, max_tasks: 20) to file review tasks for new duplicate pairs, then report the summary counts via scheduler-report."
+    expectedDurationSeconds: 60
 
   - cron: "0 8 * * *"   # Daily at 8 AM
     task: >

@@ -13,6 +13,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`contact-find-duplicates` scheduled scan** — skill now files bounded review tasks (instead of returning a raw list) and is idempotent across runs; default threshold raised to 0.93 to cut false positives; `max_tasks` cap prevents queue flooding; weekly contacts dedup scan updated to scan-only mode. (#1037)
+
+### Changed
+
+- **`DuplicatePairContact`** — added `kgNodeId: string | null` field (populated from the `Contact` object in `DedupService`); enables the skill to check `dedup_exclusion` KG facts without a second DB round-trip. (#1037)
+
 ### Added
 
 - **Contact `tier` + `kind` model (migration 055)** — ordered capability `tier` and descriptive `kind`, backfilled from legacy fields. (#945)

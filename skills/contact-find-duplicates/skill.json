@@ -1,17 +1,22 @@
 {
   "name": "contact-find-duplicates",
-  "description": "Scan all contacts for probable duplicate pairs. Returns a ranked list of contacts that likely refer to the same person. Use before or during a contacts dedup review session with the CEO.",
-  "version": "1.0.0",
+  "description": "Scan all contacts for duplicate pairs above a score threshold, file Curia-owned review tasks for new pairs, and return a summary. Idempotent: pairs that already have an open 'dedup' task or a dedup_exclusion KG fact are skipped. Use this for the weekly scheduled scan — it files tasks rather than returning a raw list, so it never floods the agent context.",
+  "version": "2.0.0",
   "sensitivity": "normal",
-  "action_risk": "none",
+  "action_risk": "low",
   "inputs": {
-    "min_confidence": "string?"
+    "min_score": "number?",
+    "max_tasks": "number?"
   },
   "outputs": {
-    "pairs": "array",
-    "count": "number"
+    "filed": "number",
+    "skipped_existing": "number",
+    "skipped_excluded": "number",
+    "capped": "number",
+    "total_scanned": "number"
   },
+  "capabilities": ["taskRepo", "entityMemory"],
   "permissions": [],
   "secrets": [],
-  "timeout": 30000
+  "timeout": 60000
 }

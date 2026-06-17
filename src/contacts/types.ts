@@ -413,6 +413,7 @@ export type DedupConfidence = 'certain' | 'probable';
 
 export interface DuplicatePairContact {
   id: string;
+  kgNodeId: string | null;
   displayName: string;
   role: string | null;
   identities: ChannelIdentity[];
