@@ -530,6 +530,91 @@ describe('runDedup — unit', () => {
     );
     expect(c1c2WasMerged).toBe(false);
   });
+
+  // -------------------------------------------------------------------------
+  // Sweep-local tuning flags: --no-tasks, --min-score, --max-tasks
+  // -------------------------------------------------------------------------
+
+  it('--no-tasks: applies structural merges but creates no review tasks', async () => {
+    const contacts: Contact[] = [
+      // Structural pair (exact normalized name) → should still merge
+      makeContact({ id: 'c1', displayName: 'Quentin Alvarez' }),
+      makeContact({ id: 'c2', displayName: 'quentin alvarez' }),
+      // Fuzzy pair (similar, dissimilar from the above) → would be a task, suppressed
+      makeContact({ id: 'c3', displayName: 'Mikael Sorensen' }),
+      makeContact({ id: 'c4', displayName: 'Michael Sorenson' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, { ...opts, noTasks: true });
+
+    expect(mergeMock).toHaveBeenCalledOnce();        // structural merge still happens
+    expect(createTaskMock).not.toHaveBeenCalled();   // no tasks created
+    expect(result.mergedCount).toBe(1);
+    expect(result.taskCount).toBe(0);
+    expect(result.suppressedTaskCount).toBe(1);      // the fuzzy pair was suppressed
+  });
+
+  it('--min-score: skips a fuzzy pair scoring below the bar', async () => {
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Mikael Sorensen' }),
+      makeContact({ id: 'c2', displayName: 'Michael Sorenson' }), // fuzzy, scores 0.96
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    // 0.99 sits above this pair's 0.96 score, so it should be skipped.
+    const result = await runDedup(contacts, identityMap, { ...opts, minScore: 0.99 });
+
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(result.taskCount).toBe(0);
+    expect(result.skippedLowScoreCount).toBe(1);
+  });
+
+  it('--min-score: still creates a task for a fuzzy pair at/above the bar', async () => {
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Mikael Sorensen' }),
+      makeContact({ id: 'c2', displayName: 'Michael Sorenson' }), // fuzzy, scores 0.96
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, { ...opts, minScore: 0.5 });
+
+    expect(createTaskMock).toHaveBeenCalledOnce();
+    expect(result.taskCount).toBe(1);
+    expect(result.skippedLowScoreCount).toBe(0);
+  });
+
+  it('--max-tasks: caps task creation and suppresses the overflow', async () => {
+    // Three mutually-similar names → three fuzzy pairs (c1c2, c1c3, c2c3), none structural.
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Mikael Sorensen' }),
+      makeContact({ id: 'c2', displayName: 'Michael Sorenson' }),
+      makeContact({ id: 'c3', displayName: 'Mikhael Sorensen' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, { ...opts, maxTasks: 1 });
+
+    expect(createTaskMock).toHaveBeenCalledTimes(1);  // capped at 1
+    expect(result.taskCount).toBe(1);
+    expect(result.suppressedTaskCount).toBe(2);       // the other two pairs suppressed
+  });
+
+  it('--max-tasks cap is reflected in dry-run counts too', async () => {
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Mikael Sorensen' }),
+      makeContact({ id: 'c2', displayName: 'Michael Sorenson' }),
+      makeContact({ id: 'c3', displayName: 'Mikhael Sorensen' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, { ...opts, dryRun: true, maxTasks: 1 });
+
+    expect(mergeMock).not.toHaveBeenCalled();
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(result.wouldCreateTaskCount).toBe(1);      // dry-run honors the cap
+    expect(result.suppressedTaskCount).toBe(2);
+  });
 });
 
 // ---------------------------------------------------------------------------
