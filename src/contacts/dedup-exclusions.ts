@@ -39,7 +39,10 @@ export interface WriteExclusionOptions {
  * done in a dedicated issue (see curia#1027 discussion).
  */
 export async function writeExclusion(opts: WriteExclusionOptions): Promise<void> {
-  const { contactBId, kgNodeId, storeFact, source = 'contacts-dedup' } = opts;
+  const { contactBId: rawContactBId, kgNodeId, storeFact, source = 'contacts-dedup' } = opts;
+  // Normalize to lowercase so writes and reads are always comparable regardless of
+  // input casing (the UUID validator accepts uppercase; the DB always returns lowercase).
+  const contactBId = rawContactBId.toLowerCase();
   const result = await storeFact({
     entityNodeId: kgNodeId,
     label: `dedup_exclusion: ${contactBId}`,
@@ -77,7 +80,9 @@ export interface HasExclusionOptions {
  * should treat the error as "unknown" and skip the pair rather than proceeding.
  */
 export async function hasExclusion(opts: HasExclusionOptions): Promise<boolean> {
-  const { contactAId, contactBId, kgNodeIdA, kgNodeIdB, getFacts } = opts;
+  const { contactAId: rawContactAId, contactBId: rawContactBId, kgNodeIdA, kgNodeIdB, getFacts } = opts;
+  const contactAId = rawContactAId.toLowerCase();
+  const contactBId = rawContactBId.toLowerCase();
 
   // Short-circuit: no KG nodes means no facts can exist
   if (kgNodeIdA === null && kgNodeIdB === null) return false;

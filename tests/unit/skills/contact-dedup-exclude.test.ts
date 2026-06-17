@@ -166,7 +166,7 @@ describe('ContactDedupExcludeHandler', () => {
     if (!result.success) expect(result.error).toContain('DB connection refused');
   });
 
-  it('returns failure when storeFact throws', async () => {
+  it('returns failure when storeFact throws on both sides', async () => {
     const contactService = {
       getContact: vi.fn().mockImplementation(async (id: string) => ({
         id,
@@ -182,8 +182,36 @@ describe('ContactDedupExcludeHandler', () => {
       { contactService, entityMemory },
     ));
 
+    // Each write is attempted independently; when both fail the handler returns failure
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('KG write failed');
+    if (!result.success) expect(result.error).toContain('dedup exclusion');
+  });
+
+  it('returns success when only one write succeeds (partial exclusion is valid)', async () => {
+    // hasExclusion is bidirectional, so one side is enough to block re-surfacing
+    const contactService = {
+      getContact: vi.fn().mockImplementation(async (id: string) => ({
+        id,
+        kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
+      })),
+    } as unknown as SkillContext['contactService'];
+    const entityMemory = {
+      storeFact: vi.fn()
+        // First call (A-side) conflicts; second call (B-side) succeeds
+        .mockResolvedValueOnce({ stored: false, action: 'conflict', conflict: 'existing exclusion' })
+        .mockResolvedValue({ stored: true, action: 'created' }),
+    } as unknown as SkillContext['entityMemory'];
+
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService, entityMemory },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contact_a_excluded).toBe(false);
+      expect(result.data.contact_b_excluded).toBe(true);
+    }
   });
 
   it('returns failure when storeFact returns stored: false (second exclusion silent-drop)', async () => {
@@ -226,7 +254,7 @@ describe('ContactDedupExcludeHandler', () => {
     ));
 
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('KG node');
+    if (!result.success) expect(result.error).toContain('dedup exclusion');
     // No facts should be written when there's nowhere to attach them
     expect(storeFactMock).not.toHaveBeenCalled();
   });

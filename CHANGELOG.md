@@ -22,11 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`DuplicatePairContact`** — added `kgNodeId: string | null` field (populated from the `Contact` object in `DedupService`); enables the skill to check `dedup_exclusion` KG facts without a second DB round-trip. (#1037)
 
 ### Added
-- **`contact-dedup-exclude` skill** — writes permanent `dedup_exclusion` KG facts on both contacts when the CEO explicitly says they are not the same person, closing the anti-nag loop for the dedup sweep. Pinned exclusively to the contacts agent. (#1027)
-- **Contacts agent decline paths** — three explicit "not a duplicate" branches added: duplicate notification, dedup review task, and weekly scan. "Skip this one" remains a temporary defer that does not write an exclusion. (#1027)
-
-### Changed
-- **`writeExclusion` / `hasExclusion`** — extracted from `scripts/dedup-contacts.ts` into `src/contacts/dedup-exclusions.ts`; `contact-find-duplicates` now uses the shared `hasExclusion` instead of its own local copy. The script re-exports them for backward compatibility.
+- **`contact-dedup-exclude`** — new skill + contacts agent decline paths that write permanent `dedup_exclusion` KG facts, preventing explicitly rejected pairs from resurfacing on future sweeps. (#1027)
 
 ### Added
 
