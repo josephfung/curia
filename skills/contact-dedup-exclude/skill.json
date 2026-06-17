@@ -1,0 +1,23 @@
+{
+  "name": "contact-dedup-exclude",
+  "description": "Record a permanent dedup_exclusion KG fact on both contacts, preventing the pair from being proposed as duplicates again. Call this when the CEO explicitly says two contacts are not the same person. Pinned exclusively to the contacts agent — not available to other agents.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "contact_a_id": "string (UUID of the first contact)",
+    "contact_b_id": "string (UUID of the second contact)"
+  },
+  "outputs": {
+    "contact_a_id": "string — echoed back",
+    "contact_b_id": "string — echoed back",
+    "contact_a_excluded": "boolean — true if an exclusion fact was written on contact A's KG node",
+    "contact_b_excluded": "boolean — true if an exclusion fact was written on contact B's KG node"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": [
+    "entityMemory"
+  ]
+}
