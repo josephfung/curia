@@ -68,6 +68,8 @@ RUN corepack enable
 #   - CVE-2026-42338: ip-address < 10.1.1 (XSS via improper HTML escaping)
 # npm@11.17.0 bundles tar@7.5.16, brace-expansion@5.0.6, ip-address@10.2.0.
 # This does not affect pnpm or the app's own node_modules.
+# TODO: Dependabot does not track RUN-instruction version pins — bump this
+# manually when npm publishes a patch that addresses new bundled CVEs.
 RUN npm install -g npm@11.17.0
 
 # Copy manifest and lockfile, then install production deps only
