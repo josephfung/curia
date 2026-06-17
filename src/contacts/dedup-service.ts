@@ -96,6 +96,19 @@ function normalizeDisplayName(name: string): string {
 }
 
 /**
+ * Build a comparison key for a channel identity. Emails are stored and looked up
+ * case-insensitively (migration 044's `LOWER(channel_identifier)` unique index), so
+ * we lowercase them before comparison; other channels (phone/signal) are already
+ * normalized to a canonical form at write time. Without this, mixed-case email
+ * identities for the same address would fail the exact-overlap check.
+ * Keep in sync with the copy in dedup-classifier.ts.
+ */
+function canonicalIdentityKey(channel: string, identifier: string): string {
+  const id = channel === 'email' ? identifier.toLowerCase() : identifier;
+  return `${channel}:${id}`;
+}
+
+/**
  * Generate name variants to handle "First Last", "Last First", and "F. Last" forms.
  * E.g., "jenna torres" → ["jenna torres", "torres jenna", "j torres"]
  */
@@ -141,9 +154,9 @@ function scoreContacts(
   if (a.id === b.id) return null;
 
   // Signal 1: exact channel identifier overlap → instant ceiling
-  const aIds = new Set(aIdentities.map((i) => `${i.channel}:${i.channelIdentifier}`));
+  const aIds = new Set(aIdentities.map((i) => canonicalIdentityKey(i.channel, i.channelIdentifier)));
   for (const bId of bIdentities) {
-    const key = `${bId.channel}:${bId.channelIdentifier}`;
+    const key = canonicalIdentityKey(bId.channel, bId.channelIdentifier);
     if (aIds.has(key)) {
       return {
         score: 1.0,
@@ -189,6 +202,22 @@ function scoreContacts(
 // ---------------------------------------------------------------------------
 
 export class DedupService {
+  /**
+   * Score a single explicit pair directly, WITHOUT the name-blocking that
+   * checkForDuplicates/findAllDuplicates apply. The dedup-classifier's caller
+   * already iterates explicit pairs, so blocking there would drop genuinely
+   * similar pairs whose name-blocking keys differ (returning null instead of a
+   * fuzzy match). Returns null below THRESHOLD_PROBABLE.
+   */
+  scorePair(
+    a: Contact,
+    aIdentities: ChannelIdentity[],
+    b: Contact,
+    bIdentities: ChannelIdentity[],
+  ): { score: number; reason: string } | null {
+    return scoreContacts(a, aIdentities, b, bIdentities);
+  }
+
   /**
    * Check a newly-created contact against a list of candidate contacts.
    *
