@@ -154,9 +154,10 @@ export class SignalAdapter implements Channel {
       const existing = await this.config.contactService.resolveByChannelIdentity('signal', senderId);
 
       if (existing) {
-        // Known sender: not provisional and not blocked counts as "known"
+        // Known sender: tier >= 'known' (i.e. not unknown/blocked) counts as "known"
         // for read-receipt purposes. The dispatcher enforces hold/block policy.
-        isKnownSender = existing.status !== 'provisional' && existing.status !== 'blocked';
+        // Uses tier for the check (issue #945); replaces status != 'provisional' && != 'blocked'.
+        isKnownSender = existing.tier !== 'unknown' && existing.tier !== 'blocked';
       } else {
         // New sender — auto-create a provisional contact.
         // signal_participant is auto-verified (per contact-service.ts) so the phone

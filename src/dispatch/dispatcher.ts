@@ -6,6 +6,7 @@ import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator } from '../contacts/types.js';
+import { meetsMinimumTier } from '../contacts/types.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
@@ -311,19 +312,22 @@ export class Dispatcher {
             // Non-blocking — the trust score for THIS message already used the
             // stored contactConfidence. This update benefits the NEXT inbound.
             // Skip blocked contacts — they are being dropped and should not accrue history.
-            if (this.confidencePipeline && senderContext.status !== 'blocked') {
+            // Uses tier for the gate check (issue #945); tier='blocked' == old status='blocked'.
+            if (this.confidencePipeline && senderContext.tier !== 'blocked') {
               const resolvedContactId = senderContext.contactId;
               this.confidencePipeline.incrementalUpdate(resolvedContactId, { type: 'message_seen' })
                 .catch(err => this.logger.warn({ err, contactId: resolvedContactId }, 'Confidence pipeline update failed (non-fatal)'));
             }
 
-            // Provisional contacts are treated like unknown senders for policy purposes.
-            // They have a contact record (so the resolver finds them), but the CEO hasn't
-            // confirmed them yet. Apply the same hold/reject policy as unknown senders.
-            if (senderContext.status === 'provisional' || senderContext.status === 'blocked') {
+            // Unknown/blocked contacts gate: applies to tier='unknown' (was: provisional) and
+            // tier='blocked'. These have a contact record (so the resolver finds them), but the
+            // contact has not been confirmed. Apply the same hold/reject policy as unknown senders.
+            // Uses tier for the gate check (issue #945): 'unknown' == old 'provisional',
+            // 'blocked' == old 'blocked'.
+            if (senderContext.tier === 'unknown' || senderContext.tier === 'blocked') {
               const policy = this.channelPolicies?.[payload.channelId];
 
-              if (senderContext.status === 'blocked') {
+              if (senderContext.tier === 'blocked') {
                 this.logger.info(
                   { channel: payload.channelId, senderId: payload.senderId, contactId: senderContext.contactId },
                   'Blocked sender — dropping message',
@@ -688,14 +692,14 @@ export class Dispatcher {
       // senders on 'allow' channels. Unknown senders on 'hold_and_notify' and 'ignore' channels
       // already returned early above, so there is no risk of double-holding here.
       //
-      // Confirmed contacts are exempt: a contact with status='confirmed' has passed explicit CEO
-      // approval and should route unconditionally regardless of contact_confidence. The floor is
-      // designed for unknown or provisional senders, not explicitly approved contacts. Provisional
-      // contacts still go through the floor check.
+      // Contacts with tier >= 'known' are exempt: a known/trusted/principal contact has been
+      // confirmed by the CEO and should route unconditionally regardless of contact_confidence.
+      // The floor is designed for unknown (provisional) senders, not confirmed contacts.
+      // Uses meetsMinimumTier() for the exemption check (issue #945).
       const policy = this.channelPolicies[payload.channelId];
       if (
         !threadTrusted &&
-        !(senderContext?.resolved && senderContext.status === 'confirmed') &&
+        !(senderContext?.resolved && meetsMinimumTier(senderContext.tier, 'known')) &&
         messageTrustScore < this.trustScoreFloor &&
         policy?.unknownSender !== 'ignore' &&
         this.heldMessages

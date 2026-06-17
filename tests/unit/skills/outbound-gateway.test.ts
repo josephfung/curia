@@ -102,6 +102,8 @@ describe('OutboundGateway', () => {
       displayName: 'Blocked Person',
       role: null,
       status: 'blocked',
+      tier: 'blocked',       // issue #945
+      kind: 'person',
       kgNodeId: null,
       verified: true,
     });
@@ -131,6 +133,8 @@ describe('OutboundGateway', () => {
       displayName: 'Confirmed Person',
       role: null,
       status: 'confirmed',
+      tier: 'known',         // issue #945
+      kind: 'person',
       kgNodeId: null,
       verified: true,
     });
@@ -291,6 +295,8 @@ describe('OutboundGateway', () => {
       displayName: 'Rita Recipient',
       role: null,
       status: 'confirmed',
+      tier: 'known',         // issue #945
+      kind: 'person',
       kgNodeId: null,
       verified: true,
       trustLevel: 'medium',
@@ -600,6 +606,8 @@ describe('OutboundGateway', () => {
         displayName: "CEO's EA",
         role: null,
         status: 'confirmed',
+        tier: 'trusted',     // trust_level='high' → tier='trusted' (issue #945)
+        kind: 'person',
         kgNodeId: null,
         verified: true,
         trustLevel: 'high',
@@ -811,6 +819,8 @@ describe('OutboundGateway.createEmailDraft', () => {
         resolveByChannelIdentity: vi.fn().mockResolvedValue({
           contactId: 'contact-blocked',
           status: 'blocked',
+          tier: 'blocked',   // issue #945
+          kind: 'person',
           trustLevel: null,
         }),
       },
@@ -1117,10 +1127,10 @@ describe('OutboundGateway contact promotion on successful send', () => {
 
     const contactService = {
       resolveByChannelIdentity: vi.fn()
-        // First call: blocked-contact check (returns provisional)
-        .mockResolvedValueOnce({ contactId: 'contact-donna', status: 'provisional', trustLevel: null })
-        // Second call: promotion lookup (returns provisional again)
-        .mockResolvedValueOnce({ contactId: 'contact-donna', status: 'provisional', trustLevel: null }),
+        // First call: blocked-contact check (returns provisional/unknown)
+        .mockResolvedValueOnce({ contactId: 'contact-donna', status: 'provisional', tier: 'unknown', kind: 'person', trustLevel: null })
+        // Second call: promotion lookup (returns provisional/unknown again)
+        .mockResolvedValueOnce({ contactId: 'contact-donna', status: 'provisional', tier: 'unknown', kind: 'person', trustLevel: null }),
       setStatus: vi.fn().mockResolvedValue(undefined),
     } as unknown as ContactService;
 
@@ -1175,6 +1185,8 @@ describe('OutboundGateway contact promotion on successful send', () => {
       resolveByChannelIdentity: vi.fn().mockResolvedValue({
         contactId: 'contact-confirmed',
         status: 'confirmed',
+        tier: 'known',       // issue #945
+        kind: 'person',
         trustLevel: null,
       }),
       setStatus: vi.fn(),
@@ -1198,6 +1210,8 @@ describe('OutboundGateway contact promotion on successful send', () => {
       resolveByChannelIdentity: vi.fn().mockResolvedValue({
         contactId: 'contact-donna',
         status: 'confirmed',
+        tier: 'known',       // issue #945
+        kind: 'person',
         trustLevel: null,
       }),
     } as unknown as ContactService;
@@ -1542,6 +1556,8 @@ describe('PII redaction pipeline step', () => {
       contactId: 'contact-ceo',
       displayName: 'CEO',
       status: 'confirmed',
+      tier: 'principal',   // trust_level='ceo' → tier='principal' (issue #945)
+      kind: 'principal',
       trustLevel: 'ceo',
     });
 
@@ -1663,6 +1679,8 @@ describe('OutboundGateway.sendEmailDraft', () => {
         resolveByChannelIdentity: vi.fn().mockResolvedValue({
           contactId: 'contact-blocked',
           status: 'blocked',
+          tier: 'blocked',   // issue #945
+          kind: 'person',
           trustLevel: null,
         }),
       },
@@ -1790,6 +1808,8 @@ describe('OutboundGateway.sendEmailDraft', () => {
         displayName: 'Draft Recipient',
         role: null,
         status: 'confirmed',
+        tier: 'known',
+        kind: 'person',
         kgNodeId: null,
         verified: true,
         trustLevel: 'medium',
@@ -1866,6 +1886,8 @@ describe('humanApproved option on send()', () => {
       displayName: 'Blocked Person',
       role: null,
       status: 'blocked',
+      tier: 'blocked',
+      kind: 'person',
       kgNodeId: null,
       verified: true,
     });
@@ -2324,6 +2346,8 @@ describe('isSystemNotification option on send()', () => {
       displayName: 'Blocked',
       role: null,
       status: 'blocked',
+      tier: 'blocked',
+      kind: 'person',
       kgNodeId: null,
       verified: true,
     });
@@ -2398,6 +2422,8 @@ describe('outbound.delivered on Signal send', () => {
       displayName: 'Phone Friend',
       role: null,
       status: 'confirmed',
+      tier: 'known',
+      kind: 'person',
       kgNodeId: null,
       verified: true,
       trustLevel: 'medium',

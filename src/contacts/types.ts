@@ -6,10 +6,16 @@ export interface Contact {
   displayName: string;
   role: string | null;
   systemRole: SystemRole | null;
+  // Legacy columns (deprecated, kept until #955 drops them). New code reads `tier`.
   status: ContactStatus;
+  trustLevel: TrustLevel | null;
+  // New capability axis (issue #945). `tier` is the single ordered capability axis
+  // that replaces the status/trust_level read path. `kind` is a descriptive facet.
+  // Added in migration 055.
+  tier: ContactTier;
+  kind: ContactKind;
   // Trust scoring fields (migration 020)
   contactConfidence: number;         // 0.0–1.0; accumulated over time
-  trustLevel: TrustLevel | null;     // nullable per-contact override
   lastSeenAt: Date | null;
   // Message count fields (migration 034) — scoring-owned
   inboundMessageCount: number;
@@ -108,7 +114,13 @@ export interface CreateContactOptions {
    */
   fallbackDisplayName?: string;
   role?: string;
+  // `status` is the legacy field; callers may still set it. When `tier` is also provided,
+  // `tier` takes precedence. When only `status` is set, tier is derived from it.
   status?: ContactStatus;
+  // `tier` is the new capability axis from issue #945. Preferred over `status` for new callers.
+  tier?: ContactTier;
+  // `kind` is the descriptive facet from issue #945.
+  kind?: ContactKind;
   notes?: string;
   /** If provided, links to this existing KG node. Otherwise auto-creates one. */
   kgNodeId?: string;
@@ -145,11 +157,15 @@ export interface ResolvedSender {
   displayName: string;
   role: string | null;
   systemRole: SystemRole | null;
+  // Legacy columns — kept until #955 drops them. New code reads `tier`.
   status: ContactStatus;
+  trustLevel: TrustLevel | null;  // per-contact override, or null
+  // New capability axis (issue #945). Canonical read path going forward.
+  tier: ContactTier;
+  kind: ContactKind;
   kgNodeId: string | null;
   verified: boolean;
   contactConfidence: number;      // 0.0–1.0
-  trustLevel: TrustLevel | null;  // per-contact override, or null
 }
 
 /** Enriched context about a sender, assembled for the coordinator's prompt */
@@ -159,6 +175,7 @@ export interface SenderContext {
   displayName: string;
   role: string | null;
   systemRole: SystemRole | null;
+  // Legacy columns — kept until #955 drops them. New code reads `tier`.
   status: ContactStatus;
   verified: boolean;
   kgNodeId: string | null;
@@ -168,6 +185,9 @@ export interface SenderContext {
   // Trust scoring inputs — available when contact was found in DB. Not propagated to bus events.
   contactConfidence: number;      // 0.0–1.0
   trustLevel: TrustLevel | null;  // per-contact override, or null
+  // New capability axis (issue #945). Canonical read path going forward.
+  tier: ContactTier;
+  kind: ContactKind;
 }
 
 export interface UnknownSenderContext {
@@ -223,6 +243,7 @@ export type SystemRole = 'principal' | 'agent' | 'system';
 // Ordinal ranking for trust level comparison. Higher rank = more trusted.
 // Used by meetsMinimumTrust() so callers don't need to enumerate every level.
 // Exported so authorization.ts and other consumers share the same single source of truth.
+// TODO(#955): Remove TRUST_RANK once all callers have migrated to TIER_RANK + ContactTier.
 export const TRUST_RANK: Record<TrustLevel, number> = {
   low: 0,
   medium: 1,
@@ -233,6 +254,12 @@ export const TRUST_RANK: Record<TrustLevel, number> = {
 /**
  * Check whether an actual trust level meets or exceeds a required minimum.
  * Returns false for null (unknown contacts default to untrusted).
+ *
+ * @deprecated Prefer meetsMinimumTier() against contact.tier. This function
+ *   operates on the legacy trust_level column. Kept alive until #955 completes
+ *   the column drop — existing call sites in authorization.ts and pii-redactor.ts
+ *   still need it for channel-level TrustLevel comparisons (channel trust is
+ *   config-driven and not mapped to tier).
  */
 export function meetsMinimumTrust(
   actual: TrustLevel | null,
@@ -240,6 +267,77 @@ export function meetsMinimumTrust(
 ): boolean {
   if (actual === null) return false;
   return TRUST_RANK[actual] >= TRUST_RANK[required];
+}
+
+// ---------------------------------------------------------------------------
+// New tier + kind system (issue #945)
+// ---------------------------------------------------------------------------
+
+/**
+ * Unified capability axis replacing the old `status` / `trust_level` split.
+ * Ordered ascending: blocked < unknown < known < trusted < principal.
+ *
+ * - 'blocked'   — CEO explicitly rejected this contact; messages are dropped.
+ * - 'unknown'   — contact exists but has not been confirmed (was: 'provisional' / trust_level='low').
+ * - 'known'     — CEO-confirmed, no special trust grant (was: 'confirmed' + no trust_level).
+ * - 'trusted'   — CEO granted elevated trust (was: trust_level='high').
+ * - 'principal' — the human CEO Curia serves (was: system_role='principal' / trust_level='ceo').
+ *
+ * Added in migration 055. See docs/wip/ for the contacts redesign design memo.
+ */
+export type ContactTier = 'blocked' | 'unknown' | 'known' | 'trusted' | 'principal';
+
+/**
+ * Descriptive facet for a contact row — what kind of entity it represents.
+ * Gates nothing directly in this issue; 'automated' will opt a row out of tier
+ * gates in issue #953.
+ *
+ * - 'person'       — individual human contact (default).
+ * - 'organization' — a company or institution (linked KG node type='organization').
+ * - 'automated'    — automated sender e.g. mailing list (TODO #953: exempts from tier gates).
+ * - 'principal'    — the human CEO Curia serves.
+ * - 'agent'        — Curia itself or another autonomous agent.
+ *
+ * Added in migration 055.
+ */
+export type ContactKind = 'person' | 'organization' | 'automated' | 'principal' | 'agent';
+
+// Ordinal ranking for tier comparison. Higher rank = more capability.
+// Used by meetsMinimumTier() so call sites never need to enumerate specific tiers.
+export const TIER_RANK: Record<ContactTier, number> = {
+  blocked:   0,
+  unknown:   1,
+  known:     2,
+  trusted:   3,
+  principal: 4,
+};
+
+/**
+ * Check whether an actual contact tier meets or exceeds a required minimum.
+ *
+ * This is the canonical helper for tier comparisons. ALL call sites must use this
+ * function — never compare specific tier values directly. This ensures a single
+ * source of truth for the ordering and makes future reorderings safe.
+ */
+export function meetsMinimumTier(
+  actual: ContactTier,
+  required: ContactTier,
+): boolean {
+  return TIER_RANK[actual] >= TIER_RANK[required];
+}
+
+/**
+ * Return true when kind='automated'. Call sites that need to skip tier gates
+ * for automated senders (mailing lists, notifications) should use this helper
+ * rather than comparing kind directly — keeps the gate logic in one place.
+ *
+ * Full gate-skipping behaviour will be wired in issue #953; for now this is
+ * a typed helper so callers can be written ahead of the gate implementation.
+ *
+ * TODO(#953): Wire this into the dispatch gate and outbound filter.
+ */
+export function isAutomatedKind(kind: ContactKind): boolean {
+  return kind === 'automated';
 }
 
 export interface AuthorizationResult {
@@ -251,6 +349,7 @@ export interface AuthorizationResult {
   channelTrust: TrustLevel;
   /** Permissions blocked by insufficient channel trust (allowed by role but channel too low) */
   trustBlocked: string[];
+  // TODO(#955): Replace contactStatus with contactTier once all callers have migrated.
   contactStatus: ContactStatus;
 }
 

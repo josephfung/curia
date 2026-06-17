@@ -34,9 +34,11 @@ export interface GroupTrustResult {
  * Check the trust level of a set of Signal group member phone numbers.
  *
  * Each phone is resolved against the contact system:
- *   - null contact or status 'provisional' → unknownMember
- *   - status 'blocked'                     → blockedMember
- *   - status 'confirmed' (any non-provisional, non-blocked status) → trusted
+ *   - null contact or tier='unknown'  → unknownMember
+ *   - tier='blocked'                  → blockedMember
+ *   - tier='known'/'trusted'/'principal' → trusted
+ *
+ * Uses contact.tier (issue #945) rather than contact.status for the gate check.
  *
  * @param memberPhones - E.164 numbers of group members (own account already excluded)
  * @param contactService - ContactService for resolving phone numbers to contacts
@@ -50,12 +52,12 @@ export async function checkGroupMemberTrust(
 
   for (const phone of memberPhones) {
     const contact = await contactService.resolveByChannelIdentity('signal', phone);
-    if (!contact || contact.status === 'provisional') {
+    if (!contact || contact.tier === 'unknown') {
       unknownMembers.push(phone);
-    } else if (contact.status === 'blocked') {
+    } else if (contact.tier === 'blocked') {
       blockedMembers.push(phone);
     }
-    // confirmed / any other non-provisional, non-blocked status → trusted
+    // known / trusted / principal → trusted member
   }
 
   return {
