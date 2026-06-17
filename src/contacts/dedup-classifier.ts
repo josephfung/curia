@@ -79,12 +79,19 @@ export function classifyPair(
   if (a.id === b.id) return null;
 
   // ------------------------------------------------------------------
-  // Structural proof (a): shared channel identity
+  // Structural proof (a): shared VERIFIED channel identity
   // ------------------------------------------------------------------
-  // Build a set of "<channel>:<identifier>" keys for contact a, then check
-  // whether any of contact b's identities match. This is O(|aIds| + |bIds|).
-  const aIdKeys = new Set(aIdentities.map(i => `${i.channel}:${i.channelIdentifier}`));
+  // Build a set of "<channel>:<identifier>" keys for contact a's VERIFIED
+  // identities only. An unverified shared identity is not structural proof —
+  // it falls through to the fuzzy path (recommendation, not auto-merge).
+  // This is O(|aIds| + |bIds|).
+  const aIdKeys = new Set(
+    aIdentities.filter(i => i.verified).map(i => `${i.channel}:${i.channelIdentifier}`),
+  );
   for (const bId of bIdentities) {
+    // Both sides must be verified: a's key was built from verified-only identities,
+    // and we check bId.verified here before looking up the key.
+    if (!bId.verified) continue;
     const key = `${bId.channel}:${bId.channelIdentifier}`;
     if (aIdKeys.has(key)) {
       return {
@@ -113,9 +120,18 @@ export function classifyPair(
   // punctuation), this is considered structural proof — the contacts refer to the
   // same person under different casing or minor formatting. This is the most
   // conservative form of the name signal; JW similarity is always fuzzy.
+  //
+  // Single-token names (e.g. "Acme" / "acme") are NOT sufficient for structural
+  // proof: a single token is too common to reliably identify a unique person or
+  // entity. We require at least 2 whitespace-separated tokens AND length ≥ 5 to
+  // guard against false positives. Single-token matches fall through to fuzzy.
   const normalA = normalizeDisplayName(a.displayName);
   const normalB = normalizeDisplayName(b.displayName);
-  if (normalA.length > 0 && normalA === normalB) {
+  if (
+    normalA.length >= 5 &&
+    normalA === normalB &&
+    normalA.split(' ').length >= 2
+  ) {
     return {
       type: 'structural',
       reason: `Exact normalized name match: "${normalA}"`,

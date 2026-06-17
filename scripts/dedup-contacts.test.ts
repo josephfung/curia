@@ -15,7 +15,6 @@
 //   7. hasExclusion helper → correctly reads exclusion facts
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type pg from 'pg';
 import type { Contact, ChannelIdentity } from '../src/contacts/types.js';
 import {
   runDedup,
@@ -81,72 +80,12 @@ function makeIdentity(
 }
 
 // ---------------------------------------------------------------------------
-// Mock factories
-// ---------------------------------------------------------------------------
-
-function makeMockPool(contacts: Contact[], identityMap: Map<string, ChannelIdentity[]>) {
-  return {
-    query: vi.fn(async (sql: string, params?: unknown[]) => {
-      if (typeof sql === 'string' && sql.includes('FROM contacts')) {
-        return { rows: contacts.map(c => ({
-          id: c.id,
-          display_name: c.displayName,
-          kg_node_id: c.kgNodeId,
-          system_role: c.systemRole,
-          status: c.status,
-          role: c.role,
-          contact_confidence: String(c.contactConfidence),
-          trust_level: c.trustLevel,
-          last_seen_at: c.lastSeenAt,
-          inbound_message_count: String(c.inboundMessageCount),
-          outbound_message_count: String(c.outboundMessageCount),
-          notes: c.notes,
-          created_at: c.createdAt,
-          updated_at: c.updatedAt,
-          preferred_name: c.preferredName,
-          title: c.title,
-          organization: c.organization,
-          primary_email: c.primaryEmail,
-          primary_phone: c.primaryPhone,
-          timezone: c.timezone,
-          locale: c.locale,
-          location: c.location,
-          pronouns: c.pronouns,
-          linkedin_url: c.linkedinUrl,
-          bio: c.bio,
-          birthday: c.birthday,
-        })) };
-      }
-      if (typeof sql === 'string' && sql.includes('FROM contact_channel_identities')) {
-        const contactId = params?.[0] as string;
-        return { rows: (identityMap.get(contactId) ?? []).map(i => ({
-          id: i.id,
-          contact_id: i.contactId,
-          channel: i.channel,
-          channel_identifier: i.channelIdentifier,
-          label: i.label,
-          verified: i.verified,
-          verified_at: i.verifiedAt,
-          status: i.status,
-          source: i.source,
-          created_at: i.createdAt,
-          updated_at: i.updatedAt,
-        })) };
-      }
-      // Default: return empty rows for INSERT/UPDATE
-      return { rows: [] };
-    }),
-  } as unknown as pg.Pool;
-}
-
-// ---------------------------------------------------------------------------
 // Unit tests (mock dependencies, no DB)
 // ---------------------------------------------------------------------------
 
 describe('runDedup — unit', () => {
   let mergeMock: ReturnType<typeof vi.fn>;
   let createTaskMock: ReturnType<typeof vi.fn>;
-  let storeFactMock: ReturnType<typeof vi.fn>;
   let getFactsMock: ReturnType<typeof vi.fn>;
   let opts: DedupRunOptions;
 
@@ -159,14 +98,13 @@ describe('runDedup — unit', () => {
       mergedAt: new Date(),
     });
     createTaskMock = vi.fn().mockResolvedValue({ id: 'task-1', title: 'test' });
-    storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created', nodeId: 'fn-1' });
     getFactsMock = vi.fn().mockResolvedValue([]);
 
     opts = {
       dryRun: false,
       mergeContacts: mergeMock,
       createTask: createTaskMock,
-      storeFact: storeFactMock,
+      // storeFact is not part of DedupRunOptions (F6)
       getFacts: getFactsMock,
     };
   });
@@ -379,13 +317,37 @@ describe('runDedup — unit', () => {
     const dryRunOpts: DedupRunOptions = { ...opts, dryRun: true };
     const result = await runDedup(contacts, identityMap, dryRunOpts);
 
-    // No writes
+    // No writes (storeFact is no longer part of DedupRunOptions — F6)
     expect(mergeMock).not.toHaveBeenCalled();
     expect(createTaskMock).not.toHaveBeenCalled();
-    expect(storeFactMock).not.toHaveBeenCalled();
 
     // But report counts are accurate (reflecting what WOULD have been done)
     expect(result.wouldMergeCount).toBeGreaterThan(0);
+    expect(result.dryRun).toBe(true);
+  });
+
+  it('in dry-run mode, result includes errorCount so the caller can surface it in the summary log', async () => {
+    // F5: The DedupRunResult always has errorCount; the CLI summary must include it.
+    // We verify here that errorCount is present on the result (the CLI log inclusion
+    // is verified by reading the dedup-contacts.ts source — it's a documentation check
+    // rather than a runtime assertion).
+    //
+    // Trigger an error by making getFacts throw on the only structural pair.
+    getFactsMock.mockRejectedValue(new Error('DB error'));
+
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Dry Run Test', kgNodeId: 'kg-c1' }),
+      makeContact({ id: 'c2', displayName: 'dry run test', kgNodeId: 'kg-c2' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const dryRunOpts: DedupRunOptions = { ...opts, dryRun: true };
+    const result = await runDedup(contacts, identityMap, dryRunOpts);
+
+    // The error must be recorded even in dry-run mode
+    expect(result.errorCount).toBe(1);
+    // No merge or task creation (it was an error, not a successful classification)
+    expect(result.wouldMergeCount).toBe(0);
     expect(result.dryRun).toBe(true);
   });
 
@@ -422,6 +384,89 @@ describe('runDedup — unit', () => {
     expect(result.errorCount).toBe(1);
     expect(result.mergedCount).toBe(0);
   });
+
+  // -------------------------------------------------------------------------
+  // F2: merged-away contacts must be skipped in subsequent pairs
+  // -------------------------------------------------------------------------
+
+  it('skips a pair where one contact was already merged away by a prior pair', async () => {
+    // c1≡c2 (structural — shared email identity).
+    // c2≡c3 (structural — shared email identity).
+    // c1 and c3 do NOT share an identity and have different names, so (c1,c3) is NOT structural.
+    //
+    // Loop order: (c1,c2) merges first, c2 added to mergedAwayIds.
+    // Then (c1,c3) is checked — not structural (different names, no shared identity) → skipped (null).
+    // Then (c2,c3) is checked — c2 is in mergedAwayIds → skipped (no merge, no task).
+    // So mergeContacts is called exactly once (for c1/c2) and not again for the dead c2.
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Lena Kovacs Alpha' }),
+      makeContact({ id: 'c2', displayName: 'Lena Kovacs' }),
+      makeContact({ id: 'c3', displayName: 'Lena Kovacs Beta' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>([
+      // c1 and c2 share an email → structural pair
+      ['c1', [makeIdentity('c1', 'email', 'lena@example.com')]],
+      ['c2', [
+        makeIdentity('c2', 'email', 'lena@example.com'), // shared with c1
+        makeIdentity('c2', 'email', 'lena@other.com'),   // shared with c3
+      ]],
+      // c2 and c3 share a second email → structural pair
+      ['c3', [makeIdentity('c3', 'email', 'lena@other.com')]],
+    ]);
+
+    const result = await runDedup(contacts, identityMap, opts);
+
+    // Only the first structural pair (c1, c2) should be merged.
+    // The (c2, c3) pair must be skipped because c2 was merged away.
+    expect(mergeMock).toHaveBeenCalledTimes(1);
+    // errorCount must be 0 — the skipped pair is not an error
+    expect(result.errorCount).toBe(0);
+    expect(result.mergedCount).toBe(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // F4: errors during exclusion check / classify must fail closed
+  // -------------------------------------------------------------------------
+
+  it('skips pair and increments errorCount when getFacts throws, and continues to the next pair', async () => {
+    // c1 and c2 share an exact name — would normally be structural.
+    // But getFacts throws a DB error when checking exclusions for c1/c2.
+    // F4: must fail closed (no merge, no task), increment errorCount, and continue.
+    // c3 and c4 also share an exact name — should still be processed (no error on that pair).
+    getFactsMock.mockImplementation(async (kgNodeId: string) => {
+      // c1 has a kg_node_id; trigger the error only on that node
+      if (kgNodeId === 'kg-c1') {
+        throw new Error('DB connection error');
+      }
+      return [];
+    });
+
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Marco Polo', kgNodeId: 'kg-c1' }),
+      makeContact({ id: 'c2', displayName: 'marco polo' }), // structural — exact name; getFacts throws
+      makeContact({ id: 'c3', displayName: 'Anna Pavlova' }),
+      makeContact({ id: 'c4', displayName: 'anna pavlova' }), // structural — exact name; no error
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, opts);
+
+    // The c1/c2 pair errored — must not have merged and must have incremented errorCount
+    // The c3/c4 pair had no error — must have merged
+    expect(result.errorCount).toBe(1);
+    // At least the c3/c4 pair merged (the sweep continued after c1/c2 error)
+    expect(result.mergedCount).toBeGreaterThanOrEqual(1);
+
+    // Verify the c1/c2 pair specifically: mergeContacts must never have been called
+    // with c1 or c2 as arguments (fail closed — no merge on the errored pair)
+    const mergeCallArgs = mergeMock.mock.calls.map((call) => [call[0] as string, call[1] as string]);
+    const c1c2WasMerged = mergeCallArgs.some(
+      ([primary, secondary]) =>
+        (primary === 'c1' || primary === 'c2') &&
+        (secondary === 'c1' || secondary === 'c2'),
+    );
+    expect(c1c2WasMerged).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -433,7 +478,7 @@ describe('writeExclusion', () => {
     const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
 
     await writeExclusion({
-      contactAId: 'c1',
+      // contactAId removed from WriteExclusionOptions (F9) — kgNodeId is already A's node
       contactBId: 'c2',
       kgNodeId: 'kg-c1',
       storeFact: storeFactMock,
@@ -452,7 +497,6 @@ describe('writeExclusion', () => {
     const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
 
     await writeExclusion({
-      contactAId: 'c1',
       contactBId: 'c2',
       kgNodeId: 'kg-c1',
       storeFact: storeFactMock,
@@ -577,11 +621,6 @@ describeIf('runDedup — integration', () => {
   // unit tests above. See src/contacts/dedup-classifier.test.ts for classifier
   // coverage and tests/integration/contacts.test.ts for ContactService coverage.
 
-  it('placeholder: DATABASE_URL-gated integration tests', () => {
-    // Integration-level test scaffolding. Full integration test expansion
-    // is deferred — the unit coverage above validates all behavioral paths.
-    // TODO: Add integration tests that create real contacts, run the sweep,
-    //       and verify DB state (merge applied, task created, exclusion respected).
-    expect(true).toBe(true);
-  });
+  // TODO: Add integration tests that create real contacts, run the sweep,
+  //       and verify DB state (merge applied, task created, exclusion respected).
 });
