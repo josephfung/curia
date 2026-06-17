@@ -11,15 +11,12 @@
 //   3. Principal-involving pair → task created (no merge), even if structural
 //   4. Excluded pair → skipped (no merge, no task)
 //   5. Dry-run mode → no writes of any kind (no merges, no tasks)
-//   6. writeExclusion helper → writes the correct KG fact
-//   7. hasExclusion helper → correctly reads exclusion facts
+// writeExclusion/hasExclusion unit tests live in src/contacts/dedup-exclusions.test.ts
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Contact, ChannelIdentity } from '../src/contacts/types.js';
 import {
   runDedup,
-  writeExclusion,
-  hasExclusion,
   parseNumericFlag,
   type DedupRunOptions,
 } from './dedup-contacts.js';
@@ -647,142 +644,6 @@ describe('runDedup — unit', () => {
     expect(result.taskCount).toBe(2);
     expect(result.skippedAboveMaxScoreCount).toBe(1);   // the 1.0 pair excluded
     expect(result.skippedLowScoreCount).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// writeExclusion helper tests
-// ---------------------------------------------------------------------------
-
-describe('writeExclusion', () => {
-  it('calls storeFact with the correct attribute and value for a dedup_exclusion', async () => {
-    const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
-
-    await writeExclusion({
-      // contactAId removed from WriteExclusionOptions (F9) — kgNodeId is already A's node
-      contactBId: 'c2',
-      kgNodeId: 'kg-c1',
-      storeFact: storeFactMock,
-    });
-
-    expect(storeFactMock).toHaveBeenCalledOnce();
-    const args = storeFactMock.mock.calls[0]![0] as Record<string, unknown>;
-    expect(args.entityNodeId).toBe('kg-c1');
-    expect((args.properties as Record<string, unknown>).attribute).toBe('dedup_exclusion');
-    expect((args.properties as Record<string, unknown>).value).toBe('c2');
-    // Exclusion facts must be permanent so they survive decay
-    expect(args.decayClass).toBe('permanent');
-  });
-
-  it('writes the exclusion label in the expected format', async () => {
-    const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
-
-    await writeExclusion({
-      contactBId: 'c2',
-      kgNodeId: 'kg-c1',
-      storeFact: storeFactMock,
-    });
-
-    const args = storeFactMock.mock.calls[0]![0] as Record<string, unknown>;
-    // Label must follow the "field: value" format used by all KG facts
-    expect(args.label).toBe('dedup_exclusion: c2');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// hasExclusion helper tests
-// ---------------------------------------------------------------------------
-
-describe('hasExclusion', () => {
-  it('returns true when the KG node has a dedup_exclusion fact for the other contact', async () => {
-    const exclusionFact = {
-      id: 'fn-1',
-      type: 'fact' as const,
-      label: 'dedup_exclusion: c2',
-      properties: { attribute: 'dedup_exclusion', value: 'c2' },
-      aliases: [],
-      embedding: null,
-      confidence: 1.0,
-      sensitivity: 'internal' as const,
-      decayClass: 'permanent' as const,
-      source: 'contacts-dedup',
-      temporal: { createdAt: new Date(), lastConfirmedAt: new Date() },
-    };
-
-    const getFactsMock = vi.fn().mockResolvedValue([exclusionFact]);
-
-    const result = await hasExclusion({
-      contactAId: 'c1',
-      contactBId: 'c2',
-      kgNodeIdA: 'kg-c1',
-      kgNodeIdB: null,
-      getFacts: getFactsMock,
-    });
-
-    expect(result).toBe(true);
-  });
-
-  it('returns false when no dedup_exclusion fact exists', async () => {
-    const getFactsMock = vi.fn().mockResolvedValue([]);
-
-    const result = await hasExclusion({
-      contactAId: 'c1',
-      contactBId: 'c2',
-      kgNodeIdA: 'kg-c1',
-      kgNodeIdB: null,
-      getFacts: getFactsMock,
-    });
-
-    expect(result).toBe(false);
-  });
-
-  it('returns false when neither contact has a kg_node_id', async () => {
-    const getFactsMock = vi.fn().mockResolvedValue([]);
-
-    const result = await hasExclusion({
-      contactAId: 'c1',
-      contactBId: 'c2',
-      kgNodeIdA: null,
-      kgNodeIdB: null,
-      getFacts: getFactsMock,
-    });
-
-    // No KG nodes → no exclusion facts possible
-    expect(result).toBe(false);
-    // Should not even call getFacts since there's nothing to query
-    expect(getFactsMock).not.toHaveBeenCalled();
-  });
-
-  it('checks both sides when both contacts have kg_node_ids', async () => {
-    // Exclusion is on contactB's KG node naming contactA
-    const getFactsMock = vi.fn().mockImplementation(async (kgNodeId: string) => {
-      if (kgNodeId === 'kg-c2') {
-        return [{
-          id: 'fn-1',
-          type: 'fact',
-          label: 'dedup_exclusion: c1',
-          properties: { attribute: 'dedup_exclusion', value: 'c1' },
-          aliases: [],
-          embedding: null,
-          confidence: 1.0,
-          sensitivity: 'internal',
-          decayClass: 'permanent',
-          source: 'contacts-dedup',
-          temporal: { createdAt: new Date(), lastConfirmedAt: new Date() },
-        }];
-      }
-      return [];
-    });
-
-    const result = await hasExclusion({
-      contactAId: 'c1',
-      contactBId: 'c2',
-      kgNodeIdA: 'kg-c1',
-      kgNodeIdB: 'kg-c2',
-      getFacts: getFactsMock,
-    });
-
-    expect(result).toBe(true);
   });
 });
 
