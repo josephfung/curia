@@ -17,6 +17,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **hono** — bumped override floor from 4.12.18 to 4.12.25, resolving 5 CVEs including CORS credential reflection (CVE-2026-54290, HIGH 7.1), body-limit bypass (CVE-2026-54288), path traversal in serve-static (CVE-2026-54286), Set-Cookie header merging (CVE-2026-54287), and Lambda@Edge header dropping (CVE-2026-54289).
 - **`markdown-to-html`** — `href` attribute now explicitly encodes `"` as `&quot;` in auto-linked URLs, closing CodeQL XSS alert #158.
+- **`@opentelemetry/core`** — pinned to `>=2.8.0`, clearing GHSA-8988-4f7v-96qf (unbounded memory allocation in W3C Baggage header parsing).
+- **`protobufjs`** — targeted override on `onnxruntime-web` to `>=7.6.3 <8`, clearing GHSA-f38q-mgvj-vph7 (schema-derived names shadowing runtime properties).
 
 ## [0.35.0] — 2026-06-16 — "Garak"
 

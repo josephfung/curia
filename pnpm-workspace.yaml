@@ -28,6 +28,9 @@ overrides:
   ws: '>=8.21.0'         # CVE-2026-48779
   form-data: '>=4.0.6'   # CVE-2026-12143
   esbuild: '>=0.28.1'    # GHSA-gv7w-rqvm-qjhr (dev-server SSRF)
+  # Scorecard vulnerability pins (GHSA alerts flagged in code-scanning #155):
+  '@opentelemetry/core': '>=2.8.0'          # GHSA-8988-4f7v-96qf (unbounded baggage header memory allocation)
+  'onnxruntime-web>protobufjs': '>=7.6.3 <8' # GHSA-f38q-mgvj-vph7 (schema name shadowing DoS); targeted to onnxruntime-web only — protobufjs@8.x is patched at 8.6.0; promptfoo already resolves 8.6.1 which is clean
 
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
