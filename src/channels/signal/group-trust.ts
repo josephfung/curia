@@ -20,6 +20,7 @@
 //   - signal-send handler (outbound): gates whether a proactive group send proceeds
 
 import type { ContactService } from '../../contacts/contact-service.js';
+import { meetsMinimumTier } from '../../contacts/types.js';
 
 export interface GroupTrustResult {
   /** True iff all members are verified (non-provisional, non-blocked) contacts. */
@@ -52,12 +53,18 @@ export async function checkGroupMemberTrust(
 
   for (const phone of memberPhones) {
     const contact = await contactService.resolveByChannelIdentity('signal', phone);
-    if (!contact || contact.tier === 'unknown') {
+    if (!contact) {
       unknownMembers.push(phone);
     } else if (contact.tier === 'blocked') {
       blockedMembers.push(phone);
+    } else if (!meetsMinimumTier(contact.tier, 'known')) {
+      // Fail-safe: anything not provably known/trusted/principal (i.e. 'unknown'
+      // or any below-'known' value) is treated as unknown rather than trusted.
+      // A positive allowlist via meetsMinimumTier() avoids the prior denylist
+      // (tier !== 'unknown' && !== 'blocked'), which trusted any unexpected value.
+      unknownMembers.push(phone);
     }
-    // known / trusted / principal → trusted member
+    // meetsMinimumTier(tier, 'known') → trusted member
   }
 
   return {

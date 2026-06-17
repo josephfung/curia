@@ -80,10 +80,13 @@ export async function bootstrapAgentIdentity(
     // DEFAULT_OFFICE_IDENTITY seed) even after the operator changes it. The KG
     // node label clause above already does the same thing for the same reason.
     const contactResult = await pool.query<{ id: string }>(
-      `INSERT INTO contacts (kg_node_id, display_name, role, status, system_role, created_at, updated_at)
-       VALUES ($1, $2, 'agent', 'confirmed', 'agent', now(), now())
+      // tier/kind (migration 055) must be set explicitly: the column defaults
+      // ('unknown'/'person') would mis-classify the agent identity. 'known'/'agent'
+      // matches what migration 055's backfill derives for a confirmed system_role='agent' row.
+      `INSERT INTO contacts (kg_node_id, display_name, role, status, system_role, tier, kind, created_at, updated_at)
+       VALUES ($1, $2, 'agent', 'confirmed', 'agent', 'known', 'agent', now(), now())
        ON CONFLICT (kg_node_id) WHERE kg_node_id IS NOT NULL
-       DO UPDATE SET display_name = EXCLUDED.display_name, role = 'agent', system_role = 'agent', updated_at = now()
+       DO UPDATE SET display_name = EXCLUDED.display_name, role = 'agent', system_role = 'agent', kind = 'agent', updated_at = now()
        RETURNING id`,
       [kgNodeId, displayName],
     );
