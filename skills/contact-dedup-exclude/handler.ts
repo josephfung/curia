@@ -25,44 +25,60 @@ export class ContactDedupExcludeHandler implements SkillHandler {
       return { success: false, error: 'entityMemory not available' };
     }
 
-    const [contactA, contactB] = await Promise.all([
-      ctx.contactService.getContact(contactAId),
-      ctx.contactService.getContact(contactBId),
-    ]);
+    try {
+      const [contactA, contactB] = await Promise.all([
+        ctx.contactService.getContact(contactAId),
+        ctx.contactService.getContact(contactBId),
+      ]);
 
-    if (!contactA) {
-      return { success: false, error: `Contact not found: ${contactAId}` };
+      if (!contactA) {
+        return { success: false, error: `Contact not found: ${contactAId}` };
+      }
+      if (!contactB) {
+        return { success: false, error: `Contact not found: ${contactBId}` };
+      }
+
+      const source = ctx.memoryWriteSource ?? 'contacts-dedup';
+      const storeFact = ctx.entityMemory.storeFact.bind(ctx.entityMemory);
+      let contactAExcluded = false;
+      let contactBExcluded = false;
+
+      // Write on A's node naming B
+      if (contactA.kgNodeId !== null) {
+        await writeExclusion({ contactBId, kgNodeId: contactA.kgNodeId, storeFact, source });
+        contactAExcluded = true;
+      }
+
+      // Write on B's node naming A — bidirectional so hasExclusion finds it regardless of
+      // which contact's node is checked first
+      if (contactB.kgNodeId !== null) {
+        await writeExclusion({ contactBId: contactAId, kgNodeId: contactB.kgNodeId, storeFact, source });
+        contactBExcluded = true;
+      }
+
+      // If neither contact has a KG node yet, the exclusion cannot be stored anywhere.
+      // Return failure so the agent knows to retry rather than telling the CEO it's done.
+      if (!contactAExcluded && !contactBExcluded) {
+        ctx.log.warn({ contactAId, contactBId }, 'contact-dedup-exclude: neither contact has a KG node; exclusion could not be written');
+        return {
+          success: false,
+          error: 'Neither contact has a KG node yet — the exclusion cannot be stored. Retry after the contacts have been enriched.',
+        };
+      }
+
+      return {
+        success: true,
+        data: {
+          contact_a_id: contactAId,
+          contact_b_id: contactBId,
+          contact_a_excluded: contactAExcluded,
+          contact_b_excluded: contactBExcluded,
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.log.error({ err, contactAId, contactBId }, 'contact-dedup-exclude: failed to write exclusion facts');
+      return { success: false, error: `Failed to write dedup exclusion: ${message}` };
     }
-    if (!contactB) {
-      return { success: false, error: `Contact not found: ${contactBId}` };
-    }
-
-    const source = ctx.memoryWriteSource ?? 'contacts-dedup';
-    const storeFact = ctx.entityMemory.storeFact.bind(ctx.entityMemory);
-    let contactAExcluded = false;
-    let contactBExcluded = false;
-
-    // Write on A's node naming B
-    if (contactA.kgNodeId !== null) {
-      await writeExclusion({ contactBId, kgNodeId: contactA.kgNodeId, storeFact, source });
-      contactAExcluded = true;
-    }
-
-    // Write on B's node naming A — bidirectional so hasExclusion finds it regardless of
-    // which contact's node is checked first
-    if (contactB.kgNodeId !== null) {
-      await writeExclusion({ contactBId: contactAId, kgNodeId: contactB.kgNodeId, storeFact, source });
-      contactBExcluded = true;
-    }
-
-    return {
-      success: true,
-      data: {
-        contact_a_id: contactAId,
-        contact_b_id: contactBId,
-        contact_a_excluded: contactAExcluded,
-        contact_b_excluded: contactBExcluded,
-      },
-    };
   }
 }

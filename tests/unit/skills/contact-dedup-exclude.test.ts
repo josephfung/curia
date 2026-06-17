@@ -151,6 +151,59 @@ describe('ContactDedupExcludeHandler', () => {
     expect(storeFactMock).toHaveBeenCalledTimes(1);
   });
 
+  it('returns failure when getContact throws', async () => {
+    const contactService = {
+      getContact: vi.fn().mockRejectedValue(new Error('DB connection refused')),
+    } as unknown as SkillContext['contactService'];
+    const entityMemory = { storeFact: vi.fn() } as unknown as SkillContext['entityMemory'];
+
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService, entityMemory },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('DB connection refused');
+  });
+
+  it('returns failure when storeFact throws', async () => {
+    const contactService = {
+      getContact: vi.fn().mockImplementation(async (id: string) => ({
+        id,
+        kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
+      })),
+    } as unknown as SkillContext['contactService'];
+    const entityMemory = {
+      storeFact: vi.fn().mockRejectedValue(new Error('KG write failed')),
+    } as unknown as SkillContext['entityMemory'];
+
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService, entityMemory },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('KG write failed');
+  });
+
+  it('returns failure when neither contact has a KG node', async () => {
+    const storeFactMock = vi.fn();
+    const contactService = {
+      getContact: vi.fn().mockImplementation(async (id: string) => ({ id, kgNodeId: null })),
+    } as unknown as SkillContext['contactService'];
+    const entityMemory = { storeFact: storeFactMock } as unknown as SkillContext['entityMemory'];
+
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService, entityMemory },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('KG node');
+    // No facts should be written when there's nowhere to attach them
+    expect(storeFactMock).not.toHaveBeenCalled();
+  });
+
   it('uses ctx.memoryWriteSource as the storeFact source', async () => {
     const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
     const contactService = {
