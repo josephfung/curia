@@ -73,7 +73,7 @@ export async function ensurePrincipalContact(
     }
     // Self-heal capability metadata: an existing principal row may have been left at
     // migration-055 defaults ('unknown'/'person') by an older path; repair before returning.
-    await repairPrincipalMetadata(row.id, pool);
+    await repairPrincipalMetadata(row.id, pool, logger);
     return { contactId: row.id, kgNodeId, alreadyExisted: true };
   }
 
@@ -143,7 +143,7 @@ export async function ensurePrincipalContact(
           );
         }
         // Self-heal: the race winner may be an older writer; repair tier/kind etc.
-        await repairPrincipalMetadata(winnerRow.id, pool);
+        await repairPrincipalMetadata(winnerRow.id, pool, logger);
         logger.info(
           { contactId: winnerRow.id, kgNodeId: winnerKgNodeId },
           'ensure-principal: concurrent race resolved — existing principal used',
