@@ -20,7 +20,7 @@ Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 
 ### TypeScript
 - ESM only (`"type": "module"`, `.js` extensions on all relative imports)
-- Node 22+, use `import.meta.dirname` instead of `__dirname`
+- Node 24+, use `import.meta.dirname` instead of `__dirname`
 - No `any` — use proper types, generics, or discriminated unions
 - All event types defined as discriminated unions in `src/bus/events.ts`
 - All errors normalized to `AgentError` type (see `docs/specs/05-error-recovery.md`)
