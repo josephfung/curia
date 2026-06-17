@@ -3,8 +3,9 @@
 // Integration test for the dedup-contacts script's merge path.
 //
 // Specifically verifies that the REAL ContactService.mergeContacts() path is used,
-// not the old hand-rolled SQL that would violate the migration-044 unique email index
-// when two contacts share the same channel identity.
+// not the old hand-rolled SQL — the real path re-points the loser's channel
+// identities onto the survivor (reattachIdentities) and records an audit row,
+// which the hand-rolled UPDATE did neither of.
 //
 // Requires a running Postgres with all migrations applied.
 // Skips gracefully when DATABASE_URL is not set.
@@ -104,25 +105,25 @@ describeIf('dedup-contacts merge integration', () => {
         [createdKgNodeIds],
       );
     }
-    // Also clean up any audit_log rows produced by these contacts so the test is idempotent.
-    // audit_log has no FK to contacts, so it must be cleaned separately.
-    // We match on payload::jsonb fields rather than source_id to avoid accidental over-deletion.
-    if (createdContactIds.length > 0) {
-      await pool.query(
-        `DELETE FROM audit_log WHERE event_type = 'contact.merged'
-           AND (payload->>'primaryContactId' = ANY($1) OR payload->>'secondaryContactId' = ANY($1))`,
-        [createdContactIds],
-      );
-    }
+    // NOTE: audit_log rows produced by this test are deliberately NOT cleaned up.
+    // audit_log is append-only — a DB trigger rejects DELETE (only acknowledged
+    // false→true is permitted) — so attempting to delete here would throw. Leftover
+    // rows are harmless: the test matches its own run's row by the unique per-run
+    // contact IDs, so accumulated rows from prior runs never affect the assertions.
     await pool.end();
   });
 
   it(
-    'merges two contacts sharing a verified email identity without violating the unique index, and writes an audit_log row',
+    'merges two contacts via the real service path, reattaching the loser\'s identities to the survivor, and writes an audit_log row',
     async () => {
       // Unique email suffix per test run so parallel runs don't collide
       const runId = Date.now().toString(36);
-      const sharedEmail = `dedup-merge-test-${runId}@example.com`;
+      // Each contact has its OWN email. Two contacts CANNOT share an identifier:
+      // migration 005's UNIQUE(channel, channel_identifier) (and 044's LOWER() index)
+      // enforce global uniqueness, so the realistic dedup case is two contacts with
+      // distinct/complementary identities matched by name or kg_node_id, then merged.
+      const primaryEmail = `dedup-merge-primary-${runId}@example.com`;
+      const secondaryEmail = `dedup-merge-secondary-${runId}@example.com`;
 
       // --- 1. Create two contacts, each with a KG node (entityMemory is wired) ---
 
@@ -142,22 +143,23 @@ describeIf('dedup-contacts merge integration', () => {
       createdContactIds.push(secondary.id);
       if (secondary.kgNodeId) createdKgNodeIds.push(secondary.kgNodeId);
 
-      // Both contacts share the same verified email — this is the structural case that
-      // the old hand-rolled UPDATE would have broken (unique index on channel+identifier).
+      // Each contact gets its own distinct verified email. The merge must re-point the
+      // loser's identity onto the survivor via the real ContactService.mergeContacts()
+      // path (reattachIdentities) — the old hand-rolled UPDATE skipped this entirely.
       await contactService.linkIdentity({
         contactId: primary.id,
         channel: 'email',
-        channelIdentifier: sharedEmail,
+        channelIdentifier: primaryEmail,
         source: 'ceo_stated',
       });
       await contactService.linkIdentity({
         contactId: secondary.id,
         channel: 'email',
-        channelIdentifier: sharedEmail,
+        channelIdentifier: secondaryEmail,
         source: 'email_participant',
       });
 
-      // --- 2. Confirm both contacts exist and each has the shared email ---
+      // --- 2. Confirm both contacts exist before the merge ---
 
       const primaryBefore = await contactService.getContact(primary.id);
       const secondaryBefore = await contactService.getContact(secondary.id);
@@ -179,18 +181,20 @@ describeIf('dedup-contacts merge integration', () => {
       const secondaryAfter = await contactService.getContact(secondary.id);
       expect(secondaryAfter).toBeUndefined();
 
-      // --- 5. Assert: loser's channel identities now belong to the survivor ---
+      // --- 5. Assert: loser's channel identity now belongs to the survivor ---
       //
-      // The real ContactService.mergeContacts() calls reattachIdentities(), which deletes
-      // any duplicate (channel, channelIdentifier) rows on the primary before re-pointing —
-      // this is what avoids the unique-index violation the old UPDATE would have caused.
+      // The real ContactService.mergeContacts() calls reattachIdentities(), which
+      // re-points the loser's rows onto the survivor (deleting any that would collide
+      // with the survivor's existing identifiers first). The survivor should now carry
+      // BOTH emails — proof the identity actually moved rather than being dropped.
       const withIdentities = await contactService.getContactWithIdentities(primary.id);
       expect(withIdentities).toBeDefined();
       const emails = withIdentities!.identities.map(i => i.channelIdentifier);
 
-      // The shared email should appear exactly once (duplicates were collapsed by reattachIdentities)
-      const sharedEmailCount = emails.filter(e => e === sharedEmail).length;
-      expect(sharedEmailCount).toBe(1);
+      expect(emails).toContain(primaryEmail);
+      expect(emails).toContain(secondaryEmail);
+      // Each identifier appears exactly once (no duplicate rows introduced by the merge)
+      expect(emails.filter(e => e === secondaryEmail).length).toBe(1);
 
       // --- 6. Assert: an audit_log row exists for the contact.merged event ---
       //
