@@ -13,6 +13,7 @@
     "skipped_existing": "number",
     "skipped_excluded": "number",
     "capped": "number",
+    "failed": "number",
     "total_scanned": "number"
   },
   "capabilities": ["taskRepo", "entityMemory"],
