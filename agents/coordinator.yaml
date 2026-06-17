@@ -611,6 +611,7 @@ pinned_skills:
   - deny-action
   - dismiss-action
   - list-pending-actions
+  - task-list
   - approval-expiry-sweep
   - scheduler-report
   - secret-capture-request
