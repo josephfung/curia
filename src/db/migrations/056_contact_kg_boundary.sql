@@ -5,7 +5,7 @@
 -- Rule: a contacts row exists iff the entity has a channel identity OR an explicit
 -- relationship/grant. Pure knowledge (no channel, no relationship) lives in the KG only.
 --
--- Part A — Demote identity-less contacts to KG-only.
+-- Part A — Fix held_messages FK, then demote identity-less contacts to KG-only.
 --   Contacts with no channel_identities and no system_role are orphaned entries that
 --   violate the boundary rule. Without a channel identity the contact row cannot be
 --   addressed by any external sender, and any auth overrides on it cannot be honoured
@@ -20,7 +20,24 @@
 -- gone (they overlap with the identity-less set). Part B only operates on surviving rows.
 
 -- -------------------------------------------------------------------------
--- Part A: Demote identity-less contacts
+-- Part A — Fix held_messages.resolved_contact_id FK before the DELETE
+-- -------------------------------------------------------------------------
+-- The FK was created without ON DELETE action (migration 007), defaulting to
+-- NO ACTION / RESTRICT. If any identity-less contact is referenced as a resolved
+-- contact on a held message, the DELETE below would fail with a FK violation.
+-- Alter it to SET NULL so the historical reference becomes NULL when the contact
+-- row is removed — the held_message record is preserved for audit purposes.
+
+ALTER TABLE held_messages
+  DROP CONSTRAINT IF EXISTS held_messages_resolved_contact_id_fkey;
+ALTER TABLE held_messages
+  ADD CONSTRAINT held_messages_resolved_contact_id_fkey
+  FOREIGN KEY (resolved_contact_id)
+  REFERENCES contacts(id)
+  ON DELETE SET NULL;
+
+-- -------------------------------------------------------------------------
+-- Part A — Demote identity-less contacts
 -- -------------------------------------------------------------------------
 
 DELETE FROM contacts
@@ -120,8 +137,12 @@ WHERE  c.id = r.contact_id
 
 -- Down Migration
 --
--- Part A: the deleted contact rows and their cascading channel identities /
--- auth overrides cannot be restored from SQL alone. Only run in development.
+-- Part A: restore the original FK behaviour (NO ACTION):
+--   ALTER TABLE held_messages DROP CONSTRAINT held_messages_resolved_contact_id_fkey;
+--   ALTER TABLE held_messages ADD CONSTRAINT held_messages_resolved_contact_id_fkey
+--     FOREIGN KEY (resolved_contact_id) REFERENCES contacts(id);
+-- The deleted contact rows and their cascading identities / auth overrides cannot
+-- be restored from SQL alone. Only run in development.
 --
 -- Part B: to revert the backfill, NULL out kg_node_id for contacts whose node
 -- was created by this migration, then delete those nodes.

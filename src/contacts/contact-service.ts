@@ -332,33 +332,44 @@ export class ContactService {
     if (atIdx === -1) return null;
     const domain = email.slice(atIdx + 1);
 
-    // Try domain as label (e.g. 'github.com' → existing 'github.com' org node)
-    const domainMatches = await this.entityMemory.findEntities(domain);
-    const domainOrg = domainMatches.find((n) => n.type === 'organization');
-    if (domainOrg) return { kgNodeId: domainOrg.id, kind: 'organization' };
+    try {
+      // Try domain as label (e.g. 'github.com' → existing 'github.com' org node)
+      const domainMatches = await this.entityMemory.findEntities(domain);
+      const domainOrg = domainMatches.find((n) => n.type === 'organization');
+      if (domainOrg) return { kgNodeId: domainOrg.id, kind: 'organization' };
 
-    // The raw display name (before sanitization) tells us whether the caller used a
-    // human-readable name like "GitHub" or fell back to the email address itself.
-    // Sanitization strips '@', so the safe check is on the pre-sanitization value.
-    const rawIsEmailShaped = rawDisplayName.includes('@');
+      // The raw display name (before sanitization) tells us whether the caller used a
+      // human-readable name like "GitHub" or fell back to the email address itself.
+      // Sanitization strips '@', so the safe check is on the pre-sanitization value.
+      const rawIsEmailShaped = rawDisplayName.includes('@');
 
-    if (!rawIsEmailShaped) {
-      // Try the human-readable display name as a label
-      const nameMatches = await this.entityMemory.findEntities(safeName);
-      const nameOrg = nameMatches.find((n) => n.type === 'organization');
-      if (nameOrg) return { kgNodeId: nameOrg.id, kind: 'organization' };
+      if (!rawIsEmailShaped) {
+        // Try the human-readable display name as a label
+        const nameMatches = await this.entityMemory.findEntities(safeName);
+        const nameOrg = nameMatches.find((n) => n.type === 'organization');
+        if (nameOrg) return { kgNodeId: nameOrg.id, kind: 'organization' };
+      }
+
+      // Create a new organization node. Use the human-readable display name when
+      // available; otherwise derive a label from the domain.
+      const orgLabel = rawIsEmailShaped ? deriveOrgLabelFromDomain(domain) : safeName;
+      const { entity } = await this.entityMemory.createEntity({
+        type: 'organization',
+        label: orgLabel,
+        properties: { domain },
+        source,
+      });
+      return { kgNodeId: entity.id, kind: 'organization' };
+    } catch (err) {
+      // KG operations are best-effort: if they fail (e.g. DB unavailable during
+      // entity lookup), fall through to the person-node path rather than blocking
+      // contact creation entirely.
+      this.logger?.error(
+        { err, email, domain, step: 'resolveOrCreateOrgNode' },
+        'resolveOrCreateOrgNode: KG operation failed — falling back to person node',
+      );
+      return null;
     }
-
-    // Create a new organization node. Use the human-readable display name when
-    // available; otherwise derive a label from the domain.
-    const orgLabel = rawIsEmailShaped ? deriveOrgLabelFromDomain(domain) : safeName;
-    const { entity } = await this.entityMemory.createEntity({
-      type: 'organization',
-      label: orgLabel,
-      properties: { domain },
-      source,
-    });
-    return { kgNodeId: entity.id, kind: 'organization' };
   }
 
   /**
@@ -410,6 +421,14 @@ export class ContactService {
         if (orgResult) {
           kgNodeId = orgResult.kgNodeId;
           resolvedKind = orgResult.kind;
+          // Warn when org routing overrides an explicitly caller-supplied kind so
+          // the override is visible in logs rather than silent.
+          if (options.kind && options.kind !== orgResult.kind) {
+            this.logger?.warn(
+              { requestedKind: options.kind, resolvedKind: orgResult.kind, email: options.primaryEmail },
+              'createContact: org routing overrode caller-supplied kind',
+            );
+          }
         }
       }
 
@@ -497,11 +516,15 @@ export class ContactService {
       // contact — e.g. two people both named "Alice Smith". Retry without a KG link;
       // the two contacts can be merged later via the contact-merge flow.
       if (pgCode === '23505' && constraint === 'idx_contacts_kg_node_unique') {
+        // Downgrade kind to 'person' alongside stripping the KG link so the contact
+        // row doesn't end up as kind='organization' with kgNodeId=null — that would
+        // violate the invariant that org contacts are always linked to a KG org node.
         this.logger?.warn(
-          { contactId: contact.id, kgNodeId: contact.kgNodeId },
-          'KG node already claimed by another contact — creating contact without KG link',
+          { contactId: contact.id, kgNodeId: contact.kgNodeId, contactKind: contact.kind },
+          'KG node already claimed by another contact — creating contact without KG link; kind downgraded to person',
         );
         contact.kgNodeId = null;
+        contact.kind = 'person';
         await this.backend.createContact(contact);
       } else {
         // TODO: The KG node auto-created above is now orphaned — it exists in the knowledge
