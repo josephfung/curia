@@ -306,6 +306,17 @@ describe('classifyPair — structural: exact normalized name match', () => {
     expect(result!.type).toBe('structural');
   });
 
+  // Unicode-aware normalization: accented and unaccented spellings of the same
+  // name fold together (NFKD + diacritic strip), so they match structurally.
+  it('classifies as structural when names differ only by diacritics ("José García" === "Jose Garcia")', () => {
+    const a = makeContact({ id: 'c1', displayName: 'José García' });
+    const b = makeContact({ id: 'c2', displayName: 'Jose Garcia' });
+
+    const result = classifyPair(a, [], b, []);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('structural');
+  });
+
   it('classifies as fuzzy on similar but not identical names (no shared variants)', () => {
     // "Natalia Perez" variants: ["natalia perez", "perez natalia", "n perez"]
     // "Nathan Pierce" variants: ["nathan pierce", "pierce nathan", "n pierce"]

@@ -82,13 +82,15 @@ function jaroWinkler(s1: string, s2: string): number {
  * - Collapse whitespace
  */
 function normalizeDisplayName(name: string): string {
+  // Unicode-aware: decompose + strip diacritics so "José"/"Jose" fold together,
+  // and keep \p{L}/\p{N} so non-ASCII scripts (CJK, Arabic, etc.) are preserved
+  // rather than collapsed to empty. Must stay in sync with the copy in
+  // dedup-classifier.ts (the classifier's structural name match mirrors this).
   return name
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
     .toLowerCase()
-    // @TODO: Use a Unicode-aware character class (e.g. \p{L}\p{N}) so that
-    // non-ASCII letters (accented characters, CJK, Arabic, etc.) are preserved
-    // rather than stripped. The current ASCII-only approach can collapse real
-    // names to empty strings or produce false matches after normalization.
-    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/[^\p{L}\p{N} ]/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
