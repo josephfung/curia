@@ -13,6 +13,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { DuplicatePair } from '../../src/contacts/types.js';
 import type { KgNode } from '../../src/memory/types.js';
+import { hasExclusion } from '../../src/contacts/dedup-exclusions.js';
 
 // Default minimum Jaro-Winkler score — chosen empirically as the precision sweet
 // spot on the production contact set (0.95 is very clean, 0.90 starts to pick up
@@ -50,45 +51,6 @@ function extractPairIds(description: string | null | undefined): { aId: string; 
   }
   if (found['A'] && found['B']) return { aId: found['A'], bId: found['B'] };
   return null;
-}
-
-/**
- * Check whether either contact in a pair has a dedup_exclusion KG fact naming
- * the other — bidirectional, same logic as hasExclusion() in dedup-contacts.ts.
- * Short-circuits to false when neither contact has a kgNodeId.
- *
- * Matching is by `properties.attribute === 'dedup_exclusion'` only (per the KG
- * fact schema guidance: never match on `label` for lookups). This assumes that
- * no other part of the system stores facts with this attribute name for an
- * unrelated purpose, which is enforced by convention — the attribute is
- * exclusively written by writeExclusion() in dedup-contacts.ts.
- */
-async function checkExclusion(
-  aId: string,
-  bId: string,
-  kgNodeIdA: string | null,
-  kgNodeIdB: string | null,
-  getFacts: (nodeId: string) => Promise<KgNode[]>,
-): Promise<boolean> {
-  if (kgNodeIdA === null && kgNodeIdB === null) return false;
-
-  if (kgNodeIdA !== null) {
-    const factsA = await getFacts(kgNodeIdA);
-    for (const fact of factsA) {
-      const props = fact.properties as Record<string, unknown>;
-      if (props['attribute'] === 'dedup_exclusion' && props['value'] === bId) return true;
-    }
-  }
-
-  if (kgNodeIdB !== null) {
-    const factsB = await getFacts(kgNodeIdB);
-    for (const fact of factsB) {
-      const props = fact.properties as Record<string, unknown>;
-      if (props['attribute'] === 'dedup_exclusion' && props['value'] === aId) return true;
-    }
-  }
-
-  return false;
 }
 
 export class ContactFindDuplicatesHandler implements SkillHandler {
@@ -211,13 +173,13 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
       }
 
       try {
-        const excluded = await checkExclusion(
-          pair.contactA.id,
-          pair.contactB.id,
-          pair.contactA.kgNodeId,
-          pair.contactB.kgNodeId,
-          cachedGetFacts,
-        );
+        const excluded = await hasExclusion({
+          contactAId: pair.contactA.id,
+          contactBId: pair.contactB.id,
+          kgNodeIdA: pair.contactA.kgNodeId,
+          kgNodeIdB: pair.contactB.kgNodeId,
+          getFacts: cachedGetFacts,
+        });
         if (excluded) {
           skippedExcluded++;
           continue;
