@@ -15,11 +15,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Contact `tier` + `kind` columns (migration 055)** — unified ordered trust `tier` (`blocked`<`unknown`<`known`<`trusted`<`principal`) plus descriptive `kind` (`person`/`organization`/`automated`/`principal`/`agent`), backfilled from legacy `status`/`trust_level`/`system_role`. (#945)
+- **Contact `tier` + `kind` model (migration 055)** — ordered capability `tier` and descriptive `kind`, backfilled from legacy fields. (#945)
 
 ### Changed
 
-- **Contact capability gating now keys on `tier`** — `meetsMinimumTier()` replaces `meetsMinimumTrust()` at behavioral gates (dispatcher, outbound gateway, Signal trust); legacy `status`/`trust_level` are kept but deprecated (removal tracked in #955). The disclosure gate stays on `trust_level` pending #949. (#945)
+- **Tier-based capability gating** — dispatcher, outbound gateway, and Signal trust now gate via `meetsMinimumTier()`; legacy `status`/`trust_level` deprecated (removal in #955). (#945)
 
 ### Security
 
