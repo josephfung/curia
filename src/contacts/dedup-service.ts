@@ -246,8 +246,8 @@ export class DedupService {
         if (newIdKeys.has(key)) {
           alreadyMatched.add(candidate.id);
           pairs.push({
-            contactA: { id: newContact.id, displayName: newContact.displayName, role: newContact.role, identities: newIdentities },
-            contactB: { id: candidate.id, displayName: candidate.displayName, role: candidate.role, identities: candidateIds },
+            contactA: { id: newContact.id, kgNodeId: newContact.kgNodeId, displayName: newContact.displayName, role: newContact.role, identities: newIdentities },
+            contactB: { id: candidate.id, kgNodeId: candidate.kgNodeId, displayName: candidate.displayName, role: candidate.role, identities: candidateIds },
             score: 1.0,
             confidence: 'certain',
             reason: `Same ${cId.channel} identifier`,
@@ -288,8 +288,8 @@ export class DedupService {
       if (!result) continue;
       const confidence: DedupConfidence = result.score >= THRESHOLD_CERTAIN ? 'certain' : 'probable';
       pairs.push({
-        contactA: { id: newContact.id, displayName: newContact.displayName, role: newContact.role, identities: newIdentities },
-        contactB: { id: candidate.id, displayName: candidate.displayName, role: candidate.role, identities: existingIdentitiesMap.get(candidate.id) ?? [] },
+        contactA: { id: newContact.id, kgNodeId: newContact.kgNodeId, displayName: newContact.displayName, role: newContact.role, identities: newIdentities },
+        contactB: { id: candidate.id, kgNodeId: candidate.kgNodeId, displayName: candidate.displayName, role: candidate.role, identities: existingIdentitiesMap.get(candidate.id) ?? [] },
         score: result.score,
         confidence,
         reason: result.reason,
@@ -350,8 +350,8 @@ export class DedupService {
           const a = contacts.find((x) => x.id === aId)!;
           const b = contacts.find((x) => x.id === bId)!;
           pairs.push({
-            contactA: { id: a.id, displayName: a.displayName, role: a.role, identities: identitiesMap.get(a.id) ?? [] },
-            contactB: { id: b.id, displayName: b.displayName, role: b.role, identities: identitiesMap.get(b.id) ?? [] },
+            contactA: { id: a.id, kgNodeId: a.kgNodeId, displayName: a.displayName, role: a.role, identities: identitiesMap.get(a.id) ?? [] },
+            contactB: { id: b.id, kgNodeId: b.kgNodeId, displayName: b.displayName, role: b.role, identities: identitiesMap.get(b.id) ?? [] },
             score: 1.0,
             confidence: 'certain',
             reason: `Same ${channelName} identifier`,
@@ -390,8 +390,8 @@ export class DedupService {
           if (minConfidence === 'certain' && confidence !== 'certain') continue;
 
           pairs.push({
-            contactA: { id: a.id, displayName: a.displayName, role: a.role, identities: identitiesMap.get(a.id) ?? [] },
-            contactB: { id: b.id, displayName: b.displayName, role: b.role, identities: identitiesMap.get(b.id) ?? [] },
+            contactA: { id: a.id, kgNodeId: a.kgNodeId, displayName: a.displayName, role: a.role, identities: identitiesMap.get(a.id) ?? [] },
+            contactB: { id: b.id, kgNodeId: b.kgNodeId, displayName: b.displayName, role: b.role, identities: identitiesMap.get(b.id) ?? [] },
             score: result.score,
             confidence,
             reason: result.reason,
