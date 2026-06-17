@@ -147,15 +147,19 @@ export function classifyPair(
   const normalA = normalizeDisplayName(a.displayName);
   const normalB = normalizeDisplayName(b.displayName);
   if (normalA.length >= 5 && normalA === normalB) {
+    // 'principal' and 'agent' kinds are intentionally excluded: the principal
+    // is never auto-merged by the dedup rules, and agent contacts (Curia itself)
+    // don't benefit from single-token name merging.
     const bothOrgKinds =
       (a.kind === 'organization' || a.kind === 'automated') &&
       (b.kind === 'organization' || b.kind === 'automated');
     const hasMultipleTokens = normalA.split(' ').length >= 2;
     if (bothOrgKinds || hasMultipleTokens) {
-      return {
-        type: 'structural',
-        reason: `Exact normalized name match: "${normalA}"`,
-      };
+      // Include path in reason to distinguish org single-token from multi-token in audit logs.
+      const reason = bothOrgKinds && !hasMultipleTokens
+        ? `Exact normalized name match (single-token org/automated): "${normalA}"`
+        : `Exact normalized name match: "${normalA}"`;
+      return { type: 'structural', reason };
     }
   }
 
