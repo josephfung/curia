@@ -396,6 +396,67 @@ describe('classifyPair — fuzzy: name similarity', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Structural proof: single-token exact match for organization / automated kind
+// ---------------------------------------------------------------------------
+// For people, a single-token exact match is too ambiguous for auto-merge.
+// For organizations and automated senders, a byte-identical brand/sender name
+// is a much stronger signal (issue #1035).
+
+describe('classifyPair — structural: single-token org/automated name match', () => {
+  it('classifies as structural on single-token exact match when both contacts are organization', () => {
+    // "GitHub" === "github" after normalization — strong signal for orgs
+    const a = makeContact({ id: 'c1', displayName: 'GitHub', kind: 'organization' });
+    const b = makeContact({ id: 'c2', displayName: 'github', kind: 'organization' });
+
+    const result = classifyPair(a, [], b, []);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('structural');
+  });
+
+  it('classifies as structural on single-token exact match when both contacts are automated', () => {
+    // Automated senders (mailing lists, notifications) with identical single-token names
+    const a = makeContact({ id: 'c1', displayName: 'Preply', kind: 'automated' });
+    const b = makeContact({ id: 'c2', displayName: 'preply', kind: 'automated' });
+
+    const result = classifyPair(a, [], b, []);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('structural');
+  });
+
+  it('classifies as structural on single-token exact match for org + automated (mixed org kinds)', () => {
+    // One organization, one automated — both are in the org/automated set
+    const a = makeContact({ id: 'c1', displayName: 'Amazon.ca', kind: 'organization' });
+    const b = makeContact({ id: 'c2', displayName: 'Amazon.ca', kind: 'automated' });
+
+    const result = classifyPair(a, [], b, []);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe('structural');
+  });
+
+  it('does NOT classify as structural on single-token exact match when both are person', () => {
+    // Person/person single-token match must remain fuzzy — unchanged behavior
+    const a = makeContact({ id: 'c1', displayName: 'Acme', kind: 'person' });
+    const b = makeContact({ id: 'c2', displayName: 'acme', kind: 'person' });
+
+    const result = classifyPair(a, [], b, []);
+    if (result !== null) {
+      expect(result.type).not.toBe('structural');
+    }
+  });
+
+  it('does NOT classify as structural on single-token exact match for org + person (mixed kind)', () => {
+    // Mixed org/person pair must NOT get the single-token exemption
+    const a = makeContact({ id: 'c1', displayName: 'Communitech', kind: 'organization' });
+    const b = makeContact({ id: 'c2', displayName: 'Communitech', kind: 'person' });
+
+    const result = classifyPair(a, [], b, []);
+    if (result !== null) {
+      expect(result.type).not.toBe('structural');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Structural proof priority: channel overlap overrides name similarity
 // ---------------------------------------------------------------------------
 

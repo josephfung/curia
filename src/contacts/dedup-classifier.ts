@@ -132,24 +132,31 @@ export function classifyPair(
   // ------------------------------------------------------------------
   // If the normalized display names are identical (after lowercasing and stripping
   // punctuation), this is considered structural proof — the contacts refer to the
-  // same person under different casing or minor formatting. This is the most
+  // same entity under different casing or minor formatting. This is the most
   // conservative form of the name signal; JW similarity is always fuzzy.
   //
-  // Single-token names (e.g. "Acme" / "acme") are NOT sufficient for structural
-  // proof: a single token is too common to reliably identify a unique person or
-  // entity. We require at least 2 whitespace-separated tokens AND length ≥ 5 to
-  // guard against false positives. Single-token matches fall through to fuzzy.
+  // For person contacts, single-token names (e.g. "Smith") are NOT sufficient:
+  // a single first name or last name is too ambiguous. We require at least 2
+  // whitespace-separated tokens AND length ≥ 5 to guard against false positives.
+  //
+  // For organization and automated contacts, an exact single-token name is a
+  // much stronger signal — a brand or sender name is far less ambiguous than a
+  // personal first name. When both contacts are organization/automated, structural
+  // proof is granted on a single-token exact match (still requiring length ≥ 5 to
+  // exclude very short abbreviations). See issue #1035.
   const normalA = normalizeDisplayName(a.displayName);
   const normalB = normalizeDisplayName(b.displayName);
-  if (
-    normalA.length >= 5 &&
-    normalA === normalB &&
-    normalA.split(' ').length >= 2
-  ) {
-    return {
-      type: 'structural',
-      reason: `Exact normalized name match: "${normalA}"`,
-    };
+  if (normalA.length >= 5 && normalA === normalB) {
+    const bothOrgKinds =
+      (a.kind === 'organization' || a.kind === 'automated') &&
+      (b.kind === 'organization' || b.kind === 'automated');
+    const hasMultipleTokens = normalA.split(' ').length >= 2;
+    if (bothOrgKinds || hasMultipleTokens) {
+      return {
+        type: 'structural',
+        reason: `Exact normalized name match: "${normalA}"`,
+      };
+    }
   }
 
   // ------------------------------------------------------------------

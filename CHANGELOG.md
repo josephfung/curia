@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Contact `tier` + `kind` model (migration 055)** — ordered capability `tier` and descriptive `kind`, backfilled from legacy fields. (#945)
 - **Contact de-duplication (`dedup:contacts`)** — maintenance sweep that auto-merges structurally-proven duplicates (shared verified identity / same `kg_node_id` / exact normalized name) and files Curia-owned review tasks for fuzzy matches, never auto-merging the principal and never re-surfacing a declined pair. Tunable for controlled rollout via `--dry-run`, `--no-tasks`, `--min-score`/`--max-score` bands, and `--max-tasks`, and shipped in the production image. (#944, #1034)
+- **Dedup: single-token org/automated name match is now structural** — exact normalized single-token names (e.g. "GitHub", "Amazon.ca") auto-merge when both contacts are `organization` or `automated`; the ≥2-token guard is unchanged for `person` and mixed-kind pairs. (#1035)
 
 ### Changed
 
