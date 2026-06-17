@@ -16,6 +16,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Contact `tier` + `kind` model (migration 055)** — ordered capability `tier` and descriptive `kind`, backfilled from legacy fields. (#945)
+- **Contact de-duplication sweep (`dedup:contacts`)** — maintenance script that auto-merges structural duplicates (shared channel identity / same `kg_node_id` / exact name), files Curia-owned tasks for fuzzy matches, skips `dedup_exclusion` pairs, and never auto-merges the principal. Supports `--dry-run`. (#944)
+- **`dedup-classifier`** — pure module classifying a contact pair as `structural` or `fuzzy`; name/JW similarity is always fuzzy (never auto-merge). (#944)
+- **`writeExclusion` / `hasExclusion` helpers** — permanent `dedup_exclusion` KG facts so a declined pair is never re-surfaced. (#944)
 
 ### Changed
 
