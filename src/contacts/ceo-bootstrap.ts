@@ -30,6 +30,34 @@ export interface CeoContactBootstrapResult {
 }
 
 /**
+ * Repair a principal/CEO contact's capability metadata to the canonical values.
+ *
+ * Idempotent — the WHERE guard makes it a no-op when the row is already correct.
+ * Called on EVERY path that returns an existing principal row (initial bootstrap,
+ * the 23505 race winner in both this module and ensure-principal), so a row left at
+ * migration-055 column defaults ('unknown'/'person') — or any older downgraded value —
+ * self-heals instead of persisting reduced capability for the run. (#945)
+ */
+export async function repairPrincipalMetadata(contactId: string, pool: DbPool): Promise<void> {
+  await pool.query(
+    `UPDATE contacts
+       SET role = 'ceo',
+           trust_level = 'ceo',
+           system_role = 'principal',
+           tier = 'principal',
+           kind = 'principal',
+           updated_at = now()
+     WHERE id = $1
+       AND (role IS DISTINCT FROM 'ceo'
+         OR trust_level IS DISTINCT FROM 'ceo'
+         OR system_role IS DISTINCT FROM 'principal'
+         OR tier IS DISTINCT FROM 'principal'
+         OR kind IS DISTINCT FROM 'principal')`,
+    [contactId],
+  );
+}
+
+/**
  * Ensure the CEO's primary email contact exists, is confirmed + verified, and has a
  * linked KG person node.
  *
@@ -77,22 +105,7 @@ export async function bootstrapCeoContact(
     // initially auto-created without a role.
     // tier='principal' and kind='principal' are the new equivalents (issue #945).
     try {
-      await pool.query(
-        `UPDATE contacts
-         SET role = 'ceo',
-             trust_level = 'ceo',
-             system_role = 'principal',
-             tier = 'principal',
-             kind = 'principal',
-             updated_at = now()
-         WHERE id = $1
-           AND (role IS DISTINCT FROM 'ceo'
-             OR trust_level IS DISTINCT FROM 'ceo'
-             OR system_role IS DISTINCT FROM 'principal'
-             OR tier IS DISTINCT FROM 'principal'
-             OR kind IS DISTINCT FROM 'principal')`,
-        [contact_id],
-      );
+      await repairPrincipalMetadata(contact_id, pool);
     } catch (err) {
       logger.error(
         { err, contactId: contact_id },
@@ -219,6 +232,9 @@ export async function bootstrapCeoContact(
             );
           }
         }
+        // Self-heal: the winner may be an older writer that left tier/kind at
+        // migration defaults. Repair before returning (mirrors the main path).
+        await repairPrincipalMetadata(winnerContactId, pool);
         logger.info({ contactId: winnerContactId, kgNodeId: winnerKgNodeId, email: ceoPrimaryEmail }, 'ceo-bootstrap: concurrent startup race resolved — existing CEO contact used');
         return { contactId: winnerContactId, kgNodeId: winnerKgNodeId, alreadyExisted: true };
       }

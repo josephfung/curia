@@ -21,7 +21,7 @@
 import { randomUUID } from 'crypto';
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
-import { insertKgPersonNode, createAndLinkKgNode } from './ceo-bootstrap.js';
+import { insertKgPersonNode, createAndLinkKgNode, repairPrincipalMetadata } from './ceo-bootstrap.js';
 
 export interface EnsurePrincipalOptions {
   /** Display name for the principal contact. Used only when creating; existing principals keep their stored name. */
@@ -71,6 +71,9 @@ export async function ensurePrincipalContact(
         'ensure-principal: backfilled KG person node for existing principal',
       );
     }
+    // Self-heal capability metadata: an existing principal row may have been left at
+    // migration-055 defaults ('unknown'/'person') by an older path; repair before returning.
+    await repairPrincipalMetadata(row.id, pool);
     return { contactId: row.id, kgNodeId, alreadyExisted: true };
   }
 
@@ -139,6 +142,8 @@ export async function ensurePrincipalContact(
             [kgNodeId],
           );
         }
+        // Self-heal: the race winner may be an older writer; repair tier/kind etc.
+        await repairPrincipalMetadata(winnerRow.id, pool);
         logger.info(
           { contactId: winnerRow.id, kgNodeId: winnerKgNodeId },
           'ensure-principal: concurrent race resolved — existing principal used',
