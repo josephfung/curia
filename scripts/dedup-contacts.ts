@@ -19,7 +19,12 @@ import { createLogger } from '../src/logger.js';
 import { classifyPair, type PairClassification } from '../src/contacts/dedup-classifier.js';
 import type { Contact, ChannelIdentity, ContactKind } from '../src/contacts/types.js';
 import type { KgNode } from '../src/memory/types.js';
-import type { StoreFactOptions } from '../src/memory/types.js';
+import {
+  writeExclusion,
+  hasExclusion,
+  type WriteExclusionOptions,
+  type HasExclusionOptions,
+} from '../src/contacts/dedup-exclusions.js';
 import { ModelRegistry } from '../src/agents/llm/model-registry.js';
 import { EventBus } from '../src/bus/bus.js';
 import { AuditLogger } from '../src/audit/logger.js';
@@ -108,106 +113,14 @@ export interface DedupRunOptions {
     sourceAgentId: string;
     tags: string[];
   }) => Promise<unknown>;
-  // storeFact is intentionally NOT included here: the sweep never writes exclusion facts
-  // itself. The decline→exclusion write is performed by the contacts agent's decline flow
-  // (not yet wired; tracked as a follow-up). Only writeExclusion() has its own storeFact param.
+  // storeFact is NOT included here: the sweep never writes exclusion facts.
+  // Decline→exclusion writes go through the contacts agent calling contact-dedup-exclude.
   /** Calls EntityMemory.getFacts for a KG node — returns fact nodes. */
   getFacts: (kgNodeId: string) => Promise<KgNode[]>;
 }
 
-// ---------------------------------------------------------------------------
-// Exclusion helpers (exported for tests)
-// ---------------------------------------------------------------------------
-
-export interface WriteExclusionOptions {
-  // contactAId is intentionally omitted: the exclusion fact is always written on
-  // kgNodeId (which is A's KG node) and names contactBId as the excluded party.
-  // The caller already knows which node belongs to A — passing A's contact ID into
-  // the helper adds no value and would just be ignored.
-  contactBId: string;
-  /** KG node on which to record the exclusion fact. */
-  kgNodeId: string;
-  storeFact: (options: StoreFactOptions) => Promise<unknown>;
-}
-
-/**
- * Record a dedup_exclusion KG fact on kgNodeId naming contactBId.
- *
- * This is the memory-store path for a "do not suggest again" signal.
- * The fact uses permanent decay so it survives the normal slow/fast decay
- * schedule and is never quietly discarded.
- *
- * Format follows the convention used by backfill-contact-attributes:
- *   label: "dedup_exclusion: <otherContactId>"
- *   properties.attribute = 'dedup_exclusion'
- *   properties.value     = otherContactId
- *
- * NOTE: This function is intentionally NOT called by runDedup() / the sweep.
- * The decline→exclusion write is performed by the contacts agent's decline flow
- * (i.e. when a human reviews a fuzzy recommendation task and declines to merge).
- * That wiring is not yet implemented; tracked as a follow-up. This function is
- * therefore NOT dead code — it is the target of that future call site.
- */
-export async function writeExclusion(opts: WriteExclusionOptions): Promise<void> {
-  const { contactBId, kgNodeId, storeFact } = opts;
-  await storeFact({
-    entityNodeId: kgNodeId,
-    label: `dedup_exclusion: ${contactBId}`,
-    properties: { attribute: 'dedup_exclusion', value: contactBId },
-    // Permanent decay — exclusion decisions must not quietly expire
-    decayClass: 'permanent',
-    confidence: 1.0,
-    source: 'contacts-dedup',
-    sensitivity: 'internal',
-  });
-}
-
-// ---------------------------------------------------------------------------
-
-export interface HasExclusionOptions {
-  contactAId: string;
-  contactBId: string;
-  kgNodeIdA: string | null;
-  kgNodeIdB: string | null;
-  getFacts: (kgNodeId: string) => Promise<KgNode[]>;
-}
-
-/**
- * Check whether either contact has recorded a dedup_exclusion fact naming the other.
- *
- * Returns true if an exclusion exists in either direction (A→B or B→A).
- * Returns false immediately if neither contact has a kg_node_id (no facts possible).
- */
-export async function hasExclusion(opts: HasExclusionOptions): Promise<boolean> {
-  const { contactAId, contactBId, kgNodeIdA, kgNodeIdB, getFacts } = opts;
-
-  // Short-circuit: no KG nodes means no facts can exist
-  if (kgNodeIdA === null && kgNodeIdB === null) return false;
-
-  // Check A's node for an exclusion naming B
-  if (kgNodeIdA !== null) {
-    const factsA = await getFacts(kgNodeIdA);
-    for (const fact of factsA) {
-      const props = fact.properties as Record<string, unknown>;
-      if (props.attribute === 'dedup_exclusion' && props.value === contactBId) {
-        return true;
-      }
-    }
-  }
-
-  // Check B's node for an exclusion naming A
-  if (kgNodeIdB !== null) {
-    const factsB = await getFacts(kgNodeIdB);
-    for (const fact of factsB) {
-      const props = fact.properties as Record<string, unknown>;
-      if (props.attribute === 'dedup_exclusion' && props.value === contactAId) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
+// Re-export shared helpers so existing test imports from this module keep working.
+export { writeExclusion, hasExclusion, type WriteExclusionOptions, type HasExclusionOptions };
 
 // ---------------------------------------------------------------------------
 // Core sweep logic (exported for tests)
