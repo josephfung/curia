@@ -69,6 +69,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Dependency CVE pins** — `ws`→8.21.0 (CVE-2026-48779), `form-data`→4.0.6 (CVE-2026-12143), and `esbuild`→0.28.1 (GHSA-gv7w-rqvm-qjhr) pinned via `pnpm-workspace.yaml` overrides, clearing the HIGH findings from the pre-release Trivy image scan.
 - **`X-Content-Type-Options: nosniff` on all HTTP responses** — a baseline header hook on the Fastify API blocks MIME-sniffing on every response (incl. 401s and static assets), clearing the ZAP DAST finding for rule 10021. (#568)
 - **Value-aware browser redaction** — secret values injected by reference are tracked per browser session and scrubbed (raw plus URL/HTML-encoded variants) from returned content, the page URL, and errors; screenshots are suppressed on a secret-fill action since an image can't be value-redacted. Blocks round-trip exfiltration via a page that reflects a typed credential back. (#973)
 - **Docker base images digest-pinned** — `Dockerfile` (node:24-slim, both stages) and `docker/postgres.Dockerfile` (pgvector/pgvector:pg16) are now pinned by `@sha256:` digest, clearing the Scorecard Pinned-Dependencies Docker findings. (#905)
