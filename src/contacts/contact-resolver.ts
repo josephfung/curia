@@ -45,6 +45,16 @@ export class ContactResolver {
       try {
         const principal = await this.contactService.findContactBySystemRole('principal');
         if (principal) {
+          // Warn if migration-055 backfill missed this principal row — kind should
+          // always be 'principal' for a system_role='principal' contact. The ?? fallback
+          // can't catch this because the kind column is NOT NULL (backfill leaves 'person',
+          // not NULL). Making it unconditional here is both authoritative and observable.
+          if (principal.kind !== 'principal') {
+            this.logger.warn(
+              { contactId: principal.id, kind: principal.kind },
+              'contact-resolver: principal contact has kind != "principal" — migration-055 backfill may have missed this row',
+            );
+          }
           return {
             resolved: true,
             contactId: principal.id,
@@ -58,10 +68,11 @@ export class ContactResolver {
             authorization: null,
             contactConfidence: 1.0,   // principal always gets max confidence
             trustLevel: null,
-            // Principal always gets the highest tier; kind comes from the stored row
-            // (should be 'principal' after migration 055 backfill).
+            // Principal always gets the highest tier and is always kind='principal'.
+            // Set unconditionally — the stored row value is authoritative only for the
+            // warning check above; we never surface a non-principal kind for the CEO.
             tier: 'principal' as ContactTier,
-            kind: (principal.kind ?? 'principal') as ContactKind,
+            kind: 'principal' as ContactKind,
           };
         }
         // DB call succeeded but no principal contact row exists yet (fresh install before seeding).

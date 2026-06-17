@@ -46,17 +46,22 @@ CREATE INDEX idx_contacts_tier ON contacts (tier) WHERE tier != 'unknown';
 -- Priority rules (checked in order, most specific first):
 -- 1. system_role='principal' → tier='principal'  (structural authority, trumps trust_level)
 -- 2. status='blocked'         → tier='blocked'
--- 3. trust_level='ceo'        → tier='principal'  (deprecated ceo trust level)
--- 4. trust_level='high'       → tier='trusted'
--- 5. trust_level='medium'     → tier='known'
--- 6. status='confirmed'       → tier='known'      (CEO approved but no explicit trust level)
--- 7. trust_level='low'        → tier='unknown'
--- 8. status='provisional'     → tier='unknown'    (unconfirmed, system-created)
+-- 3. status='provisional'     → tier='unknown'   (BEFORE trust_level branches — the old
+--                                                  authorization.ts gate refused to authorize
+--                                                  ANY provisional contact, so an elevated
+--                                                  trust_level on a provisional row must not
+--                                                  inflate the tier to 'known' or 'trusted')
+-- 4. trust_level='ceo'        → tier='principal'  (deprecated ceo trust level)
+-- 5. trust_level='high'       → tier='trusted'
+-- 6. trust_level='medium'     → tier='known'
+-- 7. status='confirmed'       → tier='known'      (CEO approved but no explicit trust level)
+-- 8. trust_level='low'        → tier='unknown'
 -- (default 'unknown' already set above — no final ELSE branch needed)
 UPDATE contacts
 SET tier = CASE
   WHEN system_role = 'principal'   THEN 'principal'
   WHEN status      = 'blocked'     THEN 'blocked'
+  WHEN status      = 'provisional' THEN 'unknown'
   WHEN trust_level = 'ceo'         THEN 'principal'
   WHEN trust_level = 'high'        THEN 'trusted'
   WHEN trust_level = 'medium'      THEN 'known'

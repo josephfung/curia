@@ -82,10 +82,14 @@ export async function ensurePrincipalContact(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Include tier and kind explicitly so the principal is never left at the
+    // migration-055 column defaults ('unknown'/'person'). The ceo-bootstrap
+    // corrective UPDATE cannot fire on this path (no channel identity yet), so
+    // the correct values must be present from the moment the row is inserted.
     await client.query(
       `INSERT INTO contacts
-         (id, kg_node_id, display_name, role, status, trust_level, system_role, created_at, updated_at)
-       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'ceo', 'principal', now(), now())`,
+         (id, kg_node_id, display_name, role, status, trust_level, system_role, tier, kind, created_at, updated_at)
+       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'ceo', 'principal', 'principal', 'principal', now(), now())`,
       [contactId, kgNodeId, displayName],
     );
     await client.query('COMMIT');

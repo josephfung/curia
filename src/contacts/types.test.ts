@@ -106,4 +106,25 @@ describe('meetsMinimumTier', () => {
       }
     }
   });
+
+  it('throws on an unrecognized actual tier value', () => {
+    // A silent wrong answer at a trust comparison is worse than an early throw.
+    // The TypeScript type system prevents this at compile time, but runtime data
+    // from the DB or deserialisation can produce invalid values.
+    expect(() => meetsMinimumTier('superadmin' as never, 'known')).toThrow(
+      /unrecognized tier value/,
+    );
+  });
+
+  it('throws on an unrecognized required tier value', () => {
+    expect(() => meetsMinimumTier('known', 'superadmin' as never)).toThrow(
+      /unrecognized tier value/,
+    );
+  });
+
+  it('throws when both tier values are unrecognized', () => {
+    expect(() => meetsMinimumTier('foo' as never, 'bar' as never)).toThrow(
+      /unrecognized tier value/,
+    );
+  });
 });
