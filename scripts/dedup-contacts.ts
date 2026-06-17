@@ -199,6 +199,20 @@ export async function runDedup(
 ): Promise<DedupRunResult> {
   const { dryRun, mergeContacts, createTask, getFacts } = opts;
 
+  // Memoize getFacts per KG node for the duration of the sweep. The exclusion check
+  // runs inside the O(n²) pair loop, and a contact that appears in many candidate
+  // pairs would otherwise re-fetch its KG facts each time. Exclusion facts are static
+  // within a run (the sweep never writes them — that's the agent's decline path), so
+  // caching is safe. Keyed by kg_node_id; contacts without a node are never looked up.
+  const factsCache = new Map<string, KgNode[]>();
+  const cachedGetFacts = async (kgNodeId: string): Promise<KgNode[]> => {
+    const hit = factsCache.get(kgNodeId);
+    if (hit !== undefined) return hit;
+    const facts = await getFacts(kgNodeId);
+    factsCache.set(kgNodeId, facts);
+    return facts;
+  };
+
   const result: DedupRunResult = {
     dryRun,
     mergedCount: 0,
@@ -263,7 +277,7 @@ export async function runDedup(
           contactBId: b.id,
           kgNodeIdA: a.kgNodeId,
           kgNodeIdB: b.kgNodeId,
-          getFacts,
+          getFacts: cachedGetFacts,
         });
       } catch (err) {
         // Fail closed: any error during classification or exclusion check means
