@@ -48,8 +48,10 @@ export type PairClassification =
 
 function normalizeDisplayName(name: string): string {
   return name
+    .normalize('NFKD')              // decompose accents: "é" → "e" + combining mark
+    .replace(/\p{M}/gu, '')         // strip the combining marks (diacritics)
     .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/[^\p{L}\p{N} ]/gu, '') // keep Unicode letters/numbers + spaces (preserves CJK/Arabic)
     .replace(/\s+/g, ' ')
     .trim();
 }

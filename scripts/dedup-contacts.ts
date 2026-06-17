@@ -16,7 +16,7 @@
 
 import pg from 'pg';
 import { createLogger } from '../src/logger.js';
-import { classifyPair } from '../src/contacts/dedup-classifier.js';
+import { classifyPair, type PairClassification } from '../src/contacts/dedup-classifier.js';
 import type { Contact, ChannelIdentity } from '../src/contacts/types.js';
 import type { KgNode } from '../src/memory/types.js';
 import type { StoreFactOptions } from '../src/memory/types.js';
@@ -261,7 +261,7 @@ export async function runDedup(
       // a transient DB error (e.g. getFacts throws) does not abort the entire
       // sweep. On error we FAIL CLOSED: the pair is skipped (never merged)
       // and errorCount is incremented so the operator knows something went wrong.
-      let classification;
+      let classification: PairClassification | null;
       let excluded: boolean;
       try {
         // Classify the pair: structural, fuzzy, or null (below threshold)
