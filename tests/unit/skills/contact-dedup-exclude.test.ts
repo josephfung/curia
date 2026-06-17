@@ -186,6 +186,33 @@ describe('ContactDedupExcludeHandler', () => {
     if (!result.success) expect(result.error).toContain('KG write failed');
   });
 
+  it('returns failure when storeFact returns stored: false (second exclusion silent-drop)', async () => {
+    // Validates the critical path where EntityMemory contradiction detection fires for
+    // a contact that already has a dedup_exclusion for a different pair. Before the fix,
+    // writeExclusion ignored the return value and the handler falsely returned success.
+    const contactService = {
+      getContact: vi.fn().mockImplementation(async (id: string) => ({
+        id,
+        kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
+      })),
+    } as unknown as SkillContext['contactService'];
+    const entityMemory = {
+      storeFact: vi.fn().mockResolvedValue({
+        stored: false,
+        action: 'conflict',
+        conflict: 'Contradicts existing dedup_exclusion fact for a different pair',
+      }),
+    } as unknown as SkillContext['entityMemory'];
+
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService, entityMemory },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('dedup exclusion');
+  });
+
   it('returns failure when neither contact has a KG node', async () => {
     const storeFactMock = vi.fn();
     const contactService = {

@@ -25,6 +25,10 @@ export class ContactDedupExcludeHandler implements SkillHandler {
       return { success: false, error: 'entityMemory not available' };
     }
 
+    // Hoisted so both variables are in scope in the catch block for partial-write logging
+    let contactAExcluded = false;
+    let contactBExcluded = false;
+
     try {
       const [contactA, contactB] = await Promise.all([
         ctx.contactService.getContact(contactAId),
@@ -40,13 +44,15 @@ export class ContactDedupExcludeHandler implements SkillHandler {
 
       const source = ctx.memoryWriteSource ?? 'contacts-dedup';
       const storeFact = ctx.entityMemory.storeFact.bind(ctx.entityMemory);
-      let contactAExcluded = false;
-      let contactBExcluded = false;
 
       // Write on A's node naming B
       if (contactA.kgNodeId !== null) {
         await writeExclusion({ contactBId, kgNodeId: contactA.kgNodeId, storeFact, source });
         contactAExcluded = true;
+      } else {
+        // A has no KG node — exclusion written on B only (best-effort); if B's node is
+        // later lost the exclusion may not be checkable. Logged so operators can audit.
+        ctx.log.warn({ contactAId, contactBId }, 'contact-dedup-exclude: contact A has no KG node — exclusion written on B only');
       }
 
       // Write on B's node naming A — bidirectional so hasExclusion finds it regardless of
@@ -54,6 +60,8 @@ export class ContactDedupExcludeHandler implements SkillHandler {
       if (contactB.kgNodeId !== null) {
         await writeExclusion({ contactBId: contactAId, kgNodeId: contactB.kgNodeId, storeFact, source });
         contactBExcluded = true;
+      } else {
+        ctx.log.warn({ contactAId, contactBId }, 'contact-dedup-exclude: contact B has no KG node — exclusion written on A only');
       }
 
       // If neither contact has a KG node yet, the exclusion cannot be stored anywhere.
@@ -77,7 +85,8 @@ export class ContactDedupExcludeHandler implements SkillHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, contactAId, contactBId }, 'contact-dedup-exclude: failed to write exclusion facts');
+      // Include partial-write state so operators can tell which write failed
+      ctx.log.error({ err, contactAId, contactBId, contactAExcluded, contactBExcluded }, 'contact-dedup-exclude: failed to write exclusion facts');
       return { success: false, error: `Failed to write dedup exclusion: ${message}` };
     }
   }

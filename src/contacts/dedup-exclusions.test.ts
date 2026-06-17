@@ -74,6 +74,22 @@ describe('writeExclusion', () => {
     const args = storeFactMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(args.source).toBe('agent:contacts/task:t1/channel:cli');
   });
+
+  it('throws when storeFact returns stored: false (e.g. conflict with existing exclusion for different pair)', async () => {
+    // This exercises the critical path where EntityMemory contradiction detection fires
+    // because the same attribute ('dedup_exclusion') already exists on the node for a
+    // different pair (different label/value). Without the throw, the handler would
+    // silently treat the non-stored fact as written and return success to the agent.
+    const storeFactMock = vi.fn().mockResolvedValue({
+      stored: false,
+      action: 'conflict',
+      conflict: 'Contradicts existing fact dedup_exclusion: c3 (same attribute, different label, equal confidence)',
+    });
+
+    await expect(
+      writeExclusion({ contactBId: 'c2', kgNodeId: 'kg-c1', storeFact: storeFactMock }),
+    ).rejects.toThrow(/not stored.*action: conflict/);
+  });
 });
 
 // ---------------------------------------------------------------------------
