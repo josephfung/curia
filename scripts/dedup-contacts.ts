@@ -17,7 +17,7 @@
 import pg from 'pg';
 import { createLogger } from '../src/logger.js';
 import { classifyPair, type PairClassification } from '../src/contacts/dedup-classifier.js';
-import type { Contact, ChannelIdentity } from '../src/contacts/types.js';
+import type { Contact, ChannelIdentity, ContactKind } from '../src/contacts/types.js';
 import type { KgNode } from '../src/memory/types.js';
 import type { StoreFactOptions } from '../src/memory/types.js';
 import { ModelRegistry } from '../src/agents/llm/model-registry.js';
@@ -495,7 +495,7 @@ type ContactRow = {
   system_role: string | null;
   status: string;
   tier: string;
-  kind: string;
+  kind: string | null;
   contact_confidence: string;
   trust_level: string | null;
   last_seen_at: Date | null;
@@ -532,6 +532,20 @@ type IdentityRow = {
   updated_at: Date;
 };
 
+const VALID_CONTACT_KINDS: ContactKind[] = ['person', 'organization', 'automated', 'principal', 'agent'];
+
+// Validates the raw DB kind value against the known enum. Defaults to 'person' with a
+// warning log for null or unrecognized values (e.g. pre-backfill rows), consistent with
+// the validation in ContactService.rowToContact. Without this, unvalidated null/legacy
+// kind values silently skip the org single-token structural exemption in the classifier.
+function parseContactKind(contactId: string, raw: string | null): ContactKind {
+  if (raw !== null && (VALID_CONTACT_KINDS as string[]).includes(raw)) {
+    return raw as ContactKind;
+  }
+  logger.warn({ contactId, rawKind: raw }, 'dedup-contacts: unrecognized kind value — defaulting to person; check kind backfill for this contact');
+  return 'person';
+}
+
 function rowToContact(row: ContactRow): Contact {
   return {
     id: row.id,
@@ -543,7 +557,7 @@ function rowToContact(row: ContactRow): Contact {
       : null,
     status: row.status as Contact['status'],
     tier: row.tier as Contact['tier'],
-    kind: row.kind as Contact['kind'],
+    kind: parseContactKind(row.id, row.kind),
     contactConfidence: Number(row.contact_confidence),
     trustLevel: row.trust_level as Contact['trustLevel'],
     lastSeenAt: row.last_seen_at,
