@@ -7,7 +7,7 @@ import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { SignalEnvelope } from '../../../../src/channels/signal/types.js';
 import type { OutboundMessageEvent } from '../../../../src/bus/events.js';
-import type { ContactTier } from '../../../../src/contacts/types.js';
+import type { ContactTier, ContactStatus } from '../../../../src/contacts/types.js';
 import { createLogger } from '../../../../src/logger.js';
 import pino from 'pino';
 
@@ -61,13 +61,13 @@ function makeMockGateway() {
  * Map legacy status string to the equivalent ContactTier (issue #945).
  * signal-adapter.ts now reads `tier` rather than `status` for the isKnownSender check.
  */
-function statusToTier(status: string): ContactTier {
+function statusToTier(status: ContactStatus): ContactTier {
   if (status === 'blocked')     return 'blocked';
   if (status === 'provisional') return 'unknown';
   return 'known'; // confirmed
 }
 
-function makeMockContactService(resolved: { contactId: string; status: string } | null = null) {
+function makeMockContactService(resolved: { contactId: string; status: ContactStatus } | null = null) {
   // Populate `tier` derived from `status` so signal-adapter's tier gate works correctly.
   const resolvedWithTier = resolved ? { ...resolved, tier: statusToTier(resolved.status) } : null;
   return {

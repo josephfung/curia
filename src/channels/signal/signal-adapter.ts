@@ -14,6 +14,7 @@
 import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
 import type { ContactService } from '../../contacts/contact-service.js';
+import { meetsMinimumTier } from '../../contacts/types.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { OutboundMessageEvent } from '../../bus/events.js';
 import type { SignalEnvelope } from './types.js';
@@ -154,10 +155,12 @@ export class SignalAdapter implements Channel {
       const existing = await this.config.contactService.resolveByChannelIdentity('signal', senderId);
 
       if (existing) {
-        // Known sender: tier >= 'known' (i.e. not unknown/blocked) counts as "known"
-        // for read-receipt purposes. The dispatcher enforces hold/block policy.
-        // Uses tier for the check (issue #945); replaces status != 'provisional' && != 'blocked'.
-        isKnownSender = existing.tier !== 'unknown' && existing.tier !== 'blocked';
+        // Known sender: tier >= 'known' counts as "known" for read-receipt purposes.
+        // The dispatcher enforces hold/block policy. Uses a positive allowlist via
+        // meetsMinimumTier() (issue #945) so an unexpected tier value fails safe to
+        // "not known" rather than the prior denylist (!== 'unknown' && !== 'blocked'),
+        // which would have treated any unrecognized value as known.
+        isKnownSender = meetsMinimumTier(existing.tier, 'known');
       } else {
         // New sender — auto-create a provisional contact.
         // signal_participant is auto-verified (per contact-service.ts) so the phone
