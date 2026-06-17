@@ -67,7 +67,8 @@ RUN corepack enable
 #   - CVE-2026-45149: brace-expansion < 5.0.6 (arbitrary string generation)
 #   - CVE-2026-42338: ip-address < 10.1.1 (XSS via improper HTML escaping)
 # npm@11.17.0 bundles tar@7.5.16, brace-expansion@5.0.6, ip-address@10.2.0.
-# This does not affect pnpm or the app's own node_modules.
+# CVE-2026-53655 in pnpm's own bundled tar is addressed separately by upgrading
+# pnpm to 11.7.0 (packageManager field in package.json), which bundles tar@7.5.16.
 # TODO: Dependabot does not track RUN-instruction version pins — bump this
 # manually when npm publishes a patch that addresses new bundled CVEs.
 RUN npm install -g npm@11.17.0

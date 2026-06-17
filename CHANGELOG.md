@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **Insecure temp directory in loader test** — replaced predictable hardcoded temp path with `fs.mkdtempSync()` to eliminate CWE-377 (insecure temporary file creation) CodeQL alert #159.
+- **pnpm 11.0.8 → 11.7.0** — clears CVE-2026-53655 (node-tar PAX size override / interpretation differential) in pnpm's own bundled tar; pnpm 11.7.0 ships tar@7.5.16.
 
 ### Fixed
 
