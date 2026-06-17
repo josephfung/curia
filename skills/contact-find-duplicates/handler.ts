@@ -172,24 +172,38 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
         continue;
       }
 
+      // Exclusion check is isolated from task filing: a transient getFacts failure
+      // should increment failed and skip the pair (same as a task-filing failure),
+      // but logging a distinct message lets operators tell the two apart.
+      let excluded: boolean;
       try {
-        const excluded = await hasExclusion({
+        excluded = await hasExclusion({
           contactAId: pair.contactA.id,
           contactBId: pair.contactB.id,
           kgNodeIdA: pair.contactA.kgNodeId,
           kgNodeIdB: pair.contactB.kgNodeId,
           getFacts: cachedGetFacts,
         });
-        if (excluded) {
-          skippedExcluded++;
-          continue;
-        }
+      } catch (exclusionErr) {
+        failed++;
+        ctx.log.error(
+          { exclusionErr, contactAId: pair.contactA.id, contactBId: pair.contactB.id },
+          'contact-find-duplicates: exclusion check failed — skipping pair, may re-surface next sweep',
+        );
+        continue;
+      }
 
-        if (maxTasks !== undefined && filed >= maxTasks) {
-          capped++;
-          continue;
-        }
+      if (excluded) {
+        skippedExcluded++;
+        continue;
+      }
 
+      if (maxTasks !== undefined && filed >= maxTasks) {
+        capped++;
+        continue;
+      }
+
+      try {
         const description = [
           `Possible duplicate contacts detected by the dedup skill scan.`,
           ``,
@@ -218,14 +232,14 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
           'contact-find-duplicates: filed review task',
         );
         filed++;
-      } catch (pairErr) {
+      } catch (taskErr) {
         // Fail open: log and continue so one pair error doesn't abort the entire scan.
         // The pair is not counted as filed, so the idempotency check will attempt it again
         // on the next weekly run — the risk of re-filing is preferable to losing all progress.
         failed++;
         ctx.log.error(
-          { pairErr, contactAId: pair.contactA.id, contactBId: pair.contactB.id },
-          'contact-find-duplicates: error processing pair — skipping and continuing',
+          { taskErr, contactAId: pair.contactA.id, contactBId: pair.contactB.id },
+          'contact-find-duplicates: error filing task for pair — skipping and continuing',
         );
       }
     }
