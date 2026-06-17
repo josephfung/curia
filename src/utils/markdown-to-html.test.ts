@@ -56,8 +56,9 @@ describe('markdownToHtml — URL auto-linking', () => {
 
   it('does not inject content after a double quote into the href attribute', () => {
     // The URL regex [^\s<>"] stops at " so the href value only contains the URL portion.
-    // This validates the regex boundary; the &quot; encoding in hrefValue (and now also
-    // in escapeHtml) provides defense-in-depth against future regex relaxation.
+    // This validates the regex boundary; the &quot; encoding in hrefValue provides
+    // defense-in-depth against future regex relaxation (escapeHtml intentionally does
+    // NOT encode " — see the comment on escapeHtml for why).
     const result = markdownToHtml('Visit https://example.com" onclick="alert(1)');
     expect(result).toContain('<a href="https://example.com"');
     expect(result).not.toContain('href="https://example.com" onclick=');
