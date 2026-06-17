@@ -20,6 +20,8 @@ function makeContact(overrides: Partial<Contact> & { id: string; displayName: st
     role: null,
     systemRole: null,
     status: 'confirmed',
+    tier: 'known',
+    kind: 'person',
     contactConfidence: 0.8,
     trustLevel: null,
     lastSeenAt: null,

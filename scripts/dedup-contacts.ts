@@ -396,6 +396,8 @@ type ContactRow = {
   role: string | null;
   system_role: string | null;
   status: string;
+  tier: string;
+  kind: string;
   contact_confidence: string;
   trust_level: string | null;
   last_seen_at: Date | null;
@@ -442,6 +444,8 @@ function rowToContact(row: ContactRow): Contact {
       ? row.system_role
       : null,
     status: row.status as Contact['status'],
+    tier: row.tier as Contact['tier'],
+    kind: row.kind as Contact['kind'],
     contactConfidence: Number(row.contact_confidence),
     trustLevel: row.trust_level as Contact['trustLevel'],
     lastSeenAt: row.last_seen_at,
@@ -488,7 +492,7 @@ async function loadContactsAndIdentities(pool: pg.Pool): Promise<{
   // Load only 'confirmed' and 'provisional' contacts — skip 'blocked'.
   // Blocked contacts should not be merged; they are deliberately excluded.
   const contactsResult = await pool.query<ContactRow>(
-    `SELECT id, kg_node_id, display_name, role, system_role, status, contact_confidence,
+    `SELECT id, kg_node_id, display_name, role, system_role, status, tier, kind, contact_confidence,
             trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes,
             created_at, updated_at, preferred_name, title, organization, primary_email,
             primary_phone, timezone, locale, location, pronouns, linkedin_url, bio, birthday
