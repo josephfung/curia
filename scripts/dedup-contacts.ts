@@ -15,13 +15,27 @@
 // Run: pnpm run dedup:contacts [--dry-run]
 
 import pg from 'pg';
-import pino from 'pino';
+import { createLogger } from '../src/logger.js';
 import { classifyPair } from '../src/contacts/dedup-classifier.js';
 import type { Contact, ChannelIdentity } from '../src/contacts/types.js';
 import type { KgNode } from '../src/memory/types.js';
 import type { StoreFactOptions } from '../src/memory/types.js';
+import { ModelRegistry } from '../src/agents/llm/model-registry.js';
+import { EventBus } from '../src/bus/bus.js';
+import { AuditLogger } from '../src/audit/logger.js';
+import { EmbeddingService } from '../src/memory/embedding.js';
+import { KnowledgeGraphStore } from '../src/memory/knowledge-graph.js';
+import { MemoryValidator } from '../src/memory/validation.js';
+import { EntityMemory } from '../src/memory/entity-memory.js';
+import { ContactService } from '../src/contacts/contact-service.js';
+import { TaskRepo } from '../src/db/task-repo.js';
+import { DedupService } from '../src/contacts/dedup-service.js';
+import { createContactMerged } from '../src/bus/events.js';
 
-const logger = pino({ name: 'dedup-contacts' });
+// Use the same structured logger factory as the rest of the app so log output
+// lands in curia.log in dev and JSON-to-stdout in production.
+const logger = createLogger();
+logger.info({ name: 'dedup-contacts' }, 'dedup-contacts starting');
 
 const { Pool } = pg;
 
@@ -471,88 +485,6 @@ async function loadContactsAndIdentities(pool: pg.Pool): Promise<{
 }
 
 // ---------------------------------------------------------------------------
-// KG fact helpers for use with the real pool
-// ---------------------------------------------------------------------------
-
-async function getFactsFromDb(pool: pg.Pool, kgNodeId: string): Promise<KgNode[]> {
-  // Replicates the query used in EntityMemory.getFacts().
-  // Returns all fact nodes reachable via a 'relates_to' edge from the given node.
-  const result = await pool.query<{
-    id: string;
-    type: string;
-    label: string;
-    properties: Record<string, unknown>;
-    embedding: number[] | null;
-    confidence: string;
-    decay_class: string;
-    source: string;
-    sensitivity: string;
-    aliases: string[];
-    created_at: Date;
-    last_confirmed_at: Date;
-  }>(
-    `SELECT n.id, n.type, n.label, n.properties, n.embedding, n.confidence,
-            n.decay_class, n.source, n.sensitivity, n.aliases,
-            n.created_at, n.last_confirmed_at
-     FROM kg_nodes n
-     JOIN kg_edges e ON (
-       (e.source_node_id = $1 AND e.target_node_id = n.id)
-       OR (e.target_node_id = $1 AND e.source_node_id = n.id)
-     )
-     WHERE e.type = 'relates_to'
-       AND e.archived_at IS NULL
-       AND n.type = 'fact'
-       AND n.archived_at IS NULL`,
-    [kgNodeId],
-  );
-
-  return result.rows.map(row => ({
-    id: row.id,
-    type: row.type as KgNode['type'],
-    label: row.label,
-    properties: row.properties,
-    embedding: row.embedding ?? undefined,
-    confidence: Number(row.confidence),
-    decayClass: row.decay_class as KgNode['decayClass'],
-    source: row.source,
-    sensitivity: row.sensitivity as KgNode['sensitivity'],
-    aliases: row.aliases,
-    temporal: {
-      createdAt: row.created_at,
-      lastConfirmedAt: row.last_confirmed_at,
-    },
-  }));
-}
-
-async function storeFactInDb(pool: pg.Pool, options: StoreFactOptions): Promise<void> {
-  // Write a KG fact via direct SQL (no EntityMemory available in the script context
-  // because EntityMemory requires EmbeddingService and MemoryValidator).
-  //
-  // This is intentionally minimal: we only need to write exclusion facts, which have
-  // a known schema (attribute/value properties, permanent decay). If a full EntityMemory
-  // is needed in future the script can be wired with real DI.
-  //
-  // The label "dedup_exclusion: <id>" is short, ascii-only — no embedding needed.
-  // We insert with embedding = NULL (allowed; the vector column is nullable).
-  await pool.query(
-    `INSERT INTO kg_nodes (
-       type, label, properties, confidence, decay_class, source, sensitivity,
-       aliases, created_at, last_confirmed_at
-     ) VALUES (
-       'fact', $1, $2, $3, $4, $5, $6, '{}', NOW(), NOW()
-     )`,
-    [
-      options.label,
-      JSON.stringify(options.properties ?? {}),
-      options.confidence ?? 0.7,
-      options.decayClass ?? 'permanent',
-      options.source,
-      options.sensitivity ?? 'internal',
-    ],
-  );
-}
-
-// ---------------------------------------------------------------------------
 // CLI entry point
 // ---------------------------------------------------------------------------
 
@@ -576,65 +508,65 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       const { contacts, identityMap } = await loadContactsAndIdentities(pool);
       logger.info({ contactCount: contacts.length }, 'dedup-contacts: loaded contacts');
 
-      // Build injected callbacks for the real pool
+      // Wire the real service stack — mirrors the construction order in src/index.ts.
+      // All four hand-rolled callbacks (mergeContacts, createTask, storeFact, getFacts)
+      // are replaced with delegates to real services so that:
+      //   - mergeContacts: uses ContactService.mergeContacts(), which is transactional,
+      //     repoints kg_node_id and contact_calendars, and fires the contact.merged bus
+      //     event (audit-logged by the write-ahead hook in EventBus).
+      //   - createTask: uses TaskRepo.createTask(), which publishes task.created events.
+      //   - storeFact/getFacts: use EntityMemory, which embeds labels and validates facts.
+      const openaiApiKey = process.env['OPENAI_API_KEY'];
+      if (!openaiApiKey) {
+        logger.error('dedup-contacts: OPENAI_API_KEY is required (entity memory — needed for storeFact / getFacts)');
+        process.exit(1);
+      }
+
+      const auditLogger = new AuditLogger(pool, logger);
+      // EventBus with write-ahead audit hook — every published event (incl. contact.merged)
+      // is persisted to audit_log before delivery, satisfying the acceptance criterion.
+      const bus = new EventBus(
+        logger,
+        (e) => auditLogger.log(e),
+        (id) => auditLogger.markAcknowledged(id),
+      );
+
+      const modelRegistry = new ModelRegistry(logger);
+      const embeddingService = EmbeddingService.createWithOpenAI(openaiApiKey, logger, bus, modelRegistry);
+      const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
+      const validator = new MemoryValidator(kgStore, embeddingService);
+      const entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
+
+      const dedupService = new DedupService();
+      const contactService = ContactService.createWithPostgres(pool, entityMemory, logger, {
+        dedupService,
+        // Publish contact.merged to the bus so the write-ahead audit hook records it.
+        onContactMerged: (primaryContactId, secondaryContactId, mergedAt) => {
+          bus.publish('dispatch', createContactMerged({ primaryContactId, secondaryContactId, mergedAt }))
+            .catch((err: unknown) => logger.error({ err }, 'Failed to publish contact.merged — audit trail may be incomplete'));
+        },
+      });
+
+      const taskRepo = new TaskRepo(pool, bus, logger, process.env['TZ'] ?? 'UTC');
+
+      // Build injected callbacks — all delegate to real services, no hand-rolled SQL
       const opts: DedupRunOptions = {
         dryRun,
 
-        mergeContacts: async (primaryId, secondaryId) => {
-          // Direct SQL merge: re-attach identities, update primary, delete secondary.
-          // Reuses the same logic as ContactService.mergeContacts but without the full
-          // service stack. The contact.merged bus event (which fires the audit log) is
-          // NOT emitted here — the maintenance script runs outside the bus context.
-          // TODO: Thread the bus through the script if audit coverage of batch merges is required.
-          await pool.query(
-            `UPDATE contact_channel_identities SET contact_id = $1 WHERE contact_id = $2`,
-            [primaryId, secondaryId],
-          );
-          await pool.query(
-            `UPDATE contact_auth_overrides SET contact_id = $1 WHERE contact_id = $2`,
-            [primaryId, secondaryId],
-          );
-          await pool.query(
-            `DELETE FROM contacts WHERE id = $1`,
-            [secondaryId],
-          );
-          logger.info({ primaryId, secondaryId }, 'dedup-contacts: merged via SQL');
-        },
+        // ContactService.mergeContacts handles: identity dedup (resolves the unique-email
+        // constraint violation the old UPDATE would have caused), kg_node_id repointing,
+        // contact_calendars reattachment, golden-record field consolidation, and deletion
+        // of the loser row — all in a single transaction.
+        mergeContacts: (primaryId, secondaryId) => contactService.mergeContacts(primaryId, secondaryId, false),
 
-        createTask: async (params) => {
-          // Insert a task directly. The heartbeat will route Curia-owned tasks
-          // with source_agent_id='contacts' to the contacts specialist.
-          const { rows } = await pool.query(
-            `INSERT INTO tasks (
-               agent_id, title, description, status, progress, error_budget,
-               owner, source, source_agent_id, tags, priority, created_at, updated_at,
-               intent_anchor, created_by
-             ) VALUES (
-               $1, $2, $3, 'open', '{"notes":[]}'::jsonb, '{}'::jsonb,
-               $4, $5, $6, $7, 50, NOW(), NOW(), $2, $1
-             )
-             RETURNING id`,
-            [
-              params.agentId,
-              params.title,
-              params.description,
-              params.owner,
-              params.source,
-              params.sourceAgentId,
-              params.tags,
-            ],
-          );
-          logger.info({ taskId: rows[0]?.id, title: params.title }, 'dedup-contacts: task created');
-          return rows[0];
-        },
+        // TaskRepo.createTask publishes task.created and handles progress/error_budget cols.
+        createTask: (params) => taskRepo.createTask(params),
 
-        storeFact: async (options) => {
-          await storeFactInDb(pool, options);
-        },
+        // EntityMemory.storeFact embeds the label and validates via MemoryValidator.
+        storeFact: (options) => entityMemory.storeFact(options),
 
-        getFacts: async (kgNodeId) => {
-          return getFactsFromDb(pool, kgNodeId);
-        },
+        // EntityMemory.getFacts returns fact nodes linked to the KG entity node.
+        getFacts: (kgNodeId) => entityMemory.getFacts(kgNodeId),
       };
 
       const result = await runDedup(contacts, identityMap, opts);
