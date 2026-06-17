@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.8.1"
+version: "0.8.2"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -612,7 +612,6 @@ pinned_skills:
   - dismiss-action
   - list-pending-actions
   - approval-expiry-sweep
-  - pending-actions-digest
   - scheduler-report
   - secret-capture-request
 allow_discovery: true
@@ -626,5 +625,13 @@ schedule:
     expectedDurationSeconds: 360
 
   - cron: "0 8 * * *"
-    task: "Run the pending-actions digest — if any approval requests are still awaiting a decision, send a summary to the CEO."
+    task: >
+      Send the CEO a daily digest. Use list-pending-actions to get all open
+      approval requests. Use task-list to get open tasks (run it twice: once
+      with owner "ceo", once with owner "external"). Compose a clear summary
+      and send it via email using the CEO's address from the Principal Contact
+      Details block. Skip sending entirely if list-pending-actions returns no
+      pending approvals and task-list returns no ceo or external tasks. If
+      list-pending-actions returns an error, include a brief note in the digest
+      that pending approvals could not be retrieved, then send anyway.
     expectedDurationSeconds: 360

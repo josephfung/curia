@@ -730,6 +730,58 @@ describe('humanApproved on InvokeOptions', () => {
     expect(result.success).toBe(false);
     expect(handler.execute).not.toHaveBeenCalled();
   });
+
+  it('allows elevated skills when task is system-originated (YAML-declared job)', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    const manifest: SkillManifest = {
+      ...makeRiskyManifest('list-pending-actions', 'none'),
+      sensitivity: 'elevated',
+    };
+    registry.register(manifest, handler);
+
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('list-pending-actions', {}, undefined, {
+      taskMetadata: {
+        originator: {
+          contactId: 'system',
+          systemRole: 'system' as const,
+          channel: 'declarative',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(handler.execute).toHaveBeenCalledOnce();
+  });
+
+  it('blocks elevated skills when task is agent-originated', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('should not run');
+    const manifest: SkillManifest = {
+      ...makeRiskyManifest('list-pending-actions', 'none'),
+      sensitivity: 'elevated',
+    };
+    registry.register(manifest, handler);
+
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('list-pending-actions', {}, undefined, {
+      taskMetadata: {
+        originator: {
+          contactId: 'coordinator',
+          systemRole: 'agent' as const,
+          channel: 'internal',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

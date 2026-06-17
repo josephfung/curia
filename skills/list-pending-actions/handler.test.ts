@@ -42,6 +42,39 @@ describe('ListPendingActionsHandler', () => {
     expect(result).toHaveProperty('error');
   });
 
+  it('allows system-originated tasks (YAML-declared scheduled jobs)', async () => {
+    const repo = makeMockRepo();
+    const handler = new ListPendingActionsHandler();
+    const result = await handler.execute(makeCtx({
+      taskMetadata: {
+        originator: {
+          contactId: 'system',
+          systemRole: 'system' as const,
+          channel: 'declarative',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
+      actionLogRepo: repo,
+    }));
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects agent-originated tasks', async () => {
+    const handler = new ListPendingActionsHandler();
+    const result = await handler.execute(makeCtx({
+      taskMetadata: {
+        originator: {
+          contactId: 'agent',
+          systemRole: 'agent' as const,
+          channel: 'internal',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
+    }));
+    expect(result.success).toBe(false);
+    expect(result).toHaveProperty('error');
+  });
+
   it('returns error when actionLogRepo is not available', async () => {
     const handler = new ListPendingActionsHandler();
     const result = await handler.execute(makeCtx({ actionLogRepo: undefined }));

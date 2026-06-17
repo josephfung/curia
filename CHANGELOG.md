@@ -37,6 +37,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`protobufjs`** — targeted override on `onnxruntime-web` to `>=7.6.3 <8`, clearing GHSA-f38q-mgvj-vph7 (schema-derived names shadowing runtime properties).
 - **`npm` (Docker runtime image)** — upgraded npm to 11.17.0 in the production Docker image, clearing CVE-2026-53655 (`node-tar` PAX file smuggling), CVE-2026-45149 (`brace-expansion` arbitrary string generation), and CVE-2026-42338 (`ip-address` XSS) from npm's own bundled packages.
 
+### Changed
+
+- **Elevated-skill gate** — `execution.ts` now permits `systemRole: "system"` (YAML-declared scheduled jobs via `makeSystemOriginator()`) through the elevated-skill gate in addition to `"principal"` (active CEO conversation). Agent-originated tasks (`systemRole: "agent"`) remain blocked. The `list-pending-actions` handler-level guard updated to match. Handler-level `isPrincipalOriginated()` guards on `approve-action`, `deny-action`, and `dismiss-action` are unchanged — those actions still require active CEO authorization.
+- **Coordinator 8am digest task** — scheduler entry rewritten from vague natural language to explicit step-by-step instructions: fetch pending approvals via `list-pending-actions`, fetch open tasks via `task-list` (owner `"ceo"` and `"external"`), compose summary, send via email. Skips sending if both return empty.
+- **`OutboundNotificationPayload.notificationType` (bus event types, public API)** — `'pending_actions_digest'` variant removed from the discriminated union in `src/bus/events.ts`.
+
+### Removed
+
+- **`pending-actions-digest` skill** — over-specialized batch skill deleted; the coordinator now composes the daily digest directly using `list-pending-actions` and `task-list`, giving the LLM full control over channel selection and digest content.
+
 ## [0.35.0] — 2026-06-16 — "Garak"
 
 > **Elim Garak** *(Star Trek: Deep Space Nine, 1993, Rick Berman & Michael Piller)* — the "plain, simple tailor" who is anything but: an exiled Cardassian spy whose entire craft is discretion, disguise, and never revealing more than the moment demands. This release teaches Curia the same trade — secrets now pass through it to where they are needed without ever being shown to the agent doing the work, and the browser learned to wear a convincing disguise.

@@ -787,10 +787,10 @@ export class EmailAdapter implements Channel {
         } else {
           // actionRef is absent either because taskEventId was not passed, or because
           // the action_log insert failed (gateway logs the DB error separately).
-          // In either case the draft is created but won't appear in the pending-actions-digest.
+          // In either case the draft is created but won't appear in list-pending-actions.
           logger.warn(
             { accountId, draftId: draftResult.draftId },
-            'email-adapter: gated fallback draft created but no actionRef available — draft will not appear in pending-actions-digest (taskEventId absent or action_log insert failed)',
+            'email-adapter: gated fallback draft created but no actionRef available — draft will not appear in list-pending-actions (taskEventId absent or action_log insert failed)',
           );
         }
         // Log inside the success branch only — if the draft failed, we already logged
