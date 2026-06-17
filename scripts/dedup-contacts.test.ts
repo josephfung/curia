@@ -20,6 +20,7 @@ import {
   runDedup,
   writeExclusion,
   hasExclusion,
+  parseNumericFlag,
   type DedupRunOptions,
 } from './dedup-contacts.js';
 
@@ -750,6 +751,65 @@ describe('hasExclusion', () => {
     });
 
     expect(result).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseNumericFlag — CLI numeric flag parsing
+// ---------------------------------------------------------------------------
+
+describe('parseNumericFlag', () => {
+  it('returns undefined when the flag is absent', () => {
+    expect(parseNumericFlag(['node', 'script', '--dry-run'], '--min-score')).toBeUndefined();
+  });
+
+  it('parses --flag value form', () => {
+    expect(parseNumericFlag(['node', 'script', '--max-tasks', '50'], '--max-tasks')).toBe(50);
+  });
+
+  it('parses --flag=value form', () => {
+    expect(parseNumericFlag(['node', 'script', '--min-score=0.88'], '--min-score')).toBe(0.88);
+  });
+
+  it('accepts an explicit zero (--flag=0)', () => {
+    expect(parseNumericFlag(['node', 'script', '--max-tasks=0'], '--max-tasks')).toBe(0);
+  });
+
+  it('exits on an empty value (--flag=) rather than silently coercing to 0', () => {
+    // process.exit is stubbed to throw so we can assert the loud-fail path. Without the
+    // empty-value guard, Number('') === 0 would be returned silently.
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit');
+    });
+    try {
+      expect(() => parseNumericFlag(['node', 'script', '--max-tasks='], '--max-tasks')).toThrow('process.exit');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('exits on a whitespace-only value', () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit');
+    });
+    try {
+      expect(() => parseNumericFlag(['node', 'script', '--min-score', '   '], '--min-score')).toThrow('process.exit');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('exits on a non-numeric value', () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit');
+    });
+    try {
+      expect(() => parseNumericFlag(['node', 'script', '--min-score=high'], '--min-score')).toThrow('process.exit');
+    } finally {
+      exitSpy.mockRestore();
+    }
   });
 });
 

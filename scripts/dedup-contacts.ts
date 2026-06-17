@@ -624,7 +624,7 @@ async function loadContactsAndIdentities(pool: pg.Pool): Promise<{
  * the flag is present but its value is missing or not a finite number — better to
  * fail loudly than to silently ignore an operator's tuning intent on a prod sweep.
  */
-function parseNumericFlag(argv: string[], flag: string): number | undefined {
+export function parseNumericFlag(argv: string[], flag: string): number | undefined {
   const eq = argv.find(a => a.startsWith(`${flag}=`));
   let raw: string | undefined;
   if (eq) {
@@ -634,7 +634,11 @@ function parseNumericFlag(argv: string[], flag: string): number | undefined {
     if (idx === -1) return undefined;
     raw = argv[idx + 1];
   }
-  const n = raw === undefined ? NaN : Number(raw);
+  // Empty / whitespace-only values (e.g. `--min-score=` or `--max-tasks= `) must fail
+  // loudly, NOT be silently coerced to 0 — Number('') and Number('  ') are both 0, which
+  // is finite, so without this guard a missing operator value would pass as a real 0
+  // setting (e.g. `--max-tasks=` would behave like --no-tasks).
+  const n = (raw === undefined || raw.trim() === '') ? NaN : Number(raw);
   if (!Number.isFinite(n)) {
     logger.error({ flag, raw }, `dedup-contacts: ${flag} requires a numeric value`);
     process.exit(1);
