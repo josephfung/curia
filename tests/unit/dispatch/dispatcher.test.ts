@@ -7,7 +7,7 @@ import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { DbPool } from '../../../src/db/connection.js';
-import type { InboundSenderContext, ContactStatus, TrustLevel, TaskOriginator } from '../../../src/contacts/types.js';
+import type { InboundSenderContext, ContactStatus, TrustLevel, TaskOriginator, ContactTier, ContactKind } from '../../../src/contacts/types.js';
 import { HeldMessageService } from '../../../src/contacts/held-messages.js';
 import { createLogger } from '../../../src/logger.js';
 
@@ -17,10 +17,21 @@ const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model
 // -- Test helpers --
 
 /**
+ * Derive the canonical tier from a legacy ContactStatus value for test fixtures.
+ * Mirrors the backfill logic in migration 055. Used to keep mock objects consistent
+ * with the post-#945 SenderContext shape without requiring a real DB.
+ */
+function statusToTier(status: ContactStatus): ContactTier {
+  if (status === 'blocked')     return 'blocked';
+  if (status === 'provisional') return 'unknown';
+  return 'known'; // confirmed
+}
+
+/**
  * Creates a mock ContactResolver that returns a resolved contact with the given trust inputs.
  * Used to exercise trust scoring paths without a real database.
  */
-function makeResolverWithContact(opts: { contactConfidence: number; trustLevel: TrustLevel | null; status: ContactStatus }): ContactResolver {
+function makeResolverWithContact(opts: { contactConfidence: number; trustLevel: TrustLevel | null; status: ContactStatus; tier?: ContactTier; kind?: ContactKind }): ContactResolver {
   return {
     resolve: async (_channel, _senderId) => ({
       resolved: true,
@@ -29,6 +40,9 @@ function makeResolverWithContact(opts: { contactConfidence: number; trustLevel: 
       role: null,
       systemRole: null,
       status: opts.status,
+      // Derive tier from status unless an explicit override is provided (issue #945).
+      tier: opts.tier ?? statusToTier(opts.status),
+      kind: opts.kind ?? 'person',
       verified: true,
       kgNodeId: null,
       knowledgeSummary: '',
@@ -221,11 +235,16 @@ describe('Dispatcher unknown_sender: ignore policy', () => {
         contactId: 'blocked-contact-id',
         displayName: 'Bad Actor',
         role: null,
+        systemRole: null,
         status: 'blocked',
+        tier: 'blocked' as ContactTier,
+        kind: 'person' as ContactKind,
         verified: false,
         kgNodeId: null,
         knowledgeSummary: '',
         authorization: null,
+        contactConfidence: 0,
+        trustLevel: null,
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
@@ -857,11 +876,16 @@ describe('Dispatcher — rate limiting', () => {
         contactId: 'blocked-id',
         displayName: 'Bad Actor',
         role: null,
+        systemRole: null,
         status: 'blocked',
+        tier: 'blocked' as ContactTier,
+        kind: 'person' as ContactKind,
         verified: false,
         kgNodeId: null,
         knowledgeSummary: '',
         authorization: null,
+        contactConfidence: 0,
+        trustLevel: null,
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
@@ -1537,6 +1561,8 @@ describe('originator metadata stamping', () => {
         role: 'ceo',
         systemRole: 'principal' as const,
         status: 'confirmed' as ContactStatus,
+        tier: 'principal' as ContactTier,
+        kind: 'principal' as ContactKind,
         verified: true,
         kgNodeId: null,
         knowledgeSummary: '',
@@ -1585,6 +1611,8 @@ describe('originator metadata stamping', () => {
         role: 'vendor',
         systemRole: null,
         status: 'confirmed' as ContactStatus,
+        tier: 'known' as ContactTier,
+        kind: 'person' as ContactKind,
         verified: true,
         kgNodeId: null,
         knowledgeSummary: '',
@@ -1634,6 +1662,8 @@ describe('originator metadata stamping', () => {
         role: 'vendor',
         systemRole: null,
         status: 'confirmed' as ContactStatus,
+        tier: 'known' as ContactTier,
+        kind: 'person' as ContactKind,
         verified: true,
         kgNodeId: null,
         knowledgeSummary: '',

@@ -548,7 +548,8 @@ export class OutboundGateway {
     try {
       const contact = await this.contactService.resolveByChannelIdentity(request.channel, recipientId);
       if (contact !== null) {
-        if (contact.status === 'blocked') {
+        // Use tier for the blocked check (issue #945); tier='blocked' == old status='blocked'.
+        if (contact.tier === 'blocked') {
           this.log.warn(
             { channel: request.channel, recipientId: redactId(recipientId), contactId: contact.contactId },
             'outbound-gateway: send blocked — recipient is blocked',
@@ -1085,11 +1086,12 @@ export class OutboundGateway {
       return;
     }
 
-    if (contact.status === 'blocked') {
+    if (contact.tier === 'blocked') {
       // Anomalous: the send proceeded despite the contact being blocked. This indicates
       // either a race (contact was blocked between the initial check and the send) or
       // a DB error on the earlier blocked-contact check that caused fail-open.
       // Log at error so this is visible in alerting — a message reached a blocked recipient.
+      // Uses tier for the gate check (issue #945); tier='blocked' == old status='blocked'.
       this.log.error(
         { channel, recipientId: redactId(recipientId), contactId: contact.contactId },
         'outbound-gateway: sent message to blocked contact — blocked-contact check may have been bypassed due to DB error',
@@ -1097,12 +1099,16 @@ export class OutboundGateway {
       return;
     }
 
-    if (contact.status === 'provisional') {
+    if (contact.tier === 'unknown') {
+      // tier='unknown' == old status='provisional'. The outbound send implicitly confirms
+      // this contact — we know the CEO's system is reaching out to them, so they're trusted
+      // enough to receive replies. Promote to 'known' tier (confirmed status).
+      // Uses tier for the gate check (issue #945).
       try {
         await this.contactService.setStatus(contact.contactId, 'confirmed');
         this.log.info(
           { channel, recipientId: redactId(recipientId), contactId: contact.contactId },
-          'outbound-gateway: promoted provisional contact to confirmed after outbound send',
+          'outbound-gateway: promoted unknown-tier contact to known after outbound send',
         );
       } catch (err) {
         this.log.warn(
@@ -1217,7 +1223,8 @@ export class OutboundGateway {
     // ------------------------------------------------------------------
     try {
       const contact = await this.contactService.resolveByChannelIdentity('email', recipientId);
-      if (contact !== null && contact.status === 'blocked') {
+      // Uses tier for the blocked check (issue #945); tier='blocked' == old status='blocked'.
+      if (contact !== null && contact.tier === 'blocked') {
         this.log.warn(
           { channel: 'email', recipientId: redactId(recipientId), contactId: contact.contactId },
           'outbound-gateway: draft blocked — recipient is blocked',
@@ -1326,7 +1333,8 @@ export class OutboundGateway {
     try {
       const contact = await this.contactService.resolveByChannelIdentity('email', recipientEmail);
       if (contact !== null) {
-        if (contact.status === 'blocked') {
+        // Uses tier for the blocked check (issue #945); tier='blocked' == old status='blocked'.
+        if (contact.tier === 'blocked') {
           this.log.warn(
             { draftId, recipientId: redactId(recipientEmail), contactId: contact.contactId },
             'outbound-gateway: draft send blocked — recipient is blocked',

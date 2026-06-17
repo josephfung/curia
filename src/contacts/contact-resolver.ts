@@ -10,7 +10,7 @@ import type { ContactService } from './contact-service.js';
 import type { AuthorizationService } from './authorization.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { Logger } from '../logger.js';
-import type { AuthorizationResult, InboundSenderContext } from './types.js';
+import type { AuthorizationResult, ContactTier, ContactKind, InboundSenderContext } from './types.js';
 
 /**
  * Resolves inbound message senders to known contacts.
@@ -58,6 +58,10 @@ export class ContactResolver {
             authorization: null,
             contactConfidence: 1.0,   // principal always gets max confidence
             trustLevel: null,
+            // Principal always gets the highest tier; kind comes from the stored row
+            // (should be 'principal' after migration 055 backfill).
+            tier: 'principal' as ContactTier,
+            kind: (principal.kind ?? 'principal') as ContactKind,
           };
         }
         // DB call succeeded but no principal contact row exists yet (fresh install before seeding).
@@ -94,6 +98,8 @@ export class ContactResolver {
         authorization: null,
         contactConfidence: 1.0,   // principal always gets max confidence
         trustLevel: null,
+        tier: 'principal' as ContactTier,
+        kind: 'principal' as ContactKind,
       };
     }
 
@@ -166,6 +172,8 @@ export class ContactResolver {
       authorization,
       contactConfidence: resolved.contactConfidence,
       trustLevel: resolved.trustLevel,
+      tier: resolved.tier,
+      kind: resolved.kind,
     };
   }
 }

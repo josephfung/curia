@@ -68,27 +68,35 @@ export async function bootstrapCeoContact(
     const { contact_id, contact_status, identity_verified, display_name: existingName } = existing.rows[0];
     let { kg_node_id } = existing.rows[0];
 
-    // Always ensure role = 'ceo' and trust_level = 'ceo' on the CEO contact regardless
-    // of which path brought us here. This is idempotent — the UPDATE is a no-op when both
-    // are already correct. Without trust_level = 'ceo', a second CEO email address linked
-    // to the same contact would not match the single CEO_PRIMARY_EMAIL config string and
-    // would fail the outbound filter's trust check. Setting role keeps metadata consistent
-    // even if the contact was initially auto-created without a role.
+    // Always ensure role = 'ceo', trust_level = 'ceo', tier = 'principal', and
+    // kind = 'principal' on the CEO contact regardless of which path brought us here.
+    // This is idempotent — the UPDATE is a no-op when all values are already correct.
+    // Without trust_level = 'ceo', a second CEO email address linked to the same contact
+    // would not match the single CEO_PRIMARY_EMAIL config string and would fail the outbound
+    // filter's trust check. Setting role keeps metadata consistent even if the contact was
+    // initially auto-created without a role.
+    // tier='principal' and kind='principal' are the new equivalents (issue #945).
     try {
       await pool.query(
         `UPDATE contacts
          SET role = 'ceo',
              trust_level = 'ceo',
              system_role = 'principal',
+             tier = 'principal',
+             kind = 'principal',
              updated_at = now()
          WHERE id = $1
-           AND (role IS DISTINCT FROM 'ceo' OR trust_level IS DISTINCT FROM 'ceo' OR system_role IS DISTINCT FROM 'principal')`,
+           AND (role IS DISTINCT FROM 'ceo'
+             OR trust_level IS DISTINCT FROM 'ceo'
+             OR system_role IS DISTINCT FROM 'principal'
+             OR tier IS DISTINCT FROM 'principal'
+             OR kind IS DISTINCT FROM 'principal')`,
         [contact_id],
       );
     } catch (err) {
       logger.error(
         { err, contactId: contact_id },
-        'ceo-bootstrap: failed to set trust_level=ceo on CEO contact — PII redaction bypass will not apply until this is resolved',
+        'ceo-bootstrap: failed to set trust_level=ceo/tier=principal on CEO contact — PII redaction bypass will not apply until this is resolved',
       );
       throw err;
     }
@@ -149,9 +157,10 @@ export async function bootstrapCeoContact(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // tier='principal' and kind='principal' added in migration 055 (issue #945).
     await client.query(
-      `INSERT INTO contacts (id, kg_node_id, display_name, role, status, trust_level, system_role, created_at, updated_at)
-       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'ceo', 'principal', now(), now())`,
+      `INSERT INTO contacts (id, kg_node_id, display_name, role, status, trust_level, system_role, tier, kind, created_at, updated_at)
+       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'ceo', 'principal', 'principal', 'principal', now(), now())`,
       [contactId, kgNodeId, displayName],
     );
     await client.query(
