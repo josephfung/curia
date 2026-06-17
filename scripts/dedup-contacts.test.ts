@@ -616,6 +616,38 @@ describe('runDedup — unit', () => {
     expect(result.wouldCreateTaskCount).toBe(1);      // dry-run honors the cap
     expect(result.suppressedTaskCount).toBe(2);
   });
+
+  it('--max-score: skips a fuzzy pair scoring at/above the bar', async () => {
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Mikael Sorensen' }),
+      makeContact({ id: 'c2', displayName: 'Michael Sorenson' }), // fuzzy, scores 0.96
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    // 0.95 sits below this pair's 0.96 score, so --max-score 0.95 excludes it.
+    const result = await runDedup(contacts, identityMap, { ...opts, maxScore: 0.95 });
+
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(result.taskCount).toBe(0);
+    expect(result.skippedAboveMaxScoreCount).toBe(1);
+  });
+
+  it('--min-score + --max-score: only pairs within [min, max) create tasks', async () => {
+    // Three names → pairs score 0.96, 1.0, 0.96. Band [0.95, 1.0): the two 0.96 pairs are
+    // in-band (tasks); the 1.0 pair is at/above max (skipped).
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Mikael Sorensen' }),
+      makeContact({ id: 'c2', displayName: 'Michael Sorenson' }),
+      makeContact({ id: 'c3', displayName: 'Mikhael Sorensen' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, { ...opts, minScore: 0.95, maxScore: 1.0 });
+
+    expect(result.taskCount).toBe(2);
+    expect(result.skippedAboveMaxScoreCount).toBe(1);   // the 1.0 pair excluded
+    expect(result.skippedLowScoreCount).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

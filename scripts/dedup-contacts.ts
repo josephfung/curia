@@ -59,6 +59,8 @@ export interface DedupRunResult {
   wouldCreateTaskCount: number;
   /** Number of fuzzy pairs skipped because their score was below the sweep's --min-score. */
   skippedLowScoreCount: number;
+  /** Number of fuzzy pairs skipped because their score was at/above the sweep's --max-score. */
+  skippedAboveMaxScoreCount: number;
   /** Number of would-be review tasks suppressed by --no-tasks or the --max-tasks cap. */
   suppressedTaskCount: number;
   /** Number of errors during merge/task-create operations. */
@@ -75,6 +77,15 @@ export interface DedupRunOptions {
    * this maintenance run. Undefined = accept whatever the classifier returns (≥ 0.7).
    */
   minScore?: number;
+  /**
+   * Sweep-local maximum score for FUZZY matches — pairs scoring AT/ABOVE this are skipped
+   * (counted in skippedAboveMaxScoreCount). Pairs with `minScore ≤ score < maxScore` are
+   * acted on. Used for incremental band runs: a later, lower `--min-score` pass sets
+   * `--max-score` to the previous run's `--min-score` so it doesn't re-create tasks for
+   * pairs the earlier run already surfaced (the sweep is not task-idempotent). Undefined =
+   * no upper bound.
+   */
+  maxScore?: number;
   /**
    * Hard cap on the number of review tasks this sweep creates. Once reached, further
    * would-be tasks are skipped (counted in suppressedTaskCount). Undefined = no cap.
@@ -218,7 +229,7 @@ export async function runDedup(
   identityMap: Map<string, ChannelIdentity[]>,
   opts: DedupRunOptions,
 ): Promise<DedupRunResult> {
-  const { dryRun, mergeContacts, createTask, getFacts, minScore, maxTasks, noTasks } = opts;
+  const { dryRun, mergeContacts, createTask, getFacts, minScore, maxScore, maxTasks, noTasks } = opts;
 
   // Memoize getFacts per KG node for the duration of the sweep. The exclusion check
   // runs inside the O(n²) pair loop, and a contact that appears in many candidate
@@ -243,6 +254,7 @@ export async function runDedup(
     wouldMergeCount: 0,
     wouldCreateTaskCount: 0,
     skippedLowScoreCount: 0,
+    skippedAboveMaxScoreCount: 0,
     suppressedTaskCount: 0,
     errorCount: 0,
   };
@@ -380,36 +392,29 @@ export async function runDedup(
           result.errorCount++;
         }
       } else {
-        // Sweep-local --min-score: drop FUZZY pairs below the bar before any task
-        // accounting. Structural+principal pairs are always surfaced (the principal
-        // guard is about safety, not similarity score). This filters this sweep only —
-        // the global DedupService threshold is untouched.
+        // Sweep-local score band: drop FUZZY pairs outside [minScore, maxScore) before any
+        // task accounting. Structural+principal pairs are always surfaced (the principal
+        // guard is about safety, not similarity score). This filters this sweep only — the
+        // global DedupService threshold is untouched.
+        //   --min-score: skip below the bar (too weak to review this run)
+        //   --max-score: skip at/above the bar — for incremental band runs, so a
+        //     lower-threshold pass doesn't re-create tasks for pairs an earlier, higher-bar
+        //     run already surfaced.
         if (classification.type === 'fuzzy' && minScore !== undefined && classification.score < minScore) {
           result.skippedLowScoreCount++;
           continue;
         }
+        if (classification.type === 'fuzzy' && maxScore !== undefined && classification.score >= maxScore) {
+          result.skippedAboveMaxScoreCount++;
+          continue;
+        }
 
-        // ------------------------------------------------------------------
-        // Fuzzy pair OR structural pair involving the principal → task
-        // ------------------------------------------------------------------
-        // Name/embedding similarity alone is never enough to auto-merge (see design).
-        // Also, any pair touching the principal must go through human review even when
-        // structural proof exists — identity mistakes for the principal are too costly.
-        // principalSkippedCount counts ONLY structural pairs withheld from auto-merge by
-        // the principal guard (see the DedupRunResult contract). A fuzzy pair involving the
-        // principal would never auto-merge anyway — it's an ordinary recommendation task —
-        // so counting it here would inflate the metric and misreport operator-facing results.
+        // principalSkippedCount counts ONLY structural pairs withheld from auto-merge by the
+        // principal guard (see the DedupRunResult contract). It records the MERGE decision,
+        // so it is incremented even if the resulting task is later suppressed. A fuzzy pair
+        // involving the principal would never auto-merge anyway, so it must not inflate this.
         if (classification.type === 'structural' && involvePrincipal) {
           result.principalSkippedCount++;
-          logger.info(
-            { contactAId: a.id, contactBId: b.id, reason: classification.reason },
-            'dedup: principal contact involved — routing structural pair to task instead of auto-merge',
-          );
-        } else {
-          logger.info(
-            { contactAId: a.id, contactBId: b.id, classification },
-            'dedup: fuzzy match — creating recommendation task',
-          );
         }
 
         // --no-tasks (merge-only) or the --max-tasks cap: suppress task creation. Compare
@@ -421,6 +426,16 @@ export async function runDedup(
           result.suppressedTaskCount++;
           continue;
         }
+
+        // Past the suppression gate: a task WILL be created (real) or counted (dry-run).
+        // Log here — NOT before the gate — so a suppressed pair never logs a misleading
+        // "creating ... task" line (a --no-tasks run previously printed one per pair).
+        logger.info(
+          { contactAId: a.id, contactBId: b.id, classification, involvePrincipal },
+          involvePrincipal
+            ? 'dedup: principal pair — creating review task (no auto-merge)'
+            : 'dedup: fuzzy match — creating review task',
+        );
 
         if (dryRun) {
           result.wouldCreateTaskCount++;
@@ -663,13 +678,23 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   // threshold is never changed. See DedupRunOptions for semantics.
   //   --no-tasks       merge-only: apply structural merges, create no review tasks
   //   --min-score <n>  only create fuzzy tasks at/above this Jaro-Winkler score (0–1)
+  //   --max-score <n>  only create fuzzy tasks BELOW this score (incremental band runs)
   //   --max-tasks <n>  cap the number of review tasks created this run
   const noTasks = process.argv.includes('--no-tasks');
   const minScore = parseNumericFlag(process.argv, '--min-score');
+  const maxScore = parseNumericFlag(process.argv, '--max-score');
   const maxTasks = parseNumericFlag(process.argv, '--max-tasks');
 
   if (minScore !== undefined && (minScore < 0 || minScore > 1)) {
     logger.error({ minScore }, 'dedup-contacts: --min-score must be between 0 and 1');
+    process.exit(1);
+  }
+  if (maxScore !== undefined && (maxScore < 0 || maxScore > 1)) {
+    logger.error({ maxScore }, 'dedup-contacts: --max-score must be between 0 and 1');
+    process.exit(1);
+  }
+  if (minScore !== undefined && maxScore !== undefined && minScore >= maxScore) {
+    logger.error({ minScore, maxScore }, 'dedup-contacts: --min-score must be less than --max-score (empty band otherwise)');
     process.exit(1);
   }
   if (maxTasks !== undefined && (maxTasks < 0 || !Number.isInteger(maxTasks))) {
@@ -685,6 +710,9 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   }
   if (minScore !== undefined) {
     logger.info({ minScore }, 'dedup-contacts: --min-score active — fuzzy pairs below this score are skipped');
+  }
+  if (maxScore !== undefined) {
+    logger.info({ maxScore }, 'dedup-contacts: --max-score active — fuzzy pairs at/above this score are skipped');
   }
   if (maxTasks !== undefined) {
     logger.info({ maxTasks }, 'dedup-contacts: --max-tasks active — review tasks capped');
@@ -736,17 +764,30 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       const validator = new MemoryValidator(kgStore, embeddingService);
       const entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
 
+      // contact.merged publishes are async (the write-ahead audit hook persists them).
+      // onContactMerged is a SYNC callback, so we can't await inside it — instead we collect
+      // each publish promise and drain them (below) BEFORE pool.end()/exit. Without this, the
+      // last merge's audit insert can lose the race against process.exit and never persist
+      // (observed: 14 merges → 13 audit rows on the first prod run).
+      const pendingMergePublishes: Promise<void>[] = [];
+      let auditPublishFailures = 0;
+
       const dedupService = new DedupService();
       const contactService = ContactService.createWithPostgres(pool, entityMemory, logger, {
         dedupService,
         // Publish contact.merged to the bus so the write-ahead audit hook records it.
-        // TODO: a bus.publish failure here is logged but not reflected in the exit code
-        // or errorCount. This is acceptable for a maintenance script (the merge itself
-        // succeeded, the audit gap is narrow), but revisit if audit-gap detection becomes
-        // a hard requirement.
         onContactMerged: (primaryContactId, secondaryContactId, mergedAt) => {
-          bus.publish('dispatch', createContactMerged({ primaryContactId, secondaryContactId, mergedAt }))
-            .catch((err: unknown) => logger.error({ err }, 'Failed to publish contact.merged — audit trail may be incomplete'));
+          pendingMergePublishes.push(
+            bus.publish('dispatch', createContactMerged({ primaryContactId, secondaryContactId, mergedAt }))
+              .then(() => undefined)
+              .catch((err: unknown) => {
+                auditPublishFailures++;
+                logger.error(
+                  { err, primaryContactId, secondaryContactId },
+                  'Failed to publish contact.merged — audit trail may be incomplete',
+                );
+              }),
+          );
         },
       });
 
@@ -757,6 +798,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
         dryRun,
         // Sweep-local tuning (see DedupRunOptions) — passed straight through.
         minScore,
+        maxScore,
         maxTasks,
         noTasks,
 
@@ -778,12 +820,22 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
 
       const result = await runDedup(contacts, identityMap, opts);
 
+      // Drain pending contact.merged audit publishes before closing the pool, so every merge
+      // has a persisted audit_log row (fixes the exit-race that dropped 1 of 14 on the first
+      // prod run). allSettled never rejects; per-publish failures are counted in the .catch
+      // above and folded into the exit code below.
+      if (pendingMergePublishes.length > 0) {
+        logger.info({ pending: pendingMergePublishes.length }, 'dedup-contacts: draining pending audit publishes');
+        await Promise.allSettled(pendingMergePublishes);
+      }
+
       // Summary report
       if (dryRun) {
         logger.info({
           wouldMergeCount: result.wouldMergeCount,
           wouldCreateTaskCount: result.wouldCreateTaskCount,
           skippedLowScoreCount: result.skippedLowScoreCount,
+          skippedAboveMaxScoreCount: result.skippedAboveMaxScoreCount,
           suppressedTaskCount: result.suppressedTaskCount,
           skippedExcludedCount: result.skippedExcludedCount,
           principalSkippedCount: result.principalSkippedCount,
@@ -797,15 +849,19 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
           mergedCount: result.mergedCount,
           taskCount: result.taskCount,
           skippedLowScoreCount: result.skippedLowScoreCount,
+          skippedAboveMaxScoreCount: result.skippedAboveMaxScoreCount,
           suppressedTaskCount: result.suppressedTaskCount,
           skippedExcludedCount: result.skippedExcludedCount,
           principalSkippedCount: result.principalSkippedCount,
+          auditPublishFailures,
           errorCount: result.errorCount,
         }, 'dedup-contacts: sweep complete');
       }
 
       await pool.end();
-      process.exit(result.errorCount > 0 ? 1 : 0);
+      // Non-zero exit on any sweep error OR any lost audit publish, so a partial audit
+      // trail surfaces as a failed run rather than a silent gap.
+      process.exit((result.errorCount > 0 || auditPublishFailures > 0) ? 1 : 0);
     } catch (err) {
       logger.error({ err }, 'dedup-contacts: fatal error');
       await pool.end();
