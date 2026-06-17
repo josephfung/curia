@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **Insecure temp directory in loader test** — replaced predictable hardcoded temp path with `fs.mkdtempSync()` to eliminate CWE-377 (insecure temporary file creation) CodeQL alert #159.
+
 ### Fixed
 
 - **`contact-find-duplicates` scheduled scan** — skill now files bounded review tasks (instead of returning a raw list) and is idempotent across runs; default threshold raised to 0.93 to cut false positives; `max_tasks` cap prevents queue flooding; weekly contacts dedup scan updated to scan-only mode. (#1037)

@@ -40,7 +40,9 @@ describe('loadSkillsFromDirectory', () => {
   // (raw JSON.parse, no Ajv), so a malformed manifest can't leak a non-array/non-string
   // shape into the registry gate or vault scope guard.
   describe('install.requires_secrets normalization', () => {
-    const tmpDir = path.join(os.tmpdir(), 'curia-loader-requires-secrets-test');
+    // mkdtempSync creates a directory with a random suffix, avoiding the
+    // predictable path that triggers CWE-377 (insecure temp file creation).
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-loader-requires-secrets-'));
 
     function writeSkill(name: string, install: unknown): void {
       const dir = path.join(tmpDir, name);
