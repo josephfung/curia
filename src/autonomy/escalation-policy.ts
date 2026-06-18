@@ -88,6 +88,8 @@ export function applyDisclosurePolicy(
   disclosureClass: DisclosureClass,
 ): EscalationDecision {
   const allowed = DISCLOSURE_ALLOWED[recipientTier];
+  // Belt-and-suspenders: unrecognized tier not in the table → fail closed.
+  if (!allowed) return 'escalate';
   return allowed.has(disclosureClass) ? 'allow' : 'escalate';
 }
 
@@ -104,8 +106,8 @@ export function applyDisclosurePolicy(
  * @param isThirdPartyFacing - For 'reversible-external' only: true when the action
  *                             targets parties OTHER than the initiating sender (e.g.
  *                             inviting a new attendee, emailing someone new, committing
- *                             on Joseph's behalf to external parties). A plain reply to
- *                             the sender is false.
+ *                             on the principal's behalf to external parties). A plain reply
+ *                             to the sender is false.
  *
  * Policy (issue #948 resolved section):
  *   blocked   — nothing; blocked contacts cannot initiate tasks.
