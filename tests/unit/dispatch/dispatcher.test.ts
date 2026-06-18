@@ -2,13 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
-import { createInboundMessage, createAgentError, createAgentTask, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent } from '../../../src/bus/events.js';
+import { createInboundMessage, createAgentError, createAgentTask, createSkillResult, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { ConfidencePipeline } from '../../../src/contacts/confidence-pipeline.js';
 import type { InboundSenderContext, ContactStatus, TrustLevel, TaskOriginator, ContactTier, ContactKind } from '../../../src/contacts/types.js';
 import { createLogger } from '../../../src/logger.js';
+import type { Logger } from '../../../src/logger.js';
 
 // Minimal provenance block for all mock LLM responses — satisfies the required field.
 const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
@@ -1883,5 +1884,106 @@ describe('Dispatcher — automated sender tier gate bypass (#953)', () => {
     expect(rejected).toHaveLength(0);
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.payload.senderContext?.kind).toBe('automated');
+  });
+});
+
+describe('Dispatcher auto-elevation — Path 1 correspondence (#951)', () => {
+  type StubBus = {
+    subscribe: ReturnType<typeof vi.fn>;
+    publish: ReturnType<typeof vi.fn>;
+  };
+
+  function buildHarness(opts: {
+    resolvedContactId?: string | null;
+    withContactService?: boolean;
+  } = {}) {
+    const subscribeHandlers = new Map<string, (event: BusEvent) => void | Promise<void>>();
+    const publishedEvents: BusEvent[] = [];
+
+    const bus = {
+      subscribe: vi.fn((eventType: string, _layer: string, handler: (e: BusEvent) => void | Promise<void>) => {
+        subscribeHandlers.set(eventType, handler);
+      }),
+      publish: vi.fn(async (_layer: string, event: BusEvent) => { publishedEvents.push(event); }),
+    } as unknown as EventBus;
+
+    const logger = {
+      info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+    } as unknown as Logger;
+
+    const elevateFn = vi.fn().mockResolvedValue(true);
+    const contactService = opts.withContactService === false
+      ? undefined
+      : { elevateTierToKnown: elevateFn } as unknown as ContactService;
+
+    const resolvedContactId = opts.resolvedContactId !== undefined ? opts.resolvedContactId : 'contact-abc';
+    const resolveFn = vi.fn().mockResolvedValue(
+      resolvedContactId
+        ? {
+            resolved: true,
+            contactId: resolvedContactId,
+            displayName: 'Test Recipient',
+            role: null, systemRole: null, status: 'provisional',
+            tier: 'unknown', kind: 'person', verified: true,
+            kgNodeId: null, knowledgeSummary: '', authorization: null,
+            contactConfidence: 0.1, trustLevel: null,
+          }
+        : { resolved: false, channel: 'email', senderId: 'unknown@example.com' },
+    );
+    const contactResolver = { resolve: resolveFn } as unknown as ContactResolver;
+
+    const dispatcher = new Dispatcher({ bus, logger, contactResolver, contactService });
+    dispatcher.register();
+
+    return { subscribeHandlers, elevateFn, resolveFn };
+  }
+
+  async function fireSkillResult(
+    subscribeHandlers: Map<string, (event: BusEvent) => void | Promise<void>>,
+    opts: { skillName: string; to: string },
+  ) {
+    const event = createSkillResult({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      skillName: opts.skillName,
+      result: { success: true, data: { message_id: 'msg-1', to: opts.to } },
+      durationMs: 50,
+      parentEventId: 'invoke-1',
+    });
+    const handler = subscribeHandlers.get('skill.result');
+    if (!handler) throw new Error('No skill.result handler registered');
+    await handler(event);
+    // Flush microtasks so fire-and-forget promise chains settle.
+    await new Promise<void>(r => setImmediate(r));
+  }
+
+  it('calls elevateTierToKnown("correspondence") after email-reply to a resolved contact', async () => {
+    const { subscribeHandlers, elevateFn } = buildHarness();
+    await fireSkillResult(subscribeHandlers, { skillName: 'email-reply', to: 'recipient@example.com' });
+    expect(elevateFn).toHaveBeenCalledWith('contact-abc', 'correspondence');
+  });
+
+  it('calls elevateTierToKnown("correspondence") after email-send to a resolved contact', async () => {
+    const { subscribeHandlers, elevateFn } = buildHarness();
+    await fireSkillResult(subscribeHandlers, { skillName: 'email-send', to: 'someone@example.com' });
+    expect(elevateFn).toHaveBeenCalledWith('contact-abc', 'correspondence');
+  });
+
+  it('calls elevate for each recipient in a comma-separated to field', async () => {
+    const { subscribeHandlers, elevateFn } = buildHarness();
+    await fireSkillResult(subscribeHandlers, { skillName: 'email-send', to: 'a@example.com, b@example.com' });
+    expect(elevateFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not call elevate when resolver returns no contact', async () => {
+    const { subscribeHandlers, elevateFn } = buildHarness({ resolvedContactId: null });
+    await fireSkillResult(subscribeHandlers, { skillName: 'email-reply', to: 'new@example.com' });
+    expect(elevateFn).not.toHaveBeenCalled();
+  });
+
+  it('silently skips when no contactService configured', async () => {
+    const { subscribeHandlers, elevateFn } = buildHarness({ withContactService: false });
+    await fireSkillResult(subscribeHandlers, { skillName: 'email-reply', to: 'someone@example.com' });
+    expect(elevateFn).not.toHaveBeenCalled();
   });
 });

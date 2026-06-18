@@ -785,6 +785,23 @@ export class Dispatcher {
         'Dispatcher reply-lock: no routing entry matched skill result — no lock set',
       );
     }
+
+    // Path 1: Correspondence elevation — attempt to elevate each outbound recipient
+    // from unknown → known. Fires for all recipients regardless of reply-lock match.
+    // elevateTierToKnown() is a no-op when the contact is already elevated.
+    if (this.contactResolver && this.contactService) {
+      const cr = this.contactResolver;
+      const cs = this.contactService;
+      for (const address of recipients) {
+        cr.resolve('email', address)
+          .then(ctx => {
+            if (ctx.resolved) {
+              return cs.elevateTierToKnown(ctx.contactId, 'correspondence');
+            }
+          })
+          .catch(err => this.logger.warn({ err, address }, 'Correspondence elevation failed (non-fatal)'));
+      }
+    }
   }
 
   private async handleAgentResponse(event: AgentResponseEvent): Promise<void> {
