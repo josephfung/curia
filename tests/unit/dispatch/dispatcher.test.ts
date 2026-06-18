@@ -1575,3 +1575,83 @@ describe('Dispatcher — thread-participants block', () => {
     expect(content).toBe('Signal message.');
   });
 });
+
+describe('Dispatcher — automated sender tier gate bypass (#953)', () => {
+  // Regression test: automated senders (kind='automated') must reach the coordinator
+  // regardless of tier and channel unknownSender policy. They carry no standing in the
+  // trust/action system, so the tier gate does not apply to them.
+
+  it('automated sender with tier=unknown bypasses ignore channel policy and reaches coordinator', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    // Resolver returns a resolved contact that is tier='unknown' but kind='automated'.
+    // Without the bypass, an 'ignore' policy would emit message.rejected and drop the message.
+    const mockResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: true,
+        contactId: 'automated-sender-id',
+        displayName: 'Notification Bot',
+        role: null,
+        systemRole: null,
+        status: 'confirmed',
+        tier: 'unknown' as ContactTier,
+        kind: 'automated' as ContactKind,
+        verified: false,
+        kgNodeId: null,
+        knowledgeSummary: '',
+        authorization: null,
+        contactConfidence: 0,
+        trustLevel: null,
+      } satisfies InboundSenderContext),
+    } as unknown as ContactResolver;
+
+    const mockProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'text' as const,
+        content: 'Acknowledged',
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      }),
+    };
+
+    const coordinator = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: mockProvider,
+      bus,
+      logger,
+    });
+    coordinator.register();
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: mockResolver,
+      // 'ignore' policy would normally drop tier='unknown' senders; automated bypass overrides this.
+      channelPolicies: { email: { trust: 'low', unknownSender: 'ignore', threaded: false } },
+    });
+    dispatcher.register();
+
+    const rejected: MessageRejectedEvent[] = [];
+    bus.subscribe('message.rejected', 'channel', (event) => {
+      rejected.push(event as MessageRejectedEvent);
+    });
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-automated-bypass',
+      channelId: 'email',
+      senderId: 'notifications@service.example.com',
+      content: 'Your report is ready.',
+    }));
+
+    // The automated sender must reach the coordinator despite tier='unknown' + 'ignore' policy.
+    expect(rejected).toHaveLength(0);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.senderContext?.kind).toBe('automated');
+  });
+});
