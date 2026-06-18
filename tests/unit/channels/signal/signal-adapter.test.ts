@@ -121,7 +121,6 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService,
       phoneNumber: PHONE,
-      ceoEmail: 'ceo@example.com',
     });
 
     await adapter.start();
@@ -162,7 +161,6 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: confirmedService,
       phoneNumber: PHONE,
-      ceoEmail: 'ceo@example.com',
     });
     await confirmedAdapter.start();
 
@@ -191,7 +189,6 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: provisionalService,
       phoneNumber: PHONE,
-      ceoEmail: 'ceo@example.com',
     });
     await provisionalAdapter.start();
 
@@ -212,7 +209,6 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: blockedService,
       phoneNumber: PHONE,
-      ceoEmail: 'ceo@example.com',
     });
     await blockedAdapter.start();
 
@@ -233,7 +229,6 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: confirmedService,
       phoneNumber: PHONE,
-      ceoEmail: 'ceo@example.com',
     });
     await confirmedAdapter.start();
 
@@ -264,7 +259,6 @@ describe('SignalAdapter', () => {
       outboundGateway: gateway,
       contactService: unknownService,
       phoneNumber: PHONE,
-      ceoEmail: 'ceo@example.com',
     });
     await unknownAdapter.start();
 
@@ -272,7 +266,7 @@ describe('SignalAdapter', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(unknownService.createContact).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'signal_participant', status: 'provisional' }),
+      expect.objectContaining({ source: 'signal_participant', tier: 'unknown' }),
     );
     expect(unknownService.linkIdentity).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'signal', channelIdentifier: '+14155551234' }),
@@ -435,29 +429,30 @@ describe('SignalAdapter', () => {
       expect(published).toHaveLength(1);
     });
 
-    it('holds a group message and emails the CEO when a member is unknown', async () => {
+    it('routes a group message to coordinator in low-trust mode when a member is unknown', async () => {
+      // Unknown-tier group members no longer cause the message to be held.
+      // The adapter auto-creates tier='unknown' contacts and publishes the message.
+      // The runtime injects a LOW-TRUST SENDER block to constrain coordinator behavior.
       const published: unknown[] = [];
       bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
 
       (rpcClient.listGroups as ReturnType<typeof vi.fn>).mockResolvedValue([
         { id: GROUP_ID, name: 'G', members: [{ number: '+14155551234' }], pendingMembers: [], isMember: true },
       ]);
-      // Member has no contact record
+      // Member has no contact record — unknown sender
       (contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
       rpcClient.simulateMessage(makeGroupEnvelope(GROUP_ID));
       await new Promise((r) => setTimeout(r, 30));
 
-      expect(published).toHaveLength(0);
-      // The group-held notification now routes through sendNotification() → bus (#206)
-      expect(gateway.sendNotification).toHaveBeenCalledWith(
-        expect.objectContaining({
-          notificationType: 'group_held',
-          ceoEmail: 'ceo@example.com',
-          subject: 'Signal group message held — member verification needed',
-          originalChannel: 'signal',
-        }),
+      // Message should be published (not held)
+      expect(published).toHaveLength(1);
+      // Auto-create contact for the unknown member at tier='unknown'
+      expect(contactService.createContact).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'signal_participant', tier: 'unknown' }),
       );
+      // No hold notification sent
+      expect(gateway.sendNotification).not.toHaveBeenCalled();
     });
 
     it('drops a group message silently when a member is blocked (no email, no publish)', async () => {

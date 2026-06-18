@@ -21,16 +21,16 @@ import { markdownToHtml } from '../../utils/markdown-to-html.js';
  * return 403/413/429 without brittle string matching on the error message.
  *
  * reason values:
- *   unknown_sender / provisional_sender / blocked_sender — policy-gate rejections (403)
+ *   unknown_sender / blocked_sender — policy-gate rejections (403)
  *   message_too_large — inbound content exceeded the configured size limit (413, spec §06)
  *   global_rate_limited / sender_rate_limited — rate limit rejections (429, spec §06)
  */
 export class MessageRejectedError extends Error {
-  readonly reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large' | 'global_rate_limited' | 'sender_rate_limited';
+  readonly reason: 'unknown_sender' | 'blocked_sender' | 'message_too_large' | 'global_rate_limited' | 'sender_rate_limited';
   /** HTTP status code for this rejection — use this instead of hardcoding per reason. */
   readonly statusCode: 403 | 429;
 
-  constructor(reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large' | 'global_rate_limited' | 'sender_rate_limited') {
+  constructor(reason: 'unknown_sender' | 'blocked_sender' | 'message_too_large' | 'global_rate_limited' | 'sender_rate_limited') {
     const isRateLimited = reason === 'global_rate_limited' || reason === 'sender_rate_limited';
     super(
       reason === 'message_too_large'
@@ -218,24 +218,6 @@ export class EventRouter {
       this.broadcastToSseClients(sseData, event.payload.conversationId);
     });
 
-    // message.held — broadcast to all SSE clients so dashboards and API consumers
-    // are notified when an unknown sender's message is held for CEO review.
-    // Previously this notification only reached the CLI adapter; with the CLI
-    // skipped in non-TTY (production) environments, the EventRouter must carry it.
-    bus.subscribe('message.held', 'channel', (event: BusEvent) => {
-      if (event.type !== 'message.held') return;
-      const sseData = JSON.stringify({
-        type: 'message.held',
-        held_message_id: event.payload.heldMessageId,
-        channel: event.payload.channel,
-        sender_id: event.payload.senderId,
-        subject: event.payload.subject,
-        timestamp: event.timestamp,
-      });
-      // Not filtered by conversationId — held-message notifications are system-wide
-      this.broadcastToSseClients(sseData);
-    });
-
     // message.rejected — immediately reject the pending POST promise so the caller
     // gets a 403 instead of hanging until the 120-second timeout. This is the signal
     // path between the dispatch layer (where reject policy fires) and the HTTP adapter
@@ -340,7 +322,7 @@ export class EventRouter {
    *
    * When `conversationId` is provided, only clients with no filter OR whose
    * filter matches are written to. When omitted, ALL clients receive the event
-   * (system-wide notifications like message.held).
+   * (system-wide notifications that apply to all clients).
    */
   private broadcastToSseClients(sseData: string, conversationId?: string): void {
     for (const client of this.sseClients) {

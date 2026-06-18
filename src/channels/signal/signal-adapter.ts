@@ -44,13 +44,6 @@ export interface SignalAdapterConfig {
   contactService: ContactService;
   /** Curia's E.164 phone number — the Signal account that receives messages */
   phoneNumber: string;
-  /**
-   * CEO's email address for group hold notifications.
-   * When a group message is held because of unverified members, Curia sends the
-   * CEO an email listing the unknown phone numbers.
-   * If absent or empty, holds are logged at error but no email is sent.
-   */
-  ceoEmail?: string;
 }
 
 export class SignalAdapter implements Channel {
@@ -162,7 +155,7 @@ export class SignalAdapter implements Channel {
         // which would have treated any unrecognized value as known.
         isKnownSender = meetsMinimumTier(existing.tier, 'known');
       } else {
-        // New sender — auto-create a provisional contact.
+        // New sender — auto-create a contact at tier='unknown'.
         // signal_participant is auto-verified (per contact-service.ts) so the phone
         // number identity gets verified:true at creation time, matching email_participant.
         // Display name comes from Signal's profile; phone number is the E.164 fallback.
@@ -170,7 +163,7 @@ export class SignalAdapter implements Channel {
           displayName: metadata.sourceName || senderId,
           fallbackDisplayName: senderId,
           source: 'signal_participant',
-          status: 'provisional',
+          tier: 'unknown',
         });
         await this.config.contactService.linkIdentity({
           contactId: contact.id,
@@ -190,10 +183,10 @@ export class SignalAdapter implements Channel {
     // ------------------------------------------------------------------
     // Step 2: Read receipt (1:1 + known sender only)
     // ------------------------------------------------------------------
-    // We send read receipts only for 1:1 messages from known (non-provisional,
-    // non-blocked) senders. Reasons for each exclusion:
+    // We send read receipts only for 1:1 messages from known (tier >= 'known') senders.
+    // Excluded cases:
     //   - Group: receipt semantics broadcast to all group members — deferred to a future version
-    //   - Provisional: CEO hasn't confirmed this contact yet — don't acknowledge unknown senders
+    //   - Unknown-tier: low-trust sender — don't acknowledge until relationship is established
     //   - Blocked: never send receipts back to blocked senders
     if (isKnownSender && !metadata.isGroup) {
       // Fire-and-forget: read receipts are best-effort protocol-level acknowledgements.
@@ -343,88 +336,56 @@ export class SignalAdapter implements Channel {
     }
 
     if (trust.unknownMembers.length > 0) {
-      // Auto-create provisional contacts for unknown members so the CEO can
-      // identify them using the contact skills. Same pattern as unknown 1:1 senders.
+      // Auto-create tier='unknown' contacts for unrecognized group members so the contact
+      // ledger stays complete. The group message routes to the coordinator in low-trust mode
+      // rather than being held — the coordinator applies read-only constraints.
       for (const phone of trust.unknownMembers) {
+        let contact: { id: string } | null = null;
         try {
-          const contact = await this.config.contactService.createContact({
+          contact = await this.config.contactService.createContact({
             displayName: phone,
             fallbackDisplayName: phone,
             source: 'signal_participant',
-            status: 'provisional',
+            tier: 'unknown',
           });
+        } catch (err) {
+          this.log.warn({ err, phone }, 'Signal adapter: failed to create contact for unknown group member');
+          continue;
+        }
+        try {
           await this.config.contactService.linkIdentity({
             contactId: contact.id,
             channel: 'signal',
             channelIdentifier: phone,
             source: 'signal_participant',
           });
-        } catch (err) {
-          // Best-effort — continue with remaining members even if one fails
-          this.log.warn({ err, phone }, 'Signal adapter: failed to auto-create contact for unknown group member');
+        } catch (linkErr) {
+          const isDuplicate = (linkErr as { code?: string }).code === '23505';
+          if (!isDuplicate) {
+            // linkIdentity failed for a non-uniqueness reason — clean up the orphaned contact row.
+            try {
+              await this.config.contactService.deleteContact(contact.id);
+            } catch (cleanupErr) {
+              this.log.warn(
+                { cleanupErr, orphanId: contact.id, phone },
+                'Signal adapter: failed to clean up orphan contact after linkIdentity failure',
+              );
+            }
+            this.log.warn({ err: linkErr, phone }, 'Signal adapter: linkIdentity failed for unknown group member — orphan cleaned up');
+          }
+          // 23505 means the identity already exists (race/duplicate send): ignore.
         }
-      }
-
-      try {
-        await this.notifyCeoGroupHeld(groupId, trust.unknownMembers);
-      } catch (err) {
-        // notifyCeoGroupHeld has its own internal try-catch for the send call,
-        // but any error before that point would escape without this guard.
-        this.log.error({ err, groupId }, 'Signal adapter: unexpected error in notifyCeoGroupHeld');
       }
 
       this.log.info(
         { groupId, unknownCount: trust.unknownMembers.length },
-        'Signal adapter: group message held — unknown members, CEO notified via email',
+        'Signal adapter: group message has unknown members — routing to coordinator in low-trust mode',
       );
-      return false;
+      // Fall through: allow the group message to route to the coordinator.
+      // The low-trust authorization block in runtime.ts constrains its behavior.
     }
 
     return true; // all members verified — proceed
   }
 
-  /**
-   * Notify the CEO via email when a group message is held due to unverified members.
-   * Publishes an outbound.notification event through the gateway so the notification
-   * routes through the standard safety pipeline (#206).
-   *
-   * The CLI is not assumed to be monitored, so email is the reliable async
-   * channel for this notification.
-   */
-  private async notifyCeoGroupHeld(groupId: string, unknownPhones: string[]): Promise<void> {
-    const { outboundGateway, ceoEmail } = this.config;
-
-    if (!outboundGateway || !ceoEmail) {
-      this.log.error(
-        { groupId, hasGateway: !!outboundGateway, hasCeoEmail: !!ceoEmail },
-        'Signal adapter: cannot notify CEO of held group message — outbound gateway or ceoEmail not configured',
-      );
-      return;
-    }
-
-    const memberList = unknownPhones.map((p) => `• ${p} — no verified contact`).join('\n');
-    const body = [
-      'A Signal group message was received but held because the following group members have not yet been verified:',
-      '',
-      memberList,
-      '',
-      'Once you have verified these contacts, you can ask me to send a message to the group and I will re-check membership before engaging.',
-      '',
-      `Group ID (for reference): ${groupId}`,
-    ].join('\n');
-
-    try {
-      await outboundGateway.sendNotification({
-        notificationType: 'group_held',
-        ceoEmail,
-        subject: 'Signal group message held — member verification needed',
-        body,
-        originalChannel: 'signal',
-        originalRecipientId: groupId,
-      });
-    } catch (err) {
-      // Non-fatal — the message is still held. Log at error so it's visible in alerting.
-      this.log.error({ err, groupId }, 'Signal adapter: failed to publish group-held notification');
-    }
-  }
 }

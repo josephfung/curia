@@ -65,7 +65,6 @@ import { SignalRpcClient } from './channels/signal/signal-rpc-client.js';
 import { SignalAdapter } from './channels/signal/signal-adapter.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
-import { HeldMessageService } from './contacts/held-messages.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
@@ -669,7 +668,7 @@ async function main(): Promise<void> {
       } else {
         logger.warn(
           { err, ceoPrimaryEmail: config.ceoPrimaryEmail },
-          'CEO contact bootstrap failed — CEO emails may be held if contact is provisional',
+          'CEO contact bootstrap failed — inbound emails from CEO may route in low-trust mode',
         );
       }
     }
@@ -682,10 +681,6 @@ async function main(): Promise<void> {
     // set CEO_PRIMARY_EMAIL.
     logger.info('CEO_PRIMARY_EMAIL not set — CEO contact bootstrap skipped (principal will be created via the onboarding wizard at /setup).');
   }
-
-  // Held messages — stores messages from unknown senders pending CEO review.
-  const heldMessages = HeldMessageService.createWithPostgres(pool, logger);
-  logger.info('Held message service initialized');
 
   // Email channel — optional. Supports N named accounts via channel_accounts.email in
   // config/default.yaml, or falls back to the legacy NYLAS_GRANT_ID + NYLAS_SELF_EMAIL
@@ -1357,7 +1352,6 @@ async function main(): Promise<void> {
       outboundGateway,
       contactService,
       phoneNumber: config.signalPhoneNumber,
-      ceoEmail: config.ceoPrimaryEmail,
     });
   }
 
@@ -1535,7 +1529,7 @@ async function main(): Promise<void> {
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
   // infraLlmService provides constrained LLM access (classify/extract) with telemetry.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -1871,8 +1865,6 @@ async function main(): Promise<void> {
     maxRiskPenalty: trustScoreConfig.max_risk_penalty ?? 0.2,
   } : undefined;
 
-  const trustScoreFloor = yamlConfig.security?.trust_score_floor ?? 0.2;
-
   // Rate limiter — enforces global and per-sender message rate limits at the dispatch layer.
   // Constructed from config/default.yaml dispatch.rate_limit section; falls back to safe defaults
   // if the section is absent (same pattern as other optional dispatch config).
@@ -1899,15 +1891,12 @@ async function main(): Promise<void> {
     bus,
     logger,
     contactResolver,
-    contactService,
-    heldMessages,
     channelPolicies: authConfig?.channelPolicies,
     injectionScanner,
     rateLimiter,
     pool,
     conversationCheckpointDebounceMs: yamlConfig.dispatch?.conversationCheckpointDebounceMs,
     trustScorerWeights,
-    trustScoreFloor,
     maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
     confidencePipeline,
     selfEmail: resolvedEmailAccounts[0]?.selfEmail,

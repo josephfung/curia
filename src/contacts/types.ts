@@ -90,8 +90,8 @@ export type IdentityStatus = 'active' | 'defunct' | 'bounced';
 
 // -- Contact status --
 // confirmed: CEO has verified this contact
-// provisional: system-created, awaiting CEO confirmation
 // blocked: CEO explicitly rejected/blocked this sender
+// provisional: legacy value — mapped to tier='unknown' in migration #055; no longer created by new code
 export type ContactStatus = 'confirmed' | 'provisional' | 'blocked';
 
 export interface AuthOverride {
@@ -375,25 +375,9 @@ export interface AuthConfig {
 }
 
 // -- Unknown sender policy --
-
-export type UnknownSenderPolicy = 'allow' | 'hold_and_notify' | 'ignore';
-
-export type HeldMessageStatus = 'pending' | 'processed' | 'discarded';
-
-export interface HeldMessage {
-  id: string;
-  channel: string;
-  senderId: string;
-  conversationId: string;
-  content: string;
-  subject: string | null;
-  metadata: Record<string, unknown>;
-  status: HeldMessageStatus;
-  /** Contact ID if the CEO identified the sender */
-  resolvedContactId: string | null;
-  createdAt: Date;
-  processedAt: Date | null;
-}
+// 'allow' routes unknown senders to the coordinator in low-trust mode (tier='unknown').
+// 'ignore' silently drops the message.
+export type UnknownSenderPolicy = 'allow' | 'ignore';
 
 export interface ChannelPolicyConfig {
   trust: TrustLevel;

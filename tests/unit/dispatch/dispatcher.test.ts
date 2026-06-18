@@ -2,13 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
-import { createInboundMessage, createAgentError, createAgentTask, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type MessageHeldEvent, type ContactUnknownEvent } from '../../../src/bus/events.js';
+import { createInboundMessage, createAgentError, createAgentTask, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent } from '../../../src/bus/events.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
-import type { DbPool } from '../../../src/db/connection.js';
 import type { InboundSenderContext, ContactStatus, TrustLevel, TaskOriginator, ContactTier, ContactKind } from '../../../src/contacts/types.js';
-import { HeldMessageService } from '../../../src/contacts/held-messages.js';
 import { createLogger } from '../../../src/logger.js';
 
 // Minimal provenance block for all mock LLM responses — satisfies the required field.
@@ -61,13 +59,6 @@ function makeResolverWithNoContact(): ContactResolver {
   return {
     resolve: async (channel, senderId) => ({ resolved: false, channel, senderId }),
   } as unknown as ContactResolver;
-}
-
-/**
- * Creates an in-memory HeldMessageService for tests that need to inspect held messages.
- */
-function makeInMemoryHeldMessages(): HeldMessageService {
-  return HeldMessageService.createInMemory();
 }
 
 describe('Dispatcher', () => {
@@ -369,7 +360,7 @@ describe('Dispatcher — messageTrustScore', () => {
       bus,
       logger,
       contactResolver: resolver,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
     });
     dispatcher.register();
 
@@ -415,53 +406,42 @@ describe('Dispatcher — messageTrustScore', () => {
     expect(tasks[0]!.payload.messageTrustScore).toBeCloseTo(0.12);
   });
 
-  it('trust floor triggers hold_and_notify for provisional sender with low score', async () => {
-    // Provisional contacts still go through the floor — they have not yet been explicitly approved.
+  it('unknown-tier sender on allow channel routes to coordinator in low-trust mode', async () => {
+    // The trust floor and hold machinery are gone. Unknown-tier senders on 'allow' channels
+    // route directly to the coordinator with a LOW-TRUST SENDER block injected by runtime.ts.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
-    const heldMessages = makeInMemoryHeldMessages();
     const resolver = makeResolverWithContact({
       contactConfidence: 0.0,
       trustLevel: null,
-      status: 'provisional',
+      status: 'provisional', // maps to tier='unknown'
     });
     const dispatcher = new Dispatcher({
       bus,
       logger,
       contactResolver: resolver,
-      heldMessages,
       channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
-      trustScoreFloor: 0.2,
     });
     dispatcher.register();
 
-    const held: MessageHeldEvent[] = [];
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('message.held', 'channel', (e) => { held.push(e as MessageHeldEvent); });
     bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     await bus.publish('channel', createInboundMessage({
-      conversationId: 'conv-floor-1',
+      conversationId: 'conv-unknown-allow',
       channelId: 'email',
-      senderId: 'provisional@example.com',
+      senderId: 'stranger@example.com',
       content: 'Hello',
     }));
 
-    // email low=0.3, contactConfidence=0.0 → 0.3*0.4=0.12, below floor of 0.2 → held
-    expect(held).toHaveLength(1);
-    expect(tasks).toHaveLength(0);
+    expect(tasks).toHaveLength(1);
   });
 
-  it('trust floor does not hold confirmed contact with contact_confidence=0 (issue #459)', async () => {
-    // Regression test: a confirmed contact with contact_confidence=0 and trust_level=null was
-    // incorrectly held by the trust floor. Confirmed contacts have explicit CEO approval and
-    // must route unconditionally regardless of contact_confidence.
-    //
-    // Production incident: xiaopu@xiaopu.ca (status=confirmed, verified, source=ceo_stated)
-    // was held because contact_confidence=0.00 caused trust score=0.12 < floor(0.2).
+  it('confirmed contact with contact_confidence=0 routes unconditionally (issue #459)', async () => {
+    // Regression: confirmed contacts must route unconditionally regardless of trust score.
+    // Previously a trust-floor gate could incorrectly hold confirmed contacts.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
-    const heldMessages = makeInMemoryHeldMessages();
     const mockProvider: LLMProvider = {
       id: 'mock',
       chat: vi.fn().mockResolvedValue({
@@ -489,121 +469,61 @@ describe('Dispatcher — messageTrustScore', () => {
       bus,
       logger,
       contactResolver: resolver,
-      heldMessages,
       channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
-      trustScoreFloor: 0.2,
     });
     dispatcher.register();
 
-    const held: MessageHeldEvent[] = [];
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('message.held', 'channel', (e) => { held.push(e as MessageHeldEvent); });
     bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     await bus.publish('channel', createInboundMessage({
-      conversationId: 'conv-floor-confirmed-exempt',
+      conversationId: 'conv-confirmed-zero-score',
       channelId: 'email',
       senderId: 'confirmed@example.com',
       content: 'Hello',
     }));
 
-    // email low=0.3, contactConfidence=0.0 → score=0.12, below floor of 0.2
-    // BUT contact is confirmed → trust floor is skipped → routes to coordinator
-    expect(held).toHaveLength(0);
     expect(tasks).toHaveLength(1);
   });
 
-  it('trust floor does not hold messages on ignore channels', async () => {
-    // Uses a confirmed contact because that is the only resolved-sender type that can reach
-    // the trust floor in a controlled test scenario (provisional contacts on ignore channels are
-    // caught by the provisional gate before they reach the trust floor). Before issue #459 was
-    // fixed, the confirmed-contact path was also the only way to trigger the floor's 'ignore'
-    // exemption for a resolved sender. After the fix, confirmed contacts are exempt via the new
-    // guard and the 'ignore' check fires second — this test retains coverage of the guard as a
-    // belt-and-suspenders defense against future regressions where a non-confirmed resolved sender
-    // might reach the trust floor on an 'ignore' channel.
+  it('ignore channel drops unknown sender silently', async () => {
+    // 'ignore' policy causes the dispatcher to emit message.rejected without routing to an agent.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
-    const heldMessages = makeInMemoryHeldMessages();
-    const resolver = makeResolverWithContact({
-      contactConfidence: 0.0,
-      trustLevel: null,
-      status: 'confirmed',
-    });
-    const dispatcher = new Dispatcher({
-      bus,
-      logger,
-      contactResolver: resolver,
-      heldMessages,
-      channelPolicies: { http: { trust: 'medium', unknownSender: 'ignore', threaded: false } },
-      trustScoreFloor: 0.5,
-    });
-    dispatcher.register();
-
-    const held: MessageHeldEvent[] = [];
-    const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('message.held', 'channel', (e) => { held.push(e as MessageHeldEvent); });
-    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
-
-    await bus.publish('channel', createInboundMessage({
-      conversationId: 'conv-floor-2',
-      channelId: 'http',
-      senderId: 'api-caller',
-      content: 'Hello',
-    }));
-
-    // Even though score < floor, 'ignore' channel skips the hold
-    expect(held).toHaveLength(0);
-    expect(tasks).toHaveLength(1);
-  });
-
-  it('trust floor holds unknown sender on allow channel (score below floor)', async () => {
-    // Regression: unknown senders on 'allow' channels must still be subject to the trust floor.
-    // Previously, the senderContext?.resolved !== false guard incorrectly exempted them.
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
-    const heldMessages = makeInMemoryHeldMessages();
-    const resolver = makeResolverWithNoContact(); // unknown sender → contactConfidence = 0.0
-    const dispatcher = new Dispatcher({
-      bus,
-      logger,
-      contactResolver: resolver,
-      heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
-      trustScoreFloor: 0.2,
-    });
-    dispatcher.register();
-
-    const held: MessageHeldEvent[] = [];
-    const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('message.held', 'channel', (e) => { held.push(e as MessageHeldEvent); });
-    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
-
-    await bus.publish('channel', createInboundMessage({
-      conversationId: 'conv-floor-unknown-allow',
-      channelId: 'email',
-      senderId: 'stranger@example.com',
-      content: 'Hello',
-    }));
-
-    // email low=0.3*0.4=0.12, below floor of 0.2 → should be held even though channel is 'allow'
-    expect(held).toHaveLength(1);
-    expect(tasks).toHaveLength(0);
-  });
-});
-
-describe('Dispatcher — contact.unknown event payload', () => {
-  it('contact.unknown includes routingDecision: hold_and_notify for email channel', async () => {
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
-    const heldMessages = makeInMemoryHeldMessages();
     const resolver = makeResolverWithNoContact();
     const dispatcher = new Dispatcher({
       bus,
       logger,
       contactResolver: resolver,
-      heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
+      channelPolicies: { http: { trust: 'medium', unknownSender: 'ignore', threaded: false } },
+    });
+    dispatcher.register();
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-ignore',
+      channelId: 'http',
+      senderId: 'api-caller',
+      content: 'Hello',
+    }));
+
+    expect(tasks).toHaveLength(0);
+  });
+});
+
+describe('Dispatcher — contact.unknown event payload', () => {
+  it('contact.unknown includes routingDecision: allow for email channel (low-trust routing)', async () => {
+    // email channel policy is now 'allow' — unknown senders route to coordinator in low-trust mode.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const resolver = makeResolverWithNoContact();
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
     });
     dispatcher.register();
 
@@ -611,7 +531,7 @@ describe('Dispatcher — contact.unknown event payload', () => {
     bus.subscribe('contact.unknown', 'system', (e) => { unknownEvents.push(e as ContactUnknownEvent); });
 
     await bus.publish('channel', createInboundMessage({
-      conversationId: 'conv-cu-hold',
+      conversationId: 'conv-cu-allow',
       channelId: 'email',
       senderId: 'stranger@example.com',
       content: 'Hello',
@@ -623,7 +543,7 @@ describe('Dispatcher — contact.unknown event payload', () => {
     expect(unknownEvents[0]!.payload.channelTrustLevel).toBe('low');
     // email low=0.3*0.4=0.12, unknown=0.0 → 0.12
     expect(unknownEvents[0]!.payload.messageTrustScore).toBeCloseTo(0.12);
-    expect(unknownEvents[0]!.payload.routingDecision).toBe('hold_and_notify');
+    expect(unknownEvents[0]!.payload.routingDecision).toBe('allow');
   });
 
   it('contact.unknown includes routingDecision: ignore for http channel', async () => {
@@ -1283,227 +1203,14 @@ describe('Dispatcher message size limit', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Fix B — thread-originated trust bypass
+// outbound.message recipientId
 // ---------------------------------------------------------------------------
 
-describe('Dispatcher thread-originated trust bypass', () => {
+describe('Dispatcher — outbound.message recipientId', () => {
   const logger = createLogger('error');
 
-  /**
-   * Build a mock DB pool that simulates the audit_log query for thread-originated trust.
-   * `hasOutbound = true` means the query returns a row (trust detected).
-   */
-  function makePool(hasOutbound: boolean) {
-    return {
-      query: vi.fn().mockResolvedValue({ rows: [{ exists: hasOutbound }] }),
-    };
-  }
-
-  function makeContactService(overrides?: Partial<ContactService>): ContactService {
-    return {
-      setStatus: vi.fn().mockResolvedValue(undefined),
-      setTrustLevel: vi.fn().mockResolvedValue(undefined),
-      createContact: vi.fn().mockResolvedValue({ id: 'new-contact-id' }),
-      linkIdentity: vi.fn().mockResolvedValue(undefined),
-      ...overrides,
-    } as unknown as ContactService;
-  }
-
-  it('routes provisional sender to coordinator when thread trust detected, and promotes contact', async () => {
-    const bus = new EventBus(logger);
-    const heldMessages = HeldMessageService.createInMemory();
-    const contactService = makeContactService();
-    const pool = makePool(true);
-
-    const resolver = makeResolverWithContact({ contactConfidence: 0, trustLevel: null, status: 'provisional' });
-
-    const dispatcher = new Dispatcher({
-      bus,
-      logger,
-      contactResolver: resolver,
-      contactService,
-      heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
-      pool: pool as unknown as DbPool,
-      // No trustScoreFloor override — the threadTrusted flag now bypasses the floor for
-      // thread-trusted messages, so this test exercises production behaviour.
-    });
-    dispatcher.register();
-
-    const held: MessageHeldEvent[] = [];
-    const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
-
-    await bus.publish('channel', createInboundMessage({
-      conversationId: 'email:thread-donna',
-      channelId: 'email',
-      senderId: 'donna@example.com',
-      content: 'Thanks for reaching out!',
-    }));
-
-    // Must route to coordinator, not hold
-    expect(held).toHaveLength(0);
-    expect(tasks).toHaveLength(1);
-    // Must promote the provisional contact and set trust level high
-    expect(contactService.setStatus).toHaveBeenCalledWith('test-contact-id', 'confirmed');
-    expect(contactService.setTrustLevel).toHaveBeenCalledWith('test-contact-id', 'high');
-  });
-
-  it('holds provisional sender when no thread trust detected', async () => {
-    const bus = new EventBus(logger);
-    const heldMessages = HeldMessageService.createInMemory();
-    const contactService = makeContactService();
-    const pool = makePool(false);
-
-    const resolver = makeResolverWithContact({ contactConfidence: 0, trustLevel: null, status: 'provisional' });
-
-    const dispatcher = new Dispatcher({
-      bus,
-      logger,
-      contactResolver: resolver,
-      contactService,
-      heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
-      pool: pool as unknown as DbPool,
-    });
-    dispatcher.register();
-
-    const held: MessageHeldEvent[] = [];
-    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
-
-    await bus.publish('channel', createInboundMessage({
-      conversationId: 'email:thread-cold',
-      channelId: 'email',
-      senderId: 'cold@example.com',
-      content: 'Hello, I found your email online.',
-    }));
-
-    // No prior outbound → should still be held
-    expect(held).toHaveLength(1);
-    expect(contactService.setStatus).not.toHaveBeenCalled();
-  });
-
-  it('routes unknown sender to coordinator when thread trust detected, and creates confirmed contact', async () => {
-    const bus = new EventBus(logger);
-    const heldMessages = HeldMessageService.createInMemory();
-    const contactService = makeContactService();
-    const pool = makePool(true);
-
-    const resolver = makeResolverWithNoContact();
-
-    const dispatcher = new Dispatcher({
-      bus,
-      logger,
-      contactResolver: resolver,
-      contactService,
-      heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
-      pool: pool as unknown as DbPool,
-      // No trustScoreFloor override — threadTrusted flag bypasses it for this message.
-    });
-    dispatcher.register();
-
-    const held: MessageHeldEvent[] = [];
-    const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
-
-    await bus.publish('channel', createInboundMessage({
-      conversationId: 'email:thread-board',
-      channelId: 'email',
-      senderId: 'board@company.com',
-      content: 'Following up on your email.',
-    }));
-
-    expect(held).toHaveLength(0);
-    expect(tasks).toHaveLength(1);
-    // Creates a confirmed contact for the unknown sender and sets trust level high
-    expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'confirmed',
-      source: 'ceo_stated',
-    }));
-    expect(contactService.linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
-      channel: 'email',
-      channelIdentifier: 'board@company.com',
-      source: 'ceo_stated',
-    }));
-    expect(contactService.setTrustLevel).toHaveBeenCalledWith('new-contact-id', 'high');
-  });
-
-  it('holds provisional sender normally when pool is not configured', async () => {
-    // Without a pool, the thread trust check cannot run — fall through to normal hold
-    const bus = new EventBus(logger);
-    const heldMessages = HeldMessageService.createInMemory();
-    const contactService = makeContactService();
-
-    const resolver = makeResolverWithContact({ contactConfidence: 0, trustLevel: null, status: 'provisional' });
-
-    const dispatcher = new Dispatcher({
-      bus,
-      logger,
-      contactResolver: resolver,
-      contactService,
-      heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
-      // pool intentionally omitted
-    });
-    dispatcher.register();
-
-    const held: MessageHeldEvent[] = [];
-    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
-
-    await bus.publish('channel', createInboundMessage({
-      conversationId: 'email:thread-nopool',
-      channelId: 'email',
-      senderId: 'nopool@example.com',
-      content: 'Hello',
-    }));
-
-    expect(held).toHaveLength(1);
-    expect(contactService.setStatus).not.toHaveBeenCalled();
-  });
-
-  it('holds provisional sender normally when audit_log query fails (fail-open)', async () => {
-    const bus = new EventBus(logger);
-    const heldMessages = HeldMessageService.createInMemory();
-    const contactService = makeContactService();
-
-    const pool = {
-      query: vi.fn().mockRejectedValue(new Error('DB connection lost')),
-    };
-
-    const resolver = makeResolverWithContact({ contactConfidence: 0, trustLevel: null, status: 'provisional' });
-
-    const dispatcher = new Dispatcher({
-      bus,
-      logger,
-      contactResolver: resolver,
-      contactService,
-      heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
-      pool: pool as unknown as DbPool,
-    });
-    dispatcher.register();
-
-    const held: MessageHeldEvent[] = [];
-    bus.subscribe('message.held', 'channel', (e) => held.push(e as MessageHeldEvent));
-
-    await bus.publish('channel', createInboundMessage({
-      conversationId: 'email:thread-dberr',
-      channelId: 'email',
-      senderId: 'dberr@example.com',
-      content: 'Hello',
-    }));
-
-    // Query failed → fall through to hold (conservative)
-    expect(held).toHaveLength(1);
-    expect(contactService.setStatus).not.toHaveBeenCalled();
-  });
-
   it('includes recipientId in outbound.message when routing an agent response', async () => {
-    // Verifies that the dispatcher populates recipientId from routing.senderId so the
-    // audit_log records have the information needed for the thread trust query.
+    // Verifies that the dispatcher populates recipientId from routing.senderId for audit logging.
     const bus = new EventBus(logger);
     const mockProvider: LLMProvider = {
       id: 'mock',
