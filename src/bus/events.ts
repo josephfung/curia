@@ -287,6 +287,13 @@ interface ContactMergedPayload {
   mergedAt: Date;
 }
 
+// contact.elevated — published when a contact is automatically promoted from 'unknown' to 'known'.
+// Fired by ContactService.elevateTierToKnown() on success via the onContactElevated callback.
+interface ContactElevatedPayload {
+  contactId: string;
+  reason: 'correspondence' | 'domain-validated' | 'judgment';
+}
+
 // MessageRejectedPayload — emitted by the dispatch layer when a message is rejected
 // due to an unknown_sender: ignore policy (or a blocked sender). The conversationId
 // is included so the HTTP adapter can immediately resolve the pending response
@@ -691,6 +698,12 @@ export interface ContactMergedEvent extends BaseEvent {
   payload: ContactMergedPayload;
 }
 
+export interface ContactElevatedEvent extends BaseEvent {
+  type: 'contact.elevated';
+  sourceLayer: 'dispatch';
+  payload: ContactElevatedPayload;
+}
+
 export interface MessageRejectedEvent extends BaseEvent {
   type: 'message.rejected';
   sourceLayer: 'dispatch';
@@ -959,6 +972,7 @@ export type BusEvent =
   | ContactUnknownEvent   // Contacts Phase A: sender has no contact record
   | ContactDuplicateDetectedEvent   // Dedup: new contact matches an existing one
   | ContactMergedEvent              // Dedup: two contacts have been merged
+  | ContactElevatedEvent            // #951: automatic tier elevation from unknown → known
   | MessageRejectedEvent  // Unknown sender policy: message rejected, signals HTTP adapter to return 403
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
   | OutboundDeliveredEvent // Outbound delivery: wire-level send succeeded (#729)
@@ -1295,6 +1309,19 @@ export function createContactMerged(
   };
 }
 
+export function createContactElevated(
+  payload: ContactElevatedPayload & { parentEventId?: string },
+): ContactElevatedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'contact.elevated',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
 
 export function createMessageRejected(
   // parentEventId is required — rejection events must trace back to the inbound event.
