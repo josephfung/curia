@@ -11,6 +11,7 @@ import { parseDisclosureVerdict, parseActionVerdict } from './escalation-judge-p
 import { EscalationJudge } from './escalation-judge.js';
 import type { EscalationJudgeConfig } from './escalation-judge.js';
 import type { LLMProvider, LLMResponse } from '../agents/llm/provider.js';
+import type { ContactTier } from '../contacts/types.js';
 import { ModelRegistry } from '../agents/llm/model-registry.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
@@ -413,6 +414,22 @@ describe('EscalationJudge.classifyDisclosure', () => {
     const events = (bus as unknown as { published: Array<{ type: string }> }).published.filter((e) => e.type === 'llm.call');
     expect(events).toHaveLength(0);
   });
+
+  it('escalates without throwing when passed an unrecognized tier value', async () => {
+    // Validates fail-closed behavior when an invalid tier reaches the policy functions
+    // (e.g. a future DB-side tier value before a code deployment). The policy guard
+    // returns 'escalate' rather than throwing; the judge's try/catch catches any throw
+    // that does escape.
+    const { judge } = makeJudge(
+      providerReturning(textResponse('{"class": "public", "reason": "fine"}')),
+    );
+    const result = await judge.classifyDisclosure({
+      content: 'hello',
+      recipientTier: 'invalid-tier' as unknown as ContactTier,
+      conversationId: '',
+    });
+    expect(result.decision).toBe('escalate');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -570,5 +587,30 @@ describe('EscalationJudge.classifyAction', () => {
     await judge.classifyAction({ description: 'lookup', initiatingTier: 'unknown', conversationId: '' });
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
     expect(capturedSignal!.aborted).toBe(true);
+  });
+
+  it('escalates on provider error', async () => {
+    const errorResponse: LLMResponse = { type: 'error', error: { message: 'api down' } as never };
+    const { judge } = makeJudge(providerReturning(errorResponse));
+    const result = await judge.classifyAction({
+      description: 'do something',
+      initiatingTier: 'unknown',
+      conversationId: '',
+    });
+    expect(result.decision).toBe('escalate');
+  });
+
+  it('escalates without throwing when policy throws on unrecognized tier value', async () => {
+    // An unrecognized tier causes meetsMinimumTier() to throw inside applyActionPolicy.
+    // The judge's try/catch must catch that and return escalate rather than propagating.
+    const { judge } = makeJudge(
+      providerReturning(textResponse('{"class": "reversible-external", "isThirdPartyFacing": false, "reason": "test"}')),
+    );
+    const result = await judge.classifyAction({
+      description: 'do something',
+      initiatingTier: 'invalid-tier' as unknown as ContactTier,
+      conversationId: '',
+    });
+    expect(result.decision).toBe('escalate');
   });
 });

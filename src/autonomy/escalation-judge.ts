@@ -124,7 +124,7 @@ export class EscalationJudge {
 
     const verdict = parseDisclosureVerdict(result.content);
     if (verdict === null) {
-      this.logger.warn(
+      this.logger.error(
         {
           responseHash: createHash('sha256').update(result.content).digest('hex'),
           conversationId: input.conversationId,
@@ -134,10 +134,16 @@ export class EscalationJudge {
       return { decision: 'escalate', reason: 'malformed judge verdict' };
     }
 
-    await this.publishTelemetry(result, userPrompt, input.conversationId, 'disclosure');
+    // Fire-and-forget: telemetry failure must never delay or block the security gate decision.
+    void this.publishTelemetry(result, userPrompt, input.conversationId, 'disclosure');
 
-    const decision = applyDisclosurePolicy(input.recipientTier, verdict.class);
-    return { decision, disclosureClass: verdict.class, reason: verdict.reason };
+    try {
+      const decision = applyDisclosurePolicy(input.recipientTier, verdict.class);
+      return { decision, disclosureClass: verdict.class, reason: verdict.reason };
+    } catch (err) {
+      this.logger.warn({ err, conversationId: input.conversationId }, 'escalation-judge: disclosure policy threw — escalating');
+      return { decision: 'escalate', reason: 'policy enforcement error' };
+    }
   }
 
   /**
@@ -160,7 +166,7 @@ export class EscalationJudge {
 
     const verdict = parseActionVerdict(result.content);
     if (verdict === null) {
-      this.logger.warn(
+      this.logger.error(
         {
           responseHash: createHash('sha256').update(result.content).digest('hex'),
           conversationId: input.conversationId,
@@ -170,10 +176,16 @@ export class EscalationJudge {
       return { decision: 'escalate', reason: 'malformed judge verdict' };
     }
 
-    await this.publishTelemetry(result, userPrompt, input.conversationId, 'action');
+    // Fire-and-forget: telemetry failure must never delay or block the security gate decision.
+    void this.publishTelemetry(result, userPrompt, input.conversationId, 'action');
 
-    const decision = applyActionPolicy(input.initiatingTier, verdict.class, verdict.isThirdPartyFacing);
-    return { decision, actionClass: verdict.class, reason: verdict.reason };
+    try {
+      const decision = applyActionPolicy(input.initiatingTier, verdict.class, verdict.isThirdPartyFacing);
+      return { decision, actionClass: verdict.class, reason: verdict.reason };
+    } catch (err) {
+      this.logger.warn({ err, conversationId: input.conversationId }, 'escalation-judge: action policy threw — escalating');
+      return { decision: 'escalate', reason: 'policy enforcement error' };
+    }
   }
 
   /** Make a single LLM call with timeout and abort. Returns null on any failure. */
@@ -201,9 +213,11 @@ export class EscalationJudge {
         ],
         options: { temperature: 0, max_tokens: maxTokens, signal: controller.signal },
       });
-      // Guard against a late rejection from an orphaned provider call after timeout.
-      // LLMProvider.chat() is non-throwing by contract but guard anyway.
-      chatPromise.catch(() => { /* handled via race + abort */ });
+      // Suppress unhandled-rejection for post-timeout orphaned provider calls.
+      // The primary error path is the outer catch; this handles the late-rejection race edge case.
+      chatPromise.catch((err) => {
+        this.logger.warn({ err, kind, conversationId }, 'escalation-judge: orphaned provider rejection after race/abort');
+      });
 
       const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
         timer = setTimeout(() => resolve(TIMEOUT), this.config.timeoutMs);
@@ -234,7 +248,8 @@ export class EscalationJudge {
         latencyMs: Date.now() - start,
       };
     } catch (err) {
-      this.logger.warn({ err, kind, conversationId }, 'escalation-judge: provider threw');
+      // Provider threw despite the non-throwing contract — treat as a gate failure and escalate.
+      this.logger.error({ err, kind, conversationId }, 'escalation-judge: provider threw');
       return null;
     } finally {
       if (timer) clearTimeout(timer);
