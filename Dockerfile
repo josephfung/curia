@@ -88,8 +88,11 @@ RUN pnpm add tsx
 # differential). Upgrading packageManager to pnpm@11.7.0 is not sufficient on
 # its own because the old cached tarball remains on disk and Trivy flags it.
 # pnpm is not used at runtime (CMD calls tsx directly), so the cache is safe to
-# remove entirely.
-RUN rm -rf /root/.cache/node/corepack
+# remove entirely. Both paths are removed: Node 24's corepack writes to
+# /root/.cache/node/corepack (confirmed by the Trivy alert path); the alternate
+# layout /root/.cache/corepack (used by older corepack versions) is removed too
+# so this stays correct across future base-image bumps.
+RUN rm -rf /root/.cache/node/corepack /root/.cache/corepack
 
 # Copy compiled output from build stage
 COPY --from=build /app/dist ./dist
@@ -175,11 +178,12 @@ USER curia
 
 # Invoke tsx directly rather than going through `pnpm exec tsx ...`. The pnpm
 # route triggers corepack at runtime, which in turn looks for a pnpm tarball
-# in /tmp/.cache/corepack (HOME=/tmp for the curia user). That cache is empty
-# at runtime because the build-stage pnpm install ran as root and populated
-# /root/.cache/corepack, and corepack then prompts before downloading. In a
-# non-TTY container the prompt sees EOF and the process exits 1 silently —
-# exactly the failure mode that took two hours to debug in #805.
+# in /tmp/.cache/node/corepack (HOME=/tmp for the curia user). That cache is
+# empty at runtime because the build-stage pnpm install ran as root and
+# populated /root/.cache/node/corepack (then cleaned up — see the rm step
+# above), and corepack then prompts before downloading. In a non-TTY container
+# the prompt sees EOF and the process exits 1 silently — exactly the failure
+# mode that took two hours to debug in #805.
 #
 # tsx is needed because dist/index.js dynamically imports raw .ts skill handlers
 # at runtime via ESM .js→.ts extension resolution. node alone cannot do that.
