@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **CVE-2026-53655 (pnpm bundled tar)** — deleted corepack's pnpm cache from the production image after install. Node 24's bundled corepack pre-caches pnpm@11.0.8 (which bundles tar@7.5.13) during `corepack enable`, even though the project uses pnpm@11.7.0. pnpm is not used at runtime, so the cache is removed entirely.
+
 ### Added
 
 - **Escalation-line policy judge** — LLM-powered classifier that maps `tier` × disclosure-sensitivity / action-consequence → allow / escalate; policy is deterministic code, LLM does only the natural-language classification; fail-closed by design. (#948)
