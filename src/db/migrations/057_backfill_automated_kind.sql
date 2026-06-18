@@ -6,7 +6,7 @@
 -- classifier existed). Idempotent: contacts already at kind='automated' are
 -- skipped via the WHERE clause.
 --
--- The regex mirrors AUTOMATED_LOCAL_RE in contact-service.ts exactly.
+-- The regex covers the same set of patterns as AUTOMATED_LOCAL_RE in contact-service.ts.
 -- Keep both in sync if patterns are ever extended.
 
 UPDATE contacts

@@ -93,6 +93,7 @@ export class ContactListHandler implements SkillHandler {
     );
 
     try {
+      // TODO: role path bypasses kind filter — findContactByRole has no kind param; acceptable since role and kind are semantically orthogonal
       const contacts = role && typeof role === 'string'
         ? await ctx.contactService.findContactByRole(role)
         : await ctx.contactService.listContacts({
