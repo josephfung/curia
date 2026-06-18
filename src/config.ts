@@ -253,6 +253,26 @@ export interface YamlConfig {
       failMode?: 'split' | 'open' | 'closed';
     };
   };
+  /**
+   * Escalation-line policy judge (issue #948).
+   * Classifies disclosure sensitivity and action consequence, then maps
+   * tier × class → allow / escalate. Consumed by disclosure gate (#949)
+   * and action gate (#950). Fail-closed by design.
+   */
+  escalation?: {
+    judge?: {
+      /** Kill switch. When false, both classifiers escalate without calling the model. Default: true. */
+      enabled?: boolean;
+      /**
+       * Model for the judge. A dedicated string (NOT a tier reference) so it can
+       * differ from the coordinator model. Validated against the registry at startup.
+       * Default: 'claude-haiku-4-5'.
+       */
+      model?: string;
+      /** Hard timeout per call in ms. Default: 5000. */
+      timeout_ms?: number;
+    };
+  };
   intentDrift?: {
     /** Enable intent drift detection. Default: true. */
     enabled?: boolean;

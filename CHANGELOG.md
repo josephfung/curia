@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Escalation-line policy judge** — LLM-powered classifier that maps `tier` × disclosure-sensitivity / action-consequence → allow / escalate; policy is deterministic code, LLM does only the natural-language classification; fail-closed by design. (#948)
 - **Contact/KG boundary enforcement** — business email senders are now routed to existing or new organization KG nodes (`kind = organization`) instead of always minting a person node; personal webmail domains and `first.last` address patterns remain person-typed. (#946)
 
 ### Fixed
