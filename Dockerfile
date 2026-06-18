@@ -67,8 +67,6 @@ RUN corepack enable
 #   - CVE-2026-45149: brace-expansion < 5.0.6 (arbitrary string generation)
 #   - CVE-2026-42338: ip-address < 10.1.1 (XSS via improper HTML escaping)
 # npm@11.17.0 bundles tar@7.5.16, brace-expansion@5.0.6, ip-address@10.2.0.
-# CVE-2026-53655 in pnpm's own bundled tar is addressed separately by upgrading
-# pnpm to 11.7.0 (packageManager field in package.json), which bundles tar@7.5.16.
 # TODO: Dependabot does not track RUN-instruction version pins — bump this
 # manually when npm publishes a patch that addresses new bundled CVEs.
 RUN npm install -g npm@11.17.0
@@ -82,6 +80,16 @@ RUN pnpm install --frozen-lockfile --prod
 # resolving to foo.ts). Node's --experimental-strip-types doesn't handle this;
 # tsx does, and it's already used for dev (pnpm dev).
 RUN pnpm add tsx
+
+# Remove corepack's cached pnpm tarballs. Node 24's bundled corepack pre-caches
+# pnpm@11.0.8 (the version shipped with Node 24) during `corepack enable`, even
+# though this project uses pnpm@11.7.0. pnpm@11.0.8 bundles tar@7.5.13 which is
+# vulnerable to CVE-2026-53655 (PAX size override / tar parser interpretation
+# differential). Upgrading packageManager to pnpm@11.7.0 is not sufficient on
+# its own because the old cached tarball remains on disk and Trivy flags it.
+# pnpm is not used at runtime (CMD calls tsx directly), so the cache is safe to
+# remove entirely.
+RUN rm -rf /root/.cache/node/corepack
 
 # Copy compiled output from build stage
 COPY --from=build /app/dist ./dist
