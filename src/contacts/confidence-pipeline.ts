@@ -36,21 +36,23 @@ export class ConfidencePipeline {
    *
    * Skips principal contacts (systemRole = 'principal') — their confidence is hardcoded to 1.0
    * in ContactResolver.
+   *
+   * Returns the new confidence value (or 0 if skipped).
    */
-  async incrementalUpdate(contactId: string, signal: ConfidenceSignal): Promise<void> {
+  async incrementalUpdate(contactId: string, signal: ConfidenceSignal): Promise<number> {
     const contact = await this.contactService.getContact(contactId);
     if (!contact) {
       this.logger?.debug({ contactId }, 'confidence-pipeline: contact not found — skipping');
-      return;
+      return 0;
     }
 
     // Skip principal contacts — confidence is hardcoded in ContactResolver
-    if (contact.systemRole === 'principal') return; // Principal confidence is hardcoded in ContactResolver
+    if (contact.systemRole === 'principal') return 1.0; // Principal confidence is hardcoded in ContactResolver
 
     const count = ('count' in signal ? signal.count : undefined) ?? 1;
     if (!Number.isInteger(count) || count < 1) {
       this.logger?.warn({ contactId, count }, 'confidence-pipeline: non-positive or non-integer count — skipping (likely a caller bug)');
-      return;
+      return 0;
     }
 
     // Determine stat deltas based on signal type
@@ -78,7 +80,7 @@ export class ConfidencePipeline {
     const result = await this.contactService.getContactWithIdentities(contactId);
     if (!result) {
       this.logger?.warn({ contactId }, 'confidence-pipeline: getContactWithIdentities returned null after getContact succeeded — possible data inconsistency');
-      return;
+      return 0;
     }
     const { identities } = result;
 
@@ -101,6 +103,7 @@ export class ConfidencePipeline {
       contactConfidence: newConfidence,
       lastSeenAt,
     });
+    return newConfidence;
   }
 
   /**

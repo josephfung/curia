@@ -31,6 +31,9 @@ export const MANUAL_BOOST = 0.10;
 /** Max confidence boost from verified identity pairings. Capped at 3 identities. */
 export const PAIRING_BOOST = 0.10;
 
+/** Minimum contact_confidence to trigger automatic tier elevation from 'unknown' to 'known'. */
+export const JUDGMENT_ELEVATION_THRESHOLD = 0.20;
+
 /** Max number of verified identities that contribute to the pairing score. */
 const MAX_PAIRING_IDENTITIES = 3;
 
