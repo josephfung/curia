@@ -208,6 +208,10 @@ describe('parseActionVerdict', () => {
     expect(parseActionVerdict('{"class": "none", "isThirdPartyFacing": "yes", "reason": "x"}')).toBeNull();
   });
 
+  it('returns null when isThirdPartyFacing is null', () => {
+    expect(parseActionVerdict('{"class": "none", "isThirdPartyFacing": null, "reason": "x"}')).toBeNull();
+  });
+
   it('returns null for an unknown action class', () => {
     expect(parseActionVerdict('{"class": "dangerous", "isThirdPartyFacing": false, "reason": "x"}')).toBeNull();
   });
@@ -215,6 +219,18 @@ describe('parseActionVerdict', () => {
   it('tolerates a markdown code fence', () => {
     const result = parseActionVerdict('```json\n{"class": "irreversible", "isThirdPartyFacing": false, "reason": "payment"}\n```');
     expect(result?.class).toBe('irreversible');
+  });
+
+  it('does not end the object early on a brace inside the reason string', () => {
+    const result = parseActionVerdict('{"class": "none", "isThirdPartyFacing": false, "reason": "action contains } brace"} trailing');
+    expect(result).toEqual({ class: 'none', isThirdPartyFacing: false, reason: 'action contains } brace' });
+  });
+});
+
+describe('parseDisclosureVerdict brace-in-string edge case', () => {
+  it('does not end the object early on a brace inside the reason string', () => {
+    const result = parseDisclosureVerdict('{"class": "public", "reason": "see {appendix} for context"} trailing');
+    expect(result).toEqual({ class: 'public', reason: 'see {appendix} for context' });
   });
 });
 
@@ -359,6 +375,23 @@ describe('EscalationJudge.classifyDisclosure', () => {
     });
     expect(result.decision).toBe('escalate');
     expect(result.reason).toMatch(/malformed/);
+  });
+
+  it('aborts the in-flight provider call on timeout', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const provider = {
+      id: 'capture',
+      chat: vi.fn((params: { options?: { signal?: AbortSignal } }) => {
+        capturedSignal = params.options?.signal;
+        return new Promise<LLMResponse>((resolve) =>
+          setTimeout(() => resolve(textResponse('{"class":"public","reason":""}')), 50),
+        );
+      }),
+    } as unknown as LLMProvider;
+    const { judge } = makeJudge(provider, { timeoutMs: 5 });
+    await judge.classifyDisclosure({ content: 'hello', recipientTier: 'unknown', conversationId: '' });
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal!.aborted).toBe(true);
   });
 
   it('publishes one llm.call telemetry event on a successful verdict', async () => {

@@ -187,6 +187,11 @@ export class EscalationJudge {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const start = Date.now();
 
+    // The action verdict has three fields (class, isThirdPartyFacing, reason) vs two
+    // for disclosure — give it more room so verbose reason strings don't truncate.
+    // Truncated JSON → parseVerdict returns null → escalate (safe failure mode).
+    const maxTokens = kind === 'action' ? 200 : 120;
+
     try {
       const chatPromise = this.provider.chat({
         model: this.config.model,
@@ -194,9 +199,7 @@ export class EscalationJudge {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        // 120 tokens: ample for {"class":"...","isThirdPartyFacing":true,"reason":"..."}
-        // plus some buffer. Truncated JSON → parseVerdict returns null → escalate.
-        options: { temperature: 0, max_tokens: 120, signal: controller.signal },
+        options: { temperature: 0, max_tokens: maxTokens, signal: controller.signal },
       });
       // Guard against a late rejection from an orphaned provider call after timeout.
       // LLMProvider.chat() is non-throwing by contract but guard anyway.
