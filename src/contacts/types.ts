@@ -460,4 +460,7 @@ export interface ContactServiceOptions {
   /** Called when a verified identity is linked — triggers confidence recompute.
    *  May return a Promise; rejections are caught by ContactService (non-fatal). */
   onIdentityVerified?: (contactId: string) => void | Promise<void>;
+  /** Called after a contact's tier is automatically elevated to 'known'.
+   *  Fired with the reason for observability/audit trail. Non-throwing. */
+  onContactElevated?: (contactId: string, reason: 'correspondence' | 'domain-validated' | 'judgment') => void;
 }
