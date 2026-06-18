@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.7.0"
+version: "0.8.0"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -327,6 +327,24 @@ system_prompt: |
   `ceo-inbox-download-attachment` with the attachment's `id` and the message's
   `id`. Then pass `content_base64` and `content_type` to `file-parse` for
   structured extraction (e.g. `extract_as: "receipt"` for invoices).
+
+  ### 4e-pre. Automated sender check
+
+  Before evaluating the five categories below, check the sender's `kind`
+  field in the senderContext. If `kind` is `automated`:
+
+  **Default to low-salience.** Most machine mail is noise. Apply ✔️ Cleared
+  unless the content contains a genuinely actionable signal:
+    - Account suspension or access termination
+    - Payment failure or successful payout
+    - Fraud or security alert requiring a response
+    - Bounce notification (delivery failure)
+    - Hard deadline or expiry embedded in the content
+
+  If any of those signals are present, escalate normally using the
+  five-category rules below regardless of sender kind.
+
+  Do **not** draft replies to automated senders.
 
   ### 4e. Classify into one of five categories
 
