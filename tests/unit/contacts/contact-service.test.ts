@@ -1,5 +1,5 @@
 // tests/unit/contacts/contact-service.test.ts
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 import type { Contact } from '../../../src/contacts/types.js';
 import { DedupService } from '../../../src/contacts/dedup-service.js';
@@ -926,6 +926,130 @@ describe('ContactService', () => {
       });
       // Normalized to lowercase on write
       expect(updated.primaryEmail).toBe('match@example.com');
+    });
+  });
+
+  describe('elevateTierToKnown', () => {
+    it('promotes an unknown contact to known and returns true', async () => {
+      const contact = await service.createContact({
+        displayName: 'Jane Doe',
+        source: 'email_participant',
+        status: 'provisional',
+      });
+      // provisional → tier='unknown' by default
+      expect(contact.tier).toBe('unknown');
+
+      const result = await service.elevateTierToKnown(contact.id, 'judgment');
+      expect(result).toBe(true);
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.tier).toBe('known');
+    });
+
+    it('returns false and does not modify a contact already at tier="known"', async () => {
+      const contact = await service.createContact({
+        displayName: 'Jane Doe',
+        source: 'email_participant',
+        status: 'confirmed',
+      });
+      expect(contact.tier).toBe('known');
+
+      const result = await service.elevateTierToKnown(contact.id, 'judgment');
+      expect(result).toBe(false);
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.tier).toBe('known'); // unchanged
+    });
+
+    it('returns false and does not modify a contact at tier="trusted"', async () => {
+      const contact = await service.createContact({
+        displayName: 'Jane Doe',
+        source: 'email_participant',
+        status: 'confirmed',
+      });
+      await service.setTrustLevel(contact.id, 'high'); // drives tier to 'trusted'
+      const before = await service.getContact(contact.id);
+      expect(before!.tier).toBe('trusted');
+
+      const result = await service.elevateTierToKnown(contact.id, 'judgment');
+      expect(result).toBe(false);
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.tier).toBe('trusted'); // unchanged
+    });
+
+    it('returns false and does not modify a blocked contact', async () => {
+      const contact = await service.createContact({
+        displayName: 'Jane Doe',
+        source: 'email_participant',
+        status: 'blocked',
+      });
+      expect(contact.tier).toBe('blocked');
+
+      const result = await service.elevateTierToKnown(contact.id, 'correspondence');
+      expect(result).toBe(false);
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.tier).toBe('blocked'); // unchanged
+    });
+
+    it('returns false for kind="automated" contacts even when tier="unknown"', async () => {
+      const contact = await service.createContact({
+        displayName: 'noreply@example.com',
+        source: 'email_participant',
+        status: 'provisional',
+        kind: 'automated',
+      });
+      expect(contact.tier).toBe('unknown');
+      expect(contact.kind).toBe('automated');
+
+      const result = await service.elevateTierToKnown(contact.id, 'judgment');
+      expect(result).toBe(false);
+
+      const updated = await service.getContact(contact.id);
+      expect(updated!.tier).toBe('unknown'); // unchanged
+    });
+
+    it('returns false for kind="agent" contacts even when tier="unknown"', async () => {
+      const contact = await service.createContact({
+        displayName: 'Specialist Agent',
+        source: 'email_participant',
+        status: 'provisional',
+        kind: 'agent',
+      });
+      const result = await service.elevateTierToKnown(contact.id, 'domain-validated');
+      expect(result).toBe(false);
+    });
+
+    it('fires the onContactElevated callback with contactId and reason', async () => {
+      const onContactElevated = vi.fn();
+      const svc = ContactService.createInMemory(entityMemory, { onContactElevated });
+
+      const contact = await svc.createContact({
+        displayName: 'Callback Test',
+        source: 'email_participant',
+        status: 'provisional',
+      });
+
+      await svc.elevateTierToKnown(contact.id, 'correspondence');
+
+      expect(onContactElevated).toHaveBeenCalledOnce();
+      expect(onContactElevated).toHaveBeenCalledWith(contact.id, 'correspondence');
+    });
+
+    it('does not fire onContactElevated when elevation is a no-op', async () => {
+      const onContactElevated = vi.fn();
+      const svc = ContactService.createInMemory(entityMemory, { onContactElevated });
+
+      const contact = await svc.createContact({
+        displayName: 'Already Known',
+        source: 'email_participant',
+        status: 'confirmed', // already known
+      });
+
+      await svc.elevateTierToKnown(contact.id, 'judgment');
+
+      expect(onContactElevated).not.toHaveBeenCalled();
     });
   });
 });

@@ -210,6 +210,13 @@ interface ContactServiceBackend {
    */
   promoteToConfirmed(contactId: string): Promise<boolean>;
 
+  /**
+   * Atomically elevate a contact's tier from 'unknown' to 'known'.
+   * Guards against automated/agent kinds at DB level.
+   * Returns true if the row was updated, false otherwise (already elevated, wrong tier, or excluded kind).
+   */
+  elevateTierToKnown(contactId: string, reason: 'correspondence' | 'domain-validated' | 'judgment'): Promise<boolean>;
+
   getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>>;
   createAuthOverride(override: AuthOverride): Promise<void>;
   revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
@@ -280,6 +287,7 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
 export class ContactService {
   private onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
   private onIdentityVerified?: (contactId: string) => void;
+  private onContactElevated?: (contactId: string, reason: 'correspondence' | 'domain-validated' | 'judgment') => void;
   private dedupService?: DedupService;
   private onDuplicateDetected?: (
     newContactId: string,
@@ -296,6 +304,7 @@ export class ContactService {
   ) {
     this.onContactMerged = options?.onContactMerged;
     this.onIdentityVerified = options?.onIdentityVerified;
+    this.onContactElevated = options?.onContactElevated;
     this.dedupService = options?.dedupService;
     this.onDuplicateDetected = options?.onDuplicateDetected;
   }
@@ -1012,6 +1021,34 @@ export class ContactService {
     return this.backend.promoteToConfirmed(contactId);
   }
 
+  /**
+   * Atomically elevate a contact from tier='unknown' to tier='known'.
+   * No-op for automated/agent kinds (enforced by backend SQL) and contacts already
+   * at known/trusted/principal/blocked. Non-throwing — returns false on error.
+   */
+  async elevateTierToKnown(
+    contactId: string,
+    reason: 'correspondence' | 'domain-validated' | 'judgment',
+  ): Promise<boolean> {
+    try {
+      const elevated = await this.backend.elevateTierToKnown(contactId, reason);
+      if (elevated) {
+        this.logger?.info({ contactId, reason }, 'contacts: tier elevated to known');
+        if (this.onContactElevated) {
+          try {
+            this.onContactElevated(contactId, reason);
+          } catch (callbackErr) {
+            this.logger?.warn({ err: callbackErr }, 'onContactElevated callback threw (non-fatal)');
+          }
+        }
+      }
+      return elevated;
+    } catch (err) {
+      this.logger?.warn({ err, contactId, reason }, 'contacts: elevateTierToKnown failed (non-fatal)');
+      return false;
+    }
+  }
+
   /** Remove a channel identity by its ID. Returns true if found and removed, false if not found. */
   async unlinkIdentity(identityId: string): Promise<boolean> {
     return this.backend.unlinkIdentity(identityId);
@@ -1690,6 +1727,22 @@ class PostgresContactBackend implements ContactServiceBackend {
     return (result.rowCount ?? 0) > 0;
   }
 
+  async elevateTierToKnown(contactId: string, _reason: string): Promise<boolean> {
+    // Atomic conditional: only upgrades tier when it is STILL 'unknown' at write time
+    // AND the contact's kind is not automated or agent.
+    // The reason parameter is accepted for interface compatibility but not written to the
+    // DB here — it is logged at the service layer for the audit trail.
+    const result = await this.pool.query(
+      `UPDATE contacts
+       SET tier = 'known', updated_at = now()
+       WHERE id = $1
+         AND tier = 'unknown'
+         AND kind NOT IN ('automated', 'agent')`,
+      [contactId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
   async setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity> {
     this.logger.debug({ identityId, status }, 'contacts: updating identity status');
     const result = await this.pool.query<{
@@ -2169,6 +2222,16 @@ class InMemoryContactBackend implements ContactServiceBackend {
     // which by definition have tier='unknown').
     const newTier: ContactTier = contact.tier === 'unknown' ? 'known' : contact.tier;
     this.contacts.set(contactId, { ...contact, status: 'confirmed', tier: newTier, updatedAt: new Date() });
+    return true;
+  }
+
+  async elevateTierToKnown(contactId: string, _reason: string): Promise<boolean> {
+    // JS is single-threaded, so check-and-set is effectively atomic here.
+    // Mirrors the conditional logic of the Postgres implementation.
+    const contact = this.contacts.get(contactId);
+    if (!contact || contact.tier !== 'unknown') return false;
+    if (contact.kind === 'automated' || contact.kind === 'agent') return false;
+    this.contacts.set(contactId, { ...contact, tier: 'known', updatedAt: new Date() });
     return true;
   }
 
