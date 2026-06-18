@@ -5,6 +5,8 @@ import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { createInboundMessage, createAgentError, createAgentTask, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent } from '../../../src/bus/events.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
+import type { ContactService } from '../../../src/contacts/contact-service.js';
+import type { ConfidencePipeline } from '../../../src/contacts/confidence-pipeline.js';
 import type { InboundSenderContext, ContactStatus, TrustLevel, TaskOriginator, ContactTier, ContactKind } from '../../../src/contacts/types.js';
 import { createLogger } from '../../../src/logger.js';
 
@@ -1573,6 +1575,233 @@ describe('Dispatcher — thread-participants block', () => {
     const content = tasks[0]!.payload.content;
     expect(content).not.toContain('[Thread participants');
     expect(content).toBe('Signal message.');
+  });
+});
+
+describe('Dispatcher auto-elevation — Path 2 domain-validated (#951)', () => {
+  function buildHarness(opts: {
+    tier?: import('../../../src/contacts/types.js').ContactTier;
+    kind?: import('../../../src/contacts/types.js').ContactKind;
+    withContactService?: boolean;
+    confidence?: number;
+  } = {}) {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const elevateFn = vi.fn().mockResolvedValue(true);
+    const contactService = opts.withContactService === false
+      ? undefined
+      : { elevateTierToKnown: elevateFn } as unknown as ContactService;
+
+    const confidencePipeline = {
+      incrementalUpdate: vi.fn().mockResolvedValue(opts.confidence ?? 0.05),
+    } as unknown as ConfidencePipeline;
+
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: true,
+        contactId: 'test-contact-id',
+        displayName: 'Corp Inc',
+        role: null,
+        systemRole: null,
+        status: 'provisional',
+        tier: opts.tier ?? 'unknown',
+        kind: opts.kind ?? 'organization',
+        verified: true,
+        kgNodeId: null,
+        knowledgeSummary: '',
+        authorization: null,
+        contactConfidence: 0.0,
+        trustLevel: null,
+      }),
+    } as unknown as ContactResolver;
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver,
+      contactService,
+      confidencePipeline,
+    });
+    dispatcher.register();
+
+    return { bus, elevateFn };
+  }
+
+  it('elevates an unknown org-kind sender on inbound', async () => {
+    const { bus, elevateFn } = buildHarness({ tier: 'unknown', kind: 'organization' });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'billing@corp.com',
+      content: 'Invoice attached.',
+    }));
+
+    await vi.waitFor(() => expect(elevateFn).toHaveBeenCalledWith('test-contact-id', 'domain-validated'), { timeout: 200 });
+  });
+
+  it('does not elevate when kind is "person"', async () => {
+    const { bus, elevateFn } = buildHarness({ tier: 'unknown', kind: 'person' });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Hello',
+    }));
+
+    // Give microtasks time to settle, then assert nothing was called
+    await new Promise<void>(r => setTimeout(r, 10));
+    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'domain-validated');
+  });
+
+  it('does not elevate when org contact is already tier="known"', async () => {
+    const { bus, elevateFn } = buildHarness({ tier: 'known', kind: 'organization' });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'billing@corp.com',
+      content: 'Invoice',
+    }));
+
+    await new Promise<void>(r => setTimeout(r, 10));
+    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'domain-validated');
+  });
+
+  it('silently skips when no contactService configured', async () => {
+    const { bus, elevateFn } = buildHarness({ withContactService: false });
+
+    await expect(bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'billing@corp.com',
+      content: 'Invoice',
+    }))).resolves.not.toThrow();
+
+    await new Promise<void>(r => setTimeout(r, 10));
+    expect(elevateFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
+  function buildHarness(opts: {
+    tier?: import('../../../src/contacts/types.js').ContactTier;
+    kind?: import('../../../src/contacts/types.js').ContactKind;
+    confidence: number;
+    withContactService?: boolean;
+  }) {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const elevateFn = vi.fn().mockResolvedValue(true);
+    const contactService = opts.withContactService === false
+      ? undefined
+      : { elevateTierToKnown: elevateFn } as unknown as ContactService;
+
+    const confidencePipeline = {
+      incrementalUpdate: vi.fn().mockResolvedValue(opts.confidence),
+    } as unknown as ConfidencePipeline;
+
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: true,
+        contactId: 'test-contact-id',
+        displayName: 'Alice',
+        role: null,
+        systemRole: null,
+        status: 'provisional',
+        tier: opts.tier ?? 'unknown',
+        kind: opts.kind ?? 'person',
+        verified: true,
+        kgNodeId: null,
+        knowledgeSummary: '',
+        authorization: null,
+        contactConfidence: 0.0,
+        trustLevel: null,
+      }),
+    } as unknown as ContactResolver;
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver,
+      contactService,
+      confidencePipeline,
+    });
+    dispatcher.register();
+
+    return { bus, elevateFn };
+  }
+
+  it('elevates when confidence crosses 0.20 threshold', async () => {
+    const { bus, elevateFn } = buildHarness({ confidence: 0.22 });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Hello again',
+    }));
+
+    await vi.waitFor(() => expect(elevateFn).toHaveBeenCalledWith('test-contact-id', 'judgment'), { timeout: 200 });
+  });
+
+  it('does not elevate when confidence is below threshold', async () => {
+    const { bus, elevateFn } = buildHarness({ confidence: 0.18 });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Hello',
+    }));
+
+    await new Promise<void>(r => setTimeout(r, 10));
+    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'judgment');
+  });
+
+  it('does not elevate automated contacts even when confidence >= threshold', async () => {
+    const { bus, elevateFn } = buildHarness({ confidence: 0.30, kind: 'automated' });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'noreply@example.com',
+      content: 'Your receipt',
+    }));
+
+    await new Promise<void>(r => setTimeout(r, 10));
+    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'judgment');
+  });
+
+  it('does not elevate when tier is already "known"', async () => {
+    const { bus, elevateFn } = buildHarness({ confidence: 0.50, tier: 'known' });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Hello',
+    }));
+
+    await new Promise<void>(r => setTimeout(r, 10));
+    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'judgment');
+  });
+
+  it('silently skips when no contactService configured', async () => {
+    const { bus, elevateFn } = buildHarness({ confidence: 0.50, withContactService: false });
+
+    await expect(bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Hello',
+    }))).resolves.not.toThrow();
+
+    await new Promise<void>(r => setTimeout(r, 10));
+    expect(elevateFn).not.toHaveBeenCalled();
   });
 });
 

@@ -5,6 +5,7 @@ import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator } from '../contacts/types.js';
 import { isAutomatedKind } from '../contacts/types.js';
+import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
@@ -68,6 +69,9 @@ export interface DispatcherConfig {
   /** Outbound context service — v2 context bridging. When present, replaces
    *  the working-memory-based context memo injection. */
   outboundContextService?: import('./outbound-context.js').OutboundContextService;
+  /** Contact service for automatic tier elevation (issue #951).
+   *  When absent, all elevation paths are silently skipped. */
+  contactService?: import('../contacts/contact-service.js').ContactService;
 }
 
 /**
@@ -118,6 +122,8 @@ export class Dispatcher {
   private selfEmail?: string;
   /** Outbound context service — v2 context bridging (replaces working-memory memo read path). */
   private _outboundContextService?: import('./outbound-context.js').OutboundContextService;
+  /** Contact service for automatic tier elevation (issue #951). */
+  private contactService?: import('../contacts/contact-service.js').ContactService;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -133,6 +139,7 @@ export class Dispatcher {
     this.confidencePipeline = config.confidencePipeline;
     this.selfEmail = config.selfEmail;
     this._outboundContextService = config.outboundContextService;
+    this.contactService = config.contactService;
   }
 
   /**
@@ -282,8 +289,33 @@ export class Dispatcher {
             // Uses tier for the gate check (issue #945); tier='blocked' == old status='blocked'.
             if (this.confidencePipeline && senderContext.tier !== 'blocked') {
               const resolvedContactId = senderContext.contactId;
+
+              // Path 2: domain-validated org elevation — fires immediately for org-kind unknown contacts.
+              // Organizations that email us are implicitly domain-validated on first contact; no judgment call needed.
+              if (this.contactService && senderContext.kind === 'organization' && senderContext.tier === 'unknown') {
+                const cs = this.contactService;
+                cs.elevateTierToKnown(resolvedContactId, 'domain-validated')
+                  .catch(err => this.logger.warn({ err, contactId: resolvedContactId }, 'domain-validated elevation failed (non-fatal)'));
+              }
+
+              // Path 3: judgment elevation — chains after the confidence update to get the new score.
+              // Capture tier and kind snapshots so the async callback sees pre-message values;
+              // senderContext may be mutated by the time the promise resolves.
+              const contactService = this.contactService;
+              const snapshotTier = senderContext.tier;
+              const snapshotKind = senderContext.kind;
               this.confidencePipeline.incrementalUpdate(resolvedContactId, { type: 'message_seen' })
-                .catch(err => this.logger.warn({ err, contactId: resolvedContactId }, 'Confidence pipeline update failed (non-fatal)'));
+                .then(newConfidence => {
+                  if (
+                    contactService &&
+                    snapshotTier === 'unknown' &&
+                    !isAutomatedKind(snapshotKind) &&
+                    newConfidence >= JUDGMENT_ELEVATION_THRESHOLD
+                  ) {
+                    return contactService.elevateTierToKnown(resolvedContactId, 'judgment');
+                  }
+                })
+                .catch(err => this.logger.warn({ err, contactId: resolvedContactId }, 'Confidence pipeline or judgment elevation failed (non-fatal)'));
             }
 
             // Unknown/blocked contacts gate: applies to tier='unknown' (was: provisional) and
