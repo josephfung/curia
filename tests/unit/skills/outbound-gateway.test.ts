@@ -590,15 +590,15 @@ describe('OutboundGateway', () => {
         recipientEmail: baseRequest.to,
         conversationId: '',
         channelId: baseRequest.channel,
-        recipientTrustLevel: null,
+        recipientTier: 'unknown',
         recipients: [{ email: baseRequest.to, isPrincipal: false }],
         principalIncluded: false,
         principalIsSoleRecipient: false,
       });
     });
 
-    it('forwards recipientTrustLevel=high to contentFilter when contact has trust_level=high', async () => {
-      // Verify that a resolved contact with trust_level='high' propagates to the
+    it('forwards recipientTier=trusted to contentFilter when contact has tier=trusted', async () => {
+      // Verify that a resolved contact with tier='trusted' propagates to the
       // content filter. This is the policy boundary that allows trusted recipients
       // (CEO's EA, CFO, board members) to receive third-party contact data.
       (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -635,7 +635,7 @@ describe('OutboundGateway', () => {
         recipientEmail: baseRequest.to,
         conversationId: '',
         channelId: baseRequest.channel,
-        recipientTrustLevel: 'high',
+        recipientTier: 'trusted',
         recipients: [{ email: baseRequest.to, isPrincipal: false }],
         principalIncluded: false,
         principalIsSoleRecipient: false,

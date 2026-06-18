@@ -24,7 +24,7 @@ import type { NylasClient, NylasMessage, NylasFolder, ListMessagesOptions, SendE
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput } from './_shared/read-attachments.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
-import type { TrustLevel, ChannelIdentity } from '../contacts/types.js';
+import type { ContactTier, ChannelIdentity } from '../contacts/types.js';
 import type { OutboundContentFilter, FilterRecipient } from '../dispatch/outbound-filter.js';
 import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
@@ -232,12 +232,12 @@ function redactId(value: string): string {
  * provider that carries the notification).
  *
  * Per-finding policy, keyed on the rule name:
- *   - Stage-2 LLM judge findings (rule prefix `llm-judge-`) carry an ABSTRACT,
- *     redaction-safe detail by construction: the judge prompt forbids quoting the
- *     offending value, and the integration suite asserts the reason never echoes a
- *     secret (see outbound-judge-prompt.ts + outbound-judge.integration.test.ts).
- *     Their detail is therefore safe to surface, and it is exactly the "judge's
- *     reason" the principal needs to understand the block.
+ *   - Stage-2 LLM judge findings (rule prefix `llm-judge-`) and Stage-2.5 escalation
+ *     judge findings (`disclosure-tier-gate`) carry an ABSTRACT, redaction-safe detail
+ *     by construction: the judge prompt forbids quoting the offending value, and the
+ *     Stage-2.5 detail is constructed from verdict.disclosureClass + verdict.reason
+ *     (never raw content). Their detail is therefore safe to surface, and it is exactly
+ *     the "judge's reason" the principal needs to understand the block.
  *   - Stage-1 deterministic-rule findings (`secret-pattern`, `contact-data-leak`,
  *     `internal-structure`, `system-prompt-fragment`) and any other rule can have
  *     the matched fragment embedded in their detail (a secret, an internal marker,
@@ -248,7 +248,10 @@ function redactId(value: string): string {
 function buildBlockReasonSummary(findings: Array<{ rule: string; detail: string }>): string {
   if (findings.length === 0) return 'Content filter (no rule detail available)';
   return findings
-    .map((f) => (f.rule.startsWith('llm-judge-') && f.detail ? `${f.rule}: ${f.detail}` : f.rule))
+    .map((f) => {
+      const showDetail = (f.rule.startsWith('llm-judge-') || f.rule === 'disclosure-tier-gate') && f.detail;
+      return showDetail ? `${f.rule}: ${f.detail}` : f.rule;
+    })
     .join('\n');
 }
 
@@ -543,7 +546,7 @@ export class OutboundGateway {
     //
     // Fail-open on DB errors: an infra failure should not silently prevent
     // sending. We warn so the anomaly is visible in logs/alerting.
-    let recipientTrustLevel: TrustLevel | null = null;
+    let recipientTier: ContactTier = 'unknown';
     let recipientContactId: string | undefined;
     try {
       const contact = await this.contactService.resolveByChannelIdentity(request.channel, recipientId);
@@ -556,15 +559,15 @@ export class OutboundGateway {
           );
           return { success: false, blockedReason: 'Recipient is blocked' };
         }
-        // Capture trust level for the content filter, and contact UUID for the PII redactor's
-        // CEO bypass check. Both are used downstream: trust level by the content filter, and
-        // contact UUID by PiiRedactor.redact() so it can match against the stored CEO contact ID.
-        recipientTrustLevel = contact.trustLevel;
+        // Capture tier for the content filter, and contact UUID for the PII redactor's
+        // CEO bypass check. Both are used downstream: tier by the content filter's disclosure
+        // gate, and contact UUID by PiiRedactor.redact() for the principal bypass.
+        recipientTier = contact.tier;
         recipientContactId = contact.contactId;
       }
     } catch (err) {
       // DB or service error — log at warn and proceed.
-      // recipientTrustLevel stays null, which is the safe/conservative fallback.
+      // recipientTier stays 'unknown', which is the safe/conservative fallback.
       this.log.warn(
         { err, channel: request.channel, recipientId: redactId(recipientId) },
         'outbound-gateway: contact resolution failed, proceeding without blocked check',
@@ -590,16 +593,14 @@ export class OutboundGateway {
         const redactionResult = await this.piiRedactor.redact(
           messageBody,
           request.channel,
-          recipientTrustLevel,
           { recipientId, recipientContactId },
         );
         redactedBody = redactionResult.content;
-        // Redact the subject too — same trust level and channel policy apply.
+        // Redact the subject too — same channel policy applies.
         if (request.channel === 'email' && request.subject) {
           const subjectResult = await this.piiRedactor.redact(
             request.subject,
             request.channel,
-            recipientTrustLevel,
             { recipientId, recipientContactId },
           );
           redactedSubject = subjectResult.content;
@@ -656,7 +657,7 @@ export class OutboundGateway {
         recipientEmail: recipientId,
         conversationId: '',
         channelId: request.channel,
-        recipientTrustLevel,
+        recipientTier,
         recipients,
         principalIncluded,
         principalIsSoleRecipient,
@@ -1328,7 +1329,7 @@ export class OutboundGateway {
     // ------------------------------------------------------------------
     // Step 1: Blocked-contact check
     // ------------------------------------------------------------------
-    let recipientTrustLevel: TrustLevel | null = null;
+    let recipientTierForDraft: ContactTier = 'unknown';
     let recipientContactIdForDraft: string | undefined;
     try {
       const contact = await this.contactService.resolveByChannelIdentity('email', recipientEmail);
@@ -1341,7 +1342,7 @@ export class OutboundGateway {
           );
           return { success: false, blockedReason: 'Recipient is blocked' };
         }
-        recipientTrustLevel = contact.trustLevel;
+        recipientTierForDraft = contact.tier;
         recipientContactIdForDraft = contact.contactId; // hoisted for outbound.delivered audit
       }
     } catch (err) {
@@ -1376,7 +1377,7 @@ export class OutboundGateway {
         recipientEmail,
         conversationId: '',
         channelId: 'email',
-        recipientTrustLevel,
+        recipientTier: recipientTierForDraft,
         recipients: draftRecipients,
         principalIncluded: draftPrincipalIncluded,
         principalIsSoleRecipient: draftPrincipalSole,
