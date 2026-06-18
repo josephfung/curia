@@ -413,7 +413,11 @@ describe('Dispatcher — messageTrustScore', () => {
     const resolver = makeResolverWithContact({
       contactConfidence: 0.0,
       trustLevel: null,
-      status: 'provisional', // maps to tier='unknown'
+      // Use the real regression scenario: DB-default status='confirmed' for auto-created contacts,
+      // paired with explicit tier='unknown'. Previously, code gating on auth.contactStatus would
+      // have missed this case and silently granted full coordinator access to unknown senders.
+      status: 'confirmed',
+      tier: 'unknown',
     });
     const dispatcher = new Dispatcher({
       bus,
@@ -434,6 +438,8 @@ describe('Dispatcher — messageTrustScore', () => {
     }));
 
     expect(tasks).toHaveLength(1);
+    // Verify the emitted task carries tier='unknown' so the runtime's LOW-TRUST injection fires.
+    expect(tasks[0]!.payload.senderContext?.tier).toBe('unknown');
   });
 
   it('confirmed contact with contact_confidence=0 routes unconditionally (issue #459)', async () => {

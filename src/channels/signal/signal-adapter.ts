@@ -361,19 +361,25 @@ export class SignalAdapter implements Channel {
           });
         } catch (linkErr) {
           const isDuplicate = (linkErr as { code?: string }).code === '23505';
-          if (!isDuplicate) {
-            // linkIdentity failed for a non-uniqueness reason — clean up the orphaned contact row.
-            try {
-              await this.config.contactService.deleteContact(contact.id);
-            } catch (cleanupErr) {
-              this.log.warn(
-                { cleanupErr, orphanId: contact.id, phone },
-                'Signal adapter: failed to clean up orphan contact after linkIdentity failure',
-              );
-            }
+          // Always clean up the newly created contact — linkIdentity failed regardless of reason.
+          // 23505: identity already belongs to an existing contact (prior 1:1 message from this
+          // phone). Non-23505: unexpected DB failure. In both cases the new contact row is
+          // orphaned with no identity and must be deleted.
+          try {
+            await this.config.contactService.deleteContact(contact.id);
+          } catch (cleanupErr) {
+            this.log.warn(
+              { cleanupErr, orphanId: contact.id, phone },
+              'Signal adapter: failed to clean up orphan contact after linkIdentity failure',
+            );
+          }
+          if (isDuplicate) {
+            // Expected: phone already has a signal identity from a prior 1:1 message.
+            // The existing contact will be resolved normally by the dispatcher.
+            this.log.debug({ phone }, 'Signal adapter: skipping group member create — signal identity already exists for this phone');
+          } else {
             this.log.warn({ err: linkErr, phone }, 'Signal adapter: linkIdentity failed for unknown group member — orphan cleaned up');
           }
-          // 23505 means the identity already exists (race/duplicate send): ignore.
         }
       }
 
