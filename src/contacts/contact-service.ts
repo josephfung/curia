@@ -194,7 +194,7 @@ interface ContactServiceBackend {
   findContactByKgNodeId(kgNodeId: string): Promise<Contact | null>;
   findContactByRole(role: string): Promise<Contact[]>;
   findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null>;
-  listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; limit?: number; offset?: number }): Promise<Contact[]>;
+  listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]>;
   updateContact(contact: Contact): Promise<void>;
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
@@ -652,8 +652,8 @@ export class ContactService {
     return this.backend.findContactBySystemRole(systemRole);
   }
 
-  /** List contacts, optionally filtered by status and/or capped by limit with offset for pagination. */
-  async listContacts(filters?: { status?: ContactStatus; limit?: number; offset?: number }): Promise<Contact[]> {
+  /** List contacts, optionally filtered by status, kind, and/or capped by limit with offset for pagination. */
+  async listContacts(filters?: { status?: ContactStatus; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
     return this.backend.listContacts(filters);
   }
 
@@ -1427,7 +1427,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     return this.rowToContact(row);
   }
 
-  async listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; limit?: number; offset?: number }): Promise<Contact[]> {
+  async listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
@@ -1440,6 +1440,12 @@ class PostgresContactBackend implements ContactServiceBackend {
     if (filters?.tier != null) {
       params.push(filters.tier);
       conditions.push(`tier = $${params.length}`);
+    }
+
+    // kind filter: pass as a Postgres array and use = ANY($N) for inclusion.
+    if (filters?.kind != null && filters.kind.length > 0) {
+      params.push(filters.kind);
+      conditions.push(`kind = ANY($${params.length})`);
     }
 
     const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
@@ -2075,7 +2081,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return null;
   }
 
-  async listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; limit?: number; offset?: number }): Promise<Contact[]> {
+  async listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
     let results = [...this.contacts.values()];
 
     if (filters?.status != null) {
@@ -2085,6 +2091,11 @@ class InMemoryContactBackend implements ContactServiceBackend {
     // tier filter (issue #945) — prefer this over status for new callers
     if (filters?.tier != null) {
       results = results.filter((c) => c.tier === filters.tier);
+    }
+
+    // kind filter: include only contacts whose kind appears in the provided array
+    if (filters?.kind != null && filters.kind.length > 0) {
+      results = results.filter((c) => filters.kind!.includes(c.kind));
     }
 
     // Sort by createdAt ascending to match Postgres ORDER BY created_at ASC

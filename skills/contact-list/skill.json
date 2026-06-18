@@ -1,12 +1,13 @@
 {
   "name": "contact-list",
-  "description": "List contacts, optionally filtered by role or status, with optional result limit and offset for pagination.",
-  "version": "1.2.1",
+  "description": "List contacts, optionally filtered by role, status, or kind, with optional result limit and offset for pagination. By default returns only person, principal, and organization contacts (excludes automated senders and agents).",
+  "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "role": "string? (filter by job title / professional role, e.g. 'CEO', 'CFO', 'Engineer'; mutually exclusive with status, limit, and offset; this is NOT a lifecycle status)",
     "status": "string? (confirmed | provisional | blocked)",
+    "kind": "string? (person | organization | automated | principal | agent, or comma-separated list; defaults to person,principal,organization — pass kind=automated to see automated senders)",
     "limit": "number?",
     "offset": "number? (skip this many contacts; use with limit for cursor-based pagination)"
   },
