@@ -890,7 +890,7 @@ export class EmailAdapter implements Channel {
           displayName: p.name || p.email,
           fallbackDisplayName: p.email,
           source: 'email_participant',
-          status: 'provisional',
+          tier: 'unknown',
           primaryEmail: p.email,
         });
 

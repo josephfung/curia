@@ -140,7 +140,7 @@ export function loadAuthConfig(configDir: string): AuthConfig {
         throw new Error(`Invalid trust level '${trust}' for channel '${channel}'`);
       }
       const unknownSender = (config as { unknown_sender: string }).unknown_sender as UnknownSenderPolicy;
-      if (!['allow', 'hold_and_notify', 'ignore'].includes(unknownSender)) {
+      if (!['allow', 'ignore'].includes(unknownSender)) {
         throw new Error(`Invalid unknown_sender policy '${unknownSender}' for channel '${channel}'`);
       }
       const rawThreaded = (config as { threaded?: unknown }).threaded;

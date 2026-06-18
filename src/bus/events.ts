@@ -267,7 +267,7 @@ interface ContactUnknownPayload {
   /** Computed message trust score for this unknown sender's message. */
   messageTrustScore: number;
   /** Routing decision applied to this unknown sender — mirrors the configured per-channel policy. */
-  routingDecision: 'allow' | 'hold_and_notify' | 'ignore';
+  routingDecision: 'allow' | 'ignore';
 }
 
 // contact.duplicate_detected — published when a newly-created contact scores above
@@ -287,13 +287,6 @@ interface ContactMergedPayload {
   mergedAt: Date;
 }
 
-interface MessageHeldPayload {
-  heldMessageId: string;
-  channel: string;
-  senderId: string;
-  subject: string | null;
-}
-
 // MessageRejectedPayload — emitted by the dispatch layer when a message is rejected
 // due to an unknown_sender: ignore policy (or a blocked sender). The conversationId
 // is included so the HTTP adapter can immediately resolve the pending response
@@ -305,7 +298,7 @@ interface MessageRejectedPayload {
   /** Why the message was rejected — used by the HTTP adapter to select the status code.
    * 'message_too_large' is set when the message body exceeds the configured size limit.
    * 'global_rate_limited' / 'sender_rate_limited' are set when rate limits are exceeded. */
-  reason: 'unknown_sender' | 'provisional_sender' | 'blocked_sender' | 'message_too_large' | 'global_rate_limited' | 'sender_rate_limited';
+  reason: 'unknown_sender' | 'blocked_sender' | 'message_too_large' | 'global_rate_limited' | 'sender_rate_limited';
   /** UTF-8 byte size of the rejected message content. Present when reason is 'message_too_large'. */
   size?: number;
   /** Configured max_message_bytes limit at the time of rejection. Present when reason is 'message_too_large'. */
@@ -698,12 +691,6 @@ export interface ContactMergedEvent extends BaseEvent {
   payload: ContactMergedPayload;
 }
 
-export interface MessageHeldEvent extends BaseEvent {
-  type: 'message.held';
-  sourceLayer: 'dispatch';
-  payload: MessageHeldPayload;
-}
-
 export interface MessageRejectedEvent extends BaseEvent {
   type: 'message.rejected';
   sourceLayer: 'dispatch';
@@ -972,7 +959,6 @@ export type BusEvent =
   | ContactUnknownEvent   // Contacts Phase A: sender has no contact record
   | ContactDuplicateDetectedEvent   // Dedup: new contact matches an existing one
   | ContactMergedEvent              // Dedup: two contacts have been merged
-  | MessageHeldEvent      // Unknown sender policy: message held for CEO review
   | MessageRejectedEvent  // Unknown sender policy: message rejected, signals HTTP adapter to return 403
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
   | OutboundDeliveredEvent // Outbound delivery: wire-level send succeeded (#729)
@@ -1309,20 +1295,6 @@ export function createContactMerged(
   };
 }
 
-export function createMessageHeld(
-  // parentEventId is required — held-message events must trace back to the inbound event.
-  payload: MessageHeldPayload & { parentEventId: string },
-): MessageHeldEvent {
-  const { parentEventId, ...rest } = payload;
-  return {
-    id: randomUUID(),
-    timestamp: new Date(),
-    type: 'message.held',
-    sourceLayer: 'dispatch',
-    payload: rest,
-    parentEventId,
-  };
-}
 
 export function createMessageRejected(
   // parentEventId is required — rejection events must trace back to the inbound event.

@@ -28,7 +28,6 @@ import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { OutboundGateway } from './outbound-gateway.js';
-import type { HeldMessageService } from '../contacts/held-messages.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { EntityMemory, CreateEntityOptions, StoreFactResult } from '../memory/entity-memory.js';
 import type { StoreFactOptions } from '../memory/types.js';
@@ -87,7 +86,6 @@ export class ExecutionLayer {
   private agentRegistry?: AgentRegistry;
   private contactService?: ContactService;
   private outboundGateway?: OutboundGateway;
-  private heldMessages?: HeldMessageService;
   private schedulerService?: SchedulerService;
   private entityMemory?: EntityMemory;
   private agentPersona?: AgentPersona;
@@ -131,7 +129,6 @@ export class ExecutionLayer {
     agentRegistry?: AgentRegistry;
     contactService?: ContactService;
     outboundGateway?: OutboundGateway;
-    heldMessages?: HeldMessageService;
     schedulerService?: SchedulerService;
     entityMemory?: EntityMemory;
     agentPersona?: AgentPersona;
@@ -164,7 +161,6 @@ export class ExecutionLayer {
     this.agentRegistry = options?.agentRegistry;
     this.contactService = options?.contactService;
     this.outboundGateway = options?.outboundGateway;
-    this.heldMessages = options?.heldMessages;
     this.schedulerService = options?.schedulerService;
     this.entityMemory = options?.entityMemory;
     this.agentPersona = options?.agentPersona;
@@ -682,7 +678,6 @@ export class ExecutionLayer {
       bus: this.bus,
       agentRegistry: this.agentRegistry,
       outboundGateway: this.outboundGateway,
-      heldMessages: this.heldMessages,
       schedulerService: this.schedulerService,
       entityMemory: this.entityMemory,
       nylasCalendarClient: this.nylasCalendarClient,

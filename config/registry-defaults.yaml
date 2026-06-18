@@ -63,8 +63,6 @@ skills:
   - date-resolve
   - context-for-email
   - context-bridge-release
-  - held-messages-list
-  - held-messages-process
   - decay-warnings-list
   - delegate
   - file-parse

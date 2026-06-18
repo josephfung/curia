@@ -28,6 +28,33 @@ function createMockProvider(response: string): LLMProvider {
   };
 }
 
+// Minimal confirmed senderContext for tests that check the exact messages array.
+// Without this, the runtime injects a LOW-TRUST SENDER block for tasks with no
+// senderContext, which adds an extra system message and breaks exact-match assertions.
+const CONFIRMED_SENDER_CONTEXT = {
+  resolved: true as const,
+  contactId: 'test-contact-id',
+  displayName: 'Test User',
+  role: null,
+  systemRole: null,
+  status: 'confirmed' as const,
+  tier: 'known' as const,
+  kind: 'person' as const,
+  verified: true,
+  kgNodeId: null,
+  knowledgeSummary: '',
+  authorization: {
+    contactStatus: 'confirmed' as const,
+    allowed: [] as string[],
+    denied: [] as string[],
+    escalate: [] as string[],
+    channelTrust: 'high' as const,
+    trustBlocked: [] as string[],
+  },
+  contactConfidence: 1.0,
+  trustLevel: null,
+};
+
 describe('AgentRuntime', () => {
   let bus: EventBus;
   let responses: AgentResponseEvent[];
@@ -61,6 +88,7 @@ describe('AgentRuntime', () => {
       channelId: 'cli',
       senderId: 'user',
       content: 'Hello',
+      senderContext: CONFIRMED_SENDER_CONTEXT,
       parentEventId: 'parent-1',
     });
     await bus.publish('dispatch', task);
@@ -70,10 +98,10 @@ describe('AgentRuntime', () => {
     expect(responses[0]?.parentEventId).toBe(task.id);
     expect(provider.chat).toHaveBeenCalledWith(
       expect.objectContaining({
-        messages: [
+        messages: expect.arrayContaining([
           { role: 'system', content: expect.stringContaining('You are a helpful assistant.') },
           { role: 'user', content: 'Hello' },
-        ],
+        ]),
       }),
     );
 
@@ -152,21 +180,21 @@ describe('AgentRuntime', () => {
       channelId: 'cli',
       senderId: 'user',
       content: 'Second message',
+      senderContext: CONFIRMED_SENDER_CONTEXT,
       parentEventId: 'parent-1',
     });
     await bus.publish('dispatch', task);
 
-    // LLM should receive system + history + new message
-    // System content includes the appended turn budget block; use stringContaining
-    // since this test cares about conversation history, not system prompt assembly.
+    // LLM should receive system + history + new message.
+    // Use arrayContaining so other injected system messages (sender info, turn budget)
+    // don't break this assertion — the test cares about history inclusion, not exact order.
     expect(provider.chat).toHaveBeenCalledWith(
       expect.objectContaining({
-        messages: [
-          { role: 'system', content: expect.stringContaining('You are helpful.') },
+        messages: expect.arrayContaining([
           { role: 'user', content: 'First message' },
           { role: 'assistant', content: 'First response' },
           { role: 'user', content: 'Second message' },
-        ],
+        ]),
       }),
     );
   });
@@ -1078,6 +1106,69 @@ describe('AgentRuntime', () => {
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
     expect(systemMsg).toContain('## Your Contact Details');
     expect(systemMsg).toContain('- Contact ID: 11111111-1111-4111-8111-111111111111');
+  });
+  it('injects LOW-TRUST block when tier=unknown even if status=confirmed and authorization.contactStatus=confirmed', async () => {
+    // Regression guard for the status/tier decoupling bug: auto-created contacts have
+    // tier='unknown' but the DB default for status is 'confirmed'. Before the fix, the
+    // runtime gated LOW-TRUST injection on auth.contactStatus !== 'confirmed', so a contact
+    // with status='confirmed' and tier='unknown' would silently receive full coordinator
+    // access instead of the behavioral constraints. The fix keys on senderCtx.tier.
+    const provider = createMockProvider('OK');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-tier-mismatch-1',
+      channelId: 'email',
+      senderId: 'stranger@example.com',
+      content: 'Hi, can you book me a flight?',
+      parentEventId: 'parent-tier-mismatch-1',
+      senderContext: {
+        resolved: true,
+        contactId: 'contact-auto-created',
+        displayName: 'stranger@example.com',
+        role: null,
+        systemRole: null,
+        // status='confirmed' is the DB default — auto-created contacts get this even
+        // though they have tier='unknown'. The runtime must not trust status here.
+        status: 'confirmed' as const,
+        tier: 'unknown' as const,
+        kind: 'person' as const,
+        verified: false,
+        kgNodeId: null,
+        knowledgeSummary: '',
+        // authorization.contactStatus reflects status column (legacy) — also 'confirmed'.
+        // This is the value that the pre-fix runtime incorrectly used to decide LOW-TRUST.
+        authorization: {
+          contactStatus: 'confirmed' as const,
+          allowed: ['view_basic_info'],
+          denied: [] as string[],
+          escalate: [] as string[],
+          channelTrust: 'low' as const,
+          trustBlocked: [] as string[],
+        },
+        contactConfidence: 0.0,
+        trustLevel: null,
+      },
+    });
+    await bus.publish('dispatch', task);
+
+    // The runtime must inject a LOW-TRUST block, not the full allowed/denied permission list.
+    const chatCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const senderMsg = chatCall.messages.find(m => m.role === 'system' && m.content.includes('AUTHORIZATION'));
+    expect(senderMsg?.content).toContain('LOW-TRUST SENDER');
+    expect(senderMsg?.content).not.toContain('view_basic_info');
+    expect(senderMsg?.content).not.toContain('Allowed:');
   });
 });
 

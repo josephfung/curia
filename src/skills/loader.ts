@@ -26,7 +26,7 @@ import type { ManifestMetadata } from '../registry/types.js';
  * are universal — available to every skill without declaration.
  */
 export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
-  'bus', 'agentRegistry', 'outboundGateway', 'heldMessages',
+  'bus', 'agentRegistry', 'outboundGateway',
   'schedulerService', 'entityMemory', 'nylasCalendarClient',
   'autonomyService', 'executiveProfileService', 'officeIdentityService', 'browserService', 'bullpenService', 'skillSearch',
   'actionLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',

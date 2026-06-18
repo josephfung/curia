@@ -2,12 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { EventBus } from '../../src/bus/bus.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { AgentRuntime } from '../../src/agents/runtime.js';
-import { createInboundMessage, type OutboundMessageEvent, type ContactUnknownEvent, type MessageHeldEvent, type AgentTaskEvent } from '../../src/bus/events.js';
+import { createInboundMessage, type OutboundMessageEvent, type ContactUnknownEvent, type AgentTaskEvent } from '../../src/bus/events.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
 const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
 import { createLogger } from '../../src/logger.js';
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
-import { HeldMessageService } from '../../src/contacts/held-messages.js';
 
 describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => {
   it('routes an inbound message through the full pipeline', async () => {
@@ -109,15 +108,16 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
     expect(outbound[0]?.parentEventId).toBeDefined();
 
     // -- Assert the LLM was called with the correct message list --
-    // The coordinator must prepend the system prompt before the user's content.
-    // Verifying the call shape ensures we're not passing raw bus payloads straight
-    // to the model (which would include routing fields the model shouldn't see).
+    // The coordinator must include the system prompt and user content.
+    // Use arrayContaining since the runtime may inject additional system messages
+    // (e.g. sender context for unknown senders). This test verifies the pipeline
+    // shape, not the exact system message count.
     expect(mockProvider.chat).toHaveBeenCalledWith(
       expect.objectContaining({
-        messages: [
+        messages: expect.arrayContaining([
           { role: 'system', content: expect.stringContaining('You are a helpful assistant.') },
           { role: 'user', content: 'Good morning!' },
-        ],
+        ]),
       }),
     );
 
@@ -129,17 +129,14 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
   });
 });
 
-describe('Vertical Slice: Unknown sender email → hold_and_notify', () => {
-  it('holds the message, fires contact.unknown with correct routingDecision and score, suppresses agent.task', async () => {
+describe('Vertical Slice: Unknown sender email → low-trust routing', () => {
+  it('routes unknown sender to coordinator in low-trust mode, fires contact.unknown with routingDecision=allow', async () => {
+    // #947: unknown senders are no longer held. They route to the coordinator with
+    // a LOW-TRUST SENDER authorization block injected by runtime.ts.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
 
-    // In-memory held messages — same interface as the real Postgres backend.
-    const heldMessages = HeldMessageService.createInMemory();
-
     // Mock resolver: always returns unknown sender.
-    // We test the dispatcher + HeldMessageService interaction here, not contact resolution.
-    // ContactResolver is a class, not an interface — cast via unknown to satisfy TypeScript.
     const mockResolver: ContactResolver = {
       resolve: vi.fn().mockResolvedValue({
         resolved: false,
@@ -152,18 +149,13 @@ describe('Vertical Slice: Unknown sender email → hold_and_notify', () => {
       bus,
       logger,
       contactResolver: mockResolver,
-      heldMessages,
-      channelPolicies: { email: { trust: 'low', unknownSender: 'hold_and_notify', threaded: true } },
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
     });
     dispatcher.register();
 
-    // Capture events
     const unknownEvents: ContactUnknownEvent[] = [];
-    const heldEvents: MessageHeldEvent[] = [];
     const taskEvents: AgentTaskEvent[] = [];
-
     bus.subscribe('contact.unknown', 'system', (e) => { unknownEvents.push(e as ContactUnknownEvent); });
-    bus.subscribe('message.held', 'channel', (e) => { heldEvents.push(e as MessageHeldEvent); });
     bus.subscribe('agent.task', 'agent', (e) => { taskEvents.push(e as AgentTaskEvent); });
 
     await bus.publish('channel', createInboundMessage({
@@ -173,27 +165,16 @@ describe('Vertical Slice: Unknown sender email → hold_and_notify', () => {
       content: 'Hey, can we talk?',
     }));
 
-    // Message must NOT reach the coordinator
-    expect(taskEvents).toHaveLength(0);
+    // Message routes to the coordinator (low-trust mode), not held
+    expect(taskEvents).toHaveLength(1);
 
-    // contact.unknown event must carry the correct audit fields
+    // contact.unknown event fires with audit fields and routingDecision=allow
     expect(unknownEvents).toHaveLength(1);
     expect(unknownEvents[0]!.payload.channel).toBe('email');
     expect(unknownEvents[0]!.payload.senderId).toBe('stranger@example.com');
     expect(unknownEvents[0]!.payload.channelTrustLevel).toBe('low');
     // email low channel (0.3 * 0.4 = 0.12) + unknown sender (0.0 * 0.4 = 0.0) = 0.12
     expect(unknownEvents[0]!.payload.messageTrustScore).toBeCloseTo(0.12);
-    expect(unknownEvents[0]!.payload.routingDecision).toBe('hold_and_notify');
-
-    // message.held event must fire with correct identifiers
-    expect(heldEvents).toHaveLength(1);
-    expect(heldEvents[0]!.payload.channel).toBe('email');
-    expect(heldEvents[0]!.payload.senderId).toBe('stranger@example.com');
-
-    // The message must be retrievable from the held messages store
-    const pending = await heldMessages.listPending('email');
-    expect(pending).toHaveLength(1);
-    expect(pending[0]!.senderId).toBe('stranger@example.com');
-    expect(pending[0]!.content).toBe('Hey, can we talk?');
+    expect(unknownEvents[0]!.payload.routingDecision).toBe('allow');
   });
 });

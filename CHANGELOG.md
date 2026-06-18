@@ -18,6 +18,18 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Escalation-line policy judge** — LLM-powered classifier that maps `tier` × disclosure-sensitivity / action-consequence → allow / escalate; policy is deterministic code, LLM does only the natural-language classification; fail-closed by design. (#948)
 - **Contact/KG boundary enforcement** — business email senders are now routed to existing or new organization KG nodes (`kind = organization`) instead of always minting a person node; personal webmail domains and `first.last` address patterns remain person-typed. (#946)
 
+### Changed
+
+- **Unknown senders route to coordinator in low-trust mode** — messages from unrecognized senders are no longer held for CEO review. Instead they route directly to the coordinator, which applies read-only behavioral constraints: it may reply or ask a clarifying question, but may not take actions, share principal context, or reveal the restrictions. (#947)
+- **`hold_and_notify` policy removed** — `UnknownSenderPolicy` now accepts only `allow` (default) or `ignore`. Both email and Signal channels default to `allow`. The coordinator's "Low-trust senders" section replaces the old "Held messages" workflow guidance.
+- **Auto-created contacts use `tier='unknown'`** — email and Signal adapters now create contacts at `tier='unknown'` (was `status='provisional'`) when a new sender is seen for the first time.
+
+### Removed
+
+- **`HeldMessageService`, `held-messages-list`, `held-messages-process`** — hold machinery fully deleted. The `held_messages` DB table is orphaned for cleanup in #955. (#947)
+- **Thread-originated trust bypass** — removed `hasOutboundToRecipientInConversation()` and `promoteToConfirmedByThreadTrust()` from the dispatcher; outbound-gateway already elevates `tier='known'` at send time, making the bypass redundant. (#947)
+- **`trust_score_floor`** — removed from dispatcher config and `config/default.yaml`. (#947)
+
 ### Fixed
 
 - **Identity-less contacts demoted** — migration 056 removes the 23 contact rows that had no channel identity (knowledge preserved in KG nodes) and backfills `kg_node_id` for the 19 contacts missing it. (#946)

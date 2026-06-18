@@ -54,7 +54,7 @@ export interface SkillManifest {
    *  a fixed allowlist at startup and rejects unknown names.
    *  The manifest is frozen after loading — capabilities cannot be mutated at runtime.
    *
-   *  Valid capabilities: bus, agentRegistry, outboundGateway, heldMessages,
+   *  Valid capabilities: bus, agentRegistry, outboundGateway,
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, skillSearch,
    *  actionLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
@@ -159,8 +159,6 @@ export interface SkillContext {
    *  All external communication (email, future Signal/Telegram) goes through the gateway,
    *  which enforces contact blocked checks and content filtering. */
   outboundGateway?: import('./outbound-gateway.js').OutboundGateway;
-  /** Held message service — available to skills declaring 'heldMessages' in capabilities */
-  heldMessages?: import('../contacts/held-messages.js').HeldMessageService;
   /** Scheduler service — available to skills declaring 'schedulerService' in capabilities */
   schedulerService?: import('../scheduler/scheduler-service.js').SchedulerService;
   /** Entity memory (knowledge graph) — available to skills declaring 'entityMemory' in capabilities.

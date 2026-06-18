@@ -57,8 +57,10 @@ describe('Multi-turn conversation with working memory', () => {
       content: 'Hello',
     }));
 
-    // First LLM call: system + user message only (no history yet)
-    expect(llmCalls[0]?.messages).toHaveLength(2);
+    // First LLM call: system + user message (plus any injected system messages — don't count them)
+    const firstMessages = llmCalls[0]?.messages as Array<{ role: string; content: string }>;
+    expect(firstMessages.filter(m => m.role === 'user')).toHaveLength(1);
+    expect(firstMessages.filter(m => m.role === 'assistant')).toHaveLength(0);
 
     // --- Second message (same conversation) ---
     await bus.publish('channel', createInboundMessage({
@@ -68,8 +70,10 @@ describe('Multi-turn conversation with working memory', () => {
       content: 'Follow-up question',
     }));
 
-    // Second LLM call: system + first user + first assistant + second user
-    expect(llmCalls[1]?.messages).toHaveLength(4);
+    // Second LLM call: includes history (first user + first assistant) plus new user message
+    const secondMessages = llmCalls[1]?.messages as Array<{ role: string; content: string }>;
+    expect(secondMessages.filter(m => m.role === 'user')).toHaveLength(2);
+    expect(secondMessages.filter(m => m.role === 'assistant')).toHaveLength(1);
 
     // Verify both responses arrived
     expect(outbound).toHaveLength(2);
