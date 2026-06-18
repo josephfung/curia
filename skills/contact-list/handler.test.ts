@@ -1,25 +1,40 @@
 // handler.test.ts — tests for contact-list skill.
 // Covers: no filters, status filter, limit, offset, status+limit+offset, role (existing),
-// invalid status, invalid limit, invalid offset.
+// invalid status, invalid limit, invalid offset, kind filter (new).
 import { describe, it, expect, vi } from 'vitest';
 import { ContactListHandler } from './handler.js';
 import type { SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { Contact } from '../../src/contacts/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 
-// Factory for minimal Contact objects — only fields the handler reads
+// Factory for minimal Contact objects — only fields the handler reads.
+// Defaults kind to 'person' and tier to 'known' so contacts pass the default kind filter.
 function makeContact(overrides: Partial<Contact> & { id: string; displayName: string }): Contact {
   return {
     kgNodeId: null,
     role: null,
     systemRole: null,
     status: 'confirmed',
+    tier: 'known',
+    kind: 'person',
     contactConfidence: 0.5,
     trustLevel: null,
     lastSeenAt: null,
     inboundMessageCount: 0,
     outboundMessageCount: 0,
     notes: null,
+    preferredName: null,
+    title: null,
+    organization: null,
+    primaryEmail: null,
+    primaryPhone: null,
+    timezone: null,
+    locale: null,
+    location: null,
+    pronouns: null,
+    linkedinUrl: null,
+    bio: null,
+    birthday: null,
     createdAt: new Date('2026-01-01'),
     updatedAt: new Date('2026-01-01'),
     ...overrides,
@@ -38,10 +53,14 @@ function makeCtx(input: Record<string, unknown> = {}, contacts: Contact[] = allC
     input,
     log: createSilentLogger(),
     contactService: {
-      listContacts: vi.fn().mockImplementation((filters?: { status?: string; limit?: number; offset?: number }) => {
+      listContacts: vi.fn().mockImplementation((filters?: { status?: string; kind?: string[]; limit?: number; offset?: number }) => {
         let results = [...contacts];
         if (filters?.status) {
           results = results.filter((c) => c.status === filters.status);
+        }
+        // Filter by kind when specified — mirrors the backend's inclusion semantics
+        if (filters?.kind != null && filters.kind.length > 0) {
+          results = results.filter((c) => filters.kind!.includes(c.kind));
         }
         // Sort ascending by createdAt to match real backend
         results.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
@@ -73,6 +92,7 @@ describe('ContactListHandler', () => {
     expect(getContacts(result)).toHaveLength(4);
     expect(ctx.contactService!.listContacts).toHaveBeenCalledWith({
       status: undefined,
+      kind: ['person', 'principal', 'organization'],
       limit: undefined,
       offset: undefined,
     });
@@ -328,5 +348,61 @@ describe('ContactListHandler', () => {
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('contactService not available');
+  });
+});
+
+// ---- kind filter tests ----
+//
+// Uses a lighter-weight makeCtx that accepts raw objects so the kind field can
+// be set freely without satisfying the full Contact interface.
+
+function makeKindCtx(input: Record<string, unknown>, contacts: unknown[]): SkillContext {
+  return {
+    input,
+    log: createSilentLogger(),
+    contactService: {
+      findContactByRole: async () => [],
+      listContacts: async (filters?: { kind?: string[]; status?: string; limit?: number; offset?: number }) => {
+        // Return only contacts whose kind is in the filter (or all if no filter)
+        return contacts.filter((c: unknown) => {
+          const contact = c as { kind?: string };
+          return !filters?.kind || filters.kind.includes(contact.kind ?? '');
+        });
+      },
+    },
+  } as unknown as SkillContext;
+}
+
+const personContact = { id: '1', displayName: 'Alice', role: null, status: 'confirmed', kgNodeId: null, kind: 'person' };
+const automatedContact = { id: '2', displayName: 'GitHub Notifications', role: null, status: 'confirmed', kgNodeId: null, kind: 'automated' };
+const agentContact = { id: '3', displayName: 'Curia Agent', role: null, status: 'confirmed', kgNodeId: null, kind: 'agent' };
+const orgContact = { id: '4', displayName: 'Stripe', role: null, status: 'confirmed', kgNodeId: null, kind: 'organization' };
+
+describe('ContactListHandler — kind filter', () => {
+  it('excludes automated and agent contacts by default (no kind param)', async () => {
+    const handler = new ContactListHandler();
+    const result = await handler.execute(makeKindCtx({}, [personContact, automatedContact, agentContact, orgContact]));
+    expect(result.success).toBe(true);
+    const ids = (result as { success: true; data: { contacts: Array<{ contact_id: string }> } }).data.contacts.map((c) => c.contact_id);
+    expect(ids).toContain('1'); // person
+    expect(ids).toContain('4'); // organization
+    expect(ids).not.toContain('2'); // automated excluded
+    expect(ids).not.toContain('3'); // agent excluded
+  });
+
+  it('returns automated contacts when kind=automated is explicitly requested', async () => {
+    const handler = new ContactListHandler();
+    const result = await handler.execute(makeKindCtx({ kind: 'automated' }, [personContact, automatedContact]));
+    expect(result.success).toBe(true);
+    const ids = (result as { success: true; data: { contacts: Array<{ contact_id: string }> } }).data.contacts.map((c) => c.contact_id);
+    expect(ids).toContain('2');
+    expect(ids).not.toContain('1'); // person not in automated filter
+  });
+
+  it('rejects an invalid kind value', async () => {
+    const handler = new ContactListHandler();
+    const result = await handler.execute(makeKindCtx({ kind: 'invisible' }, []));
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/Invalid kind/);
   });
 });

@@ -1,33 +1,37 @@
 // handler.ts — contact-list skill implementation.
 //
-// Lists contacts, optionally filtered by role or status, with optional result limit.
-// Returns an array of contact summaries.
+// Lists contacts, optionally filtered by role, status, or kind, with optional
+// result limit. Returns an array of contact summaries.
 //
-// This skill uses contactService, which is a universal service.
+// Default behavior: excludes kind='automated' and kind='agent' from results.
+// Pass kind='automated' or kind='agent' explicitly to include them.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import type { ContactStatus } from '../../src/contacts/types.js';
+import type { ContactStatus, ContactKind } from '../../src/contacts/types.js';
 
 const VALID_STATUSES: readonly ContactStatus[] = ['confirmed', 'provisional', 'blocked'];
+const VALID_KINDS: readonly ContactKind[] = ['person', 'organization', 'automated', 'principal', 'agent'];
+
+// Default People-view filter: excludes automated and agent contacts.
+const DEFAULT_KIND_FILTER: ContactKind[] = ['person', 'principal', 'organization'];
 
 export class ContactListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    // Cast through unknown per repo convention for narrowing from Record<string, unknown>
-    const { role, status, limit, offset } = ctx.input as unknown as {
+    const { role, status, kind: kindInput, limit, offset } = ctx.input as unknown as {
       role?: string;
       status?: string;
+      kind?: string | string[];
       limit?: number;
       offset?: number;
     };
 
-    // Input validation
+    // ---- Input validation ----
+
     if (role && typeof role === 'string' && role.length > 200) {
       return { success: false, error: 'Role must be 200 characters or fewer' };
     }
 
-    // Guard against a common LLM mistake: passing a lifecycle status as the role parameter.
-    // The role filter searches job titles (e.g. "CEO"); lifecycle filtering uses status.
-    // Normalize before comparing so casing/whitespace variants ("Provisional", " blocked") are caught too.
+    // Guard against LLM mistake: passing a lifecycle status as the role param.
     const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : undefined;
     if (normalizedRole && (VALID_STATUSES as readonly string[]).includes(normalizedRole)) {
       return {
@@ -40,6 +44,20 @@ export class ContactListHandler implements SkillHandler {
       return { success: false, error: `Invalid status: "${status}". Must be one of: ${VALID_STATUSES.join(', ')}` };
     }
 
+    // Parse kind: accept a single string or comma-separated list.
+    let kindFilter: ContactKind[] | undefined;
+    if (kindInput != null) {
+      const rawKinds = Array.isArray(kindInput)
+        ? kindInput
+        : String(kindInput).split(',').map((k) => k.trim());
+      for (const k of rawKinds) {
+        if (!(VALID_KINDS as readonly string[]).includes(k)) {
+          return { success: false, error: `Invalid kind: "${k}". Must be one of: ${VALID_KINDS.join(', ')}` };
+        }
+      }
+      kindFilter = rawKinds as ContactKind[];
+    }
+
     if (limit != null) {
       if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
         return { success: false, error: 'Limit must be a positive integer' };
@@ -50,20 +68,15 @@ export class ContactListHandler implements SkillHandler {
       if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
         return { success: false, error: 'Offset must be a non-negative integer' };
       }
-      // Require limit when offset > 0 to prevent accidentally returning an unbounded
-      // result set starting from the middle of the table.
       if (offset > 0 && limit == null) {
         return { success: false, error: 'Offset requires limit to be set. Use limit together with offset for pagination.' };
       }
     }
 
-    // Role uses a separate query path that doesn't support status/limit/offset — reject the combination
-    // rather than silently dropping filters.
     if (role && typeof role === 'string' && (status != null || limit != null || offset != null)) {
       return { success: false, error: 'Cannot combine role filter with status, limit, or offset. Use role alone, or status/limit/offset without role.' };
     }
 
-    // contactService is a universal service — always injected by ExecutionLayer
     if (!ctx.contactService) {
       return {
         success: false,
@@ -71,14 +84,20 @@ export class ContactListHandler implements SkillHandler {
       };
     }
 
-    ctx.log.info({ role: role ?? '(all)', status: status ?? '(all)', limit: limit ?? '(none)', offset: offset ?? 0 }, 'Listing contacts');
+    // When no kind is specified, default to the People view (excludes automated and agent).
+    const effectiveKindFilter = kindFilter ?? DEFAULT_KIND_FILTER;
+
+    ctx.log.info(
+      { role: role ?? '(all)', status: status ?? '(all)', kind: effectiveKindFilter, limit: limit ?? '(none)', offset: offset ?? 0 },
+      'Listing contacts',
+    );
 
     try {
-      // Role filter uses the dedicated findContactByRole path (no change from existing behavior)
       const contacts = role && typeof role === 'string'
         ? await ctx.contactService.findContactByRole(role)
         : await ctx.contactService.listContacts({
             status: status as ContactStatus | undefined,
+            kind: effectiveKindFilter,
             limit,
             offset,
           });
