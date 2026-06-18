@@ -116,22 +116,23 @@ describe('ContactService', () => {
       expect(contact.kind).toBe('person');
     });
 
-    it('creates organization contact for noreply business address and new org node', async () => {
+    it('creates automated contact for noreply address and skips org KG node creation', async () => {
+      // noreply@ matches AUTOMATED_LOCAL_RE → kind='automated', no org node
       const contact = await service.createContact({
         displayName: 'GitHub',
         primaryEmail: 'noreply@github.com',
         source: 'email_participant',
         status: 'provisional',
       });
-      expect(contact.kind).toBe('organization');
-      expect(contact.kgNodeId).toBeDefined();
-
-      const orgNodes = await entityMemory.findEntities('GitHub');
-      expect(orgNodes).toHaveLength(1);
-      expect(orgNodes[0]!.type).toBe('organization');
+      expect(contact.kind).toBe('automated');
+      // resolveOrCreateOrgNode is skipped — the person-node fallback creates a
+      // person-type KG node (not an org node) to hold the contact's KG link.
+      const allNodes = await entityMemory.findEntities('GitHub');
+      expect(allNodes.every(n => n.type !== 'organization')).toBe(true);
     });
 
-    it('creates organization contact for notifications address and derives label from domain when name is email-shaped', async () => {
+    it('creates automated contact for notifications address and skips org KG node', async () => {
+      // notifications@ matches AUTOMATED_LOCAL_RE → kind='automated', no org node
       const contact = await service.createContact({
         // When the sender has no name the display name is the email address itself
         displayName: 'notifications@stripe.com',
@@ -140,16 +141,14 @@ describe('ContactService', () => {
         source: 'email_participant',
         status: 'provisional',
       });
-      expect(contact.kind).toBe('organization');
-
-      // Label should be derived from domain, not from the email-shaped display name
+      expect(contact.kind).toBe('automated');
+      // Org node creation is skipped for automated senders; no Stripe org node
       const stripeNodes = await entityMemory.findEntities('Stripe');
-      expect(stripeNodes).toHaveLength(1);
-      expect(stripeNodes[0]!.type).toBe('organization');
+      expect(stripeNodes).toHaveLength(0);
     });
 
-    it('links to existing org node when domain matches', async () => {
-      // Pre-existing org node labeled with the domain
+    it('does not link to existing org node for noreply (automated) email', async () => {
+      // Even if an org node exists, automated senders bypass resolveOrCreateOrgNode
       const { entity: existingOrg } = await entityMemory.createEntity({
         type: 'organization',
         label: 'github.com',
@@ -164,8 +163,10 @@ describe('ContactService', () => {
         status: 'provisional',
       });
 
-      expect(contact.kind).toBe('organization');
-      expect(contact.kgNodeId).toBe(existingOrg.id);
+      // Automated short-circuit: kind='automated', kgNodeId comes from person-node fallback
+      expect(contact.kind).toBe('automated');
+      // The existing org node is NOT used
+      expect(contact.kgNodeId).not.toBe(existingOrg.id);
     });
 
     it('links to existing org node when display name matches', async () => {
@@ -221,19 +222,16 @@ describe('ContactService', () => {
       expect(contact.kind).toBe('person');
     });
 
-    it('org routing overrides explicit kind for org-classified emails', async () => {
-      // A caller can still override kind explicitly
+    it('automated short-circuit takes precedence over caller-supplied kind for automated emails', async () => {
+      // noreply@ classifies as 'automated' — the automated short-circuit fires before
+      // resolveOrCreateOrgNode is called, so kind='automated' regardless of caller input.
       const contact = await service.createContact({
         displayName: 'Automated Bot',
         primaryEmail: 'noreply@example.com',
         kind: 'automated',
         source: 'test',
       });
-      // resolveOrCreateOrgNode classifies as org and sets kind='organization';
-      // explicit caller kind only wins when no org routing happened (person path)
-      // — the org routing overrides caller kind when it fires.
-      // This test documents the current behavior: org routing takes precedence.
-      expect(contact.kind).toBe('organization');
+      expect(contact.kind).toBe('automated');
     });
   });
 
