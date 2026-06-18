@@ -57,7 +57,7 @@ import type { ChannelIdentity, Contact } from './contacts/types.js';
 import { ConfidencePipeline } from './contacts/confidence-pipeline.js';
 import { DedupService } from './contacts/dedup-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
-import { createContactDuplicateDetected, createContactMerged } from './bus/events.js';
+import { createContactDuplicateDetected, createContactElevated, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
 import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
@@ -577,6 +577,12 @@ async function main(): Promise<void> {
       });
       bus.publish('dispatch', event).catch((err: unknown) =>
         logger.error({ err }, 'Failed to publish contact.merged — audit trail may be incomplete'),
+      );
+    },
+    onContactElevated: (contactId, reason) => {
+      const event = createContactElevated({ contactId, reason });
+      bus.publish('dispatch', event).catch((err: unknown) =>
+        logger.error({ err }, 'Failed to publish contact.elevated — audit trail may be incomplete'),
       );
     },
   });
@@ -1899,6 +1905,7 @@ async function main(): Promise<void> {
     trustScorerWeights,
     maxMessageBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
     confidencePipeline,
+    contactService,
     selfEmail: resolvedEmailAccounts[0]?.selfEmail,
     outboundContextService,
   });

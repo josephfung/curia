@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Auto-elevation** — contacts are automatically promoted from `tier='unknown'` to `tier='known'` via three signal paths: correspondence (outbound email sent to the contact), domain-validated (first inbound from an org-kind contact), and judgment (confidence score crosses the 0.20 threshold). New `contact.elevated` bus event for the audit trail. Automated and agent contacts are excluded at the database layer. (#951)
 - **Automated sender classification** — `classifyEmailSender()` now detects noreply/mailer-daemon/newsletter patterns and sets `kind='automated'`; new contacts skip the KG org-node path. (#953)
 - **`contact-list` skill `kind` filter** — accepts `kind` to filter by contact kind; default view excludes `automated` and `agent`. (#953)
 
