@@ -15,7 +15,6 @@ function createMockBus() {
 
 const defaultConfig = {
   enabled: true,
-  trust_override: ['ceo'],
   default: 'block' as const,
   channel_policies: {
     email: { allow: ['email'] },
@@ -43,7 +42,7 @@ describe('PiiRedactor', () => {
   });
 
   it('redacts a credit card number on email channel', async () => {
-    const result = await redactor.redact('Your card is 4111 1111 1111 1111.', 'email', 'medium');
+    const result = await redactor.redact('Your card is 4111 1111 1111 1111.', 'email');
     expect(result.content).toContain('[REDACTED: CREDIT_CARD]');
     expect(result.content).not.toContain('4111');
     expect(result.redactions).toHaveLength(1);
@@ -51,21 +50,15 @@ describe('PiiRedactor', () => {
   });
 
   it('allows email addresses in email channel (in allow list)', async () => {
-    const result = await redactor.redact('Contact user@example.com for help.', 'email', 'medium');
+    const result = await redactor.redact('Contact user@example.com for help.', 'email');
     expect(result.content).toContain('user@example.com');
     expect(result.redactions).toHaveLength(0);
   });
 
   it('redacts email addresses in signal channel (not in allow list)', async () => {
-    const result = await redactor.redact('Contact user@example.com for help.', 'signal', 'medium');
+    const result = await redactor.redact('Contact user@example.com for help.', 'signal');
     expect(result.content).toContain('[REDACTED:');
     expect(result.content).not.toContain('user@example.com');
-  });
-
-  it('bypasses redaction for CEO trust level', async () => {
-    const result = await redactor.redact('Your card is 4111 1111 1111 1111.', 'email', 'ceo');
-    expect(result.content).toContain('4111 1111 1111 1111');
-    expect(result.redactions).toHaveLength(0);
   });
 
   it('bypasses redaction when disabled', async () => {
@@ -75,25 +68,25 @@ describe('PiiRedactor', () => {
       logger,
       extraPatterns: [],
     });
-    const result = await disabled.redact('Card: 4111 1111 1111 1111', 'email', 'medium');
+    const result = await disabled.redact('Card: 4111 1111 1111 1111', 'email');
     expect(result.content).toContain('4111');
   });
 
   it('blocks all PII on unlisted channels (default: block)', async () => {
     // 'sms' is not in channel_policies; default is 'block', so email PII must be redacted
-    const result = await redactor.redact('Contact user@example.com', 'sms', 'medium');
+    const result = await redactor.redact('Contact user@example.com', 'sms');
     expect(result.content).toContain('[REDACTED:');
   });
 
   it('returns original content when no PII detected', async () => {
     const text = 'Just a normal message.';
-    const result = await redactor.redact(text, 'email', 'medium');
+    const result = await redactor.redact(text, 'email');
     expect(result.content).toBe(text);
     expect(result.redactions).toHaveLength(0);
   });
 
   it('does not publish bus event when no redactions', async () => {
-    await redactor.redact('Clean message', 'email', 'medium');
+    await redactor.redact('Clean message', 'email');
     expect(mockBusPublish).not.toHaveBeenCalled();
   });
 
@@ -101,18 +94,12 @@ describe('PiiRedactor', () => {
     await redactor.redact(
       'Card: 4111 1111 1111 1111',
       'email',
-      'medium',
       { conversationId: 'conv-1', recipientId: 'r@example.com' },
     );
     expect(mockBusPublish).toHaveBeenCalledWith(
       'dispatch',
       expect.objectContaining({ type: 'outbound.pii-redacted' }),
     );
-  });
-
-  it('does not publish bus event for CEO bypass', async () => {
-    await redactor.redact('Card: 4111 1111 1111 1111', 'email', 'ceo');
-    expect(mockBusPublish).not.toHaveBeenCalled();
   });
 
   it('bypasses redaction when recipientContactId matches ceoContactId', async () => {
@@ -126,11 +113,10 @@ describe('PiiRedactor', () => {
       ceoContactId: ceoUUID,
     });
 
-    // Recipient is CEO — should pass through unredacted even with null trust level
+    // Recipient is CEO — should pass through unredacted via structural UUID bypass.
     const result = await redactorWithCeoId.redact(
       'Your card is 4111 1111 1111 1111.',
       'email',
-      null, // trust level unknown — UUID check must be sufficient
       { recipientContactId: ceoUUID },
     );
     expect(result.content).toContain('4111 1111 1111 1111');
@@ -152,20 +138,14 @@ describe('PiiRedactor', () => {
     const result = await redactorWithCeoId.redact(
       'Your card is 4111 1111 1111 1111.',
       'email',
-      'medium',
       { recipientContactId: 'ffffffff-ffff-ffff-ffff-ffffffffffff' },
     );
     expect(result.content).toContain('[REDACTED: CREDIT_CARD]');
     expect(result.redactions).toHaveLength(1);
   });
 
-  it('null trust level is treated as untrusted (PII redacted)', async () => {
-    const result = await redactor.redact('Card: 4111 1111 1111 1111', 'email', null);
-    expect(result.content).toContain('[REDACTED:');
-  });
-
   it('redaction entries do not contain the original PII value', async () => {
-    const result = await redactor.redact('Card: 4111 1111 1111 1111', 'email', 'medium');
+    const result = await redactor.redact('Card: 4111 1111 1111 1111', 'email');
     expect(JSON.stringify(result.redactions)).not.toContain('4111');
   });
 
@@ -175,7 +155,6 @@ describe('PiiRedactor', () => {
     const result = await redactor.redact(
       'Card: 4111 1111 1111 1111 and call +1 (555) 867-5309.',
       'signal',
-      'medium',
     );
     expect(result.content).not.toContain('4111');
     expect(result.content).not.toContain('867-5309');
@@ -205,7 +184,6 @@ describe('PiiRedactor', () => {
     const result = await redactorWithAllowDefault.redact(
       'Contact user@example.com',
       'email',
-      'medium',
     );
     // email channel has explicit policy with empty allow list → redacted despite default: 'allow'
     expect(result.content).toContain('[REDACTED:');

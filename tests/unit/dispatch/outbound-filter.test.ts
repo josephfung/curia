@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
 import type { OutboundJudge } from '../../../src/dispatch/outbound-judge.js';
 import type { FilterRecipient } from '../../../src/dispatch/outbound-filter.js';
+import type { EscalationJudge, EscalationVerdict } from '../../../src/autonomy/escalation-judge.js';
 
 const armin: FilterRecipient = { email: 'armin@external.com', isPrincipal: false };
 const principalRcpt: FilterRecipient = { email: 'ceo@example.com', isPrincipal: true };
@@ -29,7 +30,7 @@ const BASE_INPUT = {
   recipientEmail: 'recipient@external.com',
   conversationId: 'conv-123',
   channelId: 'email',
-  recipientTrustLevel: null,
+  recipientTier: 'unknown' as const,
 };
 
 describe('OutboundContentFilter', () => {
@@ -229,7 +230,7 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTier: 'unknown',
       });
       expect(result.passed).toBe(false);
       expect(result.findings).toEqual(
@@ -271,7 +272,7 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTier: 'unknown',
       });
       // "Test Agent" alone is fine — only "You are Test Agent" triggers
       expect(result.passed).toBe(true);
@@ -284,7 +285,7 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTier: 'unknown',
       });
       expect(result.passed).toBe(true);
     });
@@ -296,7 +297,7 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTier: 'unknown',
       });
       expect(result.passed).toBe(true);
     });
@@ -308,7 +309,7 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTier: 'unknown',
       });
       expect(result.passed).toBe(true);
     });
@@ -320,7 +321,7 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTier: 'unknown',
       });
       expect(result.passed).toBe(true);
     });
@@ -332,7 +333,7 @@ describe('OutboundContentFilter', () => {
         recipientEmail: 'alice@example.com',
         conversationId: 'email:thread-1',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTier: 'unknown',
       });
       expect(result.passed).toBe(true);
     });
@@ -376,12 +377,12 @@ describe('OutboundContentFilter', () => {
     });
   });
 
-  describe('contact-data-leak recipient trust level policy', () => {
-    // These tests exercise the contact-data-leak rule introduced in issue #210.
-    // The rule uses a single axis: recipient trust level.
+  describe('contact-data-leak recipient tier policy', () => {
+    // These tests exercise the contact-data-leak rule keyed on recipient tier (issue #949).
+    // The rule uses ContactTier as its single axis:
     //
-    // Block condition: third-party email AND !recipientIsTrusted
-    // Allow condition: no third-party email OR recipientIsTrusted (meetsMinimumTrust(trustLevel, 'high'))
+    // Block condition: third-party email AND tier < 'trusted'
+    // Allow condition: no third-party email OR tier >= 'trusted' (trusted / principal)
     //
     // The trigger source (routine vs user-initiated) is irrelevant — trusted recipients
     // may receive third-party contact data in both scheduled routines (daily briefing with
@@ -389,106 +390,106 @@ describe('OutboundContentFilter', () => {
 
     const THIRD_PARTY_EMAIL = 'hamilton.petropoulos@generationcapital.com';
 
-    it('allows a routine message to the CEO containing a third-party email (daily briefing)', async () => {
+    it('allows a routine message to the principal containing a third-party email (daily briefing)', async () => {
       const filter = createTestFilter();
-      // Daily briefing to CEO lists a calendar attendee's email — allowed (CEO is trusted).
-      // Migration 030 ensures the CEO contact always has trustLevel='ceo' in the DB,
-      // so the contact resolver provides recipientTrustLevel: 'ceo' at runtime.
+      // Daily briefing to CEO lists a calendar attendee's email — allowed (principal tier).
+      // The CEO contact has tier='principal' in the DB (set by ensure-principal.ts).
       const result = await filter.check({
         content: `Here is your daily briefing. Your 2pm meeting includes ${THIRD_PARTY_EMAIL}.`,
         recipientEmail: 'ceo@example.com',
         conversationId: 'scheduler:job-1:run-1',
         channelId: 'email',
-        recipientTrustLevel: 'ceo',
+        recipientTier: 'principal',
       });
       expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
     });
 
-    it('allows a user-initiated response to the CEO containing a third-party email', async () => {
+    it('allows a user-initiated response to the principal containing a third-party email', async () => {
       const filter = createTestFilter();
-      // CEO asked "what is Hamilton's email?" — should be allowed.
-      // Migration 030 ensures the CEO contact always has trustLevel='ceo' in the DB,
-      // so the contact resolver provides recipientTrustLevel: 'ceo' at runtime.
+      // CEO asked "what is Hamilton's email?" — allowed for principal tier.
       const result = await filter.check({
         content: `Hamilton's email is ${THIRD_PARTY_EMAIL}.`,
         recipientEmail: 'ceo@example.com',
         conversationId: 'conv-123',
         channelId: 'email',
-        recipientTrustLevel: 'ceo',
+        recipientTier: 'principal',
       });
       expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
     });
 
-    it('allows a routine message to a high-trust contact containing a third-party email', async () => {
+    it('allows a routine message to a trusted contact containing a third-party email', async () => {
       const filter = createTestFilter();
-      // Trusted EA receives a scheduled report with attendee emails — allowed.
+      // Trusted EA receives a scheduled report with attendee emails — allowed (tier='trusted').
       const result = await filter.check({
         content: `Scheduled report: attendees include ${THIRD_PARTY_EMAIL}.`,
         recipientEmail: 'ea@example.com',
         conversationId: 'scheduler:job-2:run-1',
         channelId: 'email',
-        recipientTrustLevel: 'high',
+        recipientTier: 'trusted',
       });
       expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
     });
 
-    it('allows a user-initiated response to a high-trust contact containing a third-party email', async () => {
+    it('allows a user-initiated response to a trusted contact containing a third-party email', async () => {
       const filter = createTestFilter();
-      // CEO's EA asked for a board member's email — EA has trustLevel='high'.
+      // CEO's EA asked for a board member's email — EA has tier='trusted'.
       const result = await filter.check({
         content: `The board member's contact is ${THIRD_PARTY_EMAIL}.`,
         recipientEmail: 'ea@example.com',
         conversationId: 'conv-456',
         channelId: 'email',
-        recipientTrustLevel: 'high',
+        recipientTier: 'trusted',
       });
       expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
     });
 
-    it('blocks a response to an untrusted external recipient containing a third-party email', async () => {
+    it('blocks a response to an unknown recipient containing a third-party email', async () => {
       const filter = createTestFilter();
-      // We never send third-party contact data to an untrusted external party.
+      // 'unknown' tier: no third-party contact data may be disclosed.
       const result = await filter.check({
         content: `You can also reach ${THIRD_PARTY_EMAIL} for follow-ups.`,
-        recipientEmail: 'untrusted@external.com',
+        recipientEmail: 'unknown@external.com',
         conversationId: 'conv-789',
         channelId: 'email',
-        recipientTrustLevel: null,
+        recipientTier: 'unknown',
       });
       expect(result.passed).toBe(false);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(true);
     });
 
-    it('blocks a response to a medium-trust contact containing a third-party email', async () => {
+    it('blocks a response to a known contact containing a third-party email', async () => {
       const filter = createTestFilter();
-      // trustLevel='medium' does not qualify — only 'high' is trusted for this purpose.
+      // 'known' tier does not qualify for third-party email disclosure — only 'trusted'
+      // and above. Per DISCLOSURE_ALLOWED, 'known' receives public + principal-context only.
       const result = await filter.check({
         content: `Attendee: ${THIRD_PARTY_EMAIL}`,
-        recipientEmail: 'medium@example.com',
+        recipientEmail: 'known@example.com',
         conversationId: 'conv-999',
         channelId: 'email',
-        recipientTrustLevel: 'medium',
+        recipientTier: 'known',
       });
       expect(result.passed).toBe(false);
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(true);
     });
 
-    it('allows third-party emails when recipient trust level is ceo', async () => {
+    it('blocks a response to a blocked contact containing any third-party email', async () => {
       const filter = createTestFilter();
-      // trustLevel='ceo' meets or exceeds 'high' — meetsMinimumTrust('ceo', 'high') is true.
-      // This test ensures the CEO is trusted via trust level rather than email comparison.
+      // 'blocked' tier: below 'trusted', so third-party emails are blocked.
+      // In practice the gateway rejects blocked contacts before reaching the filter,
+      // but the filter enforces the policy independently as a belt-and-suspenders guard.
       const result = await filter.check({
-        content: 'Please contact hamilton@other.org for details.',
-        recipientEmail: 'recipient@example.com',
-        conversationId: 'conv-1',
+        content: `Please contact ${THIRD_PARTY_EMAIL}`,
+        recipientEmail: 'blocked@example.com',
+        conversationId: 'conv-blocked',
         channelId: 'email',
-        recipientTrustLevel: 'ceo',
+        recipientTier: 'blocked',
       });
-      expect(result.passed).toBe(true);
+      expect(result.passed).toBe(false);
+      expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(true);
     });
   });
 });
@@ -545,5 +546,107 @@ describe('Stage 2 judge delegation', () => {
       content: 'Friday 2 PM works. I will send a calendar invite shortly.',
     });
     expect(result.passed).toBe(true);
+  });
+});
+
+describe('Stage 2.5 escalation judge delegation', () => {
+  function filterWithEscalationJudge(judge: EscalationJudge): OutboundContentFilter {
+    return new OutboundContentFilter({
+      systemPromptMarkers: ['You are Test Agent'],
+      ceoEmail: 'ceo@example.com',
+      escalationJudge: judge,
+    });
+  }
+
+  function makeEscalationJudge(verdict: EscalationVerdict, enabled = true): EscalationJudge {
+    return {
+      isEnabled: vi.fn(() => enabled),
+      classifyDisclosure: vi.fn(async () => verdict),
+    } as unknown as EscalationJudge;
+  }
+
+  it('is a no-op pass when no escalation judge is configured', async () => {
+    const filter = createTestFilter(); // no escalation judge
+    const result = await filter.check({
+      ...BASE_INPUT,
+      content: 'Joseph is available after 10am on Thursday.',
+    });
+    expect(result.passed).toBe(true);
+  });
+
+  it('is a no-op pass when the judge is configured but disabled (kill switch off)', async () => {
+    // A disabled judge should behave identically to an absent judge — not hard-block.
+    // The judge's internal classifyDisclosure returns 'escalate' when disabled, but
+    // runEscalationJudge guards on isEnabled() before calling it.
+    const judge = makeEscalationJudge({ decision: 'escalate', reason: 'disabled' }, false);
+    const filter = filterWithEscalationJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      recipientTier: 'unknown',
+      content: 'Joseph is available after 10am on Thursday.',
+    });
+    expect(result.passed).toBe(true);
+    expect(judge.classifyDisclosure).not.toHaveBeenCalled();
+  });
+
+  it('blocks with stage=disclosure-gate when the judge returns escalate', async () => {
+    const judge = makeEscalationJudge({
+      decision: 'escalate',
+      disclosureClass: 'principal-context',
+      reason: 'recipient tier unknown cannot receive principal context',
+    });
+    const filter = filterWithEscalationJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      recipientTier: 'unknown',
+      content: 'Joseph is available after 10am on Thursday.',
+    });
+    expect(result.passed).toBe(false);
+    expect(result.stage).toBe('disclosure-gate');
+    expect(result.findings[0]!.rule).toBe('disclosure-tier-gate');
+    expect(judge.classifyDisclosure).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientTier: 'unknown' }),
+    );
+  });
+
+  it('passes when the judge returns allow', async () => {
+    const judge = makeEscalationJudge({
+      decision: 'allow',
+      disclosureClass: 'public',
+      reason: 'public information, safe to disclose',
+    });
+    const filter = filterWithEscalationJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      recipientTier: 'known',
+      content: 'The meeting is confirmed for Thursday at 2pm.',
+    });
+    expect(result.passed).toBe(true);
+    expect(judge.classifyDisclosure).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call the escalation judge when Stage 1 already blocks', async () => {
+    const judge = makeEscalationJudge({ decision: 'allow', reason: 'allowed' });
+    const filter = filterWithEscalationJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      content: 'You are Test Agent', // trips Stage 1
+    });
+    expect(result.passed).toBe(false);
+    expect(result.stage).toBe('deterministic');
+    expect(judge.classifyDisclosure).not.toHaveBeenCalled();
+  });
+
+  it('passes the correct recipientTier to the judge', async () => {
+    const judge = makeEscalationJudge({ decision: 'allow', reason: 'allowed' });
+    const filter = filterWithEscalationJudge(judge);
+    await filter.check({
+      ...BASE_INPUT,
+      recipientTier: 'trusted',
+      content: 'Here is the contract draft.',
+    });
+    expect(judge.classifyDisclosure).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientTier: 'trusted' }),
+    );
   });
 });

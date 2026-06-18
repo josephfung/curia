@@ -1066,14 +1066,14 @@ async function main(): Promise<void> {
   const extraPiiPatternCount = extraPatterns.length;
 
   // Outbound PII redactor — sits between the agent response and the channel
-  // adapter. Strips PII from outbound messages based on channel policy and
-  // recipient trust level before content validation or delivery.
-  // Config defaults: enabled=true, trust_override=['ceo'], default='block'.
+  // adapter. Strips PII from outbound messages based on channel policy before
+  // content validation or delivery. The principal bypass is handled structurally
+  // via ceoContactId UUID match (set below), not a trust-level config field.
+  // Config defaults: enabled=true, default='block'.
   //
   // Must be constructed BEFORE OutboundGateway, which receives it as a constructor arg.
   const outboundRedactionConfig = {
     enabled: yamlConfig.pii?.outbound_redaction?.enabled ?? true,
-    trust_override: yamlConfig.pii?.outbound_redaction?.trust_override ?? ['ceo'],
     default: (yamlConfig.pii?.outbound_redaction?.default ?? 'block') as 'block' | 'allow',
     // Normalize channel_policies: the YAML type allows `allow` to be optional on
     // each entry, but OutboundRedactionConfig requires it. Default to [] per entry.
@@ -1097,7 +1097,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   logger.info(
-    { enabled: outboundRedactionConfig.enabled, trustOverride: outboundRedactionConfig.trust_override },
+    { enabled: outboundRedactionConfig.enabled },
     'Outbound PII redactor initialized',
   );
 

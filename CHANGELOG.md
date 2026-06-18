@@ -20,6 +20,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Escalation-line policy judge** — LLM-powered classifier that maps `tier` × disclosure-sensitivity / action-consequence → allow / escalate; policy is deterministic code, LLM does only the natural-language classification; fail-closed by design. (#948)
+
+### Changed
+
+- **Disclosure gate keyed on tier** — outbound filter and PII redactor now gate on `contact.tier` instead of the legacy `trust_level` column; unknown recipients receive no third-party or sensitive principal context; trusted/principal recipients are unaffected; escalation judge wired as Stage 2.5 for borderline disclosures. (#949)
+
+### Removed
+
+- **`trust_override` PII redactor config** — removed the `outbound_redaction.trust_override` YAML field; the principal bypass is now handled structurally via the immutable CEO contact UUID, which is more tamper-proof than a trust-level field. (#949)
 - **Contact/KG boundary enforcement** — business email senders are now routed to existing or new organization KG nodes (`kind = organization`) instead of always minting a person node; personal webmail domains and `first.last` address patterns remain person-typed. (#946)
 
 ### Changed

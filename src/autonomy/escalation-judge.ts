@@ -103,6 +103,11 @@ export class EscalationJudge {
     this.estimateCost = createEstimateCostUsd(modelRegistry);
   }
 
+  /** Returns false when the judge's kill switch is off. Used by callers to skip invocation entirely. */
+  isEnabled(): boolean {
+    return this.config.enabled;
+  }
+
   /**
    * Classify the sensitivity of a proposed disclosure and determine whether
    * sharing it with a contact at the given tier should be allowed or escalated.

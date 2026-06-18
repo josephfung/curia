@@ -248,14 +248,13 @@ pii:
   # This config controls only policy: which detected patterns pass through
   # on which channels. Patterns not in a channel's allow list are redacted.
   #
-  # trust_override: recipients at these trust levels bypass redaction entirely.
-  # CEO can ask "what phone number do we have for X?" without friction.
+  # The principal bypass is handled structurally via ceoContactId UUID match
+  # at startup — no trust_override config needed.
   #
   # default: 'block' means all detected PII not explicitly allowed is redacted.
   # Configure exceptions, not rules.
   outbound_redaction:
     enabled: true
-    trust_override: [ceo]
     default: block
     channel_policies:
       email:

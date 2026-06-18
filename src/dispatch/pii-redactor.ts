@@ -3,7 +3,7 @@
 // Sits between the agent response and the channel adapter. For each outbound
 // message it:
 //   1. Checks whether the kill switch is active (enabled: false → pass through)
-//   2. Checks trust override — CEO and other overridden levels bypass entirely (silent)
+//   2. Checks CEO contact ID — principal bypass via immutable UUID (silent)
 //   3. Detects PII using the shared detectPii() core from src/pii/scrubber.ts
 //   4. Filters matches to those not in the channel's allow list
 //   5. Replaces them end-to-start with labelled tokens (e.g. [REDACTED: CREDIT_CARD])
@@ -14,8 +14,6 @@
 
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
-import type { TrustLevel } from '../contacts/types.js';
-import { meetsMinimumTrust, TRUST_RANK } from '../contacts/types.js';
 import type { PiiPattern } from '../pii/scrubber.js';
 import { detectPii } from '../pii/scrubber.js';
 import { createOutboundPiiRedacted } from '../bus/events.js';
@@ -25,8 +23,6 @@ import { createOutboundPiiRedacted } from '../bus/events.js';
 export interface OutboundRedactionConfig {
   /** Kill switch. When false, all redaction is bypassed. */
   enabled: boolean;
-  /** Trust level strings that bypass redaction entirely (e.g. ['ceo']). */
-  trust_override: string[];
   /** Default action for channels / patterns not in channel_policies. */
   default: 'block' | 'allow';
   /** Per-channel policy: labels listed here are allowed through unredacted. */
@@ -105,24 +101,22 @@ export class PiiRedactor {
   }
 
   /**
-   * Redact PII from outbound content based on channel policy and trust level.
+   * Redact PII from outbound content based on channel policy.
    *
    * Returns the (possibly modified) content and a list of applied redactions.
    * Returns the original content unchanged if:
    *   - redaction is disabled (kill switch)
-   *   - the trust level meets or exceeds a configured trust_override level
+   *   - the recipient is the principal (CEO contact UUID match — structural bypass)
    *   - no PII is detected
    *   - all detected PII is in the channel's allow list
    *
    * @param content    The outbound message content.
    * @param channelId  The destination channel (e.g. 'email', 'signal').
-   * @param trustLevel The resolved trust level of the recipient (null = untrusted).
    * @param context    Optional metadata for the audit bus event.
    */
   async redact(
     content: string,
     channelId: string,
-    trustLevel: TrustLevel | null,
     context: RedactContext = {},
   ): Promise<RedactionResult> {
     // Step 1: Kill switch — if disabled, pass through without any inspection.
@@ -130,30 +124,12 @@ export class PiiRedactor {
       return { content, redactions: [] };
     }
 
-    // Step 1b: CEO contact ID bypass — more reliable than trust_level.
+    // Step 2: CEO contact ID bypass — structural principal bypass.
     // The CEO contact UUID is resolved once from ceoPrimaryEmail at startup and stored here.
     // A UUID match is tamper-proof: it cannot be accidentally elevated via contact management
-    // code paths (unlike trust_level, which has a setTrustLevel() API).
+    // code paths (unlike a trust-level field, which has a setTrustLevel() API).
     if (this.ceoContactId && context.recipientContactId === this.ceoContactId) {
       return { content, redactions: [] };
-    }
-
-    // Step 2: Trust override — certain trust levels (typically 'ceo') bypass
-    // redaction entirely. We use meetsMinimumTrust() so that a recipient with
-    // 'ceo' trust also satisfies 'high', 'medium', and 'low' overrides.
-    for (const overrideLevel of this.config.trust_override) {
-      // Guard against typos or invalid values from programmatic config construction
-      // (JSON schema validates YAML, but not runtime-constructed configs).
-      if (!(overrideLevel in TRUST_RANK)) {
-        this.logger.warn(
-          { unknownOverrideLevel: overrideLevel },
-          'pii-redactor: unknown trust_override level in config — entry ignored',
-        );
-        continue;
-      }
-      if (meetsMinimumTrust(trustLevel, overrideLevel as TrustLevel)) {
-        return { content, redactions: [] };
-      }
     }
 
     // Step 3: Detect PII using the shared scrubber core.

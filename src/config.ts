@@ -217,8 +217,6 @@ export interface YamlConfig {
     outbound_redaction?: {
       /** Kill switch. Default: true. */
       enabled?: boolean;
-      /** Trust levels that bypass all redaction entirely. Default: ['ceo']. */
-      trust_override?: string[];
       /** Default action for unlisted pattern/channel combos. Default: 'block'. */
       default?: 'block' | 'allow';
       /** Per-channel allow lists. Patterns listed here pass through unredacted. */

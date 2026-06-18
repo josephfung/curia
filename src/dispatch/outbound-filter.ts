@@ -4,17 +4,20 @@
 // this pipeline:
 //   Stage 1: Deterministic rules (fast, no LLM call) — catches known bad patterns.
 //   Stage 2: LLM review (contextual appropriateness) — catches subtle leakage.
+//   Stage 2.5: Escalation judge (tier-sensitive disclosure gate) — classifies content
+//     by disclosure class and checks it against the recipient's tier policy table.
 //
 // Security principle: each stage is an independent boundary. Stage 1 failures
-// short-circuit immediately; Stage 2 only runs on clean Stage 1 output.
+// short-circuit immediately; Stages 2 and 2.5 only run on clean Stage 1 output.
 //
 // The secret patterns here are intentionally duplicated from src/skills/sanitize.ts.
 // The outbound filter is a separate security boundary — sharing code would couple
 // the two boundaries and risk one change silently weakening the other.
 
-import type { TrustLevel } from '../contacts/types.js';
-import { meetsMinimumTrust } from '../contacts/types.js';
+import type { ContactTier } from '../contacts/types.js';
+import { meetsMinimumTier } from '../contacts/types.js';
 import type { OutboundJudge, JudgeInput } from './outbound-judge.js';
+import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 
 /**
  * A single resolved outbound recipient. `isPrincipal` is determined structurally
@@ -31,11 +34,11 @@ export interface FilterCheckInput {
   recipientEmail: string;
   conversationId: string;
   channelId: string;
-  // Trust level of the recipient contact as resolved from the contact DB.
-  // null means the recipient was not found in the DB or has no per-contact override.
-  // Used by the contact-data-leak rule to allow trusted contacts to receive third-party
-  // contact data (e.g. CEO asking "what is Hamilton's email?", daily briefing with attendees).
-  recipientTrustLevel: TrustLevel | null;
+  // Tier of the recipient contact as resolved from the contact DB.
+  // 'unknown' is the safe fallback when the contact is not found in the DB.
+  // Governs the contact-data-leak rule (third-party email disclosure) and the
+  // Stage 2.5 escalation-judge disclosure gate.
+  recipientTier: ContactTier;
   /**
    * Full recipient set (To + CC), each tagged isPrincipal structurally. Used by
    * Stage 2 (LLM judge). Optional: when absent (legacy callers / Stage-1-only unit
@@ -57,7 +60,7 @@ export interface FilterResult {
   findings: FilterFinding[];
   // Stage is only set when the filter blocked the content.
   // Omitting stage on a pass avoids confusion ("which stage passed?")
-  stage?: 'deterministic' | 'llm-review';
+  stage?: 'deterministic' | 'llm-review' | 'disclosure-gate';
 }
 
 export interface OutboundContentFilterConfig {
@@ -68,6 +71,14 @@ export interface OutboundContentFilterConfig {
   ceoEmail: string;
   /** Optional Stage 2 LLM judge. When absent, Stage 2 is a no-op pass. */
   judge?: OutboundJudge;
+  /**
+   * Optional Stage 2.5 escalation judge. When present, classifies outbound content
+   * by disclosure class and gates it against the recipient's tier policy. Catches
+   * borderline disclosures (principal context to unknown recipients, confidential
+   * content to untrusted recipients) that the deterministic Stage 1 rules miss.
+   * When absent, Stage 2.5 is a no-op pass.
+   */
+  escalationJudge?: EscalationJudge;
 }
 
 // Bus event type names that should never appear in outbound messages.
@@ -153,14 +164,16 @@ function normalizeForMatching(text: string): string {
 export class OutboundContentFilter {
   private config: OutboundContentFilterConfig;
   private judge?: OutboundJudge;
+  private escalationJudge?: EscalationJudge;
 
   constructor(config: OutboundContentFilterConfig) {
     this.config = config;
     this.judge = config.judge;
+    this.escalationJudge = config.escalationJudge;
   }
 
   /**
-   * Run the two-stage filter pipeline on outbound content.
+   * Run the filter pipeline on outbound content.
    *
    * Stage 1 collects ALL findings (not short-circuit per rule) so a single
    * blocked message can report all the reasons it was blocked — useful for
@@ -168,6 +181,9 @@ export class OutboundContentFilter {
    *
    * Stage 2 only runs if Stage 1 finds nothing. This avoids wasting LLM
    * resources on content that is already deterministically blocked.
+   *
+   * Stage 2.5 only runs if Stages 1 and 2 both pass. The escalation judge
+   * classifies the content's disclosure class and enforces the tier policy table.
    */
   async check(input: FilterCheckInput): Promise<FilterResult> {
     // Normalize first to strip invisible Unicode characters that an adversarial
@@ -180,7 +196,7 @@ export class OutboundContentFilter {
       ...this.checkSystemPromptFragments(normalizedContent),
       ...this.checkInternalStructure(normalizedContent),
       ...this.checkSecretPatterns(normalizedContent),
-      ...this.checkContactDataLeak(normalizedContent, input.recipientEmail, input.recipientTrustLevel),
+      ...this.checkContactDataLeak(normalizedContent, input.recipientEmail, input.recipientTier),
     ];
 
     if (findings.length > 0) {
@@ -202,7 +218,25 @@ export class OutboundContentFilter {
       return { passed: false, findings: llmFindings, stage: 'llm-review' };
     }
 
-    // Both stages passed — no stage field on success
+    // Stage 2.5: escalation judge — tier-sensitive disclosure gate.
+    // Classifies the content's disclosure class (public, principal-context, third-party,
+    // confidential) and checks it against the tier's allowed set in DISCLOSURE_ALLOWED.
+    // Catches borderline disclosures (e.g. CEO availability shared with an 'unknown'
+    // recipient) that the deterministic email-pattern scan in Stage 1 misses.
+    // No-op pass when no escalation judge is configured.
+    let escalationFindings: FilterFinding[] = [];
+    try {
+      escalationFindings = await this.runEscalationJudge({ ...input, content: normalizedContent });
+    } catch (err) {
+      // Fail-closed: disclosure gate error blocks the message.
+      const message = err instanceof Error ? err.message : String(err);
+      escalationFindings = [{ rule: 'disclosure-gate-error', detail: `Escalation judge threw: ${message}` }];
+    }
+    if (escalationFindings.length > 0) {
+      return { passed: false, findings: escalationFindings, stage: 'disclosure-gate' };
+    }
+
+    // All stages passed — no stage field on success
     return { passed: true, findings: [] };
   }
 
@@ -309,27 +343,26 @@ export class OutboundContentFilter {
    * Rule: contact-data-leak
    *
    * Finds any email address in the content that is not the recipient or CEO,
-   * then decides whether to block based solely on recipient trust level.
+   * then decides whether to block based on recipient tier.
    *
    * Block condition:
-   *   third-party email present AND !recipientIsTrusted
+   *   third-party email present AND recipient tier < 'trusted'
    *
    * Allow condition:
-   *   no third-party email OR recipientIsTrusted
+   *   no third-party email OR recipient tier >= 'trusted'
    *
-   * recipientIsTrusted is true when meetsMinimumTrust(recipientTrustLevel, 'high').
-   * This covers trustLevel='high' (explicit CEO designation, e.g. EA or CFO) and
-   * trustLevel='ceo' (the principal), both of which outrank the 'high' threshold.
+   * 'trusted' and 'principal' tiers may receive third-party contact data
+   * (emails of other people). This covers both "CEO asked for Hamilton's email"
+   * and "daily briefing lists meeting attendees". Tiers below 'trusted' never
+   * receive third-party contact data.
    *
-   * Trusted recipients can receive third-party contact data regardless of whether
-   * the message was triggered by a user request or a scheduled routine — this
-   * covers both "CEO asked for Hamilton's email" and "daily briefing lists meeting
-   * attendees". Untrusted recipients never receive third-party contact data.
+   * Note: when the recipient is not in the contacts DB, the gateway passes
+   * tier='unknown', which correctly restricts third-party disclosure.
    */
   private checkContactDataLeak(
     content: string,
     recipientEmail: string,
-    recipientTrustLevel: TrustLevel | null,
+    recipientTier: ContactTier,
   ): FilterFinding[] {
     // Only add ceoEmail if it is actually configured — an empty string (missing
     // CEO_PRIMARY_EMAIL env var) would be a no-op entry that never matches but
@@ -339,15 +372,12 @@ export class OutboundContentFilter {
       ...(this.config.ceoEmail ? [this.config.ceoEmail.toLowerCase()] : []),
     ]);
 
-    // Determine if the recipient qualifies as trusted.
-    // Uses meetsMinimumTrust() against the 'high' threshold so that both
-    // trustLevel='high' (explicit CEO designation, e.g. EA or CFO) and
-    // trustLevel='ceo' (the principal) are accepted. Null (unknown contact) is false.
-    const recipientIsTrusted = meetsMinimumTrust(recipientTrustLevel, 'high');
+    // Recipients at 'trusted' or above may receive third-party email addresses.
+    // meetsMinimumTier throws on unrecognized tiers — this is intentional; an
+    // unrecognized tier is a programming error and should fail loudly at the gate.
+    const recipientIsTrusted = meetsMinimumTier(recipientTier, 'trusted');
 
     // Trusted recipient: allow third-party emails in content without scanning.
-    // This handles both user-initiated requests ("what is Hamilton's email?") and
-    // automated routines (daily briefing listing calendar attendees) to trusted recipients.
     if (recipientIsTrusted) {
       return [];
     }
@@ -409,5 +439,45 @@ export class OutboundContentFilter {
     // throws. The try/catch around runLlmReview in check() remains as a last-resort
     // net for truly unexpected throws.
     return this.judge.review(judgeInput);
+  }
+
+  // Stage 2.5: escalation judge (tier-sensitive disclosure gate)
+
+  /**
+   * Stage 2.5: delegate to the configured EscalationJudge.
+   *
+   * The escalation judge classifies the content's disclosure sensitivity
+   * (public / principal-context / third-party / confidential) and applies the
+   * DISCLOSURE_ALLOWED policy table to determine if that class is permitted for
+   * the recipient's tier. This catches borderline disclosures that the deterministic
+   * Stage 1 rules miss — e.g. the CEO's availability being shared with an 'unknown'
+   * external recipient.
+   *
+   * When no escalation judge is configured, Stage 2.5 is a no-op pass.
+   *
+   * Fail-closed: the EscalationJudge is designed to never throw and returns
+   * decision='escalate' on any LLM failure (timeout, malformed verdict, provider
+   * error). The outer try/catch in check() handles any truly unexpected throws.
+   */
+  private async runEscalationJudge(input: FilterCheckInput): Promise<FilterFinding[]> {
+    // Treat a disabled judge the same as an absent one — both are a no-op pass.
+    // A disabled judge is an operator kill switch; we don't want it hard-blocking
+    // every message (which is what classifyDisclosure returns when enabled=false).
+    if (!this.escalationJudge || !this.escalationJudge.isEnabled()) return [];
+
+    const verdict = await this.escalationJudge.classifyDisclosure({
+      content: input.content,
+      recipientTier: input.recipientTier,
+      conversationId: input.conversationId,
+    });
+
+    if (verdict.decision === 'escalate') {
+      return [{
+        rule: 'disclosure-tier-gate',
+        detail: `Content classified as '${verdict.disclosureClass ?? 'unknown'}' — not permitted for tier '${input.recipientTier}': ${verdict.reason}`,
+      }];
+    }
+
+    return [];
   }
 }
