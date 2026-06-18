@@ -436,6 +436,10 @@ export class ContactService {
         // fallback below will still run so the contact gets a KG node, just a person-type one.
         if (classifyEmailSender(options.primaryEmail) === 'automated') {
           resolvedKind = 'automated';
+          this.logger?.debug(
+            { email: options.primaryEmail, requestedKind: options.kind },
+            'createContact: automated sender — skipping org KG node',
+          );
         } else {
           const orgResult = await this.resolveOrCreateOrgNode(
             options.primaryEmail,
@@ -486,8 +490,9 @@ export class ContactService {
         }
 
         // Org routing did not fire or returned null (KG transient failure), so we fell
-        // back to a person node. Downgrade kind to 'person' to match — leaving kind as
-        // 'organization' on a person-linked row violates the invariant checked elsewhere.
+        // back to a person node. Downgrade kind to 'person' to match the node type.
+        // Note: kind='automated' is intentionally left unchanged here — automated contacts
+        // use person-type KG nodes by design; the downgrade guard only applies to org routing.
         if (resolvedKind === 'organization') {
           this.logger?.warn(
             { requestedKind: options.kind, email: options.primaryEmail },

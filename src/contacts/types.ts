@@ -294,7 +294,7 @@ export type ContactTier = 'blocked' | 'unknown' | 'known' | 'trusted' | 'princip
  *
  * - 'person'       — individual human contact (default).
  * - 'organization' — a company or institution (linked KG node type='organization').
- * - 'automated'    — automated sender e.g. mailing list (TODO #953: exempts from tier gates).
+ * - 'automated'    — automated sender e.g. mailing list (exempts from unknown-tier gate in dispatcher.ts, #953).
  * - 'principal'    — the human CEO Curia serves.
  * - 'agent'        — Curia itself or another autonomous agent.
  *
@@ -338,14 +338,11 @@ export function meetsMinimumTier(
 }
 
 /**
- * Return true when kind='automated'. Call sites that need to skip tier gates
- * for automated senders (mailing lists, notifications) should use this helper
- * rather than comparing kind directly — keeps the gate logic in one place.
+ * Return true when kind='automated'. Use this helper at call sites that need to
+ * skip tier gates for automated senders (noreply, newsletters, notifications).
  *
- * Full gate-skipping behaviour will be wired in issue #953; for now this is
- * a typed helper so callers can be written ahead of the gate implementation.
- *
- * TODO(#953): Wire this into the dispatch gate and outbound filter.
+ * The dispatch tier gate bypass is wired in dispatcher.ts (#953).
+ * TODO(#953): Wire into the outbound filter.
  */
 export function isAutomatedKind(kind: ContactKind): boolean {
   return kind === 'automated';

@@ -93,9 +93,13 @@ export class ContactListHandler implements SkillHandler {
     );
 
     try {
-      // TODO: role path bypasses kind filter — findContactByRole has no kind param; acceptable since role and kind are semantically orthogonal
+      // The role path calls findContactByRole which has no kind parameter, so we apply
+      // effectiveKindFilter as a post-filter to keep automated/agent contacts out of results
+      // unless the caller explicitly asked for them via the kind input.
       const contacts = role && typeof role === 'string'
-        ? await ctx.contactService.findContactByRole(role)
+        ? (await ctx.contactService.findContactByRole(role)).filter(c =>
+            effectiveKindFilter.includes(c.kind as ContactKind)
+          )
         : await ctx.contactService.listContacts({
             status: status as ContactStatus | undefined,
             kind: effectiveKindFilter,
@@ -110,6 +114,7 @@ export class ContactListHandler implements SkillHandler {
             contact_id: c.id,
             display_name: c.displayName,
             role: c.role,
+            kind: c.kind,
             status: c.status,
             kg_node_id: c.kgNodeId,
           })),
@@ -118,7 +123,7 @@ export class ContactListHandler implements SkillHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, role, status, limit, offset }, 'Failed to list contacts');
+      ctx.log.error({ err, role, status, kind: effectiveKindFilter, limit, offset }, 'Failed to list contacts');
       return { success: false, error: `Failed to list contacts: ${message}` };
     }
   }

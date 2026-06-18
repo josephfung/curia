@@ -292,11 +292,16 @@ export class Dispatcher {
             // Uses tier for the gate check (issue #945): 'unknown' == old 'provisional',
             // 'blocked' == old 'blocked'.
             //
-            // Automated senders (kind='automated') bypass the tier gate entirely —
-            // they have no standing in the trust/action system and should always
-            // reach the coordinator. The coordinator uses kind='automated' context
-            // to treat them as low-salience machine mail.
-            if ((senderContext.tier === 'unknown' || senderContext.tier === 'blocked') && !isAutomatedKind(senderContext.kind)) {
+            // Automated senders (kind='automated') bypass the tier gate when tier='unknown' —
+            // that is their normal starting state, since they are created on first contact and
+            // never go through the CEO confirmation flow. The coordinator uses kind='automated'
+            // context to treat them as low-salience machine mail.
+            //
+            // Blocked contacts are explicitly blocked by operator decision — always gate them,
+            // regardless of kind. Automated senders only bypass the gate when tier='unknown'
+            // (their normal starting state) — not when they've been explicitly blocked.
+            if (senderContext.tier === 'blocked' ||
+                (senderContext.tier === 'unknown' && !isAutomatedKind(senderContext.kind))) {
               const policy = this.channelPolicies?.[payload.channelId];
 
               if (senderContext.tier === 'blocked') {
@@ -409,6 +414,14 @@ export class Dispatcher {
             return;
           }
 
+          // No contact record — truly unknown sender. The automated-kind bypass above
+          // does not apply here because there is no kind field without a contact record.
+          // The first message from a new automated sender follows the normal unknownSender
+          // policy. Subsequent messages (after createContact runs) will have kind='automated'
+          // and bypass the unknown-tier gate.
+          // TODO(#953): Consider classifyEmailSender(senderId) here to apply the bypass
+          // on first contact for recognizable-pattern addresses.
+          //
           // 'allow' policy or no policy — route to coordinator without sender context.
           // runtime.ts injects a low-trust signal block so the coordinator knows to apply skepticism.
         }

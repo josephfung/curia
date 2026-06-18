@@ -16,6 +16,6 @@ WHERE id IN (
   FROM contacts c
   JOIN contact_channel_identities cci ON cci.contact_id = c.id
   WHERE cci.channel = 'email'
-    AND cci.identity_value ~* '^(noreply|no[_.-]?reply|donotreply|do[_.-]not[_.-]?reply|mailer[_.-]?daemon|mailerdaemon|notifications?|alerts?|newsletters?|updates?|bounced?|bounces?|unsubscribe|postmaster|automated|auto)@'
+    AND cci.channel_identifier ~* '^(noreply|no[_.-]?reply|donotreply|do[_.-]not[_.-]?reply|mailer[_.-]?daemon|mailerdaemon|notifications?|alerts?|newsletters?|updates?|bounced?|bounces?|unsubscribe|postmaster|automated|auto)@'
     AND c.kind != 'automated'
 );
