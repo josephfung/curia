@@ -127,11 +127,21 @@ const PERSONAL_EMAIL_DOMAINS = new Set([
 ]);
 
 /**
- * Local-part prefixes that clearly belong to a system/org role rather than a
- * specific person. Anything matching this → classify as organization.
+ * Local-part prefixes that are unambiguously machine-generated: no-reply addresses,
+ * mailing-system roles, bounce handlers, unsubscribe addresses.
+ * Checked first — before the webmail-domain check — so noreply@gmail.com is
+ * correctly classified as automated rather than person.
+ */
+const AUTOMATED_LOCAL_RE =
+  /^(no[_.-]?reply|noreply|donotreply|do[_.-]not[_.-]?reply|mailer[_.-]?daemon|mailerdaemon|notifications?|alerts?|newsletters?|updates?|bounced?|bounces?|unsubscribe|postmaster|automated|auto)$/i;
+
+/**
+ * Local-part prefixes that belong to an org role address (support, billing, etc.)
+ * but are NOT unambiguously automated. Matches → classify as organization.
+ * hello/news kept here: too ambiguous to call automated (could be a real team).
  */
 const NON_PERSON_LOCAL_RE =
-  /^(no[_.-]?reply|noreply|info|support|hello|help|admin|contact|billing|notification|notifications|alert|alerts|news|newsletter|updates?|feedback|team|sales|marketing|legal|security|postmaster|mailer[_.-]?daemon|bounce|bounces|unsubscribe|do[._-]?not[._-]?reply|donotreply|service|services|order|orders|invoice|invoices|accounts?|system|automated|auto)$/i;
+  /^(info|support|hello|help|admin|contact|billing|feedback|news|team|sales|marketing|legal|security|service|services|order|orders|invoice|invoices|accounts?|system)$/i;
 
 /**
  * Local-part pattern for a personal name address (first.last or first_last).
@@ -140,22 +150,26 @@ const NON_PERSON_LOCAL_RE =
 const PERSON_LOCAL_RE = /^[a-zA-Z]+[._-][a-zA-Z]+$/;
 
 /**
- * Classify an email sender as a person or an organization/automated sender.
+ * Classify an email sender as a person, an organization role address, or an
+ * automated/bulk sender.
  *
  * Rules applied in order:
- * 1. Personal webmail domain → person
- * 2. Local part matches org/system role pattern → organization
- * 3. Local part looks like first.last name → person
- * 4. Default → person (conservative; a false negative on org is less harmful
- *    than a false positive that merges a real person under an org node)
+ * 1. Automated local-part pattern → 'automated' (checked BEFORE webmail domain
+ *    so noreply@gmail.com is automated, not person)
+ * 2. Personal webmail domain → 'person'
+ * 3. Org/system role local-part pattern → 'organization'
+ * 4. Local part looks like first.last name → 'person'
+ * 5. Default → 'person' (conservative; false negative on org is less harmful
+ *    than merging a real person under an org node)
  */
-export function classifyEmailSender(email: string): 'person' | 'organization' {
+export function classifyEmailSender(email: string): 'person' | 'organization' | 'automated' {
   const atIdx = email.indexOf('@');
   if (atIdx === -1) return 'person'; // malformed — safe default
 
   const localPart = email.slice(0, atIdx);
   const domain = email.slice(atIdx + 1).toLowerCase();
 
+  if (AUTOMATED_LOCAL_RE.test(localPart)) return 'automated';
   if (PERSONAL_EMAIL_DOMAINS.has(domain)) return 'person';
   if (NON_PERSON_LOCAL_RE.test(localPart)) return 'organization';
   if (PERSON_LOCAL_RE.test(localPart)) return 'person';
