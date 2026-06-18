@@ -128,6 +128,8 @@ describe('ContactService', () => {
       // resolveOrCreateOrgNode is skipped — the person-node fallback creates a
       // person-type KG node (not an org node) to hold the contact's KG link.
       const allNodes = await entityMemory.findEntities('GitHub');
+      // Person-node fallback creates at least one KG node (person-type) for the contact.
+      expect(allNodes.length).toBeGreaterThan(0);
       expect(allNodes.every(n => n.type !== 'organization')).toBe(true);
     });
 
@@ -224,11 +226,12 @@ describe('ContactService', () => {
 
     it('automated short-circuit takes precedence over caller-supplied kind for automated emails', async () => {
       // noreply@ classifies as 'automated' — the automated short-circuit fires before
-      // resolveOrCreateOrgNode is called, so kind='automated' regardless of caller input.
+      // resolveOrCreateOrgNode is called, overriding even an explicit caller-supplied kind.
+      // Pass kind='organization' to prove the classifier wins over the caller's input.
       const contact = await service.createContact({
         displayName: 'Automated Bot',
         primaryEmail: 'noreply@example.com',
-        kind: 'automated',
+        kind: 'organization',
         source: 'test',
       });
       expect(contact.kind).toBe('automated');

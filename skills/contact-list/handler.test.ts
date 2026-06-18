@@ -405,4 +405,42 @@ describe('ContactListHandler — kind filter', () => {
     expect(result.success).toBe(false);
     expect((result as { success: false; error: string }).error).toMatch(/Invalid kind/);
   });
+
+  it('accepts comma-separated kind values and filters to each requested kind', async () => {
+    const handler = new ContactListHandler();
+    const result = await handler.execute(makeKindCtx({ kind: 'person,automated' }, [personContact, automatedContact, agentContact, orgContact]));
+    expect(result.success).toBe(true);
+    const ids = (result as { success: true; data: { contacts: Array<{ contact_id: string }> } }).data.contacts.map((c) => c.contact_id);
+    expect(ids).toContain('1'); // person
+    expect(ids).toContain('2'); // automated
+    expect(ids).not.toContain('3'); // agent not requested
+    expect(ids).not.toContain('4'); // organization not requested
+  });
+
+  it('rejects an empty kind list', async () => {
+    const handler = new ContactListHandler();
+    const result = await handler.execute(makeKindCtx({ kind: [] }, []));
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/kind must not be empty/);
+  });
+
+  it('role lookup post-filters by effective kind (excludes automated/agent by default)', async () => {
+    // findContactByRole returns contacts of mixed kinds; handler must exclude automated/agent.
+    const handler = new ContactListHandler();
+    const roleContact = { id: '5', displayName: 'Support Bot', role: 'support', status: 'confirmed', kgNodeId: null, kind: 'automated' };
+    const roleHuman = { id: '6', displayName: 'Support Human', role: 'support', status: 'confirmed', kgNodeId: null, kind: 'person' };
+    const ctx = {
+      input: { role: 'support' },
+      log: createSilentLogger(),
+      contactService: {
+        findContactByRole: async () => [roleContact, roleHuman],
+        listContacts: vi.fn(),
+      },
+    } as unknown as SkillContext;
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const ids = (result as { success: true; data: { contacts: Array<{ contact_id: string }> } }).data.contacts.map((c) => c.contact_id);
+    expect(ids).not.toContain('5'); // automated excluded by default kind filter
+    expect(ids).toContain('6'); // person passes through
+  });
 });

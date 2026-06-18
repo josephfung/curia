@@ -15,13 +15,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Automated sender classification** — `classifyEmailSender()` now returns `'automated'` for noreply, mailer-daemon, bounce, newsletter, and related machine-address patterns; classified at contact-creation time so they never appear as people in the contact ledger. (#953)
-- **`contact-list` skill `kind` filter** — skill now accepts `kind` to filter by contact kind; default view excludes `automated` and `agent` contacts. (#953)
+- **Automated sender classification** — `classifyEmailSender()` now detects noreply/mailer-daemon/newsletter patterns and sets `kind='automated'`; new contacts skip the KG org-node path. (#953)
+- **`contact-list` skill `kind` filter** — accepts `kind` to filter by contact kind; default view excludes `automated` and `agent`. (#953)
 
 ### Changed
 
-- **ceo-inbox agent** (v0.7.0 → v0.8.0) — automated senders (`kind: automated`) default to ✔️ Cleared; still escalated on actionable signals (fraud, payment failure, bounce, hard deadline). (#953)
-- **`contact-list` skill** (v1.2.1 → v1.3.0) — default result set now excludes automated and agent contacts; pass `kind=automated` to see them. (#953)
+- **ceo-inbox agent** (v0.7.0 → v0.8.0) — automated senders default to Cleared; still escalated on actionable signals (payment failure, fraud, bounce, hard deadline). (#953)
+- **`contact-list` skill** (v1.2.1 → v1.3.0) — default result set excludes automated and agent contacts; pass `kind=automated` to surface them. (#953)
 
 ### Security
 
