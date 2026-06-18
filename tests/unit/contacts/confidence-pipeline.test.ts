@@ -37,6 +37,17 @@ describe('ConfidencePipeline', () => {
       const updated = await service.getContact(contact.id);
       expect(updated!.inboundMessageCount).toBe(15);
     });
+
+    it('returns the updated confidence value', async () => {
+      const contact = await createTestContact();
+      const result = await pipeline.incrementalUpdate(contact.id, { type: 'message_seen' });
+      // message_seen with recency contribution should be > 0
+      expect(typeof result).toBe('number');
+      expect(result).toBeGreaterThan(0);
+      // Must match the stored contactConfidence
+      const updated = await service.getContact(contact.id);
+      expect(result).toBeCloseTo(updated!.contactConfidence);
+    });
   });
 
   describe('incrementalUpdate — message_sent', () => {
