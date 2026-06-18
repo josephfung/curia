@@ -423,36 +423,44 @@ export class ContactService {
 
     // Resolve a KG node. Priority:
     //   1. Explicit kgNodeId provided by caller — use as-is (no lookup needed)
-    //   2. primaryEmail set and classifies as org → resolveOrCreateOrgNode()
-    //   3. Fall through to person-node auto-creation
+    //   2. primaryEmail classifies as automated → set kind='automated', skip KG org node
+    //   3. primaryEmail set and classifies as org → resolveOrCreateOrgNode()
+    //   4. Fall through to person-node auto-creation
     let kgNodeId: string | null = options.kgNodeId ?? null;
     let resolvedKind: ContactKind = options.kind ?? 'person';
 
     if (!kgNodeId && this.entityMemory) {
       if (options.primaryEmail) {
-        const orgResult = await this.resolveOrCreateOrgNode(
-          options.primaryEmail,
-          safeName,
-          options.displayName,
-          options.source,
-        );
-        if (orgResult) {
-          kgNodeId = orgResult.kgNodeId;
-          resolvedKind = orgResult.kind;
-          if (options.kind && options.kind !== orgResult.kind) {
-            // Warn when caller explicitly passed a kind that was overridden — this
-            // is likely a caller bug (e.g. passing kind:'person' for an org email).
-            this.logger?.warn(
-              { requestedKind: options.kind, resolvedKind: orgResult.kind, email: options.primaryEmail },
-              'createContact: org routing overrode caller-supplied kind',
-            );
-          } else {
-            // Debug trace on every org routing application so misclassifications
-            // are detectable retroactively even when kind defaulted to 'person'.
-            this.logger?.debug(
-              { resolvedKind: orgResult.kind, email: options.primaryEmail },
-              'createContact: org routing applied',
-            );
+        // Automated senders (noreply, mailer-daemon, etc.) have no org node worth linking.
+        // Skip resolveOrCreateOrgNode entirely and set kind directly. The person-node
+        // fallback below will still run so the contact gets a KG node, just a person-type one.
+        if (classifyEmailSender(options.primaryEmail) === 'automated') {
+          resolvedKind = 'automated';
+        } else {
+          const orgResult = await this.resolveOrCreateOrgNode(
+            options.primaryEmail,
+            safeName,
+            options.displayName,
+            options.source,
+          );
+          if (orgResult) {
+            kgNodeId = orgResult.kgNodeId;
+            resolvedKind = orgResult.kind;
+            if (options.kind && options.kind !== orgResult.kind) {
+              // Warn when caller explicitly passed a kind that was overridden — this
+              // is likely a caller bug (e.g. passing kind:'person' for an org email).
+              this.logger?.warn(
+                { requestedKind: options.kind, resolvedKind: orgResult.kind, email: options.primaryEmail },
+                'createContact: org routing overrode caller-supplied kind',
+              );
+            } else {
+              // Debug trace on every org routing application so misclassifications
+              // are detectable retroactively even when kind defaulted to 'person'.
+              this.logger?.debug(
+                { resolvedKind: orgResult.kind, email: options.primaryEmail },
+                'createContact: org routing applied',
+              );
+            }
           }
         }
       }
