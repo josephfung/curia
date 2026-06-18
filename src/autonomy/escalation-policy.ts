@@ -10,7 +10,7 @@
 //   - Both the disclosure gate (#949) and action gate (#950) import from this module.
 
 import type { ContactTier } from '../contacts/types.js';
-import { meetsMinimumTier } from '../contacts/types.js';
+import { meetsMinimumTier, TIER_RANK } from '../contacts/types.js';
 
 // ---------------------------------------------------------------------------
 // Disclosure-sensitivity classes
@@ -124,6 +124,10 @@ export function applyActionPolicy(
   actionClass: ActionConsequenceClass,
   isThirdPartyFacing: boolean,
 ): EscalationDecision {
+  // Belt-and-suspenders: unrecognized tier → fail closed (mirrors applyDisclosurePolicy guard).
+  // TIER_RANK is the canonical tier registry; a tier absent from it is not a valid ContactTier.
+  if (!(initiatingTier in TIER_RANK)) return 'escalate';
+
   if (initiatingTier === 'blocked') return 'escalate';
 
   // Principal bypasses all action gates — the CEO can request anything.
@@ -146,6 +150,10 @@ export function applyActionPolicy(
 
     case 'irreversible':
       // Irreversible always escalates (principal bypass handled above).
+      return 'escalate';
+
+    default:
+      // Belt-and-suspenders: unrecognized action class → fail closed.
       return 'escalate';
   }
 }

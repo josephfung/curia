@@ -232,7 +232,7 @@ export class EscalationJudge {
       }
 
       if (raced.type === 'error') {
-        this.logger.warn({ error: raced.error.message, kind, conversationId }, 'escalation-judge: provider error');
+        this.logger.error({ error: raced.error.message, kind, conversationId }, 'escalation-judge: provider error');
         return null;
       }
 
