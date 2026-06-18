@@ -4,6 +4,7 @@ import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplica
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator } from '../contacts/types.js';
+import { isAutomatedKind } from '../contacts/types.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { DbPool } from '../db/connection.js';
@@ -290,7 +291,12 @@ export class Dispatcher {
             // contact has not been confirmed. Apply the same hold/reject policy as unknown senders.
             // Uses tier for the gate check (issue #945): 'unknown' == old 'provisional',
             // 'blocked' == old 'blocked'.
-            if (senderContext.tier === 'unknown' || senderContext.tier === 'blocked') {
+            //
+            // Automated senders (kind='automated') bypass the tier gate entirely —
+            // they have no standing in the trust/action system and should always
+            // reach the coordinator. The coordinator uses kind='automated' context
+            // to treat them as low-salience machine mail.
+            if ((senderContext.tier === 'unknown' || senderContext.tier === 'blocked') && !isAutomatedKind(senderContext.kind)) {
               const policy = this.channelPolicies?.[payload.channelId];
 
               if (senderContext.tier === 'blocked') {
