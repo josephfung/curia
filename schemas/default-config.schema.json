@@ -166,6 +166,21 @@
         }
       }
     },
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "judge": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "model": { "type": "string" },
+            "timeout_ms": { "type": "integer", "minimum": 250 }
+          }
+        }
+      }
+    },
     "dreaming": {
       "type": "object",
       "additionalProperties": false,

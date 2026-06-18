@@ -309,6 +309,22 @@ filter:
     # split (default) | open | closed. See src/config.ts for semantics.
     failMode: split
 
+# Escalation-line policy judge (issue #948).
+# Classifies the sensitivity of outbound disclosures and the consequence of
+# proposed actions, then maps tier × class → allow / escalate.
+# Consumed by the disclosure gate (#949) and action gate (#950).
+#
+# Fail-closed by design: timeout / provider error / malformed verdict all
+# result in 'escalate' — there is no failMode knob.
+#
+# >>> STRONGLY RECOMMENDED <<<: use a DIFFERENT model family than the coordinator
+# for the same model-diversity security value as filter.llmJudge above.
+escalation:
+  judge:
+    enabled: true
+    model: claude-haiku-4-5
+    timeout_ms: 5000
+
 # Dream engine — background knowledge graph maintenance (issue #27).
 # The decay pass runs on a configurable interval and reduces the confidence of
 # slow_decay and fast_decay nodes/edges using an exponential half-life model.

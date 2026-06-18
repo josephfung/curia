@@ -1044,6 +1044,10 @@ async function main(): Promise<void> {
     });
     logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
   }
+  // TODO(#949, #950): Wire EscalationJudge here using escalation.judge config block.
+  // The judge and its config schema are defined in src/autonomy/escalation-judge.ts.
+  // Each gate constructs an EscalationJudge with a dedicated LLMProviderRouter
+  // (same pattern as the outbound judge above) and validates the model at startup.
 
   // PII scrubbing for LLM-facing error strings — loads extra patterns from
   // config/default.yaml pii.extra_patterns and injects them into classify.ts.
