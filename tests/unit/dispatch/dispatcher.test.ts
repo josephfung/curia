@@ -5,7 +5,6 @@ import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { createInboundMessage, createAgentError, createAgentTask, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent } from '../../../src/bus/events.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
-import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { InboundSenderContext, ContactStatus, TrustLevel, TaskOriginator, ContactTier, ContactKind } from '../../../src/contacts/types.js';
 import { createLogger } from '../../../src/logger.js';
 
