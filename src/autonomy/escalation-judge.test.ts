@@ -146,6 +146,12 @@ describe('applyActionPolicy', () => {
     expect(applyActionPolicy('blocked', 'reversible-external', false)).toBe('escalate');
     expect(applyActionPolicy('blocked', 'irreversible', false)).toBe('escalate');
   });
+
+  it('escalates without throwing on unrecognized tier value', () => {
+    // Validates the fail-closed guard that protects direct callers from meetsMinimumTier throwing.
+    expect(applyActionPolicy('bogus' as unknown as ContactTier, 'none', false)).toBe('escalate');
+    expect(applyActionPolicy('bogus' as unknown as ContactTier, 'irreversible', true)).toBe('escalate');
+  });
 });
 
 // ---------------------------------------------------------------------------
