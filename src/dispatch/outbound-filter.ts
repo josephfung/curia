@@ -472,9 +472,14 @@ export class OutboundContentFilter {
     });
 
     if (verdict.decision === 'escalate') {
+      // Detail uses only deterministic enum values (class + tier), not verdict.reason.
+      // The LLM-generated reason is available in structured logs from the judge's own
+      // logger but must not be forwarded to the CEO notification email — the disclosure
+      // judge prompt does not explicitly prohibit quoting from the evaluated content,
+      // so verdict.reason could theoretically echo sensitive fragments.
       return [{
         rule: 'disclosure-tier-gate',
-        detail: `Content classified as '${verdict.disclosureClass ?? 'unknown'}' — not permitted for tier '${input.recipientTier}': ${verdict.reason}`,
+        detail: `Disclosure class '${verdict.disclosureClass ?? 'unknown'}' not permitted for tier '${input.recipientTier}'`,
       }];
     }
 
