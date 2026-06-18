@@ -13,6 +13,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Automated sender classification** — `classifyEmailSender()` now returns `'automated'` for noreply, mailer-daemon, bounce, newsletter, and related machine-address patterns; classified at contact-creation time so they never appear as people in the contact ledger. (#953)
+- **`contact-list` skill `kind` filter** — skill now accepts `kind` to filter by contact kind; default view excludes `automated` and `agent` contacts. (#953)
+
+### Changed
+
+- **ceo-inbox agent** (v0.7.0 → v0.8.0) — automated senders (`kind: automated`) default to ✔️ Cleared; still escalated on actionable signals (fraud, payment failure, bounce, hard deadline). (#953)
+- **`contact-list` skill** (v1.2.1 → v1.3.0) — default result set now excludes automated and agent contacts; pass `kind=automated` to see them. (#953)
+
 ### Security
 
 - **CVE-2026-53655 (pnpm bundled tar)** — deleted corepack's pnpm cache from the production image after install. Node 24's bundled corepack pre-caches pnpm@11.0.8 (which bundles tar@7.5.13) during `corepack enable`, even though the project uses pnpm@11.7.0. pnpm is not used at runtime, so the cache is removed entirely.
