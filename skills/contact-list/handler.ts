@@ -17,6 +17,7 @@ const DEFAULT_KIND_FILTER: ContactKind[] = ['person', 'principal', 'organization
 
 export class ContactListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
+    // Runtime-validated below via VALID_STATUSES, VALID_KINDS, and explicit guards.
     const { role, status, kind: kindInput, limit, offset } = ctx.input as unknown as {
       role?: string;
       status?: string;
@@ -50,6 +51,9 @@ export class ContactListHandler implements SkillHandler {
       const rawKinds = Array.isArray(kindInput)
         ? kindInput
         : String(kindInput).split(',').map((k) => k.trim());
+      if (rawKinds.length === 0) {
+        return { success: false, error: 'kind must not be empty — pass at least one value or omit the parameter to use the default filter' };
+      }
       for (const k of rawKinds) {
         if (!(VALID_KINDS as readonly string[]).includes(k)) {
           return { success: false, error: `Invalid kind: "${k}". Must be one of: ${VALID_KINDS.join(', ')}` };

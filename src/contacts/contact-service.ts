@@ -565,15 +565,19 @@ export class ContactService {
       // contact — e.g. two people both named "Alice Smith". Retry without a KG link;
       // the two contacts can be merged later via the contact-merge flow.
       if (pgCode === '23505' && constraint === 'idx_contacts_kg_node_unique') {
-        // Downgrade kind to 'person' alongside stripping the KG link so the contact
-        // row doesn't end up as kind='organization' with kgNodeId=null — that would
-        // violate the invariant that org contacts are always linked to a KG org node.
+        // Downgrade kind to 'person' alongside stripping the KG link — but only if the
+        // contact was an org contact, to avoid violating the invariant that org contacts
+        // are always linked to a KG org node. Automated contacts keep their kind even
+        // without a KG link (their person-type node may still be around; the link is just
+        // lost for this contact instance due to the collision).
         this.logger?.warn(
           { contactId: contact.id, kgNodeId: contact.kgNodeId, contactKind: contact.kind },
-          'KG node already claimed by another contact — creating contact without KG link; kind downgraded to person',
+          'KG node already claimed by another contact — creating contact without KG link; org kind downgraded to person',
         );
         contact.kgNodeId = null;
-        contact.kind = 'person';
+        if (contact.kind === 'organization') {
+          contact.kind = 'person';
+        }
         try {
           await this.backend.createContact(contact);
         } catch (retryErr) {
@@ -657,8 +661,8 @@ export class ContactService {
     return this.backend.findContactBySystemRole(systemRole);
   }
 
-  /** List contacts, optionally filtered by status, kind, and/or capped by limit with offset for pagination. */
-  async listContacts(filters?: { status?: ContactStatus; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
+  /** List contacts, optionally filtered by status, tier, kind, and/or capped by limit with offset for pagination. */
+  async listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
     return this.backend.listContacts(filters);
   }
 

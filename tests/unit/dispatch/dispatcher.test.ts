@@ -1578,8 +1578,9 @@ describe('Dispatcher — thread-participants block', () => {
 
 describe('Dispatcher — automated sender tier gate bypass (#953)', () => {
   // Regression test: automated senders (kind='automated') must reach the coordinator
-  // regardless of tier and channel unknownSender policy. They carry no standing in the
-  // trust/action system, so the tier gate does not apply to them.
+  // even when tier='unknown' and the channel unknownSender policy would normally drop them.
+  // Note: tier='blocked' still gates automated senders — this bypass is specific to
+  // the 'unknown' tier ignore-policy, not a blanket tier override.
 
   it('automated sender with tier=unknown bypasses ignore channel policy and reaches coordinator', async () => {
     const logger = createLogger('error');
