@@ -986,9 +986,14 @@ export async function knowledgeGraphRoutes(
     }
 
     // Re-read after setStatus if it ran so the tier derivation is reflected in the pending base.
-    const base: Contact = (typeof body.status === 'string')
-      ? ((await contactService.getContact(id)) ?? contact)
-      : contact;
+    let base: Contact = contact;
+    if (typeof body.status === 'string') {
+      const refreshed = await contactService.getContact(id);
+      if (!refreshed) {
+        logger.warn({ contactId: id }, 'PATCH: contact vanished after setStatus — using stale base');
+      }
+      base = refreshed ?? contact;
+    }
 
     // Build the complete updated contact in memory. All field changes are merged
     // here so the transaction only needs one write — avoids non-transactional stale

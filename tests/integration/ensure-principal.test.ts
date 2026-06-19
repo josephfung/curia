@@ -83,11 +83,11 @@ describeIf('ensurePrincipalContact', () => {
       display_name: string;
       role: string;
       status: string;
-      trust_level: string;
+      tier: string;
       system_role: string;
       kg_node_id: string;
     }>(
-      `SELECT display_name, role, status, trust_level, system_role, kg_node_id
+      `SELECT display_name, role, status, tier, system_role, kg_node_id
        FROM contacts WHERE id = $1`,
       [result.contactId],
     );
@@ -95,7 +95,7 @@ describeIf('ensurePrincipalContact', () => {
     expect(contact.rows[0]!.display_name).toBe(displayName);
     expect(contact.rows[0]!.role).toBe('ceo');
     expect(contact.rows[0]!.status).toBe('confirmed');
-    expect(contact.rows[0]!.trust_level).toBe('ceo');
+    expect(contact.rows[0]!.tier).toBe('principal');
     expect(contact.rows[0]!.system_role).toBe('principal');
     expect(contact.rows[0]!.kg_node_id).toBe(result.kgNodeId);
 

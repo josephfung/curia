@@ -606,7 +606,7 @@ export class Dispatcher {
       } catch (err) {
         this.logger.error(
           { err, channelId: payload.channelId, channelTrust },
-          'computeTrustScore threw unexpectedly — proceeding without trust score',
+          'computeTrustScore failed (possible YAML misconfiguration for channelTrustLevel) — proceeding without trust score',
         );
         // messageTrustScore remains undefined; coordinator handles missing score
       }

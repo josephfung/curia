@@ -108,14 +108,10 @@ export async function bootstrapCeoContact(
     const { contact_id, contact_status, identity_verified, display_name: existingName } = existing.rows[0];
     let { kg_node_id } = existing.rows[0];
 
-    // Always ensure role = 'ceo', trust_level = 'ceo', tier = 'principal', and
-    // kind = 'principal' on the CEO contact regardless of which path brought us here.
-    // This is idempotent — the UPDATE is a no-op when all values are already correct.
-    // Without trust_level = 'ceo', a second CEO email address linked to the same contact
-    // would not match the single CEO_PRIMARY_EMAIL config string and would fail the outbound
-    // filter's trust check. Setting role keeps metadata consistent even if the contact was
-    // initially auto-created without a role.
-    // tier='principal' and kind='principal' are the new equivalents (issue #945).
+    // Always ensure role = 'ceo', tier = 'principal', and kind = 'principal' on the CEO
+    // contact regardless of which path brought us here. This is idempotent — the UPDATE
+    // is a no-op when all values are already correct. Setting role keeps metadata consistent
+    // even if the contact was initially auto-created without a role.
     // repairPrincipalMetadata logs with context and rethrows on failure (see its body).
     await repairPrincipalMetadata(contact_id, pool, logger);
 
