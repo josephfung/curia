@@ -14,7 +14,8 @@ describe('runRederive', () => {
       b: JUDGMENT_ELEVATION_THRESHOLD - 0.1,
     };
     const pipeline = {
-      fullRecomputeAll: vi.fn().mockResolvedValue(undefined),
+      // Resolves with the total contact count (2), matching fullRecomputeAll's Promise<number> type.
+      fullRecomputeAll: vi.fn().mockResolvedValue(2),
       fullRecompute: vi.fn((id: string) => Promise.resolve(confidenceById[id] ?? 0)),
     };
     const contactService = {
@@ -27,5 +28,9 @@ describe('runRederive', () => {
     expect(contactService.elevateTierToKnown).toHaveBeenCalledWith('a', 'judgment');
     expect(contactService.elevateTierToKnown).not.toHaveBeenCalledWith('b', 'judgment');
     expect(result.elevated).toBe(1);
+    // recomputed reflects the total processed by fullRecomputeAll (all contacts, not just candidates)
+    expect(result.recomputed).toBe(2);
+    // 'b' is below the threshold so it is skipped, not elevated
+    expect(result.skipped).toBe(1);
   });
 });

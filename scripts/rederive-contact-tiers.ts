@@ -36,7 +36,8 @@ export async function runRederive(
   // 1. Refresh every contact's confidence from current correspondence stats.
   //    fullRecomputeAll() iterates all contacts and persists updated scores,
   //    so the subsequent listContacts() query sees fresh data.
-  await pipeline.fullRecomputeAll();
+  //    Capture the count — it reflects every contact processed, not just candidates.
+  const recomputed = await pipeline.fullRecomputeAll();
 
   // 2. Re-list unknown-tier person/org contacts (post-recompute snapshot) and
   //    elevate those over the judgment threshold.
@@ -77,7 +78,7 @@ export async function runRederive(
     }
   }
 
-  const summary = { recomputed: candidates.length, elevated, skipped, errors, failedContactIds };
+  const summary = { recomputed, elevated, skipped, errors, failedContactIds };
   logger.info(summary, 'rederive: done');
   return summary;
 }
