@@ -81,7 +81,8 @@ export function getInitiatingTier(
   metadata: Record<string, unknown> | undefined,
 ): ContactTier | null {
   if (!metadata) return null;
-  const originator = metadata.originator as TaskOriginator | undefined;
+  // Runtime-validated in callers; cast through unknown per repo policy.
+  const originator = metadata.originator as unknown as TaskOriginator | undefined;
   if (!originator) return null;
   // System and agent tasks are not externally initiated — skip the tier gate.
   if (originator.systemRole === 'system' || originator.systemRole === 'agent') return null;

@@ -29,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`email-send` and `signal-send` reclassified to `action_risk: "high"`** — both skills always contact arbitrary third-party recipients; `medium` (non-third-party) was under-declared and would have allowed `known`-tier contacts to trigger outbound sends without escalation under the new Gate C policy. Bumped to `1.3.0` and `1.2.0` respectively. (#950)
 - **CVE-2026-53655 (pnpm bundled tar)** — deleted corepack's pnpm cache from the production image after install. Node 24's bundled corepack pre-caches pnpm@11.0.8 (which bundles tar@7.5.13) during `corepack enable`, even though the project uses pnpm@11.7.0. pnpm is not used at runtime, so the cache is removed entirely.
 
 ### Added
