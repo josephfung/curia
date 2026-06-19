@@ -659,13 +659,25 @@ export class Dispatcher {
       }
     }
 
-    // Stamp TaskOriginator on every task — not just principal-originated ones.
-    // The originator tracks who started this task chain. For inbound messages,
-    // that's the sender. For self-initiated tasks (scheduler, proactive), the
-    // caller sets originator before invoking createAgentTask.
-    // SECURITY: originator is the ONLY source of systemRole for downstream
-    // authorization. Channel-supplied originator is stripped in mergeTaskMetadata.
-    const originator: TaskOriginator | undefined = senderContext?.resolved
+    // Stamp TaskOriginator on every inbound task — not just principal-originated ones.
+    // The originator tracks who started this task chain. For inbound messages, that's the
+    // sender. For self-initiated tasks (scheduler, proactive), the caller sets originator
+    // before invoking createAgentTask.
+    //
+    // SECURITY: originator is the ONLY source of systemRole for downstream authorization.
+    // Channel-supplied originator is stripped in mergeTaskMetadata.
+    //
+    // Defence in depth (#1059): inbound messages are external by definition. When the sender
+    // could not be resolved to a contact — the channel adapter's first-contact creation was
+    // skipped (rate caps, a creation failure, a malformed From) or no resolver is wired — we
+    // still stamp an originator with tier='unknown'. The Dispatch layer must not assume the
+    // Channel layer always pre-creates the contact: a missing originator would make the
+    // execution layer's Gate C fail-open (skip) on a consequential action, whereas tier='unknown'
+    // routes it through normal tier enforcement (which escalates third-party-facing sends). No
+    // contact UUID exists, so the raw channel sender id is the contactId sentinel — consistent
+    // with the existing non-UUID originator.contactId values ('system', 'primary-user'); the
+    // skill layer already guards UUID-typed lookups against non-UUID caller ids.
+    const originator: TaskOriginator = senderContext?.resolved
       ? {
           contactId: senderContext.contactId,
           systemRole: senderContext.systemRole ?? null,
@@ -673,12 +685,18 @@ export class Dispatcher {
           initiatedAt: new Date().toISOString(),
           tier: senderContext.tier,
         }
-      : undefined;
-    const originatorMeta = originator ? { originator } : undefined;
-    if (!originator) {
+      : {
+          contactId: payload.senderId,
+          systemRole: null,
+          channel: payload.channelId,
+          initiatedAt: new Date().toISOString(),
+          tier: 'unknown',
+        };
+    const originatorMeta = { originator };
+    if (!senderContext?.resolved) {
       this.logger.warn(
         { channelId: payload.channelId, senderId: payload.senderId },
-        'Dispatcher: dispatching task without TaskOriginator — sender was unresolved; isPrincipalOriginated will return false for this task',
+        'Dispatcher: inbound sender unresolved — stamped unknown-tier originator so Gate C enforces tier policy (#1059); isPrincipalOriginated remains false',
       );
     }
 

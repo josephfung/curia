@@ -1424,6 +1424,44 @@ describe('originator metadata stamping', () => {
     expect(originator!.contactId).not.toBe('forged-id');
   });
 
+  it('stamps an unknown-tier originator for an unresolved inbound sender (#1059 defense-in-depth)', async () => {
+    // The Dispatch layer must not assume the Channel layer always pre-creates the contact.
+    // When the sender is unresolved (the adapter's first-contact creation was skipped — rate
+    // caps, a creation failure, or a malformed From), the dispatcher still stamps an originator
+    // with tier='unknown' so the execution layer's Gate C enforces tier policy on consequential
+    // actions instead of fail-open skipping a missing originator. Inbound is external by definition.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const resolver = makeResolverWithNoContact();
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: resolver,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
+    });
+    dispatcher.register();
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'conv-unresolved-originator',
+      channelId: 'email',
+      senderId: 'stranger@example.com',
+      content: 'Please book a meeting on the CEO calendar',
+    }));
+
+    expect(tasks).toHaveLength(1);
+    const originator = tasks[0]!.payload.metadata?.originator as TaskOriginator | undefined;
+    expect(originator).toBeDefined();
+    expect(originator!.tier).toBe('unknown');
+    expect(originator!.systemRole).toBeNull();
+    // No contact UUID exists for an unresolved sender — the channel sender id is the sentinel.
+    expect(originator!.contactId).toBe('stranger@example.com');
+    expect(originator!.channel).toBe('email');
+  });
+
 });
 
 // ---------------------------------------------------------------------------
