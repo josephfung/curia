@@ -282,40 +282,47 @@ export class Dispatcher {
               parentEventId: event.id,
             }));
 
-            // Fire-and-forget: update contact confidence for this interaction.
-            // Non-blocking — the trust score for THIS message already used the
-            // stored contactConfidence. This update benefits the NEXT inbound.
-            // Skip blocked contacts — they are being dropped and should not accrue history.
-            // Uses tier for the gate check (issue #945); tier='blocked' == old status='blocked'.
-            if (this.confidencePipeline && senderContext.tier !== 'blocked') {
+            // Auto-elevation paths 2 and 3 — skip blocked contacts entirely.
+            if (senderContext.tier !== 'blocked') {
               const resolvedContactId = senderContext.contactId;
 
-              // Path 2: domain-validated org elevation — fires immediately for org-kind unknown contacts.
-              // Organizations that email us are implicitly domain-validated on first contact; no judgment call needed.
+              // Path 2: domain-validated org elevation — awaited so the unknown-sender gate below
+              // sees the updated tier on the first inbound. Organizations emailing us are implicitly
+              // domain-validated; no confidence score is needed.
               if (this.contactService && senderContext.kind === 'organization' && senderContext.tier === 'unknown') {
                 const cs = this.contactService;
-                cs.elevateTierToKnown(resolvedContactId, 'domain-validated')
-                  .catch(err => this.logger.warn({ err, contactId: resolvedContactId }, 'domain-validated elevation failed (non-fatal)'));
+                try {
+                  const elevated = await cs.elevateTierToKnown(resolvedContactId, 'domain-validated');
+                  if (elevated) senderContext.tier = 'known';
+                } catch (err) {
+                  this.logger.warn({ err, contactId: resolvedContactId }, 'domain-validated elevation failed (non-fatal)');
+                }
               }
 
-              // Path 3: judgment elevation — chains after the confidence update to get the new score.
-              // Capture tier and kind snapshots so the async callback sees pre-message values;
-              // senderContext may be mutated by the time the promise resolves.
-              const contactService = this.contactService;
-              const snapshotTier = senderContext.tier;
-              const snapshotKind = senderContext.kind;
-              this.confidencePipeline.incrementalUpdate(resolvedContactId, { type: 'message_seen' })
-                .then(newConfidence => {
-                  if (
-                    contactService &&
-                    snapshotTier === 'unknown' &&
-                    !isAutomatedKind(snapshotKind) &&
-                    newConfidence >= JUDGMENT_ELEVATION_THRESHOLD
-                  ) {
-                    return contactService.elevateTierToKnown(resolvedContactId, 'judgment');
+              // Path 3: judgment elevation — fire-and-forget; updates confidence history for the NEXT
+              // inbound. The trust score for THIS message already used the stored contactConfidence.
+              // Capture tier/kind snapshots before the IIFE so it sees pre-message values even if
+              // senderContext is mutated (e.g. by Path 2 above).
+              if (this.confidencePipeline) {
+                const contactService = this.contactService;
+                const snapshotTier = senderContext.tier;
+                const snapshotKind = senderContext.kind;
+                void (async () => {
+                  try {
+                    const newConfidence = await this.confidencePipeline!.incrementalUpdate(resolvedContactId, { type: 'message_seen' });
+                    if (
+                      contactService &&
+                      snapshotTier === 'unknown' &&
+                      !isAutomatedKind(snapshotKind) &&
+                      newConfidence >= JUDGMENT_ELEVATION_THRESHOLD
+                    ) {
+                      await contactService.elevateTierToKnown(resolvedContactId, 'judgment');
+                    }
+                  } catch (err) {
+                    this.logger.warn({ err, contactId: resolvedContactId }, 'Confidence pipeline or judgment elevation failed (non-fatal)');
                   }
-                })
-                .catch(err => this.logger.warn({ err, contactId: resolvedContactId }, 'Confidence pipeline or judgment elevation failed (non-fatal)'));
+                })();
+              }
             }
 
             // Unknown/blocked contacts gate: applies to tier='unknown' (was: provisional) and
@@ -793,13 +800,16 @@ export class Dispatcher {
       const cr = this.contactResolver;
       const cs = this.contactService;
       for (const address of recipients) {
-        cr.resolve('email', address)
-          .then(ctx => {
+        void (async () => {
+          try {
+            const ctx = await cr.resolve('email', address);
             if (ctx.resolved) {
-              return cs.elevateTierToKnown(ctx.contactId, 'correspondence');
+              await cs.elevateTierToKnown(ctx.contactId, 'correspondence');
             }
-          })
-          .catch(err => this.logger.warn({ err, address }, 'Correspondence elevation failed (non-fatal)'));
+          } catch (err) {
+            this.logger.warn({ err, address }, 'Correspondence elevation failed (non-fatal)');
+          }
+        })();
       }
     }
   }

@@ -1736,8 +1736,8 @@ class PostgresContactBackend implements ContactServiceBackend {
       `UPDATE contacts
        SET tier = 'known', updated_at = now()
        WHERE id = $1
-         AND tier = 'unknown'
-         AND kind NOT IN ('automated', 'agent')`,
+         AND COALESCE(tier, 'unknown') = 'unknown'
+         AND COALESCE(kind, 'person') NOT IN ('automated', 'agent')`,
       [contactId],
     );
     return (result.rowCount ?? 0) > 0;
