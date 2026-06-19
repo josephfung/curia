@@ -71,7 +71,7 @@ export class ConfidencePipeline {
         break;
       case 'trust_grant':
       case 'pairing_confirmed':
-        // No stat updates — the caller already modified trust_level or
+        // No stat updates — the caller already modified the contact's tier or
         // created the verified identity. We just recompute the score.
         break;
     }
@@ -90,7 +90,7 @@ export class ConfidencePipeline {
       inboundMessageCount: contact.inboundMessageCount + inboundDelta,
       outboundMessageCount: contact.outboundMessageCount + outboundDelta,
       lastSeenAt: lastSeenAt ?? contact.lastSeenAt,
-      trustLevel: contact.trustLevel,
+      tier: contact.tier,
       verifiedIdentityCount: identities.filter(i => i.verified).length,
       hasCeoStatedIdentity: identities.some(i => i.source === 'ceo_stated'),
       now: new Date(),
@@ -125,7 +125,7 @@ export class ConfidencePipeline {
       inboundMessageCount: contact.inboundMessageCount,
       outboundMessageCount: contact.outboundMessageCount,
       lastSeenAt: contact.lastSeenAt,
-      trustLevel: contact.trustLevel,
+      tier: contact.tier,
       verifiedIdentityCount: identities.filter(i => i.verified).length,
       hasCeoStatedIdentity: identities.some(i => i.source === 'ceo_stated'),
       now: new Date(),
