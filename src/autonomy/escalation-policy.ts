@@ -120,31 +120,41 @@ export function applyDisclosurePolicy(
  * (what the reply says), not this action gate, to avoid double-counting the same message.
  */
 /**
- * Map a skill manifest's action_risk label to the canonical ActionConsequenceClass and
- * the isThirdPartyFacing flag required by applyActionPolicy().
+ * Map a skill manifest's action_risk label to the canonical ActionConsequenceClass.
+ *
+ * This intentionally returns ONLY the consequence class — NOT isThirdPartyFacing. The
+ * manifest's action_risk encodes reversibility/consequence, fixed once at skill-authoring
+ * time; it cannot encode WHO a given invocation targets. A `medium` outbound skill may
+ * reply to the initiating sender OR email a third party — same manifest, different
+ * isThirdPartyFacing. That axis is a runtime property of the actual action and must be
+ * determined per-invocation (by the EscalationJudge), never baked into a static label.
+ * See the Gate C resolution in execution.ts, which only consults the judge when the
+ * decision actually hinges on this flag.
  *
  * Mapping follows the policy ladder from issue #948:
- *   none     → read/summarise          → 'none',                not third-party-facing
- *   low      → internal write          → 'reversible-internal', not third-party-facing
- *   medium   → outbound comms          → 'reversible-external', not third-party-facing (reply to sender)
- *   high     → calendar/commitment     → 'reversible-external', third-party-facing
- *   critical → payment/deletion        → 'irreversible',        third-party-facing
+ *   none     → read/summarise      → 'none'
+ *   low      → internal write      → 'reversible-internal'
+ *   medium   → outbound comms      → 'reversible-external'
+ *   high     → calendar/commitment → 'reversible-external'
+ *   critical → payment/deletion    → 'irreversible'
  *
- * Numeric risks: treated as irreversible + third-party-facing (fail-closed — numeric values
- * are author-specified precision scores and have no canonical consequence class).
+ * Numeric risks: treated as 'irreversible' (fail-closed — numeric values are
+ * author-specified precision scores with no canonical consequence class, so they always
+ * escalate for non-principal tiers). No skill uses numeric action_risk today.
+ * @TODO(#950): route numeric risks through the EscalationJudge instead of fail-closing.
  */
 export function mapActionRiskToConsequenceClass(
   risk: 'none' | 'low' | 'medium' | 'high' | 'critical' | number,
-): { actionClass: ActionConsequenceClass; isThirdPartyFacing: boolean } {
-  if (typeof risk === 'number') {
-    return { actionClass: 'irreversible', isThirdPartyFacing: true };
-  }
+): ActionConsequenceClass {
+  if (typeof risk === 'number') return 'irreversible';
   switch (risk) {
-    case 'none':     return { actionClass: 'none',                isThirdPartyFacing: false };
-    case 'low':      return { actionClass: 'reversible-internal', isThirdPartyFacing: false };
-    case 'medium':   return { actionClass: 'reversible-external', isThirdPartyFacing: false };
-    case 'high':     return { actionClass: 'reversible-external', isThirdPartyFacing: true  };
-    case 'critical': return { actionClass: 'irreversible',        isThirdPartyFacing: true  };
+    case 'none':     return 'none';
+    case 'low':      return 'reversible-internal';
+    case 'medium':   return 'reversible-external';
+    case 'high':     return 'reversible-external';
+    case 'critical': return 'irreversible';
+    // Belt-and-suspenders: an unrecognized label fails closed (mirrors applyActionPolicy).
+    default:         return 'irreversible';
   }
 }
 

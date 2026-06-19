@@ -17,10 +17,13 @@
 // before invoking the handler. The handler receives ctx.entityContext[] and
 // never needs to call entity-context itself.
 
-import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition } from './types.js';
+import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition, SkillManifest } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isSystemOriginated, getInitiatingTier } from '../contacts/principal.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass } from '../autonomy/escalation-policy.js';
+import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
+import type { EscalationJudge } from '../autonomy/escalation-judge.js';
+import type { ContactTier } from '../contacts/types.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput, sanitizeObjectOutput } from './sanitize.js';
 import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
@@ -80,6 +83,39 @@ export interface InvokeOptions {
   humanApproved?: boolean;
 }
 
+/** Cap on the input rendering passed to the escalation judge — keeps full email bodies and
+ *  other large payloads out of the prompt while preserving the recipient/target fields the
+ *  judge needs to assess third-party-facing. */
+const JUDGE_INPUT_DESCRIPTION_MAX_LENGTH = 1000;
+
+/**
+ * Build a concise natural-language description of a skill invocation for the EscalationJudge.
+ *
+ * The judge's action classifier expects a short description (e.g. "send an email to X") and
+ * decides isThirdPartyFacing from the target it sees. We surface the skill's purpose plus a
+ * length-capped rendering of its inputs — the recipient/target fields (e.g. `to`) are what
+ * let the judge distinguish a reply-to-sender from a message to a third party. The judge
+ * JSON-encodes and treats this as opaque data, so embedded content cannot alter the verdict.
+ * A vague or truncated description fails safe: the judge leans toward escalate.
+ */
+function buildActionDescription(
+  skillName: string,
+  manifest: SkillManifest,
+  input: Record<string, unknown>,
+): string {
+  let inputJson: string;
+  try {
+    inputJson = JSON.stringify(input);
+  } catch {
+    // Circular or otherwise non-serializable input — describe without it (judge fails safe).
+    inputJson = '(input omitted: not serializable)';
+  }
+  if (inputJson.length > JUDGE_INPUT_DESCRIPTION_MAX_LENGTH) {
+    inputJson = inputJson.slice(0, JUDGE_INPUT_DESCRIPTION_MAX_LENGTH) + '…(truncated)';
+  }
+  return `Skill "${skillName}" (${manifest.description}). Invocation input: ${inputJson}`;
+}
+
 export class ExecutionLayer {
   private registry: SkillRegistry;
   private logger: Logger;
@@ -101,6 +137,7 @@ export class ExecutionLayer {
   private browserService?: BrowserService;
   private bullpenService?: import('../memory/bullpen.js').BullpenService;
   private approvalTrigger?: ApprovalTriggerService;
+  private escalationJudge?: EscalationJudge;
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
   private taskRepo?: import('../db/task-repo.js').TaskRepo;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
@@ -142,6 +179,9 @@ export class ExecutionLayer {
     browserService?: BrowserService;
     bullpenService?: import('../memory/bullpen.js').BullpenService;
     approvalTrigger?: ApprovalTriggerService;
+    /** LLM escalation judge — consulted by Gate C only when the tier decision hinges on
+     *  whether the action is third-party-facing (a runtime property the manifest can't encode). */
+    escalationJudge?: EscalationJudge;
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
     taskRepo?: import('../db/task-repo.js').TaskRepo;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
@@ -174,6 +214,7 @@ export class ExecutionLayer {
     this.browserService = options?.browserService;
     this.bullpenService = options?.bullpenService;
     this.approvalTrigger = options?.approvalTrigger;
+    this.escalationJudge = options?.escalationJudge;
     this.actionLogRepo = options?.actionLogRepo;
     this.taskRepo = options?.taskRepo;
     this.confidencePipeline = options?.confidencePipeline;
@@ -343,6 +384,69 @@ export class ExecutionLayer {
     }
 
     return baseMsg + `No approval request was created — the CEO must authorize this action manually.`;
+  }
+
+  /**
+   * Resolve the Gate C decision for a consequential action initiated by a non-principal contact.
+   *
+   * Fast path (no LLM): when applyActionPolicy returns the SAME decision regardless of whether
+   * the action is third-party-facing, the manifest's action_risk is sufficient — decide
+   * deterministically. This covers the obvious majority: `unknown` always escalates on any
+   * external send; `trusted`/`principal` always allow reversible-external; `irreversible`
+   * always escalates; internal/read-only always allow.
+   *
+   * Judge path: when the decision hinges on isThirdPartyFacing — today only a `known` contact
+   * proposing a `reversible-external` action, where a reply to the sender is allowed but
+   * emailing a third party must escalate — the static manifest cannot distinguish the two.
+   * Defer to the EscalationJudge, which inspects the actual action. The judge is fail-closed
+   * internally (LLM error/timeout/malformed verdict → escalate). When no judge is wired or it
+   * is disabled, we fail closed here as well — an ambiguous consequential action is never
+   * silently allowed.
+   */
+  private async resolveTierGateDecision(
+    initiatingTier: ContactTier,
+    actionClass: ActionConsequenceClass,
+    skillName: string,
+    manifest: SkillManifest,
+    input: Record<string, unknown>,
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): Promise<EscalationDecision> {
+    const decisionIfReplyToSender = applyActionPolicy(initiatingTier, actionClass, false);
+    const decisionIfThirdParty = applyActionPolicy(initiatingTier, actionClass, true);
+
+    // Obvious: the third-party-facing axis doesn't change the outcome → no judge needed.
+    if (decisionIfReplyToSender === decisionIfThirdParty) {
+      return decisionIfReplyToSender;
+    }
+
+    // Ambiguous: the outcome depends on who the action actually targets. Ask the judge.
+    if (this.escalationJudge?.isEnabled()) {
+      const verdict = await this.escalationJudge.classifyAction({
+        description: buildActionDescription(skillName, manifest, input),
+        initiatingTier,
+        conversationId: options?.conversationId ?? 'system',
+      });
+      skillLogger.info(
+        {
+          skillName,
+          initiatingTier,
+          actionClass,
+          decision: verdict.decision,
+          judgedClass: verdict.actionClass,
+          reason: verdict.reason,
+        },
+        'autonomy gate: Gate C consulted the escalation judge for the third-party-facing determination',
+      );
+      return verdict.decision;
+    }
+
+    // No judge available — fail closed rather than guess permissively.
+    skillLogger.warn(
+      { skillName, initiatingTier, actionClass },
+      'autonomy gate: Gate C decision is third-party-sensitive but no escalation judge is configured — failing closed (escalate)',
+    );
+    return 'escalate';
   }
 
   /**
@@ -590,11 +694,13 @@ export class ExecutionLayer {
           // is unavailable (system/agent tasks, pre-#950 stored originators).
           const initiatingTier = getInitiatingTier(options?.taskMetadata);
           if (initiatingTier !== null && manifest.action_risk !== 'none') {
-            const { actionClass, isThirdPartyFacing } = mapActionRiskToConsequenceClass(manifest.action_risk);
-            const tierDecision = applyActionPolicy(initiatingTier, actionClass, isThirdPartyFacing);
+            const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
+            const tierDecision = await this.resolveTierGateDecision(
+              initiatingTier, actionClass, skillName, manifest, input, options, skillLogger,
+            );
             if (tierDecision === 'escalate') {
               skillLogger.info(
-                { skillName, initiatingTier, actionClass, isThirdPartyFacing, actionRisk: manifest.action_risk },
+                { skillName, initiatingTier, actionClass, actionRisk: manifest.action_risk },
                 'autonomy gate: skill blocked — initiating contact tier below required minimum (Gate C)',
               );
               const gateCError = await this.buildTierGateError(
