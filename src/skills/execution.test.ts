@@ -896,9 +896,10 @@ describe('autonomy gates', () => {
       const result = await layer.invoke('email-reply', {}, undefined, originatorMeta('unknown'));
 
       expect(result.success).toBe(false);
-      const calls = mockBus.publish.mock.calls as Array<[string, { type: string }]>;
-      const blocked = calls.filter(([, e]) => e.type === 'autonomy.skill_blocked');
-      expect(blocked).toHaveLength(0);
+      expect(mockBus.publish).not.toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({ type: 'autonomy.skill_blocked' }),
+      );
     });
 
     it('humanApproved bypasses Gate C', async () => {
