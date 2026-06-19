@@ -899,20 +899,24 @@ export async function knowledgeGraphRoutes(
     if (typeof body.trustLevel === 'string') {
       await contactService.setTrustLevel(created.id, body.trustLevel as TrustLevel);
     }
-    // Apply tier/kind overrides if provided — these take precedence over status/trustLevel-derived values.
-    if (typeof body.tier === 'string') {
-      await contactService.setTier(created.id, body.tier as ContactTier);
-    }
-    if (typeof body.kind === 'string') {
-      await contactService.setKind(created.id, body.kind as ContactKind);
-    }
 
-    const freshCreated = await contactService.getContact(created.id);
+    // Read back after create + trustLevel so the post-derivation tier is the base
+    // for any tier/kind override below.
+    let freshCreated = await contactService.getContact(created.id);
     if (!freshCreated) {
       // Should never happen — contact was just created — but guard rather than return stale data.
       logger.error({ contactId: created.id }, 'POST /api/kg/contacts: contact not found after creation');
       return reply.status(500).send({ error: 'Contact created but could not be retrieved.' });
     }
+
+    // Apply tier/kind overrides atomically — one write prevents partial state if either fails.
+    if (typeof body.tier === 'string' || typeof body.kind === 'string') {
+      let enriched: Contact = { ...freshCreated, updatedAt: new Date() };
+      if (typeof body.tier === 'string') enriched = { ...enriched, tier: body.tier as ContactTier };
+      if (typeof body.kind === 'string') enriched = { ...enriched, kind: body.kind as ContactKind };
+      freshCreated = await contactService.saveContact(enriched);
+    }
+
     return reply.status(201).send({
       contact: serializeContact(freshCreated),
     });
@@ -993,11 +997,28 @@ export async function knowledgeGraphRoutes(
       }
     }
 
-    // Build the complete updated contact in memory from the pre-validation snapshot.
-    // All per-field setters read the contact non-transactionally, so calling them in
-    // sequence causes each write to clobber earlier changes with stale data. Assembling
-    // the full pending object here and writing once avoids that race.
-    let pending: Contact = { ...contact, updatedAt: new Date() };
+    // Legacy setStatus / setTrustLevel are not transaction-aware (retired in #955).
+    // Run them first: they carry tier-derivation side-effects (setStatus → newTier,
+    // setTrustLevel → newTier) that must be captured before building `pending`.
+    if (typeof body.status === 'string') {
+      await contactService.setStatus(id, body.status as ContactStatus);
+    }
+    if ('trustLevel' in body) {
+      await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
+    }
+
+    // Re-read after legacy mutations if any ran so that tier/status/trustLevel
+    // derivations from setStatus / setTrustLevel are reflected in the pending base.
+    // Without this, saveContact would overwrite the legacy-mutation writes with
+    // stale values from the pre-mutation `contact` snapshot.
+    const base: Contact = (typeof body.status === 'string' || 'trustLevel' in body)
+      ? ((await contactService.getContact(id)) ?? contact)
+      : contact;
+
+    // Build the complete updated contact in memory. All field changes are merged
+    // here so the transaction only needs one write — avoids non-transactional stale
+    // reads that occur when individual per-field setters each load the contact.
+    let pending: Contact = { ...base, updatedAt: new Date() };
 
     if (typeof body.displayName === 'string' && body.displayName.trim().length > 0) {
       pending = { ...pending, displayName: body.displayName.trim() };
@@ -1032,15 +1053,6 @@ export async function knowledgeGraphRoutes(
         definedFields.primaryEmail = definedFields.primaryEmail.toLowerCase();
       }
       pending = { ...pending, ...definedFields };
-    }
-
-    // Legacy setStatus / setTrustLevel are not transaction-aware (retired in #955).
-    // Run them before the transaction so a legacy-field failure is surfaced cleanly.
-    if (typeof body.status === 'string') {
-      await contactService.setStatus(id, body.status as ContactStatus);
-    }
-    if ('trustLevel' in body) {
-      await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
     }
 
     // All remaining mutations are wrapped in a single DB transaction for atomicity.
