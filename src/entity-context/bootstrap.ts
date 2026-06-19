@@ -82,9 +82,10 @@ export async function bootstrapAgentIdentity(
     const contactResult = await pool.query<{ id: string }>(
       // tier/kind (migration 055) must be set explicitly: the column defaults
       // ('unknown'/'person') would mis-classify the agent identity. 'known'/'agent'
-      // matches what migration 055's backfill derives for a confirmed system_role='agent' row.
-      `INSERT INTO contacts (kg_node_id, display_name, role, status, system_role, tier, kind, created_at, updated_at)
-       VALUES ($1, $2, 'agent', 'confirmed', 'agent', 'known', 'agent', now(), now())
+      // matches what migration 055's backfill derives for a system_role='agent' row.
+      // Legacy status column not written here (#955).
+      `INSERT INTO contacts (kg_node_id, display_name, role, system_role, tier, kind, created_at, updated_at)
+       VALUES ($1, $2, 'agent', 'agent', 'known', 'agent', now(), now())
        ON CONFLICT (kg_node_id) WHERE kg_node_id IS NOT NULL
        DO UPDATE SET display_name = EXCLUDED.display_name, role = 'agent', system_role = 'agent', tier = 'known', kind = 'agent', updated_at = now()
        RETURNING id`,

@@ -1036,10 +1036,12 @@ export class OutboundGateway {
       // until the contact is enriched or the CEO assigns a proper name.
       let created;
       try {
+        // No status override: the recipient is created at the default tier ('known',
+        // derived from the ceo_stated source) and elevated via the live correspondence
+        // path. Legacy status column not written here (#955).
         created = await this.contactService.createContact({
           displayName: recipientId,
           fallbackDisplayName: recipientId,
-          status: 'confirmed',
           source: 'ceo_stated',
         });
       } catch (err) {
