@@ -71,6 +71,10 @@ export function computeTrustScore(input: ComputeTrustScoreInput): number {
   // Determine the channel normalized weight. Use the tier-derived override when set
   // (trusted/principal → 1.0, known → 0.6); otherwise use the channel trust level.
   const tierOverride = tier !== null ? TIER_CHANNEL_WEIGHT_OVERRIDE[tier] : undefined;
+  // Note: TIER_CHANNEL_WEIGHT_OVERRIDE entries for principal/trusted/known are
+  // statically defined — undefined values fall through to the channelTrustLevel
+  // branch below. The undefined guard here only fires for unknown channelTrustLevel
+  // values (e.g., a YAML misconfiguration); it does not cover the tier branch.
   const channelNormalized =
     tierOverride !== undefined ? tierOverride : CHANNEL_TRUST_NORMALIZED[channelTrustLevel];
 

@@ -159,7 +159,7 @@ export class ContactResolver {
         // Log and continue with authorization=null — the coordinator still sees
         // who the sender is, just without permission context.
         this.logger.error(
-          { err, contactId: resolved.contactId },
+          { err, contactId: resolved.contactId, errMessage: err instanceof Error ? err.message : String(err) },
           'Authorization evaluation failed — proceeding without auth context',
         );
       }

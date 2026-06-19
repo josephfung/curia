@@ -377,8 +377,9 @@ describe('Dispatcher — messageTrustScore', () => {
     }));
 
     expect(tasks).toHaveLength(1);
-    // email low=0.3, contactConfidence=0.8 → (0.3*0.4)+(0.8*0.4) = 0.12+0.32 = 0.44
-    expect(tasks[0]!.payload.messageTrustScore).toBeCloseTo(0.44);
+    // status='confirmed' → tier='known' → channel weight override 0.6 (not channel floor 0.3)
+    // (0.6*0.4)+(0.8*0.4) = 0.24+0.32 = 0.56
+    expect(tasks[0]!.payload.messageTrustScore).toBeCloseTo(0.56);
   });
 
   it('attaches messageTrustScore for unknown sender via email', async () => {
