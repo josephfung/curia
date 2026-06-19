@@ -1036,13 +1036,15 @@ export class OutboundGateway {
       // until the contact is enriched or the CEO assigns a proper name.
       let created;
       try {
-        // No status override: the recipient is created at the default tier ('known',
-        // derived from the ceo_stated source) and elevated via the live correspondence
-        // path. Legacy status column not written here (#955).
+        // Explicit tier: the outbound recipient (someone the CEO is emailing) is
+        // CEO-trusted — equivalent to the former status='confirmed'→tier='known' path.
+        // Set tier='known' explicitly so this intent survives Task 5, which removes
+        // createContact's internal status default (#955).
         created = await this.contactService.createContact({
           displayName: recipientId,
           fallbackDisplayName: recipientId,
           source: 'ceo_stated',
+          tier: 'known',
         });
       } catch (err) {
         this.log.warn(
