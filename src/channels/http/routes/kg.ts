@@ -6,7 +6,7 @@ import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import { ContactValidationError } from '../../../contacts/contact-service.js';
-import type { Contact, ContactCanonicalFields, ContactKind, ContactStatus, ContactTier } from '../../../contacts/types.js';
+import type { Contact, ContactCanonicalFields, ContactKind, ContactTier } from '../../../contacts/types.js';
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
@@ -273,7 +273,6 @@ export async function knowledgeGraphRoutes(
     });
   });
 
-  const validContactStatuses: ContactStatus[] = ['confirmed', 'provisional', 'blocked'];
   // tier/kind selectable via the API — 'principal' and kind∈{principal,agent} are structural-only.
   const validContactTiers: ContactTier[] = ['blocked', 'unknown', 'known', 'trusted'];
   const validContactKinds: ContactKind[] = ['person', 'organization', 'automated'];
@@ -843,7 +842,6 @@ export async function knowledgeGraphRoutes(
     const body = request.body as {
       displayName?: unknown;
       role?: unknown;
-      status?: unknown;
       tier?: unknown;
       kind?: unknown;
       notes?: unknown;
@@ -852,10 +850,6 @@ export async function knowledgeGraphRoutes(
 
     if (typeof body.displayName !== 'string' || body.displayName.trim().length === 0) {
       return reply.status(400).send({ error: 'displayName is required.' });
-    }
-    const status = typeof body.status === 'string' ? body.status : 'confirmed';
-    if (!validContactStatuses.includes(status as ContactStatus)) {
-      return reply.status(400).send({ error: 'Invalid status.' });
     }
     if (body.tier !== undefined &&
         (typeof body.tier !== 'string' || !validContactTiers.includes(body.tier as ContactTier))) {
@@ -882,7 +876,6 @@ export async function knowledgeGraphRoutes(
     const created = await contactService.createContact({
       displayName: body.displayName,
       role: typeof body.role === 'string' && body.role.trim().length > 0 ? body.role : undefined,
-      status: status as ContactStatus,
       notes: typeof body.notes === 'string' && body.notes.trim().length > 0 ? body.notes : undefined,
       kgNodeId,
       source: 'kg_web_ui',
@@ -916,7 +909,6 @@ export async function knowledgeGraphRoutes(
     const body = request.body as {
       displayName?: unknown;
       role?: unknown;
-      status?: unknown;
       tier?: unknown;
       kind?: unknown;
       notes?: unknown;
@@ -928,9 +920,6 @@ export async function knowledgeGraphRoutes(
     }
 
     // Validate all inputs before any mutations to avoid partial writes on bad input.
-    if (typeof body.status === 'string' && !validContactStatuses.includes(body.status as ContactStatus)) {
-      return reply.status(400).send({ error: 'Invalid status.' });
-    }
     // Validate tier — rejects 'principal' (structural, derived from system_role).
     if ('tier' in body) {
       if (typeof body.tier !== 'string' || !validContactTiers.includes(body.tier as ContactTier)) {
@@ -979,26 +968,10 @@ export async function knowledgeGraphRoutes(
       }
     }
 
-    // setStatus is not transaction-aware — run it first so the tier-derivation
-    // side-effect is captured before building `pending`.
-    if (typeof body.status === 'string') {
-      await contactService.setStatus(id, body.status as ContactStatus);
-    }
-
-    // Re-read after setStatus if it ran so the tier derivation is reflected in the pending base.
-    let base: Contact = contact;
-    if (typeof body.status === 'string') {
-      const refreshed = await contactService.getContact(id);
-      if (!refreshed) {
-        logger.warn({ contactId: id }, 'PATCH: contact vanished after setStatus — using stale base');
-      }
-      base = refreshed ?? contact;
-    }
-
     // Build the complete updated contact in memory. All field changes are merged
     // here so the transaction only needs one write — avoids non-transactional stale
     // reads that occur when individual per-field setters each load the contact.
-    let pending: Contact = { ...base, updatedAt: new Date() };
+    let pending: Contact = { ...contact, updatedAt: new Date() };
 
     if (typeof body.displayName === 'string' && body.displayName.trim().length > 0) {
       pending = { ...pending, displayName: body.displayName.trim() };
