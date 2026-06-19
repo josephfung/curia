@@ -71,6 +71,8 @@ Also set isThirdPartyFacing:
 - true  — the action involves or notifies parties OTHER than the person who sent this request (e.g. inviting a new attendee, emailing someone else, committing on the executive's behalf to an external party, multi-step actions like "book a flight" that inherently contact third parties).
 - false — the action only responds to or directly involves the initiating sender (e.g. a direct reply to the person who asked).
 
+When uncertain whether the action reaches anyone beyond the initiating sender — including when the description is vague, truncated, or the recipient is unclear — set isThirdPartyFacing to true. Err toward true; a wrong "false" can leak an action to outsiders.
+
 Respond with ONLY a JSON object:
 {"class": "none"|"reversible-internal"|"reversible-external"|"irreversible", "isThirdPartyFacing": true|false, "reason": "<one short sentence>"}
 No prose, no code fences.`;

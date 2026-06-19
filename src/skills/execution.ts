@@ -20,7 +20,7 @@
 import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition, SkillManifest } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isSystemOriginated, getInitiatingTier } from '../contacts/principal.js';
-import { applyActionPolicy, mapActionRiskToConsequenceClass } from '../autonomy/escalation-policy.js';
+import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import type { ContactTier } from '../contacts/types.js';
@@ -420,25 +420,43 @@ export class ExecutionLayer {
       return decisionIfReplyToSender;
     }
 
-    // Ambiguous: the outcome depends on who the action actually targets. Ask the judge.
+    // Ambiguous: the outcome depends on who the action actually targets. Ask the judge —
+    // but only to resolve the third-party-facing axis. We recompute the policy ourselves
+    // against the manifest's consequence class so a misclassification (or crafted input)
+    // cannot DOWNGRADE the action below the class the manifest already established. The
+    // judge's class is honored only when it is MORE severe (an upgrade, e.g. it spots a
+    // payment behind a "send"). A failed/timed-out judge returns escalate with no flag
+    // (isThirdPartyFacing === undefined) → fail closed.
     if (this.escalationJudge?.isEnabled()) {
       const verdict = await this.escalationJudge.classifyAction({
         description: buildActionDescription(skillName, manifest, input),
         initiatingTier,
         conversationId: options?.conversationId ?? 'system',
       });
+      if (verdict.isThirdPartyFacing === undefined) {
+        skillLogger.info(
+          { skillName, initiatingTier, actionClass, reason: verdict.reason },
+          'autonomy gate: Gate C escalation judge returned no third-party determination — failing closed (escalate)',
+        );
+        return 'escalate';
+      }
+      // Clamp the consequence class up to the manifest floor before applying the policy.
+      const effectiveClass = moreSevereConsequence(actionClass, verdict.actionClass ?? actionClass);
+      const decision = applyActionPolicy(initiatingTier, effectiveClass, verdict.isThirdPartyFacing);
       skillLogger.info(
         {
           skillName,
           initiatingTier,
-          actionClass,
-          decision: verdict.decision,
+          manifestClass: actionClass,
           judgedClass: verdict.actionClass,
+          effectiveClass,
+          isThirdPartyFacing: verdict.isThirdPartyFacing,
+          decision,
           reason: verdict.reason,
         },
         'autonomy gate: Gate C consulted the escalation judge for the third-party-facing determination',
       );
-      return verdict.decision;
+      return decision;
     }
 
     // No judge available — fail closed rather than guess permissively.

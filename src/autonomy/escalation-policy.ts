@@ -158,6 +158,27 @@ export function mapActionRiskToConsequenceClass(
   }
 }
 
+/**
+ * Consequence classes ranked by severity (ascending up the reversibility ladder).
+ * Used to clamp an LLM verdict so it can never downgrade an action below the consequence
+ * class the manifest already established — the judge may only refine upward or resolve the
+ * third-party-facing axis, never weaken a known consequence.
+ */
+const CONSEQUENCE_RANK: Record<ActionConsequenceClass, number> = {
+  'none': 0,
+  'reversible-internal': 1,
+  'reversible-external': 2,
+  'irreversible': 3,
+};
+
+/** Return whichever consequence class is more severe (higher on the reversibility ladder). */
+export function moreSevereConsequence(
+  a: ActionConsequenceClass,
+  b: ActionConsequenceClass,
+): ActionConsequenceClass {
+  return CONSEQUENCE_RANK[a] >= CONSEQUENCE_RANK[b] ? a : b;
+}
+
 export function applyActionPolicy(
   initiatingTier: ContactTier,
   actionClass: ActionConsequenceClass,
