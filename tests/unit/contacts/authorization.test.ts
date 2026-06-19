@@ -309,6 +309,27 @@ describe('AuthorizationService', () => {
     expect(result.allowed).toContain('schedule_meetings');
   });
 
+  it('known-tier contact on low-trust channel can access medium-sensitivity perms (intentional #1070 trade-off)', () => {
+    // Old behavior: trustLevel=null → rank 0; email (rank 0): see_personal_calendar (medium, rank 1) → trust-blocked.
+    // New behavior: tier='known' → rank 1 (medium-equivalent); effectiveTrust = max(0,1) = 1 >= 1 → allowed.
+    // This is a deliberate trade-off in the trust_level→tier collapse: 'known' maps to the former 'medium'
+    // trust level rather than null, so confirmed contacts with no explicit high/ceo grant get a slight
+    // permission loosening for medium-sensitivity role grants on low-trust channels.
+    // High-sensitivity permissions remain blocked (see test above).
+    const result = authService.evaluate({
+      role: 'spouse',
+      tier: 'known',
+      status: 'confirmed',
+      channel: 'email',
+      overrides: [],
+    });
+    // see_personal_calendar: medium sensitivity, spouse role grants it → now allowed (was trust-blocked pre-#1070)
+    expect(result.allowed).toContain('see_personal_calendar');
+    expect(result.trustBlocked).not.toContain('see_personal_calendar');
+    // view_financial_reports: high sensitivity, spouse role denies it → still denied (not trust-blocked)
+    expect(result.denied).toContain('view_financial_reports');
+  });
+
   it('CEO on email gets medium-sensitivity perms via effective trust override', () => {
     // Joseph scenario: tier=principal, channel=email (low).
     // Without fix: see_personal_calendar trust-blocked. With fix: max(low,principal)=principal(3) → allowed.
