@@ -16,9 +16,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Auto-elevation** — contacts auto-promote from `unknown` to `known` via correspondence, domain, and judgment signals. (#951)
-- **Action gate: contact-tier enforcement (Gate C)** — actions from lower-tier contacts escalate unless the initiating tier permits them. (#950)
+- **Action gate: contact-tier enforcement (Gate C)** — actions from lower-tier contacts escalate unless the initiating tier permits them; the third-party-facing distinction is resolved by the escalation judge, not guessed from the manifest. (#950)
 - **`tier` on `TaskOriginator`** — dispatcher stamps the initiating contact's tier for Gate C enforcement. (#950)
-- **`mapActionRiskToConsequenceClass()`** — maps `action_risk` labels to consequence class and third-party flag for Gate C. (#950)
+- **Escalation judge wired into Gate C** — `EscalationJudge.classifyAction()` is consulted only when a tier×risk decision hinges on whether an action targets a third party (e.g. a `known` contact's reply vs. a send to a stranger); obvious cases stay deterministic. (#950)
 - **Automated sender classification** — `classifyEmailSender()` detects noreply/newsletter patterns and marks contacts `kind=automated`. (#953)
 - **`contact-list` skill `kind` filter** — filters by `kind`; default view excludes `automated` and `agent` contacts. (#953)
 

@@ -20,6 +20,7 @@ import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { AutonomyService, AutonomyConfig } from '../autonomy/autonomy-service.js';
 import type { SecretsService } from '../secrets/secrets-service.js';
 import type { ApprovalTriggerService, ApprovalRequestResult } from '../autonomy/approval-trigger.js';
+import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -691,13 +692,26 @@ describe('autonomy gates', () => {
   // ---------------------------------------------------------------------------
 
   describe('Gate C — contact-tier gate', () => {
-    function makeLayerWithScore100(bus?: EventBus) {
+    function makeLayerWithScore100(bus?: EventBus, escalationJudge?: EscalationJudge) {
       const registry = new SkillRegistry();
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(100),
         bus,
+        escalationJudge,
       });
       return { registry, layer };
+    }
+
+    /** Stub EscalationJudge with a fixed verdict; exposes the spies for call assertions. */
+    function makeEscalationJudge(decision: 'allow' | 'escalate', enabled = true) {
+      const classifyAction = vi.fn().mockResolvedValue({
+        decision,
+        actionClass: 'reversible-external',
+        reason: 'stub verdict',
+      });
+      const isEnabled = vi.fn().mockReturnValue(enabled);
+      const judge = { classifyAction, isEnabled } as unknown as EscalationJudge;
+      return { judge, classifyAction, isEnabled };
     }
 
     function originatorMeta(tier: string, systemRole: string | null = null) {
@@ -714,12 +728,15 @@ describe('autonomy gates', () => {
       };
     }
 
-    it('blocks medium-risk skill when initiated by unknown-tier contact', async () => {
-      const { registry, layer } = makeLayerWithScore100();
-      const handler = makeHandler('should not run');
-      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+    // -- Deterministic fast path: outcome is tier-determined, judge is never consulted ----
 
-      const result = await layer.invoke('email-reply', {}, undefined, originatorMeta('unknown'));
+    it('blocks medium-risk skill when initiated by unknown-tier contact (deterministic, no judge)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge('allow');
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke('email-send', {}, undefined, originatorMeta('unknown'));
 
       expect(result.success).toBe(false);
       if (!result.success) {
@@ -727,10 +744,13 @@ describe('autonomy gates', () => {
         expect(result.error).toContain('medium');
       }
       expect(handler.execute).not.toHaveBeenCalled();
+      // unknown always escalates on any external send, regardless of third-party-facing → no LLM call.
+      expect(classifyAction).not.toHaveBeenCalled();
     });
 
-    it('allows low-risk skill when initiated by unknown-tier contact', async () => {
-      const { registry, layer } = makeLayerWithScore100();
+    it('allows low-risk skill when initiated by unknown-tier contact (deterministic, no judge)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge('escalate');
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('memory-store', 'low'), handler);
 
@@ -738,6 +758,7 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(true);
       expect(handler.execute).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
     });
 
     it('always allows read-only (none) skills regardless of tier', async () => {
@@ -751,33 +772,9 @@ describe('autonomy gates', () => {
       expect(handler.execute).toHaveBeenCalledOnce();
     });
 
-    it('blocks high-risk (third-party-facing) skill when initiated by known-tier contact', async () => {
-      const { registry, layer } = makeLayerWithScore100();
-      const handler = makeHandler('should not run');
-      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
-
-      const result = await layer.invoke('calendar-create-event', {}, undefined, originatorMeta('known'));
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('known');
-      }
-      expect(handler.execute).not.toHaveBeenCalled();
-    });
-
-    it('allows medium-risk (reply-to-sender) skill when initiated by known-tier contact', async () => {
-      const { registry, layer } = makeLayerWithScore100();
-      const handler = makeHandler('ok');
-      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
-
-      const result = await layer.invoke('email-reply', {}, undefined, originatorMeta('known'));
-
-      expect(result.success).toBe(true);
-      expect(handler.execute).toHaveBeenCalledOnce();
-    });
-
-    it('allows high-risk skill when initiated by trusted-tier contact', async () => {
-      const { registry, layer } = makeLayerWithScore100();
+    it('allows high-risk skill when initiated by trusted-tier contact (deterministic, no judge)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge('escalate');
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
 
@@ -785,9 +782,11 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(true);
       expect(handler.execute).toHaveBeenCalledOnce();
+      // trusted always allows reversible-external → no LLM call even though a judge is wired.
+      expect(classifyAction).not.toHaveBeenCalled();
     });
 
-    it('blocks critical-risk skill when initiated by trusted-tier contact', async () => {
+    it('blocks critical-risk skill when initiated by trusted-tier contact (deterministic)', async () => {
       const { registry, layer } = makeLayerWithScore100();
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('irreversible-action', 'critical'), handler);
@@ -799,6 +798,63 @@ describe('autonomy gates', () => {
         expect(result.error).toContain('trusted');
       }
       expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    // -- Judge path: known + reversible-external is the third-party-sensitive cell --------
+    // A reply to the sender is allowed; a send to a third party must escalate. The manifest
+    // can't tell them apart, so Gate C defers to the judge.
+
+    it('allows a known contact reply-to-sender when the judge clears it (not third-party-facing)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge('allow');
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke('email-reply', { to: 'sender@example.com' }, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
+    it('blocks a known contact send to a third party when the judge escalates (the closed gap)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge('escalate');
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke('email-send', { to: 'stranger@example.com' }, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('known');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
+    it('fails closed (escalates) for a known-contact reversible-external action when no judge is configured', async () => {
+      const { registry, layer } = makeLayerWithScore100(); // no judge wired
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke('email-send', { to: 'stranger@example.com' }, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('fails closed (escalates) when the judge is configured but disabled, without calling it', async () => {
+      const { judge, classifyAction } = makeEscalationJudge('allow', false); // disabled kill switch
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke('email-send', { to: 'stranger@example.com' }, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
     });
 
     it('allows all skills when initiated by principal-tier contact (principal bypass)', async () => {

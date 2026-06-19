@@ -69,6 +69,8 @@ import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
 import type { JudgeConfig } from './dispatch/outbound-judge.js';
+import { EscalationJudge } from './autonomy/escalation-judge.js';
+import type { EscalationJudgeConfig } from './autonomy/escalation-judge.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { InboundScanner } from './dispatch/inbound-scanner.js';
 import { RateLimiter } from './dispatch/rate-limiter.js';
@@ -1045,12 +1047,53 @@ async function main(): Promise<void> {
     });
     logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
   }
-  // #950 (action gate): The tier-based gate uses the deterministic applyActionPolicy()
-  // from escalation-policy.ts — no LLM judge is needed at skill-execution time because
-  // the manifest's action_risk already classifies the action. The EscalationJudge
-  // (escalation-judge.ts) is available for a future coordinator-level gate that classifies
-  // natural-language action descriptions before skill decomposition; wire it here using
-  // the escalation.judge config block when that gate is implemented.
+  // #950 (action gate): Gate C decides deterministically when the tier × action_risk outcome
+  // is obvious, and consults the EscalationJudge only when the decision hinges on whether the
+  // action is third-party-facing — a runtime property the manifest's action_risk cannot encode
+  // (e.g. a `known` contact's reply to the sender is allowed, but emailing a third party must
+  // escalate). Construct the judge here from the escalation.judge config block, mirroring the
+  // outbound judge above. The judge is fail-closed; a disabled/unconfigured judge makes Gate C
+  // escalate on ambiguous actions. (#949 disclosure-gate wiring is still pending.)
+  let escalationJudge: EscalationJudge | undefined;
+  const escalationJudgeYaml = yamlConfig.escalation?.judge;
+  const escalationJudgeEnabled = escalationJudgeYaml?.enabled ?? true;
+  if (escalationJudgeEnabled) {
+    const escalationJudgeConfig: EscalationJudgeConfig = {
+      enabled: true,
+      model: escalationJudgeYaml?.model ?? 'claude-haiku-4-5',
+      timeoutMs: escalationJudgeYaml?.timeout_ms ?? 5000,
+    };
+    // Validate the same way as the outbound judge — a typo'd model or bad timeout should fail
+    // fast at startup rather than silently escalate every ambiguous Gate C decision later.
+    if (!Number.isInteger(escalationJudgeConfig.timeoutMs) || escalationJudgeConfig.timeoutMs < 250) {
+      logger.fatal(
+        { timeoutMs: escalationJudgeConfig.timeoutMs },
+        'escalation.judge.timeout_ms must be an integer >= 250 (ms) — fix config (default.yaml or local.yaml)',
+      );
+      process.exit(1);
+    }
+    if (!modelRegistry.isKnownModel(escalationJudgeConfig.model)) {
+      logger.fatal(
+        { model: escalationJudgeConfig.model },
+        'escalation.judge.model is not in the model registry — fix config (default.yaml or local.yaml)',
+      );
+      process.exit(1);
+    }
+    const escalationProviderName = modelRegistry.getProvider(escalationJudgeConfig.model);
+    if (!escalationProviderName || !providerRegistry.has(escalationProviderName)) {
+      logger.fatal(
+        { model: escalationJudgeConfig.model, provider: escalationProviderName },
+        'escalation.judge.model maps to a provider that is not registered — set the corresponding API key or change the model',
+      );
+      process.exit(1);
+    }
+    // Dedicated stateless router (same rationale as the outbound judge above).
+    const escalationJudgeRouter = new LLMProviderRouter(modelRegistry, providerRegistry);
+    escalationJudge = new EscalationJudge(escalationJudgeRouter, escalationJudgeConfig, bus, logger, modelRegistry);
+    logger.info({ model: escalationJudgeConfig.model }, 'Escalation judge enabled (Gate C third-party-facing classifier)');
+  } else {
+    logger.info('Escalation judge disabled via config (escalation.judge.enabled=false) — Gate C fails closed on ambiguous actions');
+  }
 
   // PII scrubbing for LLM-facing error strings — loads extra patterns from
   // config/default.yaml pii.extra_patterns and injects them into classify.ts.
@@ -1537,7 +1580,7 @@ async function main(): Promise<void> {
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
   // infraLlmService provides constrained LLM access (classify/extract) with telemetry.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
