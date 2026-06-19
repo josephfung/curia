@@ -75,6 +75,10 @@ export interface EscalationVerdict {
   disclosureClass?: DisclosureClass;
   /** LLM-assigned action class — present when classifyAction succeeds. */
   actionClass?: ActionConsequenceClass;
+  /** LLM-assigned third-party-facing flag — present when classifyAction succeeds. Absent on
+   *  any failure path (which always carries decision='escalate'), so callers that recompute
+   *  the policy from this flag must treat `undefined` as a fail-closed escalate. */
+  isThirdPartyFacing?: boolean;
   /** Reason from the LLM or a failure description — suitable for audit logging. */
   reason: string;
 }
@@ -186,7 +190,9 @@ export class EscalationJudge {
 
     try {
       const decision = applyActionPolicy(input.initiatingTier, verdict.class, verdict.isThirdPartyFacing);
-      return { decision, actionClass: verdict.class, reason: verdict.reason };
+      // Expose isThirdPartyFacing so a caller (e.g. Gate C) can recompute the policy against a
+      // trusted consequence-class floor instead of taking the judge's class verbatim.
+      return { decision, actionClass: verdict.class, isThirdPartyFacing: verdict.isThirdPartyFacing, reason: verdict.reason };
     } catch (err) {
       this.logger.warn({ err, conversationId: input.conversationId }, 'escalation-judge: action policy threw — escalating');
       return { decision: 'escalate', reason: 'policy enforcement error' };

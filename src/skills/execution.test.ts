@@ -702,14 +702,24 @@ describe('autonomy gates', () => {
       return { registry, layer };
     }
 
-    /** Stub EscalationJudge with a fixed verdict; exposes the spies for call assertions. */
-    function makeEscalationJudge(decision: 'allow' | 'escalate', enabled = true) {
+    /**
+     * Stub EscalationJudge with a fixed verdict; exposes the spies for call assertions.
+     * Gate C recomputes its decision from the verdict's isThirdPartyFacing + actionClass
+     * (clamped to the manifest floor), so the stub controls those rather than `decision`.
+     */
+    function makeEscalationJudge(opts: {
+      isThirdPartyFacing?: boolean;
+      actionClass?: 'none' | 'reversible-internal' | 'reversible-external' | 'irreversible';
+      enabled?: boolean;
+    }) {
       const classifyAction = vi.fn().mockResolvedValue({
-        decision,
-        actionClass: 'reversible-external',
+        // `decision` is no longer read by Gate C (it recomputes); keep it realistic anyway.
+        decision: opts.isThirdPartyFacing ? 'escalate' : 'allow',
+        actionClass: opts.actionClass ?? 'reversible-external',
+        isThirdPartyFacing: opts.isThirdPartyFacing,
         reason: 'stub verdict',
       });
-      const isEnabled = vi.fn().mockReturnValue(enabled);
+      const isEnabled = vi.fn().mockReturnValue(opts.enabled ?? true);
       const judge = { classifyAction, isEnabled } as unknown as EscalationJudge;
       return { judge, classifyAction, isEnabled };
     }
@@ -731,7 +741,7 @@ describe('autonomy gates', () => {
     // -- Deterministic fast path: outcome is tier-determined, judge is never consulted ----
 
     it('blocks medium-risk skill when initiated by unknown-tier contact (deterministic, no judge)', async () => {
-      const { judge, classifyAction } = makeEscalationJudge('allow');
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
@@ -749,7 +759,7 @@ describe('autonomy gates', () => {
     });
 
     it('allows low-risk skill when initiated by unknown-tier contact (deterministic, no judge)', async () => {
-      const { judge, classifyAction } = makeEscalationJudge('escalate');
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('memory-store', 'low'), handler);
@@ -773,7 +783,7 @@ describe('autonomy gates', () => {
     });
 
     it('allows high-risk skill when initiated by trusted-tier contact (deterministic, no judge)', async () => {
-      const { judge, classifyAction } = makeEscalationJudge('escalate');
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
@@ -805,7 +815,7 @@ describe('autonomy gates', () => {
     // can't tell them apart, so Gate C defers to the judge.
 
     it('allows a known contact reply-to-sender when the judge clears it (not third-party-facing)', async () => {
-      const { judge, classifyAction } = makeEscalationJudge('allow');
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
@@ -818,7 +828,7 @@ describe('autonomy gates', () => {
     });
 
     it('blocks a known contact send to a third party when the judge escalates (the closed gap)', async () => {
-      const { judge, classifyAction } = makeEscalationJudge('escalate');
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
@@ -829,6 +839,51 @@ describe('autonomy gates', () => {
       if (!result.success) {
         expect(result.error).toContain('known');
       }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
+    it('clamps a judge class-downgrade up to the manifest floor (third-party send still escalates)', async () => {
+      // Crafted/misclassified verdict: judge calls a medium email-send "read-only" (none) but
+      // flags it third-party-facing. Without the clamp, applyActionPolicy(known, none, …) would
+      // allow. The manifest floor (reversible-external) must win → escalate.
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true, actionClass: 'none' });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke('email-send', { to: 'stranger@example.com' }, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
+    it('honors a judge class-upgrade (irreversible escalates even for a reply-to-sender)', async () => {
+      // Judge spots a payment behind a "send" — more severe than the manifest's reversible-external.
+      const { judge } = makeEscalationJudge({ isThirdPartyFacing: false, actionClass: 'irreversible' });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke('email-send', { to: 'sender@example.com' }, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the judge returns no third-party determination', async () => {
+      // Simulate the judge's fail-closed path: it returns decision=escalate with no flag set.
+      const classifyAction = vi.fn().mockResolvedValue({ decision: 'escalate', reason: 'judge timed out' });
+      const isEnabled = vi.fn().mockReturnValue(true);
+      const judge = { classifyAction, isEnabled } as unknown as EscalationJudge;
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke('email-send', { to: 'x@example.com' }, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
       expect(classifyAction).toHaveBeenCalledOnce();
     });
@@ -845,7 +900,7 @@ describe('autonomy gates', () => {
     });
 
     it('fails closed (escalates) when the judge is configured but disabled, without calling it', async () => {
-      const { judge, classifyAction } = makeEscalationJudge('allow', false); // disabled kill switch
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false, enabled: false }); // disabled kill switch
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
