@@ -482,9 +482,22 @@ describe('ContactRegisterHandler — promotion flow removed', () => {
 
   it('ignores ceo_has_sent and calendar_accepted if supplied (inputs were removed from manifest)', async () => {
     // Even if a caller passes these now-retired inputs, the handler must not promote.
-    // The inputs are simply ignored.
+    // The inputs are simply ignored — and promoteToConfirmed must never be invoked.
+    const promoteCalls: string[] = [];
+    const proxiedService = new Proxy(contactService, {
+      get(target, prop) {
+        if (prop === 'promoteToConfirmed') {
+          return (id: string) => {
+            promoteCalls.push(id);
+            return (target as unknown as Record<string, unknown>)[prop as string];
+          };
+        }
+        return (target as unknown as Record<string, unknown>)[prop as string];
+      },
+    });
+
     const ctx = makeCtx({
-      contactService,
+      contactService: proxiedService as unknown as ContactService,
       input: {
         channel: 'email',
         identifier: 'ghost@example.com',
@@ -498,6 +511,9 @@ describe('ContactRegisterHandler — promotion flow removed', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
+    // promoteToConfirmed must not have been called, even with the stale promotion inputs
+    expect(promoteCalls).toHaveLength(0);
+
     const data = (result as { success: true; data: Record<string, unknown> }).data;
     expect(data).not.toHaveProperty('promoted');
     expect(data).not.toHaveProperty('promotion_signal');
