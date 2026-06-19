@@ -6,11 +6,12 @@
 // Formula: (channelWeight × weights.channelWeight) + (contactConfidence × weights.contactWeight)
 //          − (injectionRiskScore × weights.maxRiskPenalty), clamped to [0.0, 1.0]
 //
-// The per-contact trust_level override, when set, replaces the channel trust level
-// for the channel weight calculation. This allows the CEO to elevate or restrict a
-// specific contact regardless of what channel they're on.
+// The per-contact tier, when set, can override the channel trust weight for the
+// channel weight calculation. trusted/principal contacts get a high-equivalent (1.0)
+// override; known contacts get a medium-equivalent (0.6) override; unknown/blocked
+// contacts and null use only the channel floor.
 
-import type { TrustLevel } from '../contacts/types.js';
+import type { ContactTier, TrustLevel } from '../contacts/types.js';
 
 // Normalized weight per trust level — used to convert enum → float for the formula.
 // 'ceo' is treated identically to 'high' for scoring (maximally trusted channel weight).
@@ -19,6 +20,15 @@ const CHANNEL_TRUST_NORMALIZED: Record<TrustLevel, number> = {
   high: 1.0,
   medium: 0.6,
   low: 0.3,
+};
+
+// Tier-derived channel weight override. trusted/principal elevate to high-equivalent;
+// known elevates to medium-equivalent; unknown/blocked use the channel floor (no entry here).
+const TIER_CHANNEL_WEIGHT_OVERRIDE: Partial<Record<ContactTier, number>> = {
+  principal: 1.0,
+  trusted:   1.0,
+  known:     0.6,
+  // unknown and blocked: no entry — channel floor applies
 };
 
 export interface TrustScorerWeights {
@@ -43,9 +53,9 @@ export interface ComputeTrustScoreInput {
   contactConfidence: number;
   /** Injection risk score from InboundScanner (0.0–1.0). 0.0 if scanner not available. */
   injectionRiskScore: number;
-  /** Per-contact trust_level override from DB. When non-null, replaces channelTrustLevel
-   *  for the channel weight calculation. */
-  trustLevel: TrustLevel | null;
+  /** Contact tier from DB. When non-null and trusted/principal/known, overrides the
+   *  channel weight for the channel component calculation. unknown/blocked use channel floor. */
+  tier: ContactTier | null;
   /** Configurable scoring weights. */
   weights: TrustScorerWeights;
 }
@@ -56,16 +66,18 @@ export interface ComputeTrustScoreInput {
  * Returns a float in [0.0, 1.0]. Higher = more trustworthy.
  */
 export function computeTrustScore(input: ComputeTrustScoreInput): number {
-  const { channelTrustLevel, contactConfidence, injectionRiskScore, trustLevel, weights } = input;
+  const { channelTrustLevel, contactConfidence, injectionRiskScore, tier, weights } = input;
 
-  // Use per-contact override if set; otherwise use channel trust level.
-  const effectiveTrustLevel = trustLevel ?? channelTrustLevel;
-  const channelNormalized = CHANNEL_TRUST_NORMALIZED[effectiveTrustLevel];
+  // Determine the channel normalized weight. Use the tier-derived override when set
+  // (trusted/principal → 1.0, known → 0.6); otherwise use the channel trust level.
+  const tierOverride = tier !== null ? TIER_CHANNEL_WEIGHT_OVERRIDE[tier] : undefined;
+  const channelNormalized =
+    tierOverride !== undefined ? tierOverride : CHANNEL_TRUST_NORMALIZED[channelTrustLevel];
 
   // Guard against unexpected trust level values (e.g. a future DB value that bypasses
   // the CHECK constraint). An undefined lookup produces NaN which propagates silently.
   if (channelNormalized === undefined) {
-    throw new Error(`computeTrustScore: unknown trust level '${effectiveTrustLevel}'`);
+    throw new Error(`computeTrustScore: unknown channel trust level '${channelTrustLevel}'`);
   }
 
   const channelComponent = channelNormalized * weights.channelWeight;
