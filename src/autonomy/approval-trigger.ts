@@ -121,6 +121,9 @@ export class ApprovalTriggerService {
     input: Record<string, unknown>;
     currentScore: number;
     requiredScore: number;
+    /** Optional override for the CEO notification body. When absent, the default
+     *  score-based message is used. Provide this for non-score gate blocks (e.g. tier gate). */
+    reason?: string;
   }): Promise<ApprovalRequestResult> {
     const { taskId, conversationId, skillName, actionRisk, input, currentScore, requiredScore } = opts;
 
@@ -207,16 +210,19 @@ export class ApprovalTriggerService {
     // throwing, so we check the return value to know whether to stamp notification_sent_at.
     let notificationSent = false;
     if (this.ceoEmail && this.outboundGateway) {
+      const defaultBody =
+        `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
+        `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).`;
+      const notificationBody =
+        `${opts.reason ?? defaultBody}\n\n` +
+        `Reference: ${shortRef}\n` +
+        `Expires: ${expiresAt.toISOString()}\n\n` +
+        `Reply to approve, deny, or dismiss this request.`;
       const sent = await this.outboundGateway.sendNotification({
         notificationType: 'approval_requested',
         ceoEmail: this.ceoEmail,
         subject: `Approval needed — ${description}`,
-        body:
-          `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
-          `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).\n\n` +
-          `Reference: ${shortRef}\n` +
-          `Expires: ${expiresAt.toISOString()}\n\n` +
-          `Reply to approve, deny, or dismiss this request.`,
+        body: notificationBody,
       });
       if (sent) {
         await this.actionLogRepo.setNotificationSentAt(rowId);

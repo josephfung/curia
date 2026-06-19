@@ -119,6 +119,35 @@ export function applyDisclosurePolicy(
  * Note: a plain reply to the initiating sender is governed by the DISCLOSURE gate
  * (what the reply says), not this action gate, to avoid double-counting the same message.
  */
+/**
+ * Map a skill manifest's action_risk label to the canonical ActionConsequenceClass and
+ * the isThirdPartyFacing flag required by applyActionPolicy().
+ *
+ * Mapping follows the policy ladder from issue #948:
+ *   none     → read/summarise          → 'none',                not third-party-facing
+ *   low      → internal write          → 'reversible-internal', not third-party-facing
+ *   medium   → outbound comms          → 'reversible-external', not third-party-facing (reply to sender)
+ *   high     → calendar/commitment     → 'reversible-external', third-party-facing
+ *   critical → payment/deletion        → 'irreversible',        third-party-facing
+ *
+ * Numeric risks: treated as irreversible + third-party-facing (fail-closed — numeric values
+ * are author-specified precision scores and have no canonical consequence class).
+ */
+export function actionRiskToConsequenceClass(
+  risk: 'none' | 'low' | 'medium' | 'high' | 'critical' | number,
+): { actionClass: ActionConsequenceClass; isThirdPartyFacing: boolean } {
+  if (typeof risk === 'number') {
+    return { actionClass: 'irreversible', isThirdPartyFacing: true };
+  }
+  switch (risk) {
+    case 'none':     return { actionClass: 'none',                isThirdPartyFacing: false };
+    case 'low':      return { actionClass: 'reversible-internal', isThirdPartyFacing: false };
+    case 'medium':   return { actionClass: 'reversible-external', isThirdPartyFacing: false };
+    case 'high':     return { actionClass: 'reversible-external', isThirdPartyFacing: true  };
+    case 'critical': return { actionClass: 'irreversible',        isThirdPartyFacing: true  };
+  }
+}
+
 export function applyActionPolicy(
   initiatingTier: ContactTier,
   actionClass: ActionConsequenceClass,

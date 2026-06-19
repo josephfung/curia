@@ -16,6 +16,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Auto-elevation** — contacts are automatically promoted from `tier='unknown'` to `tier='known'` via three signal paths: correspondence (outbound email sent to the contact), domain-validated (first inbound from an org-kind contact), and judgment (confidence score crosses the 0.20 threshold). New `contact.elevated` bus event for the audit trail. Automated and agent contacts are excluded at the database layer. (#951)
+- **Action gate: contact-tier enforcement (Gate C)** — consequential actions initiated by lower-tier contacts now escalate through the approval flow instead of auto-executing. `unknown` contacts may only trigger internal writes; `known` contacts may reply to the sender but not third-party-facing actions; `trusted` contacts may take all reversible-external actions. (#950)
+- **`tier` on `TaskOriginator`** — the dispatcher now stamps the initiating contact's tier at task creation time; `getInitiatingTier()` extracts it for gate enforcement. (#950)
+- **`mapActionRiskToConsequenceClass()`** — maps skill manifest `action_risk` labels to the `ActionConsequenceClass` + `isThirdPartyFacing` pair used by the escalation policy. (#950)
 - **Automated sender classification** — `classifyEmailSender()` now detects noreply/mailer-daemon/newsletter patterns and sets `kind='automated'`; new contacts skip the KG org-node path. (#953)
 - **`contact-list` skill `kind` filter** — accepts `kind` to filter by contact kind; default view excludes `automated` and `agent`. (#953)
 

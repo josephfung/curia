@@ -19,7 +19,8 @@
 
 import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
-import { isPrincipalOriginated, isSystemOriginated } from '../contacts/principal.js';
+import { isPrincipalOriginated, isSystemOriginated, getInitiatingTier } from '../contacts/principal.js';
+import { applyActionPolicy, actionRiskToConsequenceClass } from '../autonomy/escalation-policy.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput, sanitizeObjectOutput } from './sanitize.js';
 import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
@@ -289,6 +290,62 @@ export class ExecutionLayer {
   }
 
   /**
+   * Build the advisory error message for Gate C (tier-based block).
+   * Creates an approval request when the trigger is wired; falls back to a static message.
+   */
+  private async buildTierGateError(
+    skillName: string,
+    input: Record<string, unknown>,
+    initiatingTier: string,
+    actionRisk: string | number,
+    currentScore: number,
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): Promise<string> {
+    const baseMsg =
+      `Skill '${skillName}' blocked — the initiating contact's tier ('${initiatingTier}') ` +
+      `does not permit ${String(actionRisk)}-risk actions without approval. `;
+
+    if (this.approvalTrigger && options?.taskEventId) {
+      try {
+        const result = await this.approvalTrigger.request({
+          taskId: options.taskEventId,
+          conversationId: options.conversationId,
+          skillName,
+          actionRisk: String(actionRisk),
+          input,
+          currentScore,
+          requiredScore: currentScore,
+          reason:
+            `Curia wanted to run '${skillName}', but the initiating contact's tier ` +
+            `('${initiatingTier}') requires approval for ${String(actionRisk)}-risk actions.`,
+        });
+        if (!result.created) {
+          return (
+            `Skill '${skillName}' blocked — an approval request for this action ` +
+            `is already pending (ref: ${result.existingShortRef}).`
+          );
+        }
+        if (result.notificationSent) {
+          return baseMsg + `An approval request has been sent to the CEO (ref: ${result.shortRef}).`;
+        }
+        return (
+          baseMsg +
+          `An approval request was created (ref: ${result.shortRef}) but ` +
+          `notification could not be delivered — the CEO will see it in the next digest.`
+        );
+      } catch (err) {
+        skillLogger.warn(
+          { err, skillName },
+          'tier gate approval trigger failed — returning standard gate error',
+        );
+      }
+    }
+
+    return baseMsg + `The CEO can approve this request directly.`;
+  }
+
+  /**
    * Return LLM tool definitions for the named skills.
    *
    * Used by AgentRuntime to expand the per-task working tool list after a
@@ -525,6 +582,41 @@ export class ExecutionLayer {
               success: false,
               error: this.wrapSkillError(gateBError),
             };
+          }
+
+          // Gate C: Contact-tier gate — consequential actions from lower-tier contacts
+          // escalate instead of auto-executing, even when the autonomy score permits them.
+          // Principal bypass is already handled above. Fail-open when the initiating tier
+          // is unavailable (system/agent tasks, pre-#950 stored originators).
+          const initiatingTier = getInitiatingTier(options?.taskMetadata);
+          if (initiatingTier !== null && manifest.action_risk !== 'none') {
+            const { actionClass, isThirdPartyFacing } = actionRiskToConsequenceClass(manifest.action_risk);
+            const tierDecision = applyActionPolicy(initiatingTier, actionClass, isThirdPartyFacing);
+            if (tierDecision === 'escalate') {
+              skillLogger.info(
+                { skillName, initiatingTier, actionClass, isThirdPartyFacing, actionRisk: manifest.action_risk },
+                'autonomy gate: skill blocked — initiating contact tier below required minimum (Gate C)',
+              );
+              if (this.bus) {
+                this.bus.publish('execution', createAutonomySkillBlocked({
+                  skillName,
+                  actionRisk: manifest.action_risk,
+                  currentScore,
+                  requiredScore: currentScore,
+                  agentId: options?.agentId,
+                  taskEventId: options?.taskEventId,
+                })).catch((err) => {
+                  skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event (Gate C)');
+                });
+              }
+              const gateCError = await this.buildTierGateError(
+                skillName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
+              );
+              return {
+                success: false,
+                error: this.wrapSkillError(gateCError),
+              };
+            }
           }
         }
       } else {
