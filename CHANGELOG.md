@@ -14,10 +14,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Added
+
 - **`rederive:contact-tiers` script** — one-shot backfill that recomputes contact confidence from correspondence history and elevates `unknown→known` for contacts clearing the judgment threshold; retroactive equivalent of live dispatcher elevation. (#955)
-
-### Added
-
 - **`contact-set-tier` skill** — sets a contact's tier directly from chat ("treat Dana as trusted"); principal-auth guarded, rejects `tier='principal'`. (#952)
 - **Proactive grant recommendations** — weekly LLM-judge scan (`scan-grant-recommendations`) evaluates known-tier contacts and surfaces scheduling-access recommendations for CEO approval. (#952)
 - **Approve/decline recommendations** — `approve-grant-recommendation` writes a `contact_auth_overrides` row; `decline-grant-recommendation` permanently records the decline so the recommendation never resurfaces (anti-nag via UNIQUE DB constraint). (#952)
