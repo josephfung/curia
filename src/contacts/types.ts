@@ -369,9 +369,9 @@ export interface AuthorizationResult {
 
 export interface AuthConfig {
   roles: Record<string, RolePermissions>;
-  /** Fallback permission defaults keyed by trust_level tier ('ceo'|'high'|'medium'|'low').
+  /** Fallback permission defaults keyed by ContactTier ('principal'|'trusted'|'known'|'unknown').
    *  Used when a contact's free-text role doesn't match any key in `roles`. */
-  trustLevelDefaults?: Record<string, RolePermissions>;
+  tierDefaults?: Record<string, RolePermissions>;
   permissions: Record<string, PermissionDef>;
   channelTrust: Record<string, TrustLevel>;
   channelPolicies: Record<string, ChannelPolicyConfig>;

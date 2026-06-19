@@ -95,7 +95,7 @@ export class AuthorizationService {
     const roleName = (input.role ?? '').toLowerCase();
     const roleDefaults =
       (roleName !== '' ? this.config.roles[roleName] : undefined) ??
-      (input.trustLevel != null ? this.config.trustLevelDefaults?.[input.trustLevel] : undefined) ??
+      (input.trustLevel != null ? this.config.tierDefaults?.[input.trustLevel] : undefined) ??
       this.config.roles['unknown'] ??
       { description: 'fallback', defaultPermissions: [], defaultDeny: ['*'] };
 
