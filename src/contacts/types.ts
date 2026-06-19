@@ -184,6 +184,7 @@ export interface SenderContext {
   authorization: AuthorizationResult | null;
   // Trust scoring inputs — available when contact was found in DB. Not propagated to bus events.
   contactConfidence: number;      // 0.0–1.0
+  /** @deprecated Use .tier instead — column will be dropped in #955 */
   trustLevel: TrustLevel | null;  // per-contact override, or null
   // New capability axis (issue #945). Canonical read path going forward.
   tier: ContactTier;

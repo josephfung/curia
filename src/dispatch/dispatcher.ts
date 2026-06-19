@@ -595,13 +595,21 @@ export class Dispatcher {
         );
       }
 
-      messageTrustScore = computeTrustScore({
-        channelTrustLevel: channelTrust,
-        contactConfidence,
-        injectionRiskScore,
-        tier: tierOverride,
-        weights: this.trustScorerWeights,
-      });
+      try {
+        messageTrustScore = computeTrustScore({
+          channelTrustLevel: channelTrust,
+          contactConfidence,
+          injectionRiskScore,
+          tier: tierOverride,
+          weights: this.trustScorerWeights,
+        });
+      } catch (err) {
+        this.logger.error(
+          { err, channelId: payload.channelId, channelTrust },
+          'computeTrustScore threw unexpectedly — proceeding without trust score',
+        );
+        // messageTrustScore remains undefined; coordinator handles missing score
+      }
 
     }
 
