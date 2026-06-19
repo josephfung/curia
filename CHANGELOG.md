@@ -41,6 +41,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Gate C fail-closed for unstamped external tiers** — an external originator with no resolved tier now escalates instead of bypassing the gate. (#1059)
 - **Dispatcher stamps an `unknown`-tier originator for unresolved inbound senders** — defence in depth so Gate C still enforces tier policy if the channel layer skipped contact creation. (#1059)
 - **CVE-2026-53655 (pnpm bundled tar)** — removed corepack's unused pnpm cache from the production image to eliminate a bundled tar CVE.
+- **undici CVEs (12151/9697/6734 HIGH, 9678/9679 MED, 6733/11525 LOW)** — pinned `undici: '>=7.28.0'` in `pnpm-workspace.yaml` overrides; the transitive copy pulled by promptfoo now resolves to a patched 8.x.
 
 ### Added
 
