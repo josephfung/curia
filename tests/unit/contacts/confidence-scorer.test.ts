@@ -14,7 +14,7 @@ function input(overrides: Partial<ConfidenceInput> = {}): ConfidenceInput {
     inboundMessageCount: 0,
     outboundMessageCount: 0,
     lastSeenAt: null,
-    trustLevel: null,
+    tier: 'known',
     verifiedIdentityCount: 0,
     hasCeoStatedIdentity: false,
     now: new Date('2026-01-15T12:00:00Z'),
@@ -85,7 +85,7 @@ describe('computeConfidence', () => {
     expect(score).toBeCloseTo(interactionOnly);
   });
 
-  it('CEO trust grant provides GRANT_BOOST', () => {
+  it('trusted tier provides GRANT_BOOST', () => {
     const withoutGrant = computeConfidence(input({
       inboundMessageCount: 10,
       lastSeenAt: new Date('2026-01-15T12:00:00Z'),
@@ -93,9 +93,36 @@ describe('computeConfidence', () => {
     const withGrant = computeConfidence(input({
       inboundMessageCount: 10,
       lastSeenAt: new Date('2026-01-15T12:00:00Z'),
-      trustLevel: 'high',
+      tier: 'trusted',
     }));
     expect(withGrant - withoutGrant).toBeCloseTo(GRANT_BOOST);
+  });
+
+  it('principal tier also provides GRANT_BOOST', () => {
+    const withoutGrant = computeConfidence(input({
+      inboundMessageCount: 10,
+      lastSeenAt: new Date('2026-01-15T12:00:00Z'),
+    }));
+    const withPrincipal = computeConfidence(input({
+      inboundMessageCount: 10,
+      lastSeenAt: new Date('2026-01-15T12:00:00Z'),
+      tier: 'principal',
+    }));
+    expect(withPrincipal - withoutGrant).toBeCloseTo(GRANT_BOOST);
+  });
+
+  it('known tier does NOT provide GRANT_BOOST', () => {
+    const known = computeConfidence(input({
+      inboundMessageCount: 10,
+      lastSeenAt: new Date('2026-01-15T12:00:00Z'),
+      tier: 'known',
+    }));
+    const trusted = computeConfidence(input({
+      inboundMessageCount: 10,
+      lastSeenAt: new Date('2026-01-15T12:00:00Z'),
+      tier: 'trusted',
+    }));
+    expect(trusted - known).toBeCloseTo(GRANT_BOOST);
   });
 
   it('CEO-verified contact scores meaningfully higher than auto-resolved with same volume', () => {
@@ -106,7 +133,7 @@ describe('computeConfidence', () => {
     const ceoVerified = computeConfidence(input({
       inboundMessageCount: 10,
       lastSeenAt: new Date('2026-01-15T12:00:00Z'),
-      trustLevel: 'high',
+      tier: 'trusted',
       hasCeoStatedIdentity: true,
     }));
     expect(ceoVerified - autoResolved).toBeGreaterThanOrEqual(0.2);
@@ -131,7 +158,7 @@ describe('computeConfidence', () => {
       inboundMessageCount: 1000,
       outboundMessageCount: 1000,
       lastSeenAt: new Date('2026-01-15T12:00:00Z'),
-      trustLevel: 'high',
+      tier: 'trusted',
       hasCeoStatedIdentity: true,
       verifiedIdentityCount: 100,
     }));

@@ -6,7 +6,7 @@
 // Both the incremental and full-recompute paths call this function. Convergence
 // is guaranteed because both paths use the same stored columns as inputs.
 
-import { meetsMinimumTrust, type TrustLevel } from './types.js';
+import { meetsMinimumTier, type ContactTier } from './types.js';
 
 // -- Tunable constants (exported for tests and documentation) --
 
@@ -22,7 +22,7 @@ export const W_RECENCY = 0.20;
 /** Half-life for recency decay in days. Score halves every 90 days of silence. */
 export const RECENCY_HALF_LIFE_DAYS = 90;
 
-/** Confidence boost when the CEO has explicitly set a trust level on this contact. */
+/** Confidence boost when the contact is at trusted or principal tier. */
 export const GRANT_BOOST = 0.25;
 
 /** Confidence boost when the contact was manually created by the CEO (ceo_stated identity). */
@@ -41,7 +41,7 @@ export interface ConfidenceInput {
   inboundMessageCount: number;
   outboundMessageCount: number;
   lastSeenAt: Date | null;
-  trustLevel: TrustLevel | null;
+  tier: ContactTier;
   verifiedIdentityCount: number;
   hasCeoStatedIdentity: boolean;
   /** Current time — injected for testability. */
@@ -62,7 +62,7 @@ export function computeConfidence(input: ConfidenceInput): number {
     inboundMessageCount,
     outboundMessageCount,
     lastSeenAt,
-    trustLevel,
+    tier,
     verifiedIdentityCount,
     hasCeoStatedIdentity,
     now,
@@ -79,10 +79,10 @@ export function computeConfidence(input: ConfidenceInput): number {
     recencyScore = Math.exp(-daysSinceLastSeen / RECENCY_HALF_LIFE_DAYS) * W_RECENCY;
   }
 
-  // Verification score: discrete boosts from CEO actions and identity pairings
-  // Only CEO-granted trust levels (high, ceo) earn the boost — low/medium overrides are
-  // neutral or restrictive, not a positive verification signal.
-  const grantBoost = meetsMinimumTrust(trustLevel, 'high') ? GRANT_BOOST : 0;
+  // Verification score: discrete boosts from CEO actions and identity pairings.
+  // Only trusted/principal tier earns the grant boost — those contacts have an
+  // explicit CEO trust grant. known/unknown/blocked are neutral or restrictive.
+  const grantBoost = meetsMinimumTier(tier, 'trusted') ? GRANT_BOOST : 0;
   const manualBoost = hasCeoStatedIdentity ? MANUAL_BOOST : 0;
   const pairingBoost =
     (Math.min(verifiedIdentityCount, MAX_PAIRING_IDENTITIES) / MAX_PAIRING_IDENTITIES) * PAIRING_BOOST;
