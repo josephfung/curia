@@ -27,6 +27,8 @@ import type {
   CreateContactOptions,
   DedupConfidence,
   DuplicatePair,
+  GrantRecommendation,
+  GrantRecommendationStatus,
   LinkIdentityOptions,
   MergeGoldenRecord,
   MergeProposal,
@@ -220,6 +222,13 @@ interface ContactServiceBackend {
   getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>>;
   createAuthOverride(override: AuthOverride): Promise<void>;
   revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
+
+  // -- Grant recommendations (issue #952) --
+  createGrantRecommendation(rec: GrantRecommendation): Promise<void>;
+  getGrantRecommendation(id: string): Promise<GrantRecommendation | null>;
+  findGrantRecommendation(contactId: string, permission: string): Promise<GrantRecommendation | null>;
+  listGrantRecommendations(filters?: { status?: GrantRecommendationStatus; limit?: number }): Promise<GrantRecommendation[]>;
+  resolveGrantRecommendation(id: string, status: 'approved' | 'declined', resolvedBy: string): Promise<boolean>;
   createCalendarLink(calendar: ContactCalendar): Promise<void>;
   deleteCalendarLink(nylasCalendarId: string): Promise<boolean>;
   getCalendarsForContact(contactId: string): Promise<ContactCalendar[]>;
@@ -1151,6 +1160,86 @@ export class ContactService {
     return this.backend.revokeAuthOverride(contactId, permission);
   }
 
+  // ---- Grant recommendations (issue #952) ----
+
+  /**
+   * Create a new grant recommendation for a contact+permission pair.
+   * Returns false (no-op) when a recommendation already exists for this pair —
+   * the caller must check first if dedup is desired at the service layer.
+   */
+  async createGrantRecommendation(
+    contactId: string,
+    permission: string,
+    reasoning: string,
+  ): Promise<{ created: boolean; recommendation: GrantRecommendation }> {
+    const existing = await this.backend.findGrantRecommendation(contactId, permission);
+    if (existing) {
+      return { created: false, recommendation: existing };
+    }
+
+    const rec: GrantRecommendation = {
+      id: randomUUID(),
+      contactId,
+      permission,
+      reasoning,
+      status: 'pending',
+      suggestedAt: new Date(),
+      resolvedAt: null,
+      resolvedBy: null,
+    };
+    await this.backend.createGrantRecommendation(rec);
+    this.logger?.info({ contactId, permission }, 'contacts: grant recommendation created');
+    return { created: true, recommendation: rec };
+  }
+
+  /** Fetch a single grant recommendation by ID. */
+  async getGrantRecommendation(id: string): Promise<GrantRecommendation | null> {
+    return this.backend.getGrantRecommendation(id);
+  }
+
+  /** List grant recommendations, optionally filtered by status. */
+  async listGrantRecommendations(
+    filters?: { status?: GrantRecommendationStatus; limit?: number },
+  ): Promise<GrantRecommendation[]> {
+    return this.backend.listGrantRecommendations(filters);
+  }
+
+  /**
+   * Approve a pending grant recommendation.
+   * Also writes the contact_auth_overrides row so the permission takes effect immediately.
+   * Returns false if the recommendation was not found or not in 'pending' status.
+   */
+  async approveGrantRecommendation(id: string, actorId: string): Promise<boolean> {
+    const rec = await this.backend.getGrantRecommendation(id);
+    if (!rec || rec.status !== 'pending') return false;
+
+    // Grant the permission before resolving the recommendation, so any failure
+    // here leaves the recommendation pending (retryable) rather than approved-but-not-granted.
+    await this.grantPermission(rec.contactId, rec.permission, true, actorId);
+    const resolved = await this.backend.resolveGrantRecommendation(id, 'approved', actorId);
+    if (resolved) {
+      this.logger?.info({ id, contactId: rec.contactId, permission: rec.permission, actorId }, 'contacts: grant recommendation approved');
+    }
+    return resolved;
+  }
+
+  /**
+   * Decline a pending grant recommendation.
+   * The row is permanently retained in 'declined' state as an anti-nag ledger entry —
+   * the recommendation engine must check for declined rows before suggesting again.
+   * Returns false if the recommendation was not found or not in 'pending' status.
+   */
+  async declineGrantRecommendation(id: string, actorId: string): Promise<boolean> {
+    const rec = await this.backend.getGrantRecommendation(id);
+    if (!rec || rec.status !== 'pending') return false;
+
+    const resolved = await this.backend.resolveGrantRecommendation(id, 'declined', actorId);
+    if (resolved) {
+      this.logger?.info({ id, contactId: rec.contactId, permission: rec.permission, actorId }, 'contacts: grant recommendation declined (anti-nag recorded)');
+    }
+    return resolved;
+  }
+
   /**
    * Link a calendar to a contact (or null for org-wide calendars).
    * Validates the contact exists (if contactId is non-null) and enforces
@@ -1876,6 +1965,97 @@ class PostgresContactBackend implements ContactServiceBackend {
     return (result.rowCount ?? 0) > 0;
   }
 
+  // ---- Grant recommendations (issue #952) ----
+
+  async createGrantRecommendation(rec: GrantRecommendation): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO grant_recommendations
+         (id, contact_id, permission, reasoning, status, suggested_at, resolved_at, resolved_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (contact_id, permission) DO NOTHING`,
+      [rec.id, rec.contactId, rec.permission, rec.reasoning, rec.status, rec.suggestedAt, rec.resolvedAt, rec.resolvedBy],
+    );
+  }
+
+  async getGrantRecommendation(id: string): Promise<GrantRecommendation | null> {
+    const result = await this.pool.query<{
+      id: string; contact_id: string; permission: string; reasoning: string;
+      status: string; suggested_at: Date; resolved_at: Date | null; resolved_by: string | null;
+    }>(
+      `SELECT id, contact_id, permission, reasoning, status, suggested_at, resolved_at, resolved_by
+       FROM grant_recommendations WHERE id = $1`,
+      [id],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return this.rowToGrantRecommendation(row);
+  }
+
+  async findGrantRecommendation(contactId: string, permission: string): Promise<GrantRecommendation | null> {
+    const result = await this.pool.query<{
+      id: string; contact_id: string; permission: string; reasoning: string;
+      status: string; suggested_at: Date; resolved_at: Date | null; resolved_by: string | null;
+    }>(
+      `SELECT id, contact_id, permission, reasoning, status, suggested_at, resolved_at, resolved_by
+       FROM grant_recommendations WHERE contact_id = $1 AND permission = $2`,
+      [contactId, permission],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return this.rowToGrantRecommendation(row);
+  }
+
+  async listGrantRecommendations(
+    filters?: { status?: GrantRecommendationStatus; limit?: number },
+  ): Promise<GrantRecommendation[]> {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (filters?.status) {
+      params.push(filters.status);
+      conditions.push(`status = $${params.length}`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limitClause = filters?.limit ? `LIMIT ${filters.limit}` : '';
+
+    const result = await this.pool.query<{
+      id: string; contact_id: string; permission: string; reasoning: string;
+      status: string; suggested_at: Date; resolved_at: Date | null; resolved_by: string | null;
+    }>(
+      `SELECT id, contact_id, permission, reasoning, status, suggested_at, resolved_at, resolved_by
+       FROM grant_recommendations ${where} ORDER BY suggested_at DESC ${limitClause}`,
+      params,
+    );
+    return result.rows.map(row => this.rowToGrantRecommendation(row));
+  }
+
+  async resolveGrantRecommendation(id: string, status: 'approved' | 'declined', resolvedBy: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE grant_recommendations
+       SET status = $2, resolved_at = now(), resolved_by = $3
+       WHERE id = $1 AND status = 'pending'`,
+      [id, status, resolvedBy],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private rowToGrantRecommendation(row: {
+    id: string; contact_id: string; permission: string; reasoning: string;
+    status: string; suggested_at: Date; resolved_at: Date | null; resolved_by: string | null;
+  }): GrantRecommendation {
+    return {
+      id: row.id,
+      contactId: row.contact_id,
+      permission: row.permission,
+      reasoning: row.reasoning,
+      status: row.status as GrantRecommendationStatus,
+      suggestedAt: row.suggested_at,
+      resolvedAt: row.resolved_at,
+      resolvedBy: row.resolved_by,
+    };
+  }
+
   async createCalendarLink(calendar: ContactCalendar): Promise<void> {
     this.logger.debug({ calendarId: calendar.id, nylasCalendarId: calendar.nylasCalendarId }, 'contacts: linking calendar');
     await this.pool.query(
@@ -2526,5 +2706,52 @@ class InMemoryContactBackend implements ContactServiceBackend {
     for (const [oid, override] of this.overrides) {
       if (override.contactId === id) this.overrides.delete(oid);
     }
+  }
+
+  // ---- Grant recommendations (issue #952) — in-memory stubs ----
+
+  private recommendations = new Map<string, GrantRecommendation>();
+
+  async createGrantRecommendation(rec: GrantRecommendation): Promise<void> {
+    const key = `${rec.contactId}:${rec.permission}`;
+    // Mimic ON CONFLICT DO NOTHING
+    for (const r of this.recommendations.values()) {
+      if (r.contactId === rec.contactId && r.permission === rec.permission) return;
+    }
+    this.recommendations.set(key, rec);
+  }
+
+  async getGrantRecommendation(id: string): Promise<GrantRecommendation | null> {
+    for (const rec of this.recommendations.values()) {
+      if (rec.id === id) return rec;
+    }
+    return null;
+  }
+
+  async findGrantRecommendation(contactId: string, permission: string): Promise<GrantRecommendation | null> {
+    for (const rec of this.recommendations.values()) {
+      if (rec.contactId === contactId && rec.permission === permission) return rec;
+    }
+    return null;
+  }
+
+  async listGrantRecommendations(
+    filters?: { status?: GrantRecommendationStatus; limit?: number },
+  ): Promise<GrantRecommendation[]> {
+    let results = Array.from(this.recommendations.values());
+    if (filters?.status) results = results.filter(r => r.status === filters.status);
+    results.sort((a, b) => b.suggestedAt.getTime() - a.suggestedAt.getTime());
+    if (filters?.limit) results = results.slice(0, filters.limit);
+    return results;
+  }
+
+  async resolveGrantRecommendation(id: string, status: 'approved' | 'declined', resolvedBy: string): Promise<boolean> {
+    for (const [key, rec] of this.recommendations) {
+      if (rec.id === id && rec.status === 'pending') {
+        this.recommendations.set(key, { ...rec, status, resolvedAt: new Date(), resolvedBy });
+        return true;
+      }
+    }
+    return false;
   }
 }

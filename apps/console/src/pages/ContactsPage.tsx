@@ -122,6 +122,11 @@ interface DrawerProps {
   onDeleted: (id: string) => void;
 }
 
+interface AuthOverride {
+  permission: string;
+  granted: boolean;
+}
+
 function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: DrawerProps) {
   const [displayName, setDisplayName] = useState(contact?.displayName ?? '');
   const [role, setRole] = useState(contact?.role ?? '');
@@ -144,6 +149,36 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Auth overrides state
+  const [overrides, setOverrides] = useState<AuthOverride[]>([]);
+  const [overridesError, setOverridesError] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!contact || creating) return;
+    apiFetch(`/api/kg/contacts/${contact.id}/overrides`)
+      .then(async res => {
+        if (!res.ok) { setOverridesError('Failed to load permissions'); return; }
+        const d = await res.json() as { overrides: AuthOverride[] };
+        setOverrides(d.overrides);
+      })
+      .catch(() => setOverridesError('Failed to load permissions'));
+  }, [contact, creating]);
+
+  async function handleRevokeOverride(permission: string) {
+    if (!contact) return;
+    setRevoking(permission);
+    try {
+      const res = await apiFetch(`/api/kg/contacts/${contact.id}/overrides/${permission}`, { method: 'DELETE' });
+      if (!res.ok) { setOverridesError('Failed to revoke permission'); return; }
+      setOverrides(prev => prev.filter(o => o.permission !== permission));
+    } catch {
+      setOverridesError('Failed to revoke permission');
+    } finally {
+      setRevoking(null);
+    }
+  }
 
   async function handleSave() {
     if (!displayName.trim()) {
@@ -371,6 +406,35 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
             <label htmlFor="cf-notes">Notes</label>
             <textarea id="cf-notes" rows={4} value={notes} onChange={e => setNotes(e.target.value)} />
           </div>
+
+          {/* Section: Permission grants */}
+          {!creating && (
+            <>
+              <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '16px 0 6px' }}>Permission grants</p>
+              {overridesError && <p style={{ color: 'var(--app-destructive)', fontSize: 12, margin: 0 }}>{overridesError}</p>}
+              {overrides.length === 0 && !overridesError && (
+                <p style={{ color: 'var(--app-fg-muted)', fontSize: 12, margin: 0 }}>No explicit grants or denials on file.</p>
+              )}
+              {overrides.map(o => (
+                <div key={o.permission} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 4 }}>
+                  <span style={{
+                    display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                    background: o.granted ? 'var(--app-success, #22c55e)' : 'var(--app-destructive)',
+                  }} />
+                  <span style={{ flex: 1, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{o.permission}</span>
+                  <span style={{ color: 'var(--app-fg-muted)', fontSize: 12 }}>{o.granted ? 'granted' : 'denied'}</span>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ padding: '2px 8px', fontSize: 11 }}
+                    onClick={() => void handleRevokeOverride(o.permission)}
+                    disabled={revoking === o.permission}
+                  >
+                    {revoking === o.permission ? '…' : 'Revoke'}
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       </div>
 

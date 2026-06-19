@@ -451,6 +451,23 @@ export class IdentityNotFoundError extends Error {
   }
 }
 
+// -- Grant recommendation types (issue #952) --
+
+export type GrantRecommendationStatus = 'pending' | 'approved' | 'declined';
+
+export interface GrantRecommendation {
+  id: string;
+  contactId: string;
+  /** The permission string being recommended (e.g. 'schedule_meetings'). */
+  permission: string;
+  /** LLM-authored rationale surfaced to the CEO for context. */
+  reasoning: string;
+  status: GrantRecommendationStatus;
+  suggestedAt: Date;
+  resolvedAt: Date | null;
+  resolvedBy: string | null;
+}
+
 // -- ContactService dependency injection for dedup wiring --
 
 export interface ContactServiceOptions {
