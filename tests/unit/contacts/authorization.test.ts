@@ -106,6 +106,22 @@ describe('AuthorizationService', () => {
     expect(result.contactStatus).toBe('blocked');
   });
 
+  it('blocked-tier contact on high-trust channel gets no permissions', () => {
+    // tier='blocked' and status='confirmed' can diverge (tier is set independently).
+    // Without a hard gate, Math.max(channelRank=2, tierRank=0)=2 would grant high-trust
+    // permissions to a blocked contact on a cli/signal channel. Gate 2 prevents this.
+    const result = authService.evaluate({
+      role: 'cfo',
+      tier: 'blocked',
+      status: 'confirmed',
+      channel: 'cli',
+      overrides: [],
+    });
+    expect(result.allowed).toEqual([]);
+    expect(result.denied).toContain('*');
+    expect(result.trustBlocked).toEqual([]);
+  });
+
   it('applies role defaults for confirmed contacts', () => {
     const result = authService.evaluate({
       role: 'cfo',

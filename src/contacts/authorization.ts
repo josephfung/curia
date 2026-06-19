@@ -78,6 +78,22 @@ export class AuthorizationService {
       };
     }
 
+    // Gate 2: blocked-tier contacts get zero permissions, regardless of status or channel.
+    // tier and status are set independently — a contact can have status='confirmed' but
+    // tier='blocked' (e.g. blocked at the tier level before status was updated). Without
+    // this gate, Math.max(channelTrustRank, 0) for a high-trust channel would grant
+    // permissions to a blocked contact because TIER_TO_TRUST_RANK['blocked'] = 0.
+    if (input.tier === 'blocked') {
+      return {
+        allowed: [],
+        denied: ['*'],
+        escalate: [],
+        channelTrust,
+        trustBlocked: [],
+        contactStatus: input.status,
+      };
+    }
+
     // Effective trust: the higher of the channel's inherent trust and the contact's
     // tier rank. A contact with tier='trusted' on email (low) should not have their
     // CEO-granted tier overridden by the channel floor.
