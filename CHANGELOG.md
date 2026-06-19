@@ -29,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`status` field removed from contact HTTP API** — `POST` and `PATCH /api/kg/contacts` no longer accept a `status` body field; any supplied value is silently ignored. The `setStatus()` call in the PATCH route is removed; `tier`/`kind` are the only capability inputs. (#955)
 
 - **Auto-elevation** — contacts auto-promote from `unknown` to `known` via correspondence, domain, and judgment signals. (#951)
+- **`contact-register` skill** (v1.1.0 → v1.2.0) — provisional→confirmed promotion flow retired; new contacts created at `tier='unknown'`. `ceo_has_sent`, `calendar_accepted` inputs and `status`, `promoted`, `promotion_signal` outputs removed. Elevation is now entirely the dispatcher/judgment path's responsibility. (#955)
 - **Action gate: contact-tier enforcement (Gate C)** — consequential actions from lower-tier contacts escalate unless the initiating tier permits them. (#950)
 - **`tier` on `TaskOriginator`** — dispatcher stamps the initiating contact's tier for Gate C enforcement. (#950)
 - **Escalation judge wired into Gate C** — classifies third-party-facing actions when the tier×risk policy can't decide deterministically. (#950)
