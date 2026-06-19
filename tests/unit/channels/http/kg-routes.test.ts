@@ -554,7 +554,7 @@ describe('knowledgeGraphRoutes', () => {
       expect(savedContact.tier).toBe('trusted');
       expect(savedContact.kind).toBe('organization');
       expect(savedClient).toBe(client);
-      expect(res.statusCode).not.toBe(400);
+      expect(res.statusCode).toBe(200);
       await app.close();
     });
 
