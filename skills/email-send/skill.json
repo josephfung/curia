@@ -1,9 +1,9 @@
 {
   "name": "email-send",
   "description": "Send a new email. Provide comma-separated recipient email addresses, subject, and body. Emails are sent from the agent's configured email address.",
-  "version": "1.3.0",
+  "version": "1.2.1",
   "sensitivity": "normal",
-  "action_risk": "high",
+  "action_risk": "medium",
   "inputs": {
     "to": "string",
     "cc": "string?",
