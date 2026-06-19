@@ -30,6 +30,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **Gate C fail-closed for unstamped external tiers** — an external originator with no resolved tier now escalates a consequential action instead of bypassing the tier gate; emits a `warn` so the case is observable. (#1059)
+- **Dispatcher stamps an `unknown`-tier originator for unresolved inbound senders** — defence in depth so Gate C enforces tier policy even when the channel layer's first-contact creation was skipped, rather than trusting the channel layer to always pre-create the contact. (#1059)
 - **CVE-2026-53655 (pnpm bundled tar)** — removed corepack's unused pnpm cache from the production image to eliminate a bundled tar CVE.
 
 ### Added
