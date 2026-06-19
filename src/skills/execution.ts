@@ -742,11 +742,18 @@ export class ExecutionLayer {
             // established, so the action must NOT auto-execute: escalate rather than bypassing
             // tier enforcement entirely (which would defeat the escalation judge wired in #1057).
             // The warn keeps the unstamped-tier task observable instead of silently escalating.
+            // originatorContactId is hoisted out as a flat field (in addition to the full
+            // originator object) so operators can aggregate this warn by contact when sizing
+            // how often the unstamped-tier gap is hit.
+            const failedOriginator = options?.taskMetadata?.['originator'] as
+              | { contactId?: string }
+              | undefined;
             skillLogger.warn(
               {
                 skillName,
                 actionRisk: manifest.action_risk,
                 originator: options?.taskMetadata?.['originator'],
+                originatorContactId: failedOriginator?.contactId,
                 agentId: options?.agentId,
                 taskEventId: options?.taskEventId,
               },
