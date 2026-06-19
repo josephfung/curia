@@ -6,7 +6,7 @@
 //
 // See docs/wip/2026-05-10-principal-identity-design.md
 
-import type { TaskOriginator } from './types.js';
+import type { ContactTier, TaskOriginator } from './types.js';
 
 /**
  * Check whether a task was originated by the principal (the human Curia serves).
@@ -62,5 +62,28 @@ export function makeSystemOriginator(): TaskOriginator {
     systemRole: 'system',
     channel: 'declarative',
     initiatedAt: new Date().toISOString(),
+    tier: null,
   };
+}
+
+/**
+ * Extract the initiating contact's tier for the execution-layer action gate (issue #950).
+ *
+ * Returns null (fail-open) when:
+ *  - There is no task metadata or no originator
+ *  - The originator is system- or agent-originated (no external contact involved)
+ *  - The originator predates #950 and carries no tier field
+ *
+ * Returns the tier for external-contact-originated tasks. The caller should apply
+ * applyActionPolicy() from escalation-policy.ts using the returned tier.
+ */
+export function getInitiatingTier(
+  metadata: Record<string, unknown> | undefined,
+): ContactTier | null {
+  if (!metadata) return null;
+  const originator = metadata.originator as TaskOriginator | undefined;
+  if (!originator) return null;
+  // System and agent tasks are not externally initiated — skip the tier gate.
+  if (originator.systemRole === 'system' || originator.systemRole === 'agent') return null;
+  return originator.tier ?? null;
 }

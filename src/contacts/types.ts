@@ -214,6 +214,12 @@ export interface TaskOriginator {
   channel: string;
   /** ISO timestamp — when the chain started */
   initiatedAt: string;
+  /**
+   * Contact tier at the moment the task was initiated. Null for system/agent tasks
+   * (no external contact). Absent on originators stamped before issue #950.
+   * Used by execution-layer Gate C to apply the action policy from issue #948.
+   */
+  tier?: ContactTier | null;
 }
 
 // -- Authorization types --

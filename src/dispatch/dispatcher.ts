@@ -671,6 +671,7 @@ export class Dispatcher {
           systemRole: senderContext.systemRole ?? null,
           channel: payload.channelId,
           initiatedAt: new Date().toISOString(),
+          tier: senderContext.tier,
         }
       : undefined;
     const originatorMeta = originator ? { originator } : undefined;

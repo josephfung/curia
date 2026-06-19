@@ -684,6 +684,240 @@ describe('autonomy gates', () => {
     }
     expect(handler.execute).not.toHaveBeenCalled();
   });
+
+  // ---------------------------------------------------------------------------
+  // Gate C: Contact-tier gate (issue #950)
+  // Score 100 so Gates A and B never fire — any block is Gate C.
+  // ---------------------------------------------------------------------------
+
+  describe('Gate C — contact-tier gate', () => {
+    function makeLayerWithScore100(bus?: EventBus) {
+      const registry = new SkillRegistry();
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(100),
+        bus,
+      });
+      return { registry, layer };
+    }
+
+    function originatorMeta(tier: string, systemRole: string | null = null) {
+      return {
+        taskMetadata: {
+          originator: {
+            contactId: 'contact-abc',
+            systemRole: systemRole as 'principal' | 'agent' | 'system' | null,
+            channel: 'email',
+            initiatedAt: new Date().toISOString(),
+            tier,
+          },
+        },
+      };
+    }
+
+    it('blocks medium-risk skill when initiated by unknown-tier contact', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke('email-reply', {}, undefined, originatorMeta('unknown'));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('unknown');
+        expect(result.error).toContain('medium');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('allows low-risk skill when initiated by unknown-tier contact', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('memory-store', 'low'), handler);
+
+      const result = await layer.invoke('memory-store', {}, undefined, originatorMeta('unknown'));
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('always allows read-only (none) skills regardless of tier', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('search-docs', 'none'), handler);
+
+      const result = await layer.invoke('search-docs', {}, undefined, originatorMeta('unknown'));
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('blocks high-risk (third-party-facing) skill when initiated by known-tier contact', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('known');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('allows medium-risk (reply-to-sender) skill when initiated by known-tier contact', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke('email-reply', {}, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('allows high-risk skill when initiated by trusted-tier contact', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, originatorMeta('trusted'));
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('blocks critical-risk skill when initiated by trusted-tier contact', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('irreversible-action', 'critical'), handler);
+
+      const result = await layer.invoke('irreversible-action', {}, undefined, originatorMeta('trusted'));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('trusted');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('allows all skills when initiated by principal-tier contact (principal bypass)', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskMetadata: {
+          originator: {
+            contactId: 'ceo-id',
+            systemRole: 'principal' as const,
+            channel: 'email',
+            initiatedAt: new Date().toISOString(),
+            tier: 'principal',
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('fails open (allows) when no tier is set on the originator', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      // Originator without tier field (pre-#950 or agent-originated)
+      const result = await layer.invoke('email-reply', {}, undefined, {
+        taskMetadata: {
+          originator: {
+            contactId: 'contact-xyz',
+            systemRole: null,
+            channel: 'email',
+            initiatedAt: new Date().toISOString(),
+            // no tier
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('fails open (allows) when there is no originator in task metadata', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke('email-reply', {});
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('skips Gate C for system-originated tasks (tier is null)', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke('email-reply', {}, undefined, {
+        taskMetadata: {
+          originator: {
+            contactId: 'system',
+            systemRole: 'system' as const,
+            channel: 'declarative',
+            initiatedAt: new Date().toISOString(),
+            tier: null,
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('skips Gate C for agent-originated tasks', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke('email-reply', {}, undefined, originatorMeta('unknown', 'agent'));
+
+      // Agent-originated tasks skip Gate C (governed by score gates only).
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('emits autonomy.skill_blocked event when Gate C fires', async () => {
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const { registry, layer } = makeLayerWithScore100(mockBus);
+      registry.register(makeRiskyManifest('email-reply', 'medium'), makeHandler('no'));
+
+      await layer.invoke('email-reply', {}, undefined, originatorMeta('unknown'));
+
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'autonomy.skill_blocked',
+          payload: expect.objectContaining({ skillName: 'email-reply' }),
+        }),
+      );
+    });
+
+    it('humanApproved bypasses Gate C', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke('email-reply', {}, undefined, {
+        humanApproved: true,
+        ...originatorMeta('unknown'),
+      });
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
