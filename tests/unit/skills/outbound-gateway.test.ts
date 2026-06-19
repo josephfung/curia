@@ -1161,8 +1161,11 @@ describe('OutboundGateway contact promotion on successful send', () => {
 
     expect(result.success).toBe(true);
     expect(contactService.createContact).toHaveBeenCalledOnce();
+    // Outbound recipient = CEO-trusted → tier must be 'known' explicitly,
+    // matching the former status='confirmed'→known mapping. This tier must
+    // not regress to 'unknown' if Task 5 removes the service default (#955).
     expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'confirmed',
+      tier: 'known',
       source: 'ceo_stated',
     }));
     expect(contactService.linkIdentity).toHaveBeenCalledOnce();

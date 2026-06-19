@@ -93,10 +93,13 @@ describe('ensurePrincipalContact: INSERT column list', () => {
     // Collect every SQL string the client executed
     const sqlCalls = client.query.mock.calls.map((c) => (c[0] as string).toLowerCase());
 
-    // Assert: no legacy columns in any query
+    // Assert: no legacy columns or values in any query.
+    // Also guard against the legacy status VALUE ('confirmed') re-appearing even if
+    // the column name is spelled differently — mirrors the ceo-bootstrap.test.ts pattern.
     for (const sql of sqlCalls) {
-      expect(sql, `SQL should not reference "status": ${sql}`).not.toContain('status');
+      expect(sql, `SQL should not reference "status": ${sql}`).not.toMatch(/\bstatus\b/);
       expect(sql, `SQL should not reference "trust_level": ${sql}`).not.toContain('trust_level');
+      expect(sql, `SQL should not contain literal 'confirmed': ${sql}`).not.toContain("'confirmed'");
     }
   });
 
