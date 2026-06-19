@@ -968,7 +968,7 @@ describe('ContactService', () => {
         source: 'email_participant',
         status: 'confirmed',
       });
-      await service.setTrustLevel(contact.id, 'high'); // drives tier to 'trusted'
+      await service.setTier(contact.id, 'trusted');
       const before = await service.getContact(contact.id);
       expect(before!.tier).toBe('trusted');
 

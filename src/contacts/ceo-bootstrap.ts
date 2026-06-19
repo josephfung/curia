@@ -43,14 +43,12 @@ export async function repairPrincipalMetadata(contactId: string, pool: DbPool, l
     await pool.query(
       `UPDATE contacts
          SET role = 'ceo',
-             trust_level = 'ceo',
              system_role = 'principal',
              tier = 'principal',
              kind = 'principal',
              updated_at = now()
        WHERE id = $1
          AND (role IS DISTINCT FROM 'ceo'
-           OR trust_level IS DISTINCT FROM 'ceo'
            OR system_role IS DISTINCT FROM 'principal'
            OR tier IS DISTINCT FROM 'principal'
            OR kind IS DISTINCT FROM 'principal')`,
@@ -65,7 +63,7 @@ export async function repairPrincipalMetadata(contactId: string, pool: DbPool, l
     // consistent. Uses a plain Error (consistent with this module's existing throws).
     logger.error(
       { err, contactId },
-      'repairPrincipalMetadata: failed to repair principal capability metadata (role/trust_level/system_role/tier/kind) — principal trust gates may not apply until resolved',
+      'repairPrincipalMetadata: failed to repair principal capability metadata (role/system_role/tier/kind) — principal trust gates may not apply until resolved',
     );
     throw err;
   }
@@ -179,8 +177,8 @@ export async function bootstrapCeoContact(
     await client.query('BEGIN');
     // tier='principal' and kind='principal' added in migration 055 (issue #945).
     await client.query(
-      `INSERT INTO contacts (id, kg_node_id, display_name, role, status, trust_level, system_role, tier, kind, created_at, updated_at)
-       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'ceo', 'principal', 'principal', 'principal', now(), now())`,
+      `INSERT INTO contacts (id, kg_node_id, display_name, role, status, system_role, tier, kind, created_at, updated_at)
+       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'principal', 'principal', 'principal', now(), now())`,
       [contactId, kgNodeId, displayName],
     );
     await client.query(

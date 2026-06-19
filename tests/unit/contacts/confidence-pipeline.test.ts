@@ -73,7 +73,7 @@ describe('ConfidencePipeline', () => {
   describe('incrementalUpdate — trust_grant', () => {
     it('recomputes confidence with trust level signal', async () => {
       const contact = await createTestContact();
-      await service.setTrustLevel(contact.id, 'high');
+      await service.setTier(contact.id, 'trusted');
       await pipeline.incrementalUpdate(contact.id, { type: 'trust_grant' });
 
       const updated = await service.getContact(contact.id);

@@ -6,7 +6,7 @@ import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import { ContactValidationError } from '../../../contacts/contact-service.js';
-import type { Contact, ContactCanonicalFields, ContactKind, ContactStatus, ContactTier, TrustLevel } from '../../../contacts/types.js';
+import type { Contact, ContactCanonicalFields, ContactKind, ContactStatus, ContactTier } from '../../../contacts/types.js';
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
@@ -844,7 +844,6 @@ export async function knowledgeGraphRoutes(
       displayName?: unknown;
       role?: unknown;
       status?: unknown;
-      trustLevel?: unknown;
       tier?: unknown;
       kind?: unknown;
       notes?: unknown;
@@ -857,11 +856,6 @@ export async function knowledgeGraphRoutes(
     const status = typeof body.status === 'string' ? body.status : 'confirmed';
     if (!validContactStatuses.includes(status as ContactStatus)) {
       return reply.status(400).send({ error: 'Invalid status.' });
-    }
-    const validTrustLevelsCreate = ['ceo', 'high', 'medium', 'low'];
-    if (body.trustLevel !== undefined && body.trustLevel !== null &&
-        (typeof body.trustLevel !== 'string' || !validTrustLevelsCreate.includes(body.trustLevel))) {
-      return reply.status(400).send({ error: 'Invalid trustLevel.' });
     }
     if (body.tier !== undefined &&
         (typeof body.tier !== 'string' || !validContactTiers.includes(body.tier as ContactTier))) {
@@ -895,13 +889,7 @@ export async function knowledgeGraphRoutes(
       ...canonicalFields,
     });
 
-    // Apply trustLevel if provided — createContact always initialises it to null.
-    if (typeof body.trustLevel === 'string') {
-      await contactService.setTrustLevel(created.id, body.trustLevel as TrustLevel);
-    }
-
-    // Read back after create + trustLevel so the post-derivation tier is the base
-    // for any tier/kind override below.
+    // Read back so tier/kind overrides below start from the current contact state.
     let freshCreated = await contactService.getContact(created.id);
     if (!freshCreated) {
       // Should never happen — contact was just created — but guard rather than return stale data.
@@ -929,7 +917,6 @@ export async function knowledgeGraphRoutes(
       displayName?: unknown;
       role?: unknown;
       status?: unknown;
-      trustLevel?: unknown;
       tier?: unknown;
       kind?: unknown;
       notes?: unknown;
@@ -943,11 +930,6 @@ export async function knowledgeGraphRoutes(
     // Validate all inputs before any mutations to avoid partial writes on bad input.
     if (typeof body.status === 'string' && !validContactStatuses.includes(body.status as ContactStatus)) {
       return reply.status(400).send({ error: 'Invalid status.' });
-    }
-    const validTrustLevels = ['ceo', 'high', 'medium', 'low'];
-    if ('trustLevel' in body && body.trustLevel !== null &&
-        (typeof body.trustLevel !== 'string' || !validTrustLevels.includes(body.trustLevel))) {
-      return reply.status(400).send({ error: 'Invalid trustLevel.' });
     }
     // Validate tier — rejects 'principal' (structural, derived from system_role).
     if ('tier' in body) {
@@ -997,21 +979,14 @@ export async function knowledgeGraphRoutes(
       }
     }
 
-    // Legacy setStatus / setTrustLevel are not transaction-aware (retired in #955).
-    // Run them first: they carry tier-derivation side-effects (setStatus → newTier,
-    // setTrustLevel → newTier) that must be captured before building `pending`.
+    // setStatus is not transaction-aware — run it first so the tier-derivation
+    // side-effect is captured before building `pending`.
     if (typeof body.status === 'string') {
       await contactService.setStatus(id, body.status as ContactStatus);
     }
-    if ('trustLevel' in body) {
-      await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
-    }
 
-    // Re-read after legacy mutations if any ran so that tier/status/trustLevel
-    // derivations from setStatus / setTrustLevel are reflected in the pending base.
-    // Without this, saveContact would overwrite the legacy-mutation writes with
-    // stale values from the pre-mutation `contact` snapshot.
-    const base: Contact = (typeof body.status === 'string' || 'trustLevel' in body)
+    // Re-read after setStatus if it ran so the tier derivation is reflected in the pending base.
+    const base: Contact = (typeof body.status === 'string')
       ? ((await contactService.getContact(id)) ?? contact)
       : contact;
 

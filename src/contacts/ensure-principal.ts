@@ -12,7 +12,7 @@
 //   1. If a contact with system_role='principal' already exists, return it. Backfill
 //      kg_node_id if missing (preserving the existing display_name — we don't rename).
 //   2. Otherwise create the principal contact + KG person node, mirroring the field
-//      set bootstrapCeoContact uses (role='ceo', trust_level='ceo', status='confirmed').
+//      set bootstrapCeoContact uses (role='ceo', status='confirmed').
 //      No contact_channel_identities row is inserted.
 //
 // Idempotent under serial AND concurrent execution. Handles the 23505 race on the
@@ -91,8 +91,8 @@ export async function ensurePrincipalContact(
     // the correct values must be present from the moment the row is inserted.
     await client.query(
       `INSERT INTO contacts
-         (id, kg_node_id, display_name, role, status, trust_level, system_role, tier, kind, created_at, updated_at)
-       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'ceo', 'principal', 'principal', 'principal', now(), now())`,
+         (id, kg_node_id, display_name, role, status, system_role, tier, kind, created_at, updated_at)
+       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'principal', 'principal', 'principal', now(), now())`,
       [contactId, kgNodeId, displayName],
     );
     await client.query('COMMIT');
