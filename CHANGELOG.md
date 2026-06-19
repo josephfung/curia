@@ -15,21 +15,21 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Auto-elevation** — contacts are automatically promoted from `tier='unknown'` to `tier='known'` via three signal paths: correspondence (outbound email sent to the contact), domain-validated (first inbound from an org-kind contact), and judgment (confidence score crosses the 0.20 threshold). New `contact.elevated` bus event for the audit trail. Automated and agent contacts are excluded at the database layer. (#951)
-- **Action gate: contact-tier enforcement (Gate C)** — consequential actions initiated by lower-tier contacts now escalate through the approval flow instead of auto-executing. `unknown` contacts may only trigger internal writes; `known` contacts may reply to the sender but not third-party-facing actions; `trusted` contacts may take all reversible-external actions. (#950)
-- **`tier` on `TaskOriginator`** — the dispatcher now stamps the initiating contact's tier at task creation time; `getInitiatingTier()` extracts it for gate enforcement. (#950)
-- **`mapActionRiskToConsequenceClass()`** — maps skill manifest `action_risk` labels to the `ActionConsequenceClass` + `isThirdPartyFacing` pair used by the escalation policy. (#950)
-- **Automated sender classification** — `classifyEmailSender()` now detects noreply/mailer-daemon/newsletter patterns and sets `kind='automated'`; new contacts skip the KG org-node path. (#953)
-- **`contact-list` skill `kind` filter** — accepts `kind` to filter by contact kind; default view excludes `automated` and `agent`. (#953)
+- **Auto-elevation** — contacts auto-promote from `unknown` to `known` via correspondence, domain, and judgment signals. (#951)
+- **Action gate: contact-tier enforcement (Gate C)** — actions from lower-tier contacts escalate unless the initiating tier permits them. (#950)
+- **`tier` on `TaskOriginator`** — dispatcher stamps the initiating contact's tier for Gate C enforcement. (#950)
+- **`mapActionRiskToConsequenceClass()`** — maps `action_risk` labels to consequence class and third-party flag for Gate C. (#950)
+- **Automated sender classification** — `classifyEmailSender()` detects noreply/newsletter patterns and marks contacts `kind=automated`. (#953)
+- **`contact-list` skill `kind` filter** — filters by `kind`; default view excludes `automated` and `agent` contacts. (#953)
 
 ### Changed
 
-- **ceo-inbox agent** (v0.7.0 → v0.8.0) — automated senders default to Cleared; still escalated on actionable signals (payment failure, fraud, bounce, hard deadline). (#953)
-- **`contact-list` skill** (v1.2.1 → v1.3.0) — default result set excludes automated and agent contacts; pass `kind=automated` to surface them. (#953)
+- **ceo-inbox agent** (v0.7.0 → v0.8.0) — automated senders default to Cleared; escalated only on actionable signals. (#953)
+- **`contact-list` skill** (v1.2.1 → v1.3.0) — default view excludes automated and agent contacts. (#953)
 
 ### Security
 
-- **CVE-2026-53655 (pnpm bundled tar)** — deleted corepack's pnpm cache from the production image after install. Node 24's bundled corepack pre-caches pnpm@11.0.8 (which bundles tar@7.5.13) during `corepack enable`, even though the project uses pnpm@11.7.0. pnpm is not used at runtime, so the cache is removed entirely.
+- **CVE-2026-53655 (pnpm bundled tar)** — removed corepack's unused pnpm cache from the production image to eliminate a bundled tar CVE.
 
 ### Added
 
