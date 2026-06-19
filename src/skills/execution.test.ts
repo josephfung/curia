@@ -933,13 +933,39 @@ describe('autonomy gates', () => {
       expect(handler.execute).toHaveBeenCalledOnce();
     });
 
-    it('fails open (allows) when no tier is set on the originator', async () => {
+    it('fails closed (escalates) when an external originator has no resolved tier (#1059)', async () => {
+      // An EXTERNAL contact (systemRole not system/agent) whose tier was never stamped —
+      // a pre-#950 task in flight during a deploy or a dispatcher stamping defect. Gate C
+      // cannot establish the tier it needs, so a consequential action must NOT auto-execute:
+      // it fails closed (escalates) instead of bypassing tier enforcement entirely.
       const { registry, layer } = makeLayerWithScore100();
-      const handler = makeHandler('ok');
+      const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
 
-      // Originator without tier field (pre-#950 or agent-originated)
       const result = await layer.invoke('email-reply', {}, undefined, {
+        taskMetadata: {
+          originator: {
+            contactId: 'contact-xyz',
+            systemRole: null,
+            channel: 'email',
+            initiatedAt: new Date().toISOString(),
+            // no tier
+          },
+        },
+      });
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('still allows a none-risk skill from an external originator with no resolved tier (#1059)', async () => {
+      // The fail-closed path is gated on a consequential action. A read-only (none) skill
+      // has no external effect, so a missing tier never escalates it.
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('search-docs', 'none'), handler);
+
+      const result = await layer.invoke('search-docs', {}, undefined, {
         taskMetadata: {
           originator: {
             contactId: 'contact-xyz',
@@ -955,7 +981,41 @@ describe('autonomy gates', () => {
       expect(handler.execute).toHaveBeenCalledOnce();
     });
 
-    it('fails open (allows) when there is no originator in task metadata', async () => {
+    it('emits a warn with skill name and action_risk on the fail-closed path (#1059)', async () => {
+      // The unstamped-tier external task must be observable, not silent.
+      const warn = vi.fn();
+      const spyLogger = {
+        ...logger,
+        child: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+      } as unknown as typeof logger;
+      const registry = new SkillRegistry();
+      const layer = new ExecutionLayer(registry, spyLogger, { autonomyService: makeAutonomyService(100) });
+      registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler('should not run'));
+
+      await layer.invoke('email-send', {}, undefined, {
+        taskMetadata: {
+          originator: {
+            contactId: 'contact-xyz',
+            systemRole: null,
+            channel: 'email',
+            initiatedAt: new Date().toISOString(),
+            // no tier
+          },
+        },
+      });
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ skillName: 'email-send', actionRisk: 'medium' }),
+        expect.stringContaining('failing closed'),
+      );
+    });
+
+    it('skips Gate C when there is no originator in task metadata (structurally internal, #1059)', async () => {
+      // A task with NO originator never came through the dispatcher's external-task path —
+      // e.g. the checkpoint processor invoking extract-facts directly. There is no external
+      // contact to gate, so Gate C is skipped. Failing closed here would break legitimate
+      // system-internal invocations (low/medium-risk KG writes) with zero security benefit,
+      // because an absent originator structurally rules out an external initiator.
       const { registry, layer } = makeLayerWithScore100();
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('email-reply', 'medium'), handler);

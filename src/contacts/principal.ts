@@ -69,10 +69,12 @@ export function makeSystemOriginator(): TaskOriginator {
 /**
  * Extract the initiating contact's tier for the execution-layer action gate (issue #950).
  *
- * Returns null (fail-open) when:
- *  - There is no task metadata or no originator
- *  - The originator is system- or agent-originated (no external contact involved)
- *  - The originator predates #950 and carries no tier field
+ * Returns null when:
+ *  - There is no task metadata or no originator — structurally not externally initiated → skip
+ *  - The originator is system- or agent-originated (no external contact involved) → skip
+ *  - The originator is external but carries no tier field (pre-#950 in flight or a stamping
+ *    defect). This null must NOT be read as "skip": the caller pairs it with
+ *    isExternalOriginatorMissingTier() to fail closed instead (#1059).
  *
  * Returns the tier for external-contact-originated tasks. The caller should apply
  * applyActionPolicy() from escalation-policy.ts using the returned tier.
@@ -91,12 +93,12 @@ export function getInitiatingTier(
 
 /**
  * True when a task was initiated by an EXTERNAL contact (not system- or agent-originated)
- * that carries no resolved tier — the Gate C fail-open case tracked in #1059.
+ * that carries no resolved tier — the Gate C fail-closed trigger tracked in #1059.
  *
  * getInitiatingTier() collapses three cases into null (system, agent, and external-with-no-tier);
- * this predicate isolates the third so the execution layer can surface it for observability
- * while the fail-closed remediation (#1059) is pending. It only identifies the case — it does
- * not decide allow/escalate, and the gate's behavior is unchanged.
+ * this predicate isolates the third so the execution layer can fail it closed (escalate) rather
+ * than skip the gate. A totally absent originator returns false here — that case is structurally
+ * internal (e.g. the checkpoint processor) and is intentionally skipped, not escalated.
  */
 export function isExternalOriginatorMissingTier(
   metadata: Record<string, unknown> | undefined,

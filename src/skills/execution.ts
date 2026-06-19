@@ -708,8 +708,11 @@ export class ExecutionLayer {
 
           // Gate C: Contact-tier gate — consequential actions from lower-tier contacts
           // escalate instead of auto-executing, even when the autonomy score permits them.
-          // Principal bypass is already handled above. Fail-open when the initiating tier
-          // is unavailable (system/agent tasks, pre-#950 stored originators).
+          // Principal bypass is already handled above. System/agent tasks and tasks with no
+          // originator at all skip the gate (structurally not externally initiated — e.g. the
+          // checkpoint processor invoking extract-facts with no task metadata). An EXTERNAL
+          // originator that carries no resolved tier instead FAILS CLOSED (#1059) — see the
+          // else-if below — because we cannot establish the tier the gate needs.
           const initiatingTier = getInitiatingTier(options?.taskMetadata);
           if (initiatingTier !== null && manifest.action_risk !== 'none') {
             const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
@@ -733,10 +736,12 @@ export class ExecutionLayer {
             manifest.action_risk !== 'none' &&
             isExternalOriginatorMissingTier(options?.taskMetadata)
           ) {
-            // Fail-open observability (#1059): an external contact drove a consequential action
-            // but carries no resolved tier, so Gate C is skipped. Behavior is unchanged — the
-            // action is still allowed — but this warn makes the silent skip visible until #1059
-            // fails it closed. Operators can grep this to size how often the gap is hit in prod.
+            // Fail-closed (#1059): an external contact (systemRole not system/agent) drove a
+            // consequential action but carries no resolved tier — a pre-#950 task in flight
+            // during a deploy or a dispatcher stamping defect. The tier Gate C needs cannot be
+            // established, so the action must NOT auto-execute: escalate rather than bypassing
+            // tier enforcement entirely (which would defeat the escalation judge wired in #1057).
+            // The warn keeps the unstamped-tier task observable instead of silently escalating.
             skillLogger.warn(
               {
                 skillName,
@@ -745,8 +750,17 @@ export class ExecutionLayer {
                 agentId: options?.agentId,
                 taskEventId: options?.taskEventId,
               },
-              'autonomy gate: Gate C skipped — external originator has no resolved tier (fail-open, see #1059)',
+              'autonomy gate: skill blocked — external originator has no resolved tier, failing closed (Gate C, see #1059)',
             );
+            // No tier to feed buildTierGateError — pass an explicit sentinel label so the
+            // escalation message and approval request read sensibly (tier 'unresolved').
+            const gateCError = await this.buildTierGateError(
+              skillName, input, 'unresolved', manifest.action_risk, currentScore, options, skillLogger,
+            );
+            return {
+              success: false,
+              error: this.wrapSkillError(gateCError),
+            };
           }
         }
       } else {
