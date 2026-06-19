@@ -28,6 +28,7 @@ function createContactService(): ContactService {
     setTrustLevel: vi.fn(),
     setTier: vi.fn(),
     setKind: vi.fn(),
+    saveContact: vi.fn(),
     updateDisplayName: vi.fn(),
     setRole: vi.fn(),
     setStatus: vi.fn(),
@@ -483,9 +484,8 @@ describe('knowledgeGraphRoutes', () => {
     it('rolls back the transaction and returns 500 when a mutation fails mid-PATCH', async () => {
       const contactService = createContactService();
       vi.mocked(contactService.getContact).mockResolvedValue(makeContact() as never);
-      // updateDisplayName succeeds; setTier throws to simulate a mid-tx failure.
-      vi.mocked(contactService.updateDisplayName).mockResolvedValue(makeContact() as never);
-      vi.mocked(contactService.setTier).mockRejectedValue(new Error('DB error'));
+      // saveContact throws to simulate a DB failure inside the transaction.
+      vi.mocked(contactService.saveContact).mockRejectedValue(new Error('DB error'));
 
       const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
       const clientRelease = vi.fn();
@@ -520,12 +520,11 @@ describe('knowledgeGraphRoutes', () => {
       await app.close();
     });
 
-    it('accepts valid tier and kind values and calls setTier/setKind', async () => {
+    it('accepts valid tier and kind values and writes them via saveContact', async () => {
       const contactService = createContactService();
       const contact = makeContact();
       vi.mocked(contactService.getContact).mockResolvedValue(contact as never);
-      vi.mocked(contactService.setTier).mockResolvedValue(contact as never);
-      vi.mocked(contactService.setKind).mockResolvedValue(contact as never);
+      vi.mocked(contactService.saveContact).mockResolvedValue(contact as never);
 
       const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
       const client: Partial<PoolClient> = { query: clientQuery, release: vi.fn() };
@@ -548,20 +547,42 @@ describe('knowledgeGraphRoutes', () => {
         payload: { tier: 'trusted', kind: 'organization' },
       });
 
-      // The getContact call after the transaction returns undefined (not mocked for
-      // that second call), so Fastify returns 404 — that's fine; we only verify
-      // setTier and setKind were called with the right arguments.
-      expect(contactService.setTier).toHaveBeenCalledWith(
-        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-        'trusted',
-        client,
-      );
-      expect(contactService.setKind).toHaveBeenCalledWith(
-        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-        'organization',
-        client,
-      );
+      // saveContact must have been called with a contact snapshot that has the updated
+      // tier and kind merged in, and with the transaction client.
+      expect(contactService.saveContact).toHaveBeenCalledTimes(1);
+      const [savedContact, savedClient] = (contactService.saveContact as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(savedContact.tier).toBe('trusted');
+      expect(savedContact.kind).toBe('organization');
+      expect(savedClient).toBe(client);
       expect(res.statusCode).not.toBe(400);
+      await app.close();
+    });
+
+    it('rejects kind changes for agent contacts with 400', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.getContact).mockResolvedValue(
+        makeContact({ systemRole: 'agent', kind: 'agent' }) as never,
+      );
+
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool: { query: vi.fn() } as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/kg/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { kind: 'person' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/system contact/i);
       await app.close();
     });
   });

@@ -153,11 +153,9 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
     setSaving(true);
     setError(null);
     try {
-      const body = {
+      const body: Record<string, unknown> = {
         displayName: displayName.trim(),
         role: role.trim() || null,
-        tier,
-        kind,
         notes: notes.trim() || null,
         kgNodeId: kgNodeId.trim() || null,
         // Canonical fields
@@ -174,6 +172,15 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
         bio: bio.trim() || null,
         birthday: birthday.trim() || null,
       };
+      // Tier is user-settable for all contacts except the principal (whose tier is structural).
+      // Kind is user-settable only for non-system contacts; principal and agent contacts have
+      // structural kinds ('principal' and 'agent') that the API rejects as invalid values.
+      if (creating || contact?.systemRole !== 'principal') {
+        body.tier = tier;
+      }
+      if (creating || (contact?.systemRole !== 'principal' && contact?.systemRole !== 'agent')) {
+        body.kind = kind;
+      }
 
       let res: Response;
       if (creating) {
