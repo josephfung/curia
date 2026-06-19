@@ -7,19 +7,28 @@ import { useTheme } from '../hooks/useTheme.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type ContactStatus = 'confirmed' | 'provisional' | 'blocked';
-type TrustLevel = 'ceo' | 'high' | 'medium' | 'low' | null;
+type ContactTier = 'blocked' | 'unknown' | 'known' | 'trusted' | 'principal';
+type ContactKind = 'person' | 'organization' | 'automated' | 'principal' | 'agent';
 type SystemRole = 'principal' | 'agent' | 'system' | null;
+
+// Numeric rank for tier-aware sorting (ascending capability).
+const TIER_ORDER: Record<ContactTier, number> = {
+  blocked: 0, unknown: 1, known: 2, trusted: 3, principal: 4,
+};
 
 interface Contact {
   id: string;
   kgNodeId: string | null;
   displayName: string;
   role: string | null;
-  status: ContactStatus;
-  notes: string | null;
-  trustLevel: TrustLevel;
+  // Legacy columns — kept until #955 drops them.
+  status: string;
+  trustLevel: string | null;
+  // Capability axis (migration 055).
+  tier: ContactTier;
+  kind: ContactKind;
   systemRole: SystemRole;
+  notes: string | null;
   createdAt: string;
   updatedAt: string;
   // Canonical fields (migration 048)
@@ -116,8 +125,8 @@ interface DrawerProps {
 function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: DrawerProps) {
   const [displayName, setDisplayName] = useState(contact?.displayName ?? '');
   const [role, setRole] = useState(contact?.role ?? '');
-  const [status, setStatus] = useState<ContactStatus>(contact?.status ?? 'provisional');
-  const [trustLevel, setTrustLevel] = useState<TrustLevel>(contact?.trustLevel ?? null);
+  const [tier, setTier] = useState<ContactTier>(contact?.tier ?? 'unknown');
+  const [kind, setKind] = useState<ContactKind>(contact?.kind ?? 'person');
   const [kgNodeId, setKgNodeId] = useState(contact?.kgNodeId ?? '');
   const [notes, setNotes] = useState(contact?.notes ?? '');
   const [preferredName, setPreferredName] = useState(contact?.preferredName ?? '');
@@ -147,8 +156,8 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
       const body = {
         displayName: displayName.trim(),
         role: role.trim() || null,
-        status,
-        trustLevel: trustLevel ?? null,
+        tier,
+        kind,
         notes: notes.trim() || null,
         kgNodeId: kgNodeId.trim() || null,
         // Canonical fields
@@ -315,21 +324,35 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
           <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '16px 0 6px' }}>System</p>
           <div className="form-grid">
             <div className="form-field">
-              <label htmlFor="cf-status">Status</label>
-              <select id="cf-status" value={status} onChange={e => setStatus(e.target.value as ContactStatus)}>
-                <option value="confirmed">Confirmed</option>
-                <option value="provisional">Provisional</option>
+              <label htmlFor="cf-tier">Tier</label>
+              <select
+                id="cf-tier"
+                value={tier}
+                onChange={e => setTier(e.target.value as ContactTier)}
+                disabled={contact?.systemRole === 'principal'}
+                title={contact?.systemRole === 'principal' ? 'The principal contact\'s tier is fixed' : undefined}
+              >
                 <option value="blocked">Blocked</option>
+                <option value="unknown">Unknown</option>
+                <option value="known">Known</option>
+                <option value="trusted">Trusted</option>
+                {contact?.systemRole === 'principal' && <option value="principal">Principal</option>}
               </select>
             </div>
             <div className="form-field">
-              <label htmlFor="cf-trust">Trust level</label>
-              <select id="cf-trust" value={trustLevel ?? ''} onChange={e => setTrustLevel((e.target.value || null) as TrustLevel)}>
-                <option value="">None</option>
-                <option value="ceo">CEO</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
+              <label htmlFor="cf-kind">Kind</label>
+              <select
+                id="cf-kind"
+                value={kind}
+                onChange={e => setKind(e.target.value as ContactKind)}
+                disabled={contact?.systemRole === 'principal' || contact?.systemRole === 'agent'}
+                title={contact?.systemRole ? 'System contacts\' kind is fixed' : undefined}
+              >
+                <option value="person">Person</option>
+                <option value="organization">Organization</option>
+                <option value="automated">Automated</option>
+                {contact?.systemRole === 'principal' && <option value="principal">Principal</option>}
+                {contact?.systemRole === 'agent' && <option value="agent">Agent</option>}
               </select>
             </div>
           </div>
@@ -374,8 +397,9 @@ export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | ContactStatus>('confirmed');
-  const [sort, setSort] = useState<{ key: keyof Contact; dir: 'asc' | 'desc' }>({ key: 'updatedAt', dir: 'desc' });
+  const [tierFilter, setTierFilter] = useState<'all' | ContactTier>('all');
+  const [kindFilter, setKindFilter] = useState<'all' | ContactKind>('all');
+  const [sort, setSort] = useState<{ key: keyof Contact; dir: 'asc' | 'desc' }>({ key: 'tier', dir: 'desc' });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [editing, setEditing] = useState<Contact | null>(null);
@@ -400,15 +424,22 @@ export default function ContactsPage() {
   useEffect(() => { void load(); }, [load]);
 
   const counts = useMemo(() => ({
-    all:         contacts.length,
-    confirmed:   contacts.filter(c => c.status === 'confirmed').length,
-    provisional: contacts.filter(c => c.status === 'provisional').length,
-    blocked:     contacts.filter(c => c.status === 'blocked').length,
+    allTiers:     contacts.length,
+    blocked:      contacts.filter(c => c.tier === 'blocked').length,
+    unknown:      contacts.filter(c => c.tier === 'unknown').length,
+    known:        contacts.filter(c => c.tier === 'known').length,
+    trusted:      contacts.filter(c => c.tier === 'trusted').length,
+    principal:    contacts.filter(c => c.tier === 'principal').length,
+    allKinds:     contacts.length,
+    person:       contacts.filter(c => c.kind === 'person').length,
+    organization: contacts.filter(c => c.kind === 'organization').length,
+    automated:    contacts.filter(c => c.kind === 'automated').length,
   }), [contacts]);
 
   const filtered = useMemo(() => {
     let rows = contacts;
-    if (statusFilter !== 'all') rows = rows.filter(c => c.status === statusFilter);
+    if (tierFilter !== 'all') rows = rows.filter(c => c.tier === tierFilter);
+    if (kindFilter !== 'all') rows = rows.filter(c => c.kind === kindFilter);
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(c =>
@@ -417,6 +448,9 @@ export default function ContactsPage() {
     }
     const dir = sort.dir === 'asc' ? 1 : -1;
     rows = [...rows].sort((a, b) => {
+      if (sort.key === 'tier') {
+        return ((TIER_ORDER[a.tier] ?? 0) - (TIER_ORDER[b.tier] ?? 0)) * dir;
+      }
       const av = (a[sort.key] ?? '') as string;
       const bv = (b[sort.key] ?? '') as string;
       if (av < bv) return -1 * dir;
@@ -424,7 +458,7 @@ export default function ContactsPage() {
       return 0;
     });
     return rows;
-  }, [contacts, statusFilter, search, sort]);
+  }, [contacts, tierFilter, kindFilter, search, sort]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -445,8 +479,8 @@ export default function ContactsPage() {
         next[idx] = contact;
         return next;
       }
-      // New contact: switch filter so it's immediately visible.
-      setStatusFilter(contact.status);
+      // New contact: switch tier filter so it's immediately visible.
+      setTierFilter(contact.tier);
       return [...prev, contact];
     });
     setEditing(contact);
@@ -502,15 +536,28 @@ export default function ContactsPage() {
 
               <div className="records-toolbar">
                 <div className="records-toolbar-left">
-                  {(['all', 'confirmed', 'provisional', 'blocked'] as const).map(v => (
+                  {([['all', 'All', counts.allTiers], ['blocked', 'Blocked', counts.blocked], ['unknown', 'Unknown', counts.unknown], ['known', 'Known', counts.known], ['trusted', 'Trusted', counts.trusted]] as const).map(([v, label, count]) => (
                     <button
                       key={v}
-                      className={`records-filter-chip${statusFilter === v ? ' active' : ''}`}
-                      onClick={() => { setStatusFilter(v); setPage(1); }}
+                      className={`records-filter-chip${tierFilter === v ? ' active' : ''}`}
+                      onClick={() => { setTierFilter(v); setPage(1); }}
                     >
-                      {v === 'all' ? 'All' : v.charAt(0).toUpperCase() + v.slice(1)}
+                      {label}
                       <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, opacity: 0.7 }}>
-                        {counts[v]}
+                        {count}
+                      </span>
+                    </button>
+                  ))}
+                  <span style={{ borderLeft: '1px solid var(--app-border)', margin: '0 4px', height: 16, display: 'inline-block', verticalAlign: 'middle' }} />
+                  {([['all', 'All kinds', counts.allKinds], ['person', 'Person', counts.person], ['organization', 'Org', counts.organization], ['automated', 'Auto', counts.automated]] as const).map(([v, label, count]) => (
+                    <button
+                      key={v}
+                      className={`records-filter-chip${kindFilter === v ? ' active' : ''}`}
+                      onClick={() => { setKindFilter(v); setPage(1); }}
+                    >
+                      {label}
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, opacity: 0.7 }}>
+                        {count}
                       </span>
                     </button>
                   ))}
@@ -541,11 +588,12 @@ export default function ContactsPage() {
                               Org <span className="sort-arrow">{sortArrow('organization')}</span>
                             </button>
                           </th>
-                          <th className="sortable" aria-sort={sort.key === 'status' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                            <button className="sort-btn" onClick={() => toggleSort('status')}>
-                              Status <span className="sort-arrow">{sortArrow('status')}</span>
+                          <th className="sortable" aria-sort={sort.key === 'tier' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                            <button className="sort-btn" onClick={() => toggleSort('tier')}>
+                              Tier <span className="sort-arrow">{sortArrow('tier')}</span>
                             </button>
                           </th>
+                          <th>Kind</th>
                           <th className="sortable col-updated" aria-sort={sort.key === 'updatedAt' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                             <button className="sort-btn" onClick={() => toggleSort('updatedAt')}>
                               Updated <span className="sort-arrow">{sortArrow('updatedAt')}</span>
@@ -575,7 +623,8 @@ export default function ContactsPage() {
                             </td>
                             <td>{c.title ?? ''}</td>
                             <td>{c.organization ?? ''}</td>
-                            <td><span className={`status-pill ${c.status}`}>{c.status}</span></td>
+                            <td><span className={`status-pill tier-${c.tier}`}>{c.tier}</span></td>
+                            <td style={{ fontSize: 12, color: 'var(--app-fg-muted)' }}>{c.kind}</td>
                             <td className="cell-mono col-updated">{formatDate(c.updatedAt)}</td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>
@@ -594,7 +643,7 @@ export default function ContactsPage() {
                         ))}
                         {pageRows.length === 0 && (
                           <tr>
-                            <td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
+                            <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
                               No contacts match.
                             </td>
                           </tr>

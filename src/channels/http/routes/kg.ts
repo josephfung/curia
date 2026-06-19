@@ -6,7 +6,7 @@ import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import { ContactValidationError } from '../../../contacts/contact-service.js';
-import type { Contact, ContactCanonicalFields, ContactStatus, TrustLevel } from '../../../contacts/types.js';
+import type { Contact, ContactCanonicalFields, ContactKind, ContactStatus, ContactTier, TrustLevel } from '../../../contacts/types.js';
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
@@ -274,6 +274,9 @@ export async function knowledgeGraphRoutes(
   });
 
   const validContactStatuses: ContactStatus[] = ['confirmed', 'provisional', 'blocked'];
+  // tier/kind selectable via the API — 'principal' and kind∈{principal,agent} are structural-only.
+  const validContactTiers: ContactTier[] = ['blocked', 'unknown', 'known', 'trusted'];
+  const validContactKinds: ContactKind[] = ['person', 'organization', 'automated'];
   const validTaskStatuses = [
     // Legacy values used by the scheduler before task skills shipped
     'active', 'pending', 'paused', 'completed', 'failed',
@@ -842,6 +845,8 @@ export async function knowledgeGraphRoutes(
       role?: unknown;
       status?: unknown;
       trustLevel?: unknown;
+      tier?: unknown;
+      kind?: unknown;
       notes?: unknown;
       kgNodeId?: unknown;
     };
@@ -857,6 +862,14 @@ export async function knowledgeGraphRoutes(
     if (body.trustLevel !== undefined && body.trustLevel !== null &&
         (typeof body.trustLevel !== 'string' || !validTrustLevelsCreate.includes(body.trustLevel))) {
       return reply.status(400).send({ error: 'Invalid trustLevel.' });
+    }
+    if (body.tier !== undefined &&
+        (typeof body.tier !== 'string' || !validContactTiers.includes(body.tier as ContactTier))) {
+      return reply.status(400).send({ error: `Invalid tier. Must be one of: ${validContactTiers.join(', ')}.` });
+    }
+    if (body.kind !== undefined &&
+        (typeof body.kind !== 'string' || !validContactKinds.includes(body.kind as ContactKind))) {
+      return reply.status(400).send({ error: `Invalid kind. Must be one of: ${validContactKinds.join(', ')}.` });
     }
 
     const kgNodeId =
@@ -886,6 +899,13 @@ export async function knowledgeGraphRoutes(
     if (typeof body.trustLevel === 'string') {
       await contactService.setTrustLevel(created.id, body.trustLevel as TrustLevel);
     }
+    // Apply tier/kind overrides if provided — these take precedence over status/trustLevel-derived values.
+    if (typeof body.tier === 'string') {
+      await contactService.setTier(created.id, body.tier as ContactTier);
+    }
+    if (typeof body.kind === 'string') {
+      await contactService.setKind(created.id, body.kind as ContactKind);
+    }
 
     const freshCreated = await contactService.getContact(created.id);
     if (!freshCreated) {
@@ -906,6 +926,8 @@ export async function knowledgeGraphRoutes(
       role?: unknown;
       status?: unknown;
       trustLevel?: unknown;
+      tier?: unknown;
+      kind?: unknown;
       notes?: unknown;
       kgNodeId?: unknown;
     };
@@ -922,6 +944,25 @@ export async function knowledgeGraphRoutes(
     if ('trustLevel' in body && body.trustLevel !== null &&
         (typeof body.trustLevel !== 'string' || !validTrustLevels.includes(body.trustLevel))) {
       return reply.status(400).send({ error: 'Invalid trustLevel.' });
+    }
+    // Validate tier — rejects 'principal' (structural, derived from system_role).
+    if ('tier' in body) {
+      if (typeof body.tier !== 'string' || !validContactTiers.includes(body.tier as ContactTier)) {
+        return reply.status(400).send({ error: `Invalid tier. Must be one of: ${validContactTiers.join(', ')}.` });
+      }
+      // Principal contacts cannot be demoted or re-typed via the API.
+      if (contact.systemRole === 'principal') {
+        return reply.status(400).send({ error: 'The principal contact\'s tier cannot be changed via the API.' });
+      }
+    }
+    // Validate kind — rejects 'principal' and 'agent' (structural).
+    if ('kind' in body) {
+      if (typeof body.kind !== 'string' || !validContactKinds.includes(body.kind as ContactKind)) {
+        return reply.status(400).send({ error: `Invalid kind. Must be one of: ${validContactKinds.join(', ')}.` });
+      }
+      if (contact.systemRole === 'principal') {
+        return reply.status(400).send({ error: 'The principal contact\'s kind cannot be changed via the API.' });
+      }
     }
     // Trim once; collapse whitespace-only strings to null so they don't reach the DB as invalid UUIDs.
     const normalizedKgNodeId: string | null | undefined =
@@ -952,24 +993,37 @@ export async function knowledgeGraphRoutes(
       }
     }
 
+    // Legacy setStatus / setTrustLevel are not transaction-aware (retired in #955).
+    // Run them before the transaction so a legacy-field failure is surfaced cleanly.
+    if (typeof body.status === 'string') {
+      await contactService.setStatus(id, body.status as ContactStatus);
+    }
+    if ('trustLevel' in body) {
+      await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
+    }
+
+    // All remaining mutations are wrapped in a single DB transaction for atomicity.
+    const client = await pool.connect();
     try {
+      await client.query('BEGIN');
+
       if (typeof body.displayName === 'string' && body.displayName.trim().length > 0) {
-        await contactService.updateDisplayName(id, body.displayName);
+        await contactService.updateDisplayName(id, body.displayName, client);
       }
       if (typeof body.role === 'string') {
-        await contactService.setRole(id, body.role);
+        await contactService.setRole(id, body.role, client);
       } else if (body.role === null) {
         // Explicit null means "clear the role field" — setRole doesn't accept null so go direct.
-        await pool.query(`UPDATE contacts SET role = NULL, updated_at = $2 WHERE id = $1`, [
+        await client.query(`UPDATE contacts SET role = NULL, updated_at = $2 WHERE id = $1`, [
           id,
           new Date().toISOString(),
         ]);
       }
-      if (typeof body.status === 'string') {
-        await contactService.setStatus(id, body.status as ContactStatus);
+      if (typeof body.tier === 'string') {
+        await contactService.setTier(id, body.tier as ContactTier, client);
       }
-      if ('trustLevel' in body) {
-        await contactService.setTrustLevel(id, (body.trustLevel as TrustLevel | null));
+      if (typeof body.kind === 'string') {
+        await contactService.setKind(id, body.kind as ContactKind, client);
       }
 
       // Notes and kgNodeId are updated directly by preserving the rest of the contact.
@@ -977,9 +1031,10 @@ export async function knowledgeGraphRoutes(
       if (typeof body.notes === 'string' || typeof body.kgNodeId === 'string' || body.notes === null || body.kgNodeId === null) {
         const refreshed = await contactService.getContact(id);
         if (!refreshed) {
+          await client.query('ROLLBACK');
           return reply.status(404).send({ error: 'Contact not found.' });
         }
-        await pool.query(
+        await client.query(
           `UPDATE contacts
            SET notes = $2, kg_node_id = $3, updated_at = $4
            WHERE id = $1`,
@@ -999,29 +1054,28 @@ export async function knowledgeGraphRoutes(
       ];
       const hasCanonicalFields = CANONICAL_KEYS.some(k => k in (body as Record<string, unknown>));
       if (hasCanonicalFields) {
-        try {
-          await contactService.updateContactFields(id, canonicalFields);
-        } catch (err) {
-          if (err instanceof ContactValidationError) {
-            // Client sent invalid data (e.g., primaryEmail not linked to this contact)
-            return reply.status(400).send({ error: err.message });
-          }
-          // All other errors (DB failures, etc.) propagate to the outer catch → 500
-          throw err;
-        }
+        await contactService.updateContactFields(id, canonicalFields, client);
       }
 
-      const updated = await contactService.getContact(id);
-      if (!updated) {
-        return reply.status(404).send({ error: 'Contact not found after update.' });
-      }
-      return reply.send({
-        contact: serializeContact(updated),
-      });
+      await client.query('COMMIT');
     } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof ContactValidationError) {
+        return reply.status(400).send({ error: err.message });
+      }
       request.log.error({ err }, 'contacts: PATCH mutation failed');
       return reply.status(500).send({ error: 'An error occurred while updating the contact.' });
+    } finally {
+      client.release();
     }
+
+    const updated = await contactService.getContact(id);
+    if (!updated) {
+      return reply.status(404).send({ error: 'Contact not found after update.' });
+    }
+    return reply.send({
+      contact: serializeContact(updated),
+    });
   });
 
   app.delete('/api/kg/contacts/:id', KG_RATE, async (request, reply) => {

@@ -15,6 +15,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Console Contacts: tier/kind editing** — the admin Contacts page now edits `tier` and `kind` directly; Status and Trust-level controls are removed. List view filters, sorts, and displays by tier + kind facet. (#1055)
+- **PATCH/POST `/api/kg/contacts` accept `tier` and `kind`** — validated against the migration-055 enums with structural guards rejecting `tier='principal'` and `kind ∈ {principal, agent}`. Principal contacts cannot be demoted via the API. (#1055)
+- **Atomic PATCH mutations** — all non-legacy mutations in `PATCH /api/kg/contacts/:id` now run in a single DB transaction; partial failures roll back cleanly. (#1055)
+
 - **Auto-elevation** — contacts auto-promote from `unknown` to `known` via correspondence, domain, and judgment signals. (#951)
 - **Action gate: contact-tier enforcement (Gate C)** — consequential actions from lower-tier contacts escalate unless the initiating tier permits them. (#950)
 - **`tier` on `TaskOriginator`** — dispatcher stamps the initiating contact's tier for Gate C enforcement. (#950)
