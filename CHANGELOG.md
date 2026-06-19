@@ -32,6 +32,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`trust_level` column retired as active read/write path** — the three remaining readers (confidence scorer, trust scorer, permission resolver) and all writers now key on `tier` (`ContactTier`) instead. `setTrustLevel()`, `deriveTierFromTrustLevelUpdate()`, and `meetsMinimumTrust()` removed. The `trust_level` DB column remains (dropped in #955). `config/role-defaults.yaml` `trust_level_defaults` renamed to `tier_defaults` with `ContactTier` keys. (#1070)
 - **ceo-inbox agent** (v0.7.0 → v0.8.0) — automated senders default to Cleared; escalated only on actionable signals. (#953)
 - **`contact-list` skill** (v1.2.1 → v1.3.0) — default view excludes automated and agent contacts. (#953)
 
