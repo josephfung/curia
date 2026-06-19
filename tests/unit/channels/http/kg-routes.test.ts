@@ -25,7 +25,6 @@ function createContactService(): ContactService {
   return {
     createContact: vi.fn(),
     getContact: vi.fn(),
-    setTrustLevel: vi.fn(),
     setTier: vi.fn(),
     setKind: vi.fn(),
     saveContact: vi.fn(),

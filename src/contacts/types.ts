@@ -247,33 +247,15 @@ export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
 export type SystemRole = 'principal' | 'agent' | 'system';
 
 // Ordinal ranking for trust level comparison. Higher rank = more trusted.
-// Used by meetsMinimumTrust() so callers don't need to enumerate every level.
-// Exported so authorization.ts and other consumers share the same single source of truth.
-// TODO(#955): Remove TRUST_RANK once all callers have migrated to TIER_RANK + ContactTier.
+// Kept for channel trust and permission sensitivity comparisons in authorization.ts
+// (channel trust config uses TrustLevel, not ContactTier). The trust_level *column*
+// is retired in #955; this constant stays for the channel/sensitivity read paths.
 export const TRUST_RANK: Record<TrustLevel, number> = {
   low: 0,
   medium: 1,
   high: 2,
   ceo: 3,
 };
-
-/**
- * Check whether an actual trust level meets or exceeds a required minimum.
- * Returns false for null (unknown contacts default to untrusted).
- *
- * @deprecated Prefer meetsMinimumTier() against contact.tier. This function
- *   operates on the legacy trust_level column. Kept alive until #955 completes
- *   the column drop — existing call sites in authorization.ts and pii-redactor.ts
- *   still need it for channel-level TrustLevel comparisons (channel trust is
- *   config-driven and not mapped to tier).
- */
-export function meetsMinimumTrust(
-  actual: TrustLevel | null,
-  required: TrustLevel,
-): boolean {
-  if (actual === null) return false;
-  return TRUST_RANK[actual] >= TRUST_RANK[required];
-}
 
 // ---------------------------------------------------------------------------
 // New tier + kind system (issue #945)

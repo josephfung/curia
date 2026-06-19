@@ -59,7 +59,7 @@ export class ContactValidationError extends Error {
 /**
  * Derive an initial tier for a freshly created contact from its status.
  * New contacts never start as 'trusted' or 'principal' — those require
- * explicit setTrustLevel() or bootstrap calls after creation.
+ * explicit setTier() or bootstrap calls after creation.
  */
 export function deriveInitialTier(status: ContactStatus): ContactTier {
   if (status === 'blocked')     return 'blocked';
@@ -87,26 +87,6 @@ export function deriveTierFromStatusUpdate(
   // confirmed: preserve elevated tiers
   if (existingTier === 'trusted' || existingTier === 'principal') return existingTier;
   return 'known';
-}
-
-/**
- * Derive the new tier when setTrustLevel() is called.
- *
- * trust_level maps to tier as follows:
- *   'ceo'    → 'principal'
- *   'high'   → 'trusted'
- *   'medium' → status-derived (same as known/unknown/blocked from status)
- *   'low'    → status-derived (same fallback)
- *   null     → status-derived (revert to status-based tier)
- */
-export function deriveTierFromTrustLevelUpdate(
-  trustLevel: TrustLevel | null,
-  status: ContactStatus,
-): ContactTier {
-  if (trustLevel === 'ceo')  return 'principal';
-  if (trustLevel === 'high') return 'trusted';
-  // medium, low, or null — fall back to the status-derived tier
-  return deriveInitialTier(status);
 }
 
 // ---------------------------------------------------------------------------
@@ -529,8 +509,8 @@ export class ContactService {
     //   provisional → tier='unknown'
     //   confirmed  → tier='known'
     //
-    // Note: new contacts always start with null trustLevel, so we never derive
-    // 'trusted' or 'principal' here — those are set via setTrustLevel / bootstrap
+    // Note: new contacts always start with the status-derived tier, so we never derive
+    // 'trusted' or 'principal' here — those are set via setTier() or bootstrap
     // after the contact exists.
     const contactTier: ContactTier = options.tier ?? deriveInitialTier(contactStatus);
 
@@ -790,48 +770,6 @@ export class ContactService {
   }
 
   /**
-   * Set or clear a contact's per-contact trust level override.
-   *
-   * trust_level = 'high' grants the contact access to third-party contact data
-   * in outbound responses (same as the CEO). Use for the CEO's EA, CFO, or any
-   * other party the CEO explicitly trusts with contact information.
-   *
-   * Pass null to remove the override and revert to the channel default.
-   */
-  async setTrustLevel(contactId: string, trustLevel: TrustLevel | null): Promise<Contact> {
-    const contact = await this.backend.getContact(contactId);
-    if (!contact) {
-      throw new Error(`Contact not found: ${contactId}`);
-    }
-
-    // Derive new tier from the trust level change, keeping existing tier context.
-    // trust_level='ceo' → principal, 'high' → trusted, 'medium'/'low' → fall back to status-derived tier.
-    // trust_level=null → revert to status-derived tier.
-    //
-    // TODO(#945-followup): TOCTOU — concurrent setStatus('blocked') can be clobbered by this tier
-    // derivation; a concurrent block landed after our getContact read above would be overwritten by
-    // the updateContact write below, leaving a blocked contact with tier='trusted'. Needs a
-    // conditional UPDATE or SELECT FOR UPDATE if concurrent same-contact writes become real.
-    // Never demote the principal via a trust-level change: trust_level is a per-contact
-    // override, but the principal's capability is structural (system_role). Clearing or
-    // lowering trust_level (null/low/medium) must not drop the principal below 'principal'.
-    // (CodeAnt review — deriveTierFromTrustLevelUpdate would otherwise fall back to the
-    // status-derived 'known' for a confirmed principal.)
-    const newTier = contact.systemRole === 'principal'
-      ? 'principal'
-      : deriveTierFromTrustLevelUpdate(trustLevel, contact.status);
-
-    const updated: Contact = {
-      ...contact,
-      trustLevel,
-      tier: newTier,
-      updatedAt: new Date(),
-    };
-
-    return this.updateStoredContact(updated);
-  }
-
-  /**
    * Link a channel identity to a contact.
    *
    * Auto-verification logic: sources ceo_stated, email_participant, crm_import,
@@ -936,7 +874,7 @@ export class ContactService {
   /** Update a contact's status (confirmed, provisional, blocked).
    *
    * Also updates `tier` to keep the two in sync. The tier derivation preserves any
-   * 'trusted' or 'principal' tier that was previously set (via setTrustLevel or
+   * 'trusted' or 'principal' tier that was previously set (via setTier or
    * bootstrap) — those are not downgraded by a status-only change. Specifically:
    *   - status='blocked'     → tier='blocked'   (always overrides)
    *   - status='provisional' → tier='unknown'   (unless already trusted/principal)
@@ -1663,22 +1601,21 @@ class PostgresContactBackend implements ContactServiceBackend {
 
   async updateContact(contact: Contact, client?: DbPoolClient): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: updating contact');
-    // trust_level is included because ContactService.setTrustLevel writes through this path.
     // system_role is included so bootstrap and any future setter can persist it through the standard update path.
-    // tier and kind (migration 055) are included so setStatus/setTrustLevel keep them in sync.
+    // tier and kind (migration 055) are included so setStatus/setTier keep them in sync.
     // contact_confidence and last_seen_at remain scoring-owned and are not updated here.
     const queryFn = client ?? this.pool;
     await queryFn.query(
       `UPDATE contacts SET
          kg_node_id = $2, display_name = $3, role = $4, system_role = $5, status = $6,
-         notes = $7, trust_level = $8, tier = $9, kind = $10, updated_at = $11,
-         preferred_name = $12, title = $13, organization = $14, primary_email = $15,
-         primary_phone = $16, timezone = $17, locale = $18, location = $19,
-         pronouns = $20, linkedin_url = $21, bio = $22, birthday = $23
+         notes = $7, tier = $8, kind = $9, updated_at = $10,
+         preferred_name = $11, title = $12, organization = $13, primary_email = $14,
+         primary_phone = $15, timezone = $16, locale = $17, location = $18,
+         pronouns = $19, linkedin_url = $20, bio = $21, birthday = $22
        WHERE id = $1`,
       [
         contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.systemRole,
-        contact.status, contact.notes, contact.trustLevel, contact.tier, contact.kind, contact.updatedAt,
+        contact.status, contact.notes, contact.tier, contact.kind, contact.updatedAt,
         contact.preferredName, contact.title, contact.organization, contact.primaryEmail,
         contact.primaryPhone, contact.timezone, contact.locale, contact.location,
         contact.pronouns, contact.linkedinUrl, contact.bio, contact.birthday,
