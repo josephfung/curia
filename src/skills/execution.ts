@@ -20,7 +20,7 @@
 import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isSystemOriginated, getInitiatingTier } from '../contacts/principal.js';
-import { applyActionPolicy, actionRiskToConsequenceClass } from '../autonomy/escalation-policy.js';
+import { applyActionPolicy, mapActionRiskToConsequenceClass } from '../autonomy/escalation-policy.js';
 import type { SkillRegistry } from './registry.js';
 import { sanitizeOutput, sanitizeObjectOutput } from './sanitize.js';
 import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
@@ -590,7 +590,7 @@ export class ExecutionLayer {
           // is unavailable (system/agent tasks, pre-#950 stored originators).
           const initiatingTier = getInitiatingTier(options?.taskMetadata);
           if (initiatingTier !== null && manifest.action_risk !== 'none') {
-            const { actionClass, isThirdPartyFacing } = actionRiskToConsequenceClass(manifest.action_risk);
+            const { actionClass, isThirdPartyFacing } = mapActionRiskToConsequenceClass(manifest.action_risk);
             const tierDecision = applyActionPolicy(initiatingTier, actionClass, isThirdPartyFacing);
             if (tierDecision === 'escalate') {
               skillLogger.info(

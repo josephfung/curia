@@ -133,7 +133,7 @@ export function applyDisclosurePolicy(
  * Numeric risks: treated as irreversible + third-party-facing (fail-closed — numeric values
  * are author-specified precision scores and have no canonical consequence class).
  */
-export function actionRiskToConsequenceClass(
+export function mapActionRiskToConsequenceClass(
   risk: 'none' | 'low' | 'medium' | 'high' | 'critical' | number,
 ): { actionClass: ActionConsequenceClass; isThirdPartyFacing: boolean } {
   if (typeof risk === 'number') {
