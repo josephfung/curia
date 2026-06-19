@@ -732,6 +732,19 @@ export class ContactService {
   }
 
   /**
+   * Persist a fully-constructed Contact in one write, applying display-name sanitization.
+   *
+   * Use this when the caller has already assembled all pending field changes in memory
+   * and wants a single transactional write rather than the per-field read+write cycle
+   * that individual setters (setTier, updateDisplayName, etc.) perform internally.
+   *
+   * Pass an optional PoolClient to participate in a caller-managed transaction.
+   */
+  async saveContact(contact: Contact, client?: DbPoolClient): Promise<Contact> {
+    return this.updateStoredContact(contact, client);
+  }
+
+  /**
    * Update a contact's display name with sanitization.
    * This is the only sanctioned way to change a display name after creation —
    * callers must go through this method so the sanitization gate is enforced.

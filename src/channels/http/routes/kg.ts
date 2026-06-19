@@ -960,8 +960,8 @@ export async function knowledgeGraphRoutes(
       if (typeof body.kind !== 'string' || !validContactKinds.includes(body.kind as ContactKind)) {
         return reply.status(400).send({ error: `Invalid kind. Must be one of: ${validContactKinds.join(', ')}.` });
       }
-      if (contact.systemRole === 'principal') {
-        return reply.status(400).send({ error: 'The principal contact\'s kind cannot be changed via the API.' });
+      if (contact.systemRole === 'principal' || contact.systemRole === 'agent') {
+        return reply.status(400).send({ error: 'The kind of a system contact (principal or agent) cannot be changed via the API.' });
       }
     }
     // Trim once; collapse whitespace-only strings to null so they don't reach the DB as invalid UUIDs.
@@ -993,6 +993,47 @@ export async function knowledgeGraphRoutes(
       }
     }
 
+    // Build the complete updated contact in memory from the pre-validation snapshot.
+    // All per-field setters read the contact non-transactionally, so calling them in
+    // sequence causes each write to clobber earlier changes with stale data. Assembling
+    // the full pending object here and writing once avoids that race.
+    let pending: Contact = { ...contact, updatedAt: new Date() };
+
+    if (typeof body.displayName === 'string' && body.displayName.trim().length > 0) {
+      pending = { ...pending, displayName: body.displayName.trim() };
+    }
+    if (typeof body.role === 'string') {
+      pending = { ...pending, role: body.role };
+    } else if (body.role === null) {
+      pending = { ...pending, role: null };
+    }
+    if (typeof body.tier === 'string') {
+      pending = { ...pending, tier: body.tier as ContactTier };
+    }
+    if (typeof body.kind === 'string') {
+      pending = { ...pending, kind: body.kind as ContactKind };
+    }
+    if (body.notes !== undefined) {
+      pending = { ...pending, notes: typeof body.notes === 'string' ? body.notes : null };
+    }
+    if (normalizedKgNodeId !== undefined) {
+      pending = { ...pending, kgNodeId: normalizedKgNodeId };
+    }
+    const CANONICAL_KEYS: Array<keyof typeof canonicalFields> = [
+      'preferredName', 'title', 'organization', 'primaryEmail', 'primaryPhone',
+      'timezone', 'locale', 'location', 'pronouns', 'linkedinUrl', 'bio', 'birthday',
+    ];
+    const hasCanonicalFields = CANONICAL_KEYS.some(k => k in (body as Record<string, unknown>));
+    if (hasCanonicalFields) {
+      const definedFields = Object.fromEntries(
+        Object.entries(canonicalFields).filter(([, value]) => value !== undefined),
+      ) as ContactCanonicalFields;
+      if (definedFields.primaryEmail != null) {
+        definedFields.primaryEmail = definedFields.primaryEmail.toLowerCase();
+      }
+      pending = { ...pending, ...definedFields };
+    }
+
     // Legacy setStatus / setTrustLevel are not transaction-aware (retired in #955).
     // Run them before the transaction so a legacy-field failure is surfaced cleanly.
     if (typeof body.status === 'string') {
@@ -1003,60 +1044,11 @@ export async function knowledgeGraphRoutes(
     }
 
     // All remaining mutations are wrapped in a single DB transaction for atomicity.
+    // saveContact applies display-name sanitization and writes all fields in one UPDATE.
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-
-      if (typeof body.displayName === 'string' && body.displayName.trim().length > 0) {
-        await contactService.updateDisplayName(id, body.displayName, client);
-      }
-      if (typeof body.role === 'string') {
-        await contactService.setRole(id, body.role, client);
-      } else if (body.role === null) {
-        // Explicit null means "clear the role field" — setRole doesn't accept null so go direct.
-        await client.query(`UPDATE contacts SET role = NULL, updated_at = $2 WHERE id = $1`, [
-          id,
-          new Date().toISOString(),
-        ]);
-      }
-      if (typeof body.tier === 'string') {
-        await contactService.setTier(id, body.tier as ContactTier, client);
-      }
-      if (typeof body.kind === 'string') {
-        await contactService.setKind(id, body.kind as ContactKind, client);
-      }
-
-      // Notes and kgNodeId are updated directly by preserving the rest of the contact.
-      // This route exists only for the web UI and does not expose generic backend mutation.
-      if (typeof body.notes === 'string' || typeof body.kgNodeId === 'string' || body.notes === null || body.kgNodeId === null) {
-        const refreshed = await contactService.getContact(id);
-        if (!refreshed) {
-          await client.query('ROLLBACK');
-          return reply.status(404).send({ error: 'Contact not found.' });
-        }
-        await client.query(
-          `UPDATE contacts
-           SET notes = $2, kg_node_id = $3, updated_at = $4
-           WHERE id = $1`,
-          [
-            id,
-            typeof body.notes === 'string' ? body.notes : body.notes === null ? null : refreshed.notes,
-            normalizedKgNodeId !== undefined ? normalizedKgNodeId : refreshed.kgNodeId,
-            new Date().toISOString(),
-          ],
-        );
-      }
-
-      // Apply canonical fields if any were included in the request body.
-      const CANONICAL_KEYS: Array<keyof typeof canonicalFields> = [
-        'preferredName', 'title', 'organization', 'primaryEmail', 'primaryPhone',
-        'timezone', 'locale', 'location', 'pronouns', 'linkedinUrl', 'bio', 'birthday',
-      ];
-      const hasCanonicalFields = CANONICAL_KEYS.some(k => k in (body as Record<string, unknown>));
-      if (hasCanonicalFields) {
-        await contactService.updateContactFields(id, canonicalFields, client);
-      }
-
+      await contactService.saveContact(pending, client);
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
