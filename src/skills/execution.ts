@@ -342,7 +342,7 @@ export class ExecutionLayer {
       }
     }
 
-    return baseMsg + `The CEO can approve this request directly.`;
+    return baseMsg + `No approval request was created — the CEO must authorize this action manually.`;
   }
 
   /**
@@ -597,18 +597,6 @@ export class ExecutionLayer {
                 { skillName, initiatingTier, actionClass, isThirdPartyFacing, actionRisk: manifest.action_risk },
                 'autonomy gate: skill blocked — initiating contact tier below required minimum (Gate C)',
               );
-              if (this.bus) {
-                this.bus.publish('execution', createAutonomySkillBlocked({
-                  skillName,
-                  actionRisk: manifest.action_risk,
-                  currentScore,
-                  requiredScore: currentScore,
-                  agentId: options?.agentId,
-                  taskEventId: options?.taskEventId,
-                })).catch((err) => {
-                  skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event (Gate C)');
-                });
-              }
               const gateCError = await this.buildTierGateError(
                 skillName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
               );
