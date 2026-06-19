@@ -123,7 +123,7 @@ export class ContactRegisterHandler implements SkillHandler {
         // Link the identity, guarding against a concurrent call that may have created
         // and linked the same identity between our resolveByChannelIdentity check above
         // and now. If linkIdentity hits a unique-constraint violation (23505), the
-        // concurrent caller won — clean up our orphaned provisional contact, then
+        // concurrent caller won — clean up our orphaned contact (tier=unknown), then
         // re-resolve to get theirs.
         let linked = false;
         try {
@@ -159,7 +159,7 @@ export class ContactRegisterHandler implements SkillHandler {
           } catch (deleteErr) {
             ctx.log.warn(
               { deleteErr, orphanId: contact.id },
-              'contact-register: could not clean up orphaned provisional contact',
+              'contact-register: could not clean up orphaned contact (tier=unknown)',
             );
           }
         }
