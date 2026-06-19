@@ -52,6 +52,7 @@ export class ContactSetTierHandler implements SkillHandler {
         },
       };
     } catch (err) {
+      ctx.log.error({ err, contactId: contact_id, tier }, 'contact-set-tier: setTier failed');
       const message = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Failed to set tier: ${message}` };
     }

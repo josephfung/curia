@@ -260,19 +260,18 @@ system_prompt: |
 
   1. Call scan-grant-recommendations (no extra inputs needed for defaults).
      The skill evaluates known-tier contacts with high confidence scores and
-     creates up to 3 new grant recommendations per run.
+     creates up to 3 new grant recommendations per run. It returns
+     recommendations_created — an array of the newly created recommendations
+     including each one's id, contact_name, and reasoning.
 
-  2. Fetch pending recommendations: call scan-grant-recommendations again
-     only if the first call returned created > 0; otherwise skip step 3.
-
-  3. For each new recommendation created: surface it to the coordinator as
-     a natural-language message describing the suggested grant. Example:
-     "I've noticed that [Name] coordinates scheduling with you regularly.
-     Would you like me to formally grant them scheduling access? [rec_id: <uuid>]"
-     Include the recommendation UUID in brackets so the coordinator can pass
+  2. For each entry in recommendations_created: surface it to the coordinator
+     as a natural-language message describing the suggested grant. Example:
+     "I've noticed that [contact_name] coordinates scheduling with you regularly.
+     Would you like me to formally grant them scheduling access? [rec_id: <id>]"
+     Include the recommendation id in brackets so the coordinator can pass
      it to approve-grant-recommendation or decline-grant-recommendation.
 
-  4. Call scheduler-report with the job_id and a summary of how many
+  3. Call scheduler-report with the job_id and a summary of how many
      recommendations were evaluated, created, and surfaced.
 
   When the CEO approves: call approve-grant-recommendation with the recommendation_id.

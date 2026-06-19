@@ -2017,7 +2017,10 @@ class PostgresContactBackend implements ContactServiceBackend {
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const limitClause = filters?.limit ? `LIMIT ${filters.limit}` : '';
+    if (filters?.limit) {
+      params.push(filters.limit);
+    }
+    const limitClause = filters?.limit ? `LIMIT $${params.length}` : '';
 
     const result = await this.pool.query<{
       id: string; contact_id: string; permission: string; reasoning: string;
@@ -2706,6 +2709,9 @@ class InMemoryContactBackend implements ContactServiceBackend {
     for (const [oid, override] of this.overrides) {
       if (override.contactId === id) this.overrides.delete(oid);
     }
+    for (const [rk, rec] of this.recommendations) {
+      if (rec.contactId === id) this.recommendations.delete(rk);
+    }
   }
 
   // ---- Grant recommendations (issue #952) — in-memory stubs ----
@@ -2713,6 +2719,10 @@ class InMemoryContactBackend implements ContactServiceBackend {
   private recommendations = new Map<string, GrantRecommendation>();
 
   async createGrantRecommendation(rec: GrantRecommendation): Promise<void> {
+    // Mimic Postgres FK constraint: contact must exist
+    if (!this.contacts.has(rec.contactId)) {
+      throw new Error(`Foreign key violation: contact '${rec.contactId}' does not exist`);
+    }
     const key = `${rec.contactId}:${rec.permission}`;
     // Mimic ON CONFLICT DO NOTHING
     for (const r of this.recommendations.values()) {

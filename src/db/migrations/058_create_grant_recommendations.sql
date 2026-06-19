@@ -26,6 +26,12 @@ CREATE TABLE grant_recommendations (
   resolved_at     TIMESTAMPTZ,
   resolved_by     TEXT,
 
+  -- Pending rows must have no resolver metadata; resolved rows must have both.
+  CHECK (
+    (status = 'pending'  AND resolved_at IS NULL AND resolved_by IS NULL) OR
+    (status != 'pending' AND resolved_at IS NOT NULL AND resolved_by IS NOT NULL)
+  ),
+
   -- One lifetime record per contact+permission pair prevents re-nag.
   UNIQUE (contact_id, permission)
 );
