@@ -149,7 +149,7 @@ export class ContactResolver {
         const overrides = await this.contactService.getAuthOverrides(resolved.contactId);
         authorization = this.authService.evaluate({
           role: resolved.role,
-          trustLevel: resolved.trustLevel,
+          tier: resolved.tier,
           status: resolved.status ?? 'confirmed',
           channel,
           overrides,

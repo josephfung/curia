@@ -8,18 +8,29 @@
 // 3. Channel trust — high-sensitivity actions on low-trust channels are trust-blocked
 //
 // Role lookup is case-insensitive: LLM-assigned roles like 'Spouse' match 'spouse' in config.
-// If the role has no config match, falls back to trust_level tier defaults so confirmed
-// contacts with an explicit trust grant still get appropriate permissions.
-// Effective trust = max(channel trust, contact trust_level) — a contact's explicit trust
+// If the role has no config match, falls back to tier defaults so confirmed
+// contacts with an explicit tier grant still get appropriate permissions.
+// Effective trust = max(channel trust, contact tier rank) — a contact's tier
 // grant is not downgraded by the channel's inherent floor.
 
 import type {
   AuthConfig,
   AuthorizationResult,
   ContactStatus,
+  ContactTier,
   TrustLevel,
 } from './types.js';
 import { TRUST_RANK } from './types.js';
+
+// Map ContactTier to a trust rank comparable to TRUST_RANK for effective-trust gating.
+// principal≈ceo(3), trusted≈high(2), known≈medium(1), unknown/blocked=0.
+const TIER_TO_TRUST_RANK: Record<ContactTier, number> = {
+  blocked:   0,
+  unknown:   0,
+  known:     1,
+  trusted:   2,
+  principal: 3,
+};
 
 interface AuthOverrideInput {
   permission: string;
@@ -28,8 +39,8 @@ interface AuthOverrideInput {
 
 export interface AuthEvaluateInput {
   role: string | null;
-  /** Per-contact trust_level from DB, or null to use only the channel floor. */
-  trustLevel: TrustLevel | null;
+  /** Contact tier from DB. Used for role-defaults fallback and effective-trust gating. */
+  tier: ContactTier;
   status: ContactStatus;
   channel: string;
   overrides: AuthOverrideInput[];
@@ -42,9 +53,9 @@ export interface AuthEvaluateInput {
  * 1. Contact status (provisional/blocked → zero permissions)
  * 2. Per-contact overrides (explicit grants/denials from the CEO)
  * 3. Role defaults (from config/role-defaults.yaml, case-insensitive lookup)
- *    Falls back to trust_level tier defaults when no role match exists.
- * 4. Effective trust (max of channel trust and contact trust_level) used for
- *    sensitivity gating, so explicit high-trust grants are not channel-downgraded.
+ *    Falls back to tier_defaults when no role match exists.
+ * 4. Effective trust (max of channel trust and contact tier rank) used for
+ *    sensitivity gating, so explicit high-tier grants are not channel-downgraded.
  *
  * This is NOT an LLM decision — it's a deterministic function of config + data.
  */
@@ -68,34 +79,29 @@ export class AuthorizationService {
     }
 
     // Effective trust: the higher of the channel's inherent trust and the contact's
-    // explicit trust_level grant. A contact with trust_level='high' on email (low)
-    // should not have their CEO-granted trust overridden by the channel floor.
-    // Contacts with no explicit trust_level (null) use only the channel floor.
+    // tier rank. A contact with tier='trusted' on email (low) should not have their
+    // CEO-granted tier overridden by the channel floor.
     const channelTrustRank = TRUST_RANK[channelTrust] ?? 0;
-    const contactTrustRank = (() => {
-      if (input.trustLevel == null) return 0;
-      const rank = TRUST_RANK[input.trustLevel];
-      // Throw on unknown values: a corrupt DB row or a new enum value deployed before
-      // TRUST_RANK is updated must fail loudly. The contact-resolver.ts catch block
-      // will set authorization=null — a safe degradation that is logged and observable.
-      if (rank === undefined) {
-        throw new Error(
-          `Unknown trustLevel value '${input.trustLevel}' — not a recognized TrustLevel enum. Check migration history or DB integrity.`,
-        );
-      }
-      return rank;
-    })();
-    const effectiveTrustRank = Math.max(channelTrustRank, contactTrustRank);
+    // Contact capability is expressed as tier; map to a rank comparable to TRUST_RANK
+    // for sensitivity gating. Throws if tier is an unrecognized value (TIER_TO_TRUST_RANK
+    // covers all ContactTier members, so this only fires on a bug or future enum addition).
+    const contactTierRank = TIER_TO_TRUST_RANK[input.tier];
+    if (contactTierRank === undefined) {
+      throw new Error(
+        `Unknown tier value '${input.tier}' — not a recognized ContactTier. Check migration history or DB integrity.`,
+      );
+    }
+    const effectiveTrustRank = Math.max(channelTrustRank, contactTierRank);
 
     // Role lookup: case-insensitive so LLM-assigned 'Spouse' matches config key 'spouse'.
-    // Fall back to trust_level tier defaults when the role has no config entry, so
-    // contacts with an explicit trust grant still get appropriate permissions even when
-    // the role is a free-text description ('Sister', 'Head Instructor, …').
+    // Fall back to tier defaults when the role has no config entry, so contacts with an
+    // explicit tier grant still get appropriate permissions even when the role is a
+    // free-text description ('Sister', 'Head Instructor, …').
     // Ultimate fallback is the 'unknown' role, then a hard-deny object.
     const roleName = (input.role ?? '').toLowerCase();
     const roleDefaults =
       (roleName !== '' ? this.config.roles[roleName] : undefined) ??
-      (input.trustLevel != null ? this.config.tierDefaults?.[input.trustLevel] : undefined) ??
+      this.config.tierDefaults?.[input.tier] ??
       this.config.roles['unknown'] ??
       { description: 'fallback', defaultPermissions: [], defaultDeny: ['*'] };
 
