@@ -2,10 +2,10 @@
 //
 // CEO contact bootstrap.
 //
-// Ensures the CEO's primary email is linked to a confirmed, verified contact
+// Ensures the CEO's primary email is linked to a principal-tier, verified contact
 // before the email adapter starts polling. Without this, the first inbound email
 // from the CEO triggers auto-creation via extractParticipants(), which always
-// creates contacts as provisional — causing their messages to be held.
+// creates contacts as unknown-tier — causing their messages to be held.
 //
 // Also ensures the CEO contact has a KG person node (kg_node_id). Without one,
 // entity context enrichment is non-functional for the CEO: no facts, standing
@@ -14,9 +14,11 @@
 // This module is called once at startup. It is idempotent under serial execution
 // (safe for single-process deployments, consistent with the migration runner).
 // Handles three cases:
-//   1. Contact + identity already exist as confirmed/verified → ensure kg_node_id, no-op otherwise
-//   2. Contact + identity exist as provisional/unverified → promote in-place, ensure kg_node_id
+//   1. Contact + identity already exist at tier='principal'/verified → ensure kg_node_id, no-op otherwise
+//   2. Contact + identity exist at lower tier/unverified → repair via repairPrincipalMetadata + verify
 //   3. Neither exists → create KG node, then create contact + identity in a transaction
+//
+// Legacy status/trust_level columns are not written by this module (#955).
 
 import { randomUUID } from 'crypto';
 import type { DbPool } from '../db/connection.js';
@@ -86,15 +88,18 @@ export async function bootstrapCeoContact(
 ): Promise<CeoContactBootstrapResult> {
   // Look up by channel identity first — this is the authoritative key for email senders.
   // Also fetch kg_node_id and display_name so we can detect and fix the missing-KG-node case.
+  // Fetch tier (the canonical capability axis, #945) instead of the legacy status column.
+  // repairPrincipalMetadata will be called before any gate checks so tier reflects the
+  // current canonical value even if the row was written by older code.
   const existing = await pool.query<{
     contact_id: string;
-    contact_status: string;
+    contact_tier: string;
     identity_verified: boolean;
     kg_node_id: string | null;
     display_name: string;
   }>(
     `SELECT ci.contact_id,
-            c.status        AS contact_status,
+            c.tier          AS contact_tier,
             ci.verified     AS identity_verified,
             c.kg_node_id,
             c.display_name
@@ -105,7 +110,7 @@ export async function bootstrapCeoContact(
   );
 
   if (existing.rows[0]) {
-    const { contact_id, contact_status, identity_verified, display_name: existingName } = existing.rows[0];
+    const { contact_id, contact_tier, identity_verified, display_name: existingName } = existing.rows[0];
     let { kg_node_id } = existing.rows[0];
 
     // Always ensure role = 'ceo', tier = 'principal', and kind = 'principal' on the CEO
@@ -126,20 +131,19 @@ export async function bootstrapCeoContact(
       );
     }
 
-    // Already confirmed + verified — nothing else to do.
-    if (contact_status === 'confirmed' && identity_verified) {
-      logger.info({ contactId: contact_id, kgNodeId: kg_node_id, email: ceoPrimaryEmail }, 'ceo-bootstrap: CEO contact already confirmed and verified');
+    // Already at principal tier + identity verified — nothing else to do.
+    // After repairPrincipalMetadata, a CEO contact is always at tier='principal',
+    // so this is the fast-path for every steady-state startup. (#955: gate was
+    // previously on contact_status === 'confirmed'; the tier check is equivalent
+    // for the principal because repairPrincipalMetadata already ran above.)
+    if (contact_tier === 'principal' && identity_verified) {
+      logger.info({ contactId: contact_id, kgNodeId: kg_node_id, email: ceoPrimaryEmail }, 'ceo-bootstrap: CEO contact already at principal tier and verified');
       return { contactId: contact_id, kgNodeId: kg_node_id, alreadyExisted: true };
     }
 
-    // Promote in-place: update contact status and/or identity verified flag.
-    // Two separate updates so each is independently auditable.
-    if (contact_status !== 'confirmed') {
-      await pool.query(
-        `UPDATE contacts SET status = 'confirmed', updated_at = now() WHERE id = $1`,
-        [contact_id],
-      );
-    }
+    // Promote in-place: update the identity verified flag if needed.
+    // The contact's tier is already set to 'principal' by repairPrincipalMetadata above,
+    // so we do not write status here — #955 removes that column.
     if (!identity_verified) {
       await pool.query(
         `UPDATE contact_channel_identities
@@ -150,8 +154,8 @@ export async function bootstrapCeoContact(
     }
 
     logger.info(
-      { contactId: contact_id, kgNodeId: kg_node_id, email: ceoPrimaryEmail, wasStatus: contact_status, wasVerified: identity_verified },
-      'ceo-bootstrap: CEO contact promoted to confirmed + verified',
+      { contactId: contact_id, kgNodeId: kg_node_id, email: ceoPrimaryEmail, wasTier: contact_tier, wasVerified: identity_verified },
+      'ceo-bootstrap: CEO contact promoted to principal tier + verified',
     );
     return { contactId: contact_id, kgNodeId: kg_node_id, alreadyExisted: true };
   }
@@ -172,9 +176,10 @@ export async function bootstrapCeoContact(
   try {
     await client.query('BEGIN');
     // tier='principal' and kind='principal' added in migration 055 (issue #945).
+    // status/trust_level are legacy columns not written here (#955).
     await client.query(
-      `INSERT INTO contacts (id, kg_node_id, display_name, role, status, system_role, tier, kind, created_at, updated_at)
-       VALUES ($1, $2, $3, 'ceo', 'confirmed', 'principal', 'principal', 'principal', now(), now())`,
+      `INSERT INTO contacts (id, kg_node_id, display_name, role, system_role, tier, kind, created_at, updated_at)
+       VALUES ($1, $2, $3, 'ceo', 'principal', 'principal', 'principal', now(), now())`,
       [contactId, kgNodeId, displayName],
     );
     await client.query(
