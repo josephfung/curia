@@ -10,7 +10,7 @@ describe('computeTrustScore', () => {
       channelTrustLevel: 'high',
       contactConfidence: 1.0,
       injectionRiskScore: 0,
-      trustLevel: null,
+      tier: null,
       weights,
     });
     expect(score).toBeCloseTo(0.8);
@@ -22,7 +22,7 @@ describe('computeTrustScore', () => {
       channelTrustLevel: 'low',
       contactConfidence: 0.0,
       injectionRiskScore: 0,
-      trustLevel: null,
+      tier: null,
       weights,
     });
     expect(score).toBeCloseTo(0.12);
@@ -34,23 +34,72 @@ describe('computeTrustScore', () => {
       channelTrustLevel: 'medium',
       contactConfidence: 0.5,
       injectionRiskScore: 0,
-      trustLevel: null,
+      tier: null,
       weights,
     });
     expect(score).toBeCloseTo(0.44);
   });
 
-  it('per-contact trust_level override replaces channel weight', () => {
-    // trustLevel='high' → channelWeight=1.0, overrides 'low' channel
+  it('trusted tier overrides channel weight to high-equivalent', () => {
+    // tier='trusted' → channelWeight=1.0, overrides 'low' channel
     // 1.0*0.4 + 0.5*0.4 = 0.60
     const score = computeTrustScore({
       channelTrustLevel: 'low',
       contactConfidence: 0.5,
       injectionRiskScore: 0,
-      trustLevel: 'high',
+      tier: 'trusted',
       weights,
     });
     expect(score).toBeCloseTo(0.60);
+  });
+
+  it('principal tier overrides channel weight to high-equivalent (same as trusted)', () => {
+    const score = computeTrustScore({
+      channelTrustLevel: 'low',
+      contactConfidence: 0.5,
+      injectionRiskScore: 0,
+      tier: 'principal',
+      weights,
+    });
+    expect(score).toBeCloseTo(0.60);
+  });
+
+  it('known tier overrides channel weight to medium-equivalent (0.6)', () => {
+    // tier='known' → 0.6 override on low (0.3) channel
+    // 0.6*0.4 + 0.5*0.4 = 0.44
+    const score = computeTrustScore({
+      channelTrustLevel: 'low',
+      contactConfidence: 0.5,
+      injectionRiskScore: 0,
+      tier: 'known',
+      weights,
+    });
+    expect(score).toBeCloseTo(0.44);
+  });
+
+  it('unknown tier uses channel floor (no override)', () => {
+    // tier='unknown' → channel floor (0.3)
+    // 0.3*0.4 + 0.5*0.4 = 0.32
+    const score = computeTrustScore({
+      channelTrustLevel: 'low',
+      contactConfidence: 0.5,
+      injectionRiskScore: 0,
+      tier: 'unknown',
+      weights,
+    });
+    expect(score).toBeCloseTo(0.32);
+  });
+
+  it('null tier uses channel floor (no override)', () => {
+    // same as unknown: channel floor 0.3*0.4 + 0.5*0.4 = 0.32
+    const score = computeTrustScore({
+      channelTrustLevel: 'low',
+      contactConfidence: 0.5,
+      injectionRiskScore: 0,
+      tier: null,
+      weights,
+    });
+    expect(score).toBeCloseTo(0.32);
   });
 
   it('injection risk reduces score', () => {
@@ -59,31 +108,29 @@ describe('computeTrustScore', () => {
       channelTrustLevel: 'high',
       contactConfidence: 1.0,
       injectionRiskScore: 1.0,
-      trustLevel: null,
+      tier: null,
       weights,
     });
     expect(score).toBeCloseTo(0.6);
   });
 
   it('score is clamped to 0.0 minimum', () => {
-    // Worst case: low channel, zero confidence, max risk
     const score = computeTrustScore({
       channelTrustLevel: 'low',
       contactConfidence: 0.0,
       injectionRiskScore: 1.0,
-      trustLevel: null,
+      tier: null,
       weights,
     });
     expect(score).toBe(0.0);
   });
 
   it('score is clamped to 1.0 maximum', () => {
-    // Even if weights somehow exceed 1.0, output is clamped
     const score = computeTrustScore({
       channelTrustLevel: 'high',
       contactConfidence: 1.0,
-      injectionRiskScore: -1.0, // hypothetical negative penalty
-      trustLevel: null,
+      injectionRiskScore: -1.0,
+      tier: null,
       weights: { channelWeight: 0.6, contactWeight: 0.6, maxRiskPenalty: 0.2 },
     });
     expect(score).toBe(1.0);
@@ -95,7 +142,7 @@ describe('computeTrustScore', () => {
       channelTrustLevel: 'high',
       contactConfidence: 1.0,
       injectionRiskScore: 0.5,
-      trustLevel: null,
+      tier: null,
       weights,
     });
     expect(score).toBeCloseTo(0.7);
@@ -103,12 +150,11 @@ describe('computeTrustScore', () => {
 
   it('respects custom weight configuration', () => {
     const customWeights = { channelWeight: 0.5, contactWeight: 0.5, maxRiskPenalty: 0.1 };
-    // high channel: 1.0*0.5=0.5, full confidence: 1.0*0.5=0.5, no risk → 1.0 (clamped)
     const score = computeTrustScore({
       channelTrustLevel: 'high',
       contactConfidence: 1.0,
       injectionRiskScore: 0,
-      trustLevel: null,
+      tier: null,
       weights: customWeights,
     });
     expect(score).toBe(1.0);

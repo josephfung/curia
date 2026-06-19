@@ -406,7 +406,7 @@ export class Dispatcher {
             channelTrustLevel: prelimChannelTrust,
             contactConfidence: 0.0,
             injectionRiskScore: 0,
-            trustLevel: null,
+            tier: null,
             weights: this.trustScorerWeights,
           });
 
@@ -574,14 +574,14 @@ export class Dispatcher {
     // Compute messageTrustScore from channel trust, contact confidence, and injection risk.
     // contactConfidence: from resolved sender context (0.0 for unknown senders)
     // channelTrustLevel: from channel policy config (default 'low' if not configured)
-    // trustLevel override: per-contact field from DB (null means use channel default)
+    // tier override: per-contact field from DB (null means use channel default)
     let messageTrustScore: number | undefined;
     if (this.channelPolicies) {
       const channelTrust = (this.channelPolicies[payload.channelId]?.trust ?? 'low') as TrustLevel;
       const contactConfidence =
         senderContext?.resolved ? senderContext.contactConfidence : 0.0;
-      const trustLevelOverride =
-        senderContext?.resolved ? senderContext.trustLevel : null;
+      const tierOverride =
+        senderContext?.resolved ? senderContext.tier : null;
       // Validate the injection risk score before use — a non-finite value (NaN, ±Infinity)
       // from a buggy scanner implementation would propagate through the formula and silently
       // produce a NaN trust score, which bypasses the floor check (NaN < floor = false).
@@ -599,7 +599,7 @@ export class Dispatcher {
         channelTrustLevel: channelTrust,
         contactConfidence,
         injectionRiskScore,
-        trustLevel: trustLevelOverride,
+        tier: tierOverride,
         weights: this.trustScorerWeights,
       });
 
