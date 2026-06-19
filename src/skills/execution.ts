@@ -19,7 +19,7 @@
 
 import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition, SkillManifest } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
-import { isPrincipalOriginated, isSystemOriginated, getInitiatingTier } from '../contacts/principal.js';
+import { isPrincipalOriginated, isSystemOriginated, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -729,6 +729,24 @@ export class ExecutionLayer {
                 error: this.wrapSkillError(gateCError),
               };
             }
+          } else if (
+            manifest.action_risk !== 'none' &&
+            isExternalOriginatorMissingTier(options?.taskMetadata)
+          ) {
+            // Fail-open observability (#1059): an external contact drove a consequential action
+            // but carries no resolved tier, so Gate C is skipped. Behavior is unchanged — the
+            // action is still allowed — but this warn makes the silent skip visible until #1059
+            // fails it closed. Operators can grep this to size how often the gap is hit in prod.
+            skillLogger.warn(
+              {
+                skillName,
+                actionRisk: manifest.action_risk,
+                originator: options?.taskMetadata?.['originator'],
+                agentId: options?.agentId,
+                taskEventId: options?.taskEventId,
+              },
+              'autonomy gate: Gate C skipped — external originator has no resolved tier (fail-open, see #1059)',
+            );
           }
         }
       } else {

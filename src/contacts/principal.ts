@@ -88,3 +88,24 @@ export function getInitiatingTier(
   if (originator.systemRole === 'system' || originator.systemRole === 'agent') return null;
   return originator.tier ?? null;
 }
+
+/**
+ * True when a task was initiated by an EXTERNAL contact (not system- or agent-originated)
+ * that carries no resolved tier — the Gate C fail-open case tracked in #1059.
+ *
+ * getInitiatingTier() collapses three cases into null (system, agent, and external-with-no-tier);
+ * this predicate isolates the third so the execution layer can surface it for observability
+ * while the fail-closed remediation (#1059) is pending. It only identifies the case — it does
+ * not decide allow/escalate, and the gate's behavior is unchanged.
+ */
+export function isExternalOriginatorMissingTier(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!metadata) return false;
+  // Runtime-validated in callers; cast through unknown per repo policy.
+  const originator = metadata.originator as unknown as TaskOriginator | undefined;
+  if (!originator) return false;
+  // System and agent tasks are not externally initiated — not a fail-open concern.
+  if (originator.systemRole === 'system' || originator.systemRole === 'agent') return false;
+  return originator.tier == null;
+}
