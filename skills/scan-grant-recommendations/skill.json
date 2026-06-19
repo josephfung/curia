@@ -13,7 +13,8 @@
     "evaluated": "number (contacts evaluated)",
     "created": "number (new recommendations created)",
     "skipped_existing": "number (candidates skipped because a recommendation already exists)",
-    "skipped_judge": "number (candidates skipped because the judge declined to recommend)",
+    "skipped_judge": "number (candidates where the judge explicitly declined to recommend)",
+    "skipped_errors": "number (candidates skipped due to transport/parse failures — not judge decisions)",
     "recommendations_created": "array of { id, contact_id, contact_name, permission, reasoning } for each newly created recommendation"
   },
   "permissions": [],
