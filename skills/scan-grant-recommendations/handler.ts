@@ -84,6 +84,7 @@ export class ScanGrantRecommendationsHandler implements SkillHandler {
     let created = 0;
     let skippedExisting = 0;
     let skippedJudge = 0;
+    let skippedErrors = 0;
     const recommendationsCreated: Array<{ id: string; contact_id: string; contact_name: string; permission: string; reasoning: string }> = [];
 
     for (const contact of candidates) {
@@ -101,27 +102,41 @@ export class ScanGrantRecommendationsHandler implements SkillHandler {
       }
 
       // Skip if the permission is already explicitly granted or denied via an override
-      const overrides = await svc.getAuthOverrides(contact.id);
+      let overrides: Awaited<ReturnType<typeof svc.getAuthOverrides>>;
+      try {
+        overrides = await svc.getAuthOverrides(contact.id);
+      } catch (err) {
+        ctx.log.warn({ err, contactId: contact.id }, 'scan-grant-recommendations: override lookup failed, skipping contact');
+        skippedErrors++;
+        continue;
+      }
       if (overrides.some(o => o.permission === CANDIDATE_PERMISSION)) {
         skippedExisting++;
         continue;
       }
 
       // Ask the LLM judge
-      const judgeResult = await ctx.infraLlm.extract(
-        `${JUDGE_SYSTEM_PROMPT}\n\n${buildJudgePrompt(
-          contact.displayName,
-          contact.organization ?? null,
-          contact.role ?? null,
-          contact.contactConfidence,
-          contact.inboundMessageCount,
-          contact.outboundMessageCount,
-        )}`,
-      );
+      let judgeResult: Awaited<ReturnType<typeof ctx.infraLlm.extract>>;
+      try {
+        judgeResult = await ctx.infraLlm.extract(
+          `${JUDGE_SYSTEM_PROMPT}\n\n${buildJudgePrompt(
+            contact.displayName,
+            contact.organization ?? null,
+            contact.role ?? null,
+            contact.contactConfidence,
+            contact.inboundMessageCount,
+            contact.outboundMessageCount,
+          )}`,
+        );
+      } catch (err) {
+        ctx.log.warn({ err, contactId: contact.id }, 'scan-grant-recommendations: judge transport error, skipping contact');
+        skippedErrors++;
+        continue;
+      }
 
       if (!judgeResult.ok) {
         ctx.log.warn({ contactId: contact.id, error: judgeResult.error }, 'scan-grant-recommendations: judge call failed');
-        skippedJudge++;
+        skippedErrors++;
         continue;
       }
 
@@ -133,7 +148,7 @@ export class ScanGrantRecommendationsHandler implements SkillHandler {
         }
       } catch {
         ctx.log.warn({ contactId: contact.id, raw: judgeResult.text.slice(0, 200) }, 'scan-grant-recommendations: unparseable judge response');
-        skippedJudge++;
+        skippedErrors++;
         continue;
       }
 
@@ -172,6 +187,7 @@ export class ScanGrantRecommendationsHandler implements SkillHandler {
         created,
         skipped_existing: skippedExisting,
         skipped_judge: skippedJudge,
+        skipped_errors: skippedErrors,
         recommendations_created: recommendationsCreated,
       },
     };
