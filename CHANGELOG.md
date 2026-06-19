@@ -29,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Gate C fail-closed for unstamped external tiers** — an external originator with no resolved tier now escalates a consequential action instead of bypassing the tier gate; emits a `warn` so the case is observable. (#1059)
 - **CVE-2026-53655 (pnpm bundled tar)** — removed corepack's unused pnpm cache from the production image to eliminate a bundled tar CVE.
 
 ### Added

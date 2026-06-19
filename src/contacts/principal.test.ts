@@ -28,7 +28,7 @@ describe('getInitiatingTier', () => {
   });
 });
 
-describe('isExternalOriginatorMissingTier (#1059 fail-open detector)', () => {
+describe('isExternalOriginatorMissingTier (#1059 fail-closed trigger)', () => {
   it('is true only when an external originator has no resolved tier', () => {
     expect(isExternalOriginatorMissingTier(meta({ ...baseExternal }))).toBe(true); // tier absent
     expect(isExternalOriginatorMissingTier(meta({ ...baseExternal, tier: null }))).toBe(true);
