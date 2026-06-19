@@ -3,7 +3,8 @@ name: Trivy
 on:
   # Manual trigger so the image scan can be run on demand — e.g. to verify a
   # base-image / dependency CVE fix immediately instead of waiting for the
-  # weekly schedule. See the trivy-image job's `if` guard below.
+  # weekly schedule. Which events actually build+scan the image is decided by
+  # the `changes` job below (the filesystem scan always runs).
   workflow_dispatch:
   push:
     branches: [main]
@@ -22,6 +23,74 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Decide whether the expensive image build+scan should run for this event.
+  # This job is cheap (a checkout + a git diff) and always runs, so the
+  # downstream trivy-image job can gate on its output without the skipped-
+  # dependency propagation pitfall (a job that `needs` a *skipped* job is itself
+  # skipped). The gate is fail-safe: trivy-image scans UNLESS this job
+  # explicitly outputs image=false (see its `if`), so any bug or failure here
+  # errs toward scanning rather than silently skipping a security scan.
+  changes:
+    name: Detect image-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      # 'true'  -> trivy-image should run; 'false' -> it should be skipped.
+      image: ${{ steps.decide.outputs.image }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          # Full history so we can diff a push against its "before" commit even
+          # when the push contains several commits.
+          fetch-depth: 0
+
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Always scan on the weekly schedule and on manual dispatch — these are
+          # the deliberate "scan the current image" triggers.
+          if [ "$EVENT" = "schedule" ] || [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Pull requests are covered by the filesystem scan; the image build is
+          # too expensive to run on every PR, so never trigger it here.
+          if [ "$EVENT" != "push" ]; then
+            echo "image=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Push to main: only build+scan the image when a file that actually
+          # changes the built image was touched — the base image / runtime pins
+          # (Dockerfile), the package-manager pin or workspace manifests
+          # (package.json), the dependency lockfile (pnpm-lock.yaml), or the
+          # dependency overrides where CVE pins live (pnpm-workspace.yaml).
+          # github.event.before is all-zeros for a brand-new branch or after a
+          # force-push/history rewrite; when we cannot compute a reliable diff,
+          # fail safe and run the scan.
+          ZERO=0000000000000000000000000000000000000000
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Fail safe: if the diff itself errors (unexpected — BEFORE is
+          # confirmed above), scan rather than silently skip.
+          if ! changed="$(git diff --name-only "$BEFORE" "$SHA")"; then
+            echo "git diff failed; scanning as a fail-safe" >&2
+            echo "image=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Match the relevant files at the repo root or in any nested workspace
+          # package (e.g. apps/console/package.json).
+          if echo "$changed" | grep -qE '(^|/)(Dockerfile|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$'; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=false" >> "$GITHUB_OUTPUT"
+          fi
+
   trivy-fs:
     name: Filesystem Scan
     runs-on: ubuntu-latest
@@ -55,9 +124,21 @@ jobs:
   trivy-image:
     name: Docker Image Scan
     runs-on: ubuntu-latest
-    # Image build+scan is expensive, so it's skipped on every push/PR. It runs on
-    # the weekly schedule and on manual dispatch (for on-demand fix verification).
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: changes
+    # Image build+scan is expensive, so it does not run on every push/PR. The
+    # `changes` job decides: it runs on the weekly schedule, on manual dispatch
+    # (for on-demand fix verification), and on a push to main that touches a file
+    # affecting the built image (Dockerfile / package.json / pnpm-lock.yaml /
+    # pnpm-workspace.yaml). This closes the gap where a dependency/base-image CVE
+    # fix could sit unverified for up to a week between the weekly scans.
+    #
+    # Fail-safe gate: run UNLESS the decider explicitly said 'false'. An empty
+    # output (the `changes` job errored / never wrote a value) still scans rather
+    # than silently skipping a security scan. `!cancelled()` is required so this
+    # runs even when `changes` failed — a bare needs-output check would otherwise
+    # be suppressed by the implicit success() gate on a failed dependency — while
+    # a genuine workflow cancellation still stops it.
+    if: ${{ !cancelled() && needs.changes.outputs.image != 'false' }}
     permissions:
       contents: read
       security-events: write  # Upload SARIF step writes to the Security tab
