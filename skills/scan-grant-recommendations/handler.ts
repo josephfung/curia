@@ -67,17 +67,24 @@ export class ScanGrantRecommendationsHandler implements SkillHandler {
       ? Math.min(Math.max(1, input.cadence_ceiling), 10)
       : 3;
 
-    // Load known-tier contacts as candidates
-    const candidates = await svc.listContacts({ tier: 'known', limit: maxCandidates });
+    // Load known-tier contacts and pre-fetch all existing recommendations
+    let candidates: Awaited<ReturnType<typeof svc.listContacts>>;
+    let allRecs: Awaited<ReturnType<typeof svc.listGrantRecommendations>>;
+    try {
+      candidates = await svc.listContacts({ tier: 'known', limit: maxCandidates });
+      allRecs = await svc.listGrantRecommendations({ limit: 10000 });
+    } catch (err) {
+      ctx.log.error({ err }, 'scan-grant-recommendations: failed to load candidates or existing recommendations');
+      return { success: false, error: 'Failed to load contacts or existing recommendations.' };
+    }
 
-    // Pre-fetch all existing recommendations once to avoid N per-contact DB queries
-    const allRecs = await svc.listGrantRecommendations({ limit: 10000 });
     const existingPairs = new Set(allRecs.map(r => `${r.contactId}:${r.permission}`));
 
     let evaluated = 0;
     let created = 0;
     let skippedExisting = 0;
     let skippedJudge = 0;
+    const recommendationsCreated: Array<{ id: string; contact_id: string; contact_name: string; permission: string; reasoning: string }> = [];
 
     for (const contact of candidates) {
       if (created >= cadenceCeiling) break;
@@ -136,7 +143,7 @@ export class ScanGrantRecommendationsHandler implements SkillHandler {
         continue;
       }
 
-      const { created: wasCreated } = await svc.createGrantRecommendation(
+      const { created: wasCreated, recommendation } = await svc.createGrantRecommendation(
         contact.id,
         CANDIDATE_PERMISSION,
         verdict.reasoning,
@@ -145,6 +152,13 @@ export class ScanGrantRecommendationsHandler implements SkillHandler {
       if (wasCreated) {
         ctx.log.info({ contactId: contact.id, permission: CANDIDATE_PERMISSION }, 'scan-grant-recommendations: recommendation created');
         existingPairs.add(`${contact.id}:${CANDIDATE_PERMISSION}`);
+        recommendationsCreated.push({
+          id: recommendation.id,
+          contact_id: contact.id,
+          contact_name: contact.displayName,
+          permission: CANDIDATE_PERMISSION,
+          reasoning: verdict.reasoning,
+        });
         created++;
       } else {
         skippedExisting++;
@@ -153,7 +167,13 @@ export class ScanGrantRecommendationsHandler implements SkillHandler {
 
     return {
       success: true,
-      data: { evaluated, created, skipped_existing: skippedExisting, skipped_judge: skippedJudge },
+      data: {
+        evaluated,
+        created,
+        skipped_existing: skippedExisting,
+        skipped_judge: skippedJudge,
+        recommendations_created: recommendationsCreated,
+      },
     };
   }
 }

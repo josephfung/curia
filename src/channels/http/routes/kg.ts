@@ -1138,7 +1138,7 @@ export async function knowledgeGraphRoutes(
     const statusFilter = query.status === 'pending' || query.status === 'approved' || query.status === 'declined'
       ? query.status
       : 'pending';
-    const limit = Math.min(Number.parseInt(query.limit ?? '50', 10) || 50, 200);
+    const limit = Math.max(1, Math.min(Number.parseInt(query.limit ?? '50', 10) || 50, 200));
 
     try {
       const recommendations = await contactService.listGrantRecommendations({ status: statusFilter, limit });

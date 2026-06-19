@@ -15,7 +15,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Grant mechanism + proactive recommendations** — contacts can be granted or blocked by tier (`contact-set-tier`) and per-capability overrides (`contact-grant-permission`, `contact-revoke-permission`); a weekly LLM-judge scan surfaces scheduling grant recommendations; CEO can approve or decline each; declined recommendations never resurface (anti-nag). Contacts UI now shows and revokes per-contact auth overrides. (#952)
+- **`contact-set-tier` skill** — sets a contact's tier directly from chat ("treat Dana as trusted"); principal-auth guarded, rejects `tier='principal'`. (#952)
+- **Proactive grant recommendations** — weekly LLM-judge scan (`scan-grant-recommendations`) evaluates known-tier contacts and surfaces scheduling-access recommendations for CEO approval. (#952)
+- **Approve/decline recommendations** — `approve-grant-recommendation` writes a `contact_auth_overrides` row; `decline-grant-recommendation` permanently records the decline so the recommendation never resurfaces (anti-nag via UNIQUE DB constraint). (#952)
+- **Contacts UI: permission grants section** — contact drawer lists active auth overrides with per-override revoke buttons. (#952)
 - **Console Contacts: tier/kind editing** — the admin Contacts page now edits `tier` and `kind` directly; Status and Trust-level controls are removed. List view filters, sorts, and displays by tier + kind facet. (#1055)
 - **PATCH/POST `/api/kg/contacts` accept `tier` and `kind`** — validated against the migration-055 enums with structural guards rejecting `tier='principal'` and `kind ∈ {principal, agent}`. Principal contacts cannot be demoted via the API. (#1055)
 - **Atomic PATCH mutations** — all non-legacy mutations in `PATCH /api/kg/contacts/:id` now run in a single DB transaction; partial failures roll back cleanly. (#1055)

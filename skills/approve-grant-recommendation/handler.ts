@@ -25,16 +25,15 @@ export class ApproveGrantRecommendationHandler implements SkillHandler {
       return { success: false, error: 'Cannot determine valid actor identity for audit trail' };
     }
 
-    // Fetch the recommendation first so we can return context in the result
-    const rec = await ctx.contactService.getGrantRecommendation(recommendation_id);
-    if (!rec) {
-      return { success: false, error: `Grant recommendation '${recommendation_id}' not found.` };
-    }
-    if (rec.status !== 'pending') {
-      return { success: false, error: `Recommendation is already ${rec.status} — cannot approve.` };
-    }
-
     try {
+      const rec = await ctx.contactService.getGrantRecommendation(recommendation_id);
+      if (!rec) {
+        return { success: false, error: `Grant recommendation '${recommendation_id}' not found.` };
+      }
+      if (rec.status !== 'pending') {
+        return { success: false, error: `Recommendation is already ${rec.status} — cannot approve.` };
+      }
+
       const approved = await ctx.contactService.approveGrantRecommendation(recommendation_id, actorId);
       if (!approved) {
         return { success: false, error: 'Approval failed — recommendation may have been concurrently resolved.' };
@@ -50,6 +49,7 @@ export class ApproveGrantRecommendationHandler implements SkillHandler {
         },
       };
     } catch (err) {
+      ctx.log.error({ err, recommendationId: recommendation_id, actorId }, 'approve-grant-recommendation: failed');
       const message = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Failed to approve recommendation: ${message}` };
     }

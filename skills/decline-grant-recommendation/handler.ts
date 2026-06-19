@@ -25,15 +25,15 @@ export class DeclineGrantRecommendationHandler implements SkillHandler {
       return { success: false, error: 'Cannot determine valid actor identity for audit trail' };
     }
 
-    const rec = await ctx.contactService.getGrantRecommendation(recommendation_id);
-    if (!rec) {
-      return { success: false, error: `Grant recommendation '${recommendation_id}' not found.` };
-    }
-    if (rec.status !== 'pending') {
-      return { success: false, error: `Recommendation is already ${rec.status} — cannot decline.` };
-    }
-
     try {
+      const rec = await ctx.contactService.getGrantRecommendation(recommendation_id);
+      if (!rec) {
+        return { success: false, error: `Grant recommendation '${recommendation_id}' not found.` };
+      }
+      if (rec.status !== 'pending') {
+        return { success: false, error: `Recommendation is already ${rec.status} — cannot decline.` };
+      }
+
       const declined = await ctx.contactService.declineGrantRecommendation(recommendation_id, actorId);
       if (!declined) {
         return { success: false, error: 'Decline failed — recommendation may have been concurrently resolved.' };
@@ -49,6 +49,7 @@ export class DeclineGrantRecommendationHandler implements SkillHandler {
         },
       };
     } catch (err) {
+      ctx.log.error({ err, recommendationId: recommendation_id, actorId }, 'decline-grant-recommendation: failed');
       const message = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Failed to decline recommendation: ${message}` };
     }

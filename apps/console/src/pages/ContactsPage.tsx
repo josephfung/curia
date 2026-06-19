@@ -157,13 +157,15 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
 
   useEffect(() => {
     if (!contact || creating) return;
+    setOverridesError(null);
     apiFetch(`/api/kg/contacts/${contact.id}/overrides`)
       .then(async res => {
         if (!res.ok) { setOverridesError('Failed to load permissions'); return; }
         const d = await res.json() as { overrides: AuthOverride[] };
+        setOverridesError(null);
         setOverrides(d.overrides);
       })
-      .catch(() => setOverridesError('Failed to load permissions'));
+      .catch((_err: unknown) => setOverridesError('Failed to load permissions'));
   }, [contact, creating]);
 
   async function handleRevokeOverride(permission: string) {
@@ -173,7 +175,7 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
       const res = await apiFetch(`/api/kg/contacts/${contact.id}/overrides/${permission}`, { method: 'DELETE' });
       if (!res.ok) { setOverridesError('Failed to revoke permission'); return; }
       setOverrides(prev => prev.filter(o => o.permission !== permission));
-    } catch {
+    } catch (_err: unknown) {
       setOverridesError('Failed to revoke permission');
     } finally {
       setRevoking(null);
