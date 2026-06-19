@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import type { LightMyRequestResponse } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { Logger } from '../../../../src/logger.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,7 +26,57 @@ function createContactService(): ContactService {
     createContact: vi.fn(),
     getContact: vi.fn(),
     setTrustLevel: vi.fn(),
+    setTier: vi.fn(),
+    setKind: vi.fn(),
+    updateDisplayName: vi.fn(),
+    setRole: vi.fn(),
+    setStatus: vi.fn(),
+    updateContactFields: vi.fn(),
+    validatePrimaryEmail: vi.fn(),
   } as unknown as ContactService;
+}
+
+// Creates a pool mock that also supports pool.connect() for transaction tests.
+function createTransactionalPool(client: Partial<PoolClient>): Pick<Pool, 'query' | 'connect'> {
+  return {
+    query: vi.fn(),
+    connect: vi.fn().mockResolvedValue(client),
+  } as unknown as Pick<Pool, 'query' | 'connect'>;
+}
+
+// A minimal valid Contact shape returned by contactService.getContact() stubs.
+function makeContact(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    displayName: 'Test User',
+    role: null,
+    status: 'confirmed',
+    trustLevel: null,
+    tier: 'known',
+    kind: 'person',
+    systemRole: null,
+    kgNodeId: null,
+    notes: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    preferredName: null,
+    title: null,
+    organization: null,
+    primaryEmail: null,
+    primaryPhone: null,
+    timezone: null,
+    locale: null,
+    location: null,
+    pronouns: null,
+    linkedinUrl: null,
+    bio: null,
+    birthday: null,
+    contactConfidence: 0,
+    lastSeenAt: null,
+    inboundMessageCount: 0,
+    outboundMessageCount: 0,
+    ...overrides,
+  };
 }
 
 describe('knowledgeGraphRoutes', () => {
@@ -263,5 +313,307 @@ describe('knowledgeGraphRoutes', () => {
     expect(statuses).toContain(429);
 
     await app.close();
+  });
+
+  // ── Tier / kind validation (issue #1055) ────────────────────────────────────
+
+  describe('PATCH /api/kg/contacts/:id — tier/kind validation', () => {
+    it('rejects an invalid tier value with 400', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.getContact).mockResolvedValue(makeContact() as never);
+
+      const client: Partial<PoolClient> = {
+        query: vi.fn().mockResolvedValue({ rows: [] }),
+        release: vi.fn(),
+      };
+      const txPool = createTransactionalPool(client);
+
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool: txPool as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/kg/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { tier: 'superuser' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/Invalid tier/);
+      await app.close();
+    });
+
+    it('rejects tier="principal" (structural guard) with 400', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.getContact).mockResolvedValue(makeContact() as never);
+
+      const client: Partial<PoolClient> = {
+        query: vi.fn().mockResolvedValue({ rows: [] }),
+        release: vi.fn(),
+      };
+      const txPool = createTransactionalPool(client);
+
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool: txPool as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/kg/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { tier: 'principal' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/Invalid tier/);
+      await app.close();
+    });
+
+    it('rejects kind="principal" (structural guard) with 400', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.getContact).mockResolvedValue(makeContact() as never);
+
+      const client: Partial<PoolClient> = {
+        query: vi.fn().mockResolvedValue({ rows: [] }),
+        release: vi.fn(),
+      };
+      const txPool = createTransactionalPool(client);
+
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool: txPool as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/kg/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { kind: 'principal' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/Invalid kind/);
+      await app.close();
+    });
+
+    it('rejects kind="agent" (structural guard) with 400', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.getContact).mockResolvedValue(makeContact() as never);
+
+      const client: Partial<PoolClient> = {
+        query: vi.fn().mockResolvedValue({ rows: [] }),
+        release: vi.fn(),
+      };
+      const txPool = createTransactionalPool(client);
+
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool: txPool as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/kg/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { kind: 'agent' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/Invalid kind/);
+      await app.close();
+    });
+
+    it('rejects tier changes on the principal contact with 400', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.getContact).mockResolvedValue(
+        makeContact({ systemRole: 'principal', tier: 'principal', kind: 'principal' }) as never,
+      );
+
+      const client: Partial<PoolClient> = {
+        query: vi.fn().mockResolvedValue({ rows: [] }),
+        release: vi.fn(),
+      };
+      const txPool = createTransactionalPool(client);
+
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool: txPool as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/kg/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { tier: 'known' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/principal/i);
+      await app.close();
+    });
+
+    it('rolls back the transaction and returns 500 when a mutation fails mid-PATCH', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.getContact).mockResolvedValue(makeContact() as never);
+      // updateDisplayName succeeds; setTier throws to simulate a mid-tx failure.
+      vi.mocked(contactService.updateDisplayName).mockResolvedValue(makeContact() as never);
+      vi.mocked(contactService.setTier).mockRejectedValue(new Error('DB error'));
+
+      const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
+      const clientRelease = vi.fn();
+      const client: Partial<PoolClient> = { query: clientQuery, release: clientRelease };
+      const txPool = createTransactionalPool(client);
+
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool: txPool as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/kg/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { displayName: 'New Name', tier: 'trusted' },
+      });
+
+      expect(res.statusCode).toBe(500);
+      // ROLLBACK must have been called after the failure.
+      const rollbackCall = vi.mocked(clientQuery).mock.calls.find(
+        args => args[0] === 'ROLLBACK',
+      );
+      expect(rollbackCall).toBeDefined();
+      // The client must always be released (finally block).
+      expect(clientRelease).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it('accepts valid tier and kind values and calls setTier/setKind', async () => {
+      const contactService = createContactService();
+      const contact = makeContact();
+      vi.mocked(contactService.getContact).mockResolvedValue(contact as never);
+      vi.mocked(contactService.setTier).mockResolvedValue(contact as never);
+      vi.mocked(contactService.setKind).mockResolvedValue(contact as never);
+
+      const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
+      const client: Partial<PoolClient> = { query: clientQuery, release: vi.fn() };
+      const txPool = createTransactionalPool(client);
+
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool: txPool as unknown as Pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/kg/contacts/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { tier: 'trusted', kind: 'organization' },
+      });
+
+      // The getContact call after the transaction returns undefined (not mocked for
+      // that second call), so Fastify returns 404 — that's fine; we only verify
+      // setTier and setKind were called with the right arguments.
+      expect(contactService.setTier).toHaveBeenCalledWith(
+        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        'trusted',
+        client,
+      );
+      expect(contactService.setKind).toHaveBeenCalledWith(
+        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        'organization',
+        client,
+      );
+      expect(res.statusCode).not.toBe(400);
+      await app.close();
+    });
+  });
+
+  describe('POST /api/kg/contacts — tier/kind validation', () => {
+    it('rejects an invalid tier value with 400', async () => {
+      const contactService = createContactService();
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/kg/contacts',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { displayName: 'Test', tier: 'superuser' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/Invalid tier/);
+      expect(contactService.createContact).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it('rejects tier="principal" in POST (structural guard)', async () => {
+      const contactService = createContactService();
+      const app = Fastify();
+      await app.register(knowledgeGraphRoutes, {
+        pool,
+        logger: createLogger(),
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/kg/contacts',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { displayName: 'Test', tier: 'principal' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(contactService.createContact).not.toHaveBeenCalled();
+      await app.close();
+    });
   });
 });

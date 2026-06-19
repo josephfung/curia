@@ -10,7 +10,7 @@
 //   backends are pure storage
 
 import { randomUUID } from 'node:crypto';
-import type { DbPool } from '../db/connection.js';
+import type { DbPool, DbPoolClient } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import { sanitizeDisplayName } from '../skills/sanitize.js';
@@ -195,7 +195,7 @@ interface ContactServiceBackend {
   findContactByRole(role: string): Promise<Contact[]>;
   findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null>;
   listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]>;
-  updateContact(contact: Contact): Promise<void>;
+  updateContact(contact: Contact, client?: DbPoolClient): Promise<void>;
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
@@ -709,7 +709,7 @@ export class ContactService {
    * sanitization gate (PR #63), and ensures any future update path that
    * routes through here cannot bypass sanitization. See issue #64 / #39.
    */
-  private async updateStoredContact(contact: Contact): Promise<Contact> {
+  private async updateStoredContact(contact: Contact, client?: DbPoolClient): Promise<Contact> {
     const safeName = sanitizeDisplayName(contact.displayName);
     const updatedContact =
       safeName === contact.displayName
@@ -727,7 +727,7 @@ export class ContactService {
       );
     }
 
-    await this.backend.updateContact(updatedContact);
+    await this.backend.updateContact(updatedContact, client);
     return updatedContact;
   }
 
@@ -736,7 +736,7 @@ export class ContactService {
    * This is the only sanctioned way to change a display name after creation —
    * callers must go through this method so the sanitization gate is enforced.
    */
-  async updateDisplayName(contactId: string, displayName: string): Promise<Contact> {
+  async updateDisplayName(contactId: string, displayName: string, client?: DbPoolClient): Promise<Contact> {
     const contact = await this.backend.getContact(contactId);
     if (!contact) {
       throw new Error(`Contact not found: ${contactId}`);
@@ -748,11 +748,11 @@ export class ContactService {
       updatedAt: new Date(),
     };
 
-    return this.updateStoredContact(updated);
+    return this.updateStoredContact(updated, client);
   }
 
   /** Update a contact's role and updatedAt timestamp. */
-  async setRole(contactId: string, role: string): Promise<Contact> {
+  async setRole(contactId: string, role: string, client?: DbPoolClient): Promise<Contact> {
     const contact = await this.backend.getContact(contactId);
     if (!contact) {
       throw new Error(`Contact not found: ${contactId}`);
@@ -764,7 +764,7 @@ export class ContactService {
       updatedAt: new Date(),
     };
 
-    return this.updateStoredContact(updated);
+    return this.updateStoredContact(updated, client);
   }
 
   /**
@@ -941,6 +941,50 @@ export class ContactService {
   }
 
   /**
+   * Directly set a contact's tier. Accepts the four user-settable tiers only
+   * (blocked/unknown/known/trusted); 'principal' is structural and must not be
+   * hand-set — enforce that guard at the API layer before calling this method.
+   *
+   * Pass an optional PoolClient to participate in a caller-managed transaction.
+   */
+  async setTier(contactId: string, tier: ContactTier, client?: DbPoolClient): Promise<Contact> {
+    const contact = await this.backend.getContact(contactId);
+    if (!contact) {
+      throw new Error(`Contact not found: ${contactId}`);
+    }
+
+    const updated: Contact = {
+      ...contact,
+      tier,
+      updatedAt: new Date(),
+    };
+
+    return this.updateStoredContact(updated, client);
+  }
+
+  /**
+   * Directly set a contact's kind. Accepts the three user-settable kinds only
+   * (person/organization/automated); 'principal' and 'agent' are structural —
+   * enforce that guard at the API layer before calling this method.
+   *
+   * Pass an optional PoolClient to participate in a caller-managed transaction.
+   */
+  async setKind(contactId: string, kind: ContactKind, client?: DbPoolClient): Promise<Contact> {
+    const contact = await this.backend.getContact(contactId);
+    if (!contact) {
+      throw new Error(`Contact not found: ${contactId}`);
+    }
+
+    const updated: Contact = {
+      ...contact,
+      kind,
+      updatedAt: new Date(),
+    };
+
+    return this.updateStoredContact(updated, client);
+  }
+
+  /**
    * Validate that `primaryEmail` is present in `contact_channel_identities` for this
    * contact (channel = 'email', case-insensitive). Throws `ContactValidationError` if not.
    * Call this before any writes when the PATCH handler needs to reject invalid emails
@@ -970,6 +1014,7 @@ export class ContactService {
   async updateContactFields(
     contactId: string,
     fields: ContactCanonicalFields,
+    client?: DbPoolClient,
   ): Promise<Contact> {
     const contact = await this.backend.getContact(contactId);
     if (!contact) {
@@ -1007,7 +1052,7 @@ export class ContactService {
       updatedAt: new Date(),
     };
 
-    return this.updateStoredContact(updated);
+    return this.updateStoredContact(updated, client);
   }
 
   /**
@@ -1514,13 +1559,14 @@ class PostgresContactBackend implements ContactServiceBackend {
     return result.rows.map((row) => this.rowToContact(row));
   }
 
-  async updateContact(contact: Contact): Promise<void> {
+  async updateContact(contact: Contact, client?: DbPoolClient): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: updating contact');
     // trust_level is included because ContactService.setTrustLevel writes through this path.
     // system_role is included so bootstrap and any future setter can persist it through the standard update path.
     // tier and kind (migration 055) are included so setStatus/setTrustLevel keep them in sync.
     // contact_confidence and last_seen_at remain scoring-owned and are not updated here.
-    await this.pool.query(
+    const queryFn = client ?? this.pool;
+    await queryFn.query(
       `UPDATE contacts SET
          kg_node_id = $2, display_name = $3, role = $4, system_role = $5, status = $6,
          notes = $7, trust_level = $8, tier = $9, kind = $10, updated_at = $11,
@@ -2173,7 +2219,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return results;
   }
 
-  async updateContact(contact: Contact): Promise<void> {
+  async updateContact(contact: Contact, _client?: DbPoolClient): Promise<void> {
     // Enforce system_role uniqueness on update, to match Postgres partial unique indexes.
     // Exclude the contact being updated from the duplicate check.
     if (contact.systemRole) {

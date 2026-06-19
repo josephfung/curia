@@ -3,9 +3,10 @@ import type { Logger } from '../logger.js';
 
 const { Pool } = pg;
 
-// Re-export the pg Pool type so callers don't need to import pg directly.
+// Re-export the pg Pool and PoolClient types so callers don't need to import pg directly.
 // This keeps the rest of the codebase decoupled from the pg driver's type surface.
 export type DbPool = pg.Pool;
+export type DbPoolClient = pg.PoolClient;
 
 /**
  * Create a managed connection pool to Postgres.
