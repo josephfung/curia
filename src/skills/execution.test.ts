@@ -888,20 +888,17 @@ describe('autonomy gates', () => {
       expect(handler.execute).toHaveBeenCalledOnce();
     });
 
-    it('emits autonomy.skill_blocked event when Gate C fires', async () => {
+    it('does not emit autonomy.skill_blocked when Gate C fires (tier block, not score block)', async () => {
       const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
       const { registry, layer } = makeLayerWithScore100(mockBus);
       registry.register(makeRiskyManifest('email-reply', 'medium'), makeHandler('no'));
 
-      await layer.invoke('email-reply', {}, undefined, originatorMeta('unknown'));
+      const result = await layer.invoke('email-reply', {}, undefined, originatorMeta('unknown'));
 
-      expect(mockBus.publish).toHaveBeenCalledWith(
-        'execution',
-        expect.objectContaining({
-          type: 'autonomy.skill_blocked',
-          payload: expect.objectContaining({ skillName: 'email-reply' }),
-        }),
-      );
+      expect(result.success).toBe(false);
+      const calls = mockBus.publish.mock.calls as Array<[string, { type: string }]>;
+      const blocked = calls.filter(([, e]) => e.type === 'autonomy.skill_blocked');
+      expect(blocked).toHaveLength(0);
     });
 
     it('humanApproved bypasses Gate C', async () => {
