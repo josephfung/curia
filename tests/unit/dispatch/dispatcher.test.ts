@@ -1652,9 +1652,10 @@ describe('Dispatcher auto-elevation — Path 2 domain-validated (#951)', () => {
       content: 'Hello',
     }));
 
-    // Give microtasks time to settle, then assert nothing was called
-    await new Promise<void>(r => setTimeout(r, 10));
-    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'domain-validated');
+    // Path 2 is awaited; by the time bus.publish resolves, elevation was not attempted.
+    // Flush remaining microtasks (Path 3 fire-and-forget) before asserting.
+    await new Promise<void>(r => setImmediate(r));
+    expect(elevateFn).not.toHaveBeenCalled();
   });
 
   it('does not elevate when org contact is already tier="known"', async () => {
@@ -1667,8 +1668,8 @@ describe('Dispatcher auto-elevation — Path 2 domain-validated (#951)', () => {
       content: 'Invoice',
     }));
 
-    await new Promise<void>(r => setTimeout(r, 10));
-    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'domain-validated');
+    await new Promise<void>(r => setImmediate(r));
+    expect(elevateFn).not.toHaveBeenCalled();
   });
 
   it('silently skips when no contactService configured', async () => {
@@ -1681,7 +1682,7 @@ describe('Dispatcher auto-elevation — Path 2 domain-validated (#951)', () => {
       content: 'Invoice',
     }))).resolves.not.toThrow();
 
-    await new Promise<void>(r => setTimeout(r, 10));
+    await new Promise<void>(r => setImmediate(r));
     expect(elevateFn).not.toHaveBeenCalled();
   });
 });
@@ -1759,8 +1760,8 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
       content: 'Hello',
     }));
 
-    await new Promise<void>(r => setTimeout(r, 10));
-    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'judgment');
+    await new Promise<void>(r => setImmediate(r));
+    expect(elevateFn).not.toHaveBeenCalled();
   });
 
   it('does not elevate automated contacts even when confidence >= threshold', async () => {
@@ -1773,8 +1774,8 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
       content: 'Your receipt',
     }));
 
-    await new Promise<void>(r => setTimeout(r, 10));
-    expect(elevateFn).not.toHaveBeenCalledWith(expect.anything(), 'judgment');
+    await new Promise<void>(r => setImmediate(r));
+    expect(elevateFn).not.toHaveBeenCalled();
   });
 
   it('does not elevate when tier is already "known"', async () => {
@@ -1888,11 +1889,6 @@ describe('Dispatcher — automated sender tier gate bypass (#953)', () => {
 });
 
 describe('Dispatcher auto-elevation — Path 1 correspondence (#951)', () => {
-  type StubBus = {
-    subscribe: ReturnType<typeof vi.fn>;
-    publish: ReturnType<typeof vi.fn>;
-  };
-
   function buildHarness(opts: {
     resolvedContactId?: string | null;
     withContactService?: boolean;

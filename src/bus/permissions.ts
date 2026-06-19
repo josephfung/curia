@@ -11,6 +11,8 @@ import type { Layer, EventType } from './events.js';
 //                 system layer gets full access for audit logging and monitoring.
 // Contact Merge: dispatch layer publishes contact.duplicate_detected and contact.merged — these
 //                fire as background side-effects of createContact() when DedupService is wired.
+// #951 (auto-elevation): dispatch layer publishes contact.elevated when a contact's tier is promoted
+//                        from 'unknown' to 'known'; system layer gets full access for audit logging.
 // Bullpen: agent layer publishes agent.discuss; dispatch and system layers subscribe.
 // Checkpoint pipeline: dispatch layer publishes conversation.checkpoint after inactivity;
 //                      system layer's ConversationCheckpointProcessor subscribes to run skills.
@@ -36,10 +38,10 @@ import type { Layer, EventType } from './events.js';
 //          and audit logger subscribe via the system layer.
 const publishAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['inbound.message', 'channel.poll', 'channel.stalled']),
-  dispatch: new Set(['agent.task', 'outbound.message', 'outbound.blocked', 'outbound.delivered', 'outbound.pii-redacted', 'outbound.suppressed_duplicate', 'outbound.notification', 'contact.resolved', 'contact.unknown', 'message.rejected', 'contact.duplicate_detected', 'contact.merged', 'conversation.checkpoint', 'human.decision', 'autonomy.send_blocked']),
+  dispatch: new Set(['agent.task', 'outbound.message', 'outbound.blocked', 'outbound.delivered', 'outbound.pii-redacted', 'outbound.suppressed_duplicate', 'outbound.notification', 'contact.resolved', 'contact.unknown', 'message.rejected', 'contact.duplicate_detected', 'contact.merged', 'contact.elevated', 'conversation.checkpoint', 'human.decision', 'autonomy.send_blocked']),
   agent: new Set(['agent.response', 'agent.error', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'agent.discuss', 'llm.call', 'context.budget']),
   execution: new Set(['skill.result', 'secret.accessed', 'autonomy.skill_blocked', 'contact.resolved']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.delivered', 'outbound.pii-redacted', 'outbound.suppressed_duplicate', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'memory.decay_warning', 'contact.resolved', 'contact.unknown', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'context.budget', 'human.decision', 'secret.accessed', 'secret.captured', 'autonomy.skill_blocked', 'autonomy.send_blocked', 'embedding.call']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.delivered', 'outbound.pii-redacted', 'outbound.suppressed_duplicate', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'memory.decay_warning', 'contact.resolved', 'contact.unknown', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'contact.elevated', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'context.budget', 'human.decision', 'secret.accessed', 'secret.captured', 'autonomy.skill_blocked', 'autonomy.send_blocked', 'embedding.call']),
 };
 
 // agent.discuss subscribe for 'dispatch': used by BullpenDispatcher (wired in index.ts after agent registration).
@@ -51,7 +53,7 @@ const subscribeAllowlist: Record<Layer, Set<EventType>> = {
   dispatch: new Set(['inbound.message', 'agent.response', 'agent.error', 'agent.discuss', 'skill.result']),
   agent: new Set(['agent.task', 'skill.result']),
   execution: new Set(['skill.invoke']),
-  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.delivered', 'outbound.pii-redacted', 'outbound.suppressed_duplicate', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'memory.decay_warning', 'contact.resolved', 'contact.unknown', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'context.budget', 'human.decision', 'secret.accessed', 'secret.captured', 'autonomy.skill_blocked', 'autonomy.send_blocked', 'embedding.call', 'channel.poll', 'channel.stalled']),
+  system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.delivered', 'outbound.pii-redacted', 'outbound.suppressed_duplicate', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'memory.decay_warning', 'contact.resolved', 'contact.unknown', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'contact.elevated', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'context.budget', 'human.decision', 'secret.accessed', 'secret.captured', 'autonomy.skill_blocked', 'autonomy.send_blocked', 'embedding.call', 'channel.poll', 'channel.stalled']),
 };
 
 export function canPublish(layer: Layer, eventType: EventType): boolean {

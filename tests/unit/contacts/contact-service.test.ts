@@ -943,6 +943,7 @@ describe('ContactService', () => {
       expect(result).toBe(true);
 
       const updated = await service.getContact(contact.id);
+      expect(updated).not.toBeNull();
       expect(updated!.tier).toBe('known');
     });
 
