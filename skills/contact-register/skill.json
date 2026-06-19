@@ -1,7 +1,7 @@
 {
   "name": "contact-register",
-  "description": "Register a contact interaction from an agent that reads a channel directly, outside the normal dispatcher pipeline. Given a channel type and identifier (e.g. an email address), resolves the sender to a known contact — or creates a provisional one — then updates last_seen_at and triggers a confidence scoring delta. Automatically promotes provisional contacts to confirmed when engagement signals fire: Curia has sent outbound email to this contact (self-contained DB check), the CEO has sent email to them (ceo_has_sent), or the CEO attended a calendar event with them (calendar_accepted). Blocked contacts are never promoted; confirmed contacts are a no-op. Emits a contact.resolved bus event for the audit trail. Use this once per sender during triage when processing messages that bypass handleInbound(). Returns the contact record.",
-  "version": "1.1.0",
+  "description": "Register a contact interaction from an agent that reads a channel directly, outside the normal dispatcher pipeline. Given a channel type and identifier (e.g. an email address), resolves the sender to a known contact — or creates one at tier='unknown' — then updates last_seen_at and triggers a confidence scoring delta. Emits a contact.resolved bus event for the audit trail. Use this once per sender during triage when processing messages that bypass handleInbound(). Elevation from unknown to known is handled by auto-elevation in the dispatcher/judgment path, not this skill. Returns the contact record.",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -9,18 +9,13 @@
     "identifier": "string (channel identifier, e.g. sender email address)",
     "displayName": "string (sender's display name — used as the contact name if a new contact is created)",
     "direction": "string? (message direction: 'inbound' | 'outbound'; defaults to 'inbound')",
-    "messageTimestamp": "string (ISO 8601 timestamp of the message)",
-    "ceo_has_sent": "boolean? (when true, asserts the CEO has sent email to this address from their personal inbox — promotes provisional contact to confirmed)",
-    "calendar_accepted": "boolean? (when true, asserts the CEO has an accepted calendar event with this person — promotes provisional contact to confirmed)"
+    "messageTimestamp": "string (ISO 8601 timestamp of the message)"
   },
   "outputs": {
     "contact_id": "string",
     "display_name": "string",
-    "status": "string (confirmed | provisional | blocked)",
     "contact_confidence": "number (0.0–1.0)",
-    "created": "boolean (true if a new provisional contact was created)",
-    "promoted": "boolean (true if the contact was auto-promoted from provisional to confirmed)",
-    "promotion_signal": "string? (present when promoted=true: 'curia_outbound' | 'ceo_has_sent' | 'calendar_accepted')"
+    "created": "boolean (true if a new contact was created at tier='unknown')"
   },
   "permissions": [],
   "secrets": [],

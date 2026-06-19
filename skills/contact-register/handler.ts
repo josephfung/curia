@@ -8,20 +8,15 @@
 // get none of that — this skill provides the equivalent integration point.
 //
 // Per invocation:
-//   1. Resolve by channel identity (or create a provisional contact if unknown)
+//   1. Resolve by channel identity (or create at tier='unknown' if unseen before)
 //   2. Trigger a scoring delta via the confidence pipeline (or update last_seen_at
 //      directly when the pipeline is not wired)
-//   2b. Auto-promote provisional contacts when any engagement signal fires:
-//       - curia_outbound: contact has outbound_message_count > 0 in the DB
-//       - ceo_has_sent: calling agent asserts the CEO sent email to this address
-//       - calendar_accepted: calling agent asserts the CEO attended an event with them
 //   3. Emit a contact.resolved bus event for the audit trail
 //   4. Return the contact record for use in triage / classification
 //
-// Promotion rules:
-//   - Blocked contacts are never promoted regardless of signals.
-//   - Already-confirmed contacts are a no-op (signals are not evaluated).
-//   - Only provisional contacts are checked and eligible for promotion.
+// Note: provisional→confirmed promotion has been retired (#955). New contacts are
+// created at tier='unknown'. Elevation to 'known' is handled by auto-elevation in
+// the dispatcher/judgment path (auto-elevation #951), not by this skill.
 //
 // Services used:
 //   - contactService (universal — always available)
@@ -40,16 +35,12 @@ export class ContactRegisterHandler implements SkillHandler {
       displayName,
       direction,
       messageTimestamp,
-      ceo_has_sent,
-      calendar_accepted,
     } = ctx.input as {
       channel?: string;
       identifier?: string;
       displayName?: string;
       direction?: string;
       messageTimestamp?: string;
-      ceo_has_sent?: boolean;
-      calendar_accepted?: boolean;
     };
 
     // -- Input validation --
@@ -111,14 +102,16 @@ export class ContactRegisterHandler implements SkillHandler {
       let created = false;
 
       if (!resolvedSender) {
-        ctx.log.info({ channel }, 'contact-register: no existing contact — creating provisional');
+        ctx.log.info({ channel }, 'contact-register: no existing contact — creating at tier=unknown');
 
         const contact = await ctx.contactService.createContact({
           displayName,
           // Use the identifier (e.g. email address) as a fallback display name in
           // case the displayName sanitizes to empty (prompt injection defense).
           fallbackDisplayName: identifier,
-          status: 'provisional',
+          // New inbound senders start at tier='unknown'. Elevation to 'known' is handled
+          // by auto-elevation in the dispatcher/judgment path (#951), not this skill.
+          tier: 'unknown',
           source: 'agent_called',
           // Pass primaryEmail/primaryPhone so createContact() can route business
           // senders to an org KG node rather than minting a person node (issue #946).
@@ -158,9 +151,9 @@ export class ContactRegisterHandler implements SkillHandler {
             'contact-register: concurrent link conflict — cleaning up orphan and re-resolving',
           );
           // Best-effort orphan cleanup. Failure here is non-fatal — the orphaned
-          // provisional contact has no linked identity and will be unreachable via
-          // normal resolution, but it will leave a dangling row. Log as warn so it
-          // can be caught by a periodic cleanup sweep if needed.
+          // contact has no linked identity and will be unreachable via normal resolution,
+          // but it will leave a dangling row. Log as warn so it can be caught by a
+          // periodic cleanup sweep if needed.
           try {
             await ctx.contactService.deleteContact(contact.id);
           } catch (deleteErr) {
@@ -210,84 +203,6 @@ export class ContactRegisterHandler implements SkillHandler {
         }
       }
 
-      // -- Step 2b: Auto-promote provisional contacts --
-      //
-      // Check three engagement signals. Any single signal is sufficient to promote
-      // provisional → confirmed. Blocked contacts are never promoted. Already-confirmed
-      // contacts skip this block entirely (no status change, no extra DB reads).
-      //
-      // Signal priority (first match wins for the returned promotion_signal):
-      //   1. curia_outbound — Curia has already emailed this person; DB-sourced,
-      //      no caller input required.
-      //   2. ceo_has_sent — caller asserts the CEO personally emailed this address.
-      //   3. calendar_accepted — caller asserts the CEO attended an event with them.
-      //
-      // Important: resolvedSender.status is a snapshot from Step 1. Fetch the contact
-      // fresh from the DB so a concurrent call that blocked/confirmed the contact between
-      // Step 1 and now is respected — this prevents undoing a deliberate block.
-
-      let promoted = false;
-      let promotionSignal: string | null = null;
-
-      if (resolvedSender.status === 'provisional') {
-        // Fetch the full contact record to read outbound_message_count and get the
-        // authoritative current status. This guards against TOCTOU: if a concurrent
-        // call changed the status to blocked/confirmed since Step 1, we bail out.
-        const contactForPromotion = await ctx.contactService.getContact(contactId);
-
-        if (!contactForPromotion) {
-          // Contact was resolved moments ago but is no longer retrievable — possible
-          // concurrent deletion (e.g. admin operation). Log and skip promotion safely.
-          ctx.log.warn(
-            { contactId, channel },
-            'contact-register: getContact returned undefined during promotion check — skipping promotion',
-          );
-        } else if (contactForPromotion.status !== 'provisional') {
-          // Status changed since Step 1 (concurrent block or promotion). Respect
-          // the current DB state and skip our own promotion attempt.
-          ctx.log.info(
-            { contactId, currentStatus: contactForPromotion.status },
-            'contact-register: contact status changed since Step 1 — skipping promotion',
-          );
-        } else {
-          // Contact is still provisional — evaluate signals.
-          let decidedSignal: string | null = null;
-
-          if (contactForPromotion.outboundMessageCount > 0) {
-            // Curia has previously sent a message to this contact — strong signal.
-            decidedSignal = 'curia_outbound';
-          } else if (ceo_has_sent === true) {
-            // Calling agent asserts the CEO sent from their personal inbox.
-            decidedSignal = 'ceo_has_sent';
-          } else if (calendar_accepted === true) {
-            // Calling agent asserts the CEO has a shared accepted calendar event.
-            decidedSignal = 'calendar_accepted';
-          }
-
-          if (decidedSignal) {
-            // promoteToConfirmed is a conditional UPDATE (WHERE status = 'provisional').
-            // If a concurrent admin block landed between our getContact check above and
-            // this write, the row won't match and wasPromoted returns false — so we
-            // never undo a deliberate block. promotionSignal is set only on success
-            // so that promotionSignal !== null ↔ promoted === true always holds.
-            const wasPromoted = await ctx.contactService.promoteToConfirmed(contactId);
-            if (wasPromoted) {
-              promoted = true;
-              promotionSignal = decidedSignal;
-              ctx.log.info(
-                { contactId, promotionSignal },
-                'contact-register: auto-promoted provisional contact to confirmed',
-              );
-            } else {
-              ctx.log.info(
-                { contactId },
-                'contact-register: promotion aborted — contact status changed concurrently',
-              );
-            }
-          }
-        }
-      }
-
       // -- Step 3: Emit contact.resolved bus event (audit trail) --
 
       if (ctx.bus) {
@@ -312,30 +227,19 @@ export class ContactRegisterHandler implements SkillHandler {
 
       // -- Step 4: Return updated contact record --
 
-      // Refetch after scoring update and any promotion so status/confidence reflect
-      // the latest values. Falls back to the pre-update snapshot if the fetch fails.
-      // Log a warning when the refetch fails after a promotion so callers can
-      // detect the stale-status edge case (promoted: true but status: 'provisional').
+      // Refetch after the scoring update so contact_confidence reflects the latest
+      // pipeline-updated value. Falls back to the pre-update snapshot if the fetch fails.
       const updatedContact = await ctx.contactService.getContact(contactId);
-      if (!updatedContact && promoted) {
-        ctx.log.warn(
-          { contactId, promotionSignal, channel },
-          'contact-register: getContact returned undefined after promotion — status in response reflects pre-promotion snapshot',
-        );
-      }
 
-      ctx.log.info({ contactId, created, promoted, channel }, 'contact-register: interaction registered');
+      ctx.log.info({ contactId, created, channel }, 'contact-register: interaction registered');
 
       return {
         success: true,
         data: {
           contact_id: contactId,
           display_name: resolvedSender.displayName,
-          status: updatedContact?.status ?? resolvedSender.status,
           contact_confidence: updatedContact?.contactConfidence ?? resolvedSender.contactConfidence,
           created,
-          promoted,
-          ...(promotionSignal !== null ? { promotion_signal: promotionSignal } : {}),
         },
       };
     } catch (err) {
