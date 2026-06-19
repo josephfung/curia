@@ -25,24 +25,24 @@ const testConfig: AuthConfig = {
       defaultDeny: ['*'],
     },
   },
-  trustLevelDefaults: {
-    ceo: {
-      description: 'CEO trust tier',
+  tierDefaults: {
+    principal: {
+      description: 'Principal tier',
       defaultPermissions: ['*'],
       defaultDeny: [],
     },
-    high: {
-      description: 'High-trust contact',
+    trusted: {
+      description: 'Trusted tier',
       defaultPermissions: ['see_personal_calendar', 'schedule_meetings'],
       defaultDeny: ['view_financial_reports'],
     },
-    medium: {
-      description: 'Medium-trust contact',
+    known: {
+      description: 'Known tier',
       defaultPermissions: ['schedule_meetings'],
       defaultDeny: ['view_financial_reports'],
     },
-    low: {
-      description: 'Low-trust contact',
+    unknown: {
+      description: 'Unknown tier',
       defaultPermissions: [],
       defaultDeny: ['*'],
     },
@@ -231,11 +231,11 @@ describe('AuthorizationService', () => {
     expect(result.denied).toEqual([]);
   });
 
-  // --- trust_level fallback when role has no config match ---
+  // --- tier fallback when role has no config match ---
 
-  it('unrecognized role with high trustLevel falls back to trustLevelDefaults', () => {
+  it('unrecognized role with high trustLevel falls back to tierDefaults', () => {
     // 'Sister' is a valid free-text role the LLM might set, but has no config key.
-    // Should fall back to trustLevelDefaults['high'] instead of 'unknown'.
+    // Should fall back to tierDefaults['high'] instead of 'unknown'.
     const result = authService.evaluate({
       role: 'Sister',
       trustLevel: 'high',
@@ -243,13 +243,13 @@ describe('AuthorizationService', () => {
       channel: 'email',
       overrides: [],
     });
-    // trustLevelDefaults.high grants see_personal_calendar
+    // tierDefaults.high grants see_personal_calendar
     // After effective trust fix, max(low, high)=high → should not be trust-blocked
     expect(result.denied).not.toContain('*');
     expect(result.trustBlocked).not.toContain('see_personal_calendar');
   });
 
-  it('unrecognized role with medium trustLevel falls back to trustLevelDefaults', () => {
+  it('unrecognized role with medium trustLevel falls back to tierDefaults', () => {
     const result = authService.evaluate({
       role: 'CEO, Communitech',
       trustLevel: 'medium',
@@ -257,7 +257,7 @@ describe('AuthorizationService', () => {
       channel: 'email',
       overrides: [],
     });
-    // trustLevelDefaults.medium grants schedule_meetings (low sensitivity → not trust-blocked)
+    // tierDefaults.medium grants schedule_meetings (low sensitivity → not trust-blocked)
     expect(result.denied).not.toContain('*');
     expect(result.allowed).toContain('schedule_meetings');
   });
@@ -325,15 +325,15 @@ describe('AuthorizationService', () => {
 
   // --- Issue 6a/6b: fallback chain edge cases ---
 
-  it('hard-deny fallback when config has no unknown role and no trustLevelDefaults', () => {
+  it('hard-deny fallback when config has no unknown role and no tierDefaults', () => {
     // Exercises the final hardcoded-deny sentinel in the fallback chain:
-    //   role → trustLevelDefaults → unknown → { defaultDeny: ['*'] }
-    // When both unknown and trustLevelDefaults are absent, the hard-deny object applies.
+    //   role → tierDefaults → unknown → { defaultDeny: ['*'] }
+    // When both unknown and tierDefaults are absent, the hard-deny object applies.
     const { unknown: _, ...rolesWithoutUnknown } = testConfig.roles;
     void _;
     const minimalConfig: AuthConfig = {
       roles: rolesWithoutUnknown,
-      // No trustLevelDefaults
+      // No tierDefaults
       permissions: testConfig.permissions,
       channelTrust: testConfig.channelTrust,
       channelPolicies: {},
@@ -351,15 +351,15 @@ describe('AuthorizationService', () => {
     expect(result.allowed).toEqual([]);
   });
 
-  it('falls to unknown role when trustLevelDefaults has no entry for the contact trust level', () => {
+  it('falls to unknown role when tierDefaults has no entry for the contact trust level', () => {
     // A contact with trust_level='high' and an unrecognized role falls through to
-    // trustLevelDefaults['high']. If that tier is absent from trustLevelDefaults,
+    // tierDefaults['high']. If that tier is absent from tierDefaults,
     // it falls further to the unknown role.
     const configWithPartialDefaults: AuthConfig = {
       ...testConfig,
-      trustLevelDefaults: {
-        ceo: testConfig.trustLevelDefaults!.ceo!,
-        // Deliberately no 'high', 'medium', or 'low' entries
+      tierDefaults: {
+        principal: testConfig.tierDefaults!.principal!,
+        // Deliberately no 'trusted', 'known', or 'unknown' entries
       },
     };
     const service = new AuthorizationService(configWithPartialDefaults);

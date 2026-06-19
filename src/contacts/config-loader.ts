@@ -46,35 +46,28 @@ export function loadAuthConfig(configDir: string): AuthConfig {
     };
   }
 
-  // Trust-level tier defaults — optional section. Used as fallback when a contact's
+  // Tier defaults — optional section. Used as fallback when a contact's
   // free-text role (e.g. 'Sister') has no matching key in `roles`.
-  const trustLevelDefaults: Record<string, RolePermissions> | undefined =
-    'trust_level_defaults' in rolesRaw
+  const tierDefaults: Record<string, RolePermissions> | undefined =
+    'tier_defaults' in rolesRaw
       ? (() => {
-          const raw = (rolesRaw as Record<string, unknown>).trust_level_defaults;
-          // Guard: the section must be a non-null object (YAML mapping), not a scalar or list.
-          // Object.entries(null) throws a confusing TypeError; this gives a clear startup error.
+          const raw = (rolesRaw as Record<string, unknown>).tier_defaults;
           if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
             throw new Error(
-              "'trust_level_defaults' in role-defaults.yaml must be a YAML mapping (object), not a scalar or list",
+              "'tier_defaults' in role-defaults.yaml must be a YAML mapping (object), not a scalar or list",
             );
           }
-          const validTiers = ['ceo', 'high', 'medium', 'low'];
+          const validTiers = ['principal', 'trusted', 'known', 'unknown', 'blocked'];
           const result: Record<string, RolePermissions> = {};
-          // Iterate with unknown entry type — each entry must be validated individually.
-          // A malformed YAML value like `high: null` or `high: "oops"` would silently
-          // coerce to empty permission lists via `??` without this guard.
           for (const [tier, entry] of Object.entries(raw as Record<string, unknown>)) {
-            // Fail hard on typos — a miskeyed tier silently makes all contacts at
-            // that trust level fall through to unknown (deny-all) at runtime.
             if (!validTiers.includes(tier)) {
               throw new Error(
-                `Invalid trust_level_defaults key '${tier}' in role-defaults.yaml — must be one of: ${validTiers.join(', ')}`,
+                `Invalid tier_defaults key '${tier}' in role-defaults.yaml — must be one of: ${validTiers.join(', ')}`,
               );
             }
             if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
               throw new Error(
-                `trust_level_defaults entry '${tier}' in role-defaults.yaml must be a YAML mapping, got ${entry === null ? 'null' : typeof entry}`,
+                `tier_defaults entry '${tier}' in role-defaults.yaml must be a YAML mapping, got ${entry === null ? 'null' : typeof entry}`,
               );
             }
             const typedEntry = entry as RawRoleEntry;
@@ -153,5 +146,5 @@ export function loadAuthConfig(configDir: string): AuthConfig {
     }
   }
 
-  return { roles, trustLevelDefaults, permissions, channelTrust, channelPolicies };
+  return { roles, tierDefaults, permissions, channelTrust, channelPolicies };
 }

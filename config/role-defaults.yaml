@@ -87,18 +87,18 @@ roles:
     default_deny:
       - "*"
 
-# Trust-level tier defaults — fallback when a contact's role has no config match.
-# Keyed by trust_level value. A contact with trust_level='high' and role='Sister'
-# (no 'sister' key in roles above) will use the 'high' entry below.
-trust_level_defaults:
-  ceo:
-    description: "CEO trust tier — full access"
+# Tier defaults — fallback when a contact's role has no config match.
+# Keyed by ContactTier value. A contact with tier='trusted' and role='Sister'
+# (no 'sister' key in roles above) will use the 'trusted' entry below.
+tier_defaults:
+  principal:
+    description: "Principal tier — full access"
     default_permissions:
       - "*"
     default_deny: []
 
-  high:
-    description: "High-trust contact (family, close personal)"
+  trusted:
+    description: "Trusted tier — elevated access (family, close personal)"
     default_permissions:
       - see_personal_calendar
       - book_travel
@@ -111,8 +111,8 @@ trust_level_defaults:
       - view_board_materials
       - access_internal_docs
 
-  medium:
-    description: "Medium-trust contact (professional)"
+  known:
+    description: "Known tier — standard confirmed contact"
     default_permissions:
       - schedule_meetings
       - request_action_items
@@ -121,8 +121,8 @@ trust_level_defaults:
       - view_board_materials
       - access_internal_docs
 
-  low:
-    description: "Low-trust contact (acquaintance, cold contact)"
+  unknown:
+    description: "Unknown tier — unconfirmed contact"
     default_permissions: []
     default_deny:
       - "*"

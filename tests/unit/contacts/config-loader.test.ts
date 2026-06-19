@@ -47,4 +47,13 @@ describe('loadAuthConfig', () => {
     expect(config.channelPolicies.email.trust).toBe('low');
     expect(config.channelTrust.cli).toBe('high');
   });
+
+  it('loads tier defaults from YAML', () => {
+    const config = loadAuthConfig(CONFIG_DIR);
+    expect(config.tierDefaults).toBeDefined();
+    expect(config.tierDefaults!['trusted']).toBeDefined();
+    expect(config.tierDefaults!['trusted'].defaultPermissions).toContain('schedule_meetings');
+    expect(config.tierDefaults!['principal'].defaultPermissions).toContain('*');
+    expect(config.tierDefaults!['unknown'].defaultDeny).toContain('*');
+  });
 });
