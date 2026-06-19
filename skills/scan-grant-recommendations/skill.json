@@ -1,0 +1,22 @@
+{
+  "name": "scan-grant-recommendations",
+  "description": "Scan contacts and proactively suggest capability grants for contacts who have earned them through demonstrated trust patterns. Runs the LLM-judge recommendation engine. Returns a summary of new recommendations created. Invoke on a schedule — not in response to user requests.",
+  "version": "0.1.0",
+  "sensitivity": "internal",
+  "action_risk": "none",
+  "inputs": {
+    "confidence_threshold": "number? (minimum contact_confidence to consider; default 0.65)",
+    "max_candidates": "number? (max contacts to evaluate per run; default 20)",
+    "cadence_ceiling": "number? (max new pending recommendations to create in one run; default 3)"
+  },
+  "outputs": {
+    "evaluated": "number (contacts evaluated)",
+    "created": "number (new recommendations created)",
+    "skipped_existing": "number (candidates skipped because a recommendation already exists)",
+    "skipped_judge": "number (candidates skipped because the judge declined to recommend)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 60000,
+  "capabilities": ["infraLlm"]
+}

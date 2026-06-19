@@ -1093,6 +1093,62 @@ export async function knowledgeGraphRoutes(
     return reply.status(204).send();
   });
 
+  // GET /api/kg/contacts/:id/overrides — list active auth overrides for a contact.
+  app.get('/api/kg/contacts/:id/overrides', KG_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const { id } = request.params as { id: string };
+    if (!UUID_RE.test(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
+
+    try {
+      const contact = await contactService.getContact(id);
+      if (!contact) return reply.status(404).send({ error: 'Contact not found.' });
+      const overrides = await contactService.getAuthOverrides(id);
+      return reply.send({ overrides });
+    } catch (err) {
+      logger.error({ err, contactId: id }, 'GET /api/kg/contacts/:id/overrides failed');
+      return reply.status(500).send({ error: 'Failed to load auth overrides.' });
+    }
+  });
+
+  // DELETE /api/kg/contacts/:id/overrides/:permission — revoke a specific override.
+  app.delete('/api/kg/contacts/:id/overrides/:permission', KG_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const { id, permission } = request.params as { id: string; permission: string };
+    if (!UUID_RE.test(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
+    if (!/^[a-z][a-z0-9_]*$/.test(permission)) {
+      return reply.status(400).send({ error: 'Invalid permission name.' });
+    }
+
+    try {
+      const contact = await contactService.getContact(id);
+      if (!contact) return reply.status(404).send({ error: 'Contact not found.' });
+      const revoked = await contactService.revokePermission(id, permission);
+      if (!revoked) return reply.status(404).send({ error: 'No active override found for this permission.' });
+      return reply.status(204).send();
+    } catch (err) {
+      logger.error({ err, contactId: id, permission }, 'DELETE /api/kg/contacts/:id/overrides/:permission failed');
+      return reply.status(500).send({ error: 'Failed to revoke override.' });
+    }
+  });
+
+  // GET /api/kg/grant-recommendations — list pending (or all) grant recommendations.
+  app.get('/api/kg/grant-recommendations', KG_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const query = request.query as { status?: string; limit?: string };
+    const statusFilter = query.status === 'pending' || query.status === 'approved' || query.status === 'declined'
+      ? query.status
+      : 'pending';
+    const limit = Math.min(Number.parseInt(query.limit ?? '50', 10) || 50, 200);
+
+    try {
+      const recommendations = await contactService.listGrantRecommendations({ status: statusFilter, limit });
+      return reply.send({ recommendations });
+    } catch (err) {
+      logger.error({ err }, 'GET /api/kg/grant-recommendations failed');
+      return reply.status(500).send({ error: 'Failed to load grant recommendations.' });
+    }
+  });
+
   // ── Chat endpoints ──────────────────────────────────────────────────────
   //
   // The chat endpoints let the KG web app send messages to the agent layer

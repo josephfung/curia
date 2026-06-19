@@ -1,0 +1,20 @@
+{
+  "name": "decline-grant-recommendation",
+  "description": "Decline a pending grant recommendation. Permanently marks it as declined — Curia will never surface this specific recommendation again (anti-nag). Use when the CEO says no to a suggested grant ('no', 'not Dana', 'don't recommend that again'). recommendation_id must be the UUID from the recommendation.",
+  "version": "0.1.0",
+  "sensitivity": "elevated",
+  "action_risk": "low",
+  "inputs": {
+    "recommendation_id": "string (UUID of the pending grant recommendation)"
+  },
+  "outputs": {
+    "recommendation_id": "string",
+    "contact_id": "string",
+    "permission": "string",
+    "status": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": []
+}

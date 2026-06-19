@@ -1,5 +1,5 @@
 name: contacts
-version: "0.4.0"
+version: "0.5.0"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -239,6 +239,46 @@ system_prompt: |
   | Named person not in contacts | `contact-create` name only → `kg_node_id` |
   | Non-person entity (org, venue, concept) | Pass name directly to `memory-store`; skill auto-creates |
 
+  ## Tier & Permission Grants
+
+  When the coordinator relays that the CEO wants to change a contact's trust
+  level ("treat Dana as trusted", "block this sender", "John is trusted"),
+  use contact-set-tier to set the tier directly:
+  - "treat X as trusted" / "X is trusted" → tier: "trusted"
+  - "block X" / "X is blocked"            → tier: "blocked"
+  - "downgrade X" / "X is provisional"    → tier: "unknown"
+
+  Use contact-grant-permission for specific per-capability grants
+  (e.g. "grant Dana schedule_meetings") when the CEO names a specific
+  permission rather than a broad tier change.
+  Use contact-revoke-permission to remove a specific override.
+
+  ## Grant Recommendations
+
+  When the scheduler runs the weekly grant recommendation scan, you will
+  receive a task with the job_id. Steps:
+
+  1. Call scan-grant-recommendations (no extra inputs needed for defaults).
+     The skill evaluates known-tier contacts with high confidence scores and
+     creates up to 3 new grant recommendations per run.
+
+  2. Fetch pending recommendations: call scan-grant-recommendations again
+     only if the first call returned created > 0; otherwise skip step 3.
+
+  3. For each new recommendation created: surface it to the coordinator as
+     a natural-language message describing the suggested grant. Example:
+     "I've noticed that [Name] coordinates scheduling with you regularly.
+     Would you like me to formally grant them scheduling access? [rec_id: <uuid>]"
+     Include the recommendation UUID in brackets so the coordinator can pass
+     it to approve-grant-recommendation or decline-grant-recommendation.
+
+  4. Call scheduler-report with the job_id and a summary of how many
+     recommendations were evaluated, created, and surfaced.
+
+  When the CEO approves: call approve-grant-recommendation with the recommendation_id.
+  When the CEO declines: call decline-grant-recommendation with the recommendation_id.
+  Declining is permanent — never resurface a declined recommendation.
+
 pinned_skills:
   # Identity & CRUD
   - contact-create
@@ -248,6 +288,7 @@ pinned_skills:
   - contact-set-identity-status
   - contact-set-role
   - contact-set-trust
+  - contact-set-tier
   - contact-rename
   - contact-update
   - contact-list
@@ -257,6 +298,10 @@ pinned_skills:
   - contact-dedup-exclude
   - contact-grant-permission
   - contact-revoke-permission
+  # Grant recommendations (issue #952)
+  - scan-grant-recommendations
+  - approve-grant-recommendation
+  - decline-grant-recommendation
   # Knowledge graph
   - query-relationships
   - delete-relationship
@@ -362,3 +407,28 @@ schedule:
            and the next offset so operators can track progress.
          - context: { "next_offset": <computed value from step 5> }
     expectedDurationSeconds: 540
+
+  - cron: "0 10 * * 3"   # Wednesdays at 10 AM
+    task: >
+      Run the weekly grant recommendation scan. Extract the scheduler_job_id
+      from the task payload before starting.
+
+      Steps:
+
+      1. Call scan-grant-recommendations with default inputs. It evaluates
+         known-tier contacts with high confidence scores and creates up to 3
+         new scheduling grant recommendations. The skill is idempotent —
+         contacts that already have a recommendation (any status) are skipped.
+
+      2. If created > 0 in the result: surface each new recommendation to the
+         coordinator. For each, write a natural-language message such as:
+         "I noticed that [Name] schedules with you regularly — would you like
+         me to grant them formal scheduling access? [rec_id: <uuid>]"
+         Use the recommendation UUID so the coordinator can route approve or
+         decline to the right skill.
+
+      3. Call scheduler-report with:
+         - job_id: the scheduler_job_id from the task payload
+         - summary: evaluated count, created count, skipped counts, and
+           whether any recommendations were surfaced to the coordinator.
+    expectedDurationSeconds: 60

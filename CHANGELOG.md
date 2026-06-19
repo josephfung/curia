@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Grant mechanism + proactive recommendations** — contacts can be granted or blocked by tier (`contact-set-tier`) and per-capability overrides (`contact-grant-permission`, `contact-revoke-permission`); a weekly LLM-judge scan surfaces scheduling grant recommendations; CEO can approve or decline each; declined recommendations never resurface (anti-nag). Contacts UI now shows and revokes per-contact auth overrides. (#952)
 - **Console Contacts: tier/kind editing** — the admin Contacts page now edits `tier` and `kind` directly; Status and Trust-level controls are removed. List view filters, sorts, and displays by tier + kind facet. (#1055)
 - **PATCH/POST `/api/kg/contacts` accept `tier` and `kind`** — validated against the migration-055 enums with structural guards rejecting `tier='principal'` and `kind ∈ {principal, agent}`. Principal contacts cannot be demoted via the API. (#1055)
 - **Atomic PATCH mutations** — all non-legacy mutations in `PATCH /api/kg/contacts/:id` now run in a single DB transaction; partial failures roll back cleanly. (#1055)
