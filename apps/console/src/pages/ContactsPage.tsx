@@ -516,32 +516,39 @@ function ContactViewDrawer({ contact, onClose, onEdit }: ViewDrawerProps) {
 
   useEffect(() => {
     let cancelled = false;
+    // Reset before fetching. The parent keys this drawer by contact id, so it
+    // already remounts (fresh state) when you switch contacts — but clearing
+    // here keeps the effect self-contained so stale identities can never render
+    // even if that key is removed later. Also clear on failure for the same reason.
+    setIdentities([]);
     setIdentitiesLoaded(false);
     setIdentitiesError(null);
     apiFetch(`/api/kg/contacts/${contact.id}/identities`)
       .then(async res => {
         if (cancelled) return;
-        if (!res.ok) { setIdentitiesError('Failed to load identities'); return; }
+        if (!res.ok) { setIdentities([]); setIdentitiesError('Failed to load identities'); return; }
         const d = await res.json() as { identities: ContactIdentity[] };
         setIdentities(d.identities);
       })
-      .catch((_err: unknown) => { if (!cancelled) setIdentitiesError('Failed to load identities'); })
+      .catch((_err: unknown) => { if (!cancelled) { setIdentities([]); setIdentitiesError('Failed to load identities'); } })
       .finally(() => { if (!cancelled) setIdentitiesLoaded(true); });
     return () => { cancelled = true; };
   }, [contact.id]);
 
   useEffect(() => {
     let cancelled = false;
+    setOverrides([]);
     apiFetch(`/api/kg/contacts/${contact.id}/overrides`)
       .then(async res => {
-        if (cancelled || !res.ok) return;
+        if (cancelled) return;
+        if (!res.ok) { setOverrides([]); return; }
         const d = await res.json() as { overrides: AuthOverride[] };
         setOverrides(d.overrides);
       })
       // Grants are supplementary read-only display; a failure here just hides the
       // section (guarded by overrides.length) rather than blocking the view. Leave
       // a breadcrumb so a genuinely-broken overrides endpoint is still diagnosable.
-      .catch((err: unknown) => { console.error('[ContactViewDrawer] failed to load overrides:', err); });
+      .catch((err: unknown) => { if (!cancelled) setOverrides([]); console.error('[ContactViewDrawer] failed to load overrides:', err); });
     return () => { cancelled = true; };
   }, [contact.id]);
 
