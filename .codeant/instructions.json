@@ -1,0 +1,22 @@
+{
+  "instructions": [
+    {
+      "id": "tests-skip-production-grade-rules",
+      "description": "These are Vitest test files. Do NOT flag: (1) awaited calls lacking try/catch or .catch() — Vitest already fails a test on any unhandled rejection with a full stack, so wrapping the body hides the signal; (2) non-null assertions (`x!`) — the test's own setup establishes the value a line or two earlier, and a null there should throw and fail the test; (3) requests to normalize thrown errors into AgentError — tests assert on thrown errors directly. Production-grade async/null/error-handling rules do not apply to test files.",
+      "files": ["*.test.ts", "**/*.test.ts", "tests/*", "tests/**", "**/__tests__/**"],
+      "scope": ["ide", "pr"]
+    },
+    {
+      "id": "scripts-are-not-agent-runtime",
+      "description": "Files under scripts/ are one-shot CLI/ops scripts, not part of the agent or skill runtime. Their error contract is a structured pino log plus a process exit code. Do NOT require errors to be normalized into the AgentError shape, and do NOT flag a catch that logs and re-throws the original error (preserving the stack) before the CLI entry exits non-zero.",
+      "files": ["scripts/*", "scripts/**", "scripts/*.ts", "scripts/**/*.ts"],
+      "scope": ["ide", "pr"]
+    },
+    {
+      "id": "project-error-and-null-conventions",
+      "description": "Production-code conventions. (1) `x != null` / `x == null` is the intentional combined null-or-undefined guard and is used consistently across the codebase — do NOT flag it under the loose-equality rule; reserve that rule for == / != against non-null literals (== 0, == '', == false). (2) A catch is NOT swallowing a failure when it logs with context AND records the failure (a counter, a failed-id list, or a {success:false} return) AND the caller acts on it (non-zero exit, aggregated throw, error result); a documented best-effort cleanup catch that runs after the primary operation already succeeded and logs at warn for a later sweep is intentional. (3) AgentError normalization is judged at the boundary that reaches the user or bus (skill handler / agent runtime), not at every internal throw — a plain `throw new Error(...)` inside a service method is fine when sibling guards throw the same way and the single caller normalizes it into a structured result.",
+      "files": ["src/*", "src/**", "skills/*", "skills/**"],
+      "scope": ["ide", "pr"]
+    }
+  ]
+}
