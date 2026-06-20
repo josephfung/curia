@@ -114,7 +114,7 @@ system_prompt: |
 
   ## Identity Status
   Contact identities (email, phone) have a status field distinct from the
-  contact-level status (confirmed/provisional/blocked):
+  contact-level tier (blocked/unknown/known/trusted/principal):
   - **active** — address is believed to be valid and usable (default)
   - **defunct** — address is known to be no longer in use (e.g. left the company)
   - **bounced** — delivery to this address has failed
