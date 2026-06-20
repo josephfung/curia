@@ -27,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Removed
 
 - **`status` field removed from contact HTTP API** — `POST` and `PATCH /api/kg/contacts` no longer accept a `status` body field; any supplied value is silently ignored. The `setStatus()` call in the PATCH route is removed; `tier`/`kind` are the only capability inputs. (#955)
+- **`contacts.status`, `contacts.trust_level`, `held_messages` dropped (migration 059)** — the two legacy capability columns are physically removed now that all code reads/writes `tier` and `kind`; the `held_messages` table (orphaned in #947 when the hold-and-notify flow was deleted) is also dropped. (#955)
 
 - **Auto-elevation** — contacts auto-promote from `unknown` to `known` via correspondence, domain, and judgment signals. (#951)
 - **`contact-register` skill** (v1.1.0 → v1.2.0) — provisional→confirmed promotion flow retired; new contacts created at `tier='unknown'`. `ceo_has_sent`, `calendar_accepted` inputs and `status`, `promoted`, `promotion_signal` outputs removed. Elevation is now entirely the dispatcher/judgment path's responsibility. (#955)
