@@ -28,23 +28,6 @@ describe('outbound.notification event', () => {
     expect(event.parentEventId).toBe('evt-blocked-1');
   });
 
-  it('creates a group_held notification without parentEventId', () => {
-    const event = createOutboundNotification({
-      notificationType: 'group_held',
-      ceoEmail: 'ceo@example.com',
-      subject: 'Signal group message held — member verification needed',
-      body: 'A Signal group message was held.',
-      originalChannel: 'signal',
-      originalRecipientId: 'groupABCdef==',
-    });
-
-    expect(event.type).toBe('outbound.notification');
-    expect(event.payload.notificationType).toBe('group_held');
-    expect(event.payload.ceoEmail).toBe('ceo@example.com');
-    expect(event.parentEventId).toBeUndefined();
-    expect(event.payload.blockId).toBeUndefined();
-  });
-
   it('dispatch layer can publish outbound.notification', () => {
     expect(canPublish('dispatch', 'outbound.notification')).toBe(true);
   });

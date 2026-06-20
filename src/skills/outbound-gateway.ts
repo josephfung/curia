@@ -837,7 +837,7 @@ export class OutboundGateway {
    * content) addressed to the CEO email (which is in the content filter allowlist),
    * so the filter will always pass.
    *
-   * Callers: the blocked-content path in send() and SignalAdapter.notifyCeoGroupHeld().
+   * Callers: the blocked-content path in send().
    */
   async sendNotification(
     payload: OutboundNotificationPayload,
