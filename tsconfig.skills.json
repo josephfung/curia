@@ -1,0 +1,19 @@
+{
+  // Type-check the skills/ tree, which sits outside the main tsconfig's `src/**`
+  // rootDir and was therefore never covered by `pnpm run typecheck`. Skill handlers
+  // import from ../../src, so tsc follows those references; we set rootDir to the repo
+  // root and emit nothing. Run via the `typecheck` script alongside the base project.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // declaration/declarationMap/outDir are meaningless for a noEmit check and the
+    // base values (rootDir: src) conflict with this wider rootDir — null them out.
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "composite": false
+  },
+  "include": ["skills/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
