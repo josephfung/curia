@@ -101,13 +101,13 @@ export class ContactLookupHandler implements SkillHandler {
       }
 
       // Use enrichContact (same as name/role paths) so the response includes
-      // status and channel identities — previously omitted, which prevented
+      // tier and channel identities — previously omitted, which prevented
       // the LLM from determining whether a contact was provisional.
       const contact = {
         id: resolved.contactId,
         displayName: resolved.displayName,
         role: resolved.role,
-        status: resolved.status,
+        tier: resolved.tier,
         kgNodeId: resolved.kgNodeId,
       };
       const enriched = await enrichContact(ctx, contact);
@@ -125,7 +125,7 @@ export class ContactLookupHandler implements SkillHandler {
 /** Enrich a contact with its channel identities */
 async function enrichContact(
   ctx: SkillContext,
-  contact: { id: string; displayName: string; role: string | null; status: string; kgNodeId: string | null },
+  contact: { id: string; displayName: string; role: string | null; tier: string; kgNodeId: string | null },
 ) {
   const summary = contactToSummary(contact);
   try {
@@ -155,12 +155,12 @@ async function enrichContact(
 }
 
 /** Convert a Contact to a summary object for the skill output */
-function contactToSummary(contact: { id: string; displayName: string; role: string | null; status: string; kgNodeId: string | null }) {
+function contactToSummary(contact: { id: string; displayName: string; role: string | null; tier: string; kgNodeId: string | null }) {
   return {
     contact_id: contact.id,
     display_name: contact.displayName,
     role: contact.role,
-    status: contact.status,
+    tier: contact.tier,
     kg_node_id: contact.kgNodeId,
   };
 }

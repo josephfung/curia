@@ -21,7 +21,7 @@ function makeCtx(overrides: {
   } as unknown as OutboundGateway;
 
   const contactService = {
-    resolveByChannelIdentity: vi.fn().mockResolvedValue({ contactId: 'c1', status: 'confirmed', tier: 'known' }),
+    resolveByChannelIdentity: vi.fn().mockResolvedValue({ contactId: 'c1', tier: 'known' }),
     ...overrides.contactService,
   } as unknown as ContactService;
 
@@ -117,7 +117,7 @@ describe('SignalSendHandler', () => {
       getSignalGroupMembers: vi.fn().mockResolvedValue(['+14155551234']),
     };
     const contactService = {
-      resolveByChannelIdentity: vi.fn().mockResolvedValue({ contactId: 'c1', status: 'confirmed', tier: 'known' }),
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({ contactId: 'c1', tier: 'known' }),
     };
     const ctx = makeCtx({ input: { group_id: 'grpABC==', message: 'team update' }, gateway, contactService });
 
@@ -159,7 +159,7 @@ describe('SignalSendHandler', () => {
       getSignalGroupMembers: vi.fn().mockResolvedValue(['+14155551234']),
     };
     const contactService = {
-      resolveByChannelIdentity: vi.fn().mockResolvedValue({ contactId: 'c1', status: 'blocked', tier: 'blocked' }),
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({ contactId: 'c1', tier: 'blocked' }),
     };
     const ctx = makeCtx({ input: { group_id: 'grpABC==', message: 'hi' }, gateway, contactService });
 

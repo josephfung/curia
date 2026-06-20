@@ -1,6 +1,6 @@
 // handler.test.ts — tests for contact-list skill.
-// Covers: no filters, status filter, limit, offset, status+limit+offset, role (existing),
-// invalid status, invalid limit, invalid offset, kind filter (new).
+// Covers: no filters, limit, offset, role (existing), invalid limit, invalid offset,
+// kind filter. Status filter removed along with ContactStatus (#955).
 import { describe, it, expect, vi } from 'vitest';
 import { ContactListHandler } from './handler.js';
 import type { SkillContext, SkillResult } from '../../src/skills/types.js';
@@ -14,11 +14,9 @@ function makeContact(overrides: Partial<Contact> & { id: string; displayName: st
     kgNodeId: null,
     role: null,
     systemRole: null,
-    status: 'confirmed',
     tier: 'known',
     kind: 'person',
     contactConfidence: 0.5,
-    trustLevel: null,
     lastSeenAt: null,
     inboundMessageCount: 0,
     outboundMessageCount: 0,
@@ -41,10 +39,10 @@ function makeContact(overrides: Partial<Contact> & { id: string; displayName: st
   };
 }
 
-const alice = makeContact({ id: 'a1', displayName: 'Alice', status: 'confirmed', createdAt: new Date('2026-01-01') });
-const bob = makeContact({ id: 'b2', displayName: 'Bob', status: 'provisional', createdAt: new Date('2026-02-01') });
-const carol = makeContact({ id: 'c3', displayName: 'Carol', status: 'provisional', createdAt: new Date('2026-03-01') });
-const dave = makeContact({ id: 'd4', displayName: 'Dave', status: 'blocked', createdAt: new Date('2026-04-01') });
+const alice = makeContact({ id: 'a1', displayName: 'Alice', tier: 'known', createdAt: new Date('2026-01-01') });
+const bob = makeContact({ id: 'b2', displayName: 'Bob', tier: 'unknown', createdAt: new Date('2026-02-01') });
+const carol = makeContact({ id: 'c3', displayName: 'Carol', tier: 'unknown', createdAt: new Date('2026-03-01') });
+const dave = makeContact({ id: 'd4', displayName: 'Dave', tier: 'blocked', createdAt: new Date('2026-04-01') });
 
 const allContacts = [alice, bob, carol, dave];
 
@@ -53,10 +51,10 @@ function makeCtx(input: Record<string, unknown> = {}, contacts: Contact[] = allC
     input,
     log: createSilentLogger(),
     contactService: {
-      listContacts: vi.fn().mockImplementation((filters?: { status?: string; kind?: string[]; limit?: number; offset?: number }) => {
+      listContacts: vi.fn().mockImplementation((filters?: { tier?: string; kind?: string[]; limit?: number; offset?: number }) => {
         let results = [...contacts];
-        if (filters?.status) {
-          results = results.filter((c) => c.status === filters.status);
+        if (filters?.tier) {
+          results = results.filter((c) => c.tier === filters.tier);
         }
         // Filter by kind when specified — mirrors the backend's inclusion semantics
         if (filters?.kind != null && filters.kind.length > 0) {
@@ -75,9 +73,9 @@ function makeCtx(input: Record<string, unknown> = {}, contacts: Contact[] = allC
 }
 
 /** Extract contacts array from a successful result. */
-function getContacts(result: SkillResult): Array<{ contact_id: string; display_name: string; status: string }> {
+function getContacts(result: SkillResult): Array<{ contact_id: string; display_name: string; tier: string }> {
   if (!result.success) throw new Error(`Expected success, got: ${result.error}`);
-  return (result.data as { contacts: Array<{ contact_id: string; display_name: string; status: string }> }).contacts;
+  return (result.data as { contacts: Array<{ contact_id: string; display_name: string; tier: string }> }).contacts;
 }
 
 describe('ContactListHandler', () => {
@@ -91,40 +89,10 @@ describe('ContactListHandler', () => {
     expect(result.success).toBe(true);
     expect(getContacts(result)).toHaveLength(4);
     expect(ctx.contactService!.listContacts).toHaveBeenCalledWith({
-      status: undefined,
       kind: ['person', 'principal', 'organization'],
       limit: undefined,
       offset: undefined,
     });
-  });
-
-  // --- Status filter ---
-
-  it('filters by status=provisional', async () => {
-    const ctx = makeCtx({ status: 'provisional' });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    const contacts = getContacts(result);
-    expect(contacts).toHaveLength(2);
-    expect(contacts.every((c) => c.status === 'provisional')).toBe(true);
-  });
-
-  it('filters by status=confirmed', async () => {
-    const ctx = makeCtx({ status: 'confirmed' });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    const contacts = getContacts(result);
-    expect(contacts).toHaveLength(1);
-    expect(contacts[0].display_name).toBe('Alice');
-  });
-
-  it('filters by status=blocked', async () => {
-    const ctx = makeCtx({ status: 'blocked' });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    const contacts = getContacts(result);
-    expect(contacts).toHaveLength(1);
-    expect(contacts[0].display_name).toBe('Dave');
   });
 
   // --- Limit ---
@@ -141,17 +109,6 @@ describe('ContactListHandler', () => {
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     expect(getContacts(result)).toHaveLength(4);
-  });
-
-  // --- Status + limit combined ---
-
-  it('filters by status and caps with limit', async () => {
-    const ctx = makeCtx({ status: 'provisional', limit: 1 });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    const contacts = getContacts(result);
-    expect(contacts).toHaveLength(1);
-    expect(contacts[0].status).toBe('provisional');
   });
 
   // --- Offset pagination ---
@@ -192,16 +149,6 @@ describe('ContactListHandler', () => {
     expect([...page1, ...page2].sort()).toEqual(['a1', 'b2', 'c3', 'd4'].sort());
   });
 
-  it('offset with status filter paginates within filtered results', async () => {
-    // Only bob and carol are provisional; offset 1 should return just carol
-    const ctx = makeCtx({ status: 'provisional', limit: 10, offset: 1 });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    const contacts = getContacts(result);
-    expect(contacts).toHaveLength(1);
-    expect(contacts[0]!.display_name).toBe('Carol');
-  });
-
   // --- Role filter (existing behavior, regression check) ---
 
   it('uses findContactByRole when role is provided', async () => {
@@ -217,13 +164,6 @@ describe('ContactListHandler', () => {
   });
 
   // --- Validation ---
-
-  it('rejects invalid status value', async () => {
-    const ctx = makeCtx({ status: 'invalid' });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Invalid status');
-  });
 
   it('rejects limit of zero', async () => {
     const ctx = makeCtx({ limit: 0 });
@@ -251,30 +191,6 @@ describe('ContactListHandler', () => {
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain('200 characters');
-  });
-
-  it.each([
-    // exact lowercase
-    'provisional', 'confirmed', 'blocked',
-    // casing and whitespace variants an LLM might produce
-    'Provisional', 'CONFIRMED', ' blocked',
-  ])(
-    'rejects role="%s" and redirects to the status parameter',
-    async (statusValue) => {
-      const ctx = makeCtx({ role: statusValue });
-      const result = await handler.execute(ctx);
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('status');
-      // error message includes the normalized (lowercase) form so the LLM knows what to pass
-      expect(result.error).toContain(statusValue.trim().toLowerCase());
-    },
-  );
-
-  it('rejects combining role with status', async () => {
-    const ctx = makeCtx({ role: 'CFO', status: 'provisional' });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Cannot combine role');
   });
 
   it('rejects combining role with limit', async () => {
@@ -321,12 +237,12 @@ describe('ContactListHandler', () => {
 
   // --- Output shape ---
 
-  it('includes status field in each contact output', async () => {
+  it('includes tier field in each contact output', async () => {
     const ctx = makeCtx();
     const result = await handler.execute(ctx);
     const contacts = getContacts(result);
-    expect(contacts[0]).toHaveProperty('status');
-    expect(contacts[0].status).toBe('confirmed');
+    expect(contacts[0]).toHaveProperty('tier');
+    expect(contacts[0]!.tier).toBe('known');
   });
 
   // --- Error handling ---
@@ -362,7 +278,7 @@ function makeKindCtx(input: Record<string, unknown>, contacts: unknown[]): Skill
     log: createSilentLogger(),
     contactService: {
       findContactByRole: async () => [],
-      listContacts: async (filters?: { kind?: string[]; status?: string; limit?: number; offset?: number }) => {
+      listContacts: async (filters?: { kind?: string[]; tier?: string; limit?: number; offset?: number }) => {
         // Return only contacts whose kind is in the filter (or all if no filter)
         return contacts.filter((c: unknown) => {
           const contact = c as { kind?: string };
@@ -373,10 +289,10 @@ function makeKindCtx(input: Record<string, unknown>, contacts: unknown[]): Skill
   } as unknown as SkillContext;
 }
 
-const personContact = { id: '1', displayName: 'Alice', role: null, status: 'confirmed', kgNodeId: null, kind: 'person' };
-const automatedContact = { id: '2', displayName: 'GitHub Notifications', role: null, status: 'confirmed', kgNodeId: null, kind: 'automated' };
-const agentContact = { id: '3', displayName: 'Curia Agent', role: null, status: 'confirmed', kgNodeId: null, kind: 'agent' };
-const orgContact = { id: '4', displayName: 'Stripe', role: null, status: 'confirmed', kgNodeId: null, kind: 'organization' };
+const personContact = { id: '1', displayName: 'Alice', role: null, tier: 'known', kgNodeId: null, kind: 'person' };
+const automatedContact = { id: '2', displayName: 'GitHub Notifications', role: null, tier: 'known', kgNodeId: null, kind: 'automated' };
+const agentContact = { id: '3', displayName: 'Curia Agent', role: null, tier: 'known', kgNodeId: null, kind: 'agent' };
+const orgContact = { id: '4', displayName: 'Stripe', role: null, tier: 'known', kgNodeId: null, kind: 'organization' };
 
 describe('ContactListHandler — kind filter', () => {
   it('excludes automated and agent contacts by default (no kind param)', async () => {
@@ -427,8 +343,8 @@ describe('ContactListHandler — kind filter', () => {
   it('role lookup post-filters by effective kind (excludes automated/agent by default)', async () => {
     // findContactByRole returns contacts of mixed kinds; handler must exclude automated/agent.
     const handler = new ContactListHandler();
-    const roleContact = { id: '5', displayName: 'Support Bot', role: 'support', status: 'confirmed', kgNodeId: null, kind: 'automated' };
-    const roleHuman = { id: '6', displayName: 'Support Human', role: 'support', status: 'confirmed', kgNodeId: null, kind: 'person' };
+    const roleContact = { id: '5', displayName: 'Support Bot', role: 'support', tier: 'known', kgNodeId: null, kind: 'automated' };
+    const roleHuman = { id: '6', displayName: 'Support Human', role: 'support', tier: 'known', kgNodeId: null, kind: 'person' };
     const ctx = {
       input: { role: 'support' },
       log: createSilentLogger(),
