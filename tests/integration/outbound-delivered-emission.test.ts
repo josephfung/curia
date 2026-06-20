@@ -40,10 +40,9 @@ describe('outbound.delivered emission (#729)', () => {
         contactId: 'contact-int-1',
         displayName: 'Integration Test Recipient',
         role: null,
-        status: 'confirmed',
+        tier: 'known',
         kgNodeId: null,
         verified: true,
-        trustLevel: 'medium',
       }),
     } as unknown as ContactService;
 

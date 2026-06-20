@@ -130,7 +130,7 @@ describeIf('dedup-contacts merge integration', () => {
       const primary = await contactService.createContact({
         displayName: `Dedup Primary ${runId}`,
         source: 'ceo_stated',
-        status: 'confirmed',
+        tier: 'known',
       });
       createdContactIds.push(primary.id);
       if (primary.kgNodeId) createdKgNodeIds.push(primary.kgNodeId);
@@ -138,7 +138,7 @@ describeIf('dedup-contacts merge integration', () => {
       const secondary = await contactService.createContact({
         displayName: `Dedup Secondary ${runId}`,
         source: 'email_participant',
-        status: 'provisional',
+        tier: 'unknown',
       });
       createdContactIds.push(secondary.id);
       if (secondary.kgNodeId) createdKgNodeIds.push(secondary.kgNodeId);

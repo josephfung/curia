@@ -2220,13 +2220,14 @@ describe('AgentRuntime chatWithRetry', () => {
         contactId: 'contact-abc',
         displayName: 'Alice External',
         role: null,
-        status: 'confirmed',
+        systemRole: null,
+        tier: 'unknown' as const,
+        kind: 'person' as const,
         verified: false,
         kgNodeId: null,
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 0.3,
-        trustLevel: null,
       };
 
       const task = createAgentTask({
@@ -2283,13 +2284,14 @@ describe('AgentRuntime chatWithRetry', () => {
         contactId: 'contact-bad',
         displayName: 'Attacker',
         role: null,
-        status: 'confirmed',
+        systemRole: null,
+        tier: 'unknown' as const,
+        kind: 'person' as const,
         verified: false,
         kgNodeId: null,
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 0.1,
-        trustLevel: null,
       };
 
       const task = createAgentTask({

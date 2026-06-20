@@ -101,8 +101,7 @@ describe('OutboundGateway', () => {
       contactId: 'contact-1',
       displayName: 'Blocked Person',
       role: null,
-      status: 'blocked',
-      tier: 'blocked',       // issue #945
+      tier: 'blocked',
       kind: 'person',
       kgNodeId: null,
       verified: true,
@@ -132,8 +131,7 @@ describe('OutboundGateway', () => {
       contactId: 'contact-2',
       displayName: 'Confirmed Person',
       role: null,
-      status: 'confirmed',
-      tier: 'known',         // issue #945
+      tier: 'known',
       kind: 'person',
       kgNodeId: null,
       verified: true,
@@ -294,12 +292,10 @@ describe('OutboundGateway', () => {
       contactId: 'contact-42',
       displayName: 'Rita Recipient',
       role: null,
-      status: 'confirmed',
-      tier: 'known',         // issue #945
+      tier: 'known',
       kind: 'person',
       kgNodeId: null,
       verified: true,
-      trustLevel: 'medium',
     });
 
     const gateway = new OutboundGateway({
@@ -605,12 +601,10 @@ describe('OutboundGateway', () => {
         contactId: 'contact-ea',
         displayName: "CEO's EA",
         role: null,
-        status: 'confirmed',
-        tier: 'trusted',     // trust_level='high' → tier='trusted' (issue #945)
+        tier: 'trusted',
         kind: 'person',
         kgNodeId: null,
         verified: true,
-        trustLevel: 'high',
       });
       (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
         passed: true,
@@ -818,10 +812,8 @@ describe('OutboundGateway.createEmailDraft', () => {
       contactService: {
         resolveByChannelIdentity: vi.fn().mockResolvedValue({
           contactId: 'contact-blocked',
-          status: 'blocked',
-          tier: 'blocked',   // issue #945
+          tier: 'blocked',
           kind: 'person',
-          trustLevel: null,
         }),
       },
     });
@@ -1211,10 +1203,8 @@ describe('OutboundGateway contact promotion on successful send', () => {
     const contactService = {
       resolveByChannelIdentity: vi.fn().mockResolvedValue({
         contactId: 'contact-donna',
-        status: 'confirmed',
-        tier: 'known',       // issue #945
+        tier: 'known',
         kind: 'person',
-        trustLevel: null,
       }),
     } as unknown as ContactService;
 
@@ -1557,10 +1547,8 @@ describe('PII redaction pipeline step', () => {
     (contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue({
       contactId: 'contact-ceo',
       displayName: 'CEO',
-      status: 'confirmed',
-      tier: 'principal',   // trust_level='ceo' → tier='principal' (issue #945)
+      tier: 'principal',
       kind: 'principal',
-      trustLevel: 'ceo',
     });
 
     const result = await gateway.send(piiRequest);
@@ -1680,10 +1668,8 @@ describe('OutboundGateway.sendEmailDraft', () => {
       contactService: {
         resolveByChannelIdentity: vi.fn().mockResolvedValue({
           contactId: 'contact-blocked',
-          status: 'blocked',
-          tier: 'blocked',   // issue #945
+          tier: 'blocked',
           kind: 'person',
-          trustLevel: null,
         }),
       },
     });
@@ -1809,12 +1795,10 @@ describe('OutboundGateway.sendEmailDraft', () => {
         contactId: 'draft-recipient',
         displayName: 'Draft Recipient',
         role: null,
-        status: 'confirmed',
         tier: 'known',
         kind: 'person',
         kgNodeId: null,
         verified: true,
-        trustLevel: 'medium',
       }),
     } as unknown as ContactService;
     const contentFilter = {
@@ -1887,7 +1871,6 @@ describe('humanApproved option on send()', () => {
       contactId: 'contact-1',
       displayName: 'Blocked Person',
       role: null,
-      status: 'blocked',
       tier: 'blocked',
       kind: 'person',
       kgNodeId: null,
@@ -2347,7 +2330,6 @@ describe('isSystemNotification option on send()', () => {
       contactId: 'contact-1',
       displayName: 'Blocked',
       role: null,
-      status: 'blocked',
       tier: 'blocked',
       kind: 'person',
       kgNodeId: null,
@@ -2423,12 +2405,10 @@ describe('outbound.delivered on Signal send', () => {
       contactId: 'contact-signal-1',
       displayName: 'Phone Friend',
       role: null,
-      status: 'confirmed',
       tier: 'known',
       kind: 'person',
       kgNodeId: null,
       verified: true,
-      trustLevel: 'medium',
     });
 
     const gateway = new OutboundGateway({
