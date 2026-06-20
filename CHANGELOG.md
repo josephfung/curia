@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **`rederive:contact-tiers` script** — one-shot backfill that recomputes contact confidence from correspondence history and elevates `unknown→known` for contacts clearing the judgment threshold; retroactive equivalent of live dispatcher elevation. (#955)
+- **`rederive:contact-tiers` script** — one-shot backfill that recomputes contact confidence and elevates `unknown→known` for contacts past the judgment threshold. (#955)
 - **`contact-set-tier` skill** — sets a contact's tier directly from chat ("treat Dana as trusted"); principal-auth guarded, rejects `tier='principal'`. (#952)
 - **Proactive grant recommendations** — weekly LLM-judge scan (`scan-grant-recommendations`) evaluates known-tier contacts and surfaces scheduling-access recommendations for CEO approval. (#952)
 - **Approve/decline recommendations** — `approve-grant-recommendation` writes a `contact_auth_overrides` row; `decline-grant-recommendation` permanently records the decline so the recommendation never resurfaces (anti-nag via UNIQUE DB constraint). (#952)
@@ -26,15 +26,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Removed
 
-- **`contact-set-trust` skill removed** — the handler called `setTrustLevel()` and read `trustLevel`, both removed in this cutover; the skill threw `TypeError` at runtime and was superseded by `contact-set-tier`. (#955)
-
-- **`status` field removed from contact HTTP API** — `POST` and `PATCH /api/kg/contacts` no longer accept a `status` body field; any supplied value is silently ignored. The `setStatus()` call in the PATCH route is removed; `tier`/`kind` are the only capability inputs. (#955)
-- **`contacts.status`, `contacts.trust_level`, `held_messages` dropped (migration 059)** — the two legacy capability columns are physically removed now that all code reads/writes `tier` and `kind`; the `held_messages` table (orphaned in #947 when the hold-and-notify flow was deleted) is also dropped. (#955)
-- **`group_held` notification kind removed** — dead union member and its stale doc-comments deleted; the Signal group-hold flow was replaced by route-to-coordinator-in-low-trust-mode and was never emitted or consumed. (#955)
-- **Daily provisional-promotion sweep removed from contacts agent** — the `0 8 * * *` scheduled task and its "Promotion Sweep — Principal Context" prompt block are retired; auto-elevation is now fully handled by the dispatcher/judgment path and `#951` ConfidencePipeline. The `ceo-inbox-list` and `contact-register` pins are also removed. Contacts agent bumped to v0.6.0. (#955)
+- **Legacy `status`/`trust_level` columns + `held_messages` table dropped (migration 059)** — physically removed now that all code keys on `tier`/`kind`; `held_messages` was orphaned in #947. (#955)
+- **`status` removed from contact HTTP API** — `POST`/`PATCH /api/kg/contacts` ignore any `status` field; `tier`/`kind` are the only capability inputs. (#955)
+- **`contact-set-trust` skill removed** — called the deleted `setTrustLevel()` and threw at runtime; superseded by `contact-set-tier`. (#955)
+- **`contact-register` promotion flow retired** (v1.1.0 → v1.2.0) — new contacts created at `tier='unknown'`; provisional inputs/outputs removed, elevation is now the dispatcher/judgment path. (#955)
+- **Daily provisional-promotion sweep removed from contacts agent** (v0.6.0) — auto-elevation is handled by the dispatcher/judgment path + #951 pipeline; stale skill pins dropped. (#955)
+- **`group_held` notification kind removed** — dead union member, never emitted or consumed. (#955)
 
 - **Auto-elevation** — contacts auto-promote from `unknown` to `known` via correspondence, domain, and judgment signals. (#951)
-- **`contact-register` skill** (v1.1.0 → v1.2.0) — provisional→confirmed promotion flow retired; new contacts created at `tier='unknown'`. `ceo_has_sent`, `calendar_accepted` inputs and `status`, `promoted`, `promotion_signal` outputs removed. Elevation is now entirely the dispatcher/judgment path's responsibility. (#955)
 - **Action gate: contact-tier enforcement (Gate C)** — consequential actions from lower-tier contacts escalate unless the initiating tier permits them. (#950)
 - **`tier` on `TaskOriginator`** — dispatcher stamps the initiating contact's tier for Gate C enforcement. (#950)
 - **Escalation judge wired into Gate C** — classifies third-party-facing actions when the tier×risk policy can't decide deterministically. (#950)
@@ -44,14 +43,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`trust_level` column retired as active read/write path** — the three remaining readers (confidence scorer, trust scorer, permission resolver) and all writers now key on `tier` (`ContactTier`) instead. `setTrustLevel()`, `deriveTierFromTrustLevelUpdate()`, and `meetsMinimumTrust()` removed. The `trust_level` DB column remains (dropped in #955). `config/role-defaults.yaml` `trust_level_defaults` renamed to `tier_defaults` with `ContactTier` keys. **Authorization behavior change:** contacts previously stored with `trust_level=null` were backfilled to `tier='known'` (rank 1, medium-equivalent) rather than rank 0. On low-trust channels (e.g. email), medium-sensitivity permissions granted by a role are now allowed for these contacts where they were previously trust-blocked. High-sensitivity permissions remain blocked. (#1070)
-- **Authorization Gate-1: status→tier conversion (behavior-preserving)** — the permission resolver's deny-all gate now uses `meetsMinimumTier(tier, 'known')` instead of `status !== 'confirmed'`; the effective behavior is identical under migration-055's mapping (`confirmed ⟺ tier ∈ {known,trusted,principal}`; `provisional ⟺ unknown`; `blocked ⟺ blocked`). Contacts at `unknown` or `blocked` tier still receive zero permissions. (#955)
+- **Authorization Gate-1: `status`→`tier` (behavior-preserving)** — the deny-gate now uses `meetsMinimumTier(tier, 'known')` instead of `status !== 'confirmed'`; identical under migration-055's mapping (`confirmed ⟺ tier ≥ known`). `unknown`/`blocked` contacts still get zero permissions. (#955)
 - **ceo-inbox agent** (v0.7.0 → v0.8.0) — automated senders default to Cleared; escalated only on actionable signals. (#953)
 - **`contact-list` skill** (v1.2.1 → v1.3.0) — default view excludes automated and agent contacts. (#953)
 
 ### Security
 
-- **`createContact` rejects `tier ∈ {trusted, principal}`** — capability grants and the structural principal can no longer be minted in a single create call; a contact must be created at `known`/`unknown`/`blocked` and elevated explicitly via `setTier()`/grant or bootstrap. (#955)
-- **Merge refuses to delete a structural contact** — `mergeContacts` now throws when a structural secondary (system-role/principal/agent, or `tier='principal'`) would be merged into a non-structural primary, which previously could orphan the real principal and leave a bogus `principal`-tier row behind. The structural contact must be the primary. (#955)
+- **`createContact` rejects `tier ∈ {trusted, principal}`** — grants and the structural principal must be elevated after create, not minted in one call. (#955)
+- **Merge can't delete a structural contact** — `mergeContacts` throws when a structural secondary would merge into a non-structural primary, which previously could orphan the principal. (#955)
 - **Gate C fail-closed for unstamped external tiers** — an external originator with no resolved tier now escalates instead of bypassing the gate. (#1059)
 - **Dispatcher stamps an `unknown`-tier originator for unresolved inbound senders** — defence in depth so Gate C still enforces tier policy if the channel layer skipped contact creation. (#1059)
 - **CVE-2026-53655 (pnpm bundled tar)** — removed corepack's unused pnpm cache from the production image to eliminate a bundled tar CVE.

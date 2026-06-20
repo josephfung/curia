@@ -47,3 +47,7 @@ tests/smoke/reports/*.html
 tests/redteam/coordinator-system-prompt.txt
 tests/redteam/redteam.yaml
 tests/redteam/results/
+
+# Superpowers subagent-driven-development scratch (task briefs, reports, review
+# diffs) — local workflow artifacts, never committed
+.superpowers/
