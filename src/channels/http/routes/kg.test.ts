@@ -6,7 +6,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { knowledgeGraphRoutes } from './kg.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
-import type { Contact } from '../../../contacts/types.js';
+import type { ChannelIdentity, Contact } from '../../../contacts/types.js';
 import type { EventBus } from '../../../bus/bus.js';
 import type { EventRouter } from '../event-router.js';
 import type { Pool } from 'pg';
@@ -188,5 +188,107 @@ describe('PATCH /api/kg/contacts/:id — status field removal', () => {
       body: JSON.stringify({ displayName: 'X' }),
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('GET /api/kg/contacts/:id/identities', () => {
+  let app: FastifyInstance;
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  // The identities route validates the id against a strict RFC-4122 UUID regex
+  // (version + variant nibbles), so use a well-formed v4 UUID here.
+  const CID = '11111111-1111-4111-8111-111111111111';
+
+  // A channel identity fixture with Date fields, so we can assert ISO serialization.
+  const IDENTITY: ChannelIdentity = {
+    id: '22222222-2222-4222-8222-222222222222',
+    contactId: CID,
+    channel: 'email',
+    channelIdentifier: 'alice@example.com',
+    label: 'Work',
+    verified: true,
+    verifiedAt: new Date('2024-02-02T03:04:05Z'),
+    status: 'active',
+    source: 'email_participant',
+    createdAt: new Date('2024-01-01T00:00:00Z'),
+    updatedAt: new Date('2024-01-02T00:00:00Z'),
+  };
+
+  it('returns the contact’s identities with Date fields serialized to ISO strings', async () => {
+    const svc = fakeContactService({
+      getIdentitiesForContact: vi.fn().mockResolvedValue([IDENTITY]),
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/kg/contacts/${CID}/identities`,
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { identities: Array<Record<string, unknown>> };
+    expect(body.identities).toHaveLength(1);
+    expect(body.identities[0]).toMatchObject({
+      id: IDENTITY.id,
+      channel: 'email',
+      channelIdentifier: 'alice@example.com',
+      label: 'Work',
+      verified: true,
+      status: 'active',
+      source: 'email_participant',
+      verifiedAt: '2024-02-02T03:04:05.000Z',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    });
+  });
+
+  it('returns an empty array when the contact has no identities', async () => {
+    const svc = fakeContactService({
+      getIdentitiesForContact: vi.fn().mockResolvedValue([]),
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/kg/contacts/${CID}/identities`,
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ identities: [] });
+  });
+
+  it('returns 404 when the contact does not exist', async () => {
+    const svc = fakeContactService({
+      getContact: vi.fn().mockResolvedValue(undefined),
+      getIdentitiesForContact: vi.fn(),
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/kg/contacts/${CID}/identities`,
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 400 for a non-UUID contact id', async () => {
+    const svc = fakeContactService();
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/kg/contacts/not-a-uuid/identities',
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects an unauthenticated request', async () => {
+    const svc = fakeContactService();
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/kg/contacts/${CID}/identities`,
+    });
+    expect(res.statusCode).toBe(401);
   });
 });

@@ -4,12 +4,35 @@ import { Sidebar } from '../components/Sidebar.js';
 import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
+import { buildContactViewFields, kgNodeHref, formatDateTime } from './contacts-utils.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type ContactTier = 'blocked' | 'unknown' | 'known' | 'trusted' | 'principal';
 type ContactKind = 'person' | 'organization' | 'automated' | 'principal' | 'agent';
 type SystemRole = 'principal' | 'agent' | 'system' | null;
+type IdentityStatus = 'active' | 'defunct' | 'bounced';
+
+// Which drawer (if any) is open. `view` is read-only; `edit`/`create` show the
+// editable form. Splitting view from edit means a single row click can never
+// mutate data (#1069).
+type DrawerMode = 'view' | 'edit' | 'create' | null;
+
+// A contact's linked channel identity, as serialized by
+// GET /api/kg/contacts/:id/identities (Date fields are ISO strings here).
+interface ContactIdentity {
+  id: string;
+  contactId: string;
+  channel: string;
+  channelIdentifier: string;
+  label: string | null;
+  verified: boolean;
+  verifiedAt: string | null;
+  status: IdentityStatus;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 // Numeric rank for tier-aware sorting (ascending capability).
 const TIER_ORDER: Record<ContactTier, number> = {
@@ -458,6 +481,155 @@ function ContactEditDrawer({ contact, creating, onClose, onSaved, onDeleted }: D
   );
 }
 
+// ── Read-only view drawer ───────────────────────────────────────────────────────
+
+interface ViewDrawerProps {
+  contact: Contact;
+  onClose: () => void;
+  onEdit: () => void;
+}
+
+// Render a single field value with the right affordance: email → mailto:,
+// phone → tel:, LinkedIn → external link, KG node → /kg deep link, else plain.
+function ViewFieldValue({ kind, value }: { kind: string; value: string }) {
+  switch (kind) {
+    case 'email':
+      return <a href={`mailto:${value}`}>{value}</a>;
+    case 'phone':
+      return <a href={`tel:${value}`}>{value}</a>;
+    case 'url':
+      return <a href={value} target="_blank" rel="noreferrer noopener">{value}</a>;
+    case 'kg':
+      return <a href={kgNodeHref(value)} title="Open in knowledge graph">{value}</a>;
+    default:
+      return <span style={{ whiteSpace: 'pre-wrap' }}>{value}</span>;
+  }
+}
+
+function ContactViewDrawer({ contact, onClose, onEdit }: ViewDrawerProps) {
+  const [identities, setIdentities] = useState<ContactIdentity[]>([]);
+  const [identitiesError, setIdentitiesError] = useState<string | null>(null);
+  const [identitiesLoaded, setIdentitiesLoaded] = useState(false);
+
+  // Permission grants for read-only display. Reuses the existing overrides endpoint.
+  const [overrides, setOverrides] = useState<AuthOverride[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIdentitiesLoaded(false);
+    setIdentitiesError(null);
+    apiFetch(`/api/kg/contacts/${contact.id}/identities`)
+      .then(async res => {
+        if (cancelled) return;
+        if (!res.ok) { setIdentitiesError('Failed to load identities'); return; }
+        const d = await res.json() as { identities: ContactIdentity[] };
+        setIdentities(d.identities);
+      })
+      .catch((_err: unknown) => { if (!cancelled) setIdentitiesError('Failed to load identities'); })
+      .finally(() => { if (!cancelled) setIdentitiesLoaded(true); });
+    return () => { cancelled = true; };
+  }, [contact.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch(`/api/kg/contacts/${contact.id}/overrides`)
+      .then(async res => {
+        if (cancelled || !res.ok) return;
+        const d = await res.json() as { overrides: AuthOverride[] };
+        setOverrides(d.overrides);
+      })
+      .catch((_err: unknown) => { /* grants are supplementary; failure is non-fatal */ });
+    return () => { cancelled = true; };
+  }, [contact.id]);
+
+  const fields = buildContactViewFields(contact);
+
+  return (
+    <aside className="drawer">
+      <div className="drawer-header">
+        <div className="drawer-header-top">
+          <span className="badge badge-person">contact</span>
+          <button className="drawer-close" onClick={onClose} aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <h2 className="drawer-title-h2">{contact.displayName}</h2>
+        {[contact.title, contact.organization].filter(Boolean).length > 0 && (
+          <div className="drawer-subtitle">{[contact.title, contact.organization].filter(Boolean).join(' · ')}</div>
+        )}
+      </div>
+
+      <div className="drawer-body">
+        <div className="view-drawer">
+          {/* Populated profile fields only — no blank rows. */}
+          <dl style={{ display: 'grid', gridTemplateColumns: 'minmax(110px, max-content) 1fr', gap: '6px 16px', margin: 0, fontSize: 13 }}>
+            {fields.map(f => (
+              <div key={f.key} style={{ display: 'contents' }}>
+                <dt style={{ color: 'var(--app-fg-muted)' }}>{f.label}</dt>
+                <dd style={{ margin: 0, wordBreak: 'break-word' }}>
+                  <ViewFieldValue kind={f.kind} value={f.value} />
+                </dd>
+              </div>
+            ))}
+          </dl>
+
+          {/* Channel identities — the addresses Curia actually has on file. */}
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '20px 0 6px' }}>Channel identities</p>
+          {identitiesError && <p style={{ color: 'var(--app-destructive)', fontSize: 12, margin: 0 }}>{identitiesError}</p>}
+          {!identitiesError && identitiesLoaded && identities.length === 0 && (
+            <p style={{ color: 'var(--app-fg-muted)', fontSize: 12, margin: 0 }}>No channel identities on file.</p>
+          )}
+          {identities.map(idn => (
+            <div key={idn.id} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13, marginBottom: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: 'var(--app-fg-muted)', textTransform: 'uppercase', minWidth: 48 }}>{idn.channel}</span>
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{idn.channelIdentifier}</span>
+              {idn.label && <span style={{ color: 'var(--app-fg-muted)', fontSize: 12 }}>({idn.label})</span>}
+              <span style={{ fontSize: 11, color: idn.verified ? 'var(--app-success, #22c55e)' : 'var(--app-fg-muted)' }}>
+                {idn.verified ? 'verified' : 'unverified'}
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--app-fg-muted)' }}>· {idn.status}</span>
+            </div>
+          ))}
+
+          {/* Permission grants — read-only here; managed in the Edit drawer. */}
+          {overrides.length > 0 && (
+            <>
+              <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '20px 0 6px' }}>Permission grants</p>
+              {overrides.map(o => (
+                <div key={o.permission} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 4 }}>
+                  <span style={{
+                    display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                    background: o.granted ? 'var(--app-success, #22c55e)' : 'var(--app-destructive)',
+                  }} />
+                  <span style={{ flex: 1, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}>{o.permission}</span>
+                  <span style={{ color: 'var(--app-fg-muted)', fontSize: 12 }}>{o.granted ? 'granted' : 'denied'}</span>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Timestamps */}
+          <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--app-fg-muted)', margin: '20px 0 6px' }}>Record</p>
+          <dl style={{ display: 'grid', gridTemplateColumns: 'minmax(110px, max-content) 1fr', gap: '6px 16px', margin: 0, fontSize: 13 }}>
+            <dt style={{ color: 'var(--app-fg-muted)' }}>Created</dt>
+            <dd style={{ margin: 0 }}>{formatDateTime(contact.createdAt)}</dd>
+            <dt style={{ color: 'var(--app-fg-muted)' }}>Updated</dt>
+            <dd style={{ margin: 0 }}>{formatDateTime(contact.updatedAt)}</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div className="drawer-footer">
+        <div style={{ flex: 1 }} />
+        <button className="btn btn-secondary btn-sm" onClick={onClose}>Close</button>
+        <button className="btn btn-primary btn-sm" onClick={onEdit}>Edit</button>
+      </div>
+    </aside>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ContactsPage() {
@@ -467,13 +639,17 @@ export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [tierFilter, setTierFilter] = useState<'all' | ContactTier>('all');
-  const [kindFilter, setKindFilter] = useState<'all' | ContactKind>('all');
+  // Default to the list you actually work from — Known people — rather than the
+  // full pile of every tier/kind. Chips still let you widen to All (#1069).
+  const [tierFilter, setTierFilter] = useState<'all' | ContactTier>('known');
+  const [kindFilter, setKindFilter] = useState<'all' | ContactKind>('person');
   const [sort, setSort] = useState<{ key: keyof Contact; dir: 'asc' | 'desc' }>({ key: 'tier', dir: 'desc' });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [editing, setEditing] = useState<Contact | null>(null);
-  const [creating, setCreating] = useState(false);
+  // Selected contact + which drawer is open. `view` opens on a single row click
+  // (read-only); `edit`/`create` show the editable form (#1069).
+  const [selected, setSelected] = useState<Contact | null>(null);
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>(null);
 
   useEffect(() => {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
@@ -549,18 +725,40 @@ export default function ContactsPage() {
         next[idx] = contact;
         return next;
       }
-      // New contact: switch tier filter so it's immediately visible.
+      // New contact: widen filters so it's immediately visible regardless of its
+      // tier/kind (defaults are Known + Person).
       setTierFilter(contact.tier);
+      if (contact.kind === 'person' || contact.kind === 'organization' || contact.kind === 'automated') {
+        setKindFilter(contact.kind);
+      } else {
+        setKindFilter('all');
+      }
       return [...prev, contact];
     });
-    setEditing(contact);
-    setCreating(false);
+    // After a save, return to the read-only view showing the saved data.
+    setSelected(contact);
+    setDrawerMode('view');
   }
 
   function handleDeleted(id: string) {
     setContacts(prev => prev.filter(c => c.id !== id));
-    setEditing(null);
-    setCreating(false);
+    setSelected(null);
+    setDrawerMode(null);
+  }
+
+  function openView(contact: Contact) {
+    setSelected(contact);
+    setDrawerMode('view');
+  }
+
+  function openEdit(contact: Contact) {
+    setSelected(contact);
+    setDrawerMode('edit');
+  }
+
+  function closeDrawer() {
+    setSelected(null);
+    setDrawerMode(null);
   }
 
   return (
@@ -584,7 +782,7 @@ export default function ContactsPage() {
             <TopbarDivider />
             <button
               className="btn btn-primary btn-sm"
-              onClick={() => { setEditing(null); setCreating(true); }}
+              onClick={() => { setSelected(null); setDrawerMode('create'); }}
             >
               + New contact
             </button>
@@ -676,8 +874,8 @@ export default function ContactsPage() {
                         {pageRows.map(c => (
                           <tr
                             key={c.id}
-                            className={editing?.id === c.id ? 'active' : ''}
-                            onClick={() => { setCreating(false); setEditing(c); }}
+                            className={selected?.id === c.id ? 'active' : ''}
+                            onClick={() => openView(c)}
                           >
                             <td>
                               <div className="cell-with-avatar">
@@ -698,10 +896,24 @@ export default function ContactsPage() {
                             <td className="cell-mono col-updated">{formatDate(c.updatedAt)}</td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>
+                                {/* KG deep-link — only when this contact is linked to a node. */}
+                                {c.kgNodeId && (
+                                  <a
+                                    className="btn-icon"
+                                    href={kgNodeHref(c.kgNodeId)}
+                                    title="Open in knowledge graph"
+                                    aria-label="Open in knowledge graph"
+                                  >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <circle cx="5" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="11.5" cy="18" r="2.5"/>
+                                      <path d="M7 7.5 10 16M16.5 7.5 13 16"/>
+                                    </svg>
+                                  </a>
+                                )}
                                 <button
                                   className="btn-icon"
                                   title="Edit"
-                                  onClick={() => { setCreating(false); setEditing(c); }}
+                                  onClick={() => openEdit(c)}
                                 >
                                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                     <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
@@ -731,12 +943,20 @@ export default function ContactsPage() {
                   />
                 </div>
 
-                {(editing !== null || creating) && (
+                {drawerMode === 'view' && selected && (
+                  <ContactViewDrawer
+                    key={`view-${selected.id}`}
+                    contact={selected}
+                    onClose={closeDrawer}
+                    onEdit={() => setDrawerMode('edit')}
+                  />
+                )}
+                {(drawerMode === 'edit' || drawerMode === 'create') && (
                   <ContactEditDrawer
-                    key={editing?.id ?? 'new'}
-                    contact={editing}
-                    creating={creating}
-                    onClose={() => { setEditing(null); setCreating(false); }}
+                    key={drawerMode === 'edit' ? selected?.id ?? 'edit' : 'new'}
+                    contact={drawerMode === 'edit' ? selected : null}
+                    creating={drawerMode === 'create'}
+                    onClose={closeDrawer}
                     onSaved={handleSaved}
                     onDeleted={handleDeleted}
                   />
