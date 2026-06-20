@@ -143,28 +143,34 @@ export class ConfidencePipeline {
    * Recompute all contacts. Returns the number of contacts processed.
    * Intended for backfill scripts and formula-tuning — not the hot path.
    */
-  async fullRecomputeAll(): Promise<number> {
+  /**
+   * Recompute confidence for every contact. Per-contact failures are caught and logged
+   * rather than aborting the whole pass, but the failed count is returned (not just
+   * swallowed) so callers — e.g. the one-shot rederive script — can surface partial
+   * failure in their exit code instead of reporting a clean success.
+   */
+  async fullRecomputeAll(): Promise<{ recomputed: number; failed: number }> {
     const contacts = await this.contactService.listContacts();
-    let count = 0;
-    let errors = 0;
+    let recomputed = 0;
+    let failed = 0;
     for (const contact of contacts) {
       try {
         await this.fullRecompute(contact.id);
-        count++;
+        recomputed++;
       } catch (err) {
-        errors++;
+        failed++;
         this.logger?.error(
           { err, contactId: contact.id },
           'fullRecomputeAll: failed to recompute confidence for contact — skipping',
         );
       }
     }
-    if (errors > 0) {
+    if (failed > 0) {
       this.logger?.warn(
-        { total: contacts.length, succeeded: count, failed: errors },
+        { total: contacts.length, succeeded: recomputed, failed },
         'fullRecomputeAll: completed with errors',
       );
     }
-    return count;
+    return { recomputed, failed };
   }
 }

@@ -968,27 +968,39 @@ export async function knowledgeGraphRoutes(
     // Build the complete updated contact in memory. All field changes are merged
     // here so the transaction only needs one write — avoids non-transactional stale
     // reads that occur when individual per-field setters each load the contact.
-    let pending: Contact = { ...contact, updatedAt: new Date() };
+    // `changed` tracks whether any recognized mutable field was actually supplied: a
+    // PATCH carrying only ignored/legacy fields (e.g. `status`) or nothing recognized
+    // must NOT bump `updatedAt` or perform a write, which would emit a false
+    // "contact updated" and burn a needless transaction.
+    let pending: Contact = { ...contact };
+    let changed = false;
 
     if (typeof body.displayName === 'string' && body.displayName.trim().length > 0) {
       pending = { ...pending, displayName: body.displayName.trim() };
+      changed = true;
     }
     if (typeof body.role === 'string') {
       pending = { ...pending, role: body.role };
+      changed = true;
     } else if (body.role === null) {
       pending = { ...pending, role: null };
+      changed = true;
     }
     if (typeof body.tier === 'string') {
       pending = { ...pending, tier: body.tier as ContactTier };
+      changed = true;
     }
     if (typeof body.kind === 'string') {
       pending = { ...pending, kind: body.kind as ContactKind };
+      changed = true;
     }
     if (body.notes !== undefined) {
       pending = { ...pending, notes: typeof body.notes === 'string' ? body.notes : null };
+      changed = true;
     }
     if (normalizedKgNodeId !== undefined) {
       pending = { ...pending, kgNodeId: normalizedKgNodeId };
+      changed = true;
     }
     const CANONICAL_KEYS: Array<keyof typeof canonicalFields> = [
       'preferredName', 'title', 'organization', 'primaryEmail', 'primaryPhone',
@@ -999,11 +1011,21 @@ export async function knowledgeGraphRoutes(
       const definedFields = Object.fromEntries(
         Object.entries(canonicalFields).filter(([, value]) => value !== undefined),
       ) as ContactCanonicalFields;
-      if (definedFields.primaryEmail != null) {
-        definedFields.primaryEmail = definedFields.primaryEmail.toLowerCase();
+      if (Object.keys(definedFields).length > 0) {
+        if (definedFields.primaryEmail != null) {
+          definedFields.primaryEmail = definedFields.primaryEmail.toLowerCase();
+        }
+        pending = { ...pending, ...definedFields };
+        changed = true;
       }
-      pending = { ...pending, ...definedFields };
     }
+
+    // No recognized mutable field changed — return the current contact without a
+    // spurious write or `updatedAt` bump (true no-op PATCH).
+    if (!changed) {
+      return reply.send({ contact: serializeContact(contact) });
+    }
+    pending = { ...pending, updatedAt: new Date() };
 
     // All remaining mutations are wrapped in a single DB transaction for atomicity.
     // saveContact applies display-name sanitization and writes all fields in one UPDATE.

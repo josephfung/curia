@@ -144,11 +144,11 @@ describe('ConfidencePipeline', () => {
   });
 
   describe('fullRecomputeAll', () => {
-    it('recomputes all contacts and returns count', async () => {
+    it('recomputes all contacts and returns recomputed/failed counts', async () => {
       await createTestContact();
       await createTestContact();
-      const count = await pipeline.fullRecomputeAll();
-      expect(count).toBe(2);
+      const result = await pipeline.fullRecomputeAll();
+      expect(result).toEqual({ recomputed: 2, failed: 0 });
     });
   });
 

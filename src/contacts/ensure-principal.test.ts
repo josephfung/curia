@@ -118,10 +118,11 @@ describe('ensurePrincipalContact: INSERT column list', () => {
     expect(insertCall, 'Should have executed an INSERT INTO contacts').toBeDefined();
 
     const insertSql = (insertCall![0] as string).toLowerCase();
-    expect(insertSql).toContain("'principal'"); // tier / kind / system_role values
-    expect(insertSql).toContain('tier');
-    expect(insertSql).toContain('kind');
-    expect(insertSql).toContain('system_role');
+    // Prove the column ORDER and the VALUES pairing, not just that the tokens appear
+    // somewhere — a regression that flipped tier to 'blocked' would otherwise still pass.
+    // Columns: (..., system_role, tier, kind, ...); Values: (..., 'principal', 'principal', 'principal', ...).
+    expect(insertSql).toContain('system_role, tier, kind');
+    expect(insertSql).toContain("'principal', 'principal', 'principal'");
   });
 
   it('returns result with alreadyExisted=false when principal is newly created', async () => {

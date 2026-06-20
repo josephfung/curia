@@ -14,8 +14,8 @@ describe('runRederive', () => {
       b: JUDGMENT_ELEVATION_THRESHOLD - 0.1,
     };
     const pipeline = {
-      // Resolves with the total contact count (2), matching fullRecomputeAll's Promise<number> type.
-      fullRecomputeAll: vi.fn().mockResolvedValue(2),
+      // Resolves with { recomputed, failed }, matching fullRecomputeAll's return shape.
+      fullRecomputeAll: vi.fn().mockResolvedValue({ recomputed: 2, failed: 0 }),
       fullRecompute: vi.fn((id: string) => Promise.resolve(confidenceById[id] ?? 0)),
     };
     const contactService = {
@@ -41,7 +41,7 @@ describe('runRederive', () => {
   it('counts a masked elevation failure as an error when the contact is still unknown after a false return', async () => {
     const unknown = [{ id: 'a', tier: 'unknown', kind: 'person', contactConfidence: 0 }];
     const pipeline = {
-      fullRecomputeAll: vi.fn().mockResolvedValue(1),
+      fullRecomputeAll: vi.fn().mockResolvedValue({ recomputed: 1, failed: 0 }),
       fullRecompute: vi.fn().mockResolvedValue(JUDGMENT_ELEVATION_THRESHOLD + 0.1),
     };
     const contactService = {
@@ -64,7 +64,7 @@ describe('runRederive', () => {
   it('treats a false return as a benign skip when the contact is already elevated (concurrent no-op)', async () => {
     const unknown = [{ id: 'a', tier: 'unknown', kind: 'person', contactConfidence: 0 }];
     const pipeline = {
-      fullRecomputeAll: vi.fn().mockResolvedValue(1),
+      fullRecomputeAll: vi.fn().mockResolvedValue({ recomputed: 1, failed: 0 }),
       fullRecompute: vi.fn().mockResolvedValue(JUDGMENT_ELEVATION_THRESHOLD + 0.1),
     };
     const contactService = {
@@ -79,5 +79,25 @@ describe('runRederive', () => {
     expect(result.errors).toBe(0);
     expect(result.skipped).toBe(1);
     expect(result.failedContactIds).toEqual([]);
+  });
+
+  it('folds fullRecomputeAll failures into the error count so the run is not reported as clean', async () => {
+    // fullRecomputeAll catches per-contact recompute failures internally and resolves;
+    // it returns the failed count rather than swallowing it, and runRederive must reflect
+    // that in `errors` so the CLI exits non-zero.
+    const pipeline = {
+      fullRecomputeAll: vi.fn().mockResolvedValue({ recomputed: 8, failed: 2 }),
+      fullRecompute: vi.fn(),
+    };
+    const contactService = {
+      listContacts: vi.fn().mockResolvedValue([]), // no unknown candidates to elevate
+      elevateTierToKnown: vi.fn(),
+      getContact: vi.fn(),
+    };
+
+    const result = await runRederive(contactService as never, pipeline as never);
+
+    expect(result.recomputed).toBe(8);
+    expect(result.errors).toBe(2);
   });
 });
