@@ -82,19 +82,17 @@ describeIf('ensurePrincipalContact', () => {
     const contact = await pool.query<{
       display_name: string;
       role: string;
-      status: string;
       tier: string;
       system_role: string;
       kg_node_id: string;
     }>(
-      `SELECT display_name, role, status, tier, system_role, kg_node_id
+      `SELECT display_name, role, tier, system_role, kg_node_id
        FROM contacts WHERE id = $1`,
       [result.contactId],
     );
     expect(contact.rows[0]).toBeDefined();
     expect(contact.rows[0]!.display_name).toBe(displayName);
     expect(contact.rows[0]!.role).toBe('ceo');
-    expect(contact.rows[0]!.status).toBe('confirmed');
     expect(contact.rows[0]!.tier).toBe('principal');
     expect(contact.rows[0]!.system_role).toBe('principal');
     expect(contact.rows[0]!.kg_node_id).toBe(result.kgNodeId);
@@ -162,8 +160,8 @@ describeIf('ensurePrincipalContact', () => {
     const displayName = `${TEST_LABEL_PREFIX} Carol`;
     await pool.query(
       `INSERT INTO contacts
-         (id, display_name, role, status, trust_level, system_role, created_at, updated_at)
-       VALUES ($1, $2, 'ceo', 'confirmed', 'ceo', 'principal', now(), now())`,
+         (id, display_name, role, tier, kind, system_role, created_at, updated_at)
+       VALUES ($1, $2, 'ceo', 'principal', 'principal', 'principal', now(), now())`,
       [contactId, displayName],
     );
 
