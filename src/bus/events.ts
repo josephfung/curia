@@ -173,7 +173,6 @@ interface OutboundSuppressedDuplicatePayload {
 //
 // notificationType discriminates between alert categories:
 //   - 'blocked_content': CEO alert that an outbound message was blocked by the content filter
-//   - 'group_held':      CEO alert that a Signal group message was held due to unverified members
 //   - 'contact_rate_limited': CEO alert that contact auto-creation was throttled due to rate limits
 //   - 'approval_requested':   CEO alert that an autonomy gate blocked a skill and approval is needed
 //   - 'approval_expired':     CEO alert that pending approvals expired without response (approval-expiry-sweep)
@@ -182,7 +181,6 @@ interface OutboundSuppressedDuplicatePayload {
 export interface OutboundNotificationPayload {
   notificationType:
     | 'blocked_content'
-    | 'group_held'
     | 'contact_rate_limited'
     | 'approval_requested'
     | 'approval_expired'        // batched expiry notification (approval-expiry-sweep)
@@ -1131,7 +1129,7 @@ export function createOutboundSuppressedDuplicate(
 
 export function createOutboundNotification(
   // parentEventId is optional — blocked_content notifications should pass the outbound.blocked
-  // event's ID for traceability; group_held notifications have no parent bus event.
+  // event's ID for traceability; other notification types may omit it.
   payload: OutboundNotificationPayload & { parentEventId?: string },
 ): OutboundNotificationEvent {
   const { parentEventId, ...rest } = payload;
