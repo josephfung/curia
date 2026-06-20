@@ -107,3 +107,105 @@ No existing bullets were duplicated or lost. The entry was inserted into the fir
 2. **Secondary flag — `skills/contact-register/handler.test.ts` and `skills/contact-list/handler.test.ts`**: Both test files use `status` fields on `Contact`/`CreateContactOptions` objects where those fields no longer exist in the interfaces. These are TypeScript strict errors. The contact-list test is a direct consequence of the contact-list handler fix needed above.
 
 3. **Local Docker paused**: Integration test not locally executable. CI will be the verification point.
+
+---
+
+## Skills Fix (follow-up to Concerns #1 and #2)
+
+**Commit**: `aa6b5fb2` — `fix(skills): retire contact status refs in contact-list/lookup + dead test mocks (#955)`
+
+### Per-file changes
+
+**`skills/contact-list/handler.ts`**
+- Removed `import ... ContactStatus ...` from `src/contacts/types.js` (deleted type).
+- Removed `VALID_STATUSES` array and all `status` input validation/guards (5 guards removed).
+- Removed `status` destructuring from input, `status` from `listContacts()` call, `status: c.status` from output map — replaced with `tier: c.tier`.
+- Updated file header comment and log/error-log call sites to drop `status`.
+- Role-combo guard updated: `role + status` mutual exclusion removed; only `role + limit/offset` remains.
+
+**`skills/contact-list/skill.json`** — bumped `1.3.0 → 1.4.0`. Removed `status` from `inputs`; updated description to drop "status" language.
+
+**`skills/contact-list/handler.test.ts`** — full rewrite of status-related tests:
+- `makeContact` factory: removed `status:` field (not on `Contact`), removed `trustLevel: null` (also not on `Contact`).
+- Contact fixtures (alice/bob/carol/dave): switched from `status:` to `tier:`.
+- `getContacts` helper: return type changed from `status: string` to `tier: string`.
+- Removed 8 status-filter tests (provisional/confirmed/blocked, status+limit, offset+status).
+- Removed 4 status-validation tests (invalid status, role-as-status redirects, role+status combo).
+- Kept: no-filter, limit, offset, role, kind, error handling tests. Output assertion now checks `tier` instead of `status`.
+- Kind-filter section: updated raw contact objects from `status:` to `tier:`.
+
+**`skills/contact-lookup/handler.ts`** — contact-level status classification:
+
+| Line | Expression | Classification | Action |
+|---|---|---|---|
+| 110 | `status: resolved.status` | Contact-level (`ResolvedSender.status` removed) | Changed to `tier: resolved.tier` |
+| 127 | `enrichContact` param `status: string` | Contact-level | Changed to `tier: string` |
+| 143 | `status: i.status` | Identity-level (`ChannelIdentity.status: IdentityStatus`) | **Left untouched** |
+| 158 | `contactToSummary` param `status: string` | Contact-level | Changed to `tier: string` |
+| 164 | `status: contact.status` | Contact-level | Changed to `tier: contact.tier` |
+
+No `skill.json` version bump needed — the outputs docs already just say `"contacts": "array"` (no field-level detail). No test file exists for contact-lookup.
+
+**`skills/contact-register/handler.test.ts`** — removed `status: 'confirmed'` from 4 `createContact()` calls in `beforeEach` seed blocks; replaced with `tier: 'known'` (confirmed→known mapping). Comments updated to reflect the new terminology.
+
+**`skills/signal-send/handler.test.ts`** — removed dead `status:` property from 3 `resolveByChannelIdentity` mock return objects (lines 24, 121, 163). Kept existing `tier:` values. Identity of test behavior confirmed: `group-trust.ts` uses `contact.tier` exclusively; `status` was an unused extra prop.
+
+### Test results
+All 64 tests passed across 3 files (`contact-list`, `contact-register`, `signal-send`). No test file exists for `contact-lookup`.
+
+### Typecheck
+`pnpm run typecheck` exited clean (no errors). Skills directory is excluded from tsconfig scope — the `tsc --noEmit` covers only `src/**`. The skill handlers cannot be typechecked via the project's standard typecheck command; this is a pre-existing structural gap (noted as a concern by Task 10 grep gate).
+
+### Re-grep output
+```
+skills/contact-list/handler.test.ts:3: // kind filter. Status filter removed along with ContactStatus (#955).
+```
+Only a comment. No live references remain.
+
+### Concerns
+- Skills are excluded from tsconfig — they cannot be typechecked via `pnpm run typecheck`. The skill handlers are runtime-checked only (by the test suite). This structural gap predates this PR and is worth tracking as a separate issue.
+- `contact-lookup` has no test file. The handler changes were verified by code inspection and grep only.
+
+---
+
+## Final-Review Fixes (whole-branch review findings)
+
+### Fix 1 — `contact-set-trust` skill removed
+
+**What changed:**
+- `git rm -r skills/contact-set-trust/` (handler.ts + skill.json)
+- Removed `- contact-set-trust` from `agents/contacts.yaml` pinned_skills (line 279)
+- Removed `- contact-set-trust` from `config/registry-defaults.yaml` (line 49)
+- Bumped `agents/contacts.yaml` version `0.6.0 → 0.7.0` (minor: removed a pinned skill)
+- Added `### Removed` CHANGELOG bullet: "contact-set-trust skill removed, superseded by contact-set-tier (#955)"
+
+**Grep result:** Zero hits across src/, skills/, agents/, config/, tests/ after removal.
+
+### Fix 2 — `outbound-gateway.ts` catch fall-through
+
+**What changed:**
+- `src/skills/outbound-gateway.ts` ~line 1126: removed the `return;` inside the `catch (err)` block for `elevateTierToKnown`
+- Replaced with a comment explaining that execution must fall through to the confidence `incrementalUpdate` call; the warn log is preserved
+- No other changes to the block
+
+### Fix 3 — `scripts/rederive-contact-tiers.ts` outer await guards
+
+**What changed:**
+- `pipeline.fullRecomputeAll()` now wrapped in a `try/catch` that logs `'rederive: fullRecomputeAll failed, aborting'` and re-throws
+- `contactService.listContacts(...)` now wrapped in a `try/catch` that logs `'rederive: listContacts failed, aborting after recompute'` and re-throws
+- `recomputed` and `candidates` declared as `let` before their respective try blocks so they remain in scope for the rest of the function
+- `candidates` typed as `Awaited<ReturnType<ServiceLike['listContacts']>>` (resolves to `Contact[]`)
+- Per-contact loop and error accounting unchanged
+
+### Verification
+
+**Typecheck:** `pnpm run typecheck` — clean (0 errors)
+
+**Tests:** `pnpm exec vitest run scripts/rederive-contact-tiers.test.ts tests/unit/skills/outbound-gateway.test.ts`
+- 2 test files passed, 89 tests passed
+
+**Grep gate (contact-set-trust):** Zero hits across src/, skills/, agents/, config/, tests/
+
+### contacts.yaml version
+
+`0.6.0 → 0.7.0` (removing a pinned skill = minor bump)

@@ -46,7 +46,6 @@ skills:
   - contact-rename
   - contact-revoke-permission
   - contact-set-identity-status
-  - contact-set-trust
   - contact-unlink-identity
   - contact-update
   # Tasks

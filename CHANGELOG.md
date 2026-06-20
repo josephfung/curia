@@ -26,6 +26,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Removed
 
+- **`contact-set-trust` skill removed** — the handler called `setTrustLevel()` and read `trustLevel`, both removed in this cutover; the skill threw `TypeError` at runtime and was superseded by `contact-set-tier`. (#955)
+
 - **`status` field removed from contact HTTP API** — `POST` and `PATCH /api/kg/contacts` no longer accept a `status` body field; any supplied value is silently ignored. The `setStatus()` call in the PATCH route is removed; `tier`/`kind` are the only capability inputs. (#955)
 - **`contacts.status`, `contacts.trust_level`, `held_messages` dropped (migration 059)** — the two legacy capability columns are physically removed now that all code reads/writes `tier` and `kind`; the `held_messages` table (orphaned in #947 when the hold-and-notify flow was deleted) is also dropped. (#955)
 - **`group_held` notification kind removed** — dead union member and its stale doc-comments deleted; the Signal group-hold flow was replaced by route-to-coordinator-in-low-trust-mode and was never emitted or consumed. (#955)
