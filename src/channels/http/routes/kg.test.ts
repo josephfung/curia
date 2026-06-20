@@ -229,7 +229,7 @@ describe('GET /api/kg/contacts/:id/identities', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { identities: Array<Record<string, unknown>> };
     expect(body.identities).toHaveLength(1);
-    expect(body.identities[0]).toMatchObject({
+    expect(body.identities[0]!).toMatchObject({
       id: IDENTITY.id,
       channel: 'email',
       channelIdentifier: 'alice@example.com',
