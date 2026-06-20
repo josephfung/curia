@@ -169,8 +169,12 @@ export class DriveDownloadFileHandler implements SkillHandler {
     let contentType: string;
     try {
       if (isGoogleNative) {
+        // files.export accepts only fileId + mimeType (plus standard params) — unlike
+        // files.get it has no supportsAllDrives flag (the Drive API ignores it on this
+        // endpoint). Passing it was a no-op that also broke overload resolution, leaving
+        // res typed as void so res.data failed to type-check.
         const res = await drive.files.export(
-          { fileId, mimeType: exportMime, supportsAllDrives: true },
+          { fileId, mimeType: exportMime },
           { responseType: 'stream' },
         );
         buffer = await streamToBuffer(res.data as unknown as Readable, MAX_TEMP_FILE_BYTES);

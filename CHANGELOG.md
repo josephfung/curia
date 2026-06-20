@@ -13,8 +13,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **`skills/**` typecheck** — `pnpm run typecheck` (and CI) now type-checks skill handler code via `tsconfig.skills.json`, closing the blind spot where `skills/**` sat outside `tsconfig`'s `src/**` scope. Skill `*.test.ts` files are deferred to phase 2. (#1075)
+
 ### Fixed
 
+- **Latent skill handler type errors** — fixed 34 real type errors surfaced by the new skills typecheck, including `calendar-list-events` reading `.value`/`.reason` off a `PromiseSettledResult` without narrowing on `.status`, and `noUncheckedIndexedAccess` violations in `date-resolve` and `file-parse/csv`. (#1075)
+- **`drive-download-file`** — dropped the unsupported `supportsAllDrives` flag from `files.export` (the Drive API ignores it on that endpoint), which was breaking overload resolution. (#1075)
 - **Contacts dedup task lifecycle** — the contacts specialist now closes dedup review tasks (`task-complete`) and self-sweeps the exchange's outbound-context entry on every terminal outcome (merge, exclude, defer), so resolved dedups no longer linger as `open` in the morning digest. (#1052)
 - **Silent context sweep** — `context-bridge-release` drops its `coordinator`-only `allowed_callers` restriction; specialists (`contacts`, `ceo-inbox`) can release their own exchange entries instead of asking "Sweep those too?". (#1052)
 - **Coordinator sweep trigger** — tightened from the ambiguous "after the exchange is complete" to an explicit close-on-result rule, so stale `[ACTIVE OUTBOUND CONTEXT]` entries stop accumulating across multi-turn specialist conversations. (#1052)

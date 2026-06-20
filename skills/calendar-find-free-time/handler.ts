@@ -53,8 +53,11 @@ export class CalendarFindFreeTimeHandler implements SkillHandler {
       allBusy.sort((a, b) => a.start - b.start);
       const merged: Array<{ start: number; end: number }> = [];
       for (const slot of allBusy) {
-        if (merged.length > 0 && slot.start <= merged[merged.length - 1].end) {
-          merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, slot.end);
+        // Capture the last merged entry in a local — a truthy check narrows it from
+        // `T | undefined` (noUncheckedIndexedAccess) and replaces the length>0 guard.
+        const last = merged[merged.length - 1];
+        if (last && slot.start <= last.end) {
+          last.end = Math.max(last.end, slot.end);
         } else {
           merged.push({ ...slot });
         }

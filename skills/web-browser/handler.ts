@@ -10,6 +10,10 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { BrowserAction } from '../../src/browser/types.js';
 import type { Page, Frame, Locator } from 'playwright';
+// extractFrameContent runs inside the browser (passed to frame.evaluate). It lives in
+// its own module so the DOM lib it needs is scoped there, not leaked into this
+// server-side handler. See dom-extract.ts.
+import { extractFrameContent } from './dom-extract.js';
 
 // Maximum cleaned DOM content length before truncation.
 // Prevents token blowout on content-heavy pages.
@@ -452,50 +456,6 @@ async function resolveInScope(scope: Page | Frame, selector: string): Promise<Lo
   if (textCount > 0) return textCount === 1 ? textLocator : textLocator.first();
 
   return null;
-}
-
-/**
- * DOM-extraction routine run *inside the browser* for one frame. Returns cleaned,
- * LLM-friendly text (rendered DOM, not raw HTML) plus a labelled list of form fields.
- * Defined once and passed to each frame's evaluate() so main-frame and iframe content
- * are extracted identically.
- */
-function extractFrameContent(): string {
-  // Clone the body before stripping noise elements — mutating the live DOM would
-  // destroy scripts/styles/etc. for subsequent actions in the same session.
-  const root = document.body?.cloneNode(true) as HTMLBodyElement | null;
-  if (!root) return '';
-
-  // Remove noise elements from the clone — we want content, not chrome. (iframe
-  // elements are stripped here too: their *contents* are extracted separately per
-  // frame, so leaving the empty <iframe> shell in would add nothing.)
-  const noiseSelectors = ['script', 'style', 'noscript', 'svg', 'iframe', 'template'];
-  for (const sel of noiseSelectors) {
-    root.querySelectorAll(sel).forEach(el => el.remove());
-  }
-
-  // Extract form fields with their labels — the LLM needs to know what
-  // fields exist and what they're called to fill them correctly.
-  // Query the live DOM for form fields so we can look up labels by ID.
-  const formFields: string[] = [];
-  document.querySelectorAll('input, select, textarea').forEach(el => {
-    const input = el as HTMLInputElement;
-    if (input.type === 'hidden') return;
-    const id = input.id;
-    const labelEl = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
-    const label = labelEl?.textContent?.trim()
-      ?? input.getAttribute('placeholder')
-      ?? input.getAttribute('name')
-      ?? input.type;
-    formFields.push(`[${input.type ?? 'field'}: ${label}]`);
-  });
-
-  const bodyText = (root.innerText ?? root.textContent ?? '').trim();
-  const formSummary = formFields.length > 0
-    ? '\n\n--- Form fields ---\n' + formFields.join('\n')
-    : '';
-
-  return bodyText + formSummary;
 }
 
 /**

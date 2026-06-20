@@ -18,7 +18,7 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.skills.json",
     "lint": "eslint src/ tests/",
     "migrate": "tsx --env-file=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql",
     "smoke": "tsx --env-file=.env tests/smoke/cli.ts",

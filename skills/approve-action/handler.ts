@@ -84,7 +84,9 @@ export class ApproveActionHandler implements SkillHandler {
           skillName: row.skillName,
           actionRisk: row.actionRisk,
           outcome: childOutcome,
-          taskSummary: reResult.success ? null : (reResult as { error: string }).error,
+          // taskSummary is `string | undefined`; insert() maps undefined → NULL, so
+          // use undefined (not null) for the success case to satisfy the field type.
+          taskSummary: reResult.success ? undefined : (reResult as { error: string }).error,
           parentActionId: row.id,
         });
       } catch (err) {

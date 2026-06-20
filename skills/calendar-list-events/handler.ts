@@ -123,12 +123,17 @@ export class CalendarListEventsHandler implements SkillHandler {
       const failedCalendarIds: string[] = [];
       const successfulEvents: NylasCalendarEvent[][] = [];
       for (let i = 0; i < settled.length; i++) {
-        const result = settled[i];
+        // settled is mapped 1:1 from calendarIds and i is bounded by settled.length, so
+        // both indexed accesses are guaranteed present (noUncheckedIndexedAccess types
+        // them as possibly-undefined). The guard on .status then narrows the
+        // PromiseSettledResult to its fulfilled/rejected member (.value / .reason).
+        const result = settled[i]!;
+        const calendarId = calendarIds[i]!;
         if (result.status === 'fulfilled') {
           successfulEvents.push(result.value);
         } else {
-          failedCalendarIds.push(calendarIds[i]);
-          ctx.log.error({ err: result.reason, calendarId: calendarIds[i] }, 'Failed to fetch events for calendar');
+          failedCalendarIds.push(calendarId);
+          ctx.log.error({ err: result.reason, calendarId }, 'Failed to fetch events for calendar');
         }
       }
 
