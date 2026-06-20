@@ -1,15 +1,14 @@
 // handler.ts — contact-list skill implementation.
 //
-// Lists contacts, optionally filtered by role, status, or kind, with optional
-// result limit. Returns an array of contact summaries.
+// Lists contacts, optionally filtered by kind, with optional result limit.
+// Returns an array of contact summaries.
 //
 // Default behavior: excludes kind='automated' and kind='agent' from results.
 // Pass kind='automated' or kind='agent' explicitly to include them.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import type { ContactStatus, ContactKind } from '../../src/contacts/types.js';
+import type { ContactKind } from '../../src/contacts/types.js';
 
-const VALID_STATUSES: readonly ContactStatus[] = ['confirmed', 'provisional', 'blocked'];
 const VALID_KINDS: readonly ContactKind[] = ['person', 'organization', 'automated', 'principal', 'agent'];
 
 // Default People-view filter: excludes automated and agent contacts.
@@ -17,10 +16,9 @@ const DEFAULT_KIND_FILTER: ContactKind[] = ['person', 'principal', 'organization
 
 export class ContactListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    // Runtime-validated below via VALID_STATUSES, VALID_KINDS, and explicit guards.
-    const { role, status, kind: kindInput, limit, offset } = ctx.input as unknown as {
+    // Runtime-validated below via VALID_KINDS and explicit guards.
+    const { role, kind: kindInput, limit, offset } = ctx.input as unknown as {
       role?: string;
-      status?: string;
       kind?: string | string[];
       limit?: number;
       offset?: number;
@@ -30,19 +28,6 @@ export class ContactListHandler implements SkillHandler {
 
     if (role && typeof role === 'string' && role.length > 200) {
       return { success: false, error: 'Role must be 200 characters or fewer' };
-    }
-
-    // Guard against LLM mistake: passing a lifecycle status as the role param.
-    const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : undefined;
-    if (normalizedRole && (VALID_STATUSES as readonly string[]).includes(normalizedRole)) {
-      return {
-        success: false,
-        error: `"${role}" is a contact lifecycle status, not a job title. Use the status parameter instead: { status: "${normalizedRole}" }`,
-      };
-    }
-
-    if (status != null && !(VALID_STATUSES as readonly string[]).includes(status)) {
-      return { success: false, error: `Invalid status: "${status}". Must be one of: ${VALID_STATUSES.join(', ')}` };
     }
 
     // Parse kind: accept a single string or comma-separated list.
@@ -77,8 +62,8 @@ export class ContactListHandler implements SkillHandler {
       }
     }
 
-    if (role && typeof role === 'string' && (status != null || limit != null || offset != null)) {
-      return { success: false, error: 'Cannot combine role filter with status, limit, or offset. Use role alone, or status/limit/offset without role.' };
+    if (role && typeof role === 'string' && (limit != null || offset != null)) {
+      return { success: false, error: 'Cannot combine role filter with limit or offset. Use role alone, or limit/offset without role.' };
     }
 
     if (!ctx.contactService) {
@@ -92,7 +77,7 @@ export class ContactListHandler implements SkillHandler {
     const effectiveKindFilter = kindFilter ?? DEFAULT_KIND_FILTER;
 
     ctx.log.info(
-      { role: role ?? '(all)', status: status ?? '(all)', kind: effectiveKindFilter, limit: limit ?? '(none)', offset: offset ?? 0 },
+      { role: role ?? '(all)', kind: effectiveKindFilter, limit: limit ?? '(none)', offset: offset ?? 0 },
       'Listing contacts',
     );
 
@@ -105,7 +90,6 @@ export class ContactListHandler implements SkillHandler {
             effectiveKindFilter.includes(c.kind as ContactKind)
           )
         : await ctx.contactService.listContacts({
-            status: status as ContactStatus | undefined,
             kind: effectiveKindFilter,
             limit,
             offset,
@@ -119,7 +103,7 @@ export class ContactListHandler implements SkillHandler {
             display_name: c.displayName,
             role: c.role,
             kind: c.kind,
-            status: c.status,
+            tier: c.tier,
             kg_node_id: c.kgNodeId,
           })),
           count: contacts.length,
@@ -127,7 +111,7 @@ export class ContactListHandler implements SkillHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err, role, status, kind: effectiveKindFilter, limit, offset }, 'Failed to list contacts');
+      ctx.log.error({ err, role, kind: effectiveKindFilter, limit, offset }, 'Failed to list contacts');
       return { success: false, error: `Failed to list contacts: ${message}` };
     }
   }

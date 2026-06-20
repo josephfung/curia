@@ -106,11 +106,11 @@ describe('ContactRegisterHandler — known contact resolution', () => {
     handler = new ContactRegisterHandler();
     contactService = ContactService.createInMemory();
 
-    // Seed a known confirmed contact with an email identity
+    // Seed a known contact (tier='known', the former confirmed) with an email identity
     const contact = await contactService.createContact({
       displayName: 'Alice Nguyen',
       role: 'Head of Product',
-      status: 'confirmed',
+      tier: 'known',
       source: 'ceo_stated',
     });
     await contactService.linkIdentity({
@@ -226,10 +226,10 @@ describe('ContactRegisterHandler — last_seen_at idempotency (pipeline absent)'
     handler = new ContactRegisterHandler();
     contactService = ContactService.createInMemory();
 
-    // Seed a known contact
+    // Seed a known contact (tier='known')
     const contact = await contactService.createContact({
       displayName: 'Bob Smith',
-      status: 'confirmed',
+      tier: 'known',
       source: 'ceo_stated',
     });
     await contactService.linkIdentity({
@@ -297,7 +297,7 @@ describe('ContactRegisterHandler — confidence pipeline (pipeline present)', ()
 
     const contact = await contactService.createContact({
       displayName: 'Dave Evans',
-      status: 'confirmed',
+      tier: 'known',
       source: 'ceo_stated',
     });
     contactId = contact.id;
@@ -361,7 +361,7 @@ describe('ContactRegisterHandler — bus event emission', () => {
 
     const contact = await contactService.createContact({
       displayName: 'Carol Diaz',
-      status: 'confirmed',
+      tier: 'known',
       source: 'ceo_stated',
     });
     await contactService.linkIdentity({
