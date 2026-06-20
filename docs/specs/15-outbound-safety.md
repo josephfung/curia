@@ -1,6 +1,6 @@
 # 15 — Outbound Safety
 
-**Status:** Partial — deterministic rules and LLM-as-judge implemented; see TODO below
+**Status:** Partial — deterministic rules, LLM audience-leak judge, and tier-keyed disclosure gate (Stage 2.5) implemented; see TODO below
 
 > **TODO:** Keep this spec aligned with production behaviour as Stage 2 evolves
 > (tone/persona guardrails, operator override guidance, and caller-verification notes).
@@ -34,6 +34,7 @@ the CEO, or exfiltrate internal data to an external party.
 |---|---|---|
 | **Prompt injection via inbound email** | Attacker email instructs LLM to dump system prompt in reply | Content filter — Stage 1 (deterministic) + Stage 2 (LLM-as-judge) |
 | **Accidental context leakage** | LLM naturally includes a third party's email address in a reply | Content filter — contact data leakage rule |
+| **Over-disclosure to an untrusted recipient** | Reply shares the CEO's availability or another contact's details with an unknown-tier recipient | Content filter — Stage 2.5 tier-keyed disclosure gate (escalation judge) |
 | **Skill-layer bypass** | Prompt injection tricks LLM into calling `email-send` directly, circumventing the dispatcher filter | Outbound gateway — all `nylasClient.sendMessage()` calls go through it |
 | **Impersonation of CEO** | Attacker sends email claiming to be the CEO, triggers a high-sensitivity action | Caller verification — cross-channel challenge/response for elevated skills |
 | **Display name spoofing** | Reply-To header set to `Jane Doe <attacker@evil.com>` | Display name sanitization — strip or flag mismatched display names |
@@ -72,7 +73,7 @@ The gateway emits an `outbound.delivered` event after every successful send. Thi
 
 ## Content Filter
 
-A two-stage pipeline that runs on every outbound message to an external recipient.
+A multi-stage pipeline that runs on every outbound message to an external recipient: Stage 1 (deterministic rules), Stage 2 (LLM audience-leak judge), and Stage 2.5 (tier-keyed disclosure gate). Each stage can block; later stages run only if earlier ones pass.
 
 ### Stage 1: Deterministic Rules (implemented)
 
@@ -132,6 +133,27 @@ principal-safe **reason summary**:
 The blocked content itself is never included, on either path. There is no review-and-approve /
 resend flow yet (see *What's Not Here Yet*), so a false positive currently means the agent's send
 is dropped and must be re-requested.
+
+### Stage 2.5: Escalation Judge — tier-keyed disclosure gate (implemented)
+
+Stages 1 and 2 catch *leaked internal content*. Stage 2.5 catches *over-disclosure to a recipient who isn't trusted enough to receive it* — sharing the principal's availability with an unknown sender, or another contact's details with someone who has no business seeing them. It runs only if Stages 1 and 2 both pass (#948, #949).
+
+The policy is **deterministic code**; the LLM does only the natural-language classification. The escalation judge classifies the outbound body into a `DisclosureClass`, and `applyDisclosurePolicy(recipientTier, disclosureClass)` decides `allow` or `escalate`:
+
+| Disclosure class | unknown | known | trusted | principal |
+|---|:---:|:---:|:---:|:---:|
+| `public` (a meeting exists, "best to email") | ✅ | ✅ | ✅ | ✅ |
+| `principal-context` (CEO's availability, location, opinion) | escalate | ✅ | ✅ | ✅ |
+| `third-party` (anything about another contact) | escalate | escalate | ✅ | ✅ |
+| `confidential` (financials, legal, private-thread content) | escalate | escalate | ✅ | ✅ |
+
+(`blocked` recipients receive nothing; they're dropped upstream and guarded here.)
+
+- **Recipient tier** is the contact's `tier` (`contact.tier`), not the legacy `trust_level` column — that column was retired in the contacts redesign. The principal-bypass that the old `trust_override` redactor config provided is now structural (the immutable CEO contact UUID), and `trust_override` was removed (#949).
+- **Fail-closed.** Any LLM failure (timeout, malformed verdict, provider error) resolves to `decision='escalate'`. A configured-but-throwing judge yields a `disclosure-gate-error` finding and blocks. When **no** escalation judge is configured, Stage 2.5 is a no-op pass.
+- **Shared policy module.** Both this disclosure gate and the [Gate C action gate](09-contacts-and-identity.md#layer-4-tier-based-action-gate-gate-c) import the same `src/autonomy/escalation-policy.ts` tables (`DisclosureClass`, `ActionConsequenceClass`). The action gate adds a reversibility axis (`none` → `reversible-internal` → `reversible-external` → `irreversible`) and a `isThirdPartyFacing` runtime flag the judge resolves per-invocation.
+
+A Stage 2.5 escalation surfaces to the CEO the same way as a block: the finding names the disclosure class and recipient tier (never the offending value), so the audit event and CEO notification stay principal-safe.
 
 ### Value-aware browser secret redaction (v0.35.0)
 
@@ -203,6 +225,8 @@ without cross-channel confirmation.
 | Blocked contact check in gateway pipeline | Done |
 | Content filter Stage 1 — deterministic rules (system prompt fragments, internal field names, secret patterns, contact data leakage) | Done |
 | Content filter Stage 2 — LLM-as-judge (audience-leak & hyper-sensitive financial/credential detection) | Done |
+| Content filter Stage 2.5 — tier-keyed disclosure gate (escalation judge classifies `DisclosureClass`; `applyDisclosurePolicy` gates on recipient `tier`; fail-closed) (#948, #949) | Done |
+| Disclosure gate + PII redactor key on `contact.tier`; legacy `trust_override` redactor config removed (principal bypass now structural) (#949) | Done |
 | Audience partitioning — coordinator prompt guidance to send external reply and principal status update as **separate** outbound messages (no shared body) | Done |
 | `outbound.blocked` audit event published on filter block | Done |
 | Caller verification gate — elevated-skill check in execution layer | Partial — role-based gate exists; cross-channel challenge/response flow not built |

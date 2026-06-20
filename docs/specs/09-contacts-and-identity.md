@@ -19,6 +19,9 @@ CREATE TABLE contacts (
   display_name    TEXT NOT NULL,
   role            TEXT,
   notes           TEXT,
+  -- Capability model (migration 055; see "Tier & Kind" below)
+  tier            TEXT NOT NULL DEFAULT 'unknown',  -- CHECK: blocked|unknown|known|trusted|principal
+  kind            TEXT NOT NULL DEFAULT 'person',    -- CHECK: person|organization|automated|principal|agent
   -- Canonical attributes (migration 048; see "Canonical Attributes" below)
   preferred_name  TEXT,
   title           TEXT,
@@ -38,13 +41,44 @@ CREATE TABLE contacts (
 
 CREATE INDEX idx_contacts_kg_node ON contacts (kg_node_id) WHERE kg_node_id IS NOT NULL;
 CREATE INDEX idx_contacts_role ON contacts (role) WHERE role IS NOT NULL;
+CREATE INDEX idx_contacts_tier ON contacts (tier) WHERE tier != 'unknown';
 ```
 
 - `display_name` — the working name the Coordinator uses in messages ("Jenna Torres"). Populated from the KG person node's `preferred_name` or `given_name + family_name`.
 - `role` — denormalized from the KG for fast access during authorization checks. Kept in sync when the KG node's role property changes.
+- `tier` — the contact's **capability tier**, an ordered gate on what actions and disclosures they can drive (see [Tier & Kind](#tier--kind) below). This is the primary authorization input; it replaced the older `status` + `trust_level` pair in migration 055.
+- `kind` — the contact's **entity type** (person, organization, automated sender, agent, principal). A semantic facet, not an ordered gate; `automated` contacts opt out of CEO-escalation workflows.
 - `kg_node_id` — links to the `kg_nodes` person node that holds structured name fields (`given_name`, `family_name`, `preferred_name`, `pronouns`, `title`), relationships, and temporal metadata.
 - `notes` — CEO's freeform notes about the contact ("prefers text over email", "travels a lot in Q4").
 - **Canonical attributes** (`preferred_name` … `birthday`) — 12 structured profile fields persisted directly on the contact row (see the dedicated section below).
+
+#### Tier & Kind
+
+Migration 055 (#945) replaced the legacy `status` (`provisional`/`confirmed`/`blocked`) and per-contact `trust_level` (`low`/`medium`/`high`) columns with a single ordered **tier** plus a semantic **kind** facet. The legacy columns were physically dropped in migration 059 (#955); all authorization and disclosure gates now key on `tier`.
+
+**`tier`** — an ordered capability gate (lowest to highest):
+
+| Tier | Meaning | Capability |
+|---|---|---|
+| `blocked` | Explicitly denied | No permissions; messages may be ignored |
+| `unknown` | Unrecognized / auto-created on first contact | Read-only; no consequential actions, no principal-context disclosure |
+| `known` | Recognized correspondent | Routine actions; low-sensitivity disclosure |
+| `trusted` | Elevated by the CEO or a grant | Elevated actions and disclosure |
+| `principal` | The CEO themselves (structural) | Full authority |
+
+Tier comparisons always use `meetsMinimumTier(tier, floor)` — never enumerate specific tiers. New contacts are created at `tier='unknown'` and elevate over time (see [Auto-Elevation](#auto-elevation)). `createContact` rejects `tier ∈ {trusted, principal}` — grants and the structural principal are elevated *after* create, never minted in one call.
+
+**`kind`** — the entity type, independent of tier:
+
+| Kind | Meaning |
+|---|---|
+| `person` | An individual human (default) |
+| `organization` | A company/team node (business-domain senders route here rather than minting a person) |
+| `automated` | Noreply/newsletter/bulk sender; opts out of CEO-escalation workflows (#953) |
+| `principal` | The structural CEO contact (immutable) |
+| `agent` | A Curia agent's own contact identity |
+
+`tier='principal'` and `kind='principal'`/`kind='agent'` are **structural** — `mergeContacts` refuses to delete or downgrade a structural contact, so a `blocked` duplicate can never lock out the principal.
 
 ### contact_channel_identities
 
@@ -232,13 +266,13 @@ The CEO mentions a person in conversation. The Coordinator extracts entities and
 
 ### Path 2: Reactive (unknown sender arrives)
 
-An unknown sender messages on a channel. The system applies channel-dependent policy and asks the CEO for identification.
+An unknown sender messages on a channel. Under the default `allow` policy the message routes to the coordinator in low-trust mode; identification happens in conversation, not via a hold queue.
 
 **Flow:**
 1. Contact resolver finds no match for `(channel, sender_id)`
-2. Channel-dependent unknown sender policy applies (see below)
-3. CEO identifies the sender → channel identity linked to existing or new contact (source: `ceo_stated`, verified: `true`)
-4. Held message is re-processed with the now-resolved contact context
+2. Per-channel unknown sender policy applies (see [Unknown Sender Policy](#unknown-sender-policy)): `allow` auto-creates a `tier='unknown'` contact and routes to the coordinator; `ignore` drops the message
+3. The coordinator (or the CEO) identifies the sender → channel identity linked to existing or new contact (source: `ceo_stated`, verified: `true`)
+4. Subsequent messages from that sender resolve to the now-known contact; the CEO can elevate the tier with `contact-set-tier`
 
 ### Path 3: External Source (CRM, calendar, address book)
 
@@ -291,44 +325,34 @@ This is distinct from the `## Principal Contact Details` block (item 2 above), w
 
 ## Unknown Sender Policy
 
-When an inbound message can't be matched to any contact, the system's response depends on the originating channel's trust level:
+When an inbound message can't be matched to any contact, the system applies a per-channel **unknown-sender policy**. As of #947 there are only two policies — `allow` (the default) and `ignore` — and the old hold-and-notify / held-message machinery has been fully removed (`HeldMessageService`, the `held-messages-*` skills, and the `held_messages` table were all deleted; #947, #955).
 
-| Channel | Trust | Unknown Sender Policy |
-|---|---|---|
-| **CLI** | `high` | N/A — always the primary user |
-| **Signal** | `high` | Hold silently, notify CEO |
-| **HTTP API** | `medium` | Reject with 401 (unknown token) |
-| **Email** | `low` | Hold silently, notify CEO |
-
-Policy is configurable per channel in `config/default.yaml`:
+Policy and channel trust are configured per channel in `config/channel-trust.yaml`:
 
 ```yaml
-# config/default.yaml
-contacts:
-  unknown_sender_policy:
-    signal: hold_and_notify
-    email: auto_reply
-    http_api: reject
+# config/channel-trust.yaml
+channels:
+  cli:    { trust: high,   unknown_sender: allow }
+  web:    { trust: high,   unknown_sender: allow }   # short-circuited to the CEO contact
+  signal: { trust: high,   unknown_sender: allow }
+  http:   { trust: medium, unknown_sender: ignore }
+  email:  { trust: low,    unknown_sender: allow }
 ```
 
-Held messages are queued in working memory with a `held_for_identification` flag. The Coordinator presents them to the CEO at the next opportunity:
+- **`allow`** — the sender is auto-created as a `tier='unknown'` contact and the message routes **directly to the coordinator in low-trust mode**. The coordinator may reply or ask a clarifying question, but may not take actions, may not share principal context, and must not reveal the restriction (see [02-agent-system.md](02-agent-system.md)). There is no holding step — the message is handled in real time.
+- **`ignore`** — the message is silently dropped with no rejection notice to the sender.
 
-> "I received a Signal message from an unknown sender (+15559999999) who says they're Jen Torres, asking for Q3 numbers. Do you know them?"
+When the dispatcher cannot resolve a sender at all (e.g. the channel layer skipped contact creation), it stamps the originator with `tier='unknown'` anyway, so the downstream action gate ([Gate C](#layer-4-tier-based-action-gate-gate-c)) still enforces tier policy as defence in depth (#1059).
 
-If the CEO identifies the sender, the held message is re-processed with full contact context. If the CEO says "I don't know them," the held message is discarded and the sender remains unresolved.
+**Automated senders.** Before routing, `classifyEmailSender()` (#953) inspects the sender for noreply/newsletter/bulk patterns. A match marks the contact `kind='automated'`; the ceo-inbox agent then defaults such senders to *Cleared* and escalates to the CEO only on an actionable signal. The `contact-list` skill excludes `automated` (and `agent`) contacts from its default view.
 
-**Rate limiting:** A maximum of 20 held messages per channel are queued at any time (configurable). When the cap is reached, the oldest held message is discarded. This prevents a flood of unknown-sender messages from consuming unbounded working memory.
-
-> **Open question:** Held message expiration is deferred. Messages are currently held
-> indefinitely until the CEO acts. A future discard/expiration process will need
-> judgment and oversight — not a simple TTL timer. The CEO may want to batch-review
-> old held messages, or have Curia summarize and triage them.
+Once the coordinator (or the CEO) identifies an unknown sender, the channel identity is linked to a real contact and the sender can be elevated with `contact-set-tier` ("treat Dana as trusted").
 
 ---
 
 ## Authorization Model
 
-Authorization is evaluated through a three-layer stack where per-contact overrides take precedence over role defaults, and channel trust acts as a final gate.
+Authorization is evaluated through a layered stack: per-contact overrides take precedence over role defaults, channel trust gates by sensitivity, and a contact-tier action gate (Gate C) governs whether the *initiating* contact is trusted enough to drive a consequential action at all.
 
 ### Layer 1: Role Defaults (Config)
 
@@ -431,6 +455,23 @@ trust_policy:
 
 When an action's trust requirement exceeds the channel's trust level, the Coordinator escalates: "Jenna asked for the Q3 financials via email. For security, I need her to confirm via Signal."
 
+### Layer 4: Tier-Based Action Gate (Gate C)
+
+Role, overrides, and channel trust gate *what a contact may ask for*. **Gate C** gates *whether the initiating contact is trusted enough to drive a consequential action at all* — independent of role. It keys on the originator's `tier`, which the dispatcher stamps onto every `TaskOriginator` (#950).
+
+- **Authorization Gate-1** (the deny-gate) now evaluates `meetsMinimumTier(tier, 'known')` instead of the legacy `status !== 'confirmed'` check. `unknown` and `blocked` contacts get zero permissions; this is behaviour-preserving under migration 055's mapping (`confirmed ⟺ tier ≥ known`) (#955).
+- **Gate C** escalates consequential, third-party-facing actions when the initiating tier doesn't deterministically permit them. When the tier × risk policy can't decide, an **escalation judge** (LLM classifier; see [15-outbound-safety.md](15-outbound-safety.md) and [06-audit-and-security.md](06-audit-and-security.md)) classifies the action and routes to the CEO. The gate is **fail-closed**: an external originator with no resolved tier escalates rather than bypassing the gate (#1059).
+
+### Auto-Elevation
+
+Contacts created at `tier='unknown'` are promoted to `tier='known'` automatically, without a CEO confirmation step, via three signals (#951):
+
+1. **Correspondence** — when Curia (or the CEO) sends an outbound message to an unknown contact, the outbound gateway elevates the contact to at least `'known'` before send. Mutual communication is sufficient grounds.
+2. **Domain / judgment** — a weekly LLM-judge scan and the dispatcher's scoring pipeline evaluate domain, relationship, and communication signals, elevating contacts that cross the confidence threshold.
+3. **One-shot backfill** — `scripts/rederive-contact-tiers.ts` (`rederive:contact-tiers`) recomputes confidence and elevates eligible `unknown` contacts historically.
+
+This replaced the old daily provisional→confirmed promotion sweep (retired in #955). Elevation never raises a contact to `trusted`/`principal` automatically — those require an explicit CEO grant. The CEO can also set a tier directly with `contact-set-tier`, and a weekly `scan-grant-recommendations` job surfaces scheduling-access recommendations for CEO approve/decline (#952).
+
 ### Authorization Check Flow
 
 ```
@@ -516,7 +557,8 @@ Contact CRUD operations are exposed as skills, invoked by the Coordinator during
 | `contact.grant-permission` | Add a permission override (grant or deny) |
 | `contact.revoke-permission` | Remove a permission override |
 | `contact.lookup` | Look up a contact by name, role, or channel identifier |
-| `contact.list` | List contacts filtered by role, status (`confirmed`, `provisional`, `blocked`), or limit. Filtering is DB-level for performance. |
+| `contact.list` | List contacts filtered by role, `tier`, or `kind`, with limit/offset. Default view excludes `automated` and `agent` contacts. Filtering is DB-level for performance. |
+| `contact.set-tier` | Set a contact's `tier` directly ("treat Dana as trusted"); principal-auth guarded, rejects `tier='principal'`. |
 | `contact.merge` | Merge two contacts into one (consolidates channel identities and overrides) |
 
 All contact mutations are audit-logged. The Coordinator confirms changes with the CEO before writing:
@@ -548,9 +590,10 @@ type ContactResolvedEvent = {
 type ContactUnknownEvent = {
   type: 'contact.unknown';
   channel: string;
-  sender_id: string;
-  channel_trust_level: 'low' | 'medium' | 'high';
-  held_message_id: string;
+  senderId: string;
+  channelTrustLevel: 'low' | 'medium' | 'high';
+  messageTrustScore: number;          // computed trust score for the unknown sender's message
+  routingDecision: 'allow' | 'ignore'; // mirrors the channel's unknown_sender policy
 };
 ```
 
@@ -589,7 +632,7 @@ The migration depends on `kg_nodes` existing (for the foreign key), so it must r
 - **No PII in logs** — contact display names and channel identifiers are audit-logged (they're operational data), but raw message content from unknown senders is redacted per [06-audit-and-security.md](06-audit-and-security.md#redaction).
 - **Spoofing defense** — a spoofed email From header might match a known contact's email, but the email channel's low trust level prevents consequential actions. The Coordinator will ask for Signal/CLI confirmation before acting on sensitive requests from email.
 - **Impersonation on new channels** — someone claiming to be a known contact on a new channel identity is `self_claimed` (unverified) until the CEO confirms. The Coordinator never auto-promotes self-claimed identities.
-- **Automatic promotion of provisional contacts** — provisional contacts are automatically promoted to `confirmed` when any of three signals is detected: (1) Curia has sent an outbound message to the contact, (2) the CEO has sent them an email (detected via Sent folder scan), or (3) the CEO accepted a calendar event with the contact as an attendee. A daily 8 AM contacts agent sweep reconciles provisional contacts against these signals. The sweep is **batched to 10 contacts per run** using offset pagination, with the cursor persisted in `last_run_context` so successive runs advance through the backlog without re-scanning from the start; the contacts agent's `error_budget` is raised to 30 turns to accommodate the batched work. The `contact-register` skill returns `promoted: true` and `promotion_signal` when a promotion occurs. This is distinct from self-claimed identities — auto-promotion only applies to provisional contacts whose email was established via a trusted source (email headers, calendar), never to self-claimed channel identities.
+- **Auto-elevation of unknown contacts** — contacts created at `tier='unknown'` are elevated to `tier='known'` through correspondence (the outbound gateway bumps the tier on send), domain/judgment signals (a weekly LLM-judge scan plus the dispatcher scoring pipeline), and a one-shot `rederive:contact-tiers` backfill (#951). Elevation never reaches `trusted`/`principal` automatically — those require an explicit CEO grant. This replaced the old provisional→confirmed promotion sweep and the retired `contact-register` flow (#955). Self-claimed channel identities are still never auto-verified — elevation acts on the contact's tier, not on identity verification.
 - **Contact deletion** — removing a contact also cascades to channel identities and auth overrides (ON DELETE CASCADE). The KG person node is not deleted — it retains historical facts even if the contact record is removed.
 - **Allowlist supersession** — once the contact system is deployed, it fully replaces the per-channel sender allowlist from [04-channels.md](04-channels.md#sender-allowlists). All channels use the contact resolver pipeline. Unknown senders follow the unknown sender policy defined in this spec. The old allowlist configuration is ignored. Specs 04 and 06 should be updated to mark the allowlist as deprecated.
 
@@ -633,6 +676,10 @@ The migration depends on `kg_nodes` existing (for the foreign key), so it must r
 | Integration tests: reactive identity establishment (unknown sender flow) | Not Done |
 | Integration tests: external source enrichment (CRM/calendar → contact) | Not Done |
 | Integration tests: authorization check (role defaults + overrides + trust) | Partial — three-layer logic unit-tested in `authorization.test.ts`; end-to-end integration test not covered |
-| Smart auto-promotion for provisional contacts — outbound email signals (`email-send`, `email-reply`) and calendar signals promote unverified provisional contacts to verified status | Done |
-| Promotion sweep batched to 10/run via offset cursor in `last_run_context`; contacts agent `error_budget` raised to 30 (#884) | Done |
+| Tier + kind capability model (migration 055); legacy `status`/`trust_level` columns dropped (migration 059) | Done |
+| Authorization Gate-1 keyed on `meetsMinimumTier(tier, 'known')`; Gate C tier enforcement on consequential actions (#950, #955) | Done |
+| Escalation judge wired into Gate C; fail-closed for unstamped external tiers (#948, #1059) | Done |
+| Auto-elevation `unknown→known` via correspondence, domain/judgment, and `rederive:contact-tiers` backfill (#951) | Done |
+| `contact-set-tier` skill (direct tier set, principal-auth guarded) and `scan-grant-recommendations` / approve-decline grant flow (#952) | Done |
+| Automated sender classification (`classifyEmailSender`) marks `kind=automated`; excluded from ceo-inbox escalation and default `contact-list` view (#953) | Done |
 | Case-insensitive email normalization — `contact-lookup` by email and `contact-merge` for delegated specialists tolerate case differences | Done |

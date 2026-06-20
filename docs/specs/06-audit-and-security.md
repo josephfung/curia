@@ -183,13 +183,15 @@ A baseline `X-Content-Type-Options: nosniff` header is set on **all** HTTP API r
 
 Known contacts are stored across two tables (`contacts` + `contact_channel_identities`) that already exist in the schema. This is the live source of truth — contacts can be added, edited, and queried at runtime without a deployment. Static allowlists in config are not used.
 
-`contacts` holds the person record. Two new columns are added via migration to support trust scoring:
+`contacts` holds the person record. Trust scoring uses `contact_confidence` and `last_seen_at` (migration 020), and capability gating uses the ordered `tier` column (migration 055; see [09-contacts-and-identity.md](09-contacts-and-identity.md#tier--kind)):
 
 ```sql
--- New columns added to existing contacts table (migration 020):
+-- Trust-scoring columns (migration 020):
 ALTER TABLE contacts ADD COLUMN contact_confidence NUMERIC(3,2) NOT NULL DEFAULT 0.0;  -- 0.0–1.0
-ALTER TABLE contacts ADD COLUMN trust_level        TEXT;           -- nullable per-contact override: 'high' | 'medium' | 'low'
 ALTER TABLE contacts ADD COLUMN last_seen_at       TIMESTAMPTZ;   -- timestamp of most recent inbound message from this contact
+-- Capability tier (migration 055) — replaced the legacy per-contact `trust_level`
+-- override and `status` column, both dropped in migration 059:
+ALTER TABLE contacts ADD COLUMN tier TEXT NOT NULL DEFAULT 'unknown';  -- blocked|unknown|known|trusted|principal
 ```
 
 `contact_channel_identities` maps `(channel, channel_identifier)` → `contact_id` and is the lookup target when classifying an inbound sender:
@@ -204,7 +206,7 @@ ALTER TABLE contacts ADD COLUMN last_seen_at       TIMESTAMPTZ;   -- timestamp o
 
 Neither `contact_confidence` nor `trustLevel` is propagated directly to bus events. They are inputs to the per-message trust score computation (see below). Agents and downstream consumers rely on `messageTrustScore` only — they do not need to reason about the individual components.
 
-`trust_level` on the contact record is a nullable per-contact override. When set, it adjusts the normalized channel weight used in score computation — for example, demoting a specific Signal contact due to a suspected compromised device. When null, the channel's structural `trustLevel` applies.
+Capability — what a contact may *do* — is gated separately by the ordered `tier` column, not by the trust score. The legacy per-contact `trust_level` override was removed in migration 059; the principal is now identified structurally by an immutable contact UUID resolved at bootstrap, rather than by a trust-level field (#949). Authorization Gate-1 and Gate C both key on `meetsMinimumTier(tier, …)` (see [09-contacts-and-identity.md](09-contacts-and-identity.md#authorization-model)).
 
 ### Unknown Sender Routing
 
@@ -214,18 +216,19 @@ Unknown senders — those not found in `contact_channel_identities` for the give
 # config/channel-trust.yaml
 channels:
   email:
-    unknown_sender: hold_and_notify   # 'allow' | 'hold_and_notify' | 'ignore'
+    unknown_sender: allow             # 'allow' | 'ignore'
   signal:
-    unknown_sender: hold_and_notify
+    unknown_sender: allow
   http:
     unknown_sender: ignore            # unauthenticated requests are silently dropped
   cli:
     unknown_sender: allow             # all CLI sessions are the CEO
 ```
 
-- **`allow`** — message proceeds normally. Used for channels where the auth mechanism already guarantees sender identity (CLI, web app with bootstrap secret).
-- **`hold_and_notify`** — event is queued in the held messages table and the CEO is notified. No action taken until reviewed.
+- **`allow`** — the sender is auto-created as a `tier='unknown'` contact and the message routes to the coordinator in low-trust mode (read-only constraints; see [09-contacts-and-identity.md](09-contacts-and-identity.md#unknown-sender-policy)). This is the default for email and Signal as well as the auth-guaranteed channels (CLI, web).
 - **`ignore`** — event is audit-logged and discarded. No response or rejection notice is sent to the sender.
+
+> The former `hold_and_notify` policy and the held-messages table were removed in #947/#955. Unknown senders are no longer queued for CEO review; the coordinator handles them inline under read-only constraints, and automated senders (`classifyEmailSender`, #953) are filtered before they reach the CEO.
 
 All unknown sender events are audit-logged regardless of routing decision, including sender identifier, channel, and the routing action taken.
 
@@ -237,7 +240,7 @@ The Coordinator is instructed to distinguish:
 
 - **Surface to CEO** — first contact from a plausible human: coherent prose, direct personal relevance, no mass-mail signals. Example: a new email from a recognizable domain with a specific question about the CEO's work.
 - **Ignore silently** — clear spam, bot-generated content, or messages matching configured spam patterns (mass-mail headers, unsubscribe links, no-reply senders, high link density).
-- **Hold for review** — ambiguous cases: automated but potentially relevant (e.g., a GitHub notification from an unknown org), or messages where intent is unclear.
+- **Ask the CEO** — ambiguous cases: automated but potentially relevant (e.g., a GitHub notification from an unknown org), or messages where intent is unclear. The coordinator surfaces a short summary and asks for a disposition rather than queuing the message (there is no held-message queue as of #947).
 
 When surfacing to the CEO, the Coordinator provides a brief summary and prompts for a disposition: "A new contact reached out via email. [Summary]. Should I reply, add them as a contact, or ignore future messages from this sender?"
 
@@ -257,7 +260,7 @@ This is the primary signal consumed by agents. `trustLevel` and `contactConfiden
 
 | Input | Weight | Notes |
 |---|---|---|
-| Channel `trustLevel` (normalized) | 0.4 | `high`=1.0, `medium`=0.6, `low`=0.3; per-contact `trust_level` override applies if set |
+| Channel `trustLevel` (normalized) | 0.4 | `high`=1.0, `medium`=0.6, `low`=0.3 (structural per channel; the per-contact `trust_level` override was removed in #949) |
 | `contactConfidence` from `contacts` | 0.4 | 0.0 for unknown senders |
 | Content risk modifier | −0.2 max | Injection risk score and spam signal reduce the score; clean messages apply no penalty |
 
@@ -269,7 +272,7 @@ Result is clamped to `[0.0, 1.0]`. The weights and normalization values are conf
 
 - The dispatch layer compares `messageTrustScore` against policy thresholds when enforcing trust-gated actions (see below)
 - The Coordinator receives `messageTrustScore` as structured metadata and can reference it when deciding how much latitude to extend to a request
-- A score below a configurable floor (default: 0.2, `security.trust_score_floor` in `config/default.yaml`) triggers `hold_and_notify` routing regardless of per-channel policy, unless the channel is configured as `ignore`
+- The coordinator weighs a low `messageTrustScore` when deciding how much latitude to extend; combined with `tier='unknown'`, a low score keeps an unrecognized sender in read-only mode. (The former `security.trust_score_floor` → `hold_and_notify` path was removed with the held-messages machinery in #947.)
 
 ### Email-Specific Defenses
 
@@ -377,18 +380,18 @@ These are non-negotiable for launch.
 | Intent drift detection pauses tasks (not just logs) | Done |
 | Email channel exposes provider-level SPF/DKIM/DMARC validation via Nylas message metadata | Done |
 | Anti-injection system prompt hardening and architectural containment (Layers 2 & 3) | Done |
-| Migration 020 adds `contact_confidence`, `trust_level`, `last_seen_at` columns to existing `contacts` table | Done |
+| Migration 020 adds `contact_confidence`, `last_seen_at` to `contacts`; migration 055 adds the ordered `tier` (capability gate) and `kind` columns; legacy `trust_level`/`status` dropped in migration 059 | Done |
 | All `agent.task` events carry `messageTrustScore` (computed float); `trustLevel` and `contactConfidence` are inputs only, not propagated to bus events | Done |
 | Unknown sender lookup targets `contact_channel_identities (channel, channel_identifier)` | Done |
-| Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `hold_and_notify` / `ignore` | Done |
+| Unknown sender routing configured in `config/channel-trust.yaml` using `allow` / `ignore` (the `hold_and_notify` policy and held-messages machinery were removed in #947) | Done |
 | `contact.unknown` event includes `routingDecision` field so audit trail is self-contained without downstream correlation | Done |
-| Unknown sender → `hold_and_notify` path covered by integration test (in-memory `HeldMessageService`, verifies score, event payload, and store write) | Done |
-| Trust score floor: messages below `security.trust_score_floor` (default 0.2) trigger `hold_and_notify` regardless of per-channel policy | Done |
+| Unknown sender → coordinator low-trust routing (auto-created `tier='unknown'` contact); no hold queue | Done |
 | Trust-gated action thresholds use `messageTrustScore` numeric values, enforced via Coordinator system prompt | Done |
 | Data sensitivity tags on knowledge graph entities | Done |
 | Bulk export gates active for confidential+ data | Not Done |
 | `human.decision` audit events populate `deciderId` and `deciderChannel` for every decision | Done |
 | Auth boundary — case-insensitive role lookup in authorization checks | Done |
-| Auth boundary — `trust_level` fallback when a contact has no explicit override | Done |
-| Auth boundary — effective-trust gating on contact-grant-permission and adjacent skills | Done |
-| Auth boundary — `trust_level_defaults` keys validated at config load time | Done |
+| Auth boundary — `tier_defaults` fallback (in `config/role-defaults.yaml`) when a contact's role has no explicit entry | Done |
+| Auth boundary — effective-tier gating on contact-grant-permission and adjacent skills | Done |
+| Auth boundary — `tier_defaults` keys validated at config load time | Done |
+| Authorization Gate-1 keys on `meetsMinimumTier(tier, 'known')`; Gate C tier enforcement with fail-closed escalation for unstamped external tiers (#950, #955, #1059) | Done |

@@ -4,12 +4,12 @@
 #
 # Role lookup is case-insensitive: 'Spouse' matches the 'spouse' key.
 # When a contact's free-text role (e.g. 'Sister', 'Head Instructor, Kicks') has no
-# config match, the system falls back to trust_level_defaults keyed by the contact's
-# trust_level ('ceo'|'high'|'medium'|'low'). Unknown roles with no trust_level
+# config match, the system falls back to tier_defaults keyed by the contact's
+# tier ('blocked'|'unknown'|'known'|'trusted'|'principal'). Roles with no tier match
 # fall back to the 'unknown' entry below.
 #
-# This means trust_level is the primary authorization primitive for confirmed contacts
-# whose roles were set as free-text descriptions by the coordinator LLM.
+# This means tier is the primary authorization primitive for contacts whose roles
+# were set as free-text descriptions by the coordinator LLM.
 
 roles:
   ceo:

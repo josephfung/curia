@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs synced to the contacts redesign** — specs 04/06/09/15 now describe the `tier`/`kind` capability model, tier-keyed authorization (Gate-1, Gate C), auto-elevation, the Stage 2.5 disclosure gate, and the removal of the held-messages workflow; the `adding-a-skill` capability table and a stale `role-defaults.yaml` comment were corrected, and shipped WIP artifacts were pruned.
+
 ### Added
 
 - **CodeAnt review config** — `.codeant/instructions.json` scopes the AI reviewer's style/error-handling rules away from test files and one-shot scripts and documents project null/error idioms, cutting false-positive review noise. Dev tooling only; no runtime effect.

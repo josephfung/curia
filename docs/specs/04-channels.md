@@ -145,7 +145,7 @@ Trust levels gate which actions the Coordinator can take based on the originatin
 
 ### Sender Allowlists
 
-Each channel maintains an allowlist of authorized senders. Messages from unknown senders are rejected silently (default) or held for pairing approval (configurable). This is configured per-channel in `config/default.yaml`.
+Superseded by the contact resolver (see [09-contacts-and-identity.md](09-contacts-and-identity.md#unknown-sender-policy)). Unknown senders are no longer gated by a per-channel allowlist; they are handled by the `unknown_sender` policy in `config/channel-trust.yaml`, which is either `allow` (auto-create a `tier='unknown'` contact and route to the coordinator in low-trust mode) or `ignore` (silently drop). The former hold-for-pairing-approval path was removed with the held-messages machinery in #947.
 
 ### Email Validation
 
