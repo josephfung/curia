@@ -13,132 +13,55 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
+## [0.36.0] — 2026-06-20 — "Reverend Mother"
 
-- **Docs synced to the contacts redesign** — specs 04/06/09/15 now describe the `tier`/`kind` capability model, tier-keyed authorization (Gate-1, Gate C), auto-elevation, the Stage 2.5 disclosure gate, and the removal of the held-messages workflow; the `adding-a-skill` capability table and a stale `role-defaults.yaml` comment were corrected, and shipped WIP artifacts were pruned.
+> **Reverend Mother Gaius Helen Mohiam** *(Dune, 1965, Frank Herbert)* — the Bene Gesserit who holds the gom jabbar to your throat and decides, by what you do under the test, who is human enough to pass. v0.36 gives Curia the same discernment: every sender is met at the gate, sorted by tier, and let only as far as earned trust allows.
+
+This release rebuilds how Curia decides who to trust. The old `status` + `trust_level` split is replaced by a single ordered **capability tier** (`blocked` → `unknown` → `known` → `trusted` → `principal`) plus a descriptive **kind**, with new gates, an escalation judge, and automatic elevation built on top.
 
 ### Added
 
-- **CodeAnt review config** — `.codeant/instructions.json` scopes the AI reviewer's style/error-handling rules away from test files and one-shot scripts and documents project null/error idioms, cutting false-positive review noise. Dev tooling only; no runtime effect.
-- **Console Contacts: read-only View drawer** — clicking a contact opens a read-only view (editing is an explicit Edit button), so a single click can't mutate data. Shows only populated fields with smart links (mailto:/tel:/LinkedIn/`/kg?node=`), created/updated timestamps, and linked channel identities. (#1069)
-- **Console Contacts: defaults + KG links** — the page loads filtered to Known + Person by default (chips widen to All), and each row with a `kgNodeId` shows a KG deep-link icon. (#1069)
-- **`GET /api/kg/contacts/:id/identities`** — returns a contact's serialized channel identities for the Contacts View drawer. (#1069)
-- **`remove-codeant-promo` workflow** — auto-deletes CodeAnt's "Thanks for using CodeAnt" promotional conversation comments when posted; leaves line-level code-review comments untouched.
-- **`rederive:contact-tiers` script** — one-shot backfill that recomputes contact confidence and elevates `unknown→known` for contacts past the judgment threshold. (#955)
-- **`contact-set-tier` skill** — sets a contact's tier directly from chat ("treat Dana as trusted"); principal-auth guarded, rejects `tier='principal'`. (#952)
-- **Proactive grant recommendations** — weekly LLM-judge scan (`scan-grant-recommendations`) evaluates known-tier contacts and surfaces scheduling-access recommendations for CEO approval. (#952)
-- **Approve/decline recommendations** — `approve-grant-recommendation` writes a `contact_auth_overrides` row; `decline-grant-recommendation` permanently records the decline so the recommendation never resurfaces (anti-nag via UNIQUE DB constraint). (#952)
-- **Contacts UI: permission grants section** — contact drawer lists active auth overrides with per-override revoke buttons. (#952)
-- **Console Contacts: tier/kind editing** — the admin Contacts page now edits `tier` and `kind` directly; Status and Trust-level controls are removed. List view filters, sorts, and displays by tier + kind facet. (#1055)
-- **PATCH/POST `/api/kg/contacts` accept `tier` and `kind`** — validated against the migration-055 enums with structural guards rejecting `tier='principal'` and `kind ∈ {principal, agent}`. Principal contacts cannot be demoted via the API. (#1055)
-- **Atomic PATCH mutations** — all non-legacy mutations in `PATCH /api/kg/contacts/:id` now run in a single DB transaction; partial failures roll back cleanly. (#1055)
-
-### Removed
-
-- **Legacy `status`/`trust_level` columns + `held_messages` table dropped (migration 059)** — physically removed now that all code keys on `tier`/`kind`; `held_messages` was orphaned in #947. (#955)
-- **`status` removed from contact HTTP API** — `POST`/`PATCH /api/kg/contacts` ignore any `status` field; `tier`/`kind` are the only capability inputs. (#955)
-- **`contact-set-trust` skill removed** — called the deleted `setTrustLevel()` and threw at runtime; superseded by `contact-set-tier`. (#955)
-- **`contact-register` promotion flow retired** (v1.1.0 → v1.2.0) — new contacts created at `tier='unknown'`; provisional inputs/outputs removed, elevation is now the dispatcher/judgment path. (#955)
-- **Daily provisional-promotion sweep removed from contacts agent** (v0.6.0) — auto-elevation is handled by the dispatcher/judgment path + #951 pipeline; stale skill pins dropped. (#955)
-- **`group_held` notification kind removed** — dead union member, never emitted or consumed. (#955)
-
-- **Auto-elevation** — contacts auto-promote from `unknown` to `known` via correspondence, domain, and judgment signals. (#951)
-- **Action gate: contact-tier enforcement (Gate C)** — consequential actions from lower-tier contacts escalate unless the initiating tier permits them. (#950)
-- **`tier` on `TaskOriginator`** — dispatcher stamps the initiating contact's tier for Gate C enforcement. (#950)
-- **Escalation judge wired into Gate C** — classifies third-party-facing actions when the tier×risk policy can't decide deterministically. (#950)
-- **Automated sender classification** — `classifyEmailSender()` detects noreply/newsletter patterns and marks contacts `kind=automated`. (#953)
-- **`contact-list` skill `kind` filter** — filters by `kind`; default view excludes `automated` and `agent` contacts. (#953)
+- **Capability tiers & kinds (migration 055)** — every contact carries an ordered `tier` and a descriptive `kind` (`person`/`organization`/`automated`/`agent`/`principal`), backfilled from the legacy fields. (#945)
+- **Automatic elevation** — contacts rise from `unknown` to `known` on their own via correspondence, domain, and judgment signals; the `rederive:contact-tiers` script backfills existing contacts. (#951, #955)
+- **Action gate (Gate C)** — consequential, third-party-facing actions from lower-tier senders escalate for your approval unless the initiating tier permits them; the dispatcher stamps each task with the originator's tier. (#950)
+- **Escalation judge** — an LLM classifier maps tier × disclosure-sensitivity / action-consequence to allow-or-escalate; the policy is deterministic code, the model only classifies, and it fails closed. (#948)
+- **Tier-keyed disclosure gate** — a Stage 2.5 on the outbound filter withholds principal, third-party, and confidential context from recipients whose tier isn't high enough. (#949)
+- **Automated-sender classification** — noreply/newsletter/bulk senders are detected and marked `kind=automated`, keeping them out of your way; ceo-inbox clears them unless a signal warrants attention. (#953)
+- **`contact-set-tier` skill** — set a contact's tier from chat ("treat Dana as trusted"); principal-guarded, and it won't mint a principal. (#952)
+- **Proactive grant recommendations** — a weekly judge scan surfaces scheduling-access recommendations for known contacts; approving writes an auth override, declining is recorded permanently so it never resurfaces. (#952)
+- **Console Contacts** — a read-only View drawer (so a click can't mutate data), direct `tier`/`kind` editing, a permission-grants section with per-override revoke, a Known + Person default filter, and KG deep-links; plus `GET /api/kg/contacts/:id/identities`. (#1055, #1069)
+- **Contact de-duplication (`dedup:contacts`)** — a maintenance sweep auto-merges structurally-proven duplicates (shared verified identity, same KG node, exact normalized name) and files review tasks for fuzzy matches — never merging the principal or re-surfacing a declined pair, and tunable for staged rollout. (#944, #1027, #1034, #1035)
+- **`tier`/`kind` on the contacts API** — `POST`/`PATCH /api/kg/contacts` accept them, validated against the migration-055 enums with guards that can't mint or demote a principal; all mutations run in one transaction. (#1055)
 
 ### Changed
 
-- **`trust_level` column retired as active read/write path** — the three remaining readers (confidence scorer, trust scorer, permission resolver) and all writers now key on `tier` (`ContactTier`) instead. `setTrustLevel()`, `deriveTierFromTrustLevelUpdate()`, and `meetsMinimumTrust()` removed. The `trust_level` DB column remains (dropped in #955). `config/role-defaults.yaml` `trust_level_defaults` renamed to `tier_defaults` with `ContactTier` keys. **Authorization behavior change:** contacts previously stored with `trust_level=null` were backfilled to `tier='known'` (rank 1, medium-equivalent) rather than rank 0. On low-trust channels (e.g. email), medium-sensitivity permissions granted by a role are now allowed for these contacts where they were previously trust-blocked. High-sensitivity permissions remain blocked. (#1070)
-- **Authorization Gate-1: `status`→`tier` (behavior-preserving)** — the deny-gate now uses `meetsMinimumTier(tier, 'known')` instead of `status !== 'confirmed'`; identical under migration-055's mapping (`confirmed ⟺ tier ≥ known`). `unknown`/`blocked` contacts still get zero permissions. (#955)
-- **ceo-inbox agent** (v0.7.0 → v0.8.0) — automated senders default to Cleared; escalated only on actionable signals. (#953)
-- **`contact-list` skill** (v1.2.1 → v1.3.0) — default view excludes automated and agent contacts. (#953)
+- **Authorization keys on tier** — Gate-1 and every reader and writer (confidence scorer, trust scorer, permission resolver, dispatcher, outbound gateway, Signal trust) now use `meetsMinimumTier()`; `role-defaults.yaml`'s `trust_level_defaults` became `tier_defaults`. **Behavior change:** contacts that had no trust level map to `tier='known'`, so role-granted medium-sensitivity permissions now pass on low-trust channels where they were previously blocked; high-sensitivity stays blocked. (#945, #955, #1070)
+- **Unknown senders get a low-trust reply** — instead of being held for review, an unrecognized sender routes to the coordinator under read-only constraints (no actions, no principal context, restriction not revealed). (#947)
+- **ceo-inbox & contact-list** — the default contact list excludes automated and agent contacts, and ceo-inbox escalates an automated sender only on an actionable signal. (#953)
+- **Scheduled system jobs pass the elevated-skill gate** — YAML-declared jobs (`systemRole: "system"`) may invoke elevated skills; agent-originated tasks remain blocked.
+- **Coordinator 8am digest** — rewritten with explicit steps; overdue and due-today tasks surface first, and it stays quiet when there's nothing to report.
+- **Docs synced** — specs, dev guides, and the public docs site now describe the tier/kind model; shipped WIP was pruned.
+
+### Removed
+
+- **The held-message workflow** — `HeldMessageService`, the `held-messages-*` skills, the `hold_and_notify` policy, `trust_score_floor`, and the thread-trust bypass are gone; the `held_messages` table and the legacy `status`/`trust_level` columns were dropped in migration 059. (#947, #955)
+- **`contact-set-trust` and `contact-register`** — the trust-setting skill (which threw at runtime) and the provisional-promotion flow retire in favor of `contact-set-tier` and automatic elevation; the daily promotion sweep is gone. (#955)
+- **`trust_override` redactor config** — the PII-redactor bypass field is removed; the principal bypass is now structural via the immutable CEO contact UUID. (#949)
+- **`pending-actions-digest` skill** — the coordinator now composes the daily digest directly. 
 
 ### Fixed
 
-- **No-op contact PATCH no longer writes** — `PATCH /api/kg/contacts/:id` with only ignored/legacy fields (e.g. `status`) or no recognized field skips the DB write and the `updated_at` bump instead of emitting a spurious "contact updated". (#955)
+- **Identity-less contact cleanup** — migration 056 removes 23 contacts with no channel identity (knowledge preserved in the KG) and backfills `kg_node_id` for 19 more; an orphan left by a failed identity link is now deleted. (#946)
+- **No-op contact PATCH** — a PATCH carrying only ignored or legacy fields no longer writes, bumps `updated_at`, or emits a spurious "contact updated". (#955)
+- **`contact-find-duplicates` scan** — files bounded, idempotent review tasks (threshold raised to 0.93, capped to avoid queue flooding) instead of returning a raw list. (#1037)
+- **Contact/KG boundary** — business-domain email senders route to organization KG nodes instead of always minting a person; personal webmail and `first.last` addresses stay person-typed. (#946)
 
 ### Security
 
-- **`createContact` rejects `tier ∈ {trusted, principal}`** — grants and the structural principal must be elevated after create, not minted in one call. (#955)
-- **Merge can't delete or downgrade a structural contact** — `mergeContacts` throws for *any* structural secondary (principal/agent/system-role), not just structural-into-non-structural, so a structural row can never be deleted by a merge; and a structural primary keeps its own tier, so a `blocked` duplicate can't lock out the principal. (#955)
-- **Gate C fail-closed for unstamped external tiers** — an external originator with no resolved tier now escalates instead of bypassing the gate. (#1059)
-- **Dispatcher stamps an `unknown`-tier originator for unresolved inbound senders** — defence in depth so Gate C still enforces tier policy if the channel layer skipped contact creation. (#1059)
-- **CVE-2026-53655 (pnpm bundled tar)** — removed corepack's unused pnpm cache from the production image to eliminate a bundled tar CVE.
-- **undici CVEs (12151/9697/6734 HIGH, 9678/9679 MED, 6733/11525 LOW)** — pinned `undici: '>=7.28.0'` in `pnpm-workspace.yaml` overrides; the transitive copy pulled by promptfoo now resolves to a patched 8.x.
-- **Trivy image scan runs on image-affecting pushes** — Dockerfile/lockfile/manifest changes now re-scan the image at merge, not just weekly.
-
-### Added
-
-- **Escalation-line policy judge** — LLM-powered classifier that maps `tier` × disclosure-sensitivity / action-consequence → allow / escalate; policy is deterministic code, LLM does only the natural-language classification; fail-closed by design. (#948)
-
-### Changed
-
-- **Disclosure gate keyed on tier** — outbound filter and PII redactor now gate on `contact.tier` instead of the legacy `trust_level` column; unknown recipients receive no third-party or sensitive principal context; trusted/principal recipients are unaffected; escalation judge wired as Stage 2.5 for borderline disclosures. (#949)
-
-### Removed
-
-- **`trust_override` PII redactor config** — removed the `outbound_redaction.trust_override` YAML field; the principal bypass is now handled structurally via the immutable CEO contact UUID, which is more tamper-proof than a trust-level field. (#949)
-- **Contact/KG boundary enforcement** — business email senders are now routed to existing or new organization KG nodes (`kind = organization`) instead of always minting a person node; personal webmail domains and `first.last` address patterns remain person-typed. (#946)
-
-### Changed
-
-- **Unknown senders route to coordinator in low-trust mode** — messages from unrecognized senders are no longer held for CEO review. Instead they route directly to the coordinator, which applies read-only behavioral constraints: it may reply or ask a clarifying question, but may not take actions, share principal context, or reveal the restrictions. (#947)
-- **`hold_and_notify` policy removed** — `UnknownSenderPolicy` now accepts only `allow` (default) or `ignore`. Both email and Signal channels default to `allow`. The coordinator's "Low-trust senders" section replaces the old "Held messages" workflow guidance.
-- **Auto-created contacts use `tier='unknown'`** — email and Signal adapters now create contacts at `tier='unknown'` (was `status='provisional'`) when a new sender is seen for the first time.
-
-### Removed
-
-- **`HeldMessageService`, `held-messages-list`, `held-messages-process`** — hold machinery fully deleted. The `held_messages` DB table is orphaned for cleanup in #955. (#947)
-- **Thread-originated trust bypass** — removed `hasOutboundToRecipientInConversation()` and `promoteToConfirmedByThreadTrust()` from the dispatcher; outbound-gateway already elevates `tier='known'` at send time, making the bypass redundant. (#947)
-- **`trust_score_floor`** — removed from dispatcher config and `config/default.yaml`. (#947)
-
-### Fixed
-
-- **Identity-less contacts demoted** — migration 056 removes the 23 contact rows that had no channel identity (knowledge preserved in KG nodes) and backfills `kg_node_id` for the 19 contacts missing it. (#946)
-- **Orphan contact cleanup in `extractParticipants`** — if `linkIdentity` fails after `createContact`, the adapter now deletes the identity-less orphan (mirrors the existing guard in `contact-register`). (#946)
-
-### Security
-
-- **Insecure temp directory in loader test** — replaced predictable hardcoded temp path with `fs.mkdtempSync()` to eliminate CWE-377 (insecure temporary file creation) CodeQL alert #159.
-- **pnpm 11.0.8 → 11.7.0** — clears CVE-2026-53655 (node-tar PAX size override / interpretation differential) in pnpm's own bundled tar; pnpm 11.7.0 ships tar@7.5.16.
-
-### Fixed
-
-- **`contact-find-duplicates` scheduled scan** — skill now files bounded review tasks (instead of returning a raw list) and is idempotent across runs; default threshold raised to 0.93 to cut false positives; `max_tasks` cap prevents queue flooding; weekly contacts dedup scan updated to scan-only mode. (#1037)
-
-### Changed
-
-- **`DuplicatePairContact`** — added `kgNodeId: string | null` field (populated from the `Contact` object in `DedupService`); enables the skill to check `dedup_exclusion` KG facts without a second DB round-trip. (#1037)
-
-### Added
-- **`contact-dedup-exclude`** — new skill + contacts agent decline paths that write permanent `dedup_exclusion` KG facts, preventing explicitly rejected pairs from resurfacing on future sweeps. (#1027)
-
-### Added
-
-- **Contact `tier` + `kind` model (migration 055)** — ordered capability `tier` and descriptive `kind`, backfilled from legacy fields. (#945)
-- **Contact de-duplication (`dedup:contacts`)** — maintenance sweep that auto-merges structurally-proven duplicates (shared verified identity / same `kg_node_id` / exact normalized name) and files Curia-owned review tasks for fuzzy matches, never auto-merging the principal and never re-surfacing a declined pair. Tunable for controlled rollout via `--dry-run`, `--no-tasks`, `--min-score`/`--max-score` bands, and `--max-tasks`, and shipped in the production image. (#944, #1034)
-- **Dedup: single-token org/automated name match is now structural** — exact normalized single-token names (e.g. "GitHub", "Amazon.ca") auto-merge when both contacts are `organization` or `automated`; the ≥2-token guard is unchanged for `person` and mixed-kind pairs. (#1035)
-
-### Changed
-
-- **Tier-based capability gating** — dispatcher, outbound gateway, and Signal trust now gate via `meetsMinimumTier()`; legacy `status`/`trust_level` deprecated (removal in #955). (#945)
-- **Elevated-skill gate** — YAML-declared scheduled jobs (`systemRole: "system"`) now pass the elevated-skill gate; agent-originated tasks remain blocked.
-- **Coordinator 8am digest** — scheduler entry rewritten with explicit step-by-step instructions; overdue and due-today CEO tasks now surfaced first; skips sending if everything is empty.
-
-### Removed
-
-- **`pending-actions-digest` skill** — removed; coordinator composes the daily digest directly from `list-pending-actions` and `task-list`.
-
-### Security
-
-- **hono** — bumped override floor from 4.12.18 to 4.12.25, resolving 5 CVEs including CORS credential reflection (CVE-2026-54290, HIGH 7.1), body-limit bypass (CVE-2026-54288), path traversal in serve-static (CVE-2026-54286), Set-Cookie header merging (CVE-2026-54287), and Lambda@Edge header dropping (CVE-2026-54289).
-- **`markdown-to-html`** — `href` attribute now explicitly encodes `"` as `&quot;` in auto-linked URLs, closing CodeQL XSS alert #158.
-- **`@opentelemetry/core`** — pinned to `>=2.8.0`, clearing GHSA-8988-4f7v-96qf (unbounded memory allocation in W3C Baggage header parsing).
-- **`protobufjs`** — targeted override on `onnxruntime-web` to `>=7.6.3 <8`, clearing GHSA-f38q-mgvj-vph7 (schema-derived names shadowing runtime properties).
-- **`npm` (Docker runtime image)** — upgraded npm to 11.17.0 in the production Docker image, clearing CVE-2026-53655 (`node-tar` PAX file smuggling), CVE-2026-45149 (`brace-expansion` arbitrary string generation), and CVE-2026-42338 (`ip-address` XSS) from npm's own bundled packages.
+- **The principal can't be demoted or merged away** — `createContact` rejects `tier ∈ {trusted, principal}`, and `mergeContacts` won't delete or downgrade any structural contact, so a blocked duplicate can never lock out the principal. (#955)
+- **Gate C fails closed** — an external sender with no resolved tier escalates rather than slipping past the gate; the dispatcher stamps unresolved senders `unknown`. (#1059)
+- **Dependency & image CVEs** — cleared CVEs across undici, hono (five, including a HIGH CORS credential reflection), pnpm/npm bundled tar (CVE-2026-53655), `@opentelemetry/core`, and `protobufjs` via `pnpm-workspace.yaml` overrides and a Docker npm bump.
+- **Code-scanning fixes** — closed CodeQL alerts for an insecure temp directory (CWE-377) and a `markdown-to-html` href XSS; the Trivy image scan now runs on image-affecting pushes.
 
 ## [0.35.0] — 2026-06-16 — "Garak"
 
