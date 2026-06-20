@@ -10,7 +10,7 @@
 //   - entityMemory (to resolve email policies and meeting links from KG)
 //   - contactService (to look up recipient contact info)
 
-import type { SkillHandler, SkillContext, SkillResult, AgentPersona } from '../../src/skills/types.js';
+import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { resolveSignature, resolvePolicy } from '../_shared/template-base.js';
 
 // Map email_type input values to KG template labels

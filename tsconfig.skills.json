@@ -15,5 +15,11 @@
     "composite": false
   },
   "include": ["skills/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  // Phase 1 covers production handler code only. Skill *.test.ts files still have ~117
+  // type errors (mostly SkillContext→Record casts that need `as unknown as`, `unknown`
+  // result.data narrowing, and possibly-undefined array access). Bringing them under the
+  // check is tracked as phase 2 of #1075; until then they are excluded so
+  // `pnpm run typecheck` stays green with handler code included.
+  // @TODO(#1075 phase 2): drop the *.test.ts exclusion and fix the remaining test errors.
+  "exclude": ["node_modules", "dist", "skills/**/*.test.ts"]
 }

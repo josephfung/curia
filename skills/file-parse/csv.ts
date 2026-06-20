@@ -14,14 +14,17 @@ export function parseCsv(text: string): Record<string, string>[] {
   const rows = splitCsvRows(trimmed);
   if (rows.length < 2) return []; // header only or empty
 
-  const headers = splitCsvFields(rows[0]).map(h => h.trim());
+  // rows.length >= 2 is guaranteed above, and the loop indices below are bounded by
+  // their array lengths — so these accesses are always present (noUncheckedIndexedAccess
+  // types them as possibly-undefined).
+  const headers = splitCsvFields(rows[0]!).map(h => h.trim());
   const result: Record<string, string>[] = [];
 
   for (let i = 1; i < rows.length; i++) {
-    const fields = splitCsvFields(rows[i]);
+    const fields = splitCsvFields(rows[i]!);
     const row: Record<string, string> = {};
     for (let j = 0; j < headers.length; j++) {
-      row[headers[j]] = (fields[j] ?? '').trim();
+      row[headers[j]!] = (fields[j] ?? '').trim();
     }
     result.push(row);
   }

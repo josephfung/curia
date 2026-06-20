@@ -335,11 +335,14 @@ export class MemoryStoreHandler implements SkillHandler {
             },
           };
         case 'auto_resolved':
-          // Unreachable at runtime: auto_resolved has stored=true and is handled by
-          // the `if (result.stored)` block above. TypeScript cannot narrow result.action
-          // through the stored boolean check, so this case is required to keep the
-          // exhaustive switch type-correct.
-          throw new Error('memory-store: unreachable — auto_resolved must be handled in the stored=true branch');
+        case 'created':
+        case 'updated':
+          // Unreachable at runtime: these actions all carry stored=true and are handled by
+          // the `if (result.stored)` block above. StoreFactResult is not a discriminated
+          // union (stored and action are independent fields), so TypeScript cannot narrow
+          // result.action through the stored boolean check — these cases are required to
+          // keep the exhaustive switch type-correct.
+          throw new Error(`memory-store: unreachable — ${result.action} must be handled in the stored=true branch`);
         default: {
           // Exhaustive check — TypeScript will error here if a new action variant is added
           // to StoreFactResult without a corresponding case above.

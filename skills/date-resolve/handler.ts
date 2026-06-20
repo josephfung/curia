@@ -18,7 +18,9 @@ type DayName = (typeof DAY_NAMES)[number];
 /** Map lowercase day name to luxon weekday number (1=Monday … 7=Sunday). */
 const DAY_TO_WEEKDAY: Record<string, number> = {};
 for (let i = 0; i < DAY_NAMES.length; i++) {
-  DAY_TO_WEEKDAY[DAY_NAMES[i].toLowerCase()] = i + 1;
+  // i is bounded by DAY_NAMES.length, so the element is always present
+  // (noUncheckedIndexedAccess types it as possibly-undefined).
+  DAY_TO_WEEKDAY[DAY_NAMES[i]!.toLowerCase()] = i + 1;
 }
 
 /**
@@ -63,7 +65,12 @@ function resolveRelative(raw: string, now: DateTime, timezone: string): DateTime
   // "next <day>" — the soonest future occurrence, never today
   const nextMatch = lower.match(/^next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/);
   if (nextMatch) {
-    const targetWeekday = DAY_TO_WEEKDAY[nextMatch[1]];
+    // The capture group is required (always present when the match succeeds) and the
+    // regex only matches the seven day names that DAY_TO_WEEKDAY is keyed by — so both
+    // the index and the lookup are guaranteed (noUncheckedIndexedAccess types the group
+    // as `string | undefined` and the Record lookup as `number | undefined`). This same
+    // pairing of assertions repeats for the other relative-date patterns below.
+    const targetWeekday = DAY_TO_WEEKDAY[nextMatch[1]!]!;
     const daysAhead = ((targetWeekday - now.weekday + 7) % 7) || 7;
     return now.plus({ days: daysAhead }).startOf('day');
   }
@@ -71,7 +78,7 @@ function resolveRelative(raw: string, now: DateTime, timezone: string): DateTime
   // "this <day>" — this week's occurrence (ISO week: Mon=1)
   const thisMatch = lower.match(/^this\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/);
   if (thisMatch) {
-    const targetWeekday = DAY_TO_WEEKDAY[thisMatch[1]];
+    const targetWeekday = DAY_TO_WEEKDAY[thisMatch[1]!]!;
     const diff = targetWeekday - now.weekday;
     return now.plus({ days: diff }).startOf('day');
   }
@@ -81,8 +88,8 @@ function resolveRelative(raw: string, now: DateTime, timezone: string): DateTime
     /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+of\s+the\s+week\s+of\s+(.+)$/,
   );
   if (weekOfMatch) {
-    const targetWeekday = DAY_TO_WEEKDAY[weekOfMatch[1]];
-    const anchor = parseDate(weekOfMatch[2], timezone);
+    const targetWeekday = DAY_TO_WEEKDAY[weekOfMatch[1]!]!;
+    const anchor = parseDate(weekOfMatch[2]!, timezone);
     if (!anchor) return null;
     // Find Monday of the anchor's week, then jump to target day
     const monday = anchor.startOf('week'); // luxon ISO: Monday
@@ -94,8 +101,8 @@ function resolveRelative(raw: string, now: DateTime, timezone: string): DateTime
     /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+after\s+(.+)$/,
   );
   if (afterMatch) {
-    const targetWeekday = DAY_TO_WEEKDAY[afterMatch[1]];
-    const anchor = parseDate(afterMatch[2], timezone);
+    const targetWeekday = DAY_TO_WEEKDAY[afterMatch[1]!]!;
+    const anchor = parseDate(afterMatch[2]!, timezone);
     if (!anchor) return null;
     const daysAhead = ((targetWeekday - anchor.weekday + 7) % 7) || 7;
     return anchor.plus({ days: daysAhead }).startOf('day');

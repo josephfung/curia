@@ -304,7 +304,10 @@ export class FileParseHandler implements SkillHandler {
       // Extract JSON from the LLM response. The LLM may wrap it in markdown fences
       // despite instructions; the capture-group approach handles prose before/after the block.
       const fenceMatch = llmText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-      const cleaned = (fenceMatch ? fenceMatch[1] : llmText).trim();
+      // fenceMatch[1] is the capture group; under noUncheckedIndexedAccess it's typed
+      // `string | undefined`, but a successful match always populates the group (possibly
+      // empty). `?? llmText` is a no-op at runtime and satisfies the type.
+      const cleaned = (fenceMatch?.[1] ?? llmText).trim();
       const structured = JSON.parse(cleaned);
       return {
         success: true,

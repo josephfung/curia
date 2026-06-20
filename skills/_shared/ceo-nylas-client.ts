@@ -384,7 +384,10 @@ export class CeoNylasClient {
       res = await fetch(url, {
         method: 'GET',
         headers: {
-          Authorization: this.headers.Authorization,
+          // Always set in the constructor; the Record<string, string> index access types
+          // it as possibly-undefined, which the DOM HeadersInit (in scope for the skills
+          // typecheck) rejects.
+          Authorization: this.headers.Authorization!,
           Accept: 'application/octet-stream',
         },
       });
@@ -450,7 +453,14 @@ export class CeoNylasClient {
     form.append('message', JSON.stringify(messagePayload));
     for (let i = 0; i < attachments.length; i++) {
       const att = attachments[i]!;
-      form.append(`file${i}`, new Blob([att.content], { type: att.contentType }), att.filename);
+      // Node's `Buffer` (typed `Buffer<ArrayBufferLike>`) is not assignable to the DOM
+      // `BlobPart` union (in scope for the skills typecheck), which requires an
+      // ArrayBufferView backed specifically by ArrayBuffer — a zero-copy view over the
+      // Buffer keeps the ArrayBufferLike (possibly SharedArrayBuffer) buffer type. Copy
+      // into a fresh ArrayBuffer-backed Uint8Array; attachments are email-sized, so the
+      // copy is negligible and the bytes are identical.
+      const bytes = new Uint8Array(att.content);
+      form.append(`file${i}`, new Blob([bytes], { type: att.contentType }), att.filename);
     }
 
     // Omit Content-Type — fetch sets it automatically with the multipart boundary.
