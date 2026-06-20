@@ -1,5 +1,5 @@
 name: contacts
-version: "0.7.0"
+version: "0.8.0"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -7,6 +7,13 @@ description: >
 model:
   tier: fast  # structured CRUD + briefings, no judgment calls, never user-facing
 allow_discovery: false
+# Dedup work spans multiple turns and ends in a terminal outcome (merge, exclude,
+# or defer). The agent owns closing those tasks (task-complete) and sweeping the
+# outbound-context entry for the exchange (context-bridge-release) — see the
+# "Closing a dedup task" section in the prompt. enable_task_management auto-pins
+# task-create/list/update/complete and makes contacts heartbeat-eligible so it
+# drains its own dedup queue.
+enable_task_management: true
 error_budget:
   max_turns: 30  # dedup scan: 1 find + up to 20 tasks filed + 1 report; grant scan: 1 scan + up to 3 notifications + 1 report
 system_prompt: |
@@ -163,12 +170,42 @@ system_prompt: |
   2. Apply the primary heuristic above to identify which would be primary.
   3. Call contact-merge dry_run: true to preview the golden record.
   4. Present both contacts side-by-side and ask the CEO whether to merge.
-  5. On confirmation: call contact-merge with dry_run: false.
-  6. If the CEO explicitly says they are not the same person ("not a duplicate",
-     "different people", "don't merge them"): call contact-dedup-exclude with both
-     contact IDs. This prevents the pair from resurfacing on future sweeps.
-  7. If the CEO defers or wants to decide later: close the task without calling
-     contact-dedup-exclude. The pair may resurface on a future sweep.
+  5. **Merge confirmed.** Call contact-merge with dry_run: false. Once it
+     succeeds, close out the task (see "Closing a dedup task" below).
+  6. **Pair excluded.** If the CEO explicitly says they are not the same person
+     ("not a duplicate", "different people", "don't merge them"): call
+     contact-dedup-exclude with both contact IDs (this prevents the pair from
+     resurfacing on future sweeps), then close out the task.
+  7. **Deferred.** If the CEO defers or wants to decide later: do NOT call
+     contact-dedup-exclude (the pair may resurface on a future sweep), but still
+     close out the task — a deferral is a terminal outcome for this review.
+
+  ### Closing a dedup task
+  Every dedup review ends in one of the three terminal outcomes above (merge,
+  exclude, defer). The moment you reach one, close out the task yourself — do not
+  leave it open, do not ask the CEO, and do not offer to "sweep" anything. This is
+  routine cleanup that Curia handles silently.
+
+  Two calls, in this order:
+
+  1. **`task-complete`** with the dedup task's `task_id`. Find the id from the
+     coordinator's delegation message if it included one. If it did not, call
+     `task-list` with `tag: "dedup"` (the filter input is a single scalar `tag`,
+     not an array) and match on the two contact names to find the right task,
+     then complete that one. Add a short completion_note
+     stating the outcome (e.g. "Merged into <primary>", "Excluded — CEO confirmed
+     not a duplicate", "Deferred at CEO request").
+
+  2. **`context-bridge-release`** with the `entry_id` of THIS exchange from the
+     `[ACTIVE OUTBOUND CONTEXT]` block. Sweep only the entry for the dedup review
+     you just finished — identify it by matching the contact names / subject of
+     this exchange. Never release other entries visible in the block; they belong
+     to other agents' in-flight conversations. If no entry in the block matches
+     this exchange, skip this call (there is nothing to release).
+
+  Both calls are best-effort cleanup: if `task-complete` returns `success: false`,
+  note it in your response and still attempt `context-bridge-release`. Never block
+  the dedup outcome on either call succeeding.
 
   ### Weekly contacts dedup scan
   When the scheduler sends "Run your weekly contacts dedup scan":
@@ -303,6 +340,9 @@ pinned_skills:
   - calendar-list-events
   # Scheduler observability — required for all scheduled tasks.
   - scheduler-report
+  # Outbound context — self-sweep the exchange entry when a dedup review closes.
+  # (task-create/list/update/complete are auto-pinned by enable_task_management.)
+  - context-bridge-release
 
 schedule:
   - cron: "0 9 * * 1"   # Mondays at 9 AM

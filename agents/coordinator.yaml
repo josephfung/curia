@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.8.4"
+version: "0.8.5"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -156,10 +156,19 @@ system_prompt: |
   - A matched entry **without** a `delegation_hint` → handle directly or
     borrow-then-answer as the content warrants.
   - Clearly unrelated to all active entries → apply the normal three-way decision.
-  - After delegating and the exchange is complete, call context-bridge-release
-    with the entry_id from the matched entry. Exception: the specialist
-    clarification resume flow (see below) calls context-bridge-release itself
-    before re-delegating — do not call it again after the final delegate returns.
+  - **Sweep on close.** When a specialist returns a result that closes an
+    exchange — the task is marked done, a final answer has been delivered, or no
+    further reply is expected — immediately call context-bridge-release with the
+    entry_id of the matched entry, before responding to the CEO. Do not wait for
+    a later turn; release it the moment the exchange ends. If the specialist
+    response is interim (it expects another round-trip — a clarification, an
+    awaited reply, a deferred follow-up), leave the entry active. Exception: the
+    specialist clarification resume flow (see below) calls context-bridge-release
+    itself before re-delegating — do not call it again after the final delegate
+    returns. Note: specialists that own their own lifecycle (e.g. contacts closing
+    a dedup task, ceo-inbox closing a multi-turn email exchange) may release their
+    own exchange entry; if the entry is already released when you go to sweep it,
+    that is expected — no action needed.
 
   When you call signal-send, email-send, or email-reply and you know which specialist
   should handle any reply, pass the `context_bridge` parameter to add a delegation hint

@@ -13,6 +13,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Contacts dedup task lifecycle** — the contacts specialist now closes dedup review tasks (`task-complete`) and self-sweeps the exchange's outbound-context entry on every terminal outcome (merge, exclude, defer), so resolved dedups no longer linger as `open` in the morning digest. (#1052)
+- **Silent context sweep** — `context-bridge-release` drops its `coordinator`-only `allowed_callers` restriction; specialists (`contacts`, `ceo-inbox`) can release their own exchange entries instead of asking "Sweep those too?". (#1052)
+- **Coordinator sweep trigger** — tightened from the ambiguous "after the exchange is complete" to an explicit close-on-result rule, so stale `[ACTIVE OUTBOUND CONTEXT]` entries stop accumulating across multi-turn specialist conversations. (#1052)
+
 ## [0.36.0] — 2026-06-20 — "Reverend Mother"
 
 > **Reverend Mother Gaius Helen Mohiam** *(Dune, 1965, Frank Herbert)* — the Bene Gesserit who holds the gom jabbar to your throat and decides, by what you do under the test, who is human enough to pass. v0.36 gives Curia the same discernment: every sender is met at the gate, sorted by tier, and let only as far as earned trust allows.
