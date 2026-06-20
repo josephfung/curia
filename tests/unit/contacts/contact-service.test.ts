@@ -786,6 +786,43 @@ describe('ContactService', () => {
       expect((await service.getContact(primary.id))?.tier).toBe('principal');
     });
 
+    it('refuses to merge a structural secondary even when the primary is also structural', async () => {
+      // The guard blocks deleting ANY structural row, not just structural-into-non-structural.
+      const primary = await service.createContact({
+        displayName: 'Agent A',
+        tier: 'known',
+        source: 'ceo_stated',
+      });
+      await service.setTier(primary.id, 'principal');
+      const secondary = await service.createContact({
+        displayName: 'Agent B',
+        tier: 'known',
+        source: 'ceo_stated',
+      });
+      await service.setTier(secondary.id, 'principal');
+      await expect(service.mergeContacts(primary.id, secondary.id, false))
+        .rejects.toThrow(/Cannot merge structural contact/);
+      expect(await service.getContact(secondary.id)).toBeDefined();
+    });
+
+    it('never downgrades a structural primary to blocked when merging a blocked duplicate', async () => {
+      // blocked-wins must not apply to a structural primary — merging a blocked stranger
+      // into the principal must not lock the principal out.
+      const primary = await service.createContact({
+        displayName: 'The Principal',
+        tier: 'known',
+        source: 'ceo_stated',
+      });
+      await service.setTier(primary.id, 'principal');
+      const secondary = await service.createContact({
+        displayName: 'Blocked dupe',
+        tier: 'blocked',
+        source: 'email_participant',
+      });
+      const proposal = await service.mergeContacts(primary.id, secondary.id, true);
+      expect(proposal.goldenRecord.tier).toBe('principal');
+    });
+
     it('notes from both contacts are concatenated', async () => {
       const primary = await service.createContact({
         displayName: 'Alice',

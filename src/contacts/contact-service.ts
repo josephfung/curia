@@ -48,6 +48,16 @@ export class ContactValidationError extends Error {
   }
 }
 
+/**
+ * A contact is "structural" when it represents a fixed part of the system topology
+ * rather than an ordinary correspondent: the principal, an agent, or anything with a
+ * non-null system_role. Such rows must never be deleted by a merge and a structural
+ * primary's tier must never be downgraded by survivorship. Exported for unit testing.
+ */
+export function isStructuralContact(c: Contact): boolean {
+  return c.systemRole !== null || c.kind === 'principal' || c.kind === 'agent' || c.tier === 'principal';
+}
+
 // ---------------------------------------------------------------------------
 // Email sender classification (issue #946)
 // ---------------------------------------------------------------------------
@@ -1170,18 +1180,16 @@ export class ContactService {
 
     // Structural-contact guard. A merge writes the golden record onto the primary and
     // deletes the secondary, but it only copies scalar fields (tier/displayName/role/
-    // notes) — never system_role/kind. So merging a structural contact (the principal,
-    // an agent, or anything with a system_role) into a non-structural primary would
-    // delete the real structural row and, because tier survivorship can now select the
-    // secondary's 'principal' tier, leave behind a principal-TIER row that is not the
-    // structural principal. Refuse that direction; the structural contact must be the
-    // primary (or merge the other way around).
-    const isStructural = (c: Contact): boolean =>
-      c.systemRole !== null || c.kind === 'principal' || c.kind === 'agent' || c.tier === 'principal';
-    if (isStructural(secondary) && !isStructural(primary)) {
+    // notes) — never system_role/kind. So deleting a structural contact (the principal,
+    // an agent, or anything with a system_role) via merge would destroy that structural
+    // row entirely. Refuse to merge a structural contact as the *secondary*, regardless
+    // of the primary — a structural→structural merge is just as destructive as
+    // structural→non-structural. If two rows really are the same structural entity, the
+    // structural one must be the primary (the survivor).
+    if (isStructuralContact(secondary)) {
       throw new Error(
-        `Cannot merge structural contact ${secondaryId} into non-structural primary ${primaryId}; ` +
-          `make the structural contact the primary instead.`,
+        `Cannot merge structural contact ${secondaryId} (principal/agent/system-role) — a merge ` +
+          `deletes the secondary, which would destroy the structural row. Make it the primary instead.`,
       );
     }
 
@@ -1316,11 +1324,15 @@ export class ContactService {
     const noteParts = [primary.notes, secondary.notes].filter(Boolean);
     const notes = noteParts.length > 0 ? noteParts.join('\n---\n') : null;
 
-    // Tier survivorship: a 'blocked' tier on either side always wins (most restrictive,
-    // so a merge can never un-block a contact). Otherwise the more-capable (higher
-    // TIER_RANK) tier survives, preserving any explicit CEO grant (trusted/principal).
-    const tier: ContactTier =
-      primary.tier === 'blocked' || secondary.tier === 'blocked'
+    // Tier survivorship. A structural primary (principal/agent/system-role) always keeps
+    // its own tier — a merge must never downgrade it, not even via blocked-wins: merging
+    // a 'blocked' duplicate into the principal must not lock the principal out. For
+    // ordinary contacts, a 'blocked' tier on either side wins (most restrictive, so a
+    // merge can never un-block a contact); otherwise the more-capable (higher TIER_RANK)
+    // tier survives, preserving any explicit CEO grant (trusted/principal).
+    const tier: ContactTier = isStructuralContact(primary)
+      ? primary.tier
+      : primary.tier === 'blocked' || secondary.tier === 'blocked'
         ? 'blocked'
         : TIER_RANK[primary.tier] >= TIER_RANK[secondary.tier]
           ? primary.tier

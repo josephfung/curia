@@ -47,10 +47,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **ceo-inbox agent** (v0.7.0 → v0.8.0) — automated senders default to Cleared; escalated only on actionable signals. (#953)
 - **`contact-list` skill** (v1.2.1 → v1.3.0) — default view excludes automated and agent contacts. (#953)
 
+### Fixed
+
+- **No-op contact PATCH no longer writes** — `PATCH /api/kg/contacts/:id` with only ignored/legacy fields (e.g. `status`) or no recognized field skips the DB write and the `updated_at` bump instead of emitting a spurious "contact updated". (#955)
+
 ### Security
 
 - **`createContact` rejects `tier ∈ {trusted, principal}`** — grants and the structural principal must be elevated after create, not minted in one call. (#955)
-- **Merge can't delete a structural contact** — `mergeContacts` throws when a structural secondary would merge into a non-structural primary, which previously could orphan the principal. (#955)
+- **Merge can't delete or downgrade a structural contact** — `mergeContacts` throws for *any* structural secondary (principal/agent/system-role), not just structural-into-non-structural, so a structural row can never be deleted by a merge; and a structural primary keeps its own tier, so a `blocked` duplicate can't lock out the principal. (#955)
 - **Gate C fail-closed for unstamped external tiers** — an external originator with no resolved tier now escalates instead of bypassing the gate. (#1059)
 - **Dispatcher stamps an `unknown`-tier originator for unresolved inbound senders** — defence in depth so Gate C still enforces tier policy if the channel layer skipped contact creation. (#1059)
 - **CVE-2026-53655 (pnpm bundled tar)** — removed corepack's unused pnpm cache from the production image to eliminate a bundled tar CVE.

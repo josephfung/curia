@@ -35,13 +35,17 @@ export async function runRederive(
 }> {
   // 1. Refresh every contact's confidence from current correspondence stats.
   //    fullRecomputeAll() iterates all contacts and persists updated scores,
-  //    so the subsequent listContacts() query sees fresh data.
-  //    Capture the count — it reflects every contact processed, not just candidates.
-  //    Wrap in its own try/catch so a fatal pipeline failure logs clearly and
-  //    re-throws to the CLI entry's .catch (exits 1), bypassing per-contact accounting.
+  //    so the subsequent listContacts() query sees fresh data. It catches and logs
+  //    per-contact failures internally rather than throwing, so we fold its `failed`
+  //    count into our own `errors` — otherwise a silent recompute failure would let
+  //    the script exit 0. A *fatal* pipeline failure (e.g. the initial listContacts)
+  //    still throws; we log and re-throw to the CLI entry (exits 1).
   let recomputed: number;
+  let errors = 0;
   try {
-    recomputed = await pipeline.fullRecomputeAll();
+    const result = await pipeline.fullRecomputeAll();
+    recomputed = result.recomputed;
+    errors += result.failed;
   } catch (err) {
     logger.error({ err }, 'rederive: fullRecomputeAll failed, aborting');
     throw err;
@@ -63,7 +67,8 @@ export async function runRederive(
 
   let elevated = 0;
   let skipped = 0;
-  let errors = 0;
+  // `errors` already carries any fullRecomputeAll failures from step 1; the per-candidate
+  // loop below adds to it.
   const failedContactIds: string[] = [];
 
   for (const c of candidates) {
