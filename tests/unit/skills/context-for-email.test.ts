@@ -117,10 +117,10 @@ describe('ContextForEmailHandler', () => {
     it('includes contact info when contact service finds a match', async () => {
       const cs = makeContactService();
       cs.findContactByName.mockResolvedValue([
-        { id: 'c1', displayName: 'Alice Smith', role: 'cfo', kgNodeId: null, status: 'confirmed', notes: null, createdAt: new Date(), updatedAt: new Date() },
+        { id: 'c1', displayName: 'Alice Smith', role: 'cfo', kgNodeId: null, tier: 'known', kind: 'person', notes: null, createdAt: new Date(), updatedAt: new Date() },
       ]);
       cs.getContactWithIdentities.mockResolvedValue({
-        contact: { id: 'c1', displayName: 'Alice Smith', role: 'cfo', kgNodeId: null, status: 'confirmed', notes: null, createdAt: new Date(), updatedAt: new Date() },
+        contact: { id: 'c1', displayName: 'Alice Smith', role: 'cfo', kgNodeId: null, tier: 'known', kind: 'person', notes: null, createdAt: new Date(), updatedAt: new Date() },
         identities: [
           { id: 'i1', contactId: 'c1', channel: 'email', channelIdentifier: 'alice@example.com', label: null, verified: true, verifiedAt: new Date(), source: 'ceo_stated', status: 'active' as const, createdAt: new Date(), updatedAt: new Date() },
         ],
@@ -184,10 +184,10 @@ describe('ContextForEmailHandler', () => {
       // email identity even when it appears after a defunct one in the list.
       const cs = makeContactService();
       cs.findContactByName.mockResolvedValue([
-        { id: 'c1', displayName: 'Bob Smith', role: null, kgNodeId: null, status: 'confirmed', notes: null, createdAt: new Date(), updatedAt: new Date() },
+        { id: 'c1', displayName: 'Bob Smith', role: null, kgNodeId: null, tier: 'known', kind: 'person', notes: null, createdAt: new Date(), updatedAt: new Date() },
       ]);
       cs.getContactWithIdentities.mockResolvedValue({
-        contact: { id: 'c1', displayName: 'Bob Smith', role: null, kgNodeId: null, status: 'confirmed', notes: null, createdAt: new Date(), updatedAt: new Date() },
+        contact: { id: 'c1', displayName: 'Bob Smith', role: null, kgNodeId: null, tier: 'known', kind: 'person', notes: null, createdAt: new Date(), updatedAt: new Date() },
         identities: [
           // defunct comes first in array — active must still win
           { id: 'i1', contactId: 'c1', channel: 'email', channelIdentifier: 'bob-old@example.com', label: null, verified: false, verifiedAt: null, source: 'ceo_stated', status: 'defunct' as const, createdAt: new Date(), updatedAt: new Date() },
