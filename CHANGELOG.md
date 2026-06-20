@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **CodeAnt review config** — `.codeant/instructions.json` scopes the AI reviewer's style/error-handling rules away from test files and one-shot scripts and documents project null/error idioms, cutting false-positive review noise. Dev tooling only; no runtime effect.
 - **Console Contacts: read-only View drawer** — clicking a contact opens a read-only view (editing is an explicit Edit button), so a single click can't mutate data. Shows only populated fields with smart links (mailto:/tel:/LinkedIn/`/kg?node=`), created/updated timestamps, and linked channel identities. (#1069)
 - **Console Contacts: defaults + KG links** — the page loads filtered to Known + Person by default (chips widen to All), and each row with a `kgNodeId` shows a KG deep-link icon. (#1069)
 - **`GET /api/kg/contacts/:id/identities`** — returns a contact's serialized channel identities for the Contacts View drawer. (#1069)
