@@ -7,7 +7,7 @@ import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { SignalEnvelope } from '../../../../src/channels/signal/types.js';
 import type { OutboundMessageEvent } from '../../../../src/bus/events.js';
-import type { ContactTier, ContactStatus } from '../../../../src/contacts/types.js';
+import type { ContactTier } from '../../../../src/contacts/types.js';
 import { createLogger } from '../../../../src/logger.js';
 import pino from 'pino';
 
@@ -57,21 +57,9 @@ function makeMockGateway() {
   } as unknown as OutboundGateway;
 }
 
-/**
- * Map legacy status string to the equivalent ContactTier (issue #945).
- * signal-adapter.ts now reads `tier` rather than `status` for the isKnownSender check.
- */
-function statusToTier(status: ContactStatus): ContactTier {
-  if (status === 'blocked')     return 'blocked';
-  if (status === 'provisional') return 'unknown';
-  return 'known'; // confirmed
-}
-
-function makeMockContactService(resolved: { contactId: string; status: ContactStatus } | null = null) {
-  // Populate `tier` derived from `status` so signal-adapter's tier gate works correctly.
-  const resolvedWithTier = resolved ? { ...resolved, tier: statusToTier(resolved.status) } : null;
+function makeMockContactService(resolved: { contactId: string; tier: ContactTier } | null = null) {
   return {
-    resolveByChannelIdentity: vi.fn().mockResolvedValue(resolvedWithTier),
+    resolveByChannelIdentity: vi.fn().mockResolvedValue(resolved),
     createContact: vi.fn().mockResolvedValue({ id: 'new-contact-id' }),
     linkIdentity: vi.fn().mockResolvedValue(undefined),
   } as unknown as ContactService;
@@ -153,7 +141,7 @@ describe('SignalAdapter', () => {
 
   it('sends a read receipt for a 1:1 message from a known (confirmed) sender', async () => {
     // resolveByChannelIdentity returns confirmed contact
-    const confirmedService = makeMockContactService({ contactId: 'c1', status: 'confirmed' });
+    const confirmedService = makeMockContactService({ contactId: 'c1', tier: 'known' });
     const confirmedAdapter = new SignalAdapter({
       bus,
       logger,
@@ -180,8 +168,8 @@ describe('SignalAdapter', () => {
   });
 
   it('does NOT send a read receipt for a provisional sender', async () => {
-    // resolveByChannelIdentity returns provisional contact
-    const provisionalService = makeMockContactService({ contactId: 'c2', status: 'provisional' });
+    // resolveByChannelIdentity returns tier='unknown' (was: provisional) contact
+    const provisionalService = makeMockContactService({ contactId: 'c2', tier: 'unknown' });
     const provisionalAdapter = new SignalAdapter({
       bus,
       logger,
@@ -201,7 +189,7 @@ describe('SignalAdapter', () => {
   });
 
   it('does NOT send a read receipt for a blocked sender', async () => {
-    const blockedService = makeMockContactService({ contactId: 'c3', status: 'blocked' });
+    const blockedService = makeMockContactService({ contactId: 'c3', tier: 'blocked' });
     const blockedAdapter = new SignalAdapter({
       bus,
       logger,
@@ -221,7 +209,7 @@ describe('SignalAdapter', () => {
   });
 
   it('does NOT send a read receipt for a group message even from a known sender', async () => {
-    const confirmedService = makeMockContactService({ contactId: 'c4', status: 'confirmed' });
+    const confirmedService = makeMockContactService({ contactId: 'c4', tier: 'known' });
     const confirmedAdapter = new SignalAdapter({
       bus,
       logger,
@@ -420,7 +408,7 @@ describe('SignalAdapter', () => {
       ]);
       // contactService resolves the member as confirmed (trusted)
       (contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(
-        { contactId: 'c1', status: 'confirmed', tier: 'known' as ContactTier },
+        { contactId: 'c1', tier: 'known' as ContactTier },
       );
 
       rpcClient.simulateMessage(makeGroupEnvelope(GROUP_ID));
@@ -463,7 +451,7 @@ describe('SignalAdapter', () => {
         { id: GROUP_ID, name: 'G', members: [{ number: '+14155551234' }], pendingMembers: [], isMember: true },
       ]);
       (contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(
-        { contactId: 'c1', status: 'blocked', tier: 'blocked' as ContactTier },
+        { contactId: 'c1', tier: 'blocked' as ContactTier },
       );
 
       rpcClient.simulateMessage(makeGroupEnvelope(GROUP_ID));

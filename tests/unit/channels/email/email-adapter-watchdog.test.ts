@@ -15,7 +15,7 @@ const TEST_ACCOUNT_ID = 'test-watchdog-846';
 function makeContactService(): ContactService {
   return {
     resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
-    createContact: vi.fn().mockResolvedValue({ id: 'c-test', displayName: 'Test', status: 'provisional' }),
+    createContact: vi.fn().mockResolvedValue({ id: 'c-test', displayName: 'Test', tier: 'unknown' }),
     linkIdentity: vi.fn().mockResolvedValue(undefined),
   } as unknown as ContactService;
 }

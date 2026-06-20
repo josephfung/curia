@@ -7,7 +7,7 @@ import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { ConfidencePipeline } from '../../../src/contacts/confidence-pipeline.js';
-import type { InboundSenderContext, ContactStatus, TrustLevel, TaskOriginator, ContactTier, ContactKind } from '../../../src/contacts/types.js';
+import type { InboundSenderContext, TaskOriginator, ContactTier, ContactKind } from '../../../src/contacts/types.js';
 import { createLogger } from '../../../src/logger.js';
 import type { Logger } from '../../../src/logger.js';
 
@@ -17,21 +17,10 @@ const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model
 // -- Test helpers --
 
 /**
- * Derive the canonical tier from a legacy ContactStatus value for test fixtures.
- * Mirrors the backfill logic in migration 055. Used to keep mock objects consistent
- * with the post-#945 SenderContext shape without requiring a real DB.
- */
-function statusToTier(status: ContactStatus): ContactTier {
-  if (status === 'blocked')     return 'blocked';
-  if (status === 'provisional') return 'unknown';
-  return 'known'; // confirmed
-}
-
-/**
  * Creates a mock ContactResolver that returns a resolved contact with the given trust inputs.
  * Used to exercise trust scoring paths without a real database.
  */
-function makeResolverWithContact(opts: { contactConfidence: number; trustLevel: TrustLevel | null; status: ContactStatus; tier?: ContactTier; kind?: ContactKind }): ContactResolver {
+function makeResolverWithContact(opts: { contactConfidence: number; tier?: ContactTier; kind?: ContactKind }): ContactResolver {
   return {
     resolve: async (_channel, _senderId) => ({
       resolved: true,
@@ -39,16 +28,13 @@ function makeResolverWithContact(opts: { contactConfidence: number; trustLevel: 
       displayName: 'Test Contact',
       role: null,
       systemRole: null,
-      status: opts.status,
-      // Derive tier from status unless an explicit override is provided (issue #945).
-      tier: opts.tier ?? statusToTier(opts.status),
+      tier: opts.tier ?? 'known',
       kind: opts.kind ?? 'person',
       verified: true,
       kgNodeId: null,
       knowledgeSummary: '',
       authorization: null,
       contactConfidence: opts.contactConfidence,
-      trustLevel: opts.trustLevel,
     }),
   } as unknown as ContactResolver;
 }
@@ -229,7 +215,6 @@ describe('Dispatcher unknown_sender: ignore policy', () => {
         displayName: 'Bad Actor',
         role: null,
         systemRole: null,
-        status: 'blocked',
         tier: 'blocked' as ContactTier,
         kind: 'person' as ContactKind,
         verified: false,
@@ -237,7 +222,6 @@ describe('Dispatcher unknown_sender: ignore policy', () => {
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 0,
-        trustLevel: null,
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
@@ -355,8 +339,6 @@ describe('Dispatcher — messageTrustScore', () => {
     const bus = new EventBus(logger);
     const resolver = makeResolverWithContact({
       contactConfidence: 0.8,
-      trustLevel: null,
-      status: 'confirmed',
     });
     const dispatcher = new Dispatcher({
       bus,
@@ -416,11 +398,9 @@ describe('Dispatcher — messageTrustScore', () => {
     const bus = new EventBus(logger);
     const resolver = makeResolverWithContact({
       contactConfidence: 0.0,
-      trustLevel: null,
-      // Use the real regression scenario: DB-default status='confirmed' for auto-created contacts,
-      // paired with explicit tier='unknown'. Previously, code gating on auth.contactStatus would
-      // have missed this case and silently granted full coordinator access to unknown senders.
-      status: 'confirmed',
+      // Use the real regression scenario: explicit tier='unknown' for an auto-created contact.
+      // Previously, code gating on auth.contactStatus would have missed this case and silently
+      // granted full coordinator access to unknown senders.
       tier: 'unknown',
     });
     const dispatcher = new Dispatcher({
@@ -471,8 +451,6 @@ describe('Dispatcher — messageTrustScore', () => {
 
     const resolver = makeResolverWithContact({
       contactConfidence: 0.0,
-      trustLevel: null,
-      status: 'confirmed',
     });
     const dispatcher = new Dispatcher({
       bus,
@@ -806,7 +784,6 @@ describe('Dispatcher — rate limiting', () => {
         displayName: 'Bad Actor',
         role: null,
         systemRole: null,
-        status: 'blocked',
         tier: 'blocked' as ContactTier,
         kind: 'person' as ContactKind,
         verified: false,
@@ -814,7 +791,6 @@ describe('Dispatcher — rate limiting', () => {
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 0,
-        trustLevel: null,
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
@@ -1276,7 +1252,6 @@ describe('originator metadata stamping', () => {
         displayName: 'The CEO',
         role: 'ceo',
         systemRole: 'principal' as const,
-        status: 'confirmed' as ContactStatus,
         tier: 'principal' as ContactTier,
         kind: 'principal' as ContactKind,
         verified: true,
@@ -1284,7 +1259,6 @@ describe('originator metadata stamping', () => {
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 1.0,
-        trustLevel: 'high' as TrustLevel,
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
@@ -1326,7 +1300,6 @@ describe('originator metadata stamping', () => {
         displayName: 'A Vendor',
         role: 'vendor',
         systemRole: null,
-        status: 'confirmed' as ContactStatus,
         tier: 'known' as ContactTier,
         kind: 'person' as ContactKind,
         verified: true,
@@ -1334,7 +1307,6 @@ describe('originator metadata stamping', () => {
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 0.5,
-        trustLevel: null,
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
@@ -1377,7 +1349,6 @@ describe('originator metadata stamping', () => {
         displayName: 'Sneaky Vendor',
         role: 'vendor',
         systemRole: null,
-        status: 'confirmed' as ContactStatus,
         tier: 'known' as ContactTier,
         kind: 'person' as ContactKind,
         verified: true,
@@ -1385,7 +1356,6 @@ describe('originator metadata stamping', () => {
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 0.5,
-        trustLevel: null,
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
@@ -1644,7 +1614,6 @@ describe('Dispatcher auto-elevation — Path 2 domain-validated (#951)', () => {
         displayName: 'Corp Inc',
         role: null,
         systemRole: null,
-        status: 'provisional',
         tier: opts.tier ?? 'unknown',
         kind: opts.kind ?? 'organization',
         verified: true,
@@ -1652,7 +1621,6 @@ describe('Dispatcher auto-elevation — Path 2 domain-validated (#951)', () => {
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 0.0,
-        trustLevel: null,
       }),
     } as unknown as ContactResolver;
 
@@ -1752,7 +1720,6 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
         displayName: 'Alice',
         role: null,
         systemRole: null,
-        status: 'provisional',
         tier: opts.tier ?? 'unknown',
         kind: opts.kind ?? 'person',
         verified: true,
@@ -1760,7 +1727,6 @@ describe('Dispatcher auto-elevation — Path 3 judgment (#951)', () => {
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 0.0,
-        trustLevel: null,
       }),
     } as unknown as ContactResolver;
 
@@ -1865,7 +1831,6 @@ describe('Dispatcher — automated sender tier gate bypass (#953)', () => {
         displayName: 'Notification Bot',
         role: null,
         systemRole: null,
-        status: 'confirmed',
         tier: 'unknown' as ContactTier,
         kind: 'automated' as ContactKind,
         verified: false,
@@ -1873,7 +1838,6 @@ describe('Dispatcher — automated sender tier gate bypass (#953)', () => {
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 0,
-        trustLevel: null,
       } satisfies InboundSenderContext),
     } as unknown as ContactResolver;
 
@@ -1958,10 +1922,10 @@ describe('Dispatcher auto-elevation — Path 1 correspondence (#951)', () => {
             resolved: true,
             contactId: resolvedContactId,
             displayName: 'Test Recipient',
-            role: null, systemRole: null, status: 'provisional',
+            role: null, systemRole: null,
             tier: 'unknown', kind: 'person', verified: true,
             kgNodeId: null, knowledgeSummary: '', authorization: null,
-            contactConfidence: 0.1, trustLevel: null,
+            contactConfidence: 0.1,
           }
         : { resolved: false, channel: 'email', senderId: 'unknown@example.com' },
     );

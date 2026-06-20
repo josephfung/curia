@@ -7,7 +7,8 @@ function makeContact(overrides: Partial<Contact> & { id: string; displayName: st
   return {
     kgNodeId: null,
     role: null,
-    status: 'confirmed',
+    tier: 'known',
+    kind: 'person',
     notes: null,
     createdAt: new Date('2025-01-01'),
     updatedAt: new Date('2025-01-01'),

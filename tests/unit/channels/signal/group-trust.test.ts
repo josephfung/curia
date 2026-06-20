@@ -3,34 +3,18 @@ import { checkGroupMemberTrust } from '../../../../src/channels/signal/group-tru
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { ContactTier } from '../../../../src/contacts/types.js';
 
-// Map legacy status values to their equivalent tier for test fixtures.
-// group-trust.ts now reads `tier` rather than `status` (issue #945).
-function statusToTier(status: 'confirmed' | 'provisional' | 'blocked'): ContactTier {
-  if (status === 'blocked')     return 'blocked';
-  if (status === 'provisional') return 'unknown';
-  return 'known'; // confirmed
-}
-
 /**
  * Build a ContactService mock that returns the provided contact record
  * for the given phone numbers, and null for any other identifier.
- *
- * Accepts `status` for readability, but also sets `tier` to keep mock objects
- * consistent with the post-#945 ResolvedSender shape.
  */
 function makeContactService(
-  responses: Record<string, { contactId: string; status: 'confirmed' | 'provisional' | 'blocked' } | null>,
+  responses: Record<string, { contactId: string; tier: ContactTier } | null>,
 ): ContactService {
   return {
     resolveByChannelIdentity: vi.fn().mockImplementation(
       (_channel: string, identifier: string) => {
         const entry = responses[identifier] ?? null;
-        if (!entry) return Promise.resolve(null);
-        return Promise.resolve({
-          ...entry,
-          // Populate `tier` derived from `status` so group-trust.ts's tier gate works.
-          tier: statusToTier(entry.status),
-        });
+        return Promise.resolve(entry);
       },
     ),
   } as unknown as ContactService;
@@ -39,8 +23,8 @@ function makeContactService(
 describe('checkGroupMemberTrust', () => {
   it('returns trusted:true when all members are verified contacts', async () => {
     const svc = makeContactService({
-      '+14155551234': { contactId: 'c1', status: 'confirmed' },
-      '+14165559999': { contactId: 'c2', status: 'confirmed' },
+      '+14155551234': { contactId: 'c1', tier: 'known' },
+      '+14165559999': { contactId: 'c2', tier: 'known' },
     });
 
     const result = await checkGroupMemberTrust(['+14155551234', '+14165559999'], svc);
@@ -50,7 +34,7 @@ describe('checkGroupMemberTrust', () => {
 
   it('surfaces a provisional contact as unknownMember', async () => {
     const svc = makeContactService({
-      '+14155551234': { contactId: 'c1', status: 'provisional' },
+      '+14155551234': { contactId: 'c1', tier: 'unknown' },
     });
 
     const result = await checkGroupMemberTrust(['+14155551234'], svc);
@@ -72,7 +56,7 @@ describe('checkGroupMemberTrust', () => {
 
   it('surfaces a blocked contact as blockedMember', async () => {
     const svc = makeContactService({
-      '+14155551234': { contactId: 'c1', status: 'blocked' },
+      '+14155551234': { contactId: 'c1', tier: 'blocked' },
     });
 
     const result = await checkGroupMemberTrust(['+14155551234'], svc);
@@ -84,8 +68,8 @@ describe('checkGroupMemberTrust', () => {
 
   it('surfaces both unknown and blocked members in a mixed group', async () => {
     const svc = makeContactService({
-      '+14155551234': { contactId: 'c1', status: 'provisional' },
-      '+14165559999': { contactId: 'c2', status: 'blocked' },
+      '+14155551234': { contactId: 'c1', tier: 'unknown' },
+      '+14165559999': { contactId: 'c2', tier: 'blocked' },
     });
 
     const result = await checkGroupMemberTrust(['+14155551234', '+14165559999'], svc);

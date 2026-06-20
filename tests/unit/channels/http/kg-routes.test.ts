@@ -50,8 +50,6 @@ function makeContact(overrides: Record<string, unknown> = {}) {
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
     displayName: 'Test User',
     role: null,
-    status: 'confirmed',
-    trustLevel: null,
     tier: 'known',
     kind: 'person',
     systemRole: null,
