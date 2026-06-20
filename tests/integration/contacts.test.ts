@@ -148,13 +148,13 @@ describeIf('Contacts Integration', () => {
         displayName: 'Jenna Torres',
         role: 'CFO',
         source: 'ceo_stated',
-        status: 'confirmed',
+        tier: 'known',
       });
       const secondary = await contactService.createContact({
         displayName: 'J. Torres',
         role: null,
         source: 'email_participant',
-        status: 'provisional',
+        tier: 'unknown',
       });
       await contactService.linkIdentity({
         contactId: primary.id,
@@ -184,10 +184,13 @@ describeIf('Contacts Integration', () => {
       expect(emails).toContain('jenna.torres@acme.com');
       expect(emails).toContain('j.torres@acme.com');
 
-      // Golden record: role from primary, status most-restrictive (provisional > confirmed)
+      // Golden record: role from primary; tier survivorship takes the MORE capable
+      // tier when neither side is blocked (post-#955: known beats unknown). This is a
+      // deliberate change from the old most-restrictive-status rule — a CEO grant is
+      // never silently downgraded by a merge.
       const updated = await contactService.getContact(primary.id);
       expect(updated?.role).toBe('CFO');
-      expect(updated?.status).toBe('provisional'); // secondary was provisional
+      expect(updated?.tier).toBe('known'); // primary was known, more capable than secondary's unknown
     });
 
     it('dry_run does not modify any contacts', async () => {
@@ -195,13 +198,13 @@ describeIf('Contacts Integration', () => {
         displayName: 'Alice Smith',
         role: 'CTO',
         source: 'ceo_stated',
-        status: 'confirmed',
+        tier: 'known',
       });
       const secondary = await contactService.createContact({
         displayName: 'Alice Smith',
         role: null,
         source: 'email_participant',
-        status: 'confirmed',
+        tier: 'known',
       });
 
       const proposal = await contactService.mergeContacts(primary.id, secondary.id, true);
@@ -220,12 +223,12 @@ describeIf('Contacts Integration', () => {
       const primary = await contactService.createContact({
         displayName: 'Bob',
         source: 'ceo_stated',
-        status: 'confirmed',
+        tier: 'known',
       });
       const secondary = await contactService.createContact({
         displayName: 'Bob Smith',
         source: 'email_participant',
-        status: 'confirmed',
+        tier: 'known',
       });
 
       // Primary explicitly grants view_financial_reports; secondary denies it.
@@ -262,12 +265,12 @@ describeIf('Contacts Integration', () => {
       const a = await svc.createContact({
         displayName: 'Carol White',
         source: 'ceo_stated',
-        status: 'confirmed',
+        tier: 'known',
       });
       const b = await svc.createContact({
         displayName: 'C. White',
         source: 'email_participant',
-        status: 'provisional',
+        tier: 'unknown',
       });
 
       const pairs = await svc.findDuplicates();

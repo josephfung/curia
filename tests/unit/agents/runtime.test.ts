@@ -37,14 +37,12 @@ const CONFIRMED_SENDER_CONTEXT = {
   displayName: 'Test User',
   role: null,
   systemRole: null,
-  status: 'confirmed' as const,
   tier: 'known' as const,
   kind: 'person' as const,
   verified: true,
   kgNodeId: null,
   knowledgeSummary: '',
   authorization: {
-    contactStatus: 'confirmed' as const,
     allowed: [] as string[],
     denied: [] as string[],
     escalate: [] as string[],
@@ -52,7 +50,6 @@ const CONFIRMED_SENDER_CONTEXT = {
     trustBlocked: [] as string[],
   },
   contactConfidence: 1.0,
-  trustLevel: null,
 };
 
 describe('AgentRuntime', () => {
@@ -1107,12 +1104,10 @@ describe('AgentRuntime', () => {
     expect(systemMsg).toContain('## Your Contact Details');
     expect(systemMsg).toContain('- Contact ID: 11111111-1111-4111-8111-111111111111');
   });
-  it('injects LOW-TRUST block when tier=unknown even if status=confirmed and authorization.contactStatus=confirmed', async () => {
-    // Regression guard for the status/tier decoupling bug: auto-created contacts have
-    // tier='unknown' but the DB default for status is 'confirmed'. Before the fix, the
-    // runtime gated LOW-TRUST injection on auth.contactStatus !== 'confirmed', so a contact
-    // with status='confirmed' and tier='unknown' would silently receive full coordinator
-    // access instead of the behavioral constraints. The fix keys on senderCtx.tier.
+  it('injects LOW-TRUST block when tier=unknown', async () => {
+    // The runtime gates LOW-TRUST injection on senderCtx.tier (the single capability
+    // axis after the #955 cutover). A tier='unknown' contact must receive the
+    // behavioral constraints regardless of its authorization permission set.
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -1137,18 +1132,13 @@ describe('AgentRuntime', () => {
         displayName: 'stranger@example.com',
         role: null,
         systemRole: null,
-        // status='confirmed' is the DB default — auto-created contacts get this even
-        // though they have tier='unknown'. The runtime must not trust status here.
-        status: 'confirmed' as const,
         tier: 'unknown' as const,
         kind: 'person' as const,
         verified: false,
         kgNodeId: null,
         knowledgeSummary: '',
-        // authorization.contactStatus reflects status column (legacy) — also 'confirmed'.
-        // This is the value that the pre-fix runtime incorrectly used to decide LOW-TRUST.
+        // A permissive authorization result must NOT override the tier='unknown' gate.
         authorization: {
-          contactStatus: 'confirmed' as const,
           allowed: ['view_basic_info'],
           denied: [] as string[],
           escalate: [] as string[],
@@ -1156,7 +1146,6 @@ describe('AgentRuntime', () => {
           trustBlocked: [] as string[],
         },
         contactConfidence: 0.0,
-        trustLevel: null,
       },
     });
     await bus.publish('dispatch', task);

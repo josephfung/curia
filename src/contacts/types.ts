@@ -6,12 +6,9 @@ export interface Contact {
   displayName: string;
   role: string | null;
   systemRole: SystemRole | null;
-  // Legacy columns (deprecated, kept until #955 drops them). New code reads `tier`.
-  status: ContactStatus;
-  trustLevel: TrustLevel | null;
-  // New capability axis (issue #945). `tier` is the single ordered capability axis
-  // that replaces the status/trust_level read path. `kind` is a descriptive facet.
-  // Added in migration 055.
+  // Capability axis (issue #945). `tier` is the single ordered capability axis
+  // that replaced the legacy status/trust_level read path (removed in #955).
+  // `kind` is a descriptive facet. Added in migration 055.
   tier: ContactTier;
   kind: ContactKind;
   // Trust scoring fields (migration 020)
@@ -88,12 +85,6 @@ export type IdentitySource =
 // Orthogonal to `verified` — an address can be verified-but-bounced.
 export type IdentityStatus = 'active' | 'defunct' | 'bounced';
 
-// -- Contact status --
-// confirmed: CEO has verified this contact
-// blocked: CEO explicitly rejected/blocked this sender
-// provisional: legacy value — mapped to tier='unknown' in migration #055; no longer created by new code
-export type ContactStatus = 'confirmed' | 'provisional' | 'blocked';
-
 export interface AuthOverride {
   id: string;
   contactId: string;
@@ -114,10 +105,7 @@ export interface CreateContactOptions {
    */
   fallbackDisplayName?: string;
   role?: string;
-  // `status` is the legacy field; callers may still set it. When `tier` is also provided,
-  // `tier` takes precedence. When only `status` is set, tier is derived from it.
-  status?: ContactStatus;
-  // `tier` is the new capability axis from issue #945. Preferred over `status` for new callers.
+  // `tier` is the capability axis from issue #945 (the legacy `status` option was removed in #955).
   tier?: ContactTier;
   // `kind` is the descriptive facet from issue #945.
   kind?: ContactKind;
@@ -157,10 +145,8 @@ export interface ResolvedSender {
   displayName: string;
   role: string | null;
   systemRole: SystemRole | null;
-  // Legacy columns — kept until #955 drops them. New code reads `tier`.
-  status: ContactStatus;
-  trustLevel: TrustLevel | null;  // per-contact override, or null
-  // New capability axis (issue #945). Canonical read path going forward.
+  // Capability axis (issue #945). Canonical read path; the legacy status/trust_level
+  // fields were removed in #955.
   tier: ContactTier;
   kind: ContactKind;
   kgNodeId: string | null;
@@ -175,8 +161,6 @@ export interface SenderContext {
   displayName: string;
   role: string | null;
   systemRole: SystemRole | null;
-  // Legacy columns — kept until #955 drops them. New code reads `tier`.
-  status: ContactStatus;
   verified: boolean;
   kgNodeId: string | null;
   /** Facts from the KG about this person, formatted for prompt inclusion */
@@ -184,9 +168,8 @@ export interface SenderContext {
   authorization: AuthorizationResult | null;
   // Trust scoring inputs — available when contact was found in DB. Not propagated to bus events.
   contactConfidence: number;      // 0.0–1.0
-  /** @deprecated Use .tier instead — column will be dropped in #955 */
-  trustLevel: TrustLevel | null;  // per-contact override, or null
-  // New capability axis (issue #945). Canonical read path going forward.
+  // Capability axis (issue #945). Canonical read path; the legacy status/trust_level
+  // fields were removed in #955.
   tier: ContactTier;
   kind: ContactKind;
 }
@@ -346,8 +329,6 @@ export interface AuthorizationResult {
   channelTrust: TrustLevel;
   /** Permissions blocked by insufficient channel trust (allowed by role but channel too low) */
   trustBlocked: string[];
-  // TODO(#955): Replace contactStatus with contactTier once all callers have migrated.
-  contactStatus: ContactStatus;
 }
 
 export interface AuthConfig {
@@ -403,7 +384,9 @@ export interface MergeGoldenRecord {
   displayName: string;
   role: string | null;
   notes: string | null;
-  status: ContactStatus;
+  // `tier` survivorship: blocked-on-either-side wins; else the higher TIER_RANK.
+  // Replaced the legacy `status` field (most-restrictive-status-wins) in #955.
+  tier: ContactTier;
   identities: ChannelIdentity[];  // union of both contacts' identities
   authOverrides: Array<{ permission: string; granted: boolean }>;
 }

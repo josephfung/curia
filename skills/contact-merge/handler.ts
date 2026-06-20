@@ -71,7 +71,8 @@ export class ContactMergeHandler implements SkillHandler {
             display_name: goldenRecord.displayName,
             role: goldenRecord.role,
             notes: goldenRecord.notes,
-            status: goldenRecord.status,
+            // tier replaced the legacy status field on the golden record in #955.
+            tier: goldenRecord.tier,
             identity_count: goldenRecord.identities.length,
             auth_override_count: goldenRecord.authOverrides.length,
           },

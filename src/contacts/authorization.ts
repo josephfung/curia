@@ -3,12 +3,12 @@
 // Deterministic authorization evaluation. No LLM involved — this is pure logic.
 //
 // Three-layer check:
-// 1. Contact status gate — provisional and blocked contacts get zero permissions
+// 1. Tier gate — contacts below the 'known' tier (unknown, blocked) get zero permissions
 // 2. Per-contact overrides → role defaults → escalate (for permissions in neither)
 // 3. Channel trust — high-sensitivity actions on low-trust channels are trust-blocked
 //
 // Role lookup is case-insensitive: LLM-assigned roles like 'Spouse' match 'spouse' in config.
-// If the role has no config match, falls back to tier defaults so confirmed
+// If the role has no config match, falls back to tier defaults so known-or-higher
 // contacts with an explicit tier grant still get appropriate permissions.
 // Effective trust = max(channel trust, contact tier rank) — a contact's tier
 // grant is not downgraded by the channel's inherent floor.
@@ -16,11 +16,10 @@
 import type {
   AuthConfig,
   AuthorizationResult,
-  ContactStatus,
   ContactTier,
   TrustLevel,
 } from './types.js';
-import { TRUST_RANK } from './types.js';
+import { TRUST_RANK, meetsMinimumTier } from './types.js';
 
 // Map ContactTier to a trust rank comparable to TRUST_RANK for effective-trust gating.
 // principal≈ceo(3), trusted≈high(2), known≈medium(1), unknown/blocked=0.
@@ -39,9 +38,9 @@ interface AuthOverrideInput {
 
 export interface AuthEvaluateInput {
   role: string | null;
-  /** Contact tier from DB. Used for role-defaults fallback and effective-trust gating. */
+  /** Contact tier from DB — the single capability axis. Drives the Gate-1 deny,
+   *  role-defaults fallback, and effective-trust gating. */
   tier: ContactTier;
-  status: ContactStatus;
   channel: string;
   overrides: AuthOverrideInput[];
 }
@@ -50,7 +49,7 @@ export interface AuthEvaluateInput {
  * Deterministic authorization service.
  *
  * Evaluates what a contact is allowed to do based on:
- * 1. Contact status (provisional/blocked → zero permissions)
+ * 1. Contact tier (below 'known' — i.e. unknown or blocked → zero permissions)
  * 2. Per-contact overrides (explicit grants/denials from the CEO)
  * 3. Role defaults (from config/role-defaults.yaml, case-insensitive lookup)
  *    Falls back to tier_defaults when no role match exists.
@@ -65,32 +64,22 @@ export class AuthorizationService {
   evaluate(input: AuthEvaluateInput): AuthorizationResult {
     const channelTrust = this.config.channelTrust[input.channel] ?? 'low';
 
-    // Gate 1: provisional and blocked contacts get zero permissions.
-    // This is the hardest gate — no overrides or role defaults can bypass it.
-    if (input.status !== 'confirmed') {
+    // Gate 1: contacts below the 'known' tier get zero permissions — no overrides or
+    // role defaults can bypass it. This single tier gate covers both the unknown and
+    // blocked cases (the former separate status/blocked-tier gates):
+    //   - tier='unknown' (was status='provisional') < known → deny-all.
+    //   - tier='blocked' (was status='blocked')     < known → deny-all.
+    // Equivalent to the retired `status !== 'confirmed'` gate under migration-055's mapping
+    // (confirmed ⟺ tier ∈ {known,trusted,principal}; provisional ⟺ unknown; blocked ⟺ blocked).
+    // Because blocked (rank 0) < known (rank 2), this also prevents a high-trust channel from
+    // granting permissions to a blocked contact via Math.max(channelTrustRank, 0).
+    if (!meetsMinimumTier(input.tier, 'known')) {
       return {
         allowed: [],
         denied: ['*'],
         escalate: [],
         channelTrust,
         trustBlocked: [],
-        contactStatus: input.status,
-      };
-    }
-
-    // Gate 2: blocked-tier contacts get zero permissions, regardless of status or channel.
-    // tier and status are set independently — a contact can have status='confirmed' but
-    // tier='blocked' (e.g. blocked at the tier level before status was updated). Without
-    // this gate, Math.max(channelTrustRank, 0) for a high-trust channel would grant
-    // permissions to a blocked contact because TIER_TO_TRUST_RANK['blocked'] = 0.
-    if (input.tier === 'blocked') {
-      return {
-        allowed: [],
-        denied: ['*'],
-        escalate: [],
-        channelTrust,
-        trustBlocked: [],
-        contactStatus: input.status,
       };
     }
 
@@ -202,7 +191,6 @@ export class AuthorizationService {
       escalate,
       channelTrust,
       trustBlocked,
-      contactStatus: input.status,
     };
   }
 }

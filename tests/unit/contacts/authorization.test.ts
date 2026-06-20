@@ -71,49 +71,46 @@ describe('AuthorizationService', () => {
     const result = authService.evaluate({
       role: 'ceo',
       tier: 'principal',
-      status: 'confirmed',
       channel: 'cli',
       overrides: [],
     });
     expect(result.allowed).toContain('*');
     expect(result.denied).toEqual([]);
-    expect(result.contactStatus).toBe('confirmed');
   });
 
-  it('provisional contacts get no permissions', () => {
+  it('unknown-tier contacts get no permissions (Gate 1)', () => {
+    // Post-cutover, the single capability axis is `tier`. tier='unknown' is the
+    // former status='provisional' — below the 'known' floor → zero permissions,
+    // regardless of role or channel.
     const result = authService.evaluate({
       role: 'cfo',
-      tier: 'known',
-      status: 'provisional',
+      tier: 'unknown',
       channel: 'email',
       overrides: [],
     });
     expect(result.allowed).toEqual([]);
     expect(result.denied).toContain('*');
-    expect(result.contactStatus).toBe('provisional');
   });
 
-  it('blocked contacts get no permissions', () => {
-    const result = authService.evaluate({
-      role: 'cfo',
-      tier: 'known',
-      status: 'blocked',
-      channel: 'email',
-      overrides: [],
-    });
-    expect(result.allowed).toEqual([]);
-    expect(result.denied).toContain('*');
-    expect(result.contactStatus).toBe('blocked');
-  });
-
-  it('blocked-tier contact on high-trust channel gets no permissions', () => {
-    // tier='blocked' and status='confirmed' can diverge (tier is set independently).
-    // Without a hard gate, Math.max(channelRank=2, tierRank=0)=2 would grant high-trust
-    // permissions to a blocked contact on a cli/signal channel. Gate 2 prevents this.
+  it('blocked-tier contacts get no permissions (Gate 1)', () => {
+    // tier='blocked' is the former status='blocked'. blocked < known, so the same
+    // single tier gate denies it — folding the old separate blocked-tier gate.
     const result = authService.evaluate({
       role: 'cfo',
       tier: 'blocked',
-      status: 'confirmed',
+      channel: 'email',
+      overrides: [],
+    });
+    expect(result.allowed).toEqual([]);
+    expect(result.denied).toContain('*');
+  });
+
+  it('blocked-tier contact on high-trust channel gets no permissions', () => {
+    // Without a hard gate, Math.max(channelRank=2, tierRank=0)=2 would grant high-trust
+    // permissions to a blocked contact on a cli/signal channel. Gate 1 (tier < known) prevents this.
+    const result = authService.evaluate({
+      role: 'cfo',
+      tier: 'blocked',
       channel: 'cli',
       overrides: [],
     });
@@ -122,11 +119,10 @@ describe('AuthorizationService', () => {
     expect(result.trustBlocked).toEqual([]);
   });
 
-  it('applies role defaults for confirmed contacts', () => {
+  it('applies role defaults for known-tier contacts', () => {
     const result = authService.evaluate({
       role: 'cfo',
       tier: 'known',
-      status: 'confirmed',
       channel: 'cli',
       overrides: [],
     });
@@ -138,9 +134,7 @@ describe('AuthorizationService', () => {
   it('overrides take precedence over role defaults', () => {
     const result = authService.evaluate({
       role: 'cfo',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'cli',
+      tier: 'known',      channel: 'cli',
       overrides: [
         { permission: 'send_on_behalf', granted: true },
         { permission: 'view_financial_reports', granted: false },
@@ -153,9 +147,7 @@ describe('AuthorizationService', () => {
   it('channel trust blocks high-sensitivity actions on low-trust channels', () => {
     const result = authService.evaluate({
       role: 'cfo',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'known',      channel: 'email',
       overrides: [],
     });
     expect(result.trustBlocked).toContain('view_financial_reports');
@@ -165,9 +157,7 @@ describe('AuthorizationService', () => {
   it('unknown roles with unknown tier fall back to unknown tier defaults', () => {
     const result = authService.evaluate({
       role: 'some_new_role',
-      tier: 'unknown',
-      status: 'confirmed',
-      channel: 'cli',
+      tier: 'unknown',      channel: 'cli',
       overrides: [],
     });
     expect(result.denied).toContain('*');
@@ -177,9 +167,7 @@ describe('AuthorizationService', () => {
   it('null role with unknown tier uses unknown tier defaults', () => {
     const result = authService.evaluate({
       role: null,
-      tier: 'unknown',
-      status: 'confirmed',
-      channel: 'cli',
+      tier: 'unknown',      channel: 'cli',
       overrides: [],
     });
     expect(result.denied).toContain('*');
@@ -188,9 +176,7 @@ describe('AuthorizationService', () => {
   it('permissions not in role defaults or overrides go to escalate', () => {
     const result = authService.evaluate({
       role: 'cfo',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'cli',
+      tier: 'known',      channel: 'cli',
       overrides: [],
     });
     expect(result.escalate).toContain('see_personal_calendar');
@@ -199,9 +185,7 @@ describe('AuthorizationService', () => {
   it('returns correct channel trust level', () => {
     const result = authService.evaluate({
       role: 'cfo',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'known',      channel: 'email',
       overrides: [],
     });
     expect(result.channelTrust).toBe('low');
@@ -210,9 +194,7 @@ describe('AuthorizationService', () => {
   it('unknown channels default to low trust', () => {
     const result = authService.evaluate({
       role: 'cfo',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'unknown_channel',
+      tier: 'known',      channel: 'unknown_channel',
       overrides: [],
     });
     expect(result.channelTrust).toBe('low');
@@ -225,9 +207,7 @@ describe('AuthorizationService', () => {
     // Without normalization this falls to the 'unknown' role (denied: ['*']).
     const result = authService.evaluate({
       role: 'Spouse',
-      tier: 'trusted',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'trusted',      channel: 'email',
       overrides: [],
     });
     // Should get spouse role permissions, not unknown's wildcard deny
@@ -238,9 +218,7 @@ describe('AuthorizationService', () => {
   it('role lookup is case-insensitive: CEO matches ceo role', () => {
     const result = authService.evaluate({
       role: 'CEO',
-      tier: 'principal',
-      status: 'confirmed',
-      channel: 'cli',
+      tier: 'principal',      channel: 'cli',
       overrides: [],
     });
     expect(result.allowed).toContain('*');
@@ -254,9 +232,7 @@ describe('AuthorizationService', () => {
     // Should fall back to tierDefaults['trusted'] instead of 'unknown'.
     const result = authService.evaluate({
       role: 'Sister',
-      tier: 'trusted',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'trusted',      channel: 'email',
       overrides: [],
     });
     // tierDefaults.trusted grants see_personal_calendar
@@ -268,9 +244,7 @@ describe('AuthorizationService', () => {
   it('unrecognized role with known tier falls back to tierDefaults', () => {
     const result = authService.evaluate({
       role: 'CEO, Communitech',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'known',      channel: 'email',
       overrides: [],
     });
     // tierDefaults.known grants schedule_meetings (low sensitivity → not trust-blocked)
@@ -281,9 +255,7 @@ describe('AuthorizationService', () => {
   it('unrecognized role with unknown tier uses unknown tier defaults', () => {
     const result = authService.evaluate({
       role: 'Head Instructor, Kitchener Kicks',
-      tier: 'unknown',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'unknown',      channel: 'email',
       overrides: [],
     });
     // No role match, unknown tier → tierDefaults.unknown → denied: ['*']
@@ -299,9 +271,7 @@ describe('AuthorizationService', () => {
     // With fix: max(low, trusted)=trusted(2) >= medium(1) → allowed.
     const result = authService.evaluate({
       role: 'spouse',
-      tier: 'trusted',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'trusted',      channel: 'email',
       overrides: [],
     });
     expect(result.trustBlocked).not.toContain('see_personal_calendar');
@@ -314,9 +284,7 @@ describe('AuthorizationService', () => {
     // effectiveTrustRank = max(0, 1) = 1; view_financial_reports sensitivity=high(rank=2) → blocked.
     const result = authService.evaluate({
       role: 'cfo',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'known',      channel: 'email',
       overrides: [],
     });
     // view_financial_reports is high sensitivity → trust-blocked on email
@@ -334,9 +302,7 @@ describe('AuthorizationService', () => {
     // High-sensitivity permissions remain blocked (see test above).
     const result = authService.evaluate({
       role: 'spouse',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'known',      channel: 'email',
       overrides: [],
     });
     // see_personal_calendar: medium sensitivity, spouse role grants it → now allowed (was trust-blocked pre-#1070)
@@ -351,9 +317,7 @@ describe('AuthorizationService', () => {
     // Without fix: see_personal_calendar trust-blocked. With fix: max(low,principal)=principal(3) → allowed.
     const result = authService.evaluate({
       role: 'ceo',
-      tier: 'principal',
-      status: 'confirmed',
-      channel: 'email',
+      tier: 'principal',      channel: 'email',
       overrides: [],
     });
     expect(result.trustBlocked).not.toContain('see_personal_calendar');
@@ -379,9 +343,7 @@ describe('AuthorizationService', () => {
     const service = new AuthorizationService(minimalConfig);
     const result = service.evaluate({
       role: 'some_unrecognized_role',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'cli',
+      tier: 'known',      channel: 'cli',
       overrides: [],
     });
     // Hard-deny fallback: defaultPermissions: [], defaultDeny: ['*']
@@ -403,9 +365,7 @@ describe('AuthorizationService', () => {
     const service = new AuthorizationService(configWithPartialDefaults);
     const result = service.evaluate({
       role: 'Sister',     // No 'sister' in roles → tries tierDefaults
-      tier: 'trusted',    // 'trusted' not in partial tierDefaults → falls to unknown role
-      status: 'confirmed',
-      channel: 'cli',
+      tier: 'trusted',    // 'trusted' not in partial tierDefaults → falls to unknown role      channel: 'cli',
       overrides: [],
     });
     // Falls through to unknown role → denied: ['*']
@@ -417,17 +377,17 @@ describe('AuthorizationService', () => {
 
   it('throws when tier is not a recognized ContactTier value', () => {
     // A corrupt DB row or a new enum value deployed to DB before code catches up
-    // must throw rather than silently collapsing to rank 0 (= low trust).
-    // The contact-resolver.ts catch block will handle this with authorization=null.
+    // must throw rather than silently collapsing to rank 0 (= low trust). After the
+    // #955 cutover, Gate 1 calls meetsMinimumTier() first, so an unrecognized tier
+    // throws from there. The contact-resolver.ts catch block handles it (authorization=null).
     expect(() =>
       authService.evaluate({
         role: 'cfo',
         tier: 'super_trusted' as unknown as ContactTier,
-        status: 'confirmed',
         channel: 'email',
         overrides: [],
       }),
-    ).toThrow(/Unknown tier/);
+    ).toThrow(/unrecognized tier value/);
   });
 
   // --- Issue 3: escalate when permission sensitivity has no TRUST_RANK entry ---
@@ -451,9 +411,7 @@ describe('AuthorizationService', () => {
     });
     const result = serviceWithBadSensitivity.evaluate({
       role: 'cfo',
-      tier: 'known',
-      status: 'confirmed',
-      channel: 'cli',
+      tier: 'known',      channel: 'cli',
       overrides: [],
     });
     expect(result.escalate).toContain('schedule_meetings');
