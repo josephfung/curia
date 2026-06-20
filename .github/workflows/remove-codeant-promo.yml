@@ -1,0 +1,38 @@
+# Deletes CodeAnt's promotional issue comments (the "Thanks for using CodeAnt! 🎉"
+# / share-on-social footer) as soon as the bot posts them. This targets only
+# PR/issue *conversation* comments — line-level code-review comments are a
+# different object type (pull_request_review_comment) that this workflow never
+# sees, so CodeAnt's actual review feedback is left untouched.
+#
+# Reactive by design: GitHub has no pre-publish hook for bot comments, so the
+# comment appears briefly before this removes it. If CodeAnt rewords the promo,
+# update the `contains(...)` signature below.
+
+name: Remove CodeAnt promo comments
+
+on:
+  issue_comment:
+    types: [created]
+
+# Repo-scoped token is enough to delete the bot's comment. issue_comment
+# workflows always run from the default branch, so this covers every PR.
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  delete-promo:
+    runs-on: ubuntu-latest
+    # Two independent guards: the comment must be from the CodeAnt bot AND carry
+    # the promo signature. A real review comment matches neither.
+    if: >
+      github.event.comment.user.login == 'codeant-ai[bot]' &&
+      contains(github.event.comment.body, 'Thanks for using CodeAnt')
+    steps:
+      - name: Delete the promo comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api -X DELETE "repos/${REPO}/issues/comments/${COMMENT_ID}"
