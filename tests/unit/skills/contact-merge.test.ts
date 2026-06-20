@@ -68,7 +68,7 @@ describe('ContactMergeHandler', () => {
     // don't receive senderContext, so caller is undefined in that path.
     const goldenRecord = {
       displayName: 'Jenna Torres', role: 'CFO', notes: null,
-      status: 'confirmed', identities: [], authOverrides: [],
+      tier: 'known', identities: [], authOverrides: [],
     };
     const contactService = {
       mergeContacts: vi.fn().mockResolvedValue({
@@ -89,7 +89,7 @@ describe('ContactMergeHandler', () => {
   it('calls mergeContacts with dry_run: true by default', async () => {
     const goldenRecord = {
       displayName: 'Jenna Torres', role: 'CFO', notes: null,
-      status: 'confirmed', identities: [], authOverrides: [],
+      tier: 'known', identities: [], authOverrides: [],
     };
     const contactService = {
       mergeContacts: vi.fn().mockResolvedValue({
@@ -116,7 +116,7 @@ describe('ContactMergeHandler', () => {
       mergeContacts: vi.fn().mockResolvedValue({
         primaryContactId: VALID_UUID_A,
         secondaryContactId: VALID_UUID_B,
-        goldenRecord: { displayName: 'Alice', role: null, notes: null, status: 'confirmed', identities: [], authOverrides: [] },
+        goldenRecord: { displayName: 'Alice', role: null, notes: null, tier: 'known', identities: [], authOverrides: [] },
         dryRun: false,
         mergedAt: new Date('2026-04-05T12:00:00Z'),
       }),

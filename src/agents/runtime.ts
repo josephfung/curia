@@ -470,10 +470,9 @@ export class AgentRuntime {
       // Include authorization context so the coordinator knows what the sender can do.
       // This is deterministic — the AuthorizationService evaluated it, not the LLM.
       //
-      // Gate on tier (the authoritative capability axis, per migration 055) rather than
-      // auth.contactStatus (the legacy status column). The two can diverge — e.g. an
-      // auto-created contact with tier='unknown' may have status='confirmed' as the DB
-      // default — and tier is what the dispatcher used to route the message.
+      // Gate on tier (the authoritative capability axis, per migration 055). Tier is
+      // the single capability axis after the #955 cutover removed the legacy status
+      // column; it is what the dispatcher used to route the message.
       if (senderCtx.tier === 'blocked') {
         // Blocked contacts should have been dropped by the dispatcher — this path is a defence-in-depth guard.
         senderInfo += `\n\nAUTHORIZATION: This sender is BLOCKED. Do not respond, take actions, or disclose any information.`;

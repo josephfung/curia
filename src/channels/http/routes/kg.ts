@@ -731,10 +731,7 @@ export async function knowledgeGraphRoutes(
       kgNodeId: c.kgNodeId,
       displayName: c.displayName,
       role: c.role,
-      // Legacy columns — kept until #955 drops them.
-      status: c.status,
-      trustLevel: c.trustLevel,
-      // New capability axis (issue #945).
+      // Capability axis (issue #945) — the legacy status/trust_level fields were removed in #955.
       tier: c.tier,
       kind: c.kind,
       systemRole: c.systemRole,

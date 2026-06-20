@@ -61,13 +61,11 @@ export class ContactResolver {
             displayName: principal.displayName,
             role: principal.role,
             systemRole: principal.systemRole,
-            status: 'confirmed' as const,
             verified: true,
             kgNodeId: principal.kgNodeId,
             knowledgeSummary: '',
             authorization: null,
             contactConfidence: 1.0,   // principal always gets max confidence
-            trustLevel: null,
             // Principal always gets the highest tier and is always kind='principal'.
             // Set unconditionally — the stored row value is authoritative only for the
             // warning check above; we never surface a non-principal kind for the CEO.
@@ -102,13 +100,11 @@ export class ContactResolver {
         displayName: 'CEO',
         role: 'ceo',
         systemRole: 'principal',
-        status: 'confirmed' as const,
         verified: true,
         kgNodeId: null,
         knowledgeSummary: '',
         authorization: null,
         contactConfidence: 1.0,   // principal always gets max confidence
-        trustLevel: null,
         tier: 'principal' as ContactTier,
         kind: 'principal' as ContactKind,
       };
@@ -150,7 +146,6 @@ export class ContactResolver {
         authorization = this.authService.evaluate({
           role: resolved.role,
           tier: resolved.tier,
-          status: resolved.status ?? 'confirmed',
           channel,
           overrides,
         });
@@ -176,13 +171,11 @@ export class ContactResolver {
       displayName: resolved.displayName,
       role: resolved.role,
       systemRole: resolved.systemRole,
-      status: resolved.status ?? 'confirmed',
       verified: resolved.verified,
       kgNodeId: resolved.kgNodeId,
       knowledgeSummary,
       authorization,
       contactConfidence: resolved.contactConfidence,
-      trustLevel: resolved.trustLevel,
       tier: resolved.tier,
       kind: resolved.kind,
     };

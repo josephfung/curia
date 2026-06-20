@@ -1120,26 +1120,27 @@ describe('OutboundGateway contact promotion on successful send', () => {
     body: 'Hi Donna!',
   };
 
-  it('promotes a provisional contact to confirmed after a successful send', async () => {
+  it('promotes an unknown-tier contact to known after a successful send', async () => {
     const nylasClient = {
       sendMessage: vi.fn().mockResolvedValue({ id: 'sent-1' }),
     } as unknown as NylasClient;
 
     const contactService = {
       resolveByChannelIdentity: vi.fn()
-        // First call: blocked-contact check (returns provisional/unknown)
-        .mockResolvedValueOnce({ contactId: 'contact-donna', status: 'provisional', tier: 'unknown', kind: 'person', trustLevel: null })
-        // Second call: promotion lookup (returns provisional/unknown again)
-        .mockResolvedValueOnce({ contactId: 'contact-donna', status: 'provisional', tier: 'unknown', kind: 'person', trustLevel: null }),
-      setStatus: vi.fn().mockResolvedValue(undefined),
+        // First call: blocked-contact check (returns tier='unknown')
+        .mockResolvedValueOnce({ contactId: 'contact-donna', tier: 'unknown', kind: 'person' })
+        // Second call: promotion lookup (returns tier='unknown' again)
+        .mockResolvedValueOnce({ contactId: 'contact-donna', tier: 'unknown', kind: 'person' }),
+      // Post-#955: promotion goes through elevateTierToKnown (unknown→known), not setStatus.
+      elevateTierToKnown: vi.fn().mockResolvedValue(true),
     } as unknown as ContactService;
 
     const gateway = makeGateway(contactService, nylasClient);
     const result = await gateway.send(baseRequest);
 
     expect(result.success).toBe(true);
-    expect(contactService.setStatus).toHaveBeenCalledOnce();
-    expect(contactService.setStatus).toHaveBeenCalledWith('contact-donna', 'confirmed');
+    expect(contactService.elevateTierToKnown).toHaveBeenCalledOnce();
+    expect(contactService.elevateTierToKnown).toHaveBeenCalledWith('contact-donna', 'correspondence');
     // trustLevel band-aid removed — confidence pipeline handles scoring now
     // (pipeline is optional and not provided in this test, so no scoring call fires)
   });
@@ -1179,7 +1180,7 @@ describe('OutboundGateway contact promotion on successful send', () => {
     // (pipeline is optional and not provided in this test, so no scoring call fires)
   });
 
-  it('does not promote a contact that is already confirmed', async () => {
+  it('does not promote a contact that is already at tier="known"', async () => {
     const nylasClient = {
       sendMessage: vi.fn().mockResolvedValue({ id: 'sent-3' }),
     } as unknown as NylasClient;
@@ -1187,12 +1188,10 @@ describe('OutboundGateway contact promotion on successful send', () => {
     const contactService = {
       resolveByChannelIdentity: vi.fn().mockResolvedValue({
         contactId: 'contact-confirmed',
-        status: 'confirmed',
         tier: 'known',       // issue #945
         kind: 'person',
-        trustLevel: null,
       }),
-      setStatus: vi.fn(),
+      elevateTierToKnown: vi.fn(),
       createContact: vi.fn(),
     } as unknown as ContactService;
 
@@ -1200,7 +1199,7 @@ describe('OutboundGateway contact promotion on successful send', () => {
     const result = await gateway.send(baseRequest);
 
     expect(result.success).toBe(true);
-    expect(contactService.setStatus).not.toHaveBeenCalled();
+    expect(contactService.elevateTierToKnown).not.toHaveBeenCalled();
     expect(contactService.createContact).not.toHaveBeenCalled();
   });
 
@@ -1242,7 +1241,7 @@ describe('OutboundGateway contact promotion on successful send', () => {
     const contactService = {
       resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
       createContact: vi.fn(),
-      setStatus: vi.fn(),
+      elevateTierToKnown: vi.fn(),
     } as unknown as ContactService;
 
     const gateway = makeGateway(contactService, nylasClient);
@@ -1250,7 +1249,7 @@ describe('OutboundGateway contact promotion on successful send', () => {
 
     expect(result.success).toBe(false);
     expect(contactService.createContact).not.toHaveBeenCalled();
-    expect(contactService.setStatus).not.toHaveBeenCalled();
+    expect(contactService.elevateTierToKnown).not.toHaveBeenCalled();
   });
 
   it('succeeds even if contact promotion throws a DB error (fail-open)', async () => {

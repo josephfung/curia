@@ -14,12 +14,11 @@ import type { DbPool, DbPoolClient } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import { sanitizeDisplayName } from '../skills/sanitize.js';
-import { TRUST_RANK, TIER_RANK, IdentityNotFoundError } from './types.js';
+import { TIER_RANK, IdentityNotFoundError } from './types.js';
 import type {
   AuthOverride,
   Contact,
   ContactCanonicalFields,
-  ContactStatus,
   ContactTier,
   ContactKind,
   ChannelIdentity,
@@ -37,7 +36,6 @@ import type {
   IdentitySource,
   IdentityStatus,
   SystemRole,
-  TrustLevel,
 } from './types.js';
 import type { DedupService } from './dedup-service.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
@@ -48,45 +46,6 @@ export class ContactValidationError extends Error {
     super(message);
     this.name = 'ContactValidationError';
   }
-}
-
-// ---------------------------------------------------------------------------
-// Tier derivation helpers (issue #945)
-// ---------------------------------------------------------------------------
-// These are internal helpers used by ContactService methods that write to the
-// `tier` column. Exported for testing but not intended for external callers.
-
-/**
- * Derive an initial tier for a freshly created contact from its status.
- * New contacts never start as 'trusted' or 'principal' — those require
- * explicit setTier() or bootstrap calls after creation.
- */
-export function deriveInitialTier(status: ContactStatus): ContactTier {
-  if (status === 'blocked')     return 'blocked';
-  if (status === 'provisional') return 'unknown';
-  // 'confirmed' (the default)
-  return 'known';
-}
-
-/**
- * Derive the new tier when setStatus() is called, preserving any elevated tier
- * that was previously granted (trusted/principal).
- *
- * Rules:
- * - 'blocked' always overrides — a blocked contact loses any previous tier.
- * - 'provisional' → 'unknown' (unless already 'principal', which shouldn't happen
- *   in practice — principal contacts are never set back to provisional).
- * - 'confirmed' → preserve 'trusted'/'principal' if already set; otherwise 'known'.
- */
-export function deriveTierFromStatusUpdate(
-  newStatus: ContactStatus,
-  existingTier: ContactTier,
-): ContactTier {
-  if (newStatus === 'blocked')     return 'blocked';
-  if (newStatus === 'provisional') return 'unknown';
-  // confirmed: preserve elevated tiers
-  if (existingTier === 'trusted' || existingTier === 'principal') return existingTier;
-  return 'known';
 }
 
 // ---------------------------------------------------------------------------
@@ -176,21 +135,13 @@ interface ContactServiceBackend {
   findContactByKgNodeId(kgNodeId: string): Promise<Contact | null>;
   findContactByRole(role: string): Promise<Contact[]>;
   findContactBySystemRole(systemRole: SystemRole): Promise<Contact | null>;
-  listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]>;
+  listContacts(filters?: { tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]>;
   updateContact(contact: Contact, client?: DbPoolClient): Promise<void>;
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
   unlinkIdentity(identityId: string): Promise<boolean>;
   setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity>;
-
-  /**
-   * Atomically promote a contact from provisional → confirmed only if the contact's
-   * current status is still 'provisional' at write time. Returns true if the row was
-   * updated, false if the contact was not provisional (concurrent block or already
-   * confirmed) — callers should treat false as "promotion did not happen".
-   */
-  promoteToConfirmed(contactId: string): Promise<boolean>;
 
   /**
    * Atomically elevate a contact's tier from 'unknown' to 'known'.
@@ -501,18 +452,12 @@ export class ContactService {
       }
     }
 
-    const contactStatus: ContactStatus = options.status ?? 'confirmed';
-
-    // Derive tier for new contacts. If `tier` is explicitly provided, use it directly.
-    // Otherwise, derive from the legacy `status` field:
-    //   blocked   → tier='blocked'
-    //   provisional → tier='unknown'
-    //   confirmed  → tier='known'
+    // Tier for new contacts. If `tier` is explicitly provided, use it directly.
+    // Otherwise default to 'known' (the former status='confirmed' default).
     //
-    // Note: new contacts always start with the status-derived tier, so we never derive
-    // 'trusted' or 'principal' here — those are set via setTier() or bootstrap
-    // after the contact exists.
-    const contactTier: ContactTier = options.tier ?? deriveInitialTier(contactStatus);
+    // Note: new contacts never start as 'trusted' or 'principal' — those are set via
+    // setTier() or bootstrap after the contact exists.
+    const contactTier: ContactTier = options.tier ?? 'known';
 
     // Derive kind: org routing in resolveOrCreateOrgNode() takes precedence over
     // the caller-supplied kind, which in turn overrides the 'person' default.
@@ -526,12 +471,10 @@ export class ContactService {
       // system_role is set only by bootstrap via direct SQL or updateContact; new contacts
       // created through the normal flow always start with null and get assigned explicitly.
       systemRole: null,
-      status: contactStatus,
       tier: contactTier,
       kind: contactKind,
       // Trust scoring fields default to zero/null on creation; updated by the scoring pipeline
       contactConfidence: 0,
-      trustLevel: null,
       lastSeenAt: null,
       inboundMessageCount: 0,
       outboundMessageCount: 0,
@@ -659,8 +602,8 @@ export class ContactService {
     return this.backend.findContactBySystemRole(systemRole);
   }
 
-  /** List contacts, optionally filtered by status, tier, kind, and/or capped by limit with offset for pagination. */
-  async listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
+  /** List contacts, optionally filtered by tier, kind, and/or capped by limit with offset for pagination. */
+  async listContacts(filters?: { tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
     return this.backend.listContacts(filters);
   }
 
@@ -871,35 +814,6 @@ export class ContactService {
     return { contact, identities };
   }
 
-  /** Update a contact's status (confirmed, provisional, blocked).
-   *
-   * Also updates `tier` to keep the two in sync. The tier derivation preserves any
-   * 'trusted' or 'principal' tier that was previously set (via setTier or
-   * bootstrap) — those are not downgraded by a status-only change. Specifically:
-   *   - status='blocked'     → tier='blocked'   (always overrides)
-   *   - status='provisional' → tier='unknown'   (unless already trusted/principal)
-   *   - status='confirmed'   → tier stays if already 'trusted'/'principal', else 'known'
-   */
-  async setStatus(contactId: string, status: ContactStatus): Promise<Contact> {
-    const contact = await this.backend.getContact(contactId);
-    if (!contact) {
-      throw new Error(`Contact not found: ${contactId}`);
-    }
-
-    // Derive the new tier from status while preserving elevated tiers.
-    // blocked always wins. For confirmed, preserve trusted/principal already granted.
-    const newTier = deriveTierFromStatusUpdate(status, contact.tier);
-
-    const updated: Contact = {
-      ...contact,
-      status,
-      tier: newTier,
-      updatedAt: new Date(),
-    };
-
-    return this.updateStoredContact(updated);
-  }
-
   /**
    * Directly set a contact's tier. Accepts the four user-settable tiers only
    * (blocked/unknown/known/trusted); 'principal' is structural and must not be
@@ -1013,17 +927,6 @@ export class ContactService {
     };
 
     return this.updateStoredContact(updated, client);
-  }
-
-  /**
-   * Atomically promote a contact from provisional → confirmed.
-   * Returns true if the promotion happened, false if the contact was not provisional
-   * at write time (concurrent block or already confirmed). This is the preferred
-   * method for auto-promotion: it prevents TOCTOU races where a concurrent admin
-   * block could be silently overwritten by an unconditional setStatus call.
-   */
-  async promoteToConfirmed(contactId: string): Promise<boolean> {
-    return this.backend.promoteToConfirmed(contactId);
   }
 
   /**
@@ -1235,7 +1138,7 @@ export class ContactService {
    * Golden record survivorship rules:
    * - display_name, role: most-recent-wins (primary wins on tie)
    * - notes: concatenate with separator
-   * - status: most-restrictive wins (blocked > provisional > confirmed)
+   * - tier: blocked-on-either-side wins (most restrictive); otherwise the higher TIER_RANK
    * - channel identities: union (duplicates discarded)
    * - auth overrides: union (primary wins on same-permission conflict)
    * - KG nodes: merged via entityMemory.mergeEntities() (Phase 1: scalar + facts)
@@ -1283,25 +1186,20 @@ export class ContactService {
       await this.backend.reattachIdentities(secondaryId, primaryId);
       await this.backend.reattachAuthOverrides(secondaryId, primaryId);
 
-      // Write the golden record fields onto the primary contact.
-      // Also re-derive tier from the merged status to keep them in sync.
-      //
-      // Survivorship takes the MORE CAPABLE of the two tiers, then re-derives via
-      // deriveTierFromStatusUpdate so a blocked golden record always wins.
-      // Rationale: tier represents a CEO grant (e.g. the CEO explicitly trusted a
-      // secondary contact). Merging should never silently downgrade that grant —
-      // losing a 'trusted' tier because the primary happened to be 'known' is
-      // incorrect, especially since #944's dedup calls mergeContacts.
-      const mergedExistingTier = TIER_RANK[primary.tier] >= TIER_RANK[secondary.tier]
-        ? primary.tier
-        : secondary.tier;
+      // Write the golden record fields onto the primary contact. The surviving tier
+      // is computed by computeGoldenRecord (blocked-on-either-side wins; else higher
+      // TIER_RANK) — the single source of survivorship truth. Rationale: tier
+      // represents a CEO grant (e.g. the CEO explicitly trusted a secondary contact).
+      // Merging should never silently downgrade that grant — losing a 'trusted' tier
+      // because the primary happened to be 'known' is incorrect, especially since
+      // #944's dedup calls mergeContacts. A 'blocked' tier on either side always wins
+      // so a merge can never un-block a contact.
       const updatedPrimary: Contact = {
         ...primary,
         displayName: goldenRecord.displayName,
         role: goldenRecord.role,
         notes: goldenRecord.notes,
-        status: goldenRecord.status,
-        tier: deriveTierFromStatusUpdate(goldenRecord.status, mergedExistingTier),
+        tier: goldenRecord.tier,
         updatedAt: new Date(),
       };
       await this.backend.updateContact(updatedPrimary);
@@ -1392,14 +1290,15 @@ export class ContactService {
     const noteParts = [primary.notes, secondary.notes].filter(Boolean);
     const notes = noteParts.length > 0 ? noteParts.join('\n---\n') : null;
 
-    // Most-restrictive status wins: blocked > provisional > confirmed.
-    // We keep this logic on the legacy status field for the MergeGoldenRecord interface.
-    // TODO(#955): Migrate MergeGoldenRecord to use tier instead of status once legacy columns drop.
-    const STATUS_RANK: Record<ContactStatus, number> = { blocked: 3, provisional: 2, confirmed: 1 };
-    const status: ContactStatus =
-      STATUS_RANK[primary.status] >= STATUS_RANK[secondary.status]
-        ? primary.status
-        : secondary.status;
+    // Tier survivorship: a 'blocked' tier on either side always wins (most restrictive,
+    // so a merge can never un-block a contact). Otherwise the more-capable (higher
+    // TIER_RANK) tier survives, preserving any explicit CEO grant (trusted/principal).
+    const tier: ContactTier =
+      primary.tier === 'blocked' || secondary.tier === 'blocked'
+        ? 'blocked'
+        : TIER_RANK[primary.tier] >= TIER_RANK[secondary.tier]
+          ? primary.tier
+          : secondary.tier;
 
     // Union of identities — deduplicated by channel:channelIdentifier key
     const identityKeys = new Set<string>();
@@ -1421,7 +1320,7 @@ export class ContactService {
       }
     }
 
-    return { displayName, role, notes, status, identities, authOverrides };
+    return { displayName, role, notes, tier, identities, authOverrides };
   }
 }
 
@@ -1436,10 +1335,8 @@ type ContactRow = {
   display_name: string;
   role: string | null;
   system_role: string | null;
-  // Legacy columns (kept until #955 drops them)
-  status: string;
-  trust_level: string | null;
-  // New capability axis (migration 055)
+  // Capability axis (migration 055). The legacy status/trust_level columns still exist
+  // in the DB (dropped later in migration 059) but are no longer read into the row shape.
   tier: string;
   kind: string;
   contact_confidence: string;
@@ -1467,7 +1364,7 @@ type ContactRow = {
 // Column list for all SELECT queries that return a full Contact row.
 // tier and kind added in migration 055.
 const CONTACT_COLS =
-  'id, kg_node_id, display_name, role, system_role, status, trust_level, tier, kind, ' +
+  'id, kg_node_id, display_name, role, system_role, tier, kind, ' +
   'contact_confidence, last_seen_at, inbound_message_count, outbound_message_count, notes, ' +
   'created_at, updated_at, ' +
   'preferred_name, title, organization, primary_email, primary_phone, timezone, locale, location, ' +
@@ -1490,14 +1387,14 @@ class PostgresContactBackend implements ContactServiceBackend {
     // tier and kind added in migration 055
     await this.pool.query(
       `INSERT INTO contacts (
-         id, kg_node_id, display_name, role, system_role, status, tier, kind, notes, created_at, updated_at,
+         id, kg_node_id, display_name, role, system_role, tier, kind, notes, created_at, updated_at,
          preferred_name, title, organization, primary_email, primary_phone, timezone, locale,
          location, pronouns, linkedin_url, bio, birthday
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                 $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
       [
         contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.systemRole,
-        contact.status, contact.tier, contact.kind, contact.notes, contact.createdAt, contact.updatedAt,
+        contact.tier, contact.kind, contact.notes, contact.createdAt, contact.updatedAt,
         contact.preferredName, contact.title, contact.organization, contact.primaryEmail,
         contact.primaryPhone, contact.timezone, contact.locale, contact.location,
         contact.pronouns, contact.linkedinUrl, contact.bio, contact.birthday,
@@ -1558,16 +1455,11 @@ class PostgresContactBackend implements ContactServiceBackend {
     return this.rowToContact(row);
   }
 
-  async listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
+  async listContacts(filters?: { tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
-    if (filters?.status != null) {
-      params.push(filters.status);
-      conditions.push(`status = $${params.length}`);
-    }
-
-    // tier filter (issue #945) — prefer this over status for new callers.
+    // tier filter (issue #945) — the single capability axis after the #955 cutover.
     if (filters?.tier != null) {
       params.push(filters.tier);
       conditions.push(`tier = $${params.length}`);
@@ -1602,20 +1494,20 @@ class PostgresContactBackend implements ContactServiceBackend {
   async updateContact(contact: Contact, client?: DbPoolClient): Promise<void> {
     this.logger.debug({ contactId: contact.id }, 'contacts: updating contact');
     // system_role is included so bootstrap and any future setter can persist it through the standard update path.
-    // tier and kind (migration 055) are included so setStatus/setTier keep them in sync.
+    // tier and kind (migration 055) are included so setTier keeps them in sync.
     // contact_confidence and last_seen_at remain scoring-owned and are not updated here.
     const queryFn = client ?? this.pool;
     await queryFn.query(
       `UPDATE contacts SET
-         kg_node_id = $2, display_name = $3, role = $4, system_role = $5, status = $6,
-         notes = $7, tier = $8, kind = $9, updated_at = $10,
-         preferred_name = $11, title = $12, organization = $13, primary_email = $14,
-         primary_phone = $15, timezone = $16, locale = $17, location = $18,
-         pronouns = $19, linkedin_url = $20, bio = $21, birthday = $22
+         kg_node_id = $2, display_name = $3, role = $4, system_role = $5,
+         notes = $6, tier = $7, kind = $8, updated_at = $9,
+         preferred_name = $10, title = $11, organization = $12, primary_email = $13,
+         primary_phone = $14, timezone = $15, locale = $16, location = $17,
+         pronouns = $18, linkedin_url = $19, bio = $20, birthday = $21
        WHERE id = $1`,
       [
         contact.id, contact.kgNodeId, contact.displayName, contact.role, contact.systemRole,
-        contact.status, contact.notes, contact.tier, contact.kind, contact.updatedAt,
+        contact.notes, contact.tier, contact.kind, contact.updatedAt,
         contact.preferredName, contact.title, contact.organization, contact.primaryEmail,
         contact.primaryPhone, contact.timezone, contact.locale, contact.location,
         contact.pronouns, contact.linkedinUrl, contact.bio, contact.birthday,
@@ -1713,15 +1605,13 @@ class PostgresContactBackend implements ContactServiceBackend {
       display_name: string;
       role: string | null;
       system_role: string | null;
-      status: string;
-      trust_level: string | null;
       tier: string;
       kind: string;
       kg_node_id: string | null;
       verified: boolean;
       contact_confidence: string;  // NUMERIC returned as string by node-pg
     }>(
-      `SELECT c.id, c.display_name, c.role, c.system_role, c.status, c.trust_level,
+      `SELECT c.id, c.display_name, c.role, c.system_role,
               c.tier, c.kind, c.kg_node_id, cci.verified, c.contact_confidence
        FROM contact_channel_identities cci
        JOIN contacts c ON c.id = cci.contact_id
@@ -1739,9 +1629,8 @@ class PostgresContactBackend implements ContactServiceBackend {
       displayName: row.display_name,
       role: row.role,
       // Validate system_role — DB CHECK constraint normally prevents invalid values, but
-      // guard defensively the same way we guard trust_level below.
+      // guard defensively the same way we guard tier below.
       systemRole: (row.system_role === 'principal' || row.system_role === 'agent') ? row.system_role : null,
-      status: row.status as ContactStatus,
       kgNodeId: row.kg_node_id,
       verified: row.verified,
       // PostgreSQL returns NUMERIC as a string via node-pg.
@@ -1751,12 +1640,6 @@ class PostgresContactBackend implements ContactServiceBackend {
         const v = parseFloat(row.contact_confidence);
         return isFinite(v) ? v : 0.0;
       })(),
-      // Validate trust_level against the allowed enum — the DB CHECK constraint prevents
-      // invalid values under normal operation, but a direct DB edit or future migration
-      // could introduce an unexpected value that produces NaN via an undefined lookup.
-      trustLevel: (Object.keys(TRUST_RANK) as TrustLevel[]).includes(row.trust_level as TrustLevel)
-        ? row.trust_level as TrustLevel
-        : null,
       // Validate tier against the allowed enum — fail-closed on corrupt DB values.
       // null/undefined (column absent pre-migration) → 'unknown' (benign, conservative).
       // A PRESENT but unrecognized value is a data integrity problem: log at ERROR and
@@ -1792,25 +1675,6 @@ class PostgresContactBackend implements ContactServiceBackend {
     return (result.rowCount ?? 0) > 0;
   }
 
-  async promoteToConfirmed(contactId: string): Promise<boolean> {
-    // Atomic conditional update — only flips to confirmed when status is STILL
-    // 'provisional' at DB write time. Guards against concurrent blocks between
-    // the caller's last getContact check and this write (TOCTOU mitigation).
-    //
-    // Also upgrades tier from 'unknown' → 'known'. Provisional contacts always
-    // have tier='unknown' (enforced by the create path), so CASE WHEN tier='unknown'
-    // is a safety guard for any row that might have a non-default tier despite being
-    // provisional (shouldn't happen, but defensive). 'trusted'/'principal' are preserved.
-    const result = await this.pool.query(
-      `UPDATE contacts
-       SET status = 'confirmed',
-           tier   = CASE WHEN tier = 'unknown' THEN 'known' ELSE tier END,
-           updated_at = now()
-       WHERE id = $1 AND status = 'provisional'`,
-      [contactId],
-    );
-    return (result.rowCount ?? 0) > 0;
-  }
 
   async elevateTierToKnown(contactId: string, _reason: string): Promise<boolean> {
     // Atomic conditional: only upgrades tier when it is STILL 'unknown' at write time
@@ -2128,12 +1992,7 @@ class PostgresContactBackend implements ContactServiceBackend {
       systemRole: (row.system_role === 'principal' || row.system_role === 'agent' || row.system_role === 'system')
         ? row.system_role
         : null,
-      // Legacy columns (kept until #955 drops them)
-      status: row.status as ContactStatus,
-      trustLevel: (Object.keys(TRUST_RANK) as TrustLevel[]).includes(row.trust_level as TrustLevel)
-        ? row.trust_level as TrustLevel
-        : null,
-      // New capability axis (migration 055). Fail-closed on corrupt DB values:
+      // Capability axis (migration 055). Fail-closed on corrupt DB values:
       // null/undefined (column absent pre-migration) → safe default.
       // A PRESENT but unrecognized tier is a data integrity problem — log at ERROR
       // and return 'blocked' so a corrupted 'blocked' row cannot be un-blocked by
@@ -2322,14 +2181,10 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return null;
   }
 
-  async listContacts(filters?: { status?: ContactStatus; tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
+  async listContacts(filters?: { tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
     let results = [...this.contacts.values()];
 
-    if (filters?.status != null) {
-      results = results.filter((c) => c.status === filters.status);
-    }
-
-    // tier filter (issue #945) — prefer this over status for new callers
+    // tier filter (issue #945) — the single capability axis after the #955 cutover
     if (filters?.tier != null) {
       results = results.filter((c) => c.tier === filters.tier);
     }
@@ -2388,20 +2243,6 @@ class InMemoryContactBackend implements ContactServiceBackend {
       lastSeenAt: updates.lastSeenAt ?? contact.lastSeenAt,
       updatedAt: new Date(),
     });
-  }
-
-  async promoteToConfirmed(contactId: string): Promise<boolean> {
-    // JS is single-threaded, so check-and-set here is effectively atomic for tests.
-    // The same conditional-update semantics as the Postgres implementation apply.
-    const contact = this.contacts.get(contactId);
-    if (!contact || contact.status !== 'provisional') return false;
-    // When promoting from provisional → confirmed, only upgrade tier to 'known' if
-    // it was 'unknown'. Don't downgrade 'trusted'/'principal' (in-memory backend
-    // matches Postgres behaviour: promoteToConfirmed only fires on provisional rows,
-    // which by definition have tier='unknown').
-    const newTier: ContactTier = contact.tier === 'unknown' ? 'known' : contact.tier;
-    this.contacts.set(contactId, { ...contact, status: 'confirmed', tier: newTier, updatedAt: new Date() });
-    return true;
   }
 
   async elevateTierToKnown(contactId: string, _reason: string): Promise<boolean> {
@@ -2463,8 +2304,6 @@ class InMemoryContactBackend implements ContactServiceBackend {
             displayName: contact.displayName,
             role: contact.role,
             systemRole: contact.systemRole,
-            status: contact.status,
-            trustLevel: contact.trustLevel ?? null,
             tier: contact.tier,
             kind: contact.kind,
             kgNodeId: contact.kgNodeId,

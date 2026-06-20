@@ -1107,18 +1107,21 @@ export class OutboundGateway {
     if (contact.tier === 'unknown') {
       // tier='unknown' == old status='provisional'. The outbound send implicitly confirms
       // this contact — we know the CEO's system is reaching out to them, so they're trusted
-      // enough to receive replies. Promote to 'known' tier (confirmed status).
-      // Uses tier for the gate check (issue #945).
+      // enough to receive replies. Promote unknown → known via elevateTierToKnown, which
+      // is a no-op for already-higher tiers (so a trusted contact is never downgraded) and
+      // is non-throwing (returns false on error). Uses tier for the gate check (issue #945).
       try {
-        await this.contactService.setStatus(contact.contactId, 'confirmed');
-        this.log.info(
-          { channel, recipientId: redactId(recipientId), contactId: contact.contactId },
-          'outbound-gateway: promoted unknown-tier contact to known after outbound send',
-        );
+        const elevated = await this.contactService.elevateTierToKnown(contact.contactId, 'correspondence');
+        if (elevated) {
+          this.log.info(
+            { channel, recipientId: redactId(recipientId), contactId: contact.contactId },
+            'outbound-gateway: promoted unknown-tier contact to known after outbound send',
+          );
+        }
       } catch (err) {
         this.log.warn(
           { err, channel, recipientId: redactId(recipientId), contactId: contact.contactId },
-          'outbound-gateway: setStatus failed after successful send — recipient may still receive holds on replies',
+          'outbound-gateway: elevateTierToKnown failed after successful send — recipient may still receive holds on replies',
         );
         return;
       }

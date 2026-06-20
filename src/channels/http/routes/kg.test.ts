@@ -21,8 +21,6 @@ const BASE_CONTACT: Contact = {
   displayName: 'Alice',
   role: null,
   systemRole: null,
-  status: 'confirmed',
-  trustLevel: null,
   tier: 'known',
   kind: 'person',
   contactConfidence: 0,

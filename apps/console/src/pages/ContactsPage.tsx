@@ -21,10 +21,7 @@ interface Contact {
   kgNodeId: string | null;
   displayName: string;
   role: string | null;
-  // Legacy columns — kept until #955 drops them.
-  status: string;
-  trustLevel: string | null;
-  // Capability axis (migration 055).
+  // Capability axis (migration 055). The legacy status/trust_level fields were removed in #955.
   tier: ContactTier;
   kind: ContactKind;
   systemRole: SystemRole;
