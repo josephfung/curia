@@ -58,15 +58,15 @@ describeIf('bootstrapCeoContact', () => {
 
     // Verify the contact row was created with the correct fields
     const contact = await pool.query<{
-      id: string; display_name: string; role: string; status: string; kg_node_id: string;
+      id: string; display_name: string; role: string; tier: string; kg_node_id: string;
     }>(
-      `SELECT id, display_name, role, status, kg_node_id FROM contacts WHERE id = $1`,
+      `SELECT id, display_name, role, tier, kg_node_id FROM contacts WHERE id = $1`,
       [result.contactId],
     );
     expect(contact.rows[0]).toBeDefined();
     expect(contact.rows[0].display_name).toBe('Bootstrap Test CEO');
     expect(contact.rows[0].role).toBe('ceo');
-    expect(contact.rows[0].status).toBe('confirmed');
+    expect(contact.rows[0].tier).toBe('principal');
     expect(contact.rows[0].kg_node_id).toBe(result.kgNodeId);
 
     // Verify the KG node was created with correct metadata
@@ -117,8 +117,8 @@ describeIf('bootstrapCeoContact', () => {
     // the auto-creation path from extractParticipants)
     const contactId = crypto.randomUUID();
     await pool.query(
-      `INSERT INTO contacts (id, display_name, role, status, trust_level, created_at, updated_at)
-       VALUES ($1, 'Bootstrap Test CEO', null, 'provisional', null, now(), now())`,
+      `INSERT INTO contacts (id, display_name, role, tier, created_at, updated_at)
+       VALUES ($1, 'Bootstrap Test CEO', null, 'unknown', now(), now())`,
       [contactId],
     );
     await pool.query(
@@ -133,12 +133,11 @@ describeIf('bootstrapCeoContact', () => {
     expect(result.contactId).toBe(contactId);
     expect(result.kgNodeId).toBeTruthy();
 
-    // Contact should now be confirmed with principal tier
-    const contact = await pool.query<{ status: string; tier: string; kg_node_id: string }>(
-      `SELECT status, tier, kg_node_id FROM contacts WHERE id = $1`,
+    // Contact should now be promoted to principal tier
+    const contact = await pool.query<{ tier: string; kg_node_id: string }>(
+      `SELECT tier, kg_node_id FROM contacts WHERE id = $1`,
       [contactId],
     );
-    expect(contact.rows[0].status).toBe('confirmed');
     expect(contact.rows[0].tier).toBe('principal');
     expect(contact.rows[0].kg_node_id).toBe(result.kgNodeId);
 
@@ -154,8 +153,8 @@ describeIf('bootstrapCeoContact', () => {
     // Simulate a contact created by old code: confirmed + verified but kg_node_id = NULL
     const contactId = crypto.randomUUID();
     await pool.query(
-      `INSERT INTO contacts (id, display_name, role, status, trust_level, created_at, updated_at)
-       VALUES ($1, 'Bootstrap Test CEO', 'ceo', 'confirmed', 'high', now(), now())`,
+      `INSERT INTO contacts (id, display_name, role, tier, created_at, updated_at)
+       VALUES ($1, 'Bootstrap Test CEO', 'ceo', 'known', now(), now())`,
       [contactId],
     );
     await pool.query(

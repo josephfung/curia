@@ -318,8 +318,8 @@ describeIf('/api/setup/* routes', () => {
       // means at most one row can have that role; ON CONFLICT DO NOTHING is
       // the cheapest way to express "make sure one exists, don't care whose".
       await pool.query(
-        `INSERT INTO contacts (id, display_name, role, status, trust_level, system_role, created_at, updated_at)
-         VALUES (gen_random_uuid(), $1, 'ceo', 'confirmed', 'ceo', 'principal', now(), now())
+        `INSERT INTO contacts (id, display_name, role, tier, kind, system_role, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, 'ceo', 'principal', 'principal', 'principal', now(), now())
          ON CONFLICT DO NOTHING`,
         [`${TEST_LABEL_PREFIX} RestartHappy`],
       );
