@@ -21,6 +21,7 @@ describe('runRederive', () => {
     const contactService = {
       listContacts: vi.fn().mockResolvedValue(unknown),
       elevateTierToKnown: vi.fn().mockResolvedValue(true),
+      getContact: vi.fn(),
     };
 
     const result = await runRederive(contactService as never, pipeline as never);
@@ -32,5 +33,51 @@ describe('runRederive', () => {
     expect(result.recomputed).toBe(2);
     // 'b' is below the threshold so it is skipped, not elevated
     expect(result.skipped).toBe(1);
+    // elevateTierToKnown returned true, so no disambiguating re-read is needed
+    expect(contactService.getContact).not.toHaveBeenCalled();
+    expect(result.errors).toBe(0);
+  });
+
+  it('counts a masked elevation failure as an error when the contact is still unknown after a false return', async () => {
+    const unknown = [{ id: 'a', tier: 'unknown', kind: 'person', contactConfidence: 0 }];
+    const pipeline = {
+      fullRecomputeAll: vi.fn().mockResolvedValue(1),
+      fullRecompute: vi.fn().mockResolvedValue(JUDGMENT_ELEVATION_THRESHOLD + 0.1),
+    };
+    const contactService = {
+      listContacts: vi.fn().mockResolvedValue(unknown),
+      // Swallowed backend failure: elevateTierToKnown catches internally and returns false.
+      elevateTierToKnown: vi.fn().mockResolvedValue(false),
+      // Re-read still shows 'unknown' → the elevation genuinely failed.
+      getContact: vi.fn().mockResolvedValue({ id: 'a', tier: 'unknown', kind: 'person' }),
+    };
+
+    const result = await runRederive(contactService as never, pipeline as never);
+
+    expect(contactService.getContact).toHaveBeenCalledWith('a');
+    expect(result.elevated).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toBe(1);
+    expect(result.failedContactIds).toEqual(['a']);
+  });
+
+  it('treats a false return as a benign skip when the contact is already elevated (concurrent no-op)', async () => {
+    const unknown = [{ id: 'a', tier: 'unknown', kind: 'person', contactConfidence: 0 }];
+    const pipeline = {
+      fullRecomputeAll: vi.fn().mockResolvedValue(1),
+      fullRecompute: vi.fn().mockResolvedValue(JUDGMENT_ELEVATION_THRESHOLD + 0.1),
+    };
+    const contactService = {
+      listContacts: vi.fn().mockResolvedValue(unknown),
+      elevateTierToKnown: vi.fn().mockResolvedValue(false),
+      // Re-read shows it is already 'known' → a concurrent elevation won the race.
+      getContact: vi.fn().mockResolvedValue({ id: 'a', tier: 'known', kind: 'person' }),
+    };
+
+    const result = await runRederive(contactService as never, pipeline as never);
+
+    expect(result.errors).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.failedContactIds).toEqual([]);
   });
 });

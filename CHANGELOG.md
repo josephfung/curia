@@ -50,6 +50,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`createContact` rejects `tier ∈ {trusted, principal}`** — capability grants and the structural principal can no longer be minted in a single create call; a contact must be created at `known`/`unknown`/`blocked` and elevated explicitly via `setTier()`/grant or bootstrap. (#955)
+- **Merge refuses to delete a structural contact** — `mergeContacts` now throws when a structural secondary (system-role/principal/agent, or `tier='principal'`) would be merged into a non-structural primary, which previously could orphan the real principal and leave a bogus `principal`-tier row behind. The structural contact must be the primary. (#955)
 - **Gate C fail-closed for unstamped external tiers** — an external originator with no resolved tier now escalates instead of bypassing the gate. (#1059)
 - **Dispatcher stamps an `unknown`-tier originator for unresolved inbound senders** — defence in depth so Gate C still enforces tier policy if the channel layer skipped contact creation. (#1059)
 - **CVE-2026-53655 (pnpm bundled tar)** — removed corepack's unused pnpm cache from the production image to eliminate a bundled tar CVE.

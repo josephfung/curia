@@ -72,6 +72,17 @@ describe('ContactService', () => {
       expect(contact.displayName).toBe('userexample.com');
     });
 
+    it('rejects creating a contact directly at tier trusted or principal', async () => {
+      // 'trusted' is a CEO grant and 'principal' is structural — neither is a valid
+      // creation-time tier. A caller must create at a lower tier and elevate explicitly.
+      await expect(
+        service.createContact({ displayName: 'Eve', tier: 'trusted', source: 'ceo_stated' }),
+      ).rejects.toThrow(/cannot create a contact directly at tier/);
+      await expect(
+        service.createContact({ displayName: 'Mallory', tier: 'principal', source: 'ceo_stated' }),
+      ).rejects.toThrow(/cannot create a contact directly at tier/);
+    });
+
     it('links to existing KG node when kgNodeId provided', async () => {
       const { entity } = await entityMemory.createEntity({
         type: 'person',
@@ -721,13 +732,58 @@ describe('ContactService', () => {
         tier: 'known',
         source: 'email_participant',
       });
+      // 'trusted' is a grant, not a creation-time state — create at 'known' then elevate
+      // via setTier(), the same path a real CEO grant takes.
       const secondary = await service.createContact({
         displayName: 'Alice',
-        tier: 'trusted',
+        tier: 'known',
         source: 'ceo_stated',
       });
+      await service.setTier(secondary.id, 'trusted');
       const proposal = await service.mergeContacts(primary.id, secondary.id, true);
       expect(proposal.goldenRecord.tier).toBe('trusted');
+    });
+
+    it('refuses to merge a structural (principal-tier) secondary into a non-structural primary', async () => {
+      // The merge writes the golden record onto the primary and deletes the secondary,
+      // but never copies system_role/kind. Merging the structural principal away would
+      // orphan it and leave a bogus principal-tier row behind. The structural contact
+      // must be the primary instead.
+      const primary = await service.createContact({
+        displayName: 'Stranger',
+        tier: 'known',
+        source: 'email_participant',
+      });
+      const secondary = await service.createContact({
+        displayName: 'The Principal',
+        tier: 'known',
+        source: 'ceo_stated',
+      });
+      await service.setTier(secondary.id, 'principal');
+      await expect(service.mergeContacts(primary.id, secondary.id, false))
+        .rejects.toThrow(/Cannot merge structural contact/);
+      // Both contacts survive — the merge never ran.
+      expect(await service.getContact(primary.id)).toBeDefined();
+      expect(await service.getContact(secondary.id)).toBeDefined();
+    });
+
+    it('allows merging a non-structural secondary into a structural primary', async () => {
+      // The supported direction: the structural contact is the primary and is preserved.
+      const primary = await service.createContact({
+        displayName: 'The Principal',
+        tier: 'known',
+        source: 'ceo_stated',
+      });
+      await service.setTier(primary.id, 'principal');
+      const secondary = await service.createContact({
+        displayName: 'The Principal (dupe)',
+        tier: 'known',
+        source: 'email_participant',
+      });
+      const result = await service.mergeContacts(primary.id, secondary.id, false);
+      expect(result.dryRun).toBe(false);
+      expect(await service.getContact(secondary.id)).toBeUndefined();
+      expect((await service.getContact(primary.id))?.tier).toBe('principal');
     });
 
     it('notes from both contacts are concatenated', async () => {
