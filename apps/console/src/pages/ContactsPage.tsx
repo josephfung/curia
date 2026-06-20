@@ -538,7 +538,10 @@ function ContactViewDrawer({ contact, onClose, onEdit }: ViewDrawerProps) {
         const d = await res.json() as { overrides: AuthOverride[] };
         setOverrides(d.overrides);
       })
-      .catch((_err: unknown) => { /* grants are supplementary; failure is non-fatal */ });
+      // Grants are supplementary read-only display; a failure here just hides the
+      // section (guarded by overrides.length) rather than blocking the view. Leave
+      // a breadcrumb so a genuinely-broken overrides endpoint is still diagnosable.
+      .catch((err: unknown) => { console.error('[ContactViewDrawer] failed to load overrides:', err); });
     return () => { cancelled = true; };
   }, [contact.id]);
 
