@@ -50,16 +50,42 @@ scoped rules:
 patterns — e.g. the dispatch outbound-context design, the system-origin skill bypass,
 Gate C semantics) are intentionally **not** folded in here; they stay in the dashboard.
 The dashboard cleanup (delete the duplicates these six replace, keep the specifics) is a
-separate manual step, gated on the precedence question below.
+separate manual step — see the precedence note below for why it's still required and why
+it's safe.
+
+## Precedence: repo config vs dashboard "learnings"
+
+Researched against CodeAnt's docs (2026-06):
+
+- **Override is documented for exactly one file — `quality_gates_conditions.json`:** *"its
+  settings take full precedence… [and] override any organization or repository database
+  settings."* ([docs](https://docs.codeant.ai/pull_request/quality_gates/repository_configuration))
+- **For `instructions.json` / `review.json` vs the dashboard learnings, precedence is NOT
+  documented.** "Learnings" are a dashboard/DB-managed store (created from review
+  interactions, edited/deleted in the dashboard, applied across repos) with no documented
+  file-based deletion — which implies `instructions.json` **coexists with (augments)** them
+  rather than replacing them. This is inference, not a quoted spec.
+
+**Why this doesn't block the cleanup:** the six instructions here and the ~158 dashboard
+learnings they replace are *both suppressions* of the same patterns. If the repo file
+overrides → deleting the learnings is a no-op. If it only augments → deleting them removes
+now-redundant suppressions while the repo equivalents still suppress. Either way, deleting a
+learning that's fully covered by an equivalent repo instruction cannot increase false
+positives. Two consequences:
+
+1. The dashboard duplicates **won't auto-clear** by adding this file — delete them in the
+   dashboard (use the triage sheet). This file is for going-forward suppression + versioning.
+2. The real prerequisite is simply that `instructions.json` is **honored as a suppression**
+   (its documented purpose). Confirm empirically on the first normal code PR after this
+   merges: if the test / `!= null` / `AgentError` noise is gone, the six rules are working
+   and the 158 are safe to bulk-delete. The 3 enforcement learnings (#37/#86/#22) *generate*
+   findings and must be deleted in the dashboard directly — the repo file won't suppress them.
 
 ## Open questions / caveats (verify before relying on this)
 
-The CodeAnt docs are thin and partly self-contradictory here. Two things are unverified:
+One item remains genuinely unverified:
 
-1. **Precedence: does `.codeant/` override or only augment dashboard-configured rules?**
-   If it only augments, the noisy dashboard `[custom_rule]` rules will keep firing and
-   must also be disabled in the dashboard. Confirm with a test PR.
-2. **Glob syntax / negation.** The configuration page says Python `fnmatch` (where `*`
+1. **Glob syntax / negation.** The configuration page says Python `fnmatch` (where `*`
    crosses `/`, so `**` is redundant) and that a leading `!` is **treated literally and
    silently fails to match** — so negation cannot be used to exclude paths. The
    instructions page says minimatch. We therefore scope **positively** (target the files
