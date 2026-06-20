@@ -65,7 +65,6 @@ function createMockContactService(): ContactService {
     resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
     createContact: vi.fn().mockResolvedValue({ id: 'contact-001' }),
     linkIdentity: vi.fn().mockResolvedValue(undefined),
-    setStatus: vi.fn().mockResolvedValue(undefined),
   } as unknown as ContactService;
 }
 
