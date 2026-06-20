@@ -30,7 +30,6 @@ function createContactService(): ContactService {
     saveContact: vi.fn(),
     updateDisplayName: vi.fn(),
     setRole: vi.fn(),
-    setStatus: vi.fn(),
     updateContactFields: vi.fn(),
     validatePrimaryEmail: vi.fn(),
   } as unknown as ContactService;

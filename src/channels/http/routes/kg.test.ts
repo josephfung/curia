@@ -51,9 +51,9 @@ function fakeContactService(overrides: Partial<ContactService> = {}): ContactSer
     createContact: vi.fn().mockResolvedValue(BASE_CONTACT),
     getContact: vi.fn().mockResolvedValue(BASE_CONTACT),
     saveContact: vi.fn().mockResolvedValue(BASE_CONTACT),
-    // setStatus is intentionally NOT implemented here — after this task it must
-    // not be called by the route. Any call to it will throw (undefined is not a function),
-    // which would cause the test to fail loudly.
+    // Only the methods actually called by the contact routes are implemented here.
+    // Any call to an unimplemented method will throw (undefined is not a function),
+    // which causes the test to fail loudly — intentional.
     validatePrimaryEmail: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -161,14 +161,13 @@ describe('PATCH /api/kg/contacts/:id — status field removal', () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it('ignores a legacy status field in PATCH and returns 200 without calling setStatus', async () => {
+  it('ignores a legacy status field in PATCH and returns 200', async () => {
     // Decision: IGNORE (200), not reject (400).
     // Justification: kg.ts does not attach a JSON schema to routes, so Fastify
     // passes through all body fields without validation. Unknown fields are simply
-    // not read. After removing the body.status branch, the field is silently
-    // ignored — no 400, no setStatus call.
-    const setStatus = vi.fn();
-    const svc = fakeContactService({ setStatus } as Partial<ContactService>);
+    // not read. A legacy status field in the body is silently ignored — no 400,
+    // and the route still saves the contact normally.
+    const svc = fakeContactService();
     app = await build(svc);
     const res = await app.inject({
       method: 'PATCH',
@@ -177,7 +176,6 @@ describe('PATCH /api/kg/contacts/:id — status field removal', () => {
       body: JSON.stringify({ status: 'confirmed' }),
     });
     expect(res.statusCode).toBe(200);
-    expect(setStatus).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the contact does not exist', async () => {
