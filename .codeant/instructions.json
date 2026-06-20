@@ -1,21 +1,39 @@
 {
   "instructions": [
     {
-      "id": "tests-skip-production-grade-rules",
-      "description": "These are Vitest test files. Do NOT flag: (1) awaited calls lacking try/catch or .catch() — Vitest already fails a test on any unhandled rejection with a full stack, so wrapping the body hides the signal; (2) non-null assertions (`x!`) — the test's own setup establishes the value a line or two earlier, and a null there should throw and fail the test; (3) requests to normalize thrown errors into AgentError — tests assert on thrown errors directly. Production-grade async/null/error-handling rules do not apply to test files.",
-      "files": ["*.test.ts", "**/*.test.ts", "tests/*", "tests/**", "**/__tests__/**"],
+      "id": "tests-relax-production-rules",
+      "description": "Test files (Vitest). Do NOT apply production-grade async/null/error/naming rules here. (1) Awaited calls need no try/catch or .catch() — Vitest fails the test on any unhandled rejection with the original stack, and wrapping it hides the signal; this covers setup, act, request execution, and teardown. (2) Non-null assertions (`x!`, `mock.calls[0]!`, indexed array access) are fine when prior setup deterministically establishes the value — a null there should fail the test loudly; do not require runtime guards, optional chaining, or null-checks on already-asserted response payloads or inline-constructed fixtures. (3) Abbreviated test-helper names (`makeCtx`, `buildCtx`, `fakeX`) follow repo convention — do not flag. (4) Mock failures use `new Error(...)`; `AgentError` is a payload interface, not a throwable class. (5) Best-effort `finally`/`.catch` cleanup in teardown that swallows already-stopped / never-started cases is acceptable; do not require logging or rethrow for non-actionable test cleanup. (6) Assess only the routes/behavior registered in an isolated route-module test — do not require the full production route stack or reachability.",
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.test.js", "**/test/**", "**/tests/**", "**/__tests__/**"],
       "scope": ["ide", "pr"]
     },
     {
-      "id": "scripts-are-not-agent-runtime",
-      "description": "Files under scripts/ are one-shot CLI/ops scripts, not part of the agent or skill runtime. Their error contract is a structured pino log plus a process exit code. Do NOT require errors to be normalized into the AgentError shape, and do NOT flag a catch that logs and re-throws the original error (preserving the stack) before the CLI entry exits non-zero.",
-      "files": ["scripts/*", "scripts/**", "scripts/*.ts", "scripts/**/*.ts"],
+      "id": "nullish-equality-idiom",
+      "description": "`x != null` / `x == null` is the intentional combined null-OR-undefined guard, used consistently across this codebase (no `eqeqeq` lint is enforced for the nullish case). Do NOT flag it as a loose-equality violation — converting to `=== undefined` / `!== null` changes semantics (these inputs may be `undefined` when omitted or `null` from a JSON payload). Reserve any strict-equality rule for `==`/`!=` against non-null literals (`== 0`, `== ''`, `== false`).",
+      "files": ["**/*.ts", "**/*.tsx", "**/*.js"],
       "scope": ["ide", "pr"]
     },
     {
-      "id": "project-error-and-null-conventions",
-      "description": "Production-code conventions. (1) `x != null` / `x == null` is the intentional combined null-or-undefined guard and is used consistently across the codebase — do NOT flag it under the loose-equality rule; reserve that rule for == / != against non-null literals (== 0, == '', == false). (2) A catch is NOT swallowing a failure when it logs with context AND records the failure (a counter, a failed-id list, or a {success:false} return) AND the caller acts on it (non-zero exit, aggregated throw, error result); a documented best-effort cleanup catch that runs after the primary operation already succeeded and logs at warn for a later sweep is intentional. (3) AgentError normalization is judged at the boundary that reaches the user or bus (skill handler / agent runtime), not at every internal throw — a plain `throw new Error(...)` inside a service method is fine when sibling guards throw the same way and the single caller normalizes it into a structured result.",
-      "files": ["src/*", "src/**", "skills/*", "skills/**"],
+      "id": "agent-error-is-bus-boundary-only",
+      "description": "`AgentError` is a structured payload type for the bus/dispatch layer only — it is NOT a general throwable class. Do NOT require AgentError normalization elsewhere. (1) Skill handlers return the `SkillResult` contract (`{ success: true, data }` or `{ success: false, error: string }`), including not-found cases — never throw AgentError; a raw `throw new Error(...)` inside a handler is fine because the execution layer normalizes at the skill boundary. (2) HTTP route handlers (`src/channels/http/routes/**`) log the raw error with pino and return a generic 500, or map typed domain errors like `ContactValidationError` to a 400 — do not convert to AgentError. (3) Service/computation modules (`src/contacts/**`, `src/dispatch/**`) and utility helpers may throw plain `Error` and let the caller normalize; `throw new Error(...)` for not-found/guard cases in `contact-service.ts`/`ceo-bootstrap.ts`/`mergeContacts` is correct. (4) The frontend (`apps/console/**`) uses plain string error state for UI display.",
+      "files": ["skills/**", "src/**", "apps/console/**"],
+      "scope": ["ide", "pr"]
+    },
+    {
+      "id": "error-propagation-and-pg-codes",
+      "description": "Established server-side error-handling patterns — do not require blanket per-call try/catch or AgentError wrapping. (1) Service/DB-layer methods (`src/contacts/**`, `src/secrets/**`, `skills/_shared/**` clients, etc.) may let database/lookup errors propagate to the caller's intentional error boundary (a route handler maps to 500, the skill boundary maps to a SkillResult) rather than wrapping locally; a shared `request()` helper that already normalizes/throws typed errors should not be re-wrapped per method. (2) Direct Postgres SQLSTATE/`pgCode` checks (e.g. `pgCode === '23505'` for unique-violation / concurrency races) are the project's established pattern at the DB boundary. (3) A catch that only logs and swallows a non-actionable failure does not need AgentError normalization; reserve that for errors that are rethrown or cross a boundary where the caller needs typed info. (4) One-shot bootstrap/startup awaits (route registration, wiring) may bubble to the top-level `main().catch` instead of per-await try/catch.",
+      "files": ["src/**", "skills/**"],
+      "scope": ["ide", "pr"]
+    },
+    {
+      "id": "scripts-maintenance-conventions",
+      "description": "Files under `scripts/` are one-shot CLI/ops scripts, not part of the agent/skill runtime. (1) Do NOT require `AgentError` — structured `pino` logging plus failure counting and a non-zero exit code is the contract; logging and re-throwing the original error (preserving the stack) so the process exits non-zero is also fine. (2) A per-item catch in a batch/backfill loop that aggregates failures (records failed IDs/counts) and exits non-zero at the end is acceptable — continuing the loop is intended. (3) Best-effort `.catch` logging on event-publish / side-effect calls is fine when the durable operation already succeeded and the exit code is driven by the primary failure count.",
+      "files": ["scripts/**"],
+      "scope": ["ide", "pr"]
+    },
+    {
+      "id": "apps-console-frontend-conventions",
+      "description": "`apps/console` is a Vite/React frontend, not the Node backend — backend rules do not apply. (1) Relative imports intentionally omit `.js` extensions (Vite resolves them at bundle time); do not flag extensionless relative or package imports. (2) `console.error` / console logging is acceptable in client-side code — the no-console / structured-logging rule is server-side only. (3) Do not require `React.memo` for small, conditionally-mounted drawer/field components absent evidence of measurable render cost. (4) A file may export a differently-named PascalCase page component, matching the sibling convention; do not require component-name == file-name. (5) Content-type-gated JSON parsing with a try/catch fall-through to a generic error message (no console logging) is acceptable in page components when the malformed body is non-actionable. (6) Keyboard accessibility on clickable table rows is deferred to a single dedicated cross-table a11y pass — do not raise one-off per-page row-a11y fixes.",
+      "files": ["apps/console/**"],
       "scope": ["ide", "pr"]
     }
   ]

@@ -33,6 +33,25 @@ We use `instructions.json` (not `review.json`) because we are correcting over-ea
 flags, not adding new things to enforce — and its scoping is *positive*, which matters
 (see caveats).
 
+## The six instructions
+
+These consolidate ~190 narrowly-scoped, near-duplicate CodeAnt dashboard "learnings"
+(each recorded when the same base rule re-fired on a different file) into a few broadly
+scoped rules:
+
+1. `tests-relax-production-rules` — async/null/error/naming rules don't apply to test files.
+2. `nullish-equality-idiom` — `!= null` / `== null` is the intentional combined guard.
+3. `agent-error-is-bus-boundary-only` — `AgentError` is bus-layer only; skills return `SkillResult`, routes/services/frontend use their own patterns.
+4. `error-propagation-and-pg-codes` — services may propagate to the caller's error boundary; direct `pgCode` checks are fine.
+5. `scripts-maintenance-conventions` — `scripts/` use log + exit-code, not `AgentError`.
+6. `apps-console-frontend-conventions` — Vite/React frontend ≠ Node backend (extensionless imports, `console.error`, etc.).
+
+~30 genuinely *specific* dashboard learnings (real architectural decisions, not generic
+patterns — e.g. the dispatch outbound-context design, the system-origin skill bypass,
+Gate C semantics) are intentionally **not** folded in here; they stay in the dashboard.
+The dashboard cleanup (delete the duplicates these six replace, keep the specifics) is a
+separate manual step, gated on the precedence question below.
+
 ## Open questions / caveats (verify before relying on this)
 
 The CodeAnt docs are thin and partly self-contradictory here. Two things are unverified:
