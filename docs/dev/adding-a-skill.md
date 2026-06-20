@@ -148,7 +148,6 @@ Valid capability names and what they grant:
 | `bus` | `EventBus` | Publishing bus events directly (delegate, bullpen) |
 | `agentRegistry` | `AgentRegistry` | Looking up registered agents (delegate) |
 | `outboundGateway` | `OutboundGateway` | Sending email and Signal messages |
-| `heldMessages` | `HeldMessageService` | Reading / releasing held message queues |
 | `schedulerService` | `SchedulerService` | Creating and managing scheduled jobs |
 | `entityMemory` | `EntityMemory` | Reading and writing the knowledge graph |
 | `nylasCalendarClient` | `NylasCalendarClient` | Calendar CRUD operations |
