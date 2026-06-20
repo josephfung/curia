@@ -20,7 +20,7 @@ const { Pool } = pg;
 
 // Structural aliases used by runRederive so tests can pass minimal mocks
 // without depending on the full ContactService / ConfidencePipeline shapes.
-type ServiceLike = Pick<ContactService, 'listContacts' | 'elevateTierToKnown'>;
+type ServiceLike = Pick<ContactService, 'listContacts' | 'elevateTierToKnown' | 'getContact'>;
 type PipelineLike = Pick<ConfidencePipeline, 'fullRecomputeAll' | 'fullRecompute'>;
 
 export async function runRederive(
@@ -79,9 +79,24 @@ export async function runRederive(
         if (didElevate) {
           elevated++;
         } else {
-          // elevateTierToKnown returns false when the contact is already known/trusted
-          // or the update was a no-op — treat as a successful skip, not an error.
-          skipped++;
+          // elevateTierToKnown returns false BOTH for a benign no-op (already
+          // known/trusted) AND for a swallowed backend failure — it catches and
+          // logs internally, so a false here is ambiguous. We listed this contact
+          // as 'unknown' and it just cleared the threshold, so it *should* now be
+          // elevated. Re-read the authoritative tier to disambiguate: still
+          // 'unknown' means the elevation really failed (count as an error so the
+          // exit code is honest), anything else is a benign concurrent no-op.
+          const after = await contactService.getContact(c.id);
+          if (after && after.tier === 'unknown') {
+            logger.error(
+              { contactId: c.id },
+              'rederive: elevation returned false and contact is still unknown — treating as failure',
+            );
+            errors++;
+            failedContactIds.push(c.id);
+          } else {
+            skipped++;
+          }
         }
       } else {
         skipped++;
@@ -105,17 +120,23 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     logger.error('rederive: DATABASE_URL is not set');
     process.exit(1);
   }
-  const pool = new Pool({ connectionString: databaseUrl });
-  const contactService = ContactService.createWithPostgres(pool, undefined, logger);
-  const pipeline = new ConfidencePipeline(contactService, logger);
-  runRederive(contactService, pipeline)
-    .then(async ({ errors }) => {
-      await pool.end();
-      process.exit(errors > 0 ? 1 : 0);
-    })
-    .catch(async (err) => {
+  // Single async control path: try runs the migration, catch normalizes the fatal
+  // exit, finally guarantees the pool is closed exactly once on every path.
+  const main = async (): Promise<void> => {
+    const pool = new Pool({ connectionString: databaseUrl });
+    let exitCode = 0;
+    try {
+      const contactService = ContactService.createWithPostgres(pool, undefined, logger);
+      const pipeline = new ConfidencePipeline(contactService, logger);
+      const { errors } = await runRederive(contactService, pipeline);
+      exitCode = errors > 0 ? 1 : 0;
+    } catch (err) {
       logger.error({ err }, 'rederive: fatal error');
+      exitCode = 1;
+    } finally {
       await pool.end();
-      process.exit(1);
-    });
+    }
+    process.exit(exitCode);
+  };
+  await main();
 }

@@ -455,8 +455,17 @@ export class ContactService {
     // Tier for new contacts. If `tier` is explicitly provided, use it directly.
     // Otherwise default to 'known' (the former status='confirmed' default).
     //
-    // Note: new contacts never start as 'trusted' or 'principal' — those are set via
-    // setTier() or bootstrap after the contact exists.
+    // 'trusted' and 'principal' are capability grants, not creation-time states:
+    // 'trusted' is a deliberate CEO grant (#952) and 'principal' is structural
+    // (derived from system_role, set by bootstrap). Enforce that invariant here so a
+    // caller cannot mint a high-capability contact in a single createContact() call —
+    // a contact must be created at a lower tier and elevated explicitly afterwards.
+    if (options.tier === 'trusted' || options.tier === 'principal') {
+      throw new ContactValidationError(
+        `createContact cannot create a contact directly at tier '${options.tier}'; ` +
+          `create at 'known'/'unknown'/'blocked' and elevate via setTier()/grant or bootstrap.`,
+      );
+    }
     const contactTier: ContactTier = options.tier ?? 'known';
 
     // Derive kind: org routing in resolveOrCreateOrgNode() takes precedence over
@@ -1158,6 +1167,23 @@ export class ContactService {
     if (!primary) throw new Error(`Contact not found: ${primaryId}`);
     const secondary = await this.backend.getContact(secondaryId);
     if (!secondary) throw new Error(`Contact not found: ${secondaryId}`);
+
+    // Structural-contact guard. A merge writes the golden record onto the primary and
+    // deletes the secondary, but it only copies scalar fields (tier/displayName/role/
+    // notes) — never system_role/kind. So merging a structural contact (the principal,
+    // an agent, or anything with a system_role) into a non-structural primary would
+    // delete the real structural row and, because tier survivorship can now select the
+    // secondary's 'principal' tier, leave behind a principal-TIER row that is not the
+    // structural principal. Refuse that direction; the structural contact must be the
+    // primary (or merge the other way around).
+    const isStructural = (c: Contact): boolean =>
+      c.systemRole !== null || c.kind === 'principal' || c.kind === 'agent' || c.tier === 'principal';
+    if (isStructural(secondary) && !isStructural(primary)) {
+      throw new Error(
+        `Cannot merge structural contact ${secondaryId} into non-structural primary ${primaryId}; ` +
+          `make the structural contact the primary instead.`,
+      );
+    }
 
     const primaryIdentities = await this.backend.getIdentitiesForContact(primaryId);
     const secondaryIdentities = await this.backend.getIdentitiesForContact(secondaryId);
