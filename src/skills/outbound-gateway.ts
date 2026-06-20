@@ -1123,7 +1123,9 @@ export class OutboundGateway {
           { err, channel, recipientId: redactId(recipientId), contactId: contact.contactId },
           'outbound-gateway: elevateTierToKnown failed after successful send — recipient may still receive holds on replies',
         );
-        return;
+        // Do not return here — fall through to confidence update so scoring still runs
+        // even if the tier promotion failed (defensive: elevateTierToKnown is non-throwing
+        // in normal operation, but the catch guard is kept for safety).
       }
       // Update confidence score after promotion
       if (this.confidencePipeline) {

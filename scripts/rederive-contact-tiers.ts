@@ -37,14 +37,29 @@ export async function runRederive(
   //    fullRecomputeAll() iterates all contacts and persists updated scores,
   //    so the subsequent listContacts() query sees fresh data.
   //    Capture the count — it reflects every contact processed, not just candidates.
-  const recomputed = await pipeline.fullRecomputeAll();
+  //    Wrap in its own try/catch so a fatal pipeline failure logs clearly and
+  //    re-throws to the CLI entry's .catch (exits 1), bypassing per-contact accounting.
+  let recomputed: number;
+  try {
+    recomputed = await pipeline.fullRecomputeAll();
+  } catch (err) {
+    logger.error({ err }, 'rederive: fullRecomputeAll failed, aborting');
+    throw err;
+  }
 
   // 2. Re-list unknown-tier person/org contacts (post-recompute snapshot) and
   //    elevate those over the judgment threshold.
-  const candidates = await contactService.listContacts({
-    tier: 'unknown',
-    kind: ['person', 'organization'],
-  });
+  //    Same guard: a DB failure here is fatal — re-throw so the CLI exits 1.
+  let candidates: Awaited<ReturnType<ServiceLike['listContacts']>>;
+  try {
+    candidates = await contactService.listContacts({
+      tier: 'unknown',
+      kind: ['person', 'organization'],
+    });
+  } catch (err) {
+    logger.error({ err }, 'rederive: listContacts failed, aborting after recompute');
+    throw err;
+  }
 
   let elevated = 0;
   let skipped = 0;
