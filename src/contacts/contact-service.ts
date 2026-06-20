@@ -976,6 +976,11 @@ export class ContactService {
     }
   }
 
+  /** List all channel identities linked to a contact, oldest first. */
+  async getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]> {
+    return this.backend.getIdentitiesForContact(contactId);
+  }
+
   /** Remove a channel identity by its ID. Returns true if found and removed, false if not found. */
   async unlinkIdentity(identityId: string): Promise<boolean> {
     return this.backend.unlinkIdentity(identityId);

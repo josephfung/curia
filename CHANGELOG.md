@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Console Contacts: read-only View drawer** — clicking a contact opens a read-only view (editing is an explicit Edit button), so a single click can't mutate data. Shows only populated fields with smart links (mailto:/tel:/LinkedIn/`/kg?node=`), created/updated timestamps, and linked channel identities. (#1069)
+- **Console Contacts: defaults + KG links** — the page loads filtered to Known + Person by default (chips widen to All), and each row with a `kgNodeId` shows a KG deep-link icon. (#1069)
+- **`GET /api/kg/contacts/:id/identities`** — returns a contact's serialized channel identities for the Contacts View drawer. (#1069)
 - **`rederive:contact-tiers` script** — one-shot backfill that recomputes contact confidence and elevates `unknown→known` for contacts past the judgment threshold. (#955)
 - **`contact-set-tier` skill** — sets a contact's tier directly from chat ("treat Dana as trusted"); principal-auth guarded, rejects `tier='principal'`. (#952)
 - **Proactive grant recommendations** — weekly LLM-judge scan (`scan-grant-recommendations`) evaluates known-tier contacts and surfaces scheduling-access recommendations for CEO approval. (#952)

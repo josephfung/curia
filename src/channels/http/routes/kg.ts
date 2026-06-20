@@ -6,7 +6,7 @@ import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import { ContactValidationError } from '../../../contacts/contact-service.js';
-import type { Contact, ContactCanonicalFields, ContactKind, ContactTier } from '../../../contacts/types.js';
+import type { ChannelIdentity, Contact, ContactCanonicalFields, ContactKind, ContactTier } from '../../../contacts/types.js';
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
@@ -754,6 +754,24 @@ export async function knowledgeGraphRoutes(
     };
   }
 
+  // Serialize a channel identity for the API: Date fields → ISO strings, so the
+  // contacts View drawer (#1069) can render them. Mirrors serializeContact above.
+  function serializeIdentity(i: ChannelIdentity) {
+    return {
+      id: i.id,
+      contactId: i.contactId,
+      channel: i.channel,
+      channelIdentifier: i.channelIdentifier,
+      label: i.label,
+      verified: i.verified,
+      verifiedAt: i.verifiedAt ? i.verifiedAt.toISOString() : null,
+      status: i.status,
+      source: i.source,
+      createdAt: i.createdAt.toISOString(),
+      updatedAt: i.updatedAt.toISOString(),
+    };
+  }
+
   // Validate canonical fields from a POST/PATCH body.
   // Returns an error string if invalid, or null if all checks pass.
   // `fields` entries are trimmed and empty-string-coerced to null.
@@ -1079,6 +1097,26 @@ export async function knowledgeGraphRoutes(
     } catch (err) {
       logger.error({ err, contactId: id }, 'GET /api/kg/contacts/:id/overrides failed');
       return reply.status(500).send({ error: 'Failed to load auth overrides.' });
+    }
+  });
+
+  // GET /api/kg/contacts/:id/identities — list a contact's linked channel identities.
+  // Read-only display surface for the contacts View drawer (#1069): the drawer shows
+  // the actual channel identities (email/phone/Signal/…) Curia has on file, not just
+  // the denormalized primaryEmail/primaryPhone columns.
+  app.get('/api/kg/contacts/:id/identities', KG_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const { id } = request.params as { id: string };
+    if (!UUID_RE.test(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
+
+    try {
+      const contact = await contactService.getContact(id);
+      if (!contact) return reply.status(404).send({ error: 'Contact not found.' });
+      const identities = await contactService.getIdentitiesForContact(id);
+      return reply.send({ identities: identities.map(serializeIdentity) });
+    } catch (err) {
+      logger.error({ err, contactId: id }, 'GET /api/kg/contacts/:id/identities failed');
+      return reply.status(500).send({ error: 'Failed to load identities.' });
     }
   });
 
