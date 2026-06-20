@@ -102,7 +102,7 @@ export class ContactLookupHandler implements SkillHandler {
 
       // Use enrichContact (same as name/role paths) so the response includes
       // tier and channel identities — previously omitted, which prevented
-      // the LLM from determining whether a contact was provisional.
+      // the LLM from determining a contact's tier (e.g. unknown vs known).
       const contact = {
         id: resolved.contactId,
         displayName: resolved.displayName,
