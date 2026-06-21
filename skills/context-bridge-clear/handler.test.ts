@@ -61,6 +61,20 @@ describe('ContextBridgeClearHandler', () => {
     expect(ctx.outboundContext!.clearBySubjects).toHaveBeenCalledWith(['Peter Lenardon']);
   });
 
+  it('falls back to subject when subjects is an empty array', async () => {
+    // An empty `subjects` array must not shadow a valid single `subject`.
+    const ctx = makeCtx({ subjects: [], subject: 'Peter Lenardon' }, {
+      totalReleased: 2,
+      perSubject: [{ subject: 'Peter Lenardon', released: 2 }],
+      unmatched: [],
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(ctx.outboundContext!.clearBySubjects).toHaveBeenCalledWith(['Peter Lenardon']);
+  });
+
   it('surfaces unmatched subjects in the result', async () => {
     const ctx = makeCtx({ subjects: ['Walk and Ice cream', 'Ghost Meeting'] }, {
       totalReleased: 3,
