@@ -16,7 +16,7 @@
 - **Run one test file:** `pnpm -C "$WT" exec vitest run <relpath>`
 - **Typecheck (run before every commit touching .ts):** `pnpm -C "$WT" run typecheck`
 - **ESM:** `.js` extensions on all relative imports. No `any`. No `console.log` (pino only). No empty `catch {}`.
-- **SQL:** parameterized only; migrations in `src/db/migrations/` as plain SQL with `-- Up Migration` / `-- Down Migration`. Next free prefix is **060** — verify uniqueness with `ls src/db/migrations/ | sort` before committing.
+- **SQL:** parameterized only; migrations in `src/db/migrations/` as plain SQL with `-- Up Migration` / `-- Down Migration`. Next free prefix is **061** (060 was taken upstream) — verify uniqueness with `ls src/db/migrations/ | sort` before committing.
 - **No-value privacy invariant:** no secret value in any token column, event, task, or log. Tests assert the literal `hunter2` never appears.
 - **Strict TS:** array access like `rows[0]` is `T | undefined` — use `!` when guaranteed; cast `Record<string,unknown>` through `unknown` after runtime validation.
 - **Commits:** conventional (`feat:`/`fix:`/`chore:`), no `Co-Authored-By`, no Claude attribution.
@@ -201,7 +201,7 @@ git -C "$WT" commit -m "refactor: extract shared resume-token encode/decode help
 ### Task 2: Persist `resume_token` (migration + service round-trip)
 
 **Files:**
-- Create: `src/db/migrations/060_add_secret_capture_resume_token.sql`
+- Create: `src/db/migrations/061_add_secret_capture_resume_token.sql`
 - Modify: `src/secrets/secret-capture-service.ts` (`CaptureOrigin`, `CapturedContext`, `mint()` SQL, `redeem()` claim SQL + mapping)
 - Modify: `src/secrets/secret-capture-service.test.ts`
 
@@ -211,7 +211,7 @@ git -C "$WT" commit -m "refactor: extract shared resume-token encode/decode help
 
 - [ ] **Step 1: Write the migration**
 
-Create `src/db/migrations/060_add_secret_capture_resume_token.sql`:
+Create `src/db/migrations/061_add_secret_capture_resume_token.sql`:
 
 ```sql
 -- Up Migration
@@ -235,7 +235,7 @@ ALTER TABLE secret_capture_tokens
 - [ ] **Step 2: Verify migration prefix uniqueness**
 
 Run: `ls "$WT"/src/db/migrations/ | sort | tail -5`
-Expected: `060_add_secret_capture_resume_token.sql` is present and no other `060_*` exists.
+Expected: `061_add_secret_capture_resume_token.sql` is present and no other `061_*` exists.
 
 - [ ] **Step 3: Write the failing service tests**
 
@@ -365,7 +365,7 @@ Expected: no errors.
 - [ ] **Step 7: Commit**
 
 ```bash
-git -C "$WT" add src/db/migrations/060_add_secret_capture_resume_token.sql src/secrets/secret-capture-service.ts src/secrets/secret-capture-service.test.ts
+git -C "$WT" add src/db/migrations/061_add_secret_capture_resume_token.sql src/secrets/secret-capture-service.ts src/secrets/secret-capture-service.test.ts
 git -C "$WT" commit -m "feat: persist resume_token on capture tokens (#995)"
 ```
 
@@ -1260,7 +1260,7 @@ Expected: no errors (or matches baseline).
 - [ ] **Step 4: Migration ordering check**
 
 Run: `ls "$WT"/src/db/migrations/ | sort | tail -5`
-Expected: `060_add_secret_capture_resume_token.sql` present; no duplicate `060_*`.
+Expected: `061_add_secret_capture_resume_token.sql` present; no duplicate `061_*`.
 
 - [ ] **Step 5: Pre-PR review (per global workflow)**
 
