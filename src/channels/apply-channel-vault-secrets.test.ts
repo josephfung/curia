@@ -1,0 +1,195 @@
+import { describe, it, expect, vi } from 'vitest';
+import pino from 'pino';
+import type { Config } from '../config.js';
+import type { YamlConfig } from '../config.js';
+import { resolveChannelAccounts } from '../config.js';
+import { channelCredentialStatus } from './credential-resolver.js';
+import { getChannelDescriptor } from './catalog.js';
+import { applyChannelVaultSecrets } from './apply-channel-vault-secrets.js';
+
+const logger = pino({ level: 'silent' });
+
+// Minimal config covering every field the overlay touches (mirrors apply-vault-secrets.test.ts).
+function baseConfig(): Config {
+  return {
+    databaseUrl: 'postgres://x',
+    anthropicApiKey: undefined,
+    openaiApiKey: undefined,
+    openrouterApiKey: undefined,
+    logLevel: 'info',
+    httpPort: 3000,
+    apiToken: undefined,
+    webAppBootstrapSecret: undefined,
+    appOrigin: undefined,
+    timezone: 'UTC',
+    nylasApiKey: undefined,
+    nylasGrantId: undefined,
+    nylasPollingIntervalMs: 30000,
+    nylasSelfEmail: '',
+    ceoPrimaryEmail: undefined,
+    ceoSignalNumber: undefined,
+    signalSocketPath: undefined,
+    signalPhoneNumber: undefined,
+  } as Config;
+}
+
+// A vault fake whose get() is a spy, so tests can assert exactly which keys were read.
+function fakeSecrets(values: Record<string, string>) {
+  return { get: vi.fn(async (name: string) => values[name] ?? null) };
+}
+
+describe('applyChannelVaultSecrets', () => {
+  it('populates config from vault-only channel.email.* / channel.signal.* keys', async () => {
+    const config = baseConfig();
+    const secrets = fakeSecrets({
+      'channel.email.nylas_api_key': 'nyk_vault',
+      'channel.email.nylas_grant_id': 'grant_vault',
+      'channel.email.nylas_self_email': 'curia@vault.test',
+      'channel.signal.phone_number': '+15550001111',
+      'channel.signal.socket_path': '/run/signal/socket',
+    });
+
+    await applyChannelVaultSecrets(config, secrets, {}, logger);
+
+    expect(config.nylasApiKey).toBe('nyk_vault');
+    expect(config.nylasGrantId).toBe('grant_vault');
+    expect(config.nylasSelfEmail).toBe('curia@vault.test');
+    expect(config.signalPhoneNumber).toBe('+15550001111');
+    expect(config.signalSocketPath).toBe('/run/signal/socket');
+  });
+
+  it('falls back to env when the vault is empty', async () => {
+    const config = baseConfig();
+    const secrets = fakeSecrets({});
+    const env = {
+      NYLAS_API_KEY: 'nyk_env',
+      NYLAS_GRANT_ID: 'grant_env',
+      NYLAS_SELF_EMAIL: 'curia@env.test',
+      SIGNAL_PHONE_NUMBER: '+15550002222',
+      SIGNAL_SOCKET_PATH: '/env/signal/socket',
+    };
+
+    await applyChannelVaultSecrets(config, secrets, env, logger);
+
+    expect(config.nylasApiKey).toBe('nyk_env');
+    expect(config.signalSocketPath).toBe('/env/signal/socket');
+  });
+
+  it('channel vault wins over env when both are present', async () => {
+    const config = baseConfig();
+    const secrets = fakeSecrets({ 'channel.email.nylas_api_key': 'nyk_vault' });
+    const env = { NYLAS_API_KEY: 'nyk_env' };
+
+    await applyChannelVaultSecrets(config, secrets, env, logger);
+
+    expect(config.nylasApiKey).toBe('nyk_vault');
+  });
+
+  it('keeps the current config value when neither vault nor env supplies one', async () => {
+    const config = baseConfig();
+    config.nylasApiKey = 'nyk_bootstrap'; // e.g. already set by applyVaultSecrets
+    const secrets = fakeSecrets({});
+
+    await applyChannelVaultSecrets(config, secrets, {}, logger);
+
+    expect(config.nylasApiKey).toBe('nyk_bootstrap');
+    expect(config.nylasGrantId).toBeUndefined();
+    expect(config.nylasSelfEmail).toBe(''); // string-typed field stays ''
+    expect(config.signalSocketPath).toBeUndefined();
+  });
+
+  it('treats a whitespace-only vault value as absent and falls through', async () => {
+    const config = baseConfig();
+    const secrets = fakeSecrets({ 'channel.email.nylas_api_key': '   ' });
+    const env = { NYLAS_API_KEY: 'nyk_env' };
+
+    await applyChannelVaultSecrets(config, secrets, env, logger);
+
+    expect(config.nylasApiKey).toBe('nyk_env');
+  });
+
+  it('treats a vault read error as absent (no throw)', async () => {
+    const config = baseConfig();
+    const secrets = {
+      get: vi.fn(async (name: string) => {
+        if (name === 'channel.email.nylas_api_key') throw new Error('vault down');
+        return null;
+      }),
+    };
+    const env = { NYLAS_API_KEY: 'nyk_env' };
+
+    await expect(applyChannelVaultSecrets(config, secrets, env, logger)).resolves.toBeUndefined();
+    expect(config.nylasApiKey).toBe('nyk_env');
+  });
+
+  it('reads ONLY the five named channel.* keys — never list(), never user.* / dot-free keys', async () => {
+    const config = baseConfig();
+    const secrets = fakeSecrets({});
+
+    await applyChannelVaultSecrets(config, secrets, {}, logger);
+
+    const readKeys = secrets.get.mock.calls.map(c => c[0]).sort();
+    expect(readKeys).toEqual([
+      'channel.email.nylas_api_key',
+      'channel.email.nylas_grant_id',
+      'channel.email.nylas_self_email',
+      'channel.signal.phone_number',
+      'channel.signal.socket_path',
+    ]);
+    // No list() method should even be invoked (the fake doesn't have one).
+    expect('list' in secrets).toBe(false);
+  });
+});
+
+// AC1: the registry gate and the adapter wiring agree across all four source combinations.
+describe('applyChannelVaultSecrets — gate/adapter agreement (AC1)', () => {
+  const emailDesc = getChannelDescriptor('email')!;
+  const emptyYaml = {} as unknown as YamlConfig; // resolveChannelAccounts only reads channel_accounts
+
+  it('vault-only email: adapter constructs AND registry reports resolvable', async () => {
+    const config = baseConfig();
+    const vault = {
+      'channel.email.nylas_api_key': 'nyk_vault',
+      'channel.email.nylas_grant_id': 'grant_vault',
+      'channel.email.nylas_self_email': 'curia@vault.test',
+    };
+    const secrets = fakeSecrets(vault);
+
+    await applyChannelVaultSecrets(config, secrets, {}, logger);
+
+    // Adapter path: config is populated → legacy single-account synthesis yields one account.
+    const accounts = resolveChannelAccounts(emptyYaml, config);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]!.name).toBe('curia');
+    expect(config.nylasApiKey).toBe('nyk_vault');
+
+    // Gate path: registry resolves the same vault keys → resolvable.
+    const status = await channelCredentialStatus({ secrets: fakeSecrets(vault), env: {} }, emailDesc);
+    expect(status.requiredResolvable).toBe(true);
+  });
+
+  it('neither: adapter skips AND registry reports not resolvable', async () => {
+    const config = baseConfig();
+    await applyChannelVaultSecrets(config, fakeSecrets({}), {}, logger);
+
+    expect(resolveChannelAccounts(emptyYaml, config)).toHaveLength(0);
+    const status = await channelCredentialStatus({ secrets: fakeSecrets({}), env: {} }, emailDesc);
+    expect(status.requiredResolvable).toBe(false);
+  });
+
+  it('both: channel vault wins for the adapter, registry agrees (resolvable)', async () => {
+    const config = baseConfig();
+    const vault = {
+      'channel.email.nylas_api_key': 'nyk_vault',
+      'channel.email.nylas_grant_id': 'grant_vault',
+      'channel.email.nylas_self_email': 'curia@vault.test',
+    };
+    const env = { NYLAS_API_KEY: 'nyk_env', NYLAS_GRANT_ID: 'grant_env', NYLAS_SELF_EMAIL: 'curia@env.test' };
+
+    await applyChannelVaultSecrets(config, fakeSecrets(vault), env, logger);
+
+    expect(config.nylasApiKey).toBe('nyk_vault'); // vault wins
+    const status = await channelCredentialStatus({ secrets: fakeSecrets(vault), env }, emailDesc);
+    expect(status.requiredResolvable).toBe(true);
+  });
+});
