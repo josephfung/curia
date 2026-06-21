@@ -77,7 +77,7 @@ function makeAdapter(mocks: ReturnType<typeof createMocks>, overrides: Partial<{
     contactService: mocks.contactService,
     pollingIntervalMs: 7_200_000, // 2 hours — never fires in tests, even under vi.advanceTimersByTime(3_600_001)
     selfEmail: SELF_EMAIL,
-    excludedSenderEmails: [],
+    suppressedSenderEmails: [],
     contactCreationMaxPerMessage: overrides.contactCreationMaxPerMessage ?? 10,
     contactCreationMaxPerHour: overrides.contactCreationMaxPerHour ?? 100,
     ceoEmail: overrides.ceoEmail ?? CEO_EMAIL,
@@ -370,10 +370,10 @@ describe('EmailAdapter — sendOutboundReply', () => {
   });
 });
 
-// ── Inbound poll — excludedSenderEmails ──────────────────
+// ── Inbound poll — suppressedSenderEmails ──────────────────
 
-describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
-  it('suppresses emails from an excluded sender address', async () => {
+describe('EmailAdapter — inbound poll: suppressedSenderEmails', () => {
+  it('suppresses emails from an address in suppressedSenderEmails', async () => {
     const mocks = createMocks();
     const adapter = new EmailAdapter({
       accountId: 'joseph',
@@ -383,7 +383,7 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
       contactService: mocks.contactService,
       pollingIntervalMs: 999999,
       selfEmail: 'joseph@example.com',
-      excludedSenderEmails: ['curia@example.com'],
+      suppressedSenderEmails: ['curia@example.com'],
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
@@ -404,7 +404,7 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
     await adapter.stop();
   });
 
-  it('excluded sender check is case-insensitive', async () => {
+  it('suppressed sender check is case-insensitive', async () => {
     const mocks = createMocks();
     const adapter = new EmailAdapter({
       accountId: 'joseph',
@@ -414,7 +414,7 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
       contactService: mocks.contactService,
       pollingIntervalMs: 999999,
       selfEmail: 'joseph@example.com',
-      excludedSenderEmails: ['CURIA@EXAMPLE.COM'],
+      suppressedSenderEmails: ['CURIA@EXAMPLE.COM'],
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
@@ -435,7 +435,7 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
     await adapter.stop();
   });
 
-  it('does not suppress emails from non-excluded senders', async () => {
+  it('does not suppress emails from non-suppressed senders', async () => {
     const mocks = createMocks();
     const adapter = new EmailAdapter({
       accountId: 'joseph',
@@ -445,7 +445,7 @@ describe('EmailAdapter — inbound poll: excludedSenderEmails', () => {
       contactService: mocks.contactService,
       pollingIntervalMs: 999999,
       selfEmail: 'joseph@example.com',
-      excludedSenderEmails: ['curia@example.com'],
+      suppressedSenderEmails: ['curia@example.com'],
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
@@ -519,7 +519,7 @@ describe('EmailAdapter — outbound.notification subscriber', () => {
       contactService: mocks.contactService,
       pollingIntervalMs: 999999,
       selfEmail: 'joseph@example.com',
-      excludedSenderEmails: [],
+      suppressedSenderEmails: [],
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
@@ -1123,7 +1123,7 @@ describe('EmailAdapter — inbound poll: self-loop hardening', () => {
       contactService: mocks.contactService,
       pollingIntervalMs: 999999,
       selfEmail: 'nathancuria1@gmail.com',
-      excludedSenderEmails: [],
+      suppressedSenderEmails: [],
       contactCreationMaxPerMessage: 10,
       contactCreationMaxPerHour: 100,
       ceoEmail: CEO_EMAIL,
