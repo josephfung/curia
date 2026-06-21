@@ -42,11 +42,14 @@ describeIf('clearBySubjects across the injection window (#975)', () => {
     await pool.query('SELECT 1 FROM outbound_context LIMIT 0');
     service = new OutboundContextService(pool, createSilentLogger());
 
-    // 12 active entries total across 3 meetings — more than getActive()'s LIMIT 10.
-    await registerForSubject('Sean Brownlee', 4);
-    await registerForSubject('Khanjan Desai', 2);
-    await registerForSubject('Walk and Ice cream', 3);
-    await registerForSubject('Drinks & AI', 3); // intentionally NOT cleared
+    // 12 active entries total across 4 meetings — more than getActive()'s LIMIT 10.
+    // Subjects are suffixed with runId because clearBySubjects matches by subject
+    // GLOBALLY (it is conversation-agnostic), so generic titles would collide with
+    // other tests' rows and release foreign data. The runId makes them unique.
+    await registerForSubject(`Sean Brownlee ${runId}`, 4);
+    await registerForSubject(`Khanjan Desai ${runId}`, 2);
+    await registerForSubject(`Walk and Ice cream ${runId}`, 3);
+    await registerForSubject(`Drinks & AI ${runId}`, 3); // intentionally NOT cleared
   });
 
   afterAll(async () => {
@@ -73,21 +76,21 @@ describeIf('clearBySubjects across the injection window (#975)', () => {
     expect(mineActive.length).toBeLessThan(12); // some of this run's entries fall outside the window
 
     const result = await service.clearBySubjects([
-      'Sean Brownlee',
-      'khanjan desai', // case-insensitive
-      'Walk and Ice cream',
-      'Nonexistent Meeting', // unmatched
+      `Sean Brownlee ${runId}`,
+      `khanjan desai ${runId}`, // case-insensitive (name lowercased; runId already lowercase)
+      `Walk and Ice cream ${runId}`,
+      `Nonexistent Meeting ${runId}`, // unmatched
     ]);
 
     expect(result.totalReleased).toBe(9);
     expect(result.perSubject).toEqual(
       expect.arrayContaining([
-        { subject: 'Sean Brownlee', released: 4 },
-        { subject: 'khanjan desai', released: 2 },
-        { subject: 'Walk and Ice cream', released: 3 },
+        { subject: `Sean Brownlee ${runId}`, released: 4 },
+        { subject: `khanjan desai ${runId}`, released: 2 },
+        { subject: `Walk and Ice cream ${runId}`, released: 3 },
       ]),
     );
-    expect(result.unmatched).toEqual(['Nonexistent Meeting']);
+    expect(result.unmatched).toEqual([`Nonexistent Meeting ${runId}`]);
 
     // Verify directly in the DB: 0 active rows remain for the three cleared subjects,
     // and the un-cleared "Drinks & AI" subject is untouched (3 still active).
@@ -99,9 +102,9 @@ describeIf('clearBySubjects across the injection window (#975)', () => {
       [`conv-${runId}`],
     );
     const bySubject = new Map(remaining.rows.map((r) => [r.subject, Number(r.n)]));
-    expect(bySubject.get('Sean Brownlee')).toBeUndefined();
-    expect(bySubject.get('Khanjan Desai')).toBeUndefined();
-    expect(bySubject.get('Walk and Ice cream')).toBeUndefined();
-    expect(bySubject.get('Drinks & AI')).toBe(3);
+    expect(bySubject.get(`Sean Brownlee ${runId}`)).toBeUndefined();
+    expect(bySubject.get(`Khanjan Desai ${runId}`)).toBeUndefined();
+    expect(bySubject.get(`Walk and Ice cream ${runId}`)).toBeUndefined();
+    expect(bySubject.get(`Drinks & AI ${runId}`)).toBe(3);
   });
 });
