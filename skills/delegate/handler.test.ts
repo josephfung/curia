@@ -71,4 +71,23 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
       originator: { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' },
     });
   });
+
+  it('forwards delegationOrigin without originator when no originator is in ctx', async () => {
+    const { bus, published } = makeBus();
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, { taskMetadata: undefined }),
+    );
+    expect(result.success).toBe(true);
+
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    expect(task.payload.metadata).toMatchObject({
+      delegationOrigin: {
+        conversationId: 'user-conv',
+        channelId: 'email',
+        agentId: 'coordinator',
+        originalTask: 'find the acquisition comps',
+      },
+    });
+    expect(task.payload.metadata).not.toHaveProperty('originator');
+  });
 });
