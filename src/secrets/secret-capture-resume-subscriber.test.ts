@@ -1,8 +1,8 @@
 // secret-capture-resume-subscriber.test.ts — unit tests for the #972 resume subscriber.
 // No DB, no real bus: a fake bus records subscriptions/publishes and lets a test emit events.
 
-import { describe, it, expect } from 'vitest';
-import pino from 'pino';
+import { describe, it, expect, vi } from 'vitest';
+import { createSilentLogger, type Logger } from '../logger.js';
 import { SecretCaptureResumeSubscriber, type ResumeRoutingRegistrar } from './secret-capture-resume-subscriber.js';
 import type { EventBus } from '../bus/bus.js';
 import type { BusEvent, Layer, EventType, AgentTaskEvent } from '../bus/events.js';
@@ -48,12 +48,14 @@ function makeCapturedEvent(overrides: Partial<Parameters<typeof createSecretCapt
   );
 }
 
-function makeSubscriber(opts: { publishThrows?: boolean } = {}) {
+function makeSubscriber(opts: { publishThrows?: boolean; logger?: Logger } = {}) {
   const { bus, published, emit } = makeFakeBus(opts);
   // Spy registrar so tests can assert routing is seeded for the resume task.
   const routingCalls: Array<{ taskEventId: string; routing: Parameters<ResumeRoutingRegistrar>[1] }> = [];
   const registerRouting: ResumeRoutingRegistrar = (taskEventId, routing) => { routingCalls.push({ taskEventId, routing }); };
-  const sub = new SecretCaptureResumeSubscriber(bus, pino({ level: 'silent' }), registerRouting);
+  // Allow callers to inject a custom logger (e.g. one with a spy on warn) for assertion purposes.
+  const logger = opts.logger ?? createSilentLogger();
+  const sub = new SecretCaptureResumeSubscriber(bus, logger, registerRouting);
   sub.start();
   return { published, emit, routingCalls };
 }
@@ -198,9 +200,21 @@ describe('SecretCaptureResumeSubscriber', () => {
   });
 
   it('skips with a log when the resume_token cannot be decoded (#995)', async () => {
-    const { published, emit } = makeSubscriber();
+    // Use a per-test logger with a warn spy so we can assert the warning was actually emitted.
+    // createSilentLogger() discards output; the spy still intercepts the call.
+    const logger = createSilentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+    const { published, emit } = makeSubscriber({ logger });
     await emit(makeCapturedEvent({ conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator', resumeToken: '!!!garbage!!!' }));
+    // Must not publish — the bad token is unrecoverable.
     expect(published).toHaveLength(0);
+    // Must log a warning so a future refactor cannot silently drop the warn call.
+    expect(warnSpy).toHaveBeenCalledOnce();
+    // The warning object must carry the routing context for debuggability, and the message must
+    // mention decode failure or the skip decision.
+    const [meta, message] = warnSpy.mock.calls[0]!;
+    expect(meta).toMatchObject({ secretName: expect.any(String), agentId: 'coordinator' });
+    expect(message).toMatch(/decod|skip/i);
   });
 
   it('never leaks the secret value on the re-delegation path (#995)', async () => {
