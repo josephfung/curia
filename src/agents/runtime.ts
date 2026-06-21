@@ -926,12 +926,26 @@ export class AgentRuntime {
                 'Closed originating Bullpen thread after outbound relay (#1065)',
               );
             } catch (err) {
-              // Not authorized to close, or thread already closed/missing — non-fatal.
-              // Log so the audit trail shows the relay happened but the close was skipped.
-              logger.warn(
-                { err, agentId, threadId: bullpenOriginThreadId, skill: toolCall.name },
-                'Failed to close originating Bullpen thread after outbound relay — it may be re-surfaced',
-              );
+              // closeThread throws for three distinct reasons (see BullpenService.closeThread):
+              //   - thread not found / already closed — benign: the thread can't re-send anyway.
+              //   - agent not authorized (not creator/coordinator) — leaves the thread OPEN.
+              //   - Postgres UPDATE failure (transient) — leaves the thread OPEN.
+              // The last two mean the #1065 duplicate-send can recur, and this is the only
+              // close attempt, so surface them at error level (alertable) while keeping the
+              // benign case at warn. Either way it's non-fatal: the send already happened, so
+              // aborting the task would be worse than leaving bookkeeping incomplete.
+              const benign = err instanceof Error && /not found/i.test(err.message);
+              if (benign) {
+                logger.warn(
+                  { err, agentId, threadId: bullpenOriginThreadId, skill: toolCall.name },
+                  'Bullpen relay-close skipped: originating thread already closed or missing',
+                );
+              } else {
+                logger.error(
+                  { err, agentId, threadId: bullpenOriginThreadId, skill: toolCall.name },
+                  'Bullpen relay-close FAILED — originating thread left open, duplicate outbound may be re-sent (#1065)',
+                );
+              }
             }
           }
 

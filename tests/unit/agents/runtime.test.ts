@@ -3214,6 +3214,51 @@ describe('AgentRuntime bullpen outbound-relay close (#1065)', () => {
     expect(after?.thread.status).toBe('open');
   });
 
+  it('completes the task without crashing when closeThread throws after a relay', async () => {
+    // The close is best-effort: if it throws (unauthorized agent, transient DB error)
+    // the agent task must still complete — the outbound send already happened, so
+    // aborting would be worse. The runtime logs the failure rather than propagating it.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const seenResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (e) => { seenResponses.push(e as AgentResponseEvent); });
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+    // Force the close to fail with a non-benign error (thread is left open).
+    vi.spyOn(bullpenService, 'closeThread').mockRejectedValue(new Error('connection terminated'));
+
+    const provider = createToolUseProvider('signal-send', { to: '+1555', message: 'hi' });
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are the coordinator.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: { invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }) } as unknown as ExecutionLayer,
+      bullpenService,
+      pinnedSkills: ['signal-send'],
+      skillToolDefs: [{ name: 'signal-send', description: 'Send a Signal message', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: threadId,
+      channelId: 'bullpen',
+      senderId: 'meeting-debrief',
+      content: 'relay this',
+      metadata: { taskOrigin: 'bullpen', threadId },
+      parentEventId: 'discuss-1',
+    }));
+
+    // Task still completed (a non-error response was published) despite the close failure.
+    expect(seenResponses).toHaveLength(1);
+    expect(seenResponses[0]!.payload.isError).toBeFalsy();
+    // The close failed, so the thread remains open (the failure is surfaced via logs).
+    const after = await bullpenService.getThread(threadId);
+    expect(after?.thread.status).toBe('open');
+  });
+
   it('does not close any thread when an outbound send happens outside a bullpen-origin task', async () => {
     // Guard: a normal (non-bullpen) task that sends a Signal message must not
     // touch bullpen threads even if one is open and the coordinator participates.
