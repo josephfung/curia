@@ -1,5 +1,5 @@
 // handler.test.ts — delegate skill: forwarding of relay context for specialist resume (#995).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { DelegateHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
@@ -130,5 +130,39 @@ describe('DelegateHandler resume_token decode', () => {
     if (result.success) throw new Error('expected delegate to reject a cross-agent resume_token');
     expect(result.error).toMatch(/accounts-specialist/);
     expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
+  });
+
+  it('rejects a resume_token whose required field is an empty string', async () => {
+    const { bus, published } = makeBus();
+    // Valid base64/JSON with the right keys, but original_task is empty — the shared decode accepts
+    // it (it is a string), so the handler's own empty-field guard must still reject it.
+    const resume_token = encodeResumeToken({ agent: 'research-analyst', originalTask: '', context: 'y' });
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, { input: { agent: 'research-analyst', task: 'continue', resume_token } }),
+    );
+    if (result.success) throw new Error('expected delegate to reject an empty-field resume_token');
+    expect(result.error).toMatch(/missing required fields/i);
+    expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
+  });
+
+  it('warns but proceeds when the resume_token version does not match', async () => {
+    const { bus, published } = makeBus();
+    const logger = pino({ level: 'silent' });
+    const warnSpy = vi.spyOn(logger, 'warn');
+    // Hand-craft a token with a future version (encodeResumeToken always stamps the current one).
+    const resume_token = Buffer.from(
+      JSON.stringify({ v: 99, agent: 'research-analyst', original_task: 'orig task', context: 'progress' }),
+    ).toString('base64');
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, { log: logger, input: { agent: 'research-analyst', task: 'continue', resume_token } }),
+    );
+    expect(result.success).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ tokenVersion: 99, expectedVersion: 1 }),
+      expect.stringMatching(/version mismatch/i),
+    );
+    // Despite the mismatch it still proceeds and builds the brief.
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    expect(task.payload.content).toContain('orig task');
   });
 });
