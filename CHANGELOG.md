@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`SecretCapturedPayload`** — gained an optional `resumeToken` field (public bus event surface). (#995)
 - **Coordinator Drive moves** — pinned `update_drive_file` to the coordinator and documented reparenting (`add_parents`/`remove_parents`), so "move this doc into a folder" requests are performed instead of declined. (#1062)
 - **`skills/**` typecheck** — CI now type-checks all skill handlers and tests, closing the scope blind spot. (#1075)
+- **CodeAnt review rules** — scoped `.codeant/instructions.json` so known false-positive patterns (skill-handler `String(err)` returns, the MCP loader's warn-not-crash `continue`, awaited loader calls in tests) stop firing. (#1098)
 
 ### Fixed
 
