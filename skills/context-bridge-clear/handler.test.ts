@@ -91,7 +91,7 @@ describe('ContextBridgeClearHandler', () => {
 
   it('returns an error when outboundContext capability is missing', async () => {
     const ctx = makeCtx({ subjects: ['Sean Brownlee'] });
-    (ctx as Record<string, unknown>).outboundContext = undefined;
+    (ctx as unknown as Record<string, unknown>).outboundContext = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/outboundContext/);
