@@ -276,6 +276,9 @@ export async function bootstrapCeoContact(
  * slow_decay, which makes them eligible for DreamEngine archival once confidence decays.
  * When that pre-existing node belongs to the principal, bootstrap must repair it — and
  * GREATEST ensures we never *demote* a node that already has a higher confidence value.
+ * `source` is intentionally not updated: preserving the original creator (e.g.
+ * 'extraction') keeps the audit trail honest; decay protection is controlled
+ * exclusively by decay_class, not source.
  * (Issue #1004)
  *
  * Exported so ensure-principal.ts can reuse the exact same node-creation semantics

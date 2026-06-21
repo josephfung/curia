@@ -209,12 +209,14 @@ describeIf('bootstrapCeoContact', () => {
 
     expect(result.kgNodeId).toBe(preExistingNodeId);
 
-    const node = await pool.query<{ decay_class: string; confidence: number }>(
-      `SELECT decay_class, confidence FROM kg_nodes WHERE id = $1`,
+    const node = await pool.query<{ decay_class: string; confidence: number; source: string }>(
+      `SELECT decay_class, confidence, source FROM kg_nodes WHERE id = $1`,
       [preExistingNodeId],
     );
     expect(node.rows[0]!.decay_class).toBe('permanent');
     expect(node.rows[0]!.confidence).toBeGreaterThanOrEqual(1.0);
+    // source is preserved (not overwritten) to keep the audit trail intact
+    expect(node.rows[0]!.source).toBe('extraction');
   });
 
   it('does not demote confidence when the conflicting node already has confidence >= 1.0', async () => {
