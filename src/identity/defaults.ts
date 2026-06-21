@@ -22,7 +22,9 @@ import type { OfficeIdentity } from './types.js';
 export const DEFAULT_OFFICE_IDENTITY: OfficeIdentity = {
   assistant: {
     name: 'Alex Curia',
-    title: 'Agent EA',
+    // Matches the role line ("Digital EA") in the default email signature below, so
+    // the wizard shows a consistent title and signature on a fresh install.
+    title: 'Digital EA',
     // Default email signature shown (pre-populated) in the onboarding wizard on
     // a fresh install. Kept in sync with the wizard's `defaultSignature()` helper
     // in apps/console/src/pages/wizard-utils.ts so the wizard's no-clobber and
