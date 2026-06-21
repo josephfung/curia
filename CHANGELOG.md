@@ -30,6 +30,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Default assistant signature** — the seeded `DEFAULT_OFFICE_IDENTITY` email signature is now `--\n<name> Curia\nDigital EA`, pre-populated (not just placeheld) in the onboarding wizard. (#799)
+- **Default assistant title** — the seeded `DEFAULT_OFFICE_IDENTITY` title is now `Digital EA`, matching the role line in the default signature so the onboarding wizard shows a consistent title and signature. (#799)
 - **Principal identity is contacts-only** — `findContactBySystemRole('principal')` is now the single startup source of truth; the `PiiRedactor` bypass, CEO notifiers, outbound filter, and email adapter all read the principal contact (resolved once at boot) instead of `config.ceoPrimaryEmail`. Fixes principal-bound messages being wrongly redacted in fresh-setup mode. (#1049)
 - **`SecretCapturedPayload`** — gained an optional `resumeToken` field (public bus event surface). (#995)
 - **Coordinator Drive moves** — pinned `update_drive_file` to the coordinator and documented reparenting (`add_parents`/`remove_parents`), so "move this doc into a folder" requests are performed instead of declined. (#1062)
