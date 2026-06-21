@@ -38,6 +38,7 @@ import { executiveRoutes } from './routes/executive.js';
 import { autonomyRoutes } from './routes/autonomy.js';
 import { registryRoutes } from './routes/registry.js';
 import { channelRegistryRoutes } from './routes/channel-registry.js';
+import { mcpRegistryRoutes } from './routes/mcp-registry.js';
 import { vaultRoutes } from './routes/vault.js';
 import { secretCaptureRoutes } from './routes/secret-capture.js';
 import { setupRoutes } from './routes/setup.js';
@@ -68,6 +69,9 @@ export interface HttpAdapterConfig {
   /** Backs the /api/registry/channels/* routes (channel install/enable lifecycle). Mounted
    *  only when webAppBootstrapSecret is also configured. */
   channelRegistryService?: import('../../registry/channel-registry-service.js').ChannelRegistryService;
+  /** Backs the /api/registry/mcp/* routes (MCP server install/enable lifecycle).
+   *  Mounted only when webAppBootstrapSecret is also configured. */
+  mcpRegistryService?: import('../../registry/mcp-registry-service.js').McpRegistryService;
   /** Backs the /api/vault/* routes (secrets status + skill-secret entry). Mounted only
    *  alongside registryService, which scopes which secret names may be written. */
   secretsService?: import('../../secrets/secrets-service.js').SecretsService;
@@ -365,6 +369,7 @@ export class HttpAdapter implements Channel {
         await this.app.register(vaultRoutes, {
           secretsService: this.config.secretsService,
           registryService: this.config.registryService,
+          mcpRegistryService: this.config.mcpRegistryService,
           webAppBootstrapSecret,
           sessions,
         });
@@ -377,6 +382,16 @@ export class HttpAdapter implements Channel {
     if (webAppBootstrapSecret && this.config.channelRegistryService) {
       await this.app.register(channelRegistryRoutes, {
         channelRegistryService: this.config.channelRegistryService,
+        webAppBootstrapSecret,
+        sessions,
+      });
+    }
+
+    // MCP registry routes — the MCP server install/enable lifecycle for the console UI.
+    // Guards on the bootstrap secret + its own service, same pattern as channel registry.
+    if (webAppBootstrapSecret && this.config.mcpRegistryService) {
+      await this.app.register(mcpRegistryRoutes, {
+        mcpRegistryService: this.config.mcpRegistryService,
         webAppBootstrapSecret,
         sessions,
       });

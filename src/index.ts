@@ -50,7 +50,7 @@ import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { loadSkillsFromDirectory, discoverSkillManifests, validateAllowedCallers } from './skills/loader.js';
 import type { SkillDiscovery } from './skills/loader.js';
-import { loadMcpServers } from './skills/mcp-loader.js';
+import { loadMcpServers, loadSkillsConfig } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
 import type { ChannelIdentity, Contact } from './contacts/types.js';
@@ -131,6 +131,9 @@ import { channelCredentialStatus } from './channels/credential-resolver.js';
 import { ChannelRegistryRepo } from './registry/channel-registry-repo.js';
 import { ChannelRegistryService } from './registry/channel-registry-service.js';
 import { reconcileChannelRegistry } from './registry/channel-reconcile.js';
+import { McpRegistryRepo } from './registry/mcp-registry-repo.js';
+import { McpRegistryService } from './registry/mcp-registry-service.js';
+import { reconcileMcpRegistry } from './registry/mcp-reconcile.js';
 
 async function main(): Promise<void> {
   // Captured at the very start of main() so the wizard's post-setup polling
@@ -883,6 +886,24 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // ── MCP server registry ────────────────────────────────────────────────────
+  // Auto-installs all declared servers; auto-enables those whose required secrets resolve.
+  // Drives the /api/registry/mcp/* routes and gates which servers loadMcpServers spawns.
+  // Must run before loadMcpServers so the enabled set is ready to filter which servers start.
+  const mcpRegistryRepo = new McpRegistryRepo(pool);
+  const mcpConfig = loadSkillsConfig(configDir);
+  const mcpRegistryService = new McpRegistryService(mcpRegistryRepo, mcpConfig.servers ?? [], secretsService);
+
+  try {
+    await reconcileMcpRegistry({ service: mcpRegistryService, servers: mcpConfig.servers ?? [], logger });
+  } catch (err) {
+    logger.fatal({ err }, 'MCP server registry reconciliation failed');
+    process.exit(1);
+  }
+
+  const enabledMcpServers = await mcpRegistryService.enabledServerNames();
+  // ───────────────────────────────────────────────────────────────────────────
+
   // MCP server connections — connects to each server in config/skills.yaml,
   // discovers tools via tools/list, and registers them in the skill registry
   // alongside local skills. Agents don't know or care which kind they're using.
@@ -892,7 +913,7 @@ async function main(): Promise<void> {
   // until the next restart.
   let mcpSessions: McpSession[] = [];
   try {
-    mcpSessions = await loadMcpServers(configDir, skillRegistry, logger, secretsService);
+    mcpSessions = await loadMcpServers(configDir, skillRegistry, logger, secretsService, enabledMcpServers);
   } catch (err) {
     // Malformed skills.yaml or unexpected loader error — degrade gracefully rather
     // than crashing. The startup validator catches schema violations, but a YAML
@@ -2021,6 +2042,7 @@ async function main(): Promise<void> {
     autonomyService,
     registryService,
     channelRegistryService,
+    mcpRegistryService,
     secretsService,
     secretCaptureService,
     setupRequiredAtBoot,

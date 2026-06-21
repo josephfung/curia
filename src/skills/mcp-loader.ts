@@ -260,13 +260,16 @@ export async function resolveSecretsBlock(
  * Load MCP servers from config/skills.yaml, connect to each one, discover
  * tools via tools/list, and register them in the SkillRegistry.
  *
- * @param configDir - Absolute path to the config/ directory (same as used by loadYamlConfig).
- * @param registry  - The SkillRegistry to register discovered tools into.
- * @param logger    - Pino logger for structured log output.
- * @param secrets   - Vault accessor. A server's `env:` empty-string sentinels and
- *                    `fixed_inputs` "env:VAR" references are resolved from the vault
- *                    at spawn time (vault-only, #913). A missing secret skips that
- *                    server, the same as a connection failure.
+ * @param configDir          - Absolute path to the config/ directory (same as used by loadYamlConfig).
+ * @param registry           - The SkillRegistry to register discovered tools into.
+ * @param logger             - Pino logger for structured log output.
+ * @param secrets            - Vault accessor. A server's `env:` empty-string sentinels and
+ *                             `fixed_inputs` "env:VAR" references are resolved from the vault
+ *                             at spawn time (vault-only, #913). A missing secret skips that
+ *                             server, the same as a connection failure.
+ * @param enabledServerNames - When provided, only servers whose name is in this set are spawned.
+ *                             Servers absent from the set are skipped with a debug log (not an error).
+ *                             Pass undefined to skip the filter (legacy / test behavior).
  * @returns Array of live McpSession objects. Pass to the shutdown handler to close them.
  */
 export async function loadMcpServers(
@@ -274,6 +277,7 @@ export async function loadMcpServers(
   registry: SkillRegistry,
   logger: Logger,
   secrets: SecretsService,
+  enabledServerNames?: Set<string>,
 ): Promise<McpSession[]> {
   const config = loadSkillsConfig(configDir);
   const servers = config.servers ?? [];
@@ -299,6 +303,15 @@ export async function loadMcpServers(
       logger.warn(
         { server: serverEntry.name },
         'MCP server config missing required "url" for sse transport — skipping',
+      );
+      continue;
+    }
+
+    // Registry filter: skip servers not in the enabled set.
+    if (enabledServerNames !== undefined && !enabledServerNames.has(serverEntry.name)) {
+      logger.debug(
+        { server: serverEntry.name },
+        'MCP server not in enabled registry set — skipping',
       );
       continue;
     }
