@@ -30,11 +30,36 @@ export interface LocalIdentity {
   constraints: string[];
 }
 
+// The assistant's surname. The LLM only ever suggests a first name (issue #799);
+// the wizard pairs it with this fixed brand surname to form the full name shown
+// in the name field and the email signature.
+export const ASSISTANT_SURNAME = 'Curia';
+
+// First name used in the static defaults when no LLM suggestion is available
+// (the call hasn't returned, failed, or returned an unusable value).
+export const DEFAULT_ASSISTANT_FIRST_NAME = 'Alex';
+
+// Full assistant name from a first name: "Sam" → "Sam Curia".
+export function assistantFullName(firstName: string): string {
+  return `${firstName} ${ASSISTANT_SURNAME}`;
+}
+
+// Default email signature from a first name. Pre-populated into the signature
+// field (not just shown as a placeholder) so a fresh install ships with a
+// sensible signature the operator can keep or edit:
+//
+//   --
+//   Sam Curia
+//   Digital EA
+export function defaultSignature(firstName: string): string {
+  return `--\n${assistantFullName(firstName)}\nDigital EA`;
+}
+
 export const DEFAULT_WIZARD_STATE: WizardState = {
   principalName: '',
-  name: 'Alex Curia',
+  name: assistantFullName(DEFAULT_ASSISTANT_FIRST_NAME),
   title: 'Executive Assistant to the CEO',
-  signature: '',
+  signature: defaultSignature(DEFAULT_ASSISTANT_FIRST_NAME),
   toneBaseline: ['warm', 'direct'],
   verbosity: 50,
   directness: 75,

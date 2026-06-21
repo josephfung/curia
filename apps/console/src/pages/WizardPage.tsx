@@ -15,6 +15,9 @@ import {
   validateNonEmptyName,
   validatePrincipalName,
   buildIdentityPayload,
+  assistantFullName,
+  defaultSignature,
+  DEFAULT_ASSISTANT_FIRST_NAME,
   type WizardState,
   type LocalIdentity,
 } from './wizard-utils.js';
@@ -122,7 +125,10 @@ export default function WizardPage() {
           principalName: DEFAULT_WIZARD_STATE.principalName,
           name: id.assistant.name || DEFAULT_WIZARD_STATE.name,
           title: id.assistant.title || DEFAULT_WIZARD_STATE.title,
-          signature: id.assistant.emailSignature || '',
+          // Pre-populate the default signature on a fresh install so the field
+          // ships with a usable value (not just a placeholder). A wizard re-run
+          // with a saved signature keeps it.
+          signature: id.assistant.emailSignature || DEFAULT_WIZARD_STATE.signature,
           toneBaseline:
             id.tone.baseline.length > 0
               ? id.tone.baseline
@@ -162,9 +168,16 @@ export default function WizardPage() {
         const name = typeof data.name === 'string' ? data.name : null;
         if (!name || cancelled) return;
         setSuggestedName(name);
-        // Prefill the value only if the field is still the untouched static
-        // default — never clobber a name the user has already typed.
-        setState(s => (s.name === DEFAULT_WIZARD_STATE.name ? { ...s, name } : s));
+        // The LLM suggests only a first name; the assistant's full name and the
+        // signature both pair it with the "Curia" surname. Prefill each field
+        // only if it is still the untouched static default — never clobber a
+        // name or signature the user has already edited.
+        setState(s => ({
+          ...s,
+          name: s.name === DEFAULT_WIZARD_STATE.name ? assistantFullName(name) : s.name,
+          signature:
+            s.signature === DEFAULT_WIZARD_STATE.signature ? defaultSignature(name) : s.signature,
+        }));
       } catch {
         // Network error — silently keep the static placeholder, per #799.
       }
@@ -563,7 +576,9 @@ export default function WizardPage() {
           id="w-name"
           type="text"
           value={state.name}
-          placeholder="Alex Curia"
+          // Name is pre-populated as a value; this placeholder is the fallback
+          // if the operator clears it. Tracks the LLM suggestion when one landed.
+          placeholder={assistantFullName(suggestedName ?? DEFAULT_ASSISTANT_FIRST_NAME)}
           onChange={e => {
             setState(s => ({ ...s, name: e.target.value }));
             if (assistantNameError) setAssistantNameError('');
@@ -586,10 +601,10 @@ export default function WizardPage() {
         <textarea
           id="w-signature"
           value={state.signature}
-          // Signature stays a placeholder hint (the field is optional, so its
-          // value is left empty); the hint name tracks the LLM suggestion when
-          // one landed, else the static "Alex" (issue #799).
-          placeholder={`Best regards, ${suggestedName ?? 'Alex'}`}
+          // The signature is pre-populated as a value (above); this placeholder
+          // is the fallback if the operator clears the field. Tracks the LLM
+          // suggestion's first name when one landed, else "Alex" (#799).
+          placeholder={defaultSignature(suggestedName ?? DEFAULT_ASSISTANT_FIRST_NAME)}
           onChange={e => setState(s => ({ ...s, signature: e.target.value }))}
         />
       </div>

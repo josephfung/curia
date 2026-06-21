@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Wizard name suggestion** — the onboarding wizard prefills the assistant-name field with an LLM-suggested first name via `POST /api/setup/suggest-name`, doubling as an early smoke test of the Anthropic key; falls back silently to the static placeholder on any failure. (#799)
+- **Wizard name suggestion** — the onboarding wizard prefills the assistant name and email signature from an LLM-suggested first name via `POST /api/setup/suggest-name`, doubling as an early smoke test of the Anthropic key; silent static fallback on any failure. (#799)
 - **Specialist secret-capture resume** — a delegated specialist (or the setup-wizard) that mints a secret-capture link is now resumed on redeem: migration 061 adds `resume_token` to `secret_capture_tokens`, re-entry routes through the coordinator, which re-delegates to the specialist via the `delegate` resume_token. Preserves the no-value and originator invariants. (#995)
 
 ### Fixed
