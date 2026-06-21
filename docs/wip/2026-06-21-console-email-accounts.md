@@ -17,7 +17,7 @@
 - pino logging only — no `console.log`. Levels: error/warn/info/debug. Never log secret values.
 - No empty `catch {}` — every catch logs and handles.
 - Typecheck via `pnpm -C <worktree> run typecheck` (not bare `tsc`) before every commit touching `.ts`.
-- Migrations: plain SQL, `-- Up Migration` / `-- Down Migration` headers, both directions. Verify the numeric prefix is unique (`ls src/db/migrations/ | sort`) before committing — current max is `062`, this plan uses `063`.
+- Migrations: plain SQL, `-- Up Migration` / `-- Down Migration` headers, both directions. Verify the numeric prefix is unique (`ls src/db/migrations/ | sort`) before committing — current max is `062`, this plan uses `064`.
 - Integration tests use real Postgres (Docker), run in CI. Raw-SQL migrations only fail in CI, so treat CI as the gate.
 - Every PR updates `CHANGELOG.md` under `## [Unreleased]`. Do not bump the version number.
 - Vault-key convention (single source of truth): `channel.email.<name>.nylas_grant_id`. Account `name` is constrained to `^[a-z0-9][a-z0-9_-]*$` (no dots — names appear inside the dotted vault key).
@@ -28,7 +28,7 @@
 ### Task 1: Migration — `email_accounts` table
 
 **Files:**
-- Create: `src/db/migrations/063_create_email_accounts.sql`
+- Create: `src/db/migrations/064_create_email_accounts.sql`
 
 **Interfaces:**
 - Produces: table `email_accounts (name PK, self_email, provider, enabled, created_at, created_by, updated_at)`.
@@ -36,11 +36,11 @@
 - [ ] **Step 1: Verify the next migration number is free**
 
 Run: `ls src/db/migrations/ | sort | tail -3`
-Expected: highest prefix is `062_*`; `063` is unused. If `063` is taken, use the next free number and update all references in this plan.
+Expected: highest prefix is `062_*`; `064` is unused. If `064` is taken, use the next free number and update all references in this plan.
 
 - [ ] **Step 2: Write the migration**
 
-Create `src/db/migrations/063_create_email_accounts.sql`:
+Create `src/db/migrations/064_create_email_accounts.sql`:
 
 ```sql
 -- Up Migration
@@ -78,12 +78,12 @@ DROP TABLE IF EXISTS email_accounts;
 - [ ] **Step 3: Run migrations to verify the SQL applies**
 
 Run: `pnpm -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-console-email-accounts run migrate` (or the repo's migrate script — check `package.json` scripts; common name is `migrate` / `db:migrate`).
-Expected: migration `063_create_email_accounts` applies cleanly (requires local Postgres; if unavailable locally, rely on CI per Global Constraints).
+Expected: migration `064_create_email_accounts` applies cleanly (requires local Postgres; if unavailable locally, rely on CI per Global Constraints).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-console-email-accounts add src/db/migrations/063_create_email_accounts.sql
+git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-console-email-accounts add src/db/migrations/064_create_email_accounts.sql
 git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-console-email-accounts commit -m "feat: add email_accounts table (#1101)"
 ```
 
@@ -1339,7 +1339,7 @@ Expected: green. Integration tests (`email-accounts-repo`, migration) require Po
 - [ ] **Step 2: Migration-prefix collision check (rebase hazard)**
 
 Run: `ls src/db/migrations/ | sort | uniq -w3 -D`
-Expected: no duplicate 3-char prefixes. If `063` collides after a rebase, renumber this migration to the next free slot and update Task 1 references.
+Expected: no duplicate 3-char prefixes. If `064` collides after a rebase, renumber this migration to the next free slot and update Task 1 references.
 
 - [ ] **Step 3: Pre-PR review subagents (per global workflow)**
 
@@ -1351,7 +1351,7 @@ Dispatch in parallel: `pr-review-toolkit:code-reviewer` (branch vs `main`), `pr-
 git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-console-email-accounts push -u origin feat/console-email-accounts
 ```
 Open the PR with `Closes #1101` in the Summary. Include a **Rollout checklist** in the body:
-- Deploy carries migration `063` (table created before new resolver runs).
+- Deploy carries migration `064` (table created before new resolver runs).
 - First boot runs the backfill: confirm logs show "Backfilled legacy email account" and the email channel polls.
 - After confirming, remove `NYLAS_GRANT_ID` / `NYLAS_SELF_EMAIL` from prod `.env` and the curia-deploy `.env.example`; restart; confirm the channel still polls (now fully vault + table sourced).
 

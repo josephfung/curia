@@ -68,7 +68,7 @@ No `provider_config jsonb` column yet. When IMAP lands it will need non-secret t
 config (host/port), and that column earns its place then. Adding it now would be speculative
 (YAGNI).
 
-Migration number: next available (currently `063` — **verify at merge** against the
+Migration number: `064` (`063` is taken by another in-flight PR — **verify at merge** against the
 duplicate-prefix hazard in CLAUDE.md).
 
 ### Resolver rewrite
