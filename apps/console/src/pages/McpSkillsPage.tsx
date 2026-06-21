@@ -51,7 +51,7 @@ async function errorMessage(res: Response): Promise<string> {
 }
 
 // Credential row — identical to ChannelSettings.CredentialRow but uses the flat vault key directly.
-function SecretRow({ field, onSaved }: { field: McpSecretField; onSaved: () => void }) {
+function SecretRow({ field, onSaved }: { field: McpSecretField; onSaved: () => void | Promise<void> }) {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -68,7 +68,7 @@ function SecretRow({ field, onSaved }: { field: McpSecretField; onSaved: () => v
       });
       if (!res.ok) throw new Error(await errorMessage(res));
       setValue('');
-      onSaved();
+      await onSaved();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to save credential');
     } finally {
@@ -108,7 +108,7 @@ function SecretRow({ field, onSaved }: { field: McpSecretField; onSaved: () => v
   );
 }
 
-function McpDrawer({ entry, onClose, onChanged }: { entry: McpEntry; onClose: () => void; onChanged: () => void }) {
+function McpDrawer({ entry, onClose, onChanged }: { entry: McpEntry; onClose: () => void; onChanged: () => void | Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -121,7 +121,7 @@ function McpDrawer({ entry, onClose, onChanged }: { entry: McpEntry; onClose: ()
         { method },
       );
       if (!res.ok) throw new Error(await errorMessage(res));
-      onChanged();
+      await onChanged();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Action failed');
     } finally {
@@ -177,11 +177,11 @@ function McpDrawer({ entry, onClose, onChanged }: { entry: McpEntry; onClose: ()
 
           <div className="form-field">
             <label>Installed</label>
-            <div>{entry.installedAt ? `${entry.installedAt} by ${entry.installedBy}` : '—'}</div>
+            <div>{entry.installedAt ? `${entry.installedAt}${entry.installedBy ? ` by ${entry.installedBy}` : ''}` : '—'}</div>
           </div>
           <div className="form-field">
             <label>Enabled</label>
-            <div>{entry.enabledAt ? `${entry.enabledAt} by ${entry.enabledBy}` : '—'}</div>
+            <div>{entry.enabledAt ? `${entry.enabledAt}${entry.enabledBy ? ` by ${entry.enabledBy}` : ''}` : '—'}</div>
           </div>
         </div>
       </div>
@@ -336,7 +336,7 @@ export default function McpSkillsPage() {
                   </div>
                 </div>
                 {selected && (
-                  <McpDrawer key={selected.name} entry={selected} onClose={() => setSelected(null)} onChanged={() => { void load(); }} />
+                  <McpDrawer key={selected.name} entry={selected} onClose={() => setSelected(null)} onChanged={load} />
                 )}
               </div>
             </>

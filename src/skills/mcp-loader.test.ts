@@ -278,7 +278,8 @@ describe('resolveFixedInputFromVault', () => {
 describe('loadSkillsConfig', () => {
   let tmpDir: string;
   beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-cfg-')); });
-  afterEach(() => { fs.rmSync(tmpDir, { recursive: true }); });
+  // Best-effort: a teardown failure must not mask the real assertion.
+  afterEach(() => { try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ } });
 
   it('parses a server entry with a secrets: block', () => {
     fs.writeFileSync(path.join(tmpDir, 'skills.yaml'), `
@@ -380,13 +381,18 @@ describe('resolveSecretsBlock', () => {
   });
 
   it('does not fall back to process.env', async () => {
+    const prior = process.env['SHOULD_NOT_READ'];
     process.env['SHOULD_NOT_READ'] = 'leaked';
-    const decls: McpSecretDeclaration[] = [{
-      key: 'should_not_read', label: 'Test', required: false, secret: false,
-      inject: { env: 'SHOULD_NOT_READ' },
-    }];
-    const result = await resolveSecretsBlock(decls, makeSecrets({}), 'test-server');
-    expect(result.env['SHOULD_NOT_READ']).toBeUndefined();
-    delete process.env['SHOULD_NOT_READ'];
+    try {
+      const decls: McpSecretDeclaration[] = [{
+        key: 'should_not_read', label: 'Test', required: false, secret: false,
+        inject: { env: 'SHOULD_NOT_READ' },
+      }];
+      const result = await resolveSecretsBlock(decls, makeSecrets({}), 'test-server');
+      expect(result.env['SHOULD_NOT_READ']).toBeUndefined();
+    } finally {
+      if (prior === undefined) delete process.env['SHOULD_NOT_READ'];
+      else process.env['SHOULD_NOT_READ'] = prior;
+    }
   });
 });

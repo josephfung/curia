@@ -124,6 +124,14 @@ describe('McpRegistryService', () => {
     expect(entry.state).toBe('enabled');
   });
 
+  it('uninstall(): rejects and preserves secrets when server has no registry row', async () => {
+    const secrets = makeSecrets({});
+    const svc = new McpRegistryService(makeRepo(), [ATPROTO], secrets);
+    // Server exists in config but was never installed — no registry row
+    await expect(svc.uninstall('atproto-mcp', 'actor')).rejects.toBeInstanceOf(McpGuardError);
+    expect(secrets.delete).not.toHaveBeenCalled();
+  });
+
   it('uninstall(): deletes exclusively-owned vault keys', async () => {
     const secrets = makeSecrets({});
     const repo = makeRepo();
