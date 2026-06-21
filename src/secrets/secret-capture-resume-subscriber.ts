@@ -115,10 +115,6 @@ export class SecretCaptureResumeSubscriber {
       return;
     }
 
-    // Mark dispatched BEFORE publishing so a synchronous re-delivery during publish can't slip
-    // through (mirrors the scheduler tracking its pending job before publish()).
-    this.markDispatched(event.id);
-
     const displayName = label ?? secretName;
     let content: string;
     if (resumeToken) {
@@ -127,9 +123,11 @@ export class SecretCaptureResumeSubscriber {
       const decoded = decodeResumeToken(resumeToken);
       if (!decoded) {
         // A system-minted token should always decode; a malformed one is unrecoverable, so skip
-        // (don't fabricate a re-delegation) and log loudly rather than swallow. A safe fingerprint
-        // (length + prefix) makes a "why won't this decode" investigation tractable; the token
-        // holds no secret value (names + NL only) so logging a prefix carries no privacy cost.
+        // (don't fabricate a re-delegation) and log loudly rather than swallow. Do NOT mark
+        // dispatched here — the skip should remain replayable if the operator corrects the token
+        // (e.g. re-publishes the event after a bug fix). A safe fingerprint (length + prefix) makes
+        // a "why won't this decode" investigation tractable; the token holds no secret value
+        // (names + NL only) so logging a prefix carries no privacy cost.
         this.logger.warn(
           { eventId: event.id, secretName, agentId, tokenLength: resumeToken.length, tokenPrefix: resumeToken.slice(0, 8) },
           'secret.captured carried a resume_token that could not be decoded — skipping specialist re-delegation',
@@ -159,6 +157,12 @@ export class SecretCaptureResumeSubscriber {
     // exactly as they did on the original task.
     const contactId = originator?.['contactId'];
     const senderId = typeof contactId === 'string' && contactId.length > 0 ? contactId : 'secret-capture';
+
+    // Mark dispatched BEFORE publishing so a synchronous re-delivery during publish can't slip
+    // through (mirrors the scheduler tracking its pending job before publish()). Placed here —
+    // after all validation — so decode/deliverability failures don't permanently dead-letter
+    // the event id (skipped events remain replayable without a process restart).
+    this.markDispatched(event.id);
 
     // Build the task first so we know its id, then seed dispatcher routing BEFORE publishing —
     // otherwise the agent's response could arrive before routing exists, or find none and be

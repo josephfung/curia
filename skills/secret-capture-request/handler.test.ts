@@ -147,7 +147,8 @@ describe('SecretCaptureRequestHandler', () => {
       },
     );
     await new SecretCaptureRequestHandler().execute(ctx);
-    const call = (minter.userCalls[0] as { origin: Record<string, unknown> });
+    expect(minter.userCalls[0]).toBeDefined();
+    const call = minter.userCalls[0]! as { origin: Record<string, unknown> };
     // Re-entry targets the coordinator on its deliverable channel, not the internal specialist ctx.
     expect(call.origin.conversationId).toBe('user-conv');
     expect(call.origin.channelId).toBe('email');
@@ -168,7 +169,8 @@ describe('SecretCaptureRequestHandler', () => {
       { secretCapture: minter, conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator' },
     );
     await new SecretCaptureRequestHandler().execute(ctx);
-    const call = (minter.userCalls[0] as { origin: Record<string, unknown> });
+    expect(minter.userCalls[0]).toBeDefined();
+    const call = minter.userCalls[0]! as { origin: Record<string, unknown> };
     expect(call.origin.agentId).toBe('coordinator');
     expect(call.origin).not.toHaveProperty('resumeToken');
   });

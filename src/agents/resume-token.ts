@@ -20,7 +20,7 @@ export interface ResumeTokenPayload {
   context: string;
 }
 
-function cap(value: string, max: number): string {
+function truncateToMax(value: string, max: number): string {
   return value.length > max ? value.slice(0, max) + '…' : value;
 }
 
@@ -29,8 +29,8 @@ export function encodeResumeToken(args: { agent: string; originalTask: string; c
   const payload: ResumeTokenPayload = {
     v: RESUME_TOKEN_VERSION,
     agent: args.agent,
-    original_task: cap(args.originalTask, MAX_RESUME_TASK_LENGTH),
-    context: cap(args.context, MAX_RESUME_CONTEXT_LENGTH),
+    original_task: truncateToMax(args.originalTask, MAX_RESUME_TASK_LENGTH),
+    context: truncateToMax(args.context, MAX_RESUME_CONTEXT_LENGTH),
   };
   return Buffer.from(JSON.stringify(payload)).toString('base64');
 }
@@ -39,21 +39,25 @@ export function encodeResumeToken(args: { agent: string; originalTask: string; c
  *  the required string fields — callers MUST handle null and log, rather than trust a malformed
  *  token. Version is not enforced here (lenient decode); callers can inspect `.v` if they care. */
 export function decodeResumeToken(token: string): ResumeTokenPayload | null {
-  let decoded: Record<string, unknown>;
+  let decoded: unknown;
   try {
-    decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf-8')) as Record<string, unknown>;
+    decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf-8'));
   } catch {
     // Malformed input is an expected, handled outcome (return null); not an error to propagate.
     return null;
   }
+  // JSON.parse can return null (e.g. base64 of the string "null") — guard before field access.
+  if (!decoded || typeof decoded !== 'object') {
+    return null;
+  }
+  const rec = decoded as Record<string, unknown>;
   if (
-    typeof decoded.agent !== 'string' ||
-    typeof decoded.original_task !== 'string' ||
-    typeof decoded.context !== 'string'
+    typeof rec.agent !== 'string' ||
+    typeof rec.original_task !== 'string' ||
+    typeof rec.context !== 'string'
   ) {
     return null;
   }
-  const v = typeof decoded.v === 'number' ? decoded.v : RESUME_TOKEN_VERSION;
-  // Validated above; cast through unknown per strict-TS narrowing rule.
-  return { v, agent: decoded.agent, original_task: decoded.original_task, context: decoded.context } as unknown as ResumeTokenPayload;
+  const v = typeof rec.v === 'number' ? rec.v : RESUME_TOKEN_VERSION;
+  return { v, agent: rec.agent, original_task: rec.original_task, context: rec.context };
 }
