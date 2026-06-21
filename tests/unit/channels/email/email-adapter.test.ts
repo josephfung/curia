@@ -421,7 +421,7 @@ describe('EmailAdapter — inbound poll: suppressedSenderEmails', () => {
       timezone: 'America/Toronto',
     });
 
-    // Sender address uses different casing than the exclusion list entry
+    // Sender address uses different casing than the suppressedSenderEmails entry
     const msg = makeMockMessage({ from: [{ email: 'curia@example.com' }] });
     (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValueOnce([msg]);
 

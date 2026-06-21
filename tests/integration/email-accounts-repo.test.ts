@@ -1,4 +1,4 @@
-// Integration tests for EmailAccountsRepo — requires Postgres with migration 063 applied.
+// Integration tests for EmailAccountsRepo — requires Postgres with migration 064 applied.
 // Skips gracefully when DATABASE_URL is unset.
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
@@ -14,7 +14,7 @@ describeIf('EmailAccountsRepo (integration)', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await pool.query('SELECT 1 FROM email_accounts LIMIT 0'); // fails loudly if migration 063 not applied
+    await pool.query('SELECT 1 FROM email_accounts LIMIT 0'); // fails loudly if migration 064 not applied
     repo = new EmailAccountsRepo(pool);
   });
   afterAll(async () => {

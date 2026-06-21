@@ -49,7 +49,7 @@ export interface CreateEmailAccountInput {
 }
 
 /**
- * Repository for the `email_accounts` table (migration 063).
+ * Repository for the `email_accounts` table (migration 064).
  *
  * Each row represents a mailbox the agent owns — the non-secret identity of
  * the account. Secrets (Nylas grant IDs) live separately in the vault under

@@ -702,9 +702,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Email channel — optional. Supports N named accounts via channel_accounts.email in
-  // config/default.yaml, or falls back to the legacy NYLAS_GRANT_ID + NYLAS_SELF_EMAIL
-  // env vars for single-account backward compatibility.
+  // Email channel — optional. Accounts are managed via the console (email_accounts table,
+  // migration 064). On first boot after the migration, backfillEmailAccounts seeds the table
+  // from the legacy single-account NYLAS_GRANT_ID + NYLAS_SELF_EMAIL env vars (idempotent).
+  // The retired channel_accounts.email YAML path is only still read for the backfill seeding
+  // transition; it is no longer the source of truth.
   //
   // One NylasClient is constructed per account (needed by OutboundGateway's client map).
   // EmailAdapters are constructed further below, after OutboundGateway is ready,
@@ -733,7 +735,7 @@ async function main(): Promise<void> {
       logger.warn('NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled');
     }
   } else if (resolvedEmailAccounts.length === 0) {
-    logger.warn('No email accounts resolved — email channel disabled. Set NYLAS_GRANT_ID + NYLAS_SELF_EMAIL, or configure channel_accounts.email in config/default.yaml');
+    logger.warn('No email accounts resolved — email channel disabled. Add an account via the console (or set NYLAS_GRANT_ID + NYLAS_SELF_EMAIL for the legacy backfill path on first boot).');
   } else {
     for (const account of resolvedEmailAccounts) {
       nylasClientMap.set(account.name, new NylasClient(config.nylasApiKey, account.nylasGrantId, logger));
