@@ -354,6 +354,36 @@ describe('email-accounts routes', () => {
     expect(secrets.deletes).toHaveLength(0);
   });
 
+  it('DELETE returns 200 when the row is deleted but the vault grant delete throws', async () => {
+    // Simulates the case where repo.delete succeeds but secretsService.delete throws.
+    // The row is gone; the orphaned vault key is inert. The response must be 200, not 500.
+    const repo = fakeRepo({
+      delete: async (name) => {
+        repo.deleteCalls.push(name);
+        return true;
+      },
+    });
+    // Build a secrets service whose delete always throws to simulate a vault error.
+    const throwingSecrets: RecordingSecrets = {
+      sets: [],
+      deletes: [],
+      get: async () => null,
+      set: async () => { /* no-op */ },
+      delete: async () => { throw new Error('vault unavailable'); },
+    };
+    app = await build(repo, throwingSecrets);
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/api/registry/email-accounts/main',
+      headers: auth,
+    });
+    // Row was deleted — 200 must be returned despite the vault failure.
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+    // Confirm the repo.delete was called (row IS gone).
+    expect(repo.deleteCalls).toContain('main');
+  });
+
   // --- Auth ---
 
   it('GET returns 401 without authentication', async () => {

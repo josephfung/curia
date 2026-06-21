@@ -195,20 +195,30 @@ export async function emailAccountsRoutes(
     if (!requireAuth(request, reply)) return;
     const { name } = request.params as { name: string };
 
+    let deleted: boolean;
     try {
-      const deleted = await repo.delete(name);
-      if (!deleted) {
-        return reply.status(404).send({ error: `email account '${name}' not found` });
-      }
-      // Remove the grant from the vault after the row is gone. If this fails the row is
-      // already deleted — log it but don't surface the error to the caller; the vault
-      // entry is inert without a corresponding DB row.
-      await secretsService.delete(emailAccountGrantSecretName(name));
-      request.log.info({ account: name }, 'email account deleted');
-      return reply.send({ ok: true });
+      deleted = await repo.delete(name);
     } catch (err) {
       request.log.error({ err, name }, 'DELETE /api/registry/email-accounts/:name failed');
       return reply.status(500).send({ error: 'Failed to delete email account. Check server logs.' });
     }
+
+    if (!deleted) {
+      return reply.status(404).send({ error: `email account '${name}' not found` });
+    }
+
+    // Best-effort: remove the grant key from the vault now that the row is gone.
+    // If this fails, the orphaned vault entry is inert — there is no DB row for the
+    // channel to look up, so the key can never be used. Log the error and continue
+    // rather than returning 500 (which would be confusing: the row IS deleted, and
+    // a retry by the caller would get 404).
+    try {
+      await secretsService.delete(emailAccountGrantSecretName(name));
+    } catch (err) {
+      request.log.error({ err, name }, 'email account deleted but vault grant key removal failed — orphaned key is inert without a DB row');
+    }
+
+    request.log.info({ account: name }, 'email account deleted');
+    return reply.send({ ok: true });
   });
 }
