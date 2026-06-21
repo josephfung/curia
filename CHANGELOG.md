@@ -36,6 +36,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Silent context sweep** — `context-bridge-release` drops its `coordinator`-only `allowed_callers` restriction; specialists (`contacts`, `ceo-inbox`) can release their own exchange entries instead of asking "Sweep those too?". (#1052)
 - **Coordinator sweep trigger** — tightened from the ambiguous "after the exchange is complete" to an explicit close-on-result rule, so stale `[ACTIVE OUTBOUND CONTEXT]` entries stop accumulating across multi-turn specialist conversations. (#1052)
 
+### Security
+
+- **Google Workspace OAuth secrets in the vault** — `google_oauth_client_id`, `google_oauth_client_secret`, and `curia_google_email` now resolve from the encrypted vault instead of plaintext `.env`; `drive-download-file` reads them via audited `ctx.secret()`, and the `google-workspace` MCP subprocess resolves them (and its `env:` fixed_input) from the vault at spawn time, vault-only. (#913)
+
 ## [0.36.0] — 2026-06-20 — "Reverend Mother"
 
 > **Reverend Mother Gaius Helen Mohiam** *(Dune, 1965, Frank Herbert)* — the Bene Gesserit who holds the gom jabbar to your throat and decides, by what you do under the test, who is human enough to pass. v0.36 gives Curia the same discernment: every sender is met at the gate, sorted by tier, and let only as far as earned trust allows.

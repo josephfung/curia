@@ -48,14 +48,27 @@ OAuth 2.0 as Curia's own Gmail user.
 3. Name it (e.g. `curia-mcp-client`).
 4. Note the **Client ID** and **Client Secret** — you will need these in the next step.
 
-#### Step 4 — Set env vars
+#### Step 4 — Seed the OAuth secrets into the vault
 
-Add to `.env` (VPS and local):
+As of #913 the Google Workspace OAuth secrets live in the **encrypted vault**, not
+in `.env`. Both consumers read them from the vault at runtime: the
+`drive-download-file` skill (via `ctx.secret()`, audited) and the `google-workspace`
+MCP subprocess (resolved at spawn time by the MCP loader, vault-only).
 
-```env
-GOOGLE_OAUTH_CLIENT_ID=<your-client-id>.apps.googleusercontent.com
-GOOGLE_OAUTH_CLIENT_SECRET=GOCSPX-...
+Seed all three on each environment (VPS and local) by setting them transiently and
+running the seeder — the vault upsert is idempotent, so re-running is safe:
+
+```bash
+GOOGLE_OAUTH_CLIENT_ID=<your-client-id>.apps.googleusercontent.com \
+GOOGLE_OAUTH_CLIENT_SECRET=GOCSPX-... \
+CURIA_GOOGLE_EMAIL=<curia-gmail> \
+  pnpm run seed-vault
 ```
+
+This writes the vault keys `google_oauth_client_id`, `google_oauth_client_secret`,
+and `curia_google_email`. Do **not** add these to `.env` — if the vault has no row
+for them, the `google-workspace` MCP server is skipped at startup and Drive download
+fails with a clear "not set in the vault" error.
 
 #### Step 5 — Run the first OAuth flow
 
