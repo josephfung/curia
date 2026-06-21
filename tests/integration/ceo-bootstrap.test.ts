@@ -213,10 +213,11 @@ describeIf('bootstrapCeoContact', () => {
       `SELECT decay_class, confidence, source FROM kg_nodes WHERE id = $1`,
       [preExistingNodeId],
     );
-    expect(node.rows[0]!.decay_class).toBe('permanent');
-    expect(node.rows[0]!.confidence).toBeGreaterThanOrEqual(1.0);
+    expect(node.rows[0]).toBeDefined();
+    expect(node.rows[0].decay_class).toBe('permanent');
+    expect(node.rows[0].confidence).toBeGreaterThanOrEqual(1.0);
     // source is preserved (not overwritten) to keep the audit trail intact
-    expect(node.rows[0]!.source).toBe('extraction');
+    expect(node.rows[0].source).toBe('extraction');
   });
 
   it('does not demote confidence when the conflicting node already has confidence >= 1.0', async () => {
@@ -236,8 +237,9 @@ describeIf('bootstrapCeoContact', () => {
       `SELECT decay_class, confidence FROM kg_nodes WHERE id = $1`,
       [preExistingNodeId],
     );
-    expect(node.rows[0]!.decay_class).toBe('permanent');
-    expect(node.rows[0]!.confidence).toBe(1.0);
+    expect(node.rows[0]).toBeDefined();
+    expect(node.rows[0].decay_class).toBe('permanent');
+    expect(node.rows[0].confidence).toBe(1.0);
   });
 
   it('does not affect person nodes with a different label', async () => {
@@ -255,6 +257,7 @@ describeIf('bootstrapCeoContact', () => {
       `SELECT decay_class FROM kg_nodes WHERE id = $1`,
       [unrelatedNodeId],
     );
-    expect(node.rows[0]!.decay_class).toBe('slow_decay');
+    expect(node.rows[0]).toBeDefined();
+    expect(node.rows[0].decay_class).toBe('slow_decay');
   });
 });
