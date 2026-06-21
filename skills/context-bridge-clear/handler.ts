@@ -3,7 +3,8 @@
 // more subjects (meeting names), releases EVERY active entry whose metadata
 // subject matches — not just the ones visible in the turn's [ACTIVE OUTBOUND
 // CONTEXT] block — and returns the actual released set so the coordinator can
-// confirm exactly what was cleared. Coordinator-only (allowed_callers).
+// confirm exactly what was cleared. Access is controlled by pinning (no
+// allowed_callers), matching the context-bridge-release convention.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 
