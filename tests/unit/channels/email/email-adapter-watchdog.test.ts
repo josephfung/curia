@@ -42,7 +42,7 @@ function makeAdapterConfig(
     contactService: makeContactService(),
     pollingIntervalMs: 100,
     selfEmail: 'curia@example.com',
-    excludedSenderEmails: [],
+    suppressedSenderEmails: [],
     contactCreationMaxPerMessage: 10,
     contactCreationMaxPerHour: 100,
     timezone: 'UTC',
