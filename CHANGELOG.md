@@ -20,7 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Channel registry** — email/signal creds saved via the Channels UI (`channel.*` vault keys) now wire up the adapter at boot, so the registry's `enabled + resolvable` state and real adapter boot can no longer disagree. (#964)
+- **Channel registry** — email/signal creds saved via the Channels UI (`channel.*` vault keys) now wire up the adapter at boot, so the registry's `enabled + resolvable` state and real adapter boot can no longer disagree; the gate and the runtime overlay share one `normalizeSecretValue()` so a whitespace-only vault value reads as absent on both. (#964)
 - **Bullpen duplicate out-of-band actions** — a per-agent read watermark (`bullpen_thread_reads`) stops a thread an agent has already had in context from being re-injected on a later wake until newer activity arrives, so a request fulfilled out-of-band (a send, a spreadsheet write, anything) is no longer re-actioned. Action-agnostic. (#1065)
 - **Drift detector false-positives on wake jobs** — the scheduler no longer drift-checks task-bound `wake_at` jobs (whose payload is the contentless `{"type":"task-wake"}` envelope), so meeting-debriefs and reminders complete instead of being wrongly paused; the drift-pause notification is now review-only and carries no re-executable intent, ending the duplicate outbound send. (#1064)
 - **Autonomy test skips** — `autonomy-routes` and `autonomy-service-pagination` tests now `describe.skip` when `DATABASE_URL` is unset instead of throwing in `beforeAll`, matching the other integration tests and removing 2 spurious local failures. (#519)

@@ -47,6 +47,23 @@ describe('channelCredentialStatus', () => {
     expect(res.fields.map(f => f.source)).toEqual(['config', 'config']);
   });
 
+  it('treats a whitespace-only vault value as absent (not resolvable), matching the runtime overlay', async () => {
+    // A "   " vault row must NOT report resolvable: applyChannelVaultSecrets trims it to
+    // undefined, so reporting it resolvable here would reintroduce the #964 divergence.
+    const secrets = fakeSecrets({ 'channel.signal.socket_path': '   ', 'channel.signal.phone_number': '+15551234567' });
+    const res = await channelCredentialStatus({ secrets, env: {} }, signal);
+    expect(res.requiredResolvable).toBe(false);
+    expect(res.fields.find(f => f.key === 'socket_path')!.source).toBe('missing');
+  });
+
+  it('falls through a whitespace-only vault value to a usable env fallback', async () => {
+    const secrets = fakeSecrets({ 'channel.signal.socket_path': '  ' });
+    const env = { SIGNAL_SOCKET_PATH: '/run/sig.sock', SIGNAL_PHONE_NUMBER: '+15551234567' };
+    const res = await channelCredentialStatus({ secrets, env }, signal);
+    expect(res.requiredResolvable).toBe(true);
+    expect(res.fields.find(f => f.key === 'socket_path')!.source).toBe('env');
+  });
+
   it('a channel with no required keys is always resolvable', async () => {
     const http: ChannelDescriptor = { name: 'http', description: '', isToggleable: false, credentialFields: [], requiredSecretKeys: [] };
     const res = await channelCredentialStatus({ secrets: fakeSecrets({}), env: {} }, http);

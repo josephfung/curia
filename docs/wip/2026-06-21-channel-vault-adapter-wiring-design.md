@@ -72,8 +72,11 @@ so the gate and the adapter never disagree.
 Resolution rules, matching `applyVaultSecrets` / `channelCredentialStatus`:
 - Each vault read is isolated in a `try/catch`; a transient vault failure is logged and
   treated as absent (fall through to env/current-config), never aborting boot.
-- Values are `clean()`-normalized (trim; blank-after-trim reads as absent), the same guard
-  used by `applyVaultSecrets`, so a whitespace-only row doesn't wire up a broken channel.
+- Values are normalized via the shared `normalizeSecretValue()` (trim; blank-after-trim reads
+  as absent). **The gate resolver (`channelCredentialStatus`) uses the same helper** — so a
+  whitespace-only vault row reads as absent on BOTH paths, never `resolvable`-but-unbootable.
+  (Without the shared helper the gate's `if (vaultVal)` truthy check would mark `"   "`
+  resolvable while the overlay cleared it — re-opening the divergence.)
 - Never log secret values — log a names-only `present` map like `applyVaultSecrets` does.
 
 ### Namespace safety (invariant — do not relax)

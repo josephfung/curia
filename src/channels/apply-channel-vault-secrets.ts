@@ -15,16 +15,13 @@
 // secrets and dot-free skill/system secrets structurally out of reach.
 import type { Config } from '../config.js';
 import type { Logger } from '../logger.js';
+// Shared so the gate (channelCredentialStatus) and this overlay make the SAME present/absent
+// decision — in particular both treat a whitespace-only value as absent (#964).
+import { normalizeSecretValue } from './credential-resolver.js';
 
 /** Narrow view of the vault — only get() is needed (and only get() must ever be called). */
 interface ChannelSecretsPort {
   get(name: string): Promise<string | null>;
-}
-
-/** Trim; collapse a blank/whitespace-only value to undefined (absent). Matches applyVaultSecrets. */
-function clean(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 /** Read one vault key, isolated: a transient failure logs and reads as absent, never aborts boot. */
@@ -34,7 +31,7 @@ async function readVaultKey(
   logger: Logger,
 ): Promise<string | undefined> {
   try {
-    return clean(await secrets.get(key));
+    return normalizeSecretValue(await secrets.get(key));
   } catch (err) {
     logger.warn({ err, key }, 'channel credential vault read failed; treating as missing and falling back to env/config');
     return undefined;
@@ -53,7 +50,7 @@ export async function applyChannelVaultSecrets(
     envVar: string,
     current: string | undefined,
   ): Promise<string | undefined> =>
-    (await readVaultKey(secrets, vaultKey, logger)) ?? clean(env[envVar]) ?? clean(current);
+    (await readVaultKey(secrets, vaultKey, logger)) ?? normalizeSecretValue(env[envVar]) ?? normalizeSecretValue(current);
 
   const [nylasApiKey, nylasGrantId, nylasSelfEmail, signalPhoneNumber, signalSocketPath] =
     await Promise.all([
