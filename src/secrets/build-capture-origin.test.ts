@@ -64,6 +64,8 @@ describe('buildCaptureOrigin (#995)', () => {
       }),
       'intent',
     );
+    expect(origin.conversationId).toBe('delegate-xyz');
+    expect(origin.agentId).toBe('accounts-specialist');
     expect(origin.channelId).toBe('internal');
     expect(origin).not.toHaveProperty('resumeToken');
   });
