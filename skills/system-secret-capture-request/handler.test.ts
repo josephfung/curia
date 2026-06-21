@@ -10,6 +10,7 @@ import pino from 'pino';
 import { SystemSecretCaptureRequestHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import type { SecretCaptureMinter, MintResult } from '../../src/secrets/secret-capture-service.js';
+import { decodeResumeToken } from '../../src/agents/resume-token.js';
 
 function fakeMinter(opts: { reject?: boolean; result?: Partial<MintResult> } = {}): SecretCaptureMinter & { systemCalls: unknown[] } {
   const systemCalls: unknown[] = [];
@@ -46,7 +47,8 @@ describe('SystemSecretCaptureRequestHandler', () => {
     const data = (result as { success: true; data: Record<string, unknown> }).data;
     expect(data.capture_url).toBe('https://curia.example.com/secret-capture/tok');
     expect(data.secret_name).toBe('anthropic_api_key');
-    expect(minter.systemCalls).toEqual([{ rawName: 'anthropic_api_key', label: 'anthropic_api_key', valueFormat: 'string' }]);
+    // origin is now always threaded; only assert the name-policy fields here.
+    expect(minter.systemCalls[0]).toEqual(expect.objectContaining({ rawName: 'anthropic_api_key', label: 'anthropic_api_key', valueFormat: 'string' }));
   });
 
   it('uses mintSystemSecret, never mintUserSecret', async () => {
@@ -98,5 +100,44 @@ describe('SystemSecretCaptureRequestHandler', () => {
     } as unknown as SkillContext;
     const result = await new SystemSecretCaptureRequestHandler().execute(ctx);
     expect(result.success).toBe(false);
+  });
+});
+
+// --- #995 origin threading tests (appended per task-6-brief) ---
+
+function fakeMinterWithUserCalls(over: Partial<MintResult> = {}): SecretCaptureMinter & { userCalls: unknown[]; systemCalls: unknown[] } {
+  const userCalls: unknown[] = [];
+  const systemCalls: unknown[] = [];
+  return {
+    userCalls, systemCalls,
+    async mintUserSecret(args) { userCalls.push(args); return { rawToken: 'abc123', secretName: 'user.x', expiresAt: new Date(), ...over }; },
+    async mintSystemSecret(args) { systemCalls.push(args); return { rawToken: 'abc123', secretName: 'channel.email.nylas_api_key', expiresAt: new Date(), ...over }; },
+  };
+}
+
+function makeCtxWithOverrides(input: Record<string, unknown>, overrides: Partial<SkillContext> = {}): SkillContext {
+  return { input, log: pino({ level: 'silent' }), secretCapture: fakeMinterWithUserCalls(), appOrigin: 'https://curia.example.com', ...overrides } as unknown as SkillContext;
+}
+
+describe('SystemSecretCaptureRequestHandler (#995)', () => {
+  it('threads coordinator routing + resume_token when delegated (setup-wizard)', async () => {
+    const minter = fakeMinterWithUserCalls();
+    const originator = { contactId: 'ceo', systemRole: 'principal', channel: 'web', initiatedAt: 't' };
+    const ctx = makeCtxWithOverrides(
+      { secret_name: 'channel.email.nylas_api_key', label: 'Nylas API key' },
+      {
+        secretCapture: minter,
+        conversationId: 'delegate-xyz', channelId: 'internal', agentId: 'setup-wizard',
+        taskMetadata: { originator, delegationOrigin: { conversationId: 'user-conv', channelId: 'web', agentId: 'coordinator', originalTask: 'set up email' } },
+      },
+    );
+    const result = await new SystemSecretCaptureRequestHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    const call = (minter.systemCalls[0] as { origin: Record<string, unknown> });
+    expect(call.origin.conversationId).toBe('user-conv');
+    expect(call.origin.channelId).toBe('web');
+    expect(call.origin.agentId).toBe('coordinator');
+    expect(call.origin.originator).toEqual(originator);
+    expect(decodeResumeToken(call.origin.resumeToken as string)!.agent).toBe('setup-wizard');
   });
 });
