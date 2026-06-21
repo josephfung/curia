@@ -17,6 +17,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Specialist secret-capture resume** — a delegated specialist (or the setup-wizard) that mints a secret-capture link is now resumed on redeem: migration 061 adds `resume_token` to `secret_capture_tokens`, re-entry routes through the coordinator, which re-delegates to the specialist via the `delegate` resume_token. Preserves the no-value and originator invariants. (#995)
 
+### Fixed
+
+- **Principal KG node decay class** — `insertKgPersonNode`'s `ON CONFLICT` handler now promotes `decay_class` to `permanent` and pins `confidence` to `GREATEST(existing, 1.0)`, so a pre-existing `slow_decay` person node (created by email extraction before bootstrap ran) is repaired instead of left eligible for DreamEngine archival. Migration 062 backfills any already-affected instance. (#1004)
+
 ### Changed
 
 - **`SecretCapturedPayload`** — gained an optional `resumeToken` field (public bus event surface). (#995)

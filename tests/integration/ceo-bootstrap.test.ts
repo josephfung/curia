@@ -42,10 +42,11 @@ describeIf('bootstrapCeoContact', () => {
     await pool.query(
       `DELETE FROM contacts WHERE role = 'ceo' AND display_name LIKE 'Bootstrap Test%'`,
     );
-    // kg_nodes rows created during tests are cleaned up via FK cascade when contacts are deleted
-    // (if kg_node_id FK has ON DELETE SET NULL we need to clean separately)
+    // Delete ALL kg_nodes for the test label prefix regardless of source — tests that
+    // pre-seed extraction nodes (to simulate pre-existing slow_decay nodes) won't be
+    // cleaned up by a source='bootstrap' filter alone.
     await pool.query(
-      `DELETE FROM kg_nodes WHERE source = 'bootstrap' AND label LIKE 'Bootstrap Test%'`,
+      `DELETE FROM kg_nodes WHERE label LIKE 'Bootstrap Test%'`,
     );
   });
 
@@ -191,5 +192,67 @@ describeIf('bootstrapCeoContact', () => {
     expect(node.rows[0].type).toBe('person');
     expect(node.rows[0].decay_class).toBe('permanent');
     expect(node.rows[0].source).toBe('bootstrap');
+  });
+
+  it('promotes a pre-existing slow_decay person node to permanent on conflict', async () => {
+    // Simulate what email-based extraction creates before bootstrap runs:
+    // a person node with the default slow_decay for the CEO's display name.
+    const preExistingNodeId = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+       VALUES ($1, 'person', 'Bootstrap Test CEO', '{}', 0.7, 'slow_decay', 'extraction', now(), now())`,
+      [preExistingNodeId],
+    );
+
+    // Bootstrap should find this node via the ON CONFLICT index and promote it.
+    const result = await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
+
+    expect(result.kgNodeId).toBe(preExistingNodeId);
+
+    const node = await pool.query<{ decay_class: string; confidence: number }>(
+      `SELECT decay_class, confidence FROM kg_nodes WHERE id = $1`,
+      [preExistingNodeId],
+    );
+    expect(node.rows[0]!.decay_class).toBe('permanent');
+    expect(node.rows[0]!.confidence).toBeGreaterThanOrEqual(1.0);
+  });
+
+  it('does not demote confidence when the conflicting node already has confidence >= 1.0', async () => {
+    // Pre-seed a permanent node at confidence=1.0 — bootstrap should not lower it.
+    const preExistingNodeId = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+       VALUES ($1, 'person', 'Bootstrap Test CEO', '{}', 1.0, 'permanent', 'bootstrap', now(), now())`,
+      [preExistingNodeId],
+    );
+
+    const result = await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
+
+    expect(result.kgNodeId).toBe(preExistingNodeId);
+
+    const node = await pool.query<{ decay_class: string; confidence: number }>(
+      `SELECT decay_class, confidence FROM kg_nodes WHERE id = $1`,
+      [preExistingNodeId],
+    );
+    expect(node.rows[0]!.decay_class).toBe('permanent');
+    expect(node.rows[0]!.confidence).toBe(1.0);
+  });
+
+  it('does not affect person nodes with a different label', async () => {
+    // A third-party contact node should be left at slow_decay after bootstrap runs.
+    const unrelatedNodeId = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+       VALUES ($1, 'person', 'Bootstrap Test Other Person', '{}', 0.7, 'slow_decay', 'extraction', now(), now())`,
+      [unrelatedNodeId],
+    );
+
+    await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
+
+    const node = await pool.query<{ decay_class: string }>(
+      `SELECT decay_class FROM kg_nodes WHERE id = $1`,
+      [unrelatedNodeId],
+    );
+    expect(node.rows[0]!.decay_class).toBe('slow_decay');
   });
 });
