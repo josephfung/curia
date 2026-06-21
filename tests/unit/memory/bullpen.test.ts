@@ -181,6 +181,45 @@ describe('BullpenService (in-memory)', () => {
   it('markThreadsSeen ignores unknown thread ids without throwing', async () => {
     await expect(service.markThreadsSeen('agent-b', ['00000000-0000-0000-0000-000000000000'])).resolves.toBeUndefined();
   });
+
+  it('a watermarked multi-turn thread re-surfaces with the original request still in the recent window', async () => {
+    // The watermark gates thread *visibility*, not individual messages. After contact has
+    // seen the opening request and it is watermarked, a later reply must bring the thread
+    // back WITH the original request still visible — otherwise the agent would act on "the
+    // VC" with no idea what was being asked.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-21T10:00:00Z'));
+    try {
+      // ceo-inbox opens the thread with the original request (msg1).
+      const { thread } = await service.openThread(
+        'Debrief John Doe',
+        'ceo-inbox',
+        ['ceo-inbox', 'contact'],
+        'debrief me about John Doe',
+        ['contact'],
+      );
+      // contact is woken, sees msg1, and the runtime watermarks the thread for contact.
+      await service.markThreadsSeen('contact', [thread.id]);
+      expect(await service.getPendingThreadsForAgent('contact', 60)).toHaveLength(0);
+
+      // contact asks a clarifying question (msg2), then ceo-inbox answers (msg3) — new
+      // activity past contact's watermark.
+      vi.setSystemTime(new Date('2026-06-21T10:01:00Z'));
+      await service.postMessage(thread.id, 'contact', 'which John Doe?', ['ceo-inbox']);
+      vi.setSystemTime(new Date('2026-06-21T10:02:00Z'));
+      await service.postMessage(thread.id, 'ceo-inbox', 'the VC', ['contact']);
+
+      // The thread re-surfaces for contact, and the recent window still carries the
+      // original request alongside the new answer.
+      const pending = await service.getPendingThreadsForAgent('contact', 60);
+      expect(pending.map(t => t.threadId)).toContain(thread.id);
+      const contents = pending[0]!.recentMessages.map(m => m.content);
+      expect(contents).toContain('debrief me about John Doe');
+      expect(contents).toContain('the VC');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('formatBullpenContext', () => {
