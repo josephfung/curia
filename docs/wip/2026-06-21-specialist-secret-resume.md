@@ -564,16 +564,94 @@ git -C "$WT" commit -m "feat: delegate forwards coordinator relay context for sp
 ### Task 5: `secret-capture-request` builds resume_token + retargets origin when delegated
 
 **Files:**
+- Create: `src/secrets/build-capture-origin.ts` (shared helper, also used by Task 6)
+- Create: `src/secrets/build-capture-origin.test.ts`
 - Modify: `skills/secret-capture-request/handler.ts`
 - Modify: `skills/secret-capture-request/skill.json` (version bump)
 - Modify: `skills/secret-capture-request/handler.test.ts`
 
 **Interfaces:**
 - Consumes: `ctx.taskMetadata.delegationOrigin` (Task 4), `encodeResumeToken` (Task 1), `CaptureOrigin.resumeToken` (Task 2).
+- Produces: `buildCaptureOrigin(ctx: SkillContext, resumeIntent: string): CaptureOrigin` in `src/secrets/build-capture-origin.ts` — shared with Task 6. Returns the agent's own routing when coordinator-minted; retargets at the coordinator with a `resumeToken` when delegated. The delegation-detection + retarget + token-mint logic lives ONLY here (no duplication across the two capture skills).
 
 - [ ] **Step 1: Write the failing tests**
 
-In `skills/secret-capture-request/handler.test.ts`, add:
+First, the shared helper's own unit test. Create `src/secrets/build-capture-origin.test.ts`:
+
+```ts
+// build-capture-origin.test.ts — shared capture-origin builder for the secret-capture skills (#995).
+import { describe, it, expect } from 'vitest';
+import { buildCaptureOrigin } from './build-capture-origin.js';
+import { decodeResumeToken } from '../agents/resume-token.js';
+import type { SkillContext } from '../skills/types.js';
+
+function ctx(over: Partial<SkillContext> = {}): SkillContext {
+  return {
+    conversationId: 'own-conv',
+    channelId: 'internal',
+    agentId: 'accounts-specialist',
+    taskEventId: 'evt-1',
+    ...over,
+  } as unknown as SkillContext;
+}
+
+describe('buildCaptureOrigin (#995)', () => {
+  it("returns the agent's own routing and no resume_token when not delegated", () => {
+    const origin = buildCaptureOrigin(
+      ctx({ conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator' }),
+      'check the balance',
+    );
+    expect(origin.conversationId).toBe('user-conv');
+    expect(origin.channelId).toBe('email');
+    expect(origin.agentId).toBe('coordinator');
+    expect(origin.taskEventId).toBe('evt-1');
+    expect(origin.resumeIntent).toBe('check the balance');
+    expect(origin).not.toHaveProperty('resumeToken');
+  });
+
+  it('retargets at the coordinator and mints a resume_token when delegated', () => {
+    const originator = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' };
+    const origin = buildCaptureOrigin(
+      ctx({
+        conversationId: 'delegate-xyz',
+        channelId: 'internal',
+        agentId: 'accounts-specialist',
+        taskMetadata: {
+          originator,
+          delegationOrigin: { conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator', originalTask: 'log into Aeroplan and check balance' },
+        },
+      }),
+      'check the balance',
+    );
+    expect(origin.conversationId).toBe('user-conv');
+    expect(origin.channelId).toBe('email');
+    expect(origin.agentId).toBe('coordinator');
+    expect(origin.originator).toEqual(originator);
+    // The coordinator's task id isn't threaded; subscriber falls back to the event id.
+    expect(origin.taskEventId).toBeUndefined();
+    const decoded = decodeResumeToken(origin.resumeToken!)!;
+    expect(decoded.agent).toBe('accounts-specialist');
+    expect(decoded.original_task).toBe('log into Aeroplan and check balance');
+    expect(decoded.context).toBe('check the balance');
+  });
+
+  it('falls back to own routing when delegationOrigin is incomplete (missing channelId)', () => {
+    const origin = buildCaptureOrigin(
+      ctx({
+        conversationId: 'delegate-xyz',
+        channelId: 'internal',
+        agentId: 'accounts-specialist',
+        taskMetadata: { delegationOrigin: { conversationId: 'user-conv', agentId: 'coordinator', originalTask: 'x' } },
+      }),
+      'intent',
+    );
+    expect(origin.channelId).toBe('internal');
+    expect(origin).not.toHaveProperty('resumeToken');
+  });
+});
+```
+
+Then the handler-level tests. In `skills/secret-capture-request/handler.test.ts`, add:
 
 ```ts
   it('retargets origin at the coordinator and mints a resume_token when delegated (#995)', async () => {
@@ -622,60 +700,104 @@ In `skills/secret-capture-request/handler.test.ts`, add:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm -C "$WT" exec vitest run skills/secret-capture-request/handler.test.ts`
-Expected: the two new tests FAIL.
+Run: `pnpm -C "$WT" exec vitest run src/secrets/build-capture-origin.test.ts skills/secret-capture-request/handler.test.ts`
+Expected: the new tests FAIL (helper module `./build-capture-origin.js` missing; handler still uses the inline non-delegated origin).
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Create the shared helper**
+
+Create `src/secrets/build-capture-origin.ts`:
+
+```ts
+// build-capture-origin.ts — shared origin builder for the secret-capture skills (#995).
+//
+// Both secret-capture-request (user secrets) and system-secret-capture-request (channel/system
+// credentials) need the same logic: capture the agent's routing so redeem can re-enter it, and —
+// when the agent runs as a DELEGATED specialist — retarget the resume at the coordinator (a
+// deliverable channel) and mint a resume_token so the coordinator can re-delegate back to the
+// specialist. This helper holds NO secret material: only routing, names, and an NL intent.
+
+import { encodeResumeToken } from '../agents/resume-token.js';
+import type { CaptureOrigin } from './secret-capture-service.js';
+import type { SkillContext } from '../skills/types.js';
+
+/** Shape the delegate skill writes into task metadata (#995). All fields optional because it is
+ *  decoded from opaque metadata; the retarget only fires when the routing trio is fully present. */
+interface DelegationOrigin {
+  conversationId?: string;
+  channelId?: string;
+  agentId?: string;
+  originalTask?: string;
+}
+
+/**
+ * Build the CaptureOrigin to persist on a capture token.
+ *
+ * - Non-delegated (coordinator-minted): returns the agent's own routing so redeem re-enters it
+ *   directly (#972).
+ * - Delegated specialist: retargets routing at the coordinator and attaches a resume_token naming
+ *   this specialist + its brief, so the redeem event re-enters the coordinator to re-delegate (#995).
+ *
+ * @param resumeIntent natural-language description of what to resume (the user ask, or the label).
+ */
+export function buildCaptureOrigin(ctx: SkillContext, resumeIntent: string): CaptureOrigin {
+  const originator = ctx.taskMetadata?.originator as Record<string, unknown> | undefined;
+  const delegationOrigin = ctx.taskMetadata?.delegationOrigin as DelegationOrigin | undefined;
+
+  // Delegated specialist — only when delegate populated the full routing trio. Re-entering the
+  // specialist's own 'internal' channel would reach no user, so retarget at the coordinator.
+  if (
+    delegationOrigin &&
+    ctx.agentId &&
+    delegationOrigin.conversationId &&
+    delegationOrigin.channelId &&
+    delegationOrigin.agentId
+  ) {
+    return {
+      conversationId: delegationOrigin.conversationId,
+      channelId: delegationOrigin.channelId,
+      agentId: delegationOrigin.agentId,
+      // taskEventId omitted: the coordinator's task id isn't threaded here; the resume subscriber
+      // falls back to the event id for parentEventId.
+      originator,
+      resumeIntent,
+      resumeToken: encodeResumeToken({
+        agent: ctx.agentId,
+        originalTask: delegationOrigin.originalTask ?? resumeIntent,
+        context: resumeIntent,
+      }),
+    };
+  }
+
+  // Non-delegated — re-enter this agent in this conversation directly (#972).
+  return {
+    conversationId: ctx.conversationId,
+    channelId: ctx.channelId,
+    agentId: ctx.agentId,
+    taskEventId: ctx.taskEventId,
+    originator,
+    resumeIntent,
+  };
+}
+```
+
+Run: `pnpm -C "$WT" exec vitest run src/secrets/build-capture-origin.test.ts`
+Expected: PASS (3 helper tests).
+
+- [ ] **Step 3b: Use the helper in the handler**
 
 In `skills/secret-capture-request/handler.ts`, add the import:
 
 ```ts
-import { encodeResumeToken } from '../../src/agents/resume-token.js';
-import type { CaptureOrigin } from '../../src/secrets/secret-capture-service.js';
+import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
 ```
 
-Replace the `origin: { … }` object literal inside the `mintUserSecret({ … })` call with a pre-built `origin` variable. Just before the `try {` that calls `mintUserSecret`, add:
+Remove the now-unused `const originator = ctx.taskMetadata?.originator as …` line (the helper reads the originator from `ctx.taskMetadata`). Keep the `resumeIntent` computation. Just before the `try {` that calls `mintUserSecret`, add:
 
 ```ts
-    // Detect a delegated-specialist context (#995). `delegationOrigin` is set only by the delegate
-    // skill and carries the coordinator's deliverable routing + the specialist's brief. When
-    // present, the resume must re-enter the COORDINATOR and carry a resume_token so it can
-    // re-delegate to this specialist — re-entering the specialist's own 'internal' channel would
-    // reach no user.
-    const delegationOrigin = ctx.taskMetadata?.delegationOrigin as
-      | { conversationId?: string; channelId?: string; agentId?: string; originalTask?: string }
-      | undefined;
-
-    let origin: CaptureOrigin = {
-      conversationId: ctx.conversationId,
-      channelId: ctx.channelId,
-      agentId: ctx.agentId,
-      taskEventId: ctx.taskEventId,
-      originator,
-      resumeIntent,
-    };
-    if (
-      delegationOrigin &&
-      ctx.agentId &&
-      delegationOrigin.conversationId &&
-      delegationOrigin.channelId &&
-      delegationOrigin.agentId
-    ) {
-      origin = {
-        conversationId: delegationOrigin.conversationId,
-        channelId: delegationOrigin.channelId,
-        agentId: delegationOrigin.agentId,
-        // taskEventId omitted: the coordinator's task id isn't threaded here; the resume
-        // subscriber falls back to the event id for parentEventId.
-        originator,
-        resumeIntent,
-        resumeToken: encodeResumeToken({
-          agent: ctx.agentId,
-          originalTask: delegationOrigin.originalTask ?? resumeIntent,
-          context: resumeIntent,
-        }),
-      };
-    }
+    // Build the capture origin via the shared helper (#995): re-enter this agent directly when
+    // coordinator-minted, or retarget at the coordinator with a resume_token when this skill runs
+    // as a delegated specialist. Holds no secret value.
+    const origin = buildCaptureOrigin(ctx, resumeIntent);
 ```
 
 Then change the `mintUserSecret` call to pass the variable:
@@ -691,7 +813,7 @@ Then change the `mintUserSecret` call to pass the variable:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pnpm -C "$WT" exec vitest run skills/secret-capture-request/handler.test.ts`
+Run: `pnpm -C "$WT" exec vitest run src/secrets/build-capture-origin.test.ts skills/secret-capture-request/handler.test.ts`
 Expected: PASS (all tests, incl. the existing `captures origin routing context` test which still sees the non-delegated path).
 
 - [ ] **Step 5: Bump version + typecheck**
@@ -703,7 +825,7 @@ Expected: no errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git -C "$WT" add skills/secret-capture-request/handler.ts skills/secret-capture-request/handler.test.ts skills/secret-capture-request/skill.json
+git -C "$WT" add src/secrets/build-capture-origin.ts src/secrets/build-capture-origin.test.ts skills/secret-capture-request/handler.ts skills/secret-capture-request/handler.test.ts skills/secret-capture-request/skill.json
 git -C "$WT" commit -m "feat: secret-capture-request mints resume_token + retargets origin when delegated (#995)"
 ```
 
@@ -776,53 +898,20 @@ Expected: FAIL — `mintSystemSecret` is called with no `origin`.
 
 - [ ] **Step 3: Implement**
 
-In `skills/system-secret-capture-request/handler.ts`, add imports:
+In `skills/system-secret-capture-request/handler.ts`, add the import:
 
 ```ts
-import { encodeResumeToken } from '../../src/agents/resume-token.js';
-import type { CaptureOrigin } from '../../src/secrets/secret-capture-service.js';
+import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
 ```
 
 After computing `labelStr` and `valueFormat`, before the `try {` that calls `mintSystemSecret`, add:
 
 ```ts
-    // Origin threading (#995). The system variant has no resume_intent input — derive it from the
-    // label. The setup-wizard always runs as a delegated specialist, so delegationOrigin retargets
-    // the resume at the coordinator and carries a resume_token to re-delegate back to the wizard.
-    const resumeIntent = labelStr;
-    const originator = ctx.taskMetadata?.originator as Record<string, unknown> | undefined;
-    const delegationOrigin = ctx.taskMetadata?.delegationOrigin as
-      | { conversationId?: string; channelId?: string; agentId?: string; originalTask?: string }
-      | undefined;
-
-    let origin: CaptureOrigin = {
-      conversationId: ctx.conversationId,
-      channelId: ctx.channelId,
-      agentId: ctx.agentId,
-      taskEventId: ctx.taskEventId,
-      originator,
-      resumeIntent,
-    };
-    if (
-      delegationOrigin &&
-      ctx.agentId &&
-      delegationOrigin.conversationId &&
-      delegationOrigin.channelId &&
-      delegationOrigin.agentId
-    ) {
-      origin = {
-        conversationId: delegationOrigin.conversationId,
-        channelId: delegationOrigin.channelId,
-        agentId: delegationOrigin.agentId,
-        originator,
-        resumeIntent,
-        resumeToken: encodeResumeToken({
-          agent: ctx.agentId,
-          originalTask: delegationOrigin.originalTask ?? resumeIntent,
-          context: resumeIntent,
-        }),
-      };
-    }
+    // Origin threading (#995) via the shared helper. The system variant has no resume_intent input,
+    // so derive the intent from the label. The setup-wizard always runs as a delegated specialist,
+    // so the helper retargets the resume at the coordinator and mints a resume_token to re-delegate
+    // back to the wizard. (When somehow run non-delegated, it falls back to the agent's own routing.)
+    const origin = buildCaptureOrigin(ctx, labelStr);
 ```
 
 Change the `mintSystemSecret({ … })` call to pass `origin`:
@@ -1160,7 +1249,7 @@ Expected: no errors.
 
 - [ ] **Step 2: Run the full unit suite (or at least all touched files)**
 
-Run: `pnpm -C "$WT" exec vitest run src/agents/resume-token.test.ts src/secrets/secret-capture-service.test.ts src/secrets/secret-capture-resume-subscriber.test.ts src/secrets/specialist-resume-flow.test.ts skills/delegate/handler.test.ts skills/secret-capture-request/handler.test.ts skills/system-secret-capture-request/handler.test.ts`
+Run: `pnpm -C "$WT" exec vitest run src/agents/resume-token.test.ts src/secrets/build-capture-origin.test.ts src/secrets/secret-capture-service.test.ts src/secrets/secret-capture-resume-subscriber.test.ts src/secrets/specialist-resume-flow.test.ts skills/delegate/handler.test.ts skills/secret-capture-request/handler.test.ts skills/system-secret-capture-request/handler.test.ts`
 Expected: all PASS.
 
 - [ ] **Step 3: Lint (if configured)**
