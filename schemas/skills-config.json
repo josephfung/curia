@@ -85,6 +85,58 @@
           "type": "object",
           "additionalProperties": { "type": "string" },
           "description": "Constant parameter values injected into every tool call from this server. Keys are parameter names; values are literal strings or 'env:VAR_NAME' references resolved at startup. Listed parameters are stripped from the tool schema — agents never see them."
+        },
+        "secrets": {
+          "type": "array",
+          "description": "Declared secrets for this MCP server. Each entry names a flat vault key, provides a console label, and specifies how the resolved value is injected into the subprocess (via env var or fixed tool input). Replaces the old env:\"\" sentinel and fixed_inputs:\"env:VAR\" patterns.",
+          "items": {
+            "$ref": "#/$defs/secretDeclaration"
+          }
+        }
+      }
+    },
+    "secretDeclaration": {
+      "type": "object",
+      "description": "A single secret declared by an MCP server entry.",
+      "required": ["key", "label", "required", "secret", "inject"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Flat vault key (shared across skills and MCP servers). E.g. 'google_oauth_client_id'."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable label shown in the console credential form."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "If true, the server cannot be enabled until this secret is configured in the vault."
+        },
+        "secret": {
+          "type": "boolean",
+          "description": "If true, the console renders the field as a masked (password) input."
+        },
+        "inject": {
+          "type": "object",
+          "description": "How the resolved vault value is delivered to the subprocess. Exactly one of 'env' or 'fixed_input' must be set.",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "maxProperties": 1,
+          "properties": {
+            "env": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Inject as an environment variable with this name."
+            },
+            "fixed_input": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Inject as a fixed tool-call input parameter with this name."
+            }
+          }
         }
       }
     }
