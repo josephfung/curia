@@ -49,12 +49,6 @@ servers:
   # create_sheet (new tab) and append_table_rows are both in the complete tier —
   # they were not promoted to extended in workspace-mcp's tool_tiers.yaml.
   #
-  # Prerequisites (one-time human setup — see docs/dev/google-drive.md):
-  #   1. Create a Google Cloud Project, enable Drive/Sheets/Docs/Gmail/Calendar APIs
-  #   2. Create an OAuth 2.0 Desktop App credential
-  #   3. Seed the required secrets into the vault (see docs/dev/google-drive.md)
-  #   4. Run the OAuth flow once locally to cache tokens (~/.workspace-mcp/cli-tokens/)
-  #
   # Secrets are declared in the `secrets:` block and resolved from the encrypted
   # vault at spawn time. The `secrets:` list defines which credentials are required,
   # and how they are injected into the process:
