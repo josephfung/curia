@@ -269,11 +269,21 @@ export async function setupRoutes(
     }
 
     // extract() routes to the 'standard' tier and is errors-as-values: a provider
-    // failure comes back as { ok: false }, never a throw. Cap the output hard —
-    // we only want a single word, and a tight ceiling keeps the smoke test cheap.
-    const result = await infraLlmService
-      .scoped({ skillName: 'wizard-suggest-name', conversationId: 'setup' })
-      .extract(SUGGEST_NAME_PROMPT, { maxTokens: 16 });
+    // failure is meant to come back as { ok: false }, never a throw. The
+    // try/catch is belt-and-suspenders — an unexpected rejection (e.g. a future
+    // provider impl, or a bug in the routing layer) is funneled into the same
+    // controlled 502 fallback rather than bubbling up as an uncontrolled 500.
+    // Cap the output hard: we only want a single word, and a tight ceiling keeps
+    // the smoke test cheap.
+    let result;
+    try {
+      result = await infraLlmService
+        .scoped({ skillName: 'wizard-suggest-name', conversationId: 'setup' })
+        .extract(SUGGEST_NAME_PROMPT, { maxTokens: 16 });
+    } catch (err) {
+      logger.warn({ err }, 'POST /api/setup/suggest-name: LLM call threw unexpectedly — frontend will fall back');
+      return reply.status(502).send({ error: 'Could not generate a suggestion.' });
+    }
 
     if (!result.ok) {
       logger.info({ error: result.error }, 'POST /api/setup/suggest-name: LLM call failed — frontend will fall back');

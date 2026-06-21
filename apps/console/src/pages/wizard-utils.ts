@@ -51,6 +51,10 @@ export function assistantFullName(firstName: string): string {
 //   --
 //   Sam Curia
 //   Digital EA
+//
+// NOTE: `defaultSignature(DEFAULT_ASSISTANT_FIRST_NAME)` must match the seed
+// `DEFAULT_OFFICE_IDENTITY.assistant.emailSignature` in src/identity/defaults.ts
+// — that backend seed is what the wizard actually loads on a fresh install.
 export function defaultSignature(firstName: string): string {
   return `--\n${assistantFullName(firstName)}\nDigital EA`;
 }
