@@ -111,6 +111,7 @@ export async function secretCaptureRoutes(
                 taskEventId: c.taskEventId,
                 resumeIntent: c.resumeIntent,
                 originator: c.originator,
+                resumeToken: c.resumeToken,
               },
               c.taskEventId,  // parentEventId traces back to the originating agent.task
             )).catch((pubErr: unknown) => {

@@ -482,6 +482,10 @@ interface SecretCapturedPayload {
   taskEventId?: string;   // originating agent.task event id — threaded as parentEventId on resume
   resumeIntent?: string;  // NL description of what the agent was trying to do
   originator?: Record<string, unknown>;  // TaskOriginator that started the chain (preserved on resume)
+  /** Base64 delegate resume_token (#995). Present only for a delegated-specialist-minted link;
+   *  carries no secret value. The resume subscriber decodes it to recover the specialist name and
+   *  instructs the coordinator to re-delegate with it. */
+  resumeToken?: string;
 }
 
 // AutonomySkillBlockedPayload — published by the execution layer when a skill
