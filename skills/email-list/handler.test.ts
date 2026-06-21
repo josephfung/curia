@@ -69,8 +69,8 @@ describe('EmailListHandler — attachment metadata', () => {
     expect(result.success).toBe(true);
     const data = (result as { data: Record<string, unknown> }).data;
     const messages = data.messages as Array<Record<string, unknown>>;
-    expect(messages[0].attachmentCount).toBe(0);
-    expect(messages[0].hasAttachments).toBe(false);
+    expect(messages[0]!.attachmentCount).toBe(0);
+    expect(messages[0]!.hasAttachments).toBe(false);
   });
 
   it('returns attachmentCount: 2 and hasAttachments: true when 2 attachments present', async () => {
@@ -86,8 +86,8 @@ describe('EmailListHandler — attachment metadata', () => {
     expect(result.success).toBe(true);
     const data = (result as { data: Record<string, unknown> }).data;
     const messages = data.messages as Array<Record<string, unknown>>;
-    expect(messages[0].attachmentCount).toBe(2);
-    expect(messages[0].hasAttachments).toBe(true);
+    expect(messages[0]!.attachmentCount).toBe(2);
+    expect(messages[0]!.hasAttachments).toBe(true);
   });
 
   it('returns count matching the number of messages', async () => {
@@ -128,7 +128,7 @@ describe('EmailListHandler — unread_only with search', () => {
       outboundGateway: gateway,
       input: { search: 'to:security@example.com', unread_only: true },
     }));
-    const opts = (gateway!.listEmailMessages as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const opts = (gateway!.listEmailMessages as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     // unread_only should be embedded in the search string, not passed as a separate filter
     expect(opts.searchQueryNative).toBe('to:security@example.com is:unread');
     expect(opts.unread).toBeUndefined();
@@ -141,7 +141,7 @@ describe('EmailListHandler — unread_only with search', () => {
       outboundGateway: gateway,
       input: { search: 'to:security@example.com', unread_only: false },
     }));
-    const opts = (gateway!.listEmailMessages as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const opts = (gateway!.listEmailMessages as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(opts.searchQueryNative).toBe('to:security@example.com');
     expect(opts.unread).toBeUndefined();
   });
@@ -153,7 +153,7 @@ describe('EmailListHandler — unread_only with search', () => {
       outboundGateway: gateway,
       input: { unread_only: true },
     }));
-    const opts = (gateway!.listEmailMessages as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const opts = (gateway!.listEmailMessages as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(opts.unread).toBe(true);
     expect(opts.searchQueryNative).toBeUndefined();
   });

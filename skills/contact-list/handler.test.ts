@@ -158,7 +158,7 @@ describe('ContactListHandler', () => {
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     expect(getContacts(result)).toHaveLength(1);
-    expect(getContacts(result)[0].display_name).toBe('CFO Person');
+    expect(getContacts(result)[0]!.display_name).toBe('CFO Person');
     // Should NOT have called listContacts
     expect(ctx.contactService!.listContacts).not.toHaveBeenCalled();
   });
@@ -169,6 +169,7 @@ describe('ContactListHandler', () => {
     const ctx = makeCtx({ limit: 0 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('positive integer');
   });
 
@@ -176,6 +177,7 @@ describe('ContactListHandler', () => {
     const ctx = makeCtx({ limit: -5 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('positive integer');
   });
 
@@ -183,6 +185,7 @@ describe('ContactListHandler', () => {
     const ctx = makeCtx({ limit: 2.5 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('positive integer');
   });
 
@@ -190,6 +193,7 @@ describe('ContactListHandler', () => {
     const ctx = makeCtx({ role: 'x'.repeat(201) });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('200 characters');
   });
 
@@ -197,6 +201,7 @@ describe('ContactListHandler', () => {
     const ctx = makeCtx({ role: 'CFO', limit: 5 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('Cannot combine role');
   });
 
@@ -204,6 +209,7 @@ describe('ContactListHandler', () => {
     const ctx = makeCtx({ role: 'CFO', offset: 5, limit: 10 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('Cannot combine role');
   });
 
@@ -211,6 +217,7 @@ describe('ContactListHandler', () => {
     const ctx = makeCtx({ offset: -1 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('non-negative integer');
   });
 
@@ -218,6 +225,7 @@ describe('ContactListHandler', () => {
     const ctx = makeCtx({ offset: 5 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('Offset requires limit');
   });
 
@@ -232,6 +240,7 @@ describe('ContactListHandler', () => {
     const ctx = makeCtx({ offset: 1.5 });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('non-negative integer');
   });
 
@@ -252,6 +261,7 @@ describe('ContactListHandler', () => {
     (ctx.contactService!.listContacts as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('DB down'));
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('DB down');
   });
 
@@ -263,6 +273,7 @@ describe('ContactListHandler', () => {
     } as unknown as SkillContext;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
     expect(result.error).toContain('contactService not available');
   });
 });

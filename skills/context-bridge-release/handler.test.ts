@@ -38,7 +38,7 @@ describe('ContextBridgeReleaseHandler', () => {
 
   it('returns error when outboundContext capability is missing', async () => {
     const ctx = makeCtx({ entry_id: 'abc-123' });
-    (ctx as Record<string, unknown>).outboundContext = undefined;
+    (ctx as unknown as Record<string, unknown>).outboundContext = undefined;
 
     const result = await handler.execute(ctx);
 

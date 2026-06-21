@@ -7,6 +7,7 @@ import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import { createSilentLogger } from '../../src/logger.js';
+import type { Logger } from '../../src/logger.js';
 
 const PENDING_ROW = {
   id: 10,
@@ -200,7 +201,7 @@ describe('ApproveActionHandler', () => {
     const handler = new ApproveActionHandler();
 
     const result = await handler.execute(makeCtx({
-      log: mockLog,
+      log: mockLog as unknown as Logger,
       taskMetadata: {
         // systemRole = 'principal' passes isPrincipalOriginated but contactId/channel are absent
         originator: { systemRole: 'principal' as const, initiatedAt: new Date().toISOString() },

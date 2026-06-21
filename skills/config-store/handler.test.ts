@@ -133,14 +133,14 @@ describe('ConfigStoreHandler', () => {
     expect(mem.storeFact).toHaveBeenCalledTimes(2);
 
     // Verify the value fact
-    const valueFact = mem.storeFact.mock.calls[0][0];
+    const valueFact = mem.storeFact.mock.calls[0]![0];
     expect(valueFact.label).toBe('writing_guide_url');
     expect(valueFact.properties.value).toBe('https://docs.example.com');
     expect(valueFact.properties.namespace).toBe('writing_config');
     expect(valueFact.decayClass).toBe('permanent');
 
     // Verify the namespace registration fact
-    const nsFact = mem.storeFact.mock.calls[1][0];
+    const nsFact = mem.storeFact.mock.calls[1]![0];
     expect(nsFact.label).toBe('writing_config');
     expect(nsFact.properties.namespace).toBe('writing_config');
     expect(nsFact.decayClass).toBe('permanent');
@@ -162,7 +162,7 @@ describe('ConfigStoreHandler', () => {
     expect(mem.createEntity).not.toHaveBeenCalled();
     // storeFact still called for value + namespace registration
     expect(mem.storeFact).toHaveBeenCalledTimes(2);
-    expect(mem.storeFact.mock.calls[0][0].entityNodeId).toBe('anchor-existing');
+    expect(mem.storeFact.mock.calls[0]![0].entityNodeId).toBe('anchor-existing');
   });
 
   it('surfaces stored:false and action when storeFact rejects the write', async () => {
@@ -249,8 +249,8 @@ describe('ConfigStoreHandler', () => {
     expect(result.success).toBe(true);
     // storeFact called once — for the value fact only; namespace already registered, skipped
     expect(mem.storeFact).toHaveBeenCalledTimes(1);
-    expect(mem.storeFact.mock.calls[0][0].entityNodeId).toBe('anchor-existing');
-    expect(mem.storeFact.mock.calls[0][0].label).toBe('aeroplan');
+    expect(mem.storeFact.mock.calls[0]![0].entityNodeId).toBe('anchor-existing');
+    expect(mem.storeFact.mock.calls[0]![0].label).toBe('aeroplan');
   });
 
   // ── Retrieve: input validation ───────────────────────────────────────────

@@ -53,7 +53,7 @@ describe('EmailReplyHandler', () => {
 
   it('returns error when outboundGateway is not available', async () => {
     const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Reply body' });
-    (ctx as Record<string, unknown>).outboundGateway = undefined;
+    (ctx as unknown as Record<string, unknown>).outboundGateway = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/outboundGateway/);
@@ -180,13 +180,13 @@ describe('EmailReplyHandler', () => {
         success: true, messageId: 'reply-1',
       });
       const mockRegister = vi.fn().mockResolvedValue('entry-1');
-      (ctx as Record<string, unknown>).outboundContext = {
+      (ctx as unknown as Record<string, unknown>).outboundContext = {
         register: mockRegister,
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
       };
-      (ctx as Record<string, unknown>).agentId = 'coordinator';
+      (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 
       const result = await handler.execute(ctx);
 
@@ -221,13 +221,13 @@ describe('EmailReplyHandler', () => {
         success: true, messageId: 'reply-1',
       });
       const mockRegister = vi.fn().mockResolvedValue('entry-1');
-      (ctx as Record<string, unknown>).outboundContext = {
+      (ctx as unknown as Record<string, unknown>).outboundContext = {
         register: mockRegister,
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
       };
-      (ctx as Record<string, unknown>).agentId = 'coordinator';
+      (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 
       const result = await handler.execute(ctx);
 
@@ -258,13 +258,13 @@ describe('EmailReplyHandler', () => {
         success: true, messageId: 'reply-1',
       });
       const mockRegister = vi.fn().mockResolvedValue('entry-1');
-      (ctx as Record<string, unknown>).outboundContext = {
+      (ctx as unknown as Record<string, unknown>).outboundContext = {
         register: mockRegister,
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
       };
-      (ctx as Record<string, unknown>).agentId = 'coordinator';
+      (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 
       const result = await handler.execute(ctx);
 
@@ -295,13 +295,13 @@ describe('EmailReplyHandler', () => {
         success: true, messageId: 'reply-1',
       });
       const mockRegister = vi.fn().mockRejectedValue(new Error('DB error'));
-      (ctx as Record<string, unknown>).outboundContext = {
+      (ctx as unknown as Record<string, unknown>).outboundContext = {
         register: mockRegister,
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
       };
-      (ctx as Record<string, unknown>).agentId = 'coordinator';
+      (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 
       const result = await handler.execute(ctx);
       expect(result.success).toBe(true);

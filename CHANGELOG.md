@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **`skills/**` typecheck** — `tsconfig.skills.json` now type-checks skill handlers in CI; test files deferred to phase 2. (#1075)
+- **`skills/**` typecheck** — `tsconfig.skills.json` now type-checks all skill handlers and tests in CI, closing the blind spot where `skills/**` sat outside `tsc`'s scope. (#1075)
 
 ### Fixed
 

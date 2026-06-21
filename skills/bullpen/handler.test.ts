@@ -44,7 +44,7 @@ describe('BullpenHandler', () => {
     expect(typeof data.thread_id).toBe('string');
     expect(typeof data.message_id).toBe('string');
     expect(ctx.bus!.publish).toHaveBeenCalledOnce();
-    const publishCall = (ctx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls[0];
+    const publishCall = (ctx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(publishCall[0]).toBe('agent');
     expect(publishCall[1].type).toBe('agent.discuss');
   });
@@ -58,7 +58,7 @@ describe('BullpenHandler', () => {
     });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
-    const publishCall = (ctx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls[0];
+    const publishCall = (ctx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(publishCall[1].payload.mentionedAgentIds).toEqual(['coordinator', 'agent-b', 'agent-c']);
   });
 
@@ -359,7 +359,7 @@ describe('BullpenHandler', () => {
     // Exactly one call was marked as a dedup hit
     expect([d1.deduplicated, d2.deduplicated].filter(Boolean)).toHaveLength(1);
     // bus.publish fired exactly once — no duplicate agent.discuss
-    expect((bus.publish as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    expect((bus!.publish as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
   it('post: a publish rejection does not surface as a handler failure', async () => {

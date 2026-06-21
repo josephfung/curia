@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDraftReplyHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { Logger } from '../../src/logger.js';
 import { readFile, realpath } from 'node:fs/promises';
 
 vi.mock('node:fs/promises', () => ({
@@ -105,7 +106,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc: [{ email: 'charlie@example.com' }],
     });
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -123,7 +124,7 @@ describe('CeoInboxDraftReplyHandler', () => {
 
     // Verify the draft creation call
     const draftCall = mockFetch.mock.calls.find(
-      (call) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
     );
     expect(draftCall).toBeDefined();
 
@@ -155,7 +156,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc: [{ email: 'bob@example.com' }],
     });
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -172,7 +173,7 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
     );
     expect(draftCall).toBeDefined();
 
@@ -193,7 +194,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc: [{ email: 'bob@example.com' }],
     });
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -210,7 +211,7 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
     );
     expect(draftCall).toBeDefined();
 
@@ -229,7 +230,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc: [],
     });
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -246,7 +247,7 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
     );
     expect(draftCall).toBeDefined();
 
@@ -279,7 +280,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       },
     };
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -296,7 +297,7 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
     );
     expect(draftCall).toBeDefined();
 
@@ -307,7 +308,7 @@ describe('CeoInboxDraftReplyHandler', () => {
   });
 
   it('Case 6: getMessage fails — returns { success: false }', async () => {
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response('Not Found', { status: 404 });
@@ -345,12 +346,13 @@ describe('CeoInboxDraftReplyHandler', () => {
           default: return '';
         }
       },
+      // Partial logger mock; cast through unknown to the real Logger type.
       log: {
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
         debug: vi.fn(),
-      },
+      } as unknown as Logger,
     };
 
     const result = await handler.execute(ctx);
@@ -377,7 +379,7 @@ describe('CeoInboxDraftReplyHandler', () => {
     // Override body with rich HTML
     messageResponse.data.body = '<p>Hello <b>world</b></p>';
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -393,7 +395,7 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
     );
     expect(draftCall).toBeDefined();
 
@@ -418,7 +420,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc: [],
     });
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -440,7 +442,7 @@ describe('CeoInboxDraftReplyHandler', () => {
 
     // The drafts endpoint must NOT have been called
     const draftCall = mockFetch.mock.calls.find(
-      (call) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
     );
     expect(draftCall).toBeUndefined();
   });
@@ -455,7 +457,7 @@ describe('CeoInboxDraftReplyHandler', () => {
         cc: [],
       });
 
-      mockFetch.mockImplementation(async (url) => {
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
         const urlStr = String(url);
         if (urlStr.includes('/messages/msg-001')) {
           return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -475,7 +477,7 @@ describe('CeoInboxDraftReplyHandler', () => {
 
       expect(result.success).toBe(true);
       const draftCall = mockFetch.mock.calls.find(
-        (call) => String(call[0]).includes('/drafts'),
+        (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
       );
       expect(draftCall).toBeDefined();
       // Body must be FormData (not a JSON string) when attachments are present
@@ -489,7 +491,7 @@ describe('CeoInboxDraftReplyHandler', () => {
         cc: [],
       });
 
-      mockFetch.mockImplementation(async (url) => {
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
         const urlStr = String(url);
         if (urlStr.includes('/messages/msg-001')) {
           return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -504,7 +506,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       await handler.execute(ctx);
 
       const draftCall = mockFetch.mock.calls.find(
-        (call) => String(call[0]).includes('/drafts'),
+        (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
       );
       expect(draftCall).toBeDefined();
       // Without attachments, body is a JSON string (not FormData)

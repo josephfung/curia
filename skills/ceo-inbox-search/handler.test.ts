@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxSearchHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { Logger } from '../../src/logger.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -19,12 +20,14 @@ function makeCtx(
       }
       throw new Error(`unknown secret: ${name}`);
     },
+    // The mock only implements the logger methods these tests exercise; cast to
+    // the real Logger type through unknown since the shape is intentionally partial.
     log: {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
-    },
+    } as unknown as Logger,
   };
 }
 
@@ -36,7 +39,7 @@ function mockFetchReturning(messages: unknown[] = []) {
 }
 
 function extractQueryParam(fetchMock: ReturnType<typeof vi.fn>, param: string): string | null {
-  const url = new URL(fetchMock.mock.calls[0][0] as string);
+  const url = new URL(fetchMock.mock.calls[0]![0] as string);
   return url.searchParams.get(param);
 }
 
@@ -143,7 +146,7 @@ describe('CeoInboxSearchHandler — drafts search (#1000)', () => {
 
     await handler.execute(ctx);
 
-    const url = new URL(fetchSpy.mock.calls[0][0] as string);
+    const url = new URL(fetchSpy.mock.calls[0]![0] as string);
     expect(url.pathname.endsWith('/drafts')).toBe(true);
     expect(url.pathname).not.toContain('/messages');
   });

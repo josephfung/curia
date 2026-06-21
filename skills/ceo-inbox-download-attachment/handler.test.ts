@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDownloadAttachmentHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { Logger } from '../../src/logger.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -21,12 +22,13 @@ function buildCtx(overrides: Partial<{
         default: throw new Error(`unknown secret: ${key}`);
       }
     },
+    // Partial logger mock; cast through unknown to the real Logger type.
     log: {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
-    },
+    } as unknown as Logger,
   };
 }
 
@@ -117,7 +119,7 @@ describe('CeoInboxDownloadAttachmentHandler', () => {
   // ── 3. getMessage() throws ───────────────────────────────────────────────
 
   it('returns error when getMessage() throws (Nylas API error)', async () => {
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes(`/messages/${MSG_ID}`)) {
         return new Response('Server Error', { status: 500 });
@@ -142,7 +144,7 @@ describe('CeoInboxDownloadAttachmentHandler', () => {
       { id: 'att-other', filename: 'other.pdf', content_type: 'application/pdf', size: 1000 },
     ]);
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes(`/messages/${MSG_ID}`)) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -159,7 +161,7 @@ describe('CeoInboxDownloadAttachmentHandler', () => {
       expect(result.error).toContain(ATT_ID);
     }
     // The download endpoint should never be called
-    expect(mockFetch.mock.calls.every((c) => !String(c[0]).includes('/attachments/'))).toBe(true);
+    expect(mockFetch.mock.calls.every((c: Parameters<typeof fetch>) => !String(c[0]).includes('/attachments/'))).toBe(true);
   });
 
   // ── 5. Declared size exceeds 10 MB ──────────────────────────────────────
@@ -170,7 +172,7 @@ describe('CeoInboxDownloadAttachmentHandler', () => {
       { id: ATT_ID, filename: FILENAME, content_type: CONTENT_TYPE, size: ELEVEN_MB },
     ]);
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes(`/messages/${MSG_ID}`)) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -187,7 +189,7 @@ describe('CeoInboxDownloadAttachmentHandler', () => {
       expect(result.error).toContain(FILENAME);
     }
     // Download endpoint must never be called
-    expect(mockFetch.mock.calls.every((c) => !String(c[0]).includes('/attachments/'))).toBe(true);
+    expect(mockFetch.mock.calls.every((c: Parameters<typeof fetch>) => !String(c[0]).includes('/attachments/'))).toBe(true);
   });
 
   // ── 6. Actual download size exceeds 10 MB (declared size was 0) ─────────
@@ -202,7 +204,7 @@ describe('CeoInboxDownloadAttachmentHandler', () => {
     const ELEVEN_MB = 11 * 1024 * 1024;
     const largeBody = Buffer.alloc(ELEVEN_MB, 0x41); // 11 MB of 'A'
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes(`/messages/${MSG_ID}`)) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -231,7 +233,7 @@ describe('CeoInboxDownloadAttachmentHandler', () => {
       { id: ATT_ID, filename: FILENAME, content_type: CONTENT_TYPE, size: 1024 },
     ]);
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes(`/messages/${MSG_ID}`)) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
@@ -263,7 +265,7 @@ describe('CeoInboxDownloadAttachmentHandler', () => {
       { id: ATT_ID, filename: FILENAME, content_type: CONTENT_TYPE, size: fileBytes.length },
     ]);
 
-    mockFetch.mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const urlStr = String(url);
       if (urlStr.includes(`/messages/${MSG_ID}`)) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });

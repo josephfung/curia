@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CeoInboxListHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
+import type { Logger } from '../../src/logger.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -45,12 +46,13 @@ function makeCtx(
       }
       throw new Error(`unknown secret: ${name}`);
     },
+    // Partial logger mock; cast through unknown to the real Logger type.
     log: {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
-    },
+    } as unknown as Logger,
     entityMemory,
   };
 }
@@ -162,6 +164,7 @@ describe('CeoInboxListHandler — watermark handling (#866)', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
+    if (!result.success) throw new Error(`expected success: ${result.error}`);
     const data = result.data as { count: number };
     expect(data.count).toBe(1);
   });
@@ -221,6 +224,7 @@ describe('CeoInboxListHandler — drafts routing (#1000)', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
+    if (!result.success) throw new Error(`expected success: ${result.error}`);
     const data = result.data as { drafts: Array<Record<string, unknown>>; count: number; folder: string };
     expect(data.folder).toBe('DRAFTS');
     expect(data.count).toBe(1);
