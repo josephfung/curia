@@ -16,7 +16,7 @@ import { connectStdio, connectSse } from './mcp-client.js';
 import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
 import type { ActionRisk } from './types.js';
-import { resolveEnvValue } from '../config.js';
+import type { SecretsService } from '../secrets/secrets-service.js';
 
 // ---------------------------------------------------------------------------
 // Config types — mirrors schemas/skills-config.json
@@ -177,6 +177,80 @@ export function mergeFixedInputs(
 }
 
 // ---------------------------------------------------------------------------
+// Vault-backed secret resolution for MCP servers (#913) — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a single secret from the vault, vault-only — no process.env fallback.
+ * Trims the value and treats a blank/whitespace-only result as absent. Throws a
+ * descriptive error when the secret is missing so the caller can skip the whole
+ * server (the same loud-fail contract as a missing fixed_input) rather than
+ * spawn a third-party subprocess with a half-populated credential set.
+ */
+async function getRequiredVaultSecret(
+  vaultKey: string,
+  secrets: SecretsService,
+  context: string,
+): Promise<string> {
+  const value = (await secrets.get(vaultKey))?.trim();
+  if (!value) {
+    throw new Error(`${context}: secret "${vaultKey}" is not set in the vault`);
+  }
+  return value;
+}
+
+/**
+ * Resolve a stdio server's `env:` block from the vault. The empty-string
+ * sentinel (`KEY: ""` in config/skills.yaml) means "resolve KEY from the vault
+ * by its lowercased name" — vault-only, never process.env (#913). Non-empty
+ * values are literal passthroughs (e.g. ALLOWED_FILE_DIRS). Returns a fully
+ * resolved map of literals ready for buildChildEnv; throws if any referenced
+ * secret is missing so the caller skips the server.
+ *
+ * By design there is no way to express a literal empty-string env value: an
+ * empty value is always a vault-resolution request. No MCP server needs an empty
+ * literal today; if one ever does, give it a sentinel non-empty value instead.
+ */
+export async function resolveStdioEnvFromVault(
+  configEnv: Record<string, string>,
+  secrets: SecretsService,
+  serverName: string,
+): Promise<Record<string, string>> {
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(configEnv)) {
+    if (value !== '') {
+      resolved[key] = value;
+      continue;
+    }
+    resolved[key] = await getRequiredVaultSecret(
+      key.toLowerCase(),
+      secrets,
+      `MCP server '${serverName}' env.${key}`,
+    );
+  }
+  return resolved;
+}
+
+/**
+ * Resolve a single fixed_inputs value from the vault. An "env:VAR" reference is
+ * resolved vault-only by VAR's lowercased name (#913); a literal string passes
+ * through unchanged. Throws if a referenced secret is missing. This is the
+ * vault-backed replacement for the process.env-based resolveEnvValue() that
+ * fixed_inputs used before the migration.
+ */
+export async function resolveFixedInputFromVault(
+  value: string,
+  secrets: SecretsService,
+  context: string,
+): Promise<string> {
+  if (value.startsWith('env:')) {
+    const varName = value.slice(4);
+    return getRequiredVaultSecret(varName.toLowerCase(), secrets, context);
+  }
+  return value;
+}
+
+// ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
@@ -187,12 +261,17 @@ export function mergeFixedInputs(
  * @param configDir - Absolute path to the config/ directory (same as used by loadYamlConfig).
  * @param registry  - The SkillRegistry to register discovered tools into.
  * @param logger    - Pino logger for structured log output.
+ * @param secrets   - Vault accessor. A server's `env:` empty-string sentinels and
+ *                    `fixed_inputs` "env:VAR" references are resolved from the vault
+ *                    at spawn time (vault-only, #913). A missing secret skips that
+ *                    server, the same as a connection failure.
  * @returns Array of live McpSession objects. Pass to the shutdown handler to close them.
  */
 export async function loadMcpServers(
   configDir: string,
   registry: SkillRegistry,
   logger: Logger,
+  secrets: SecretsService,
 ): Promise<McpSession[]> {
   const config = loadSkillsConfig(configDir);
   const servers = config.servers ?? [];
@@ -224,18 +303,20 @@ export async function loadMcpServers(
 
     // Resolve fixed_inputs once at startup. These values are captured in closures
     // and merged into every callTool invocation for this server's tools.
-    // Env-var references (e.g. "env:CURIA_GOOGLE_EMAIL") are resolved here —
-    // a missing env var skips this server entirely (same as a connection failure).
-    // This keeps google-workspace optional: deployments without CURIA_GOOGLE_EMAIL
-    // simply don't get Workspace tools, rather than crashing the process.
+    // "env:VAR" references (e.g. "env:CURIA_GOOGLE_EMAIL") are resolved from the
+    // vault here, vault-only (#913) — a missing secret skips this server entirely
+    // (same as a connection failure). This keeps google-workspace optional:
+    // deployments without the secret simply don't get Workspace tools, rather than
+    // crashing the process.
     const rawFixedInputs = 'fixed_inputs' in serverEntry ? serverEntry.fixed_inputs : undefined;
     const resolvedFixedInputs: Record<string, string> = {};
     if (rawFixedInputs) {
       let resolutionFailed = false;
       for (const [key, value] of Object.entries(rawFixedInputs)) {
         try {
-          resolvedFixedInputs[key] = resolveEnvValue(
+          resolvedFixedInputs[key] = await resolveFixedInputFromVault(
             value,
+            secrets,
             `MCP server '${serverEntry.name}' fixed_inputs.${key}`,
           );
         } catch (err) {
@@ -254,11 +335,34 @@ export async function loadMcpServers(
       );
     }
 
+    // Resolve a stdio server's env block from the vault before spawning (#913).
+    // The empty-string sentinel resolves vault-only by the lowercased key name; a
+    // missing secret skips the whole server, the same loud-fail contract as a
+    // missing fixed_input. connectEntry carries the resolved literals into
+    // connectStdio so buildChildEnv never has to touch process.env for secrets.
+    let connectEntry: McpServerEntry = serverEntry;
+    if (serverEntry.transport === 'stdio' && serverEntry.env) {
+      try {
+        const resolvedEnv = await resolveStdioEnvFromVault(
+          serverEntry.env,
+          secrets,
+          serverEntry.name,
+        );
+        connectEntry = { ...serverEntry, env: resolvedEnv };
+      } catch (err) {
+        logger.error(
+          { err, server: serverEntry.name },
+          'env secret resolution from vault failed — skipping this MCP server',
+        );
+        continue;
+      }
+    }
+
     let session: McpSession;
     try {
-      session = serverEntry.transport === 'stdio'
-        ? await connectStdio(serverEntry, logger)
-        : await connectSse(serverEntry, logger);
+      session = connectEntry.transport === 'stdio'
+        ? await connectStdio(connectEntry, logger)
+        : await connectSse(connectEntry, logger);
     } catch (err) {
       // Connection failure is non-recoverable without a restart — tools from this
       // server will be unavailable for the lifetime of this process. Log at error

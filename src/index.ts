@@ -892,7 +892,7 @@ async function main(): Promise<void> {
   // until the next restart.
   let mcpSessions: McpSession[] = [];
   try {
-    mcpSessions = await loadMcpServers(configDir, skillRegistry, logger);
+    mcpSessions = await loadMcpServers(configDir, skillRegistry, logger, secretsService);
   } catch (err) {
     // Malformed skills.yaml or unexpected loader error — degrade gracefully rather
     // than crashing. The startup validator catches schema violations, but a YAML

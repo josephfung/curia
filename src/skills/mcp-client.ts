@@ -20,7 +20,12 @@ export interface McpStdioServerConfig {
   transport: 'stdio';
   command: string;
   args?: string[];
-  /** Extra env vars merged on top of the inherited environment. */
+  /**
+   * Extra env vars to inject into the child. Values must already be resolved to
+   * literals by the caller (mcp-loader resolves secret references from the vault
+   * upstream, #913) — buildChildEnv applies non-empty values verbatim and drops
+   * empties rather than inheriting them from process.env.
+   */
   env?: Record<string, string>;
 }
 
@@ -57,25 +62,32 @@ export interface McpSession {
  *
  * Starts from the same safe base that the MCP SDK's getDefaultEnvironment()
  * uses (HOME, LOGNAME, PATH, SHELL, TERM, USER) so spawned tools can locate
- * binaries and their own config dirs. Then resolves each key declared in
- * configEnv: an empty string means "inherit the value from process.env at
- * runtime"; a non-empty string is used as a literal override.
+ * binaries and their own config dirs. Then applies each key declared in
+ * configEnv as a literal override.
+ *
+ * The caller (mcp-loader) is responsible for resolving any secret references
+ * before they reach here: the empty-string sentinel in config/skills.yaml is
+ * resolved from the encrypted vault, vault-only, upstream (#913). By the time a
+ * value reaches buildChildEnv it is already a literal. An empty value therefore
+ * means "unresolved" and is skipped — never filled from process.env — so a
+ * secret can never silently leak in from the parent environment.
  *
  * This enforces least-privilege — the full host environment (DB_PASSWORD,
  * ANTHROPIC_API_KEY, etc.) is never passed to the third-party subprocess.
  * Only keys explicitly declared in config/skills.yaml under env: reach it.
  */
-function buildChildEnv(configEnv: Record<string, string>): Record<string, string> {
+export function buildChildEnv(configEnv: Record<string, string>): Record<string, string> {
   // Minimal base matching the MCP SDK's getDefaultEnvironment() key set.
   const env: Record<string, string> = {};
   for (const key of ['HOME', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'USER']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]!;
   }
 
-  // Resolve declared keys: empty value = inherit from process.env.
+  // Apply non-empty literal overrides only. Secret resolution happens upstream
+  // (vault-only); an empty value here is an unresolved key and is dropped rather
+  // than inherited from process.env.
   for (const [key, value] of Object.entries(configEnv)) {
-    const resolved = value !== '' ? value : process.env[key];
-    if (resolved !== undefined) env[key] = resolved;
+    if (value !== '') env[key] = value;
   }
 
   return env;

@@ -48,6 +48,14 @@ const { loadMcpServers } = await import('../../../src/skills/mcp-loader.js');
 
 const logger = createSilentLogger();
 
+// Vault double. These tests don't exercise vault resolution — none of their
+// fixtures use an env: sentinel or an "env:" fixed_input — so an empty vault
+// (get() always null) is sufficient. The 4th loadMcpServers arg is required
+// as of #913; vault-resolution behavior is unit-tested in src/skills/mcp-loader.test.ts.
+const secrets = {
+  get: async (): Promise<string | null> => null,
+} as unknown as import('../../../src/secrets/secrets-service.js').SecretsService;
+
 /** Write a skills.yaml file into a temp directory and return that directory. */
 function writeSkillsYaml(content: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-mcp-test-'));
@@ -67,7 +75,7 @@ function emptyConfigDir(): string {
 describe('loadMcpServers — absent / empty config', () => {
   it('returns empty array when skills.yaml is absent', async () => {
     const registry = new SkillRegistry();
-    const sessions = await loadMcpServers(emptyConfigDir(), registry, logger);
+    const sessions = await loadMcpServers(emptyConfigDir(), registry, logger, secrets);
     expect(sessions).toHaveLength(0);
     expect(registry.list()).toHaveLength(0);
   });
@@ -75,14 +83,14 @@ describe('loadMcpServers — absent / empty config', () => {
   it('returns empty array when skills.yaml is empty', async () => {
     const dir = writeSkillsYaml('');
     const registry = new SkillRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger);
+    const sessions = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
   });
 
   it('returns empty array when servers list is empty', async () => {
     const dir = writeSkillsYaml('servers: []');
     const registry = new SkillRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger);
+    const sessions = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
   });
 });
@@ -113,7 +121,7 @@ servers:
     action_risk: none
 `);
     const registry = new SkillRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger);
+    const sessions = await loadMcpServers(dir, registry, logger, secrets);
 
     // Only the working server's session is returned.
     expect(sessions).toHaveLength(1);
@@ -135,7 +143,7 @@ servers:
     action_risk: none
 `);
     const registry = new SkillRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger);
+    const sessions = await loadMcpServers(dir, registry, logger, secrets);
 
     expect(sessions).toHaveLength(0);
     // Session must be closed when tools/list fails.
@@ -150,7 +158,7 @@ servers:
     action_risk: none
 `);
     const registry = new SkillRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger);
+    const sessions = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
     expect(mockConnectStdio).not.toHaveBeenCalled();
   });
@@ -163,7 +171,7 @@ servers:
     action_risk: none
 `);
     const registry = new SkillRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger);
+    const sessions = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
     expect(mockConnectSse).not.toHaveBeenCalled();
   });
@@ -212,7 +220,7 @@ servers:
     timeout_ms: 15000
 `);
     const registry = new SkillRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger);
+    const sessions = await loadMcpServers(dir, registry, logger, secrets);
 
     expect(sessions).toHaveLength(1);
 
@@ -251,7 +259,7 @@ servers:
     sensitivity: elevated
 `);
     const registry = new SkillRegistry();
-    await loadMcpServers(dir, registry, logger);
+    await loadMcpServers(dir, registry, logger, secrets);
 
     expect(registry.get('tool-x')!.manifest.action_risk).toBe('high');
     expect(registry.get('tool-x')!.manifest.sensitivity).toBe('elevated');
@@ -273,7 +281,7 @@ servers:
     action_risk: none
 `);
     const registry = new SkillRegistry();
-    await loadMcpServers(dir, registry, logger);
+    await loadMcpServers(dir, registry, logger, secrets);
 
     expect(registry.get('tool-z')!.manifest.sensitivity).toBe('normal');
   });
@@ -292,7 +300,7 @@ servers:
     action_risk: none
 `);
     const registry = new SkillRegistry();
-    await loadMcpServers(dir, registry, logger);
+    await loadMcpServers(dir, registry, logger, secrets);
 
     expect(registry.get('tool-t')!.manifest.timeout).toBe(30000);
   });
@@ -311,7 +319,7 @@ servers:
     action_risk: medium
 `);
     const registry = new SkillRegistry();
-    await loadMcpServers(dir, registry, logger);
+    await loadMcpServers(dir, registry, logger, secrets);
 
     expect(mockConnectSse).toHaveBeenCalledOnce();
     expect(mockConnectStdio).not.toHaveBeenCalled();
@@ -337,7 +345,7 @@ servers:
 `);
     const registry = new SkillRegistry();
     // Should not throw — duplicate registration is a warning, not a crash.
-    await expect(loadMcpServers(dir, registry, logger)).resolves.not.toThrow();
+    await expect(loadMcpServers(dir, registry, logger, secrets)).resolves.not.toThrow();
     // The first registration wins.
     expect(registry.get('duplicate_tool')).toBeDefined();
   });
@@ -367,7 +375,7 @@ servers:
     action_risk: none
 `);
     const registry = new SkillRegistry();
-    await loadMcpServers(dir, registry, logger);
+    await loadMcpServers(dir, registry, logger, secrets);
 
     const skill = registry.get('read_file')!;
     const result = await skill.handler.execute({
@@ -401,7 +409,7 @@ servers:
     action_risk: none
 `);
     const registry = new SkillRegistry();
-    await loadMcpServers(dir, registry, logger);
+    await loadMcpServers(dir, registry, logger, secrets);
 
     const result = await registry.get('bad_tool')!.handler.execute({
       input: {},
@@ -427,7 +435,7 @@ servers:
     action_risk: none
 `);
     const registry = new SkillRegistry();
-    await loadMcpServers(dir, registry, logger);
+    await loadMcpServers(dir, registry, logger, secrets);
 
     const result = await registry.get('erroring_tool')!.handler.execute({
       input: {},
