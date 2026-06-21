@@ -501,5 +501,11 @@ export function formatBullpenContext(pending: PendingThreadContext[]): string {
   // injects bullpen state gives all agents the convention without per-agent prompt edits.
   lines.push('');
   lines.push('When your bullpen reply concludes a thread, pass close_after: true so it is closed atomically. Leave it off (or false) if the discussion is still going.');
+  // #1065: the relay pattern (a thread asking you to deliver a message out-of-band)
+  // leaves no in-thread reply, so close_after never fires and the request gets re-sent on
+  // a later wake. Tell agents to close the thread explicitly after relaying. The runtime
+  // also closes it deterministically once the outbound send succeeds, so this is guidance,
+  // not the sole guard.
+  lines.push('If you fulfil a request by sending out-of-band (e.g. signal-send/email-send) instead of replying here, close the thread (bullpen close action) so it is not actioned again.');
   return lines.join('\n');
 }

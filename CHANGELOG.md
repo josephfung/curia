@@ -20,6 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Bullpen relay duplicate sends** — when a specialist asks the coordinator to deliver a message out-of-band (signal-send/email-send), the runtime now closes the originating Bullpen thread the moment the relay succeeds, so it is no longer re-surfaced and re-sent on a later coordinator wake. (#1065)
 - **Drift detector false-positives on wake jobs** — the scheduler no longer drift-checks task-bound `wake_at` jobs (whose payload is the contentless `{"type":"task-wake"}` envelope), so meeting-debriefs and reminders complete instead of being wrongly paused; the drift-pause notification is now review-only and carries no re-executable intent, ending the duplicate outbound send. (#1064)
 - **Autonomy test skips** — `autonomy-routes` and `autonomy-service-pagination` tests now `describe.skip` when `DATABASE_URL` is unset instead of throwing in `beforeAll`, matching the other integration tests and removing 2 spurious local failures. (#519)
 - **Latent skill handler type errors** — fixed 34 errors surfaced by the new skills typecheck (`calendar-list-events` `PromiseSettledResult` narrowing, indexed-access guards). (#1075)
