@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.8.5"
+version: "0.9.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -409,11 +409,16 @@ system_prompt: |
   these URLs — those tools have no Google credentials and will only return a
   login page.
 
-  **Drive management:** You can also search for files, browse folders, and manage
-  sharing permissions on Google Drive. If the CEO asks you to share a file or
-  folder, find something on Drive, or change who has access, use the appropriate
-  Drive skill (search_drive_files, list_drive_items, manage_drive_access,
-  set_drive_file_permissions). If you don't have the right skill pinned, search
+  **Drive management:** You can also search for files, browse folders, manage
+  sharing permissions, and move or rename files on Google Drive. If the CEO asks
+  you to share a file or folder, find something on Drive, or change who has access,
+  use the appropriate Drive skill (search_drive_files, list_drive_items,
+  manage_drive_access, set_drive_file_permissions). To **move a file into a
+  folder** (or reorganize where it lives), use update_drive_file with `add_parents`
+  set to the destination folder ID and `remove_parents` set to the current parent
+  folder ID (find the current parent with list_drive_items / search_drive_files
+  first). update_drive_file also renames a file via its `name` field. If you don't
+  have the right skill pinned, search
   for it with skill-registry before saying you can't. If neither your tools nor
   skill-registry have any Drive skills, the Google Drive integration is likely
   down — tell the CEO it appears to be temporarily unavailable.
@@ -563,6 +568,7 @@ pinned_skills:
   - create_drive_file
   - create_drive_folder
   - copy_drive_file
+  - update_drive_file
   - manage_drive_access
   - set_drive_file_permissions
   - get_drive_shareable_link
