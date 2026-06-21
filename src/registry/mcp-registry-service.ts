@@ -20,6 +20,9 @@ export class McpRegistryService {
     private readonly repo: IMcpRegistryRepo,
     private readonly servers: McpServerEntry[],
     private readonly secrets: SecretStore,
+    /** Optional: returns the flat vault key names declared by local skills. Used during
+     *  uninstall to avoid deleting keys still needed by skills (flat keys are shared). */
+    private readonly getSkillDeclaredKeys: () => string[] = () => [],
   ) {}
 
   private descriptor(name: string): McpServerEntry {
@@ -106,11 +109,17 @@ export class McpRegistryService {
     const ownKeys = new Set(
       server.transport === 'stdio' ? (server.secrets ?? []).map(d => d.key) : [],
     );
+    // Remove keys shared with other MCP servers.
     for (const other of this.servers) {
       if (other.name === name) continue;
       for (const d of other.transport === 'stdio' ? (other.secrets ?? []) : []) {
         ownKeys.delete(d.key);
       }
+    }
+    // Remove keys also declared by local skills — flat keys are shared across
+    // the platform; deleting them here would silently break skill invocations.
+    for (const key of this.getSkillDeclaredKeys()) {
+      ownKeys.delete(key);
     }
     for (const key of ownKeys) {
       await this.secrets.delete(key);
