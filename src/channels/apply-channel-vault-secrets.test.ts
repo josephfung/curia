@@ -1,10 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import type { Config } from '../config.js';
-import type { YamlConfig } from '../config.js';
-import { resolveChannelAccounts } from '../config.js';
-import { channelCredentialStatus } from './credential-resolver.js';
-import { getChannelDescriptor } from './catalog.js';
 import { applyChannelVaultSecrets } from './apply-channel-vault-secrets.js';
 
 const logger = pino({ level: 'silent' });
@@ -140,74 +136,7 @@ describe('applyChannelVaultSecrets', () => {
   });
 });
 
-// AC1: the registry gate and the adapter wiring agree across all four source combinations.
-describe('applyChannelVaultSecrets — gate/adapter agreement (AC1)', () => {
-  const emailDesc = getChannelDescriptor('email')!;
-  const emptyYaml = {} as unknown as YamlConfig; // resolveChannelAccounts only reads channel_accounts
-
-  it('vault-only email: adapter constructs AND registry reports resolvable', async () => {
-    const config = baseConfig();
-    const vault = {
-      'channel.email.nylas_api_key': 'nyk_vault',
-      'channel.email.nylas_grant_id': 'grant_vault',
-      'channel.email.nylas_self_email': 'curia@vault.test',
-    };
-    const secrets = fakeSecrets(vault);
-
-    await applyChannelVaultSecrets(config, secrets, {}, logger);
-
-    // Adapter path: config is populated → legacy single-account synthesis yields one account.
-    const accounts = resolveChannelAccounts(emptyYaml, config);
-    expect(accounts).toHaveLength(1);
-    expect(accounts[0]!.name).toBe('curia');
-    expect(config.nylasApiKey).toBe('nyk_vault');
-
-    // Gate path: registry resolves the same vault keys → resolvable.
-    const status = await channelCredentialStatus({ secrets: fakeSecrets(vault), env: {} }, emailDesc);
-    expect(status.requiredResolvable).toBe(true);
-  });
-
-  it('neither: adapter skips AND registry reports not resolvable', async () => {
-    const config = baseConfig();
-    await applyChannelVaultSecrets(config, fakeSecrets({}), {}, logger);
-
-    expect(resolveChannelAccounts(emptyYaml, config)).toHaveLength(0);
-    const status = await channelCredentialStatus({ secrets: fakeSecrets({}), env: {} }, emailDesc);
-    expect(status.requiredResolvable).toBe(false);
-  });
-
-  it('whitespace-only vault creds: adapter sees absent AND registry reports not resolvable (agree)', async () => {
-    const config = baseConfig();
-    const vault = {
-      'channel.email.nylas_api_key': '   ',
-      'channel.email.nylas_grant_id': '  ',
-      'channel.email.nylas_self_email': ' ',
-    };
-
-    await applyChannelVaultSecrets(config, fakeSecrets(vault), {}, logger);
-
-    // Adapter path: whitespace trimmed to absent → no synthesized account.
-    expect(config.nylasApiKey).toBeUndefined();
-    expect(resolveChannelAccounts(emptyYaml, config)).toHaveLength(0);
-
-    // Gate path: same normalization → not resolvable. The two agree (no silent no-op).
-    const status = await channelCredentialStatus({ secrets: fakeSecrets(vault), env: {} }, emailDesc);
-    expect(status.requiredResolvable).toBe(false);
-  });
-
-  it('both: channel vault wins for the adapter, registry agrees (resolvable)', async () => {
-    const config = baseConfig();
-    const vault = {
-      'channel.email.nylas_api_key': 'nyk_vault',
-      'channel.email.nylas_grant_id': 'grant_vault',
-      'channel.email.nylas_self_email': 'curia@vault.test',
-    };
-    const env = { NYLAS_API_KEY: 'nyk_env', NYLAS_GRANT_ID: 'grant_env', NYLAS_SELF_EMAIL: 'curia@env.test' };
-
-    await applyChannelVaultSecrets(config, fakeSecrets(vault), env, logger);
-
-    expect(config.nylasApiKey).toBe('nyk_vault'); // vault wins
-    const status = await channelCredentialStatus({ secrets: fakeSecrets(vault), env }, emailDesc);
-    expect(status.requiredResolvable).toBe(true);
-  });
-});
+// @TODO (#1101 Task 7): The AC1 gate/adapter agreement tests that used resolveChannelAccounts
+// (the legacy YAML/env resolver) were removed here when resolveChannelAccounts was deleted.
+// New end-to-end coverage of the table+vault resolver path should be added in Task 7 or a
+// follow-up once index.ts is wired to resolveEmailAccounts.

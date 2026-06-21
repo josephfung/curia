@@ -7,30 +7,14 @@ import * as path from 'node:path';
 // ---------------------------------------------------------------------------
 
 /**
- * Raw per-account email entry as read from config/default.yaml.
- * Values may be literal strings or "env:VAR_NAME" env-var references.
- */
-export interface RawEmailAccountConfig {
-  nylas_grant_id: string;
-  self_email: string;
-  /**
-   * Additional sender email addresses to suppress from this account's inbox,
-   * beyond the account's own selfEmail. Supports env:VAR_NAME references.
-   */
-  excluded_sender_emails?: string[];
-}
-
-/**
- * Fully resolved per-account email config with env-var references expanded
- * to their actual values. This is the shape passed to NylasClient and EmailAdapter.
+ * Fully resolved per-account email config. Account identity comes from the
+ * email_accounts table; the grant is read from the vault. (#1101)
  */
 export interface ResolvedEmailAccount {
-  /** Logical name for this account as declared in the YAML (e.g. "curia"). */
+  /** Logical account name (e.g. "curia"). */
   name: string;
   nylasGrantId: string;
   selfEmail: string;
-  /** Resolved sender addresses to suppress in addition to selfEmail. */
-  excludedSenderEmails: string[];
 }
 
 export interface Config {
@@ -106,26 +90,11 @@ export interface YamlConfig {
     max_message_bytes?: number;
   };
   /**
-   * Multi-account channel config (spec 03 - #3).
-   *
-   * Defines N named accounts per channel type, each with its own credentials.
-   * When this block is absent, the system falls back to the legacy single-account
-   * env-var config (NYLAS_GRANT_ID + NYLAS_SELF_EMAIL).
-   *
-   * Values may be literal strings or "env:VAR_NAME" references resolved at startup.
-   * The Nylas API key (NYLAS_API_KEY) is shared across all email accounts —
-   * it is the application key, not per-account.
-   *
-   * Example:
-   *   channel_accounts:
-   *     email:
-   *       curia:
-   *         nylas_grant_id: env:NYLAS_GRANT_ID
-   *         self_email: env:NYLAS_SELF_EMAIL
+   * @deprecated Removed as a configuration path (#1101). Retained as a loosely-typed
+   * field ONLY so the one-time email-accounts backfill can detect a residual block and
+   * warn about accounts it cannot auto-migrate. Remove together with the backfill.
    */
-  channel_accounts?: {
-    email?: Record<string, RawEmailAccountConfig>;
-  };
+  channel_accounts?: { email?: Record<string, unknown> };
   browser?: {
     sessionTtlMs?: number;
     sweepIntervalMs?: number;
@@ -590,39 +559,6 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     }
   }
 
-  // Validate channel_accounts if present
-  const channelAccounts = config.channel_accounts?.email;
-  if (channelAccounts !== undefined) {
-    if (channelAccounts === null || typeof channelAccounts !== 'object' || Array.isArray(channelAccounts)) {
-      throw new Error('channel_accounts.email must be a YAML mapping');
-    }
-    for (const [accountName, rawAccount] of Object.entries(channelAccounts)) {
-      if (typeof rawAccount !== 'object' || rawAccount === null || Array.isArray(rawAccount)) {
-        throw new Error(`channel_accounts.email.${accountName} must be a YAML mapping`);
-      }
-      if (typeof rawAccount.nylas_grant_id !== 'string' || !rawAccount.nylas_grant_id) {
-        throw new Error(`channel_accounts.email.${accountName}.nylas_grant_id must be a non-empty string`);
-      }
-      if (typeof rawAccount.self_email !== 'string' || !rawAccount.self_email) {
-        throw new Error(`channel_accounts.email.${accountName}.self_email must be a non-empty string`);
-      }
-      if (rawAccount.excluded_sender_emails !== undefined) {
-        if (!Array.isArray(rawAccount.excluded_sender_emails)) {
-          throw new Error(
-            `channel_accounts.email.${accountName}.excluded_sender_emails must be a list of strings`,
-          );
-        }
-        for (const entry of rawAccount.excluded_sender_emails) {
-          if (typeof entry !== 'string' || !entry) {
-            throw new Error(
-              `channel_accounts.email.${accountName}.excluded_sender_emails entries must be non-empty strings`,
-            );
-          }
-        }
-      }
-    }
-  }
-
   const drift = config.intentDrift;
   if (drift !== undefined) {
     // Reject non-object roots (e.g. `intentDrift: false`, `intentDrift: "off"`, `intentDrift: []`).
@@ -866,66 +802,6 @@ export function resolveEnvValue(value: string, context: string): string {
     return resolved;
   }
   return value;
-}
-
-/**
- * Resolve the final list of email accounts to bootstrap, merging YAML multi-account
- * config with the legacy env-var single-account fallback.
- *
- * Resolution order:
- *   1. If channel_accounts.email is present in YAML → use it (multi-account mode)
- *   2. Otherwise → fall back to NYLAS_GRANT_ID + NYLAS_SELF_EMAIL env vars with
- *      a synthetic "curia" account (single-account backward-compat mode)
- *
- * Returns an empty array when neither source provides credentials — in that case
- * the email channel is simply disabled at startup, matching existing behaviour.
- *
- * The Nylas API key (NYLAS_API_KEY) is always read from env and shared across all
- * accounts; it lives in Config, not per-account config.
- */
-export function resolveChannelAccounts(yamlConfig: YamlConfig, config: Config): ResolvedEmailAccount[] {
-  const emailAccounts = yamlConfig.channel_accounts?.email;
-
-  // Multi-account mode: YAML block is present (even if empty).
-  // An explicit empty mapping ({ }) means "no configured email accounts" — do NOT
-  // fall through to the legacy env-var path, so operators can intentionally
-  // disable email in YAML without the legacy account silently reappearing.
-  if (emailAccounts !== undefined) {
-    return Object.entries(emailAccounts).map(([name, raw]) => {
-      const nylasGrantId = resolveEnvValue(
-        raw.nylas_grant_id,
-        `channel_accounts.email.${name}.nylas_grant_id`,
-      );
-      const selfEmail = resolveEnvValue(
-        raw.self_email,
-        `channel_accounts.email.${name}.self_email`,
-      );
-      const excludedSenderEmails = (raw.excluded_sender_emails ?? []).map((entry, i) =>
-        resolveEnvValue(entry, `channel_accounts.email.${name}.excluded_sender_emails[${i}]`),
-      );
-      return {
-        name,
-        nylasGrantId,
-        selfEmail,
-        excludedSenderEmails,
-      };
-    });
-  }
-
-  // Backward-compat mode: fall back to the legacy single-account env vars.
-  // This path is only taken when channel_accounts.email is absent entirely,
-  // ensuring existing single-account deployments require no config changes.
-  if (config.nylasGrantId && config.nylasSelfEmail) {
-    return [{
-      name: 'curia',
-      nylasGrantId: config.nylasGrantId,
-      selfEmail: config.nylasSelfEmail,
-      excludedSenderEmails: [],
-    }];
-  }
-
-  // No credentials available — email channel will be disabled
-  return [];
 }
 
 export function loadConfig(): Config {
