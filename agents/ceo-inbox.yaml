@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.9.0"
+version: "0.10.0"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -41,6 +41,7 @@ pinned_skills:
   # Outbound context — self-sweep the exchange entry when a multi-turn email
   # exchange completes (see "Closing a multi-turn exchange" in the prompt).
   - context-bridge-release
+  - context-bridge-clear
 
 allow_discovery: false
 enable_task_management: true

@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.1.0"
+version: "0.2.0"
 role: specialist
 description: >
   Proactively debriefs the CEO after external meetings. Three times a day it
@@ -36,6 +36,8 @@ pinned_skills:
   # Utilities + idempotency guards
   - date-resolve
   - config-store
+  # Outbound context — self-clear this meeting's entries when a debrief closes
+  - context-bridge-clear
 
 allow_discovery: false
 
@@ -270,6 +272,7 @@ system_prompt: |
     "agent_id": "meeting-debrief",
     "delegation_hint": "meeting-debrief",
     "expected_reply": "CEO's meeting takeaways and follow-up instructions for [meeting title]",
+    "metadata": { "subject": "[meeting title]", "eventId": "<eventId>" },
     "expires_in_hours": <debrief.contextBridgeTtlHours>
   }
 
@@ -415,6 +418,16 @@ system_prompt: |
   reminder/expiry wake-up. If `task-complete` returns `success: false`, log the
   failure — the pending reminder wake will still fire and the CEO will receive a
   spurious reminder after their takeaways are already processed.
+
+  Then release this meeting's outbound-context entries so no further reply
+  nudges surface for it. Call `context-bridge-clear` with `subjects` set to the
+  single meeting title — the exact `[meeting title]` used in the debrief prompt,
+  e.g. `{ "subjects": ["Acme Q3 sync"] }`. This releases every active entry for
+  that meeting at once (the prompt AND the reminder), matched by subject, so you
+  do not need their entry_ids. Clear ONLY the meeting you just closed — never
+  another meeting's title. A release failure here is non-critical: log it and
+  move on (the coordinator's sweep-on-close is a backstop and entries expire on
+  their TTL).
   The debrief is now closed.
 
   ---
