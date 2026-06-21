@@ -11,11 +11,13 @@ const logger = pino({ level: 'silent' });
 // Dynamically import after setting up the fetch mock so the module-level
 // constant (`NYLAS_BASE`) picks up correctly.
 let CeoNylasClient: typeof import('../../../skills/_shared/ceo-nylas-client.js').CeoNylasClient;
+let NylasApiError: typeof import('../../../skills/_shared/ceo-nylas-client.js').NylasApiError;
 
 beforeEach(async () => {
   vi.restoreAllMocks();
   const mod = await import('../../../skills/_shared/ceo-nylas-client.js');
   CeoNylasClient = mod.CeoNylasClient;
+  NylasApiError = mod.NylasApiError;
 });
 
 function mockFetchSuccess(data: unknown = []) {
@@ -78,6 +80,27 @@ describe('htmlToPlainText', () => {
 
   it('decodes HTML entities', () => {
     expect(htmlToPlainText('&amp; &lt; &gt;')).toBe('& < >');
+  });
+});
+
+describe('CeoNylasClient request envelope handling', () => {
+  it('throws a NylasApiError when a successful response has no data envelope', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ request_id: 'req-1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const client = new CeoNylasClient('key', 'grant', logger);
+    const request = client.listFolders();
+
+    await expect(request).rejects.toMatchObject({
+      name: 'NylasApiError',
+      status: 200,
+      endpoint: 'listFolders',
+      message: 'Nylas listFolders: response missing data envelope',
+    });
+    await expect(request).rejects.toBeInstanceOf(NylasApiError);
   });
 });
 
