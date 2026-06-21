@@ -10,6 +10,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { CaptureValueFormat } from '../../src/secrets/secret-capture-service.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
+import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
 
 /** Build the operator-facing magic-link URL. Prod uses ctx.appOrigin; dev falls back to the
  *  local SPA origin (Fastify serves the built console on httpPort). */
@@ -52,11 +53,18 @@ export class SystemSecretCaptureRequestHandler implements SkillHandler {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
 
+    // Origin threading (#995) via the shared helper. The system variant has no resume_intent input,
+    // so derive the intent from the label. The setup-wizard always runs as a delegated specialist,
+    // so the helper retargets the resume at the coordinator and mints a resume_token to re-delegate
+    // back to the wizard. (When somehow run non-delegated, it falls back to the agent's own routing.)
+    const origin = buildCaptureOrigin(ctx, labelStr);
+
     try {
       const { rawToken, secretName, expiresAt } = await ctx.secretCapture.mintSystemSecret({
         rawName: secret_name,
         label: labelStr,
         valueFormat,
+        origin,
       });
       const captureUrl = buildCaptureUrl(ctx, rawToken);
       const expiresLocal = toLocalIso(Math.floor(expiresAt.getTime() / 1000), ctx.timezone);
