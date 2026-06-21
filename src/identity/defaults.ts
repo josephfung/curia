@@ -23,7 +23,11 @@ export const DEFAULT_OFFICE_IDENTITY: OfficeIdentity = {
   assistant: {
     name: 'Alex Curia',
     title: 'Agent EA',
-    emailSignature: 'Alex Curia\nOffice of the CEO\n',
+    // Default email signature shown (pre-populated) in the onboarding wizard on
+    // a fresh install. Kept in sync with the wizard's `defaultSignature()` helper
+    // in apps/console/src/pages/wizard-utils.ts so the wizard's no-clobber and
+    // suggestion-prefill logic recognises this seed value as the untouched default.
+    emailSignature: '--\nAlex Curia\nDigital EA',
   },
   tone: {
     baseline: ['warm', 'direct'],

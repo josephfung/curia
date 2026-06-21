@@ -101,6 +101,13 @@ export default function WizardPage() {
   // per wizard mount, surviving the re-renders that step navigation triggers.
   const [suggestedName, setSuggestedName] = useState<string | null>(null);
   const suggestFiredRef = useRef(false);
+  // Whether the operator has saved an identity through the wizard/API (vs. the
+  // in-code seed that every fresh install boots with). null until the mount
+  // fetch resolves. This — NOT the presence of an assistant name — is the
+  // "fresh install" signal: the seed always carries a non-empty name, so a name
+  // check would wrongly suppress the suggestion on exactly the first-run case
+  // it exists for.
+  const [identityConfigured, setIdentityConfigured] = useState<boolean | null>(null);
 
   // Pre-populate form from current identity and check setup status on mount.
   // Run both fetches in parallel; setup status drives the Step 1 auto-skip
@@ -121,6 +128,9 @@ export default function WizardPage() {
         const id = data.identity;
         setExistingIdentity(id);
         setPrincipalExists(status.principalExists);
+        // `configured` is false until the operator saves through the wizard/API;
+        // it gates the one-shot name suggestion below.
+        setIdentityConfigured(data.configured);
         setState({
           principalName: DEFAULT_WIZARD_STATE.principalName,
           name: id.assistant.name || DEFAULT_WIZARD_STATE.name,
@@ -145,46 +155,57 @@ export default function WizardPage() {
     void load();
   }, []);
 
-  // One-shot LLM name suggestion (issue #799). Fires once the identity prefill
-  // has resolved, and only on a fresh install — when the loaded identity has no
-  // assistant name yet (a wizard re-run pre-fills the saved name, so there's
-  // nothing to suggest and we don't waste an LLM call). On success we prefill
-  // the assistant-name field with the suggestion, but only if the user hasn't
-  // already edited it (the functional setState compares against the static
-  // default). Every failure path is silent: the static placeholders stand and
-  // no error is surfaced here — channel/key validation has its own surface later.
+  // One-shot LLM name suggestion (issue #799). Fires once the mount fetch has
+  // resolved, and only on a fresh install — i.e. when the identity has NOT been
+  // configured yet. Gating on `identityConfigured === false` (not on whether an
+  // assistant name exists) is deliberate: every fresh install boots with the
+  // in-code seed, whose assistant name is already "Alex Curia", so a name check
+  // would suppress the suggestion in exactly the first-run scenario it's for.
+  //
+  // On success we prefill the assistant name and email signature, but only for a
+  // field still holding the value it loaded with (we compare against the loaded
+  // identity, so an edit the user already made — or a value that drifts from the
+  // wizard's static default — is never clobbered). Every failure path is silent:
+  // the loaded defaults stand and no error is surfaced here, since channel/key
+  // validation has its own surface later in the wizard.
   useEffect(() => {
     if (suggestFiredRef.current) return;            // at most once per mount
-    if (!existingIdentity) return;                   // wait for the prefill
-    if (existingIdentity.assistant.name) return;     // re-run with a saved name — skip
+    if (!existingIdentity || identityConfigured === null) return; // wait for the fetch
+    if (identityConfigured) return;                  // already configured (re-run) — skip
     suggestFiredRef.current = true;
+
+    // Capture the just-loaded values as the "untouched" baseline. Comparing the
+    // current field against these (rather than a hardcoded default) keeps the
+    // no-clobber guard correct even if the seed/default values change.
+    const loadedName = existingIdentity.assistant.name;
+    const loadedSignature = existingIdentity.assistant.emailSignature;
 
     let cancelled = false;
     async function suggest() {
       try {
         const res = await apiFetch('/api/setup/suggest-name', { method: 'POST' });
-        if (!res.ok) return;                          // 4xx/5xx → keep static placeholder
+        if (!res.ok) return;                          // 4xx/5xx → keep loaded defaults
         const data = await res.json() as { name?: unknown };
         const name = typeof data.name === 'string' ? data.name : null;
         if (!name || cancelled) return;
         setSuggestedName(name);
-        // The LLM suggests only a first name; the assistant's full name and the
-        // signature both pair it with the "Curia" surname. Prefill each field
-        // only if it is still the untouched static default — never clobber a
-        // name or signature the user has already edited.
+        // The LLM suggests only a first name; the full name and the signature
+        // both pair it with the "Curia" surname. Prefill each field only if it
+        // still holds the value it loaded with — never clobber a user edit.
         setState(s => ({
           ...s,
-          name: s.name === DEFAULT_WIZARD_STATE.name ? assistantFullName(name) : s.name,
-          signature:
-            s.signature === DEFAULT_WIZARD_STATE.signature ? defaultSignature(name) : s.signature,
+          name: s.name === loadedName ? assistantFullName(name) : s.name,
+          signature: s.signature === loadedSignature ? defaultSignature(name) : s.signature,
         }));
-      } catch {
-        // Network error — silently keep the static placeholder, per #799.
+      } catch (err) {
+        // Best-effort feature: a network error must not disrupt onboarding.
+        // Log at debug for diagnosability and keep the loaded defaults (#799).
+        console.debug('[WizardPage] name suggestion request failed:', err);
       }
     }
     void suggest();
     return () => { cancelled = true; };
-  }, [existingIdentity]);
+  }, [existingIdentity, identityConfigured]);
 
   // Auto-skip Step 1 when the principal already exists. Runs after the mount
   // fetch sets principalExists and on any subsequent step change. The route
