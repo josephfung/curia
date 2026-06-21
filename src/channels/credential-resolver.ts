@@ -7,6 +7,21 @@ import type { ChannelDescriptor } from './catalog.js';
 
 export type CredentialSource = 'vault' | 'env' | 'config' | 'missing';
 
+/**
+ * Normalize a raw secret value: trim surrounding whitespace and collapse a blank/
+ * whitespace-only result to `undefined` (absent). A whitespace-only credential is unusable
+ * at runtime, so it must read as absent.
+ *
+ * Shared by this gate resolver AND `applyChannelVaultSecrets` so both make the SAME
+ * present/absent decision. If only one side trimmed, a whitespace-only vault row could read
+ * as `resolvable` on the gate while the adapter sees an empty config value — reintroducing the
+ * exact gate/runtime divergence #964 closes.
+ */
+export function normalizeSecretValue(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export interface CredentialFieldStatus {
   key: string;
   label: string;
@@ -54,9 +69,14 @@ export async function channelCredentialStatus(
         'channel credential vault read failed; treating as missing and falling back to env/config',
       );
     }
+    // Normalize before the present/absent check so a whitespace-only value reads as absent —
+    // the SAME decision applyChannelVaultSecrets makes when populating config. Without this,
+    // a `"   "` vault row would report 'vault'/resolvable here while the adapter saw nothing.
+    const vaultClean = normalizeSecretValue(vaultVal);
+    const envClean = field.envFallback ? normalizeSecretValue(env[field.envFallback]) : undefined;
     let source: CredentialSource;
-    if (vaultVal) source = 'vault';
-    else if (field.envFallback && env[field.envFallback]) source = 'env';
+    if (vaultClean) source = 'vault';
+    else if (envClean) source = 'env';
     else if (configKeys.has(field.key)) source = 'config';
     else source = 'missing';
 

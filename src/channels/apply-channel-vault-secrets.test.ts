@@ -177,6 +177,25 @@ describe('applyChannelVaultSecrets — gate/adapter agreement (AC1)', () => {
     expect(status.requiredResolvable).toBe(false);
   });
 
+  it('whitespace-only vault creds: adapter sees absent AND registry reports not resolvable (agree)', async () => {
+    const config = baseConfig();
+    const vault = {
+      'channel.email.nylas_api_key': '   ',
+      'channel.email.nylas_grant_id': '  ',
+      'channel.email.nylas_self_email': ' ',
+    };
+
+    await applyChannelVaultSecrets(config, fakeSecrets(vault), {}, logger);
+
+    // Adapter path: whitespace trimmed to absent → no synthesized account.
+    expect(config.nylasApiKey).toBeUndefined();
+    expect(resolveChannelAccounts(emptyYaml, config)).toHaveLength(0);
+
+    // Gate path: same normalization → not resolvable. The two agree (no silent no-op).
+    const status = await channelCredentialStatus({ secrets: fakeSecrets(vault), env: {} }, emailDesc);
+    expect(status.requiredResolvable).toBe(false);
+  });
+
   it('both: channel vault wins for the adapter, registry agrees (resolvable)', async () => {
     const config = baseConfig();
     const vault = {
