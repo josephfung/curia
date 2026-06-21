@@ -7,6 +7,7 @@ import { SecretCaptureResumeSubscriber, type ResumeRoutingRegistrar } from './se
 import type { EventBus } from '../bus/bus.js';
 import type { BusEvent, Layer, EventType, AgentTaskEvent } from '../bus/events.js';
 import { createSecretCaptured } from '../bus/events.js';
+import { encodeResumeToken } from '../agents/resume-token.js';
 
 function makeFakeBus(opts: { publishThrows?: boolean } = {}) {
   const handlers = new Map<EventType, Array<(e: BusEvent) => unknown>>();
@@ -167,6 +168,45 @@ describe('SecretCaptureResumeSubscriber', () => {
     await emit(makeCapturedEvent());
     // Sanity: the payload only ever references the vault key/label/intent — there is no value
     // anywhere in the chain to leak, and the content is built from names only.
+    expect(JSON.stringify(published[0]!.event)).not.toContain('hunter2');
+  });
+
+  it('re-enters the coordinator with a re-delegate instruction when a resume_token is present (#995)', async () => {
+    const { published, emit, routingCalls } = makeSubscriber();
+    const resumeToken = encodeResumeToken({ agent: 'accounts-specialist', originalTask: 'log into Aeroplan', context: 'need password' });
+    // Origin points at the COORDINATOR (deliverable), as the capture skill retargeted it.
+    await emit(makeCapturedEvent({
+      label: 'Aeroplan password',
+      conversationId: 'user-conv',
+      channelId: 'email',
+      agentId: 'coordinator',
+      resumeIntent: 'check the Aeroplan balance',
+      resumeToken,
+    }));
+
+    expect(published).toHaveLength(1);
+    const task = published[0]!.event as AgentTaskEvent;
+    expect(task.payload.agentId).toBe('coordinator');
+    expect(task.payload.conversationId).toBe('user-conv');
+    expect(task.payload.channelId).toBe('email');
+    // Content names the specialist to re-delegate to and embeds the token verbatim.
+    expect(task.payload.content).toContain('accounts-specialist');
+    expect(task.payload.content).toContain(resumeToken);
+    // originator preserved; routing seeded for delivery.
+    expect(task.payload.metadata).toEqual({ originator: ORIGINATOR });
+    expect(routingCalls).toHaveLength(1);
+  });
+
+  it('skips with a log when the resume_token cannot be decoded (#995)', async () => {
+    const { published, emit } = makeSubscriber();
+    await emit(makeCapturedEvent({ conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator', resumeToken: '!!!garbage!!!' }));
+    expect(published).toHaveLength(0);
+  });
+
+  it('never leaks the secret value on the re-delegation path (#995)', async () => {
+    const { published, emit } = makeSubscriber();
+    const resumeToken = encodeResumeToken({ agent: 'accounts-specialist', originalTask: 'log into Aeroplan', context: 'need password' });
+    await emit(makeCapturedEvent({ conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator', resumeToken }));
     expect(JSON.stringify(published[0]!.event)).not.toContain('hunter2');
   });
 });
