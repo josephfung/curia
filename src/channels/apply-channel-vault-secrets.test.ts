@@ -136,7 +136,6 @@ describe('applyChannelVaultSecrets', () => {
   });
 });
 
-// @TODO (#1101 Task 7): The AC1 gate/adapter agreement tests that used resolveChannelAccounts
-// (the legacy YAML/env resolver) were removed here when resolveChannelAccounts was deleted.
-// New end-to-end coverage of the table+vault resolver path should be added in Task 7 or a
-// follow-up once index.ts is wired to resolveEmailAccounts.
+// The AC1 gate/adapter agreement coverage (formerly here, using the deleted resolveChannelAccounts
+// YAML/env resolver) was rebuilt for the per-account table+vault model in
+// ./email/resolve-email-accounts.agreement.test.ts (#1101 Task 7).

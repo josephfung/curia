@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveChannelAccounts, resolveTasksConfig } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -61,6 +61,9 @@ import { createContactDuplicateDetected, createContactElevated, createContactMer
 import { NylasClient } from './channels/email/nylas-client.js';
 import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
+import { EmailAccountsRepo } from './channels/email/email-accounts-repo.js';
+import { resolveEmailAccounts } from './channels/email/resolve-email-accounts.js';
+import { backfillEmailAccounts } from './channels/email/backfill-email-accounts.js';
 import { SignalRpcClient } from './channels/signal/signal-rpc-client.js';
 import { SignalAdapter } from './channels/signal/signal-adapter.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
@@ -706,7 +709,21 @@ async function main(): Promise<void> {
   // One NylasClient is constructed per account (needed by OutboundGateway's client map).
   // EmailAdapters are constructed further below, after OutboundGateway is ready,
   // and started after the dispatcher is registered to avoid dropping inbound messages.
-  const resolvedEmailAccounts = resolveChannelAccounts(yamlConfig, config);
+  // The email_accounts table is the source of truth for which mailboxes the agent owns
+  // (#1101). Grants live in the vault under channel.email.<name>.nylas_grant_id. The console
+  // manages this table at runtime; on first boot after the migration the table is empty, so
+  // backfillEmailAccounts seeds the legacy single-account creds (idempotent — no-op once the
+  // table is populated). resolveEmailAccounts then reads the table + vault into the runtime
+  // shape used below (and read by the channel-registry credential gate further down).
+  const emailAccountsRepo = new EmailAccountsRepo(pool);
+  await backfillEmailAccounts({
+    repo: emailAccountsRepo,
+    secrets: secretsService,
+    config,
+    channelAccountsBlock: yamlConfig.channel_accounts?.email,
+    logger,
+  });
+  const resolvedEmailAccounts = await resolveEmailAccounts(emailAccountsRepo, secretsService, logger);
   const nylasClientMap = new Map<string, NylasClient>();
 
   if (!config.nylasApiKey) {
@@ -1391,6 +1408,10 @@ async function main(): Promise<void> {
   // its own high-water mark on poll).
   if (outboundGateway && channelShouldStart.has('email')) {
     const emailAdaptersBefore = emailAdapters.length;
+    // Every mailbox the agent owns is suppressed as an inbound sender across ALL adapters,
+    // so an email from one owned account into another isn't processed as a third-party message
+    // (and so the agent never reacts to its own sends). The union is the same for each adapter.
+    const ownedMailboxAddresses = resolvedEmailAccounts.map(a => a.selfEmail);
     for (const account of resolvedEmailAccounts) {
       if (!nylasClientMap.has(account.name)) continue; // skip accounts with no client (NYLAS_API_KEY missing)
 
@@ -1402,7 +1423,7 @@ async function main(): Promise<void> {
         contactService,
         pollingIntervalMs: config.nylasPollingIntervalMs,
         selfEmail: account.selfEmail,
-        excludedSenderEmails: account.excludedSenderEmails,
+        suppressedSenderEmails: ownedMailboxAddresses,
         // Principal's email, resolved from findContactBySystemRole('principal') (#1049).
         // undefined when unknown — EmailAdapter treats it as optional.
         ceoEmail: principalEmail || undefined,
