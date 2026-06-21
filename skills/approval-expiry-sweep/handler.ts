@@ -22,9 +22,14 @@ import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
  * findContactBySystemRole('principal') is the single source of truth for principal
  * identity (#1049 removed the CEO_PRIMARY_EMAIL env var this skill used to read from
  * process.env). Returns null — a silent skip — when there is no contactService, no
- * principal, or no verified email on file. Prefers a verified+active email but falls
- * back to any verified email so an alert still has a destination if the only known
- * address is flagged bounced/defunct.
+ * principal, no verified + active email, or the lookup itself fails.
+ *
+ * Restricted to verified + ACTIVE email (a defunct/bounced address may be reassigned, so we
+ * don't route CEO notifications to it — mirrors the startup derivation in src/index.ts).
+ *
+ * Never throws: this runs on the notification path AFTER expiry has already committed, so a
+ * transient contacts-layer error must not fail the sweep (which would falsely signal failure
+ * and cause scheduler retry churn). Lookup errors are caught here and treated as "no email".
  */
 async function resolvePrincipalEmail(ctx: SkillContext): Promise<string | null> {
   if (!ctx.contactService) {
@@ -35,14 +40,18 @@ async function resolvePrincipalEmail(ctx: SkillContext): Promise<string | null> 
     ctx.log.warn('approval-expiry-sweep: contactService capability unavailable — cannot resolve principal email');
     return null;
   }
-  const principal = await ctx.contactService.findContactBySystemRole('principal');
-  if (!principal) return null;
-  const withIdentities = await ctx.contactService.getContactWithIdentities(principal.id);
-  const identities = withIdentities?.identities ?? [];
-  const email =
-    identities.find((id) => id.channel === 'email' && id.verified && id.status === 'active') ??
-    identities.find((id) => id.channel === 'email' && id.verified);
-  return email?.channelIdentifier ?? null;
+  try {
+    const principal = await ctx.contactService.findContactBySystemRole('principal');
+    if (!principal) return null;
+    const withIdentities = await ctx.contactService.getContactWithIdentities(principal.id);
+    const identities = withIdentities?.identities ?? [];
+    const email = identities.find((id) => id.channel === 'email' && id.verified && id.status === 'active');
+    return email?.channelIdentifier ?? null;
+  } catch (err) {
+    // Expiry already committed in step 2 — a notification-path lookup failure is non-fatal.
+    ctx.log.warn({ err }, 'approval-expiry-sweep: failed to resolve principal email — skipping expiry notification');
+    return null;
+  }
 }
 
 // Tiers that warrant a CEO notification on expiry.

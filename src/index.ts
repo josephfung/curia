@@ -667,33 +667,13 @@ async function main(): Promise<void> {
       // (defunct/bounced) addresses must not be presented to agents as live.
       principalIdentities = allIdentities.filter((id) => id.verified && id.status === 'active');
 
-      // principalEmail: prefer a verified+active email; fall back to any verified email so
-      // operational alerts (suspension/recovery/approval) still have a destination even when
-      // the only known address is flagged bounced/defunct — dropping the alert is worse.
-      const activeEmail = principalIdentities.find((id) => id.channel === 'email');
-      const fallbackEmail = activeEmail ?? allIdentities.find((id) => id.channel === 'email' && id.verified);
-      principalEmail = fallbackEmail?.channelIdentifier ?? '';
-
-      // Make the degraded choice visible: when we fall back to a verified-but-inactive
-      // (defunct/bounced) address, operational alerts may silently bounce. Without this
-      // warning the only signal is `hasEmail: true` below, which looks healthy.
-      if (!activeEmail && fallbackEmail) {
-        logger.warn(
-          { contactId: principalContact.id, status: fallbackEmail.status },
-          'Principal has no active verified email — falling back to a flagged (defunct/bounced) address; operational alerts may not be delivered',
-        );
-      }
-
-      // Restore the escalation the removed env-var bootstrap used to emit: a live email
-      // adapter with no usable principal email is the most dangerous config — the first
-      // inbound email from the principal is not matched to their contact and is held as
-      // provisional. Surface at error so it shows up in log aggregators (not just info).
-      if (!principalEmail && config.nylasApiKey && config.nylasGrantId) {
-        logger.error(
-          { contactId: principalContact.id },
-          'Principal has no verified email but the email adapter is active — inbound email from the principal WILL be held as provisional until an email identity is bound',
-        );
-      }
+      // principalEmail: the principal's verified + ACTIVE email. Restricted to active only
+      // (#1049 review): a defunct/bounced address may have been reassigned, so routing
+      // operational alerts to it — or seeding the outbound-filter allow-list with it — is a
+      // confidentiality risk. When there is no active email, principalEmail stays '' and the
+      // dependent features degrade with their own warnings (notifiers below; the email-adapter
+      // escalation after adapter construction).
+      principalEmail = principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
 
       logger.info(
         { contactId: principalContact.id, kgNodeId: principalContact.kgNodeId, hasEmail: !!principalEmail },
@@ -1411,6 +1391,20 @@ async function main(): Promise<void> {
     if (emailAdapters.length === emailAdaptersBefore) {
       logger.warn('channel email is enabled + resolvable but no Nylas client is configured at runtime; no email adapter constructed — check vault/env credentials and restart');
     }
+  }
+
+  // The most dangerous email config: adapter(s) are live but the principal has no usable
+  // (verified + active) email, so the first inbound email from the principal is not matched
+  // to their contact and is held as provisional. Keyed on the actually-constructed adapters
+  // so it covers multi-account `channel_accounts.email` setups too, not just the legacy
+  // single `nylasGrantId` path (#1049 review). Surface at error for log aggregators. This is
+  // the escalation the removed env-var bootstrap used to emit; it lives here (rather than in
+  // the principal-resolution block) because adapter activeness is only known after this point.
+  if (emailAdapters.length > 0 && principalContact && !principalEmail) {
+    logger.error(
+      { contactId: principalContact.id },
+      'Email adapter(s) active but the principal has no verified active email — inbound email from the principal WILL be held as provisional until an email identity is bound',
+    );
   }
 
   // Construct the Signal adapter (but don't start it yet — same ordering rule as email:
