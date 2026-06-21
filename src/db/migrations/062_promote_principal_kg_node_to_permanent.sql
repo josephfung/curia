@@ -1,4 +1,4 @@
--- Migration 061: Promote the principal's KG person node to permanent decay class.
+-- Migration 062: Promote the principal's KG person node to permanent decay class.
 --
 -- Root cause (issue #1004): insertKgPersonNode uses ON CONFLICT DO UPDATE to handle
 -- pre-existing person nodes (e.g. created by email-based extraction with the default
@@ -12,6 +12,10 @@
 --
 -- Scope: only the node linked from the principal contact (system_role='principal').
 -- Promotion never demotes: GREATEST preserves any confidence already above 1.0.
+--
+-- Edge case: if contacts.kg_node_id IS NULL for the principal (e.g. an instance
+-- that never ran the #380 fix), this migration updates 0 rows — that is correct.
+-- The forward fix in insertKgPersonNode handles that case at the next bootstrap run.
 
 UPDATE kg_nodes
    SET decay_class       = 'permanent',
