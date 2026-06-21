@@ -5,15 +5,17 @@ import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
 
-describe('AutonomyService.getHistoryPaginated', () => {
+// Skip gracefully when DATABASE_URL is unset (e.g. local dev without Postgres),
+// matching the describeIf convention used by the other integration tests.
+const DATABASE_URL = process.env['DATABASE_URL'];
+const describeIf = DATABASE_URL ? describe : describe.skip;
+
+describeIf('AutonomyService.getHistoryPaginated', () => {
   let pool: pg.Pool;
   let service: AutonomyService;
 
   beforeAll(async () => {
-    if (!process.env['DATABASE_URL']) {
-      throw new Error('DATABASE_URL must be set to run autonomy route integration tests');
-    }
-    pool = new pg.Pool({ connectionString: process.env['DATABASE_URL'] });
+    pool = new pg.Pool({ connectionString: DATABASE_URL });
     service = new AutonomyService(pool, logger);
 
     // Ensure tables exist (migration 011)

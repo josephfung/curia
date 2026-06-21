@@ -8,7 +8,12 @@ import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 
 const logger = pino({ level: 'silent' });
 
-describe('Autonomy REST routes', () => {
+// Skip gracefully when DATABASE_URL is unset (e.g. local dev without Postgres),
+// matching the describeIf convention used by the other integration tests.
+const DATABASE_URL = process.env['DATABASE_URL'];
+const describeIf = DATABASE_URL ? describe : describe.skip;
+
+describeIf('Autonomy REST routes', () => {
   let app: ReturnType<typeof Fastify>;
   let pool: pg.Pool;
   let autonomyService: AutonomyService;
@@ -19,11 +24,8 @@ describe('Autonomy REST routes', () => {
   const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 
   beforeAll(async () => {
-    if (!process.env['DATABASE_URL']) {
-      throw new Error('DATABASE_URL must be set to run autonomy route integration tests');
-    }
     app = Fastify();
-    pool = new pg.Pool({ connectionString: process.env['DATABASE_URL'] });
+    pool = new pg.Pool({ connectionString: DATABASE_URL });
     autonomyService = new AutonomyService(pool, logger);
 
     // Ensure tables exist
