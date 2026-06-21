@@ -40,6 +40,7 @@ import { registryRoutes } from './routes/registry.js';
 import { channelRegistryRoutes } from './routes/channel-registry.js';
 import { mcpRegistryRoutes } from './routes/mcp-registry.js';
 import { vaultRoutes } from './routes/vault.js';
+import { emailAccountsRoutes } from './routes/email-accounts.js';
 import { secretCaptureRoutes } from './routes/secret-capture.js';
 import { setupRoutes } from './routes/setup.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
@@ -396,6 +397,19 @@ export class HttpAdapter implements Channel {
     if (webAppBootstrapSecret && this.config.mcpRegistryService) {
       await this.app.register(mcpRegistryRoutes, {
         mcpRegistryService: this.config.mcpRegistryService,
+        webAppBootstrapSecret,
+        sessions,
+      });
+    }
+
+    // Email accounts routes — CRUD for the email_accounts table + per-account Nylas
+    // grant writes. Requires the bootstrap secret + secretsService (to write grant IDs
+    // to the vault). The /api/registry/* auth bypass in the onRequest hook above covers
+    // these routes so they never reach the Bearer-token gate.
+    if (webAppBootstrapSecret && this.config.secretsService) {
+      await this.app.register(emailAccountsRoutes, {
+        pool,
+        secretsService: this.config.secretsService,
         webAppBootstrapSecret,
         sessions,
       });
