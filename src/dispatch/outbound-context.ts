@@ -60,12 +60,24 @@ export interface OutboundContextRow {
   released: boolean;
 }
 
+/** Result of a bulk clear-by-subject operation (see clearBySubjects). */
+export interface SubjectClearResult {
+  /** Total active entries released across all matched subjects. */
+  totalReleased: number;
+  /** Per-subject release counts — only subjects that matched ≥1 active entry. */
+  perSubject: { subject: string; released: number }[];
+  /** Requested subjects that matched zero active entries. */
+  unmatched: string[];
+}
+
 /** Narrow interface exposed to skills via the outboundContext capability. */
 export interface OutboundContextCapability {
   readonly defaultExpiryHours: number;
   readonly explicitExpiryHours: number;
   register(entry: Omit<OutboundContextEntry, 'conversationId'>): Promise<string>;
   release(entryId: string): Promise<void>;
+  /** Release every active entry whose metadata subject matches one of `subjects`. */
+  clearBySubjects(subjects: string[]): Promise<SubjectClearResult>;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -212,6 +224,64 @@ export class OutboundContextService {
     }
   }
 
+  /**
+   * Release every active (non-released, non-expired) entry whose metadata
+   * `subject` equals one of the given subjects (exact, case-insensitive).
+   *
+   * Intentionally conversation-agnostic — unlike release(entryId), the subject
+   * IS the scope. Debrief prompts and their replies can span Signal and email
+   * (different conversation_ids), so scoping by conversation would miss entries.
+   * It scans the whole active table, so entries that fell outside the
+   * coordinator's bounded [ACTIVE OUTBOUND CONTEXT] injection window are still
+   * released — this is the core of the #975 fix.
+   *
+   * Blank subjects are dropped and duplicates collapsed (case-insensitive). A
+   * subject matching no active entry is returned in `unmatched` so callers can
+   * report it instead of claiming a clear they cannot substantiate.
+   */
+  async clearBySubjects(subjects: string[]): Promise<SubjectClearResult> {
+    // Normalize: trim, drop blanks, de-dup case-insensitively (preserve first casing).
+    const seen = new Set<string>();
+    const cleaned: string[] = [];
+    for (const s of subjects) {
+      const trimmed = typeof s === 'string' ? s.trim() : '';
+      if (trimmed.length === 0) continue;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cleaned.push(trimmed);
+    }
+
+    const perSubject: { subject: string; released: number }[] = [];
+    const unmatched: string[] = [];
+    let totalReleased = 0;
+
+    for (const subject of cleaned) {
+      const result = await this.pool.query<{ id: string }>(
+        `UPDATE outbound_context
+           SET released = true
+         WHERE released = false
+           AND expires_at > now()
+           AND lower(metadata->>'subject') = lower($1)
+         RETURNING id`,
+        [subject],
+      );
+      const released = result.rowCount ?? 0;
+      if (released > 0) {
+        perSubject.push({ subject, released });
+        totalReleased += released;
+      } else {
+        unmatched.push(subject);
+      }
+    }
+
+    this.logger.debug(
+      { totalReleased, matched: perSubject.length, unmatched: unmatched.length },
+      'clearBySubjects completed',
+    );
+    return { totalReleased, perSubject, unmatched };
+  }
+
   /** Delete expired or released entries. Returns the count of rows deleted. */
   async cleanupExpired(): Promise<number> {
     const result = await this.pool.query(
@@ -305,5 +375,11 @@ export class ScopedOutboundContext implements OutboundContextCapability {
 
   async release(entryId: string): Promise<void> {
     return this.service.release(entryId, this.conversationId);
+  }
+
+  async clearBySubjects(subjects: string[]): Promise<SubjectClearResult> {
+    // Intentionally conversation-agnostic — see OutboundContextService.clearBySubjects.
+    // The subject is the scope, not this.conversationId, so we delegate without scoping.
+    return this.service.clearBySubjects(subjects);
   }
 }

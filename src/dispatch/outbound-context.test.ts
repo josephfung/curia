@@ -172,6 +172,64 @@ describe('OutboundContextService', () => {
     });
   });
 
+  describe('clearBySubjects', () => {
+    it('releases all active entries matching each subject (case-insensitive) and returns per-subject counts', async () => {
+      // Subject "Sean Brownlee" → 4 rows; "Khanjan Desai" → 2 rows.
+      (pool.query as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ rowCount: 4, rows: [{ id: '1' }, { id: '2' }, { id: '3' }, { id: '4' }] })
+        .mockResolvedValueOnce({ rowCount: 2, rows: [{ id: '5' }, { id: '6' }] });
+
+      const result = await service.clearBySubjects(['Sean Brownlee', 'khanjan desai']);
+
+      expect(result.totalReleased).toBe(6);
+      expect(result.perSubject).toEqual([
+        { subject: 'Sean Brownlee', released: 4 },
+        { subject: 'khanjan desai', released: 2 },
+      ]);
+      expect(result.unmatched).toEqual([]);
+
+      // First statement: releases by case-insensitive metadata subject, active rows only.
+      const first = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(first[0]).toContain('UPDATE outbound_context');
+      expect(first[0]).toContain('released = false');
+      expect(first[0]).toContain("expires_at > now()");
+      expect(first[0]).toContain("lower(metadata->>'subject') = lower($1)");
+      expect(first[0]).toContain('RETURNING id');
+      expect(first[1]).toEqual(['Sean Brownlee']);
+    });
+
+    it('reports subjects that matched zero active entries as unmatched', async () => {
+      (pool.query as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ rowCount: 3, rows: [{ id: '1' }, { id: '2' }, { id: '3' }] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+      const result = await service.clearBySubjects(['Walk and Ice cream', 'Nonexistent Meeting']);
+
+      expect(result.totalReleased).toBe(3);
+      expect(result.perSubject).toEqual([{ subject: 'Walk and Ice cream', released: 3 }]);
+      expect(result.unmatched).toEqual(['Nonexistent Meeting']);
+    });
+
+    it('trims, drops blank subjects, and de-duplicates case-insensitively before querying', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 1, rows: [{ id: '1' }] });
+
+      const result = await service.clearBySubjects(['  Peter Lenardon  ', '', '   ', 'peter lenardon']);
+
+      // Only one query runs — blanks dropped, the duplicate (case-insensitive) collapsed.
+      expect((pool.query as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(call[1]).toEqual(['Peter Lenardon']); // trimmed, first-seen casing preserved
+      expect(result.totalReleased).toBe(1);
+    });
+
+    it('returns an empty result without querying when given no usable subjects', async () => {
+      const result = await service.clearBySubjects(['', '   ']);
+
+      expect((pool.query as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+      expect(result).toEqual({ totalReleased: 0, perSubject: [], unmatched: [] });
+    });
+  });
+
   describe('formatInjectionBlock', () => {
     it('returns null when entries is empty', () => {
       const result = service.formatInjectionBlock([], 'original content');
