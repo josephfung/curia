@@ -106,6 +106,9 @@ export class DelegateHandler implements SkillHandler {
       // not silently produce a broken task brief.
       const payload = decodeResumeToken(resume_token);
       if (!payload) {
+        // decodeResumeToken absorbs the parse error (returns null rather than throwing), so the
+        // specific decode reason isn't surfaced here. The token is opaque names+NL, so the target
+        // agent is the actionable signal; a malformed token is unrecoverable regardless of reason.
         ctx.log.error({ targetAgent: agent }, 'Failed to decode resume_token');
         return {
           success: false,
