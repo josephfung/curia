@@ -1195,10 +1195,22 @@ export class AgentRuntime {
     await bus.publish('agent', responseEvent);
 
     // Bullpen read-watermark (#1065): on a successful completion, mark every thread this
-    // agent had in context as seen up to its current latest message. They won't be
-    // re-surfaced (and re-actioned) on a later wake until newer activity arrives. Skipped
-    // on the fallback/error path so an unfinished thread gets another turn. Best-effort:
-    // a watermark write failure must not turn a completed task into a failure.
+    // agent had in context as seen up to its current latest message — whether or not it
+    // acted on each one. The invariant is "the agent has been shown this thread state and
+    // had its turn", not "the agent fulfilled it": ambient injection is awareness, and the
+    // authoritative "please act" trigger is the per-message task BullpenDispatcher creates,
+    // which surfaces the thread's content directly before any ambient suppression. So a
+    // thread the agent consciously left alone stops nagging, and re-surfaces only when
+    // genuinely new activity arrives.
+    //
+    // Skipped on the fallback/error path (and all early returns above: clarification,
+    // budget exhaustion) so unfinished work gets another turn. The deliberate trade-off:
+    // if the agent performed an out-of-band action on an earlier turn and only then hit
+    // the error budget, that thread is left un-watermarked and could be re-actioned next
+    // wake. Erring toward re-surfacing on a failed task is the safer default vs. dropping
+    // genuinely-unfinished work.
+    //
+    // Best-effort: a watermark write failure must not turn a completed task into a failure.
     if (!isResponseError && this.config.bullpenService && injectedBullpenThreadIds.size > 0) {
       try {
         await this.config.bullpenService.markThreadsSeen(agentId, [...injectedBullpenThreadIds]);
