@@ -34,6 +34,12 @@ export const SEED_SECRET_NAMES = [
   'ceo_nylas_grant_id',
   'ceo_self_email',
   'tavily_api_key',
+  // Google Workspace OAuth (#913). Two consumers: the drive-download-file skill
+  // (via ctx.secret) and the google-workspace MCP subprocess (resolved at spawn
+  // time in mcp-loader). Seeded here so both read from the vault, not .env.
+  'google_oauth_client_id',
+  'google_oauth_client_secret',
+  'curia_google_email',
 ] as const;
 
 // The subset of secrets that MUST exist in the vault for a working install. Their

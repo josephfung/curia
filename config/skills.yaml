@@ -52,14 +52,16 @@ servers:
   # Prerequisites (one-time human setup — see docs/dev/google-drive.md):
   #   1. Create a Google Cloud Project, enable Drive/Sheets/Docs/Gmail/Calendar APIs
   #   2. Create an OAuth 2.0 Desktop App credential
-  #   3. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in .env
+  #   3. Seed google_oauth_client_id / google_oauth_client_secret / curia_google_email
+  #      into the vault (see .env.example: GOOGLE_OAUTH_CLIENT_ID=... pnpm run seed-vault)
   #   4. Run the OAuth flow once locally to cache tokens (~/.workspace-mcp/cli-tokens/)
   #
-  # Empty-string env values are resolved from process.env at runtime by
-  # mcp-client.ts's buildChildEnv() — only these two keys are passed to the
-  # subprocess (plus a safe base set: PATH, HOME, USER, etc.). This enforces
-  # least-privilege: DB_PASSWORD, ANTHROPIC_API_KEY, etc. never reach the
-  # third-party process.
+  # Empty-string env values below are resolved from the encrypted VAULT at spawn
+  # time by mcp-loader (vault-only, #913): the lowercased key name is the vault key
+  # (GOOGLE_OAUTH_CLIENT_ID -> google_oauth_client_id). A missing secret skips this
+  # whole server. Only these declared keys are passed to the subprocess (plus a safe
+  # base set: PATH, HOME, USER, etc.). This enforces least-privilege: DB_PASSWORD,
+  # ANTHROPIC_API_KEY, etc. never reach the third-party process.
   - name: google-workspace
     transport: stdio
     command: uvx
@@ -76,9 +78,10 @@ servers:
       # from its own STORAGE_DIR by default.
       ALLOWED_FILE_DIRS: "/run/curia-tempfiles"
     # Bind the Google Workspace user email at the tool layer so agents never see
-    # or reason about it. Resolved from CURIA_GOOGLE_EMAIL env var at startup.
-    # This replaces the system prompt injection approach (#387) which was fragile
-    # because LLMs could hallucinate different email addresses.
+    # or reason about it. The "env:CURIA_GOOGLE_EMAIL" reference resolves from the
+    # vault (key curia_google_email) at startup, vault-only (#913). This replaces
+    # the system prompt injection approach (#387) which was fragile because LLMs
+    # could hallucinate different email addresses.
     fixed_inputs:
       user_google_email: "env:CURIA_GOOGLE_EMAIL"
     action_risk: low
