@@ -317,6 +317,23 @@ describe('email-accounts routes', () => {
     expect(repo.updateCalls).toHaveLength(0);
   });
 
+  it('PATCH with invalid name returns 400 without touching the vault', async () => {
+    // Belt-and-suspenders validation: the URL :name param must pass isValidEmailAccountName
+    // before any vault-key construction occurs, independent of the DB row check.
+    const repo = fakeRepo();
+    const secrets = fakeSecrets();
+    app = await build(repo, secrets);
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/registry/email-accounts/Bad.Name',
+      headers: { ...auth, 'content-type': 'application/json' },
+      payload: { enabled: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(repo.updateCalls).toHaveLength(0);
+    expect(secrets.sets).toHaveLength(0);
+  });
+
   // --- DELETE ---
 
   it('DELETE removes the row and deletes the grant key', async () => {
@@ -351,6 +368,22 @@ describe('email-accounts routes', () => {
       headers: auth,
     });
     expect(res.statusCode).toBe(404);
+    expect(secrets.deletes).toHaveLength(0);
+  });
+
+  it('DELETE with invalid name returns 400 without touching the vault', async () => {
+    // Belt-and-suspenders validation: the URL :name param must pass isValidEmailAccountName
+    // before any vault-key construction occurs, independent of the DB row check.
+    const repo = fakeRepo();
+    const secrets = fakeSecrets();
+    app = await build(repo, secrets);
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/api/registry/email-accounts/Bad.Name',
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(repo.deleteCalls).toHaveLength(0);
     expect(secrets.deletes).toHaveLength(0);
   });
 

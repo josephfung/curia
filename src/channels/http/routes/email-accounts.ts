@@ -149,6 +149,14 @@ export async function emailAccountsRoutes(
   app.patch('/api/registry/email-accounts/:name', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const { name } = request.params as { name: string };
+
+    // Belt-and-suspenders: the DB row is the primary gate (only a name that passed
+    // POST validation can exist in the table), but we validate directly here so that
+    // vault-key construction never depends on an invariant enforced elsewhere.
+    if (!isValidEmailAccountName(name)) {
+      return reply.status(400).send({ error: `name must match ${EMAIL_ACCOUNT_NAME_RE.source}` });
+    }
+
     const body = (request.body ?? {}) as {
       selfEmail?: unknown;
       enabled?: unknown;
@@ -194,6 +202,12 @@ export async function emailAccountsRoutes(
   app.delete('/api/registry/email-accounts/:name', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     const { name } = request.params as { name: string };
+
+    // Belt-and-suspenders: the DB row is the primary gate, but we validate directly
+    // here so vault-key construction never depends on an invariant enforced elsewhere.
+    if (!isValidEmailAccountName(name)) {
+      return reply.status(400).send({ error: `name must match ${EMAIL_ACCOUNT_NAME_RE.source}` });
+    }
 
     let deleted: boolean;
     try {
