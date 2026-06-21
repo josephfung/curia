@@ -140,14 +140,18 @@ export class DelegateHandler implements SkillHandler {
       // Guard against cross-agent token misuse: if the coordinator passes a
       // resume_token generated for one specialist but targets a different one,
       // the task brief would contain another agent's context. Reject early.
-      if (payload.agent && payload.agent !== agent) {
+      // Use strict equality (not payload.agent && payload.agent !== agent) so that a
+      // malformed token with agent: "" cannot bypass the guard via a falsy agent field.
+      if (payload.agent !== agent) {
         ctx.log.warn(
-          { targetAgent: agent, tokenAgent: payload.agent },
-          'resume_token was generated for a different agent — possible cross-agent token misuse',
+          { targetAgent: agent, tokenAgent: payload.agent || '(empty)' },
+          'resume_token agent mismatch — possible cross-agent token misuse or corrupted token',
         );
         return {
           success: false,
-          error: `resume_token was generated for agent '${payload.agent}' but is being used to delegate to '${agent}'. Re-delegate to the correct specialist or ask the CEO to repeat their request.`,
+          error: payload.agent
+            ? `resume_token was generated for agent '${payload.agent}' but is being used to delegate to '${agent}'. Re-delegate to the correct specialist or ask the CEO to repeat their request.`
+            : `resume_token has an empty agent field and cannot be validated. The token may be corrupted — ask the CEO to repeat their request.`,
         };
       }
 
