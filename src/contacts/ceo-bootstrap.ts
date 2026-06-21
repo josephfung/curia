@@ -271,6 +271,13 @@ export async function bootstrapCeoContact(
  * Without this, a blind INSERT would 23505 outside the contact-identity recovery block
  * and propagate as an unhandled error.
  *
+ * The DO UPDATE also promotes decay_class to 'permanent' and pins confidence to 1.0
+ * on the conflicting row. Email-based extraction creates person nodes with the default
+ * slow_decay, which makes them eligible for DreamEngine archival once confidence decays.
+ * When that pre-existing node belongs to the principal, bootstrap must repair it — and
+ * GREATEST ensures we never *demote* a node that already has a higher confidence value.
+ * (Issue #1004)
+ *
  * Exported so ensure-principal.ts can reuse the exact same node-creation semantics
  * for the wizard's no-channel principal-creation path.
  */
@@ -279,7 +286,9 @@ export async function insertKgPersonNode(displayName: string, pool: DbPool): Pro
     `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
      VALUES ('person', $1, '{}', 1.0, 'permanent', 'bootstrap', now(), now())
      ON CONFLICT (lower(label), type) WHERE type != 'fact' AND archived_at IS NULL
-     DO UPDATE SET last_confirmed_at = now()
+     DO UPDATE SET last_confirmed_at = now(),
+                   decay_class       = 'permanent',
+                   confidence        = GREATEST(kg_nodes.confidence, 1.0)
      RETURNING id`,
     [displayName],
   );
