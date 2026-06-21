@@ -67,7 +67,7 @@ channel_accounts:
     expect(config.skillOutput?.maxLength).toBe(50000);
     // channel_accounts is now a loosely-typed detection field (Record<string, unknown>).
     // Cast through unknown to access the inner value for testing purposes.
-    const curia = config.channel_accounts?.email?.['curia'] as Record<string, unknown> | undefined;
+    const curia = config.channel_accounts?.email?.['curia'] as unknown as Record<string, unknown> | undefined;
     expect(curia?.['self_email']).toBe('curia@example.com');
   });
 

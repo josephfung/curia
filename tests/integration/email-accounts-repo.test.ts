@@ -18,8 +18,13 @@ describeIf('EmailAccountsRepo (integration)', () => {
     repo = new EmailAccountsRepo(pool);
   });
   afterAll(async () => {
-    await pool.query('DELETE FROM email_accounts');
-    await pool.end();
+    // Always close the pool, even if the cleanup DELETE throws (e.g. the table check in
+    // beforeAll already failed) — otherwise the pool leaks connections and can hang the run.
+    try {
+      await pool.query('DELETE FROM email_accounts');
+    } finally {
+      await pool.end();
+    }
   });
   beforeEach(async () => { await pool.query('DELETE FROM email_accounts'); });
 
