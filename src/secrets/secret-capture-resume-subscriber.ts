@@ -20,6 +20,7 @@ import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import type { BusEvent, SecretCapturedEvent } from '../bus/events.js';
 import { createAgentTask } from '../bus/events.js';
+import { decodeResumeToken } from '../agents/resume-token.js';
 
 /**
  * Seeds channel routing for the synthetic resume task so the agent's response is delivered back
@@ -47,8 +48,11 @@ const MAX_DISPATCHED_IDS = 10_000;
  * adapter delivers and no user is watching — AND the coordinator's delegate-await that would relay
  * it has already returned. We skip those with a loud log rather than dead-ending silently.
  *
- * Cleanly resuming a delegated specialist is a separate feature: it needs the coordinator to
- * re-delegate via the delegate skill's resume_token, not a direct re-entry. Tracked as follow-up.
+ * A delegated specialist now resumes by minting its capture link with the COORDINATOR's routing
+ * + a resume_token (#995), so by the time the event reaches here channelId is already the
+ * coordinator's deliverable channel and this guard passes. This guard now only catches a
+ * genuinely unroutable mint (an internal-channel link with no delegation context), which should
+ * not occur but must not dead-end loudly into a non-deliverable channel.
  */
 const NON_DELIVERABLE_CHANNELS = new Set(['internal', 'bullpen', 'scheduler']);
 
@@ -84,7 +88,7 @@ export class SecretCaptureResumeSubscriber {
       return;
     }
 
-    const { secretName, label, conversationId, agentId, channelId, taskEventId, resumeIntent, originator } = event.payload;
+    const { secretName, label, conversationId, agentId, channelId, taskEventId, resumeIntent, resumeToken, originator } = event.payload;
 
     // Essential routing must be present to re-enter an agent. A token minted outside an agent
     // context (or before #972's migration) has no origin — there is nothing to resume, so we
@@ -116,11 +120,35 @@ export class SecretCaptureResumeSubscriber {
     this.markDispatched(event.id);
 
     const displayName = label ?? secretName;
-    const intentLine = resumeIntent ? ` Original request: ${resumeIntent}.` : '';
-    const content =
-      `The secret '${displayName}' was just captured and saved to the vault.${intentLine} ` +
-      `If you now have everything you need to continue, proceed. Otherwise, tell the user what ` +
-      `is still outstanding (check your conversation history for any other secrets you asked for).`;
+    let content: string;
+    if (resumeToken) {
+      // Delegated-specialist resume (#995): decode the token to recover the specialist name, then
+      // instruct the coordinator to re-delegate with the token (verbatim) and relay the reply.
+      const decoded = decodeResumeToken(resumeToken);
+      if (!decoded) {
+        // A system-minted token should always decode; a malformed one is unrecoverable, so skip
+        // (don't fabricate a re-delegation) and log loudly rather than swallow.
+        this.logger.warn(
+          { eventId: event.id, secretName, agentId },
+          'secret.captured carried a resume_token that could not be decoded — skipping specialist re-delegation',
+        );
+        return;
+      }
+      const goalLine = resumeIntent ? ` (Original goal: ${resumeIntent}.)` : '';
+      content =
+        `The secret '${displayName}' that a specialist asked for was just captured and saved to the vault. ` +
+        `The specialist '${decoded.agent}' paused waiting for it. Re-delegate to '${decoded.agent}' to continue, ` +
+        `passing this resume_token EXACTLY as given (do not alter, redact, or shorten it):\n\n${resumeToken}\n\n` +
+        `Then relay its reply to the user.${goalLine} If '${decoded.agent}' reports it is still missing other ` +
+        `secrets it already requested, relay that to the user — do not send new capture links for secrets ` +
+        `whose links are still pending.`;
+    } else {
+      const intentLine = resumeIntent ? ` Original request: ${resumeIntent}.` : '';
+      content =
+        `The secret '${displayName}' was just captured and saved to the vault.${intentLine} ` +
+        `If you now have everything you need to continue, proceed. Otherwise, tell the user what ` +
+        `is still outstanding (check your conversation history for any other secrets you asked for).`;
+    }
 
     // Attribute the resumed turn to whoever started the chain. originator is round-tripped from
     // JSONB (typed Record<string, unknown>), so validate contactId is actually a string before
