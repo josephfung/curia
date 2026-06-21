@@ -58,10 +58,19 @@ describeIf('clearBySubjects across the injection window (#975)', () => {
   });
 
   it('releases every matching active entry even though the injection window is bounded', async () => {
-    // Sanity: the bounded view cannot see all of this run's entries at once.
+    // This run created 12 active entries in one conversation; the bounded
+    // injection view (getActive's LIMIT 10) structurally cannot show them all,
+    // so at least some of this meeting's entries are invisible to any single
+    // turn — exactly the window the bug fell into. Assert that explicitly
+    // rather than the vacuous "<= 10" (always true given LIMIT 10).
+    const totalActive = await pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM outbound_context WHERE conversation_id = $1 AND released = false`,
+      [`conv-${runId}`],
+    );
+    expect(Number(totalActive.rows[0]!.n)).toBe(12);
     const active = await service.getActive(10);
     const mineActive = active.filter((e) => e.conversationId === `conv-${runId}`);
-    expect(mineActive.length).toBeLessThanOrEqual(10); // window is the trap the bug fell into
+    expect(mineActive.length).toBeLessThan(12); // some of this run's entries fall outside the window
 
     const result = await service.clearBySubjects([
       'Sean Brownlee',
