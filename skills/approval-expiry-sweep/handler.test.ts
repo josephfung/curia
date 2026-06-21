@@ -1,13 +1,14 @@
 // handler.test.ts — unit tests for approval-expiry-sweep skill handler.
 //
 // Tests cover: no-op on empty results, batch expiry, notification filtering
-// by risk tier, batched single notification, missing CEO email, missing
+// by risk tier, batched single notification, missing principal email, missing
 // outbound gateway, non-fatal sendNotification failure, and unexpected DB errors.
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ApprovalExpirySweepHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
+import type { ContactService } from '../../src/contacts/contact-service.js';
 import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
 
@@ -45,8 +46,12 @@ function makeCtx(overrides: {
   // the common case where no concurrent resolution happened.
   expireRowsResult?: ActionLogRow[];
   sendNotificationResult?: boolean;
+  // The principal's resolved email. '' (or null) simulates no verified principal email
+  // on file — the handler resolves this via contactService.findContactBySystemRole (#1049).
   ceoEmail?: string;
   withoutOutboundGateway?: boolean;
+  // Simulate ctx.contactService being entirely unavailable.
+  withoutContactService?: boolean;
 } = {}) {
   const {
     findExpiredRows = [],
@@ -54,11 +59,8 @@ function makeCtx(overrides: {
     sendNotificationResult = true,
     ceoEmail = 'ceo@example.com',
     withoutOutboundGateway = false,
+    withoutContactService = false,
   } = overrides;
-
-  // The handler reads CEO_PRIMARY_EMAIL from process.env directly (not ctx.secret),
-  // so set it here. Tests that need it absent should pass ceoEmail: ''.
-  process.env['CEO_PRIMARY_EMAIL'] = ceoEmail;
 
   // Keep explicit references so tests can assert on mock calls without casts.
   const findExpiredMock = vi.fn().mockResolvedValue(findExpiredRows);
@@ -68,11 +70,22 @@ function makeCtx(overrides: {
   const logWarnMock = vi.fn();
   const logErrorMock = vi.fn();
 
+  // The handler resolves the principal email via contactService:
+  //   findContactBySystemRole('principal') → getContactWithIdentities(id) → verified email.
+  // An empty ceoEmail makes findContactBySystemRole return null (no principal), so the
+  // notification is skipped — the post-#1049 equivalent of "no email configured".
+  const principalContactId = 'principal-contact-id';
+  const findContactBySystemRoleMock = vi
+    .fn()
+    .mockResolvedValue(ceoEmail ? { id: principalContactId } : null);
+  const getContactWithIdentitiesMock = vi.fn().mockResolvedValue(
+    ceoEmail
+      ? { identities: [{ channel: 'email', channelIdentifier: ceoEmail, verified: true, status: 'active' }] }
+      : { identities: [] },
+  );
+
   const ctx: SkillContext = {
     input: {},
-    // ctx.secret() throws in production when the var is unset — mirror that here.
-    // The handlers read CEO_PRIMARY_EMAIL via process.env directly, so this stub
-    // is present for shape correctness only.
     secret: vi.fn().mockImplementation((name: string) => {
       throw new Error(`secret ${name} not configured`);
     }),
@@ -81,18 +94,19 @@ function makeCtx(overrides: {
       findExpired: findExpiredMock,
       expireRows: expireRowsMock,
     } as unknown as ActionLogRepo,
+    contactService: withoutContactService
+      ? undefined
+      : ({
+          findContactBySystemRole: findContactBySystemRoleMock,
+          getContactWithIdentities: getContactWithIdentitiesMock,
+        } as unknown as ContactService),
     outboundGateway: withoutOutboundGateway
       ? undefined
       : ({ sendNotification: sendNotificationMock } as unknown as OutboundGateway),
   } as SkillContext;
 
-  return { ctx, findExpiredMock, expireRowsMock, sendNotificationMock, logInfoMock, logWarnMock, logErrorMock };
+  return { ctx, findExpiredMock, expireRowsMock, sendNotificationMock, findContactBySystemRoleMock, logInfoMock, logWarnMock, logErrorMock };
 }
-
-afterEach(() => {
-  // Clean up the env var between tests so they don't bleed into each other.
-  delete process.env['CEO_PRIMARY_EMAIL'];
-});
 
 // --- Tests ---
 
@@ -205,21 +219,38 @@ describe('ApprovalExpirySweepHandler', () => {
     expect((result.data as { expired: number }).expired).toBe(1);
   });
 
-  it('skips notification when CEO_PRIMARY_EMAIL is not set', async () => {
+  it('skips notification when no principal email is on file', async () => {
     const rows = [makeRow({ id: 1, shortRef: 'high-ref', actionRisk: 'high' })];
     const handler = new ApprovalExpirySweepHandler();
-    // Passing ceoEmail: '' causes the helper to set process.env['CEO_PRIMARY_EMAIL'] = ''
+    // ceoEmail: '' → findContactBySystemRole returns null → no principal email resolved.
     const { ctx, sendNotificationMock, logWarnMock } = makeCtx({ findExpiredRows: rows, ceoEmail: '' });
 
     const result = await handler.execute(ctx);
 
-    // No notification sent because the email is blank
+    // No notification sent because no principal email could be resolved
     expect(sendNotificationMock).not.toHaveBeenCalled();
 
     // A warning should be emitted about the missing email
     expect(logWarnMock).toHaveBeenCalled();
 
     // Expiry itself still succeeds
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('unreachable');
+    expect(result.data).toEqual({ expired: 1, notified: 0 });
+  });
+
+  it('skips notification but still expires when contactService is absent', async () => {
+    const rows = [makeRow({ id: 1, shortRef: 'high-ref', actionRisk: 'high' })];
+    const handler = new ApprovalExpirySweepHandler();
+    const { ctx, sendNotificationMock, logWarnMock } = makeCtx({ findExpiredRows: rows, withoutContactService: true });
+
+    const result = await handler.execute(ctx);
+
+    // No principal email resolvable without contactService → notification skipped
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalled();
+
+    // Expiry committed regardless
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
     expect(result.data).toEqual({ expired: 1, notified: 0 });

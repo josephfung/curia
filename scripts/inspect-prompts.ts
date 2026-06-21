@@ -74,21 +74,15 @@ async function main(): Promise<void> {
     );
     await profileService.initialize();
 
-    // Look up the CEO's display name the same way index.ts does.
-    // Falls back to 'the executive' if CEO_PRIMARY_EMAIL is unset or the contact
-    // doesn't exist yet (first-run case before ceo-bootstrap has run).
+    // Look up the principal's display name by system_role — the same source of truth
+    // index.ts uses (#1049). Falls back to 'the executive' if no principal contact
+    // exists yet (first-run case before onboarding has been completed).
     let executiveDisplayName = 'the executive';
-    if (config.ceoPrimaryEmail) {
-      const nameResult = await pool.query<{ display_name: string }>(
-        `SELECT c.display_name
-         FROM contacts c
-         JOIN contact_channel_identities ci ON ci.contact_id = c.id
-         WHERE ci.channel = 'email' AND ci.channel_identifier = $1`,
-        [config.ceoPrimaryEmail],
-      );
-      if (nameResult.rows[0]?.display_name) {
-        executiveDisplayName = nameResult.rows[0].display_name;
-      }
+    const nameResult = await pool.query<{ display_name: string }>(
+      `SELECT display_name FROM contacts WHERE system_role = 'principal' LIMIT 1`,
+    );
+    if (nameResult.rows[0]?.display_name) {
+      executiveDisplayName = nameResult.rows[0].display_name;
     }
 
     // ── Agent contact ID ───────────────────────────────────────────────────────

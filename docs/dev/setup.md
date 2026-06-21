@@ -85,8 +85,7 @@ has not been configured and redirects you to `/setup` automatically. This is
 a five-step React form wizard:
 
 1. **About you** — the CEO's name (the principal contact). Auto-skipped if
-   a principal already exists (e.g. you set `CEO_PRIMARY_EMAIL` before first
-   boot).
+   a principal already exists (e.g. from a prior wizard run on this instance).
 2. **Identity** — assistant name, title, optional email signature.
 3. **Tone** — 1–3 baseline tone words + verbosity and directness sliders.
 4. **Posture** — decision-making posture + initial behavioral preferences.
@@ -133,8 +132,9 @@ tiers below name the variables to seed.
 
 > Only the four vault-bootstrap values (`DB_USER`, `DB_PASSWORD`,
 > `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) plus non-secret config (`TIMEZONE`,
-> `CEO_PRIMARY_EMAIL`, etc.) belong in `.env`. Everything else goes through the
-> vault.
+> etc.) belong in `.env`. Everything else goes through the vault. The principal's
+> email is not env config — it's set in the onboarding wizard and lives in the
+> contacts store.
 
 ---
 

@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { ceoPrimaryEmailIsPlaceholder, loadConfig, loadYamlConfig, resolveChannelAccounts, resolveTasksConfig } from './config.js';
+import { loadConfig, loadYamlConfig, resolveChannelAccounts, resolveTasksConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -88,7 +88,7 @@ import { RecoveryNotifier } from './scheduler/recovery-notifier.js';
 import type { DriftConfig } from './scheduler/drift-detector.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
-import { bootstrapCeoContact } from './contacts/ceo-bootstrap.js';
+import { repairPrincipalMetadata } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
 import { ActionLogRepo } from './autonomy/action-log-repo.js';
 import { TaskRepo } from './db/task-repo.js';
@@ -168,17 +168,6 @@ async function main(): Promise<void> {
       'Unhandled promise rejection — process kept alive (see #983)',
     );
   });
-
-  // Surface the `.env.example` placeholder case so it's obvious in logs why
-  // CEO_PRIMARY_EMAIL appears to be ignored. loadConfig() normalized the value
-  // to undefined silently because the logger doesn't exist yet at that point;
-  // warn here once the logger is available.
-  if (ceoPrimaryEmailIsPlaceholder()) {
-    logger.warn(
-      'CEO_PRIMARY_EMAIL is the literal .env.example placeholder ("you@yourdomain.com") — treating as unset. ' +
-        'Comment the line out or set a real address; fresh installs should rely on the /setup wizard to create the principal.',
-    );
-  }
 
   // Compile the security context block from config at startup.
   // runStartupValidation (below) enforces the JSON schema, which requires trust_thresholds
@@ -641,59 +630,64 @@ async function main(): Promise<void> {
     logger.warn({ err }, 'Agent self-identity bootstrap failed — entity_enrichment default=agent will not resolve; coordinator system prompt ${agent_contact_id} will be empty');
   }
 
-  // CEO contact bootstrap — ensures the CEO's primary email contact exists with
-  // status=confirmed and verified=true before the email adapter starts polling.
-  // Without this, the first inbound email from the CEO auto-creates them as
-  // provisional (the extractParticipants default), causing their messages to be held.
-  // Also creates (or backfills) a KG person node so entity context enrichment works
-  // for the CEO. See issue #380.
+  // Principal contact resolution — the single source of truth for principal identity (#1049).
   //
-  // Note: `config.ceoPrimaryEmail` is normalized in loadConfig() so the literal
-  // `.env.example` placeholder `you@yourdomain.com` reads as undefined here — this
-  // block is therefore a no-op for fresh installs that didn't customize that line.
-  let ceoContactId: string | undefined;
-  if (config.ceoPrimaryEmail) {
-    try {
-      const ceoBootstrap = await bootstrapCeoContact(config.ceoPrimaryEmail, 'CEO', pool, logger);
-      // Persist the CEO's contact UUID so PiiRedactor can bypass redaction using a stable
-      // UUID check rather than relying solely on trust_level. UUID is resolved once at startup
-      // from ceoPrimaryEmail and is tamper-proof (unlike trust_level, which has a setter API).
-      ceoContactId = ceoBootstrap.contactId;
-      logger.info({ contactId: ceoBootstrap.contactId, kgNodeId: ceoBootstrap.kgNodeId }, 'CEO identity ready');
-    } catch (err) {
-      // Non-fatal: log and continue. Severity depends on whether the email adapter is active:
-      // - With email configured: the CEO's first message will be held if the contact doesn't
-      //   exist yet — escalate to error so it shows up in log aggregators.
-      // - Without email: no adapter polls, so the risk is deferred and a warn suffices.
-      // A unique constraint violation (23505) indicates inconsistent DB state (e.g. a
-      // channel identity row with no matching contact), not a transient failure — flag it
-      // separately so operators know to inspect contact_channel_identities directly.
-      const pgCode = (err as { code?: string }).code;
-      if (pgCode === '23505') {
-        logger.error(
-          { err, ceoPrimaryEmail: config.ceoPrimaryEmail },
-          'CEO contact bootstrap failed with unique constraint violation — possible inconsistent DB state. Inspect contact_channel_identities for orphaned rows.',
-        );
-      } else if (config.nylasApiKey && config.nylasGrantId) {
-        logger.error(
-          { err, ceoPrimaryEmail: config.ceoPrimaryEmail },
-          'CEO contact bootstrap failed with email adapter active — CEO emails WILL be held if contact does not exist',
-        );
-      } else {
-        logger.warn(
-          { err, ceoPrimaryEmail: config.ceoPrimaryEmail },
-          'CEO contact bootstrap failed — inbound emails from CEO may route in low-trust mode',
-        );
-      }
+  // findContactBySystemRole('principal') replaces the former CEO_PRIMARY_EMAIL env-var
+  // bootstrap. The principal contact is created by the in-app onboarding wizard (#771);
+  // this block only *resolves* it once at startup and derives the runtime identity values
+  // used downstream:
+  //   - principalContact.id  → PiiRedactor bypass (structural UUID match, tamper-proof)
+  //   - principalEmail        → outbound content filter allow-list, CEO notifiers,
+  //                             email adapter, approval notifications
+  //   - principalIdentities   → runtime prompt injection + outbound recipient check
+  //
+  // A missing principal is NOT fatal here: the readiness check below converts it into
+  // setup-required mode so the operator can finish onboarding via the web UI. That keeps
+  // the env-var-unset and fresh-setup paths identical (principalEmail = '', no bypass),
+  // which is exactly the dual-path inconsistency #1049 removes.
+  let principalContact: Contact | null = null;
+  let principalIdentities: ChannelIdentity[] = [];
+  // Empty string when there is no principal or no verified email (fresh setup, Signal-only).
+  // Downstream consumers already treat '' as "absent" — the same contract the old unset
+  // CEO_PRIMARY_EMAIL had.
+  let principalEmail = '';
+  try {
+    principalContact = await contactService.findContactBySystemRole('principal');
+    if (principalContact) {
+      // Self-heal capability metadata (role/system_role/tier/kind) in case an older writer
+      // left the row at migration-055 defaults. Idempotent — a no-op when already canonical.
+      // Preserved from the deleted ceo-bootstrap path. Fatal on failure (repairPrincipalMetadata
+      // rethrows): a mis-tiered principal means trust gates like the PII-redaction bypass may
+      // silently not apply, which is worse than refusing to boot.
+      await repairPrincipalMetadata(principalContact.id, pool, logger);
+
+      const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
+      const allIdentities = withIdentities?.identities ?? [];
+      // Only verified + active identities are authoritative for reachability — stale
+      // (defunct/bounced) addresses must not be presented to agents as live.
+      principalIdentities = allIdentities.filter((id) => id.verified && id.status === 'active');
+
+      // principalEmail: prefer a verified+active email; fall back to any verified email so
+      // operational alerts (suspension/recovery/approval) still have a destination even when
+      // the only known address is flagged bounced/defunct — dropping the alert is worse.
+      const emailIdentity =
+        principalIdentities.find((id) => id.channel === 'email') ??
+        allIdentities.find((id) => id.channel === 'email' && id.verified);
+      principalEmail = emailIdentity?.channelIdentifier ?? '';
+
+      logger.info(
+        { contactId: principalContact.id, kgNodeId: principalContact.kgNodeId, hasEmail: !!principalEmail },
+        'Principal identity resolved',
+      );
+    } else {
+      logger.info('No principal contact found — startup will enter setup-required mode (complete onboarding at /setup).');
     }
-  } else {
-    // No CEO_PRIMARY_EMAIL configured (or it was the .env.example placeholder, which
-    // loadConfig() normalizes to undefined). This is the normal path for fresh
-    // installs post-#771 — the in-app onboarding wizard creates the principal without
-    // an email channel binding; per-channel verification flows attach identities later.
-    // Only operators running the historical email-channel back-compat path need to
-    // set CEO_PRIMARY_EMAIL.
-    logger.info('CEO_PRIMARY_EMAIL not set — CEO contact bootstrap skipped (principal will be created via the onboarding wizard at /setup).');
+  } catch (err) {
+    logger.fatal(
+      { err },
+      'Failed to resolve principal contact — check that migration 035 (add_system_role) has been applied',
+    );
+    process.exit(1);
   }
 
   // Email channel — optional. Supports N named accounts via channel_accounts.email in
@@ -985,14 +979,14 @@ async function main(): Promise<void> {
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
     const systemPromptMarkers = extractIdentityMarkers(officeIdentity);
-    // CEO_PRIMARY_EMAIL is the CEO's email — used to allow their address in outbound
-    // content without triggering the contact-data-leak rule. Must NOT be Curia's
-    // own Nylas address (nylasSelfEmail): using Curia's address here was a bug
-    // that (a) treated the CEO's email as a third-party leak and (b) routed
-    // blocked-content notifications to Curia's inbox instead of the CEO's.
-    const ceoEmail = config.ceoPrimaryEmail ?? '';
+    // The principal's email — used to allow their address in outbound content without
+    // triggering the contact-data-leak rule. Resolved from the principal contact (#1049),
+    // not from config. Must NOT be Curia's own Nylas address (nylasSelfEmail): using
+    // Curia's address here was a bug that (a) treated the CEO's email as a third-party
+    // leak and (b) routed blocked-content notifications to Curia's inbox instead of the CEO's.
+    const ceoEmail = principalEmail;
     if (!ceoEmail) {
-      logger.warn('Outbound content filter initialized without CEO email (CEO_PRIMARY_EMAIL not set) — contact-data-leak rule may produce false positives');
+      logger.warn('Outbound content filter initialized without principal email (no verified principal email on file) — contact-data-leak rule may produce false positives');
     }
     if (systemPromptMarkers.length === 0) {
       logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that office identity has a name and title configured.');
@@ -1125,7 +1119,8 @@ async function main(): Promise<void> {
   // Outbound PII redactor — sits between the agent response and the channel
   // adapter. Strips PII from outbound messages based on channel policy before
   // content validation or delivery. The principal bypass is handled structurally
-  // via ceoContactId UUID match (set below), not a trust-level config field.
+  // via the principal contact UUID match (resolved above via
+  // findContactBySystemRole('principal'), #1049), not a trust-level config field.
   // Config defaults: enabled=true, default='block'.
   //
   // Must be constructed BEFORE OutboundGateway, which receives it as a constructor arg.
@@ -1147,7 +1142,9 @@ async function main(): Promise<void> {
       bus,
       logger,
       extraPatterns, // same patterns used by the inbound scrubber
-      ceoContactId,  // resolved from ceoPrimaryEmail at bootstrap; undefined if bootstrap failed or email not set
+      // Principal bypass: resolved once from findContactBySystemRole('principal') above.
+      // undefined in setup-required mode (no principal yet) — then nothing bypasses redaction.
+      ceoContactId: principalContact?.id,
     });
   } catch (err) {
     logger.fatal({ err }, 'Failed to initialize PiiRedactor — check pii.outbound_redaction config');
@@ -1166,30 +1163,10 @@ async function main(): Promise<void> {
   // TaskRepo — used by task-create, task-list, task-update, task-complete skills.
   const taskRepo = new TaskRepo(pool, bus, logger, config.timezone);
 
-  // Load principal's channel identities for the outbound gateway recipient check.
-  // Cached for the lifetime of the process — restart picks up changes.
-  // Load principal contact reference and cache it for the readiness check below (avoid a redundant DB query).
-  let principalIdentities: ChannelIdentity[] = [];
-  let principalContact: Contact | null = null;
-  try {
-    principalContact = await contactService.findContactBySystemRole('principal');
-    if (principalContact) {
-      const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
-      // Only use verified, active identities. Defunct/bounced addresses remain verified
-      // in the DB but are no longer reachable — presenting them as authoritative in the
-      // runtime prompt would cause agents to send to stale addresses with no fallback.
-      principalIdentities = (withIdentities?.identities ?? []).filter(
-        (id) => id.verified && id.status === 'active',
-      );
-    }
-  } catch (err) {
-    logger.fatal(
-      { err },
-      'Failed to load principal contact — check that migration 035 (add_system_role) has been applied',
-    );
-    process.exit(1);
-  }
-
+  // principalContact + principalIdentities were resolved once near the top of bootstrap
+  // (see the "Principal contact resolution" block above, #1049). They are reused here for
+  // the outbound gateway recipient check and the readiness gate — no redundant DB query.
+  //
   // Note: a missing principal does NOT degrade — the readiness check below
   // converts it into a fatal startup error with a searchable `check: principal-contact`
   // log line and aborts boot. No separate warn here; that would duplicate the
@@ -1389,7 +1366,9 @@ async function main(): Promise<void> {
         pollingIntervalMs: config.nylasPollingIntervalMs,
         selfEmail: account.selfEmail,
         excludedSenderEmails: account.excludedSenderEmails,
-        ceoEmail: config.ceoPrimaryEmail,
+        // Principal's email, resolved from findContactBySystemRole('principal') (#1049).
+        // undefined when unknown — EmailAdapter treats it as optional.
+        ceoEmail: principalEmail || undefined,
         contactCreationMaxPerMessage: yamlConfig.contact_creation_limits?.max_per_message ?? 10,
         contactCreationMaxPerHour: yamlConfig.contact_creation_limits?.max_per_hour ?? 100,
         timezone: config.timezone,
@@ -1516,38 +1495,38 @@ async function main(): Promise<void> {
 
   // SuspensionNotifier — emails the CEO when a scheduled job is auto-suspended.
   // Bypasses the LLM pipeline: notifies even when Anthropic is the thing that's down.
-  // Skipped (with a warning) if outboundGateway or ceoPrimaryEmail is absent.
-  if (outboundGateway && config.ceoPrimaryEmail) {
+  // Skipped (with a warning) if outboundGateway or the principal's email is absent.
+  if (outboundGateway && principalEmail) {
     const suspensionNotifier = new SuspensionNotifier({
       bus,
       outboundGateway,
-      ceoEmail: config.ceoPrimaryEmail,
+      ceoEmail: principalEmail,
       logger,
     });
     suspensionNotifier.register();
   } else {
     logger.warn(
-      { hasGateway: !!outboundGateway, hasCeoEmail: !!config.ceoPrimaryEmail },
-      'SuspensionNotifier not registered — outboundGateway or ceoPrimaryEmail absent; suspended jobs will not trigger CEO email alerts',
+      { hasGateway: !!outboundGateway, hasCeoEmail: !!principalEmail },
+      'SuspensionNotifier not registered — outboundGateway or principal email absent; suspended jobs will not trigger CEO email alerts',
     );
   }
 
   // RecoveryNotifier — emails the CEO when the watchdog auto-recovers a stuck job.
   // Bypasses the LLM pipeline for the same reason as SuspensionNotifier: the LLM
   // may be the reason the job is stuck in the first place.
-  // Skipped (with a warning) if outboundGateway or ceoPrimaryEmail is absent.
-  if (outboundGateway && config.ceoPrimaryEmail) {
+  // Skipped (with a warning) if outboundGateway or the principal's email is absent.
+  if (outboundGateway && principalEmail) {
     const recoveryNotifier = new RecoveryNotifier({
       bus,
       outboundGateway,
-      ceoEmail: config.ceoPrimaryEmail,
+      ceoEmail: principalEmail,
       logger,
     });
     recoveryNotifier.register();
   } else {
     logger.warn(
-      { hasGateway: !!outboundGateway, hasCeoEmail: !!config.ceoPrimaryEmail },
-      'RecoveryNotifier not registered — outboundGateway or ceoPrimaryEmail absent; recovered stuck jobs will not trigger CEO email alerts',
+      { hasGateway: !!outboundGateway, hasCeoEmail: !!principalEmail },
+      'RecoveryNotifier not registered — outboundGateway or principal email absent; recovered stuck jobs will not trigger CEO email alerts',
     );
   }
 
@@ -1557,7 +1536,7 @@ async function main(): Promise<void> {
   // outboundGateway and ceoEmail are optional: if absent, the row is created but
   // notification is skipped (CEO will see it in the next digest, #429).
   const approvalTrigger = new ApprovalTriggerService(
-    actionLogRepo, outboundGateway, logger, config.ceoPrimaryEmail || undefined,
+    actionLogRepo, outboundGateway, logger, principalEmail || undefined,
   );
 
   // Temp file store — secure tmpfs-backed storage for binary attachment handoff.

@@ -23,7 +23,6 @@ function baseConfig(): Config {
     nylasGrantId: undefined,
     nylasPollingIntervalMs: 30000,
     nylasSelfEmail: '',
-    ceoPrimaryEmail: undefined,
     ceoSignalNumber: undefined,
     signalSocketPath: undefined,
     signalPhoneNumber: undefined,

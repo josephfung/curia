@@ -4,7 +4,7 @@ export interface WizardState {
   // Step 1 — About you. Captured separately from the assistant identity below
   // and POSTed to /api/setup/principal so the principal contact exists before
   // the rest of the form is saved. Auto-skipped when a principal is already
-  // present (e.g. CEO_PRIMARY_EMAIL deployments).
+  // present (e.g. from a prior wizard run on this instance).
   principalName: string;
   // Steps 2–5 — assistant identity, tone, posture, review.
   name: string;

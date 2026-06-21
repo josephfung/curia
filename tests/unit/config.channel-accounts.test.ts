@@ -23,7 +23,6 @@ const baseConfig: Config = {
   nylasGrantId: undefined,
   nylasPollingIntervalMs: 30000,
   nylasSelfEmail: '',
-  ceoPrimaryEmail: undefined,
   signalPhoneNumber: undefined,
   signalSocketPath: undefined,
   tavilyApiKey: undefined,
