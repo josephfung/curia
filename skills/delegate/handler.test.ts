@@ -135,6 +135,22 @@ describe('DelegateHandler resume_token decode', () => {
     expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
   });
 
+  it('rejects a resume_token with an empty agent field (cross-agent guard bypass via falsy agent)', async () => {
+    const { bus, published } = makeBus();
+    // Encode a token with agent: "" — decodeResumeToken accepts it (validates only typeof),
+    // so the handler's strict-equality guard must reject it rather than letting it through via
+    // the old `payload.agent && payload.agent !== agent` falsy-bypass.
+    const resume_token = Buffer.from(
+      JSON.stringify({ v: 1, agent: '', original_task: 'orig task', context: 'progress' }),
+    ).toString('base64');
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, { input: { agent: 'research-analyst', task: 'continue', resume_token } }),
+    );
+    if (result.success) throw new Error('expected delegate to reject an empty-agent resume_token');
+    expect(result.error).toMatch(/empty agent field|corrupted/i);
+    expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
+  });
+
   it('rejects a resume_token whose required field is an empty string', async () => {
     const { bus, published } = makeBus();
     // Valid base64/JSON with the right keys, but original_task is empty — the shared decode accepts
