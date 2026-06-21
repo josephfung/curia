@@ -104,6 +104,7 @@ import { SecretCaptureService } from './secrets/secret-capture-service.js';
 import { SecretCaptureResumeSubscriber } from './secrets/secret-capture-resume-subscriber.js';
 import { channelCredentialKeys } from './channels/http/routes/vault.js';
 import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
+import { applyChannelVaultSecrets } from './channels/apply-channel-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
 import type { DecayConfig } from './memory/dream-engine.js';
@@ -311,6 +312,11 @@ async function main(): Promise<void> {
   // with a structured fatal line to match the migration/encryption-key blocks above.
   try {
     await applyVaultSecrets(config, secretsService, logger);
+    // Overlay channel-scoped vault creds (channel.email.* / channel.signal.*, written by the
+    // Channels UI) onto config so the email/signal adapters boot from console-configured
+    // creds. Same fatal-on-error contract as applyVaultSecrets. Must run before
+    // resolveChannelAccounts and adapter/gateway construction below. (#964)
+    await applyChannelVaultSecrets(config, secretsService, process.env, logger);
   } catch (err) {
     logger.fatal({ err }, 'Failed to resolve bootstrap secrets from vault');
     process.exit(1);
