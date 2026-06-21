@@ -892,6 +892,106 @@ describe('Scheduler', () => {
         expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
       });
     });
+
+    // Regression: task-bound wake jobs (created via wake_at / enqueueTaskWake) carry the
+    // contentless envelope `{"type":"task-wake"}` as their payload — the real intent lives
+    // in intent_anchor and the linked task row, not the payload. Comparing the rich intent
+    // against the empty envelope made the detector report drift on EVERY such job (#1064).
+    // The drift check must be skipped entirely for these jobs, and the job completed normally.
+    it('skips drift check for task-wake envelope payloads and completes normally', async () => {
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      // A task-bound wake job: agentTaskId + intentAnchor set, but payload is the
+      // contentless wake envelope.
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: 'task-99',
+        intentAnchor: "Debrief the CEO's meeting 'Lisa' — prompt at meeting end.",
+        taskPayload: { type: 'task-wake', task_id: 'task-99' },
+        lastRunSummary: null,
+      });
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-wake',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'Debrief prompt sent.' },
+      });
+
+      await vi.waitFor(() => {
+        // No drift check, no pause — the job must reach terminal completion.
+        expect(driftDetector.check).not.toHaveBeenCalled();
+        expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith(
+          'job-1',
+          true,
+          undefined,
+          'Debrief prompt sent.',
+        );
+      });
+    });
+
+    // Regression: the drift-pause notification used to embed the original intent and the raw
+    // payload verbatim, so the coordinator re-interpreted it as an actionable instruction and
+    // re-sent the original outbound message (#1064). The notification must be review-only and
+    // must NOT carry the re-executable intent or payload.
+    it('drift-pause notification is review-only and carries no re-executable intent', async () => {
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      const intentAnchor = "Debrief the CEO's meeting 'Lisa' — prompt at meeting end.";
+      const driftVerdict = { drifted: true, reason: 'Generic wake with no meeting context.', confidence: 'high' as const };
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: 'task-99',
+        intentAnchor,
+        taskPayload: { skill: 'web-search', query: 'AI safety' },
+        lastRunSummary: null,
+      });
+      driftDetector.check.mockResolvedValueOnce(driftVerdict);
+      driftDetector.shouldPause.mockReturnValueOnce(true);
+      driftSchedulerService.pauseJobForDrift.mockResolvedValueOnce(undefined);
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-notify',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
+      });
+
+      await vi.waitFor(() => {
+        expect(driftSchedulerService.pauseJobForDrift).toHaveBeenCalledWith('job-1');
+      });
+
+      const notifyCall = (driftBus.publish.mock.calls as [string, { type: string; payload: { agentId: string; content: string } }][])
+        .find(([, ev]) => ev.type === 'agent.task' && ev.payload.agentId === 'coordinator');
+      expect(notifyCall).toBeDefined();
+      const content = notifyCall![1].payload.content;
+
+      // Must NOT echo the re-executable original intent or the raw payload.
+      expect(content).not.toContain(intentAnchor);
+      expect(content).not.toContain('web-search');
+      // Must be framed as review-only and reference the paused job + reason.
+      expect(content).toContain('job-1');
+      expect(content).toContain(driftVerdict.reason);
+      expect(content.toLowerCase()).toContain('review');
+    });
   });
 
   // -- loadDeclarativeJobs --
