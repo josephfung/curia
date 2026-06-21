@@ -70,8 +70,9 @@ async function main(): Promise<void> {
     const nameResult = await pool.query<{ display_name: string }>(
       `SELECT display_name FROM contacts WHERE system_role = 'principal' LIMIT 1`,
     );
-    if (nameResult.rows[0]?.display_name) {
-      executiveDisplayName = nameResult.rows[0].display_name;
+    const principalRow = nameResult.rows[0];
+    if (principalRow?.display_name) {
+      executiveDisplayName = principalRow.display_name;
     } else {
       // Warn rather than fail — name is cosmetic; a fallback won't invalidate red-team results.
       process.stderr.write(

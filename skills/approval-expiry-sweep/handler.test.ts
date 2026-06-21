@@ -49,6 +49,9 @@ function makeCtx(overrides: {
   // The principal's resolved email. '' (or null) simulates no verified principal email
   // on file — the handler resolves this via contactService.findContactBySystemRole (#1049).
   ceoEmail?: string;
+  // Status of the principal's email identity. The handler only uses verified + ACTIVE
+  // emails, so a non-active status should resolve to "no email".
+  emailStatus?: 'active' | 'defunct' | 'bounced';
   withoutOutboundGateway?: boolean;
   // Simulate ctx.contactService being entirely unavailable.
   withoutContactService?: boolean;
@@ -58,6 +61,7 @@ function makeCtx(overrides: {
     expireRowsResult = findExpiredRows,
     sendNotificationResult = true,
     ceoEmail = 'ceo@example.com',
+    emailStatus = 'active',
     withoutOutboundGateway = false,
     withoutContactService = false,
   } = overrides;
@@ -80,7 +84,7 @@ function makeCtx(overrides: {
     .mockResolvedValue(ceoEmail ? { id: principalContactId } : null);
   const getContactWithIdentitiesMock = vi.fn().mockResolvedValue(
     ceoEmail
-      ? { identities: [{ channel: 'email', channelIdentifier: ceoEmail, verified: true, status: 'active' }] }
+      ? { identities: [{ channel: 'email', channelIdentifier: ceoEmail, verified: true, status: emailStatus }] }
       : { identities: [] },
   );
 
@@ -234,6 +238,38 @@ describe('ApprovalExpirySweepHandler', () => {
     expect(logWarnMock).toHaveBeenCalled();
 
     // Expiry itself still succeeds
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('unreachable');
+    expect(result.data).toEqual({ expired: 1, notified: 0 });
+  });
+
+  it('skips notification when the principal email is verified but not active (defunct/bounced)', async () => {
+    const rows = [makeRow({ id: 1, shortRef: 'high-ref', actionRisk: 'high' })];
+    const handler = new ApprovalExpirySweepHandler();
+    // A reassigned/dead address must not receive CEO notifications — active-only (#1049).
+    const { ctx, sendNotificationMock, logWarnMock } = makeCtx({ findExpiredRows: rows, emailStatus: 'bounced' });
+
+    const result = await handler.execute(ctx);
+
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('unreachable');
+    expect(result.data).toEqual({ expired: 1, notified: 0 });
+  });
+
+  it('skips notification but still succeeds when the principal lookup throws (non-fatal)', async () => {
+    const rows = [makeRow({ id: 1, shortRef: 'high-ref', actionRisk: 'high' })];
+    const handler = new ApprovalExpirySweepHandler();
+    const { ctx, sendNotificationMock, findContactBySystemRoleMock, logWarnMock } = makeCtx({ findExpiredRows: rows });
+    // Transient contacts-layer read error on the post-expiry notification path.
+    findContactBySystemRoleMock.mockRejectedValue(new Error('DB read error'));
+
+    const result = await handler.execute(ctx);
+
+    // Expiry already committed → the lookup failure must NOT fail the sweep (no retry churn).
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalled();
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
     expect(result.data).toEqual({ expired: 1, notified: 0 });
