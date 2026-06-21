@@ -12,10 +12,12 @@ export class ContextBridgeClearHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     const input = ctx.input as { subjects?: unknown; subject?: unknown };
 
-    // Accept either `subjects: string[]` or a single `subject: string`.
-    const raw: unknown[] = Array.isArray(input.subjects)
+    // Accept either `subjects: string[]` or a single `subject: string`. Prefer
+    // `subjects` only when it actually has entries — an empty `subjects` array
+    // must not shadow a provided single `subject` (e.g. `{ subjects: [], subject: "X" }`).
+    const raw: unknown[] = Array.isArray(input.subjects) && input.subjects.length > 0
       ? input.subjects
-      : input.subject != null
+      : typeof input.subject === 'string'
         ? [input.subject]
         : [];
 

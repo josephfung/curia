@@ -71,9 +71,23 @@ describeIf('clearBySubjects across the injection window (#975)', () => {
       [`conv-${runId}`],
     );
     expect(Number(totalActive.rows[0]!.n)).toBe(12);
-    const active = await service.getActive(10);
-    const mineActive = active.filter((e) => e.conversationId === `conv-${runId}`);
-    expect(mineActive.length).toBeLessThan(12); // some of this run's entries fall outside the window
+
+    // Prove a TARGETED (to-be-cleared) subject has at least one active row OUTSIDE
+    // the bounded injection window — not just any row. "Sean Brownlee" is registered
+    // first, so 11 of this run's entries are newer than its oldest row; that row is
+    // therefore always beyond getActive's 10-row DESC cutoff, regardless of other
+    // rows in a shared DB (they only push it further out). If clearBySubjects naively
+    // released only what getActive surfaced, that out-of-window Sean row would survive
+    // and fail the post-clear DB check below — which is the #975 regression this guards.
+    const visibleIds = new Set((await service.getActive(10)).map((e) => e.id));
+    const seanActive = await pool.query<{ id: string }>(
+      `SELECT id FROM outbound_context
+        WHERE conversation_id = $1 AND released = false
+          AND lower(metadata->>'subject') = lower($2)`,
+      [`conv-${runId}`, `Sean Brownlee ${runId}`],
+    );
+    const seanHasOutOfWindowRow = seanActive.rows.some((r) => !visibleIds.has(r.id));
+    expect(seanHasOutOfWindowRow).toBe(true);
 
     const result = await service.clearBySubjects([
       `Sean Brownlee ${runId}`,
