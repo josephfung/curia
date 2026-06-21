@@ -505,11 +505,18 @@ export class Scheduler {
                   // message to the principal (#1064). Reference the job by id + reason only,
                   // and explicitly instruct the coordinator not to act on the paused task. The
                   // full intent/payload remains on the schedule.drift_paused audit event above.
+                  //
+                  // verdict.reason is LLM-generated free text. Normalise it before embedding so
+                  // it stays a single short sentence and can't smuggle imperative multi-line
+                  // phrasing back into the coordinator's instructions (it's constrained to one
+                  // sentence by the detector prompt, but defend at the boundary anyway).
+                  const safeReason = verdict.reason.replace(/[\r\n]+/g, ' ').trim().slice(0, 280);
+
                   const notifyContent = [
                     `A scheduled job was automatically paused for review because its behaviour may have drifted from its original goal.`,
                     ``,
                     `Job: ${jobId}`,
-                    `Reason: ${verdict.reason} (confidence: ${verdict.confidence})`,
+                    `Reason: ${safeReason} (confidence: ${verdict.confidence})`,
                     ``,
                     `This is a review notice only — do not re-run, re-send, or otherwise act on the paused task. Let the principal know the job is paused and awaiting their review; they can resume it with corrected instructions or cancel it.`,
                   ].join('\n');
