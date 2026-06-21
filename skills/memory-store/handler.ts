@@ -341,13 +341,30 @@ export class MemoryStoreHandler implements SkillHandler {
           // the `if (result.stored)` block above. StoreFactResult is not a discriminated
           // union (stored and action are independent fields), so TypeScript cannot narrow
           // result.action through the stored boolean check — these cases are required to
-          // keep the exhaustive switch type-correct.
-          throw new Error(`memory-store: unreachable — ${result.action} must be handled in the stored=true branch`);
+          // keep the exhaustive switch type-correct. Per the skill contract (handlers
+          // resolve to a SkillResult, never throw), surface the impossible state as a
+          // logged failure rather than a thrown Error.
+          ctx.log.error(
+            { entity, field, action: result.action },
+            'memory-store: impossible storeFact state (stored-only action reached the stored=false branch)',
+          );
+          return {
+            success: false,
+            error: `Internal invariant violation: storeFact action "${result.action}" requires stored=true`,
+          };
         default: {
-          // Exhaustive check — TypeScript will error here if a new action variant is added
-          // to StoreFactResult without a corresponding case above.
+          // Exhaustive compile-time check — TypeScript errors on the `never` assignment if a
+          // new action variant is added to StoreFactResult without a case above. At runtime we
+          // return a logged failure rather than throw, per the skill contract.
           const _exhaustive: never = result.action;
-          throw new Error(`memory-store: unhandled storeFact action: ${String(_exhaustive)}`);
+          ctx.log.error(
+            { entity, field, action: String(_exhaustive) },
+            'memory-store: unhandled storeFact action',
+          );
+          return {
+            success: false,
+            error: `memory-store: unhandled storeFact action: ${String(_exhaustive)}`,
+          };
         }
       }
     } catch (err) {
