@@ -616,19 +616,28 @@ git commit -m "test: integration coverage for clear-by-subject across window (#9
 
 ---
 
-### Task 4: Producer key, coordinator wiring, versions, CHANGELOG
+### Task 4: Producer key, agent wiring, versions, CHANGELOG
 
-Stamp the subject key on debrief sends, teach the coordinator to use the new skill and report from its result, pin the skill, bump versions, and update the changelog. This task is config/prompt only — verified by typecheck and the app's config loader at startup (no new unit test).
+Stamp the subject key on debrief sends, teach the coordinator to use the new skill and report strictly from its result, wire meeting-debrief to self-clear its own entries when a debrief closes, pin the skill to all four agents (access is controlled by pinning — the new skill carries no `allowed_callers`, matching the #1052 convention), bump versions, and update the changelog. This task is config/prompt + a one-line manifest edit — verified by typecheck and the app's config loader at startup (no new unit test).
+
+**Access-control note:** `context-bridge-clear` matches only entries that carry a `metadata.subject` key, and today only `meeting-debrief` stamps that key. So even though the skill is pinned to `contacts` and `ceo-inbox`, it is currently inert for their own entries (they have none with a subject) — pinning future-proofs them and is harmless. `meeting-debrief`'s entries *are* subject-keyed, so it can self-clear them.
 
 **Files:**
+- Modify: `skills/context-bridge-clear/skill.json`
 - Modify: `agents/meeting-debrief.yaml`
 - Modify: `agents/coordinator.yaml`
+- Modify: `agents/contacts.yaml`
+- Modify: `agents/ceo-inbox.yaml`
 - Modify: `CHANGELOG.md`
 
 **Interfaces:**
 - Consumes: the `context-bridge-clear` skill (Task 2).
 
-- [ ] **Step 1: Add the subject key to the debrief Bullpen request format**
+- [ ] **Step 1: Remove `allowed_callers` from the manifest**
+
+In `skills/context-bridge-clear/skill.json`, delete the `"allowed_callers": ["coordinator"],` line. Access is now controlled solely by pinning (Steps 4, 6-8), consistent with the #1052 decision that removed `allowed_callers` from `context-bridge-release` and made pinning the access mechanism for this skill family. Leave every other field unchanged.
+
+- [ ] **Step 2: Add the subject key to the debrief Bullpen request format**
 
 In `agents/meeting-debrief.yaml`, in the `### Bullpen request format` block (the `context_bridge` JSON inside the fenced code, ~lines 268-274), add the `metadata` field. Replace:
 
@@ -655,13 +664,54 @@ with:
   }
 ```
 
-(Step 7's reminder reuses "the same request format as Step 6", so this single block covers both the prompt and the reminder.)
+(Step 7's reminder reuses "the same request format as Step 6", so this single block covers both the prompt and the reminder. The `subject` must be the exact `[meeting title]` string — it is the key meeting-debrief and the coordinator both clear by.)
 
-- [ ] **Step 2: Bump the meeting-debrief version**
+- [ ] **Step 3: Wire meeting-debrief to self-clear when a debrief closes**
 
-In `agents/meeting-debrief.yaml` line 2, change `version: "0.1.0"` to `version: "0.2.0"` (new structured field carried on every debrief send → minor bump).
+In `agents/meeting-debrief.yaml`, in `## Step D5: Complete the debrief task`, insert a self-clear instruction before the closing `The debrief is now closed.` line. Replace:
 
-- [ ] **Step 3: Add the clear rule to the coordinator prompt**
+```
+  Call `task-complete` with the debrief `task_id` and a brief completion_note
+  summarizing what was set up. This auto-cancels the task's pending
+  reminder/expiry wake-up. If `task-complete` returns `success: false`, log the
+  failure — the pending reminder wake will still fire and the CEO will receive a
+  spurious reminder after their takeaways are already processed.
+  The debrief is now closed.
+```
+
+with:
+
+```
+  Call `task-complete` with the debrief `task_id` and a brief completion_note
+  summarizing what was set up. This auto-cancels the task's pending
+  reminder/expiry wake-up. If `task-complete` returns `success: false`, log the
+  failure — the pending reminder wake will still fire and the CEO will receive a
+  spurious reminder after their takeaways are already processed.
+
+  Then release this meeting's outbound-context entries so no further reply
+  nudges surface for it. Call `context-bridge-clear` with `subjects` set to the
+  single meeting title — the exact `[meeting title]` used in the debrief prompt,
+  e.g. `{ "subjects": ["Acme Q3 sync"] }`. This releases every active entry for
+  that meeting at once (the prompt AND the reminder), matched by subject, so you
+  do not need their entry_ids. Clear ONLY the meeting you just closed — never
+  another meeting's title. A release failure here is non-critical: log it and
+  move on (the coordinator's sweep-on-close is a backstop and entries expire on
+  their TTL).
+  The debrief is now closed.
+```
+
+- [ ] **Step 4: Pin the skill to meeting-debrief + bump its version**
+
+In `agents/meeting-debrief.yaml` `pinned_skills` (ends with `- config-store`, ~line 38), append:
+
+```
+  # Outbound context — self-clear this meeting's entries when a debrief closes
+  - context-bridge-clear
+```
+
+Then change `version: "0.1.0"` (line 2) to `version: "0.2.0"` (new subject field on every send + new pinned skill + self-clear behavior → minor bump).
+
+- [ ] **Step 5: Add the clear rule to the coordinator prompt**
 
 In `agents/coordinator.yaml`, in the `### Active outbound context` section, immediately after the `- **Sweep on close.** ...` bullet (which ends ~line 171), add a new bullet:
 
@@ -679,42 +729,62 @@ In `agents/coordinator.yaml`, in the `### Active outbound context` section, imme
     `context-bridge-release` calls for a multi-item clear.
 ```
 
-- [ ] **Step 4: Pin the new skill to the coordinator**
+- [ ] **Step 6: Pin the skill to the coordinator + bump its version**
 
-In `agents/coordinator.yaml`, in `pinned_skills`, add `context-bridge-clear` immediately after the `- context-bridge-release` line (~line 585):
+In `agents/coordinator.yaml` `pinned_skills`, add `context-bridge-clear` immediately after the `- context-bridge-release` line (~line 585):
 
 ```
   - context-bridge-release
   - context-bridge-clear
 ```
 
-- [ ] **Step 5: Bump the coordinator version**
+Then change `version: "0.8.5"` (line 2) to `version: "0.9.0"` (new pinned skill + clear rule → minor bump).
 
-In `agents/coordinator.yaml` line 2, change `version: "0.8.5"` to `version: "0.9.0"` (new pinned skill + capability → minor bump).
+- [ ] **Step 7: Pin the skill to contacts + bump its version**
 
-- [ ] **Step 6: Update CHANGELOG**
+In `agents/contacts.yaml` `pinned_skills`, add `context-bridge-clear` immediately after the `- context-bridge-release` line (~line 345):
+
+```
+  - context-bridge-release
+  - context-bridge-clear
+```
+
+Then change `version: "0.8.0"` (line 3, the `version:` field) to `version: "0.9.0"` (new pinned skill → minor bump). Do NOT add any prompt instruction for contacts — pin-only (inert until contacts entries are subject-keyed).
+
+- [ ] **Step 8: Pin the skill to ceo-inbox + bump its version**
+
+In `agents/ceo-inbox.yaml` `pinned_skills`, add `context-bridge-clear` immediately after the `- context-bridge-release` line (~line 43):
+
+```
+  - context-bridge-release
+  - context-bridge-clear
+```
+
+Then change `version: "0.9.0"` (the `version:` field) to `version: "0.10.0"` (new pinned skill → minor bump). Do NOT add any prompt instruction for ceo-inbox — pin-only.
+
+- [ ] **Step 9: Update CHANGELOG**
 
 In `CHANGELOG.md`, under `## [Unreleased]`, add under a `### Fixed` section (create it if absent):
 
 ```
-- **Debrief clear** — "clear meeting X" now releases *all* active outbound-context entries for each named meeting via the new coordinator-only `context-bridge-clear` skill, and the coordinator confirms from what was actually released (surfacing any names it couldn't match) instead of reporting blanket success. meeting-debrief now stamps a `{subject, eventId}` key on every debrief send. (#975)
+- **Debrief clear** — "clear meeting X" now releases *all* active outbound-context entries for each named meeting via the new `context-bridge-clear` skill (matches by meeting subject across the whole active table, not just the injected window) and confirms from what was actually released, surfacing any names it couldn't match instead of reporting blanket success. meeting-debrief stamps a `{subject, eventId}` key on every debrief send and self-clears both prompt and reminder when a debrief closes. `context-bridge-clear` is pinned to coordinator, contacts, ceo-inbox, and meeting-debrief. (#975)
 ```
 
-- [ ] **Step 7: Typecheck**
+- [ ] **Step 10: Typecheck**
 
 Run: `pnpm run typecheck`
 Expected: no errors (no `.ts` changed here, but confirms nothing regressed).
 
-- [ ] **Step 8: Run the full unit suite**
+- [ ] **Step 11: Run the full unit suite**
 
 Run: `pnpm test`
-Expected: PASS (integration tests skip without `DATABASE_URL`). Confirm no regressions in `outbound-context`, `context-bridge`, and skill-loader suites.
+Expected: PASS (integration tests skip without `DATABASE_URL`). Confirm no regressions in `outbound-context`, `context-bridge`, and skill-loader suites. The skill-loader cross-validates pinned skill names against manifests, so a typo in a `pinned_skills` entry will surface here.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add agents/meeting-debrief.yaml agents/coordinator.yaml CHANGELOG.md
-git commit -m "feat: wire context-bridge-clear into coordinator + debrief subject key (#975)"
+git add skills/context-bridge-clear/skill.json agents/meeting-debrief.yaml agents/coordinator.yaml agents/contacts.yaml agents/ceo-inbox.yaml CHANGELOG.md
+git commit -m "feat: wire context-bridge-clear into agents + debrief subject key (#975)"
 ```
 
 ---
@@ -725,9 +795,11 @@ git commit -m "feat: wire context-bridge-clear into coordinator + debrief subjec
 - Producer stamps `{subject, eventId}` → Task 4 Step 1. ✓
 - `clearBySubjects` conversation-agnostic, exact ci match, `{totalReleased, perSubject, unmatched}` → Task 1. ✓
 - Capability + scoped delegation → Task 1 Steps 4, 6. ✓
-- New coordinator-only `context-bridge-clear` skill, grounded result, errors → Task 2. ✓
-- Coordinator reports from result + surfaces unmatched; not blanket success → Task 4 Step 3. ✓
-- Pin skill + version bumps → Task 4 Steps 2, 4, 5. ✓
+- New `context-bridge-clear` skill (access via pinning, no `allowed_callers`), grounded result, errors → Task 2 + Task 4 Step 1. ✓
+- Coordinator reports from result + surfaces unmatched; not blanket success → Task 4 Step 5. ✓
+- meeting-debrief self-clears its own entries on debrief close → Task 4 Step 3. ✓
+- Pin skill to coordinator/contacts/ceo-inbox/meeting-debrief + version bumps → Task 4 Steps 4, 6, 7, 8. ✓
+- `context-bridge-release` retained as the precise single-entry self-sweep primitive (not deprecated). ✓
 - Tests: store (window scenario), skill, integration → Tasks 1, 2, 3. ✓
 - CHANGELOG → Task 4 Step 6. ✓
 - Acceptance criteria 1-4 all map to tasks. ✓
