@@ -155,6 +155,105 @@ describe('Scheduler task-bound dispatch integration', () => {
     expect(coordinatorLlm.chat).not.toHaveBeenCalled();
   });
 
+  // Repro for #1064 (the "Lisa" meeting-debrief): a task-wake job carries the contentless
+  // `{"type":"task-wake"}` payload but a rich intent_anchor. Before the fix, the drift detector
+  // compared the two, returned drifted:true/high, and the job was hard-paused — and the
+  // drift-pause notification triggered a SECOND outbound to the coordinator. After the fix the
+  // wake is excluded from drift detection: it ends in terminal completion, and the specialist's
+  // single fire is the ONLY outbound (no drift-pause notify to the coordinator).
+  it('task-wake job with a drift detector present completes (not paused) with exactly one outbound', async () => {
+    const logger = createLogger('silent');
+    const bus = new EventBus(logger);
+    const schedulerService = mockSchedulerService();
+
+    // Capture every agent.task event published to the bus (specialist fire + any drift notify).
+    const agentTaskEvents: Array<{ agentId: string }> = [];
+    bus.subscribe('agent.task', 'system', (event) => {
+      const e = event as { payload: { agentId: string } };
+      agentTaskEvents.push({ agentId: e.payload.agentId });
+    });
+
+    const specialistLlm: LLMProvider = {
+      id: 'mock-specialist',
+      chat: vi.fn().mockResolvedValue({
+        type: 'text' as const,
+        content: 'Debrief prompt sent.',
+        usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      }),
+    };
+    new AgentRuntime({
+      agentId: 'meeting-debrief',
+      systemPrompt: 'You process meeting debriefs.',
+      provider: specialistLlm,
+      bus,
+      logger,
+    }).register();
+
+    // Coordinator is a canary: it must receive NO drift-pause notification.
+    const coordinatorLlm: LLMProvider = { id: 'mock-coordinator', chat: vi.fn() };
+    new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are the coordinator.',
+      provider: coordinatorLlm,
+      bus,
+      logger,
+    }).register();
+
+    schedulerService.getJob.mockResolvedValue({
+      id: 'job-task-wake-1',
+      agentId: 'meeting-debrief',
+      agentTaskId: 'task-abc-123',
+      intentAnchor: 'Follow up with board on Q3 results',
+      taskPayload: { type: 'task-wake' },
+      lastRunSummary: null,
+    });
+
+    // A drift detector that WOULD flag drift if it were ever consulted — proving the wake
+    // path bypasses it rather than relying on the verdict happening to be benign.
+    const driftDetector = {
+      checkEveryNBursts: 1,
+      check: vi.fn().mockResolvedValue({ drifted: true, reason: 'No meeting context.', confidence: 'high' }),
+      shouldPause: vi.fn().mockReturnValue(true),
+    };
+
+    const pool = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [fakeTaskWakeRow()] })  // SELECT due jobs
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),     // UPDATE claim
+    };
+
+    const scheduler = new Scheduler({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      pool: pool as any,
+      bus,
+      logger,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      schedulerService: schedulerService as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      driftDetector: driftDetector as any,
+    });
+
+    scheduler.start();
+    await scheduler.pollDueJobs();
+
+    await vi.waitFor(() => {
+      expect(schedulerService.completeJobRun).toHaveBeenCalled();
+    });
+
+    scheduler.stop();
+
+    // Terminal completion, not a drift pause.
+    expect(driftDetector.check).not.toHaveBeenCalled();
+    expect(schedulerService.pauseJobForDrift).not.toHaveBeenCalled();
+    expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-task-wake-1', true, undefined, 'Debrief prompt sent.');
+
+    // Exactly one outbound: the specialist fire. No drift-pause notify to the coordinator.
+    expect(agentTaskEvents).toHaveLength(1);
+    expect(agentTaskEvents[0]!.agentId).toBe('meeting-debrief');
+    expect(coordinatorLlm.chat).not.toHaveBeenCalled();
+  });
+
   it('falls back to coordinator when agent_id is coordinator (CEO-created task with no specialist)', async () => {
     const logger = createLogger('silent');
     const bus = new EventBus(logger);

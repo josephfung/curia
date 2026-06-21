@@ -79,6 +79,16 @@ export function computeRecoveryTimeout(expectedDurationSeconds: number): number 
   );
 }
 
+/**
+ * True when a job's payload is the contentless wake envelope `{"type":"task-wake"}`
+ * produced by wake_at / SchedulerService.enqueueTaskWake. Such payloads carry no task
+ * description (the real intent lives in intent_anchor and the linked task row), so they
+ * must be excluded from drift detection — see the guard in handleCompletion (#1064).
+ */
+function isTaskWakePayload(payload: Record<string, unknown>): boolean {
+  return payload['type'] === 'task-wake';
+}
+
 export interface SchedulerConfig {
   pool: Pool;
   bus: EventBus;
@@ -440,7 +450,14 @@ export class Scheduler {
       if (success && this.driftDetector) {
         const job = await this.schedulerService.getJob(jobId);
 
-        if (job?.agentTaskId && job.intentAnchor) {
+        // Skip drift detection for task-bound wake jobs. These are created via wake_at /
+        // enqueueTaskWake and carry the contentless envelope `{"type":"task-wake"}` as their
+        // payload — the real task context lives in intent_anchor and the linked task row, not
+        // the payload. Feeding the rich intent vs. the empty envelope to the detector made it
+        // report drift on every such job, hard-pausing healthy meeting-debriefs/reminders and
+        // triggering a duplicate outbound send via the drift-pause notification (#1064). A
+        // one-shot wake also cannot meaningfully "drift" — it fires exactly once.
+        if (job?.agentTaskId && job.intentAnchor && !isTaskWakePayload(job.taskPayload)) {
           // Enforce checkEveryNBursts: only check on the Nth burst.
           const burstCount = (this.burstCounts.get(jobId) ?? 0) + 1;
           this.burstCounts.set(jobId, burstCount);
@@ -481,16 +498,20 @@ export class Scheduler {
                   await this.bus.publish('system', driftEvent);
 
                   // Notify the CEO via the coordinator (same pattern as schedule.suspended).
+                  // IMPORTANT: this is a review-only notice — it must NOT embed the original
+                  // intent or the raw payload. Previously it echoed `Original intent: …` /
+                  // `Current task: …` verbatim, which the coordinator re-interpreted as an
+                  // actionable instruction and re-executed, causing a duplicate outbound
+                  // message to the principal (#1064). Reference the job by id + reason only,
+                  // and explicitly instruct the coordinator not to act on the paused task. The
+                  // full intent/payload remains on the schedule.drift_paused audit event above.
                   const notifyContent = [
-                    `Task has been paused because its current instructions may have drifted from its original goal.`,
+                    `A scheduled job was automatically paused for review because its behaviour may have drifted from its original goal.`,
                     ``,
-                    `Original intent: ${job.intentAnchor}`,
-                    ``,
-                    `Current task: ${JSON.stringify(job.taskPayload)}`,
-                    ``,
+                    `Job: ${jobId}`,
                     `Reason: ${verdict.reason} (confidence: ${verdict.confidence})`,
                     ``,
-                    `Please review the task and either resume it with corrected instructions or cancel it.`,
+                    `This is a review notice only — do not re-run, re-send, or otherwise act on the paused task. Let the principal know the job is paused and awaiting their review; they can resume it with corrected instructions or cancel it.`,
                   ].join('\n');
 
                   const notifyEvent = createAgentTask({
