@@ -2025,6 +2025,8 @@ async function main(): Promise<void> {
     secretCaptureService,
     setupRequiredAtBoot,
     bootStartedAt,
+    // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
+    infraLlmService,
   });
 
   try {

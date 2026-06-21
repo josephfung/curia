@@ -1,4 +1,4 @@
-import { useState, useEffect, type JSX, type CSSProperties } from 'react';
+import { useState, useEffect, useRef, type JSX, type CSSProperties } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { apiFetch } from '../api.js';
 import {
@@ -91,6 +91,13 @@ export default function WizardPage() {
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [restartState, setRestartState] = useState<RestartState>({ kind: 'idle' });
+  // LLM-suggested starter first name (issue #799). Null until a successful
+  // suggestion lands; drives the signature placeholder and the one-time prefill
+  // of the assistant-name field. Stays null on any failure so the static
+  // placeholders remain. suggestFiredRef guarantees the call fires at most once
+  // per wizard mount, surviving the re-renders that step navigation triggers.
+  const [suggestedName, setSuggestedName] = useState<string | null>(null);
+  const suggestFiredRef = useRef(false);
 
   // Pre-populate form from current identity and check setup status on mount.
   // Run both fetches in parallel; setup status drives the Step 1 auto-skip
@@ -131,6 +138,40 @@ export default function WizardPage() {
     }
     void load();
   }, []);
+
+  // One-shot LLM name suggestion (issue #799). Fires once the identity prefill
+  // has resolved, and only on a fresh install — when the loaded identity has no
+  // assistant name yet (a wizard re-run pre-fills the saved name, so there's
+  // nothing to suggest and we don't waste an LLM call). On success we prefill
+  // the assistant-name field with the suggestion, but only if the user hasn't
+  // already edited it (the functional setState compares against the static
+  // default). Every failure path is silent: the static placeholders stand and
+  // no error is surfaced here — channel/key validation has its own surface later.
+  useEffect(() => {
+    if (suggestFiredRef.current) return;            // at most once per mount
+    if (!existingIdentity) return;                   // wait for the prefill
+    if (existingIdentity.assistant.name) return;     // re-run with a saved name — skip
+    suggestFiredRef.current = true;
+
+    let cancelled = false;
+    async function suggest() {
+      try {
+        const res = await apiFetch('/api/setup/suggest-name', { method: 'POST' });
+        if (!res.ok) return;                          // 4xx/5xx → keep static placeholder
+        const data = await res.json() as { name?: unknown };
+        const name = typeof data.name === 'string' ? data.name : null;
+        if (!name || cancelled) return;
+        setSuggestedName(name);
+        // Prefill the value only if the field is still the untouched static
+        // default — never clobber a name the user has already typed.
+        setState(s => (s.name === DEFAULT_WIZARD_STATE.name ? { ...s, name } : s));
+      } catch {
+        // Network error — silently keep the static placeholder, per #799.
+      }
+    }
+    void suggest();
+    return () => { cancelled = true; };
+  }, [existingIdentity]);
 
   // Auto-skip Step 1 when the principal already exists. Runs after the mount
   // fetch sets principalExists and on any subsequent step change. The route
@@ -545,7 +586,10 @@ export default function WizardPage() {
         <textarea
           id="w-signature"
           value={state.signature}
-          placeholder="Best regards, Alex"
+          // Signature stays a placeholder hint (the field is optional, so its
+          // value is left empty); the hint name tracks the LLM suggestion when
+          // one landed, else the static "Alex" (issue #799).
+          placeholder={`Best regards, ${suggestedName ?? 'Alex'}`}
           onChange={e => setState(s => ({ ...s, signature: e.target.value }))}
         />
       </div>

@@ -21,6 +21,8 @@ import type { Logger } from '../../../logger.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
 import { ensurePrincipalContact } from '../../../contacts/ensure-principal.js';
 import { isIdentityConfigured } from './identity.js';
+import type { InfraLlmService } from '../../../skills/infra-llm.js';
+import { parseSuggestedFirstName, SUGGEST_NAME_PROMPT } from './suggest-name.js';
 
 export interface SetupRouteOptions {
   webAppBootstrapSecret: string;
@@ -48,6 +50,14 @@ export interface SetupRouteOptions {
    * passes a small wrapper around process.exit; tests pass a spy.
    */
   scheduleProcessExit: (delayMs: number) => void;
+  /**
+   * Constrained LLM access used by POST /api/setup/suggest-name to propose a
+   * starter first name for the assistant (issue #799). Optional: when absent
+   * (e.g. no LLM provider configured) the endpoint reports "unavailable" and the
+   * wizard silently keeps its static placeholder — name suggestion is a
+   * nice-to-have, never a setup blocker.
+   */
+  infraLlmService?: InfraLlmService;
 }
 
 // Match identity.ts: tighter rate limit on auth-sensitive routes (10/min vs the
@@ -70,6 +80,7 @@ export async function setupRoutes(
     setupRequiredAtBoot,
     bootStartedAt,
     scheduleProcessExit,
+    infraLlmService,
   } = options;
 
   // Delay before process.exit so Fastify can finish flushing the 200 response.
@@ -235,5 +246,46 @@ export async function setupRoutes(
       logger.error({ err }, 'POST /api/setup/restart: scheduleProcessExit threw — restart will not occur');
     }
     return reply.send({ restarting: true, exitDelayMs: RESTART_EXIT_DELAY_MS });
+  });
+
+  // -- POST /api/setup/suggest-name --
+  //
+  // One-shot LLM call that proposes a starter first name for the assistant,
+  // shown by the wizard's identity step (issue #799). Two purposes: a touch of
+  // per-install personalization, and an early smoke test that the configured
+  // Anthropic key actually works before the operator commits anything.
+  //
+  // Best-effort by contract: every failure mode (no LLM service, provider error,
+  // an unparseable response) returns a non-2xx the frontend treats as "keep the
+  // static placeholder." No error is ever surfaced to the user from here —
+  // channel/key validation has its own surface later in the wizard. POST (not
+  // GET) because the call costs tokens and must not be cached by the browser.
+  app.post('/api/setup/suggest-name', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+
+    if (!infraLlmService) {
+      // No LLM provider wired — nothing to suggest. 503 → frontend falls back.
+      return reply.status(503).send({ error: 'Name suggestion is unavailable.' });
+    }
+
+    // extract() routes to the 'standard' tier and is errors-as-values: a provider
+    // failure comes back as { ok: false }, never a throw. Cap the output hard —
+    // we only want a single word, and a tight ceiling keeps the smoke test cheap.
+    const result = await infraLlmService
+      .scoped({ skillName: 'wizard-suggest-name', conversationId: 'setup' })
+      .extract(SUGGEST_NAME_PROMPT, { maxTokens: 16 });
+
+    if (!result.ok) {
+      logger.info({ error: result.error }, 'POST /api/setup/suggest-name: LLM call failed — frontend will fall back');
+      return reply.status(502).send({ error: 'Could not generate a suggestion.' });
+    }
+
+    const name = parseSuggestedFirstName(result.text);
+    if (!name) {
+      logger.info({ raw: result.text }, 'POST /api/setup/suggest-name: response was not a clean first name — frontend will fall back');
+      return reply.status(422).send({ error: 'Suggestion was not a usable name.' });
+    }
+
+    return reply.send({ name });
   });
 }
