@@ -112,14 +112,29 @@ than over-reporting) and age out within the 48h TTL.
   convenience (normalized to a one-element array).
 - Calls `ctx.outboundContext.clearBySubjects(...)`.
 - Output: `{ released: number, cleared: { subject: string; count: number }[], unmatched: string[] }`.
-- `action_risk: "low"`, `capabilities: ["outboundContext"]`, coordinator-only
-  via `allowed_callers`. Pinned to the coordinator.
+- `action_risk: "low"`, `capabilities: ["outboundContext"]`. **No
+  `allowed_callers`** — access is controlled by pinning, matching the #1052
+  convention that removed `allowed_callers` from `context-bridge-release` and
+  made pinning the access mechanism for this skill family. Pinned to
+  `coordinator`, `contacts`, `ceo-inbox`, and `meeting-debrief`.
 - Errors (no silent swallow): missing `outboundContext` capability → `{ success:
   false, error }`; empty/all-blank `subjects` → `{ success: false, error }`;
   store failure → logged and returned as `{ success: false, error }`.
 
-The existing single-entry `context-bridge-release` skill is unchanged and still
-used for the sweep-on-close path.
+The existing single-entry `context-bridge-release` skill is **retained, not
+deprecated** — it is the precise primitive for "release the one entry I'm
+holding" (self-sweep) and the only tool that can release entries lacking a
+`metadata.subject` key (which is most of them: `contacts`, `ceo-inbox`, ad-hoc
+coordinator sends). `clear` is the complementary higher-level operation: bulk,
+by-name, conversation-agnostic, for the CEO-facing "clear these meetings" case.
+
+**Why pin `clear` to all four agents:** the skill only ever matches entries that
+carry `metadata.subject`, and today only `meeting-debrief` stamps it. So pinning
+to `contacts`/`ceo-inbox` is inert for their own entries (harmless,
+future-proofs them); `meeting-debrief`'s entries *are* subject-keyed, so it
+**self-clears** both its prompt and reminder when a debrief closes (Step D5),
+fully owning its lifecycle. The coordinator remains the CEO-facing caller for
+multi-meeting clears.
 
 ### 4. Coordinator prompt (`agents/coordinator.yaml`)
 
@@ -130,6 +145,14 @@ its result** — state the released count and the meetings cleared, and for any
 name in `unmatched` tell the CEO it could not be found among active debrief
 items rather than claiming it was cleared. Never report a blanket "all cleared"
 keyed to the names the CEO listed. Pin the new skill; bump the agent `version`.
+
+### 4a. meeting-debrief self-clear (`agents/meeting-debrief.yaml`)
+
+In Delegated-mode Step D5 (debrief close), after `task-complete`, meeting-debrief
+calls `context-bridge-clear` with the single meeting title to release its own
+prompt + reminder entries by subject. Clears only the meeting it just closed.
+Non-critical on failure (coordinator sweep + TTL are backstops). Pin the skill
+to meeting-debrief; bump its `version`.
 
 ### 5. Tests
 
