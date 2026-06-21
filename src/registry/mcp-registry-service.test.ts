@@ -134,6 +134,23 @@ describe('McpRegistryService', () => {
     expect(secrets.delete).toHaveBeenCalledWith('atproto_password');
   });
 
+  it('uninstall(): does not delete vault keys declared by local skills', async () => {
+    const secrets = makeSecrets({});
+    // ATPROTO declares atproto_identifier and atproto_password
+    const svc = new McpRegistryService(
+      makeRepo(),
+      [ATPROTO],
+      secrets,
+      () => ['atproto_identifier'],  // local skill also declares this key
+    );
+    await svc.install('atproto-mcp', 'actor');
+    await svc.uninstall('atproto-mcp', 'actor');
+    // atproto_identifier is shared with a local skill → must NOT be deleted
+    expect(secrets.delete).not.toHaveBeenCalledWith('atproto_identifier');
+    // atproto_password is exclusively owned by this MCP server → may be deleted
+    expect(secrets.delete).toHaveBeenCalledWith('atproto_password');
+  });
+
   it('uninstall(): does not delete vault keys shared by another server', async () => {
     const SHARED: McpStdioServerEntry = {
       name: 'other-server', transport: 'stdio', command: './cmd', action_risk: 'low',

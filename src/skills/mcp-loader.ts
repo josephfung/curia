@@ -241,11 +241,17 @@ export async function resolveSecretsBlock(
       }
       continue;
     }
-    if (decl.inject.env) {
+    if (decl.inject.env !== undefined) {
       env[decl.inject.env] = value;
+    } else if (decl.inject.fixed_input !== undefined) {
+      fixedInputs[decl.inject.fixed_input] = value;
     } else {
-      // inject.fixed_input is the only other option per the discriminated union
-      fixedInputs[decl.inject.fixed_input!] = value;
+      // Unreachable for valid config: the startup JSON schema validator enforces
+      // exactly one of env/fixed_input. Guard defensively so malformed YAML fails
+      // loudly instead of silently producing a broken fixedInputs key.
+      throw new Error(
+        `MCP server '${serverName}': secret "${decl.key}" inject block has neither 'env' nor 'fixed_input'.`,
+      );
     }
   }
 

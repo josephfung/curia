@@ -892,7 +892,16 @@ async function main(): Promise<void> {
   // Must run before loadMcpServers so the enabled set is ready to filter which servers start.
   const mcpRegistryRepo = new McpRegistryRepo(pool);
   const mcpConfig = loadSkillsConfig(configDir);
-  const mcpRegistryService = new McpRegistryService(mcpRegistryRepo, mcpConfig.servers ?? [], secretsService);
+  // skillDeclaredKeys is populated after registryService is built (below). Using a mutable
+  // binding + closure lets McpRegistryService call the getter at uninstall time (not at
+  // startup), so the value is always current even though registryService is constructed later.
+  let skillDeclaredKeys: string[] = [];
+  const mcpRegistryService = new McpRegistryService(
+    mcpRegistryRepo,
+    mcpConfig.servers ?? [],
+    secretsService,
+    () => skillDeclaredKeys,
+  );
 
   try {
     await reconcileMcpRegistry({ service: mcpRegistryService, servers: mcpConfig.servers ?? [], logger });
@@ -1674,6 +1683,10 @@ async function main(): Promise<void> {
     // install.requires_secrets can't go live until those keys exist in the vault.
     secretsService,
   );
+
+  // Wire skill-declared key names into McpRegistryService so uninstall
+  // doesn't delete vault keys still needed by local skills.
+  skillDeclaredKeys = registryService.declaredSecretNames();
 
   // Secret-capture service (#971) — mints one-time tokens for agent-initiated secret
   // capture and redeems submitted values into the vault. Shared by the public HTTP routes
