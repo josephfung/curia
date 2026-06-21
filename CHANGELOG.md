@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`resume_token` on capture tokens** — migration 060 adds a nullable `resume_token TEXT` column to `secret_capture_tokens`; `SecretCaptureService.mint()` persists it from `CaptureOrigin` and `redeem()` returns it in `CapturedContext`, enabling the redeem endpoint to thread it onto `secret.captured` for delegated-specialist resumes. (#995)
+
 ### Changed
 
 - **Coordinator Drive moves** — pinned `update_drive_file` to the coordinator and documented reparenting (`add_parents`/`remove_parents`), so "move this doc into a folder" requests are performed instead of declined. (#1062)

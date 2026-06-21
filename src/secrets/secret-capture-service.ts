@@ -100,6 +100,10 @@ export interface CaptureOrigin {
   originator?: Record<string, unknown>;
   /** Natural-language description of what to resume, e.g. the original user ask. */
   resumeIntent?: string;
+  /** Base64 delegate resume_token (#995). Present only when a delegated specialist minted the
+   *  link; carries no secret value. Lets the redeem endpoint thread it onto secret.captured so
+   *  the coordinator can re-delegate to the specialist. */
+  resumeToken?: string;
 }
 
 export interface MintNameArgs {
@@ -149,6 +153,7 @@ export interface CapturedContext {
   taskEventId?: string;
   originator?: Record<string, unknown>;
   resumeIntent?: string;
+  resumeToken?: string;
 }
 
 /**
@@ -200,8 +205,8 @@ export class SecretCaptureService implements SecretCaptureMinter {
     const result = await this.pool.query<{ expires_at: Date }>(
       `INSERT INTO secret_capture_tokens
          (token_hash, secret_name, label, value_format, expires_at,
-          conversation_id, channel_id, agent_id, task_event_id, originator, resume_intent)
-       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5), $6, $7, $8, $9, $10, $11)
+          conversation_id, channel_id, agent_id, task_event_id, originator, resume_intent, resume_token)
+       VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5), $6, $7, $8, $9, $10, $11, $12)
        RETURNING expires_at`,
       [
         tokenHash, secretName, label ?? null, valueFormat, DEFAULT_CAPTURE_TTL_MINUTES,
@@ -211,6 +216,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
         origin?.taskEventId ?? null,
         origin?.originator ?? null,
         origin?.resumeIntent ?? null,
+        origin?.resumeToken ?? null,
       ],
     );
     return { rawToken, expiresAt: result.rows[0]!.expires_at };
@@ -307,12 +313,13 @@ export class SecretCaptureService implements SecretCaptureMinter {
       task_event_id: string | null;
       originator: Record<string, unknown> | null;
       resume_intent: string | null;
+      resume_token: string | null;
     }>(
       `UPDATE secret_capture_tokens
           SET consumed_at = now()
         WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
         RETURNING secret_name, value_format, label,
-                  conversation_id, channel_id, agent_id, task_event_id, originator, resume_intent`,
+                  conversation_id, channel_id, agent_id, task_event_id, originator, resume_intent, resume_token`,
       [tokenHash],
     );
     const claimed = claim.rows[0];
@@ -358,6 +365,7 @@ export class SecretCaptureService implements SecretCaptureMinter {
         taskEventId: claimed.task_event_id ?? undefined,
         originator: claimed.originator ?? undefined,
         resumeIntent: claimed.resume_intent ?? undefined,
+        resumeToken: claimed.resume_token ?? undefined,
       },
     };
   }

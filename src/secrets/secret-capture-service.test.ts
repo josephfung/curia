@@ -174,6 +174,17 @@ describe('SecretCaptureService minting (via the public name-policy entry points)
     // The four routing params after the fixed columns + TTL should all be null when no origin.
     expect(insert!.params.filter(p => p === null).length).toBeGreaterThanOrEqual(5);
   });
+
+  it('persists the resume_token on the token when supplied (#995)', async () => {
+    const { svc, queries } = makeService();
+    await svc.mintUserSecret({
+      rawName: 'Aeroplan password',
+      origin: { conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator', resumeToken: 'RESUME_TOK' },
+    });
+    const insert = queries.find(q => q.sql.includes('INSERT INTO secret_capture_tokens'));
+    expect(insert!.sql).toContain('resume_token');
+    expect(insert!.params).toContain('RESUME_TOK');
+  });
 });
 
 describe('SecretCaptureService.mintUserSecret / mintSystemSecret', () => {
@@ -353,5 +364,26 @@ describe('SecretCaptureService.redeem', () => {
     await expect(svc.redeem('deadbeef', 'hunter2')).rejects.toThrow('vault write failed');
     // The stranded-token event was logged for an operator.
     expect(errors).toHaveLength(1);
+  });
+
+  it('returns the resume_token in the captured context on ok (#995)', async () => {
+    const { svc } = makeService(router({
+      peek: [{ value_format: 'string', spent: false }],
+      claim: [{
+        secret_name: 'user.aeroplan_password',
+        value_format: 'string',
+        label: 'Aeroplan password',
+        conversation_id: 'user-conv',
+        channel_id: 'email',
+        agent_id: 'coordinator',
+        task_event_id: null,
+        originator: null,
+        resume_intent: 'check the Aeroplan balance',
+        resume_token: 'RESUME_TOK',
+      }],
+    }));
+    const result = await svc.redeem('deadbeef', 'hunter2');
+    expect(result).toMatchObject({ status: 'ok', captured: { resumeToken: 'RESUME_TOK' } });
+    expect(JSON.stringify(result)).not.toContain('hunter2');
   });
 });
