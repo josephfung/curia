@@ -64,6 +64,9 @@ interface BullpenBackend {
   getThread(threadId: string): Promise<{ thread: BullpenThread; messages: BullpenMessage[] } | null>;
   findThreadBySourceMessageId(sourceMessageId: string): Promise<{ thread: BullpenThread; message: BullpenMessage } | null>;
   getPendingThreadsForAgent(agentId: string, windowMs: number): Promise<PendingThreadContext[]>;
+  // Advance the per-agent read watermark for the given threads to each thread's current
+  // last_message_at. Unknown thread ids are ignored. Idempotent and monotonic (#1065).
+  markThreadsSeen(agentId: string, threadIds: string[]): Promise<void>;
 }
 
 // -- In-memory backend (for unit tests) --
@@ -73,6 +76,9 @@ class InMemoryBullpenBackend implements BullpenBackend {
   private messages = new Map<string, BullpenMessage[]>();
   // Maps sourceMessageId -> threadId for dedup lookups.
   private sourceIdToThreadId = new Map<string, string>();
+  // Per-agent read watermark: `${threadId}:${agentId}` -> seenThrough. Mirrors the
+  // bullpen_thread_reads table in the Postgres backend (#1065).
+  private reads = new Map<string, Date>();
 
   async openThread(thread: BullpenThread, message: BullpenMessage): Promise<void> {
     if (thread.sourceMessageId && this.sourceIdToThreadId.has(thread.sourceMessageId)) {
@@ -130,6 +136,11 @@ class InMemoryBullpenBackend implements BullpenBackend {
       if (!thread.participants.includes(agentId)) continue;
       if (!thread.lastMessageAt || thread.lastMessageAt < cutoff) continue;
 
+      // Read watermark (#1065): skip threads the agent has already seen up to their
+      // current latest message — only re-surface when newer activity has arrived.
+      const seenThrough = this.reads.get(`${threadId}:${agentId}`);
+      if (seenThrough && thread.lastMessageAt <= seenThrough) continue;
+
       const msgs = this.messages.get(threadId) ?? [];
       if (msgs.length === 0) continue;
 
@@ -153,6 +164,20 @@ class InMemoryBullpenBackend implements BullpenBackend {
         return tb - ta;
       })
       .slice(0, 5);
+  }
+
+  async markThreadsSeen(agentId: string, threadIds: string[]): Promise<void> {
+    for (const threadId of threadIds) {
+      const thread = this.threads.get(threadId);
+      // Stamp to the thread's current latest message; ignore unknown threads and threads
+      // with no messages. Monotonic: never move the watermark backwards.
+      if (!thread || !thread.lastMessageAt) continue;
+      const key = `${threadId}:${agentId}`;
+      const existing = this.reads.get(key);
+      if (!existing || thread.lastMessageAt > existing) {
+        this.reads.set(key, thread.lastMessageAt);
+      }
+    }
   }
 }
 
@@ -315,11 +340,17 @@ class PostgresBullpenBackend implements BullpenBackend {
     const threadsRes = await this.pool.query<{
       id: string; topic: string; message_count: number; last_message_at: Date;
     }>(
+      // LEFT JOIN the per-agent read watermark and skip threads the agent has already
+      // seen up to their current latest message (#1065): a thread re-surfaces only when
+      // last_message_at advances past seen_through, so a handled out-of-band request is
+      // not re-actioned on a later wake.
       `SELECT t.id, t.topic, t.message_count, t.last_message_at
        FROM bullpen_threads t
+       LEFT JOIN bullpen_thread_reads r ON r.thread_id = t.id AND r.agent_id = $1
        WHERE t.status = 'open'
          AND t.participants @> ARRAY[$1]::text[]
          AND t.last_message_at > NOW() - ($2::numeric * INTERVAL '1 second')
+         AND (r.seen_through IS NULL OR t.last_message_at > r.seen_through)
          AND (
            SELECT sender_id FROM bullpen_messages
            WHERE thread_id = t.id ORDER BY created_at DESC LIMIT 1
@@ -348,6 +379,24 @@ class PostgresBullpenBackend implements BullpenBackend {
       results.push({ threadId: row.id, topic: row.topic, totalMessages: row.message_count, recentMessages });
     }
     return results;
+  }
+
+  async markThreadsSeen(agentId: string, threadIds: string[]): Promise<void> {
+    if (threadIds.length === 0) return;
+    // Stamp seen_through to each thread's *current* last_message_at, read inside the
+    // upsert so the caller only passes ids. GREATEST keeps the watermark monotonic so a
+    // concurrent stamp from an earlier-state task can't move it backwards. Threads with a
+    // NULL last_message_at (no messages) are skipped by the SELECT's WHERE. (#1065)
+    await this.pool.query(
+      `INSERT INTO bullpen_thread_reads (thread_id, agent_id, seen_through, updated_at)
+       SELECT t.id, $1, t.last_message_at, now()
+       FROM bullpen_threads t
+       WHERE t.id = ANY($2::uuid[]) AND t.last_message_at IS NOT NULL
+       ON CONFLICT (thread_id, agent_id)
+       DO UPDATE SET seen_through = GREATEST(bullpen_thread_reads.seen_through, EXCLUDED.seen_through),
+                     updated_at = now()`,
+      [agentId, threadIds],
+    );
   }
 }
 
@@ -468,6 +517,16 @@ export class BullpenService {
   async getPendingThreadsForAgent(agentId: string, windowMinutes: number): Promise<PendingThreadContext[]> {
     return this.backend.getPendingThreadsForAgent(agentId, windowMinutes * 60 * 1000);
   }
+
+  /**
+   * Advance the per-agent read watermark for the given threads to each thread's current
+   * last_message_at (#1065). After this, getPendingThreadsForAgent will not re-surface
+   * those threads to the agent until a newer message arrives — preventing the re-action
+   * of an already-handled out-of-band request. Idempotent, monotonic, unknown ids ignored.
+   */
+  async markThreadsSeen(agentId: string, threadIds: string[]): Promise<void> {
+    return this.backend.markThreadsSeen(agentId, threadIds);
+  }
 }
 
 // -- Context formatter --
@@ -501,11 +560,5 @@ export function formatBullpenContext(pending: PendingThreadContext[]): string {
   // injects bullpen state gives all agents the convention without per-agent prompt edits.
   lines.push('');
   lines.push('When your bullpen reply concludes a thread, pass close_after: true so it is closed atomically. Leave it off (or false) if the discussion is still going.');
-  // #1065: the relay pattern (a thread asking you to deliver a message out-of-band)
-  // leaves no in-thread reply, so close_after never fires and the request gets re-sent on
-  // a later wake. Tell agents to close the thread explicitly after relaying. The runtime
-  // also closes it deterministically once the outbound send succeeds, so this is guidance,
-  // not the sole guard.
-  lines.push('If you fulfil a request by sending out-of-band (e.g. signal-send/email-send) instead of replying here, close the thread (bullpen close action) so it is not actioned again.');
   return lines.join('\n');
 }
