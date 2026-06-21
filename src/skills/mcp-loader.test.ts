@@ -5,13 +5,17 @@
 // these unit tests verify the mechanical correctness of schema manipulation and
 // argument merging.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   stripFixedInputsFromSchema,
   mergeFixedInputs,
   resolveStdioEnvFromVault,
   resolveFixedInputFromVault,
+  loadSkillsConfig,
 } from './mcp-loader.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { resolveEnvValue } from '../config.js';
 import type { SecretsService } from '../secrets/secrets-service.js';
 
@@ -262,5 +266,59 @@ describe('resolveFixedInputFromVault', () => {
         "MCP server 'google-workspace' fixed_inputs.user_google_email",
       ),
     ).rejects.toThrow(/secret "curia_google_email" is not set in the vault/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadSkillsConfig — YAML parsing including the secrets: block
+// ---------------------------------------------------------------------------
+
+describe('loadSkillsConfig', () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-cfg-')); });
+  afterEach(() => { fs.rmSync(tmpDir, { recursive: true }); });
+
+  it('parses a server entry with a secrets: block', () => {
+    fs.writeFileSync(path.join(tmpDir, 'skills.yaml'), `
+servers:
+  - name: atproto-mcp
+    transport: stdio
+    command: ./node_modules/.bin/atproto-mcp
+    action_risk: medium
+    secrets:
+      - key: atproto_identifier
+        label: "Bluesky handle"
+        required: true
+        secret: false
+        inject:
+          env: ATPROTO_IDENTIFIER
+      - key: atproto_password
+        label: "Bluesky app password"
+        required: true
+        secret: true
+        inject:
+          env: ATPROTO_PASSWORD
+`);
+    const config = loadSkillsConfig(tmpDir);
+    const server = config.servers![0]! as import('./mcp-config-types.js').McpStdioServerEntry;
+    expect(server.secrets).toHaveLength(2);
+    expect(server.secrets![0]!.key).toBe('atproto_identifier');
+    expect(server.secrets![0]!.inject).toEqual({ env: 'ATPROTO_IDENTIFIER' });
+    expect(server.secrets![1]!.secret).toBe(true);
+  });
+
+  it('returns empty config when secrets: block is absent', () => {
+    fs.writeFileSync(path.join(tmpDir, 'skills.yaml'), `
+servers:
+  - name: legacy-server
+    transport: stdio
+    command: ./cmd
+    action_risk: low
+    env:
+      SOME_KEY: ""
+`);
+    const config = loadSkillsConfig(tmpDir);
+    const server = config.servers![0]! as import('./mcp-config-types.js').McpStdioServerEntry;
+    expect(server.secrets).toBeUndefined();
   });
 });
