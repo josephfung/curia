@@ -15,10 +15,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **`resume_token` on capture tokens** — migration 060 adds a nullable `resume_token TEXT` column to `secret_capture_tokens`; `SecretCaptureService.mint()` persists it from `CaptureOrigin` and `redeem()` returns it in `CapturedContext`, enabling the redeem endpoint to thread it onto `secret.captured` for delegated-specialist resumes. (#995)
+- **Specialist secret-capture resume** — a delegated specialist (or the setup-wizard) that mints a secret-capture link is now resumed on redeem: migration 061 adds `resume_token` to `secret_capture_tokens`, re-entry routes through the coordinator, which re-delegates to the specialist via the `delegate` resume_token. Preserves the no-value and originator invariants. (#995)
 
 ### Changed
 
+- **`SecretCapturedPayload`** — gained an optional `resumeToken` field (public bus event surface). (#995)
 - **Coordinator Drive moves** — pinned `update_drive_file` to the coordinator and documented reparenting (`add_parents`/`remove_parents`), so "move this doc into a folder" requests are performed instead of declined. (#1062)
 - **`skills/**` typecheck** — CI now type-checks all skill handlers and tests, closing the scope blind spot. (#1075)
 
