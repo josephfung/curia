@@ -31,10 +31,22 @@ function makeReadable(content: Buffer): Readable {
   return Readable.from([content]);
 }
 
+// Default vault values returned by the mocked ctx.secret(). Mirrors the three
+// snake_case secret keys the handler resolves before calling getDriveClient().
+const SECRET_VALUES: Record<string, string> = {
+  google_oauth_client_id: 'test-client-id.apps.googleusercontent.com',
+  google_oauth_client_secret: 'GOCSPX-test-secret',
+  curia_google_email: 'curia@test.com',
+};
+
 function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
   return {
     input: { file_id_or_url: '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms' },
-    secret: () => { throw new Error('no secret in test'); },
+    secret: vi.fn((name: string): string => {
+      const value = SECRET_VALUES[name];
+      if (value === undefined) throw new Error(`Secret '${name}' is declared but not set in the environment`);
+      return value;
+    }),
     log: createSilentLogger(),
     writeTempFile: vi.fn().mockResolvedValue('file:///run/curia-tempfiles/abc123.pdf'),
     taskMetadata: {},
@@ -117,6 +129,49 @@ describe('DriveDownloadFileHandler — URL extraction', () => {
     const handler = new DriveDownloadFileHandler();
     await handler.execute(makeCtx({ input: { file_id_or_url: 'RAW_FILE_ID' } }));
     expect(mockFilesGet).toHaveBeenNthCalledWith(1, expect.objectContaining({ fileId: 'RAW_FILE_ID' }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Vault-sourced credentials (#913)
+// ---------------------------------------------------------------------------
+
+describe('DriveDownloadFileHandler — vault credentials', () => {
+  it('resolves all three OAuth secrets via ctx.secret() and passes them to getDriveClient', async () => {
+    setupMetadata({ name: 'doc.pdf', mimeType: 'application/pdf', size: '9' });
+    setupDownloadStream(Buffer.from('PDF bytes'));
+    const ctx = makeCtx();
+    const handler = new DriveDownloadFileHandler();
+    await handler.execute(ctx);
+
+    // ctx.secret() is the audited read path — assert all three keys go through it.
+    expect(ctx.secret).toHaveBeenCalledWith('google_oauth_client_id');
+    expect(ctx.secret).toHaveBeenCalledWith('google_oauth_client_secret');
+    expect(ctx.secret).toHaveBeenCalledWith('curia_google_email');
+
+    const { getDriveClient } = await import('../../src/google/drive-auth.js');
+    expect(getDriveClient).toHaveBeenCalledWith({
+      clientId: 'test-client-id.apps.googleusercontent.com',
+      clientSecret: 'GOCSPX-test-secret',
+      email: 'curia@test.com',
+    });
+  });
+
+  it('returns a clean skill error (not a throw) when a secret is missing from the vault', async () => {
+    const handler = new DriveDownloadFileHandler();
+    // ctx.secret() throws for an unset declared secret — handler must catch and
+    // surface it as { success: false }, never let it propagate.
+    const ctx = makeCtx({
+      secret: vi.fn((name: string): string => {
+        if (name === 'curia_google_email') {
+          throw new Error(`Secret '${name}' is declared but not set in the environment`);
+        }
+        return SECRET_VALUES[name]!;
+      }),
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('curia_google_email');
   });
 });
 

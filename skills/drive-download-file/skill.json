@@ -1,7 +1,7 @@
 {
   "name": "drive-download-file",
   "description": "Download a file from Google Drive to temporary storage and return a file:// URL for use with email-send or email-reply attachments. Accepts a Drive file ID or any drive.google.com / docs.google.com URL. Google Docs/Sheets/Slides are exported to PDF by default; pass export_mime_type to override. Pass the returned temp_file_url in the attachments array of email-send or email-reply.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -17,9 +17,9 @@
   },
   "permissions": [],
   "secrets": [
-    "GOOGLE_OAUTH_CLIENT_ID",
-    "GOOGLE_OAUTH_CLIENT_SECRET",
-    "CURIA_GOOGLE_EMAIL"
+    "google_oauth_client_id",
+    "google_oauth_client_secret",
+    "curia_google_email"
   ],
   "timeout": 60000,
   "capabilities": ["tempFileStore"]
