@@ -229,13 +229,13 @@ describe('DelegateHandler', () => {
     expect(capturedMetadata?.originator).toEqual(originator);
   });
 
-  it('sets metadata to undefined on specialist task when no originator in parent', async () => {
+  it('includes delegationOrigin but no originator when parent task has no originator (#995)', async () => {
     const agentRegistry = new AgentRegistry();
     agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
     agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
     const bus = new EventBus(logger);
 
-    let capturedMetadata: Record<string, unknown> | undefined = { sentinel: true };
+    let capturedMetadata: Record<string, unknown> | undefined;
     bus.subscribe('agent.task', 'agent', async (event) => {
       if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
         capturedMetadata = event.payload.metadata as Record<string, unknown> | undefined;
@@ -254,7 +254,11 @@ describe('DelegateHandler', () => {
       { bus, agentRegistry },
     ));
 
-    // No originator in parent task → specialist task should have no metadata
-    expect(capturedMetadata).toBeUndefined();
+    // Since #995, delegate always sets delegationOrigin so the specialist's capture links can
+    // re-enter the coordinator on redeem. originator is absent (no parent originator to forward).
+    expect(capturedMetadata).toMatchObject({
+      delegationOrigin: { originalTask: 'Research AI trends' },
+    });
+    expect(capturedMetadata).not.toHaveProperty('originator');
   });
 });
