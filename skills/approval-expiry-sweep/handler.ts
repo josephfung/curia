@@ -27,7 +27,14 @@ import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
  * address is flagged bounced/defunct.
  */
 async function resolvePrincipalEmail(ctx: SkillContext): Promise<string | null> {
-  if (!ctx.contactService) return null;
+  if (!ctx.contactService) {
+    // Distinct from the benign "no principal yet" case: this is a capability-wiring
+    // problem (the skill ran without contactService injected), which an operator should
+    // investigate — not a normal first-run data state. Log the cause here; the caller
+    // logs the consequence (notification skipped).
+    ctx.log.warn('approval-expiry-sweep: contactService capability unavailable — cannot resolve principal email');
+    return null;
+  }
   const principal = await ctx.contactService.findContactBySystemRole('principal');
   if (!principal) return null;
   const withIdentities = await ctx.contactService.getContactWithIdentities(principal.id);
