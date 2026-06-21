@@ -1376,6 +1376,7 @@ async function main(): Promise<void> {
   // events have no subscriber and are permanently dropped because each adapter advances
   // its own high-water mark on poll).
   if (outboundGateway && channelShouldStart.has('email')) {
+    const emailAdaptersBefore = emailAdapters.length;
     for (const account of resolvedEmailAccounts) {
       if (!nylasClientMap.has(account.name)) continue; // skip accounts with no client (NYLAS_API_KEY missing)
 
@@ -1397,6 +1398,14 @@ async function main(): Promise<void> {
         configStore: entityMemory ? new ConfigStore(entityMemory, logger) : undefined,
       }));
     }
+    // Divergence guard (#964): the registry gate marked email enabled + resolvable, yet no
+    // adapter constructed — the runtime config has no usable Nylas client. This is the silent
+    // no-op the channel-vault fix exists to prevent; it can still arise if a transient vault
+    // read error hit applyChannelVaultSecrets but not the gate's independent read. Surface it
+    // loudly instead of booting a dead channel, rather than letting the gate and runtime disagree.
+    if (emailAdapters.length === emailAdaptersBefore) {
+      logger.warn('channel email is enabled + resolvable but no Nylas client is configured at runtime; no email adapter constructed — check vault/env credentials and restart');
+    }
   }
 
   // Construct the Signal adapter (but don't start it yet — same ordering rule as email:
@@ -1410,6 +1419,12 @@ async function main(): Promise<void> {
       contactService,
       phoneNumber: config.signalPhoneNumber,
     });
+  } else if (outboundGateway && channelShouldStart.has('signal') && (!signalRpcClient || !config.signalPhoneNumber)) {
+    // Divergence guard (#964): same silent-no-op class as the email block above — the gate
+    // says signal should start but its runtime client/credentials (socket path or phone
+    // number) are absent from config, so no adapter was constructed. Warn instead of skipping
+    // silently. (Only reachable outside setup-required mode, where outboundGateway is set.)
+    logger.warn('channel signal is enabled + resolvable but its runtime client/credentials are missing (socket path or phone number); no Signal adapter constructed — check vault/env credentials and restart');
   }
 
   // Scheduler — Postgres-backed job scheduler for cron and one-shot tasks.
