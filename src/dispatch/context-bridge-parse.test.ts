@@ -10,6 +10,7 @@ function makeCap(overrides?: Partial<OutboundContextCapability>): OutboundContex
   return {
     register: vi.fn().mockResolvedValue('entry-id'),
     release: vi.fn().mockResolvedValue(undefined),
+    clearBySubjects: vi.fn().mockResolvedValue({ totalReleased: 0, perSubject: [], unmatched: [] }),
     defaultExpiryHours: 6,
     explicitExpiryHours: 24,
     ...overrides,
