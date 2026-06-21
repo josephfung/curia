@@ -319,7 +319,7 @@ describe('ContactRegisterHandler — confidence pipeline (pipeline present)', ()
 
     const ctx = makeCtx({
       contactService,
-      confidencePipeline: mockPipeline as SkillContext['confidencePipeline'],
+      confidencePipeline: mockPipeline as unknown as SkillContext['confidencePipeline'],
       input: { channel: 'email', identifier: 'dave@example.com', displayName: 'Dave', messageTimestamp: TIMESTAMP_A },
     });
 
@@ -338,7 +338,7 @@ describe('ContactRegisterHandler — confidence pipeline (pipeline present)', ()
 
     const ctx = makeCtx({
       contactService,
-      confidencePipeline: mockPipeline as SkillContext['confidencePipeline'],
+      confidencePipeline: mockPipeline as unknown as SkillContext['confidencePipeline'],
       input: { channel: 'email', identifier: 'dave@example.com', displayName: 'Dave', messageTimestamp: TIMESTAMP_A },
     });
 

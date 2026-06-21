@@ -199,7 +199,7 @@ describe('FileParseHandler', () => {
       expect(infraLlm.extract).toHaveBeenCalledOnce();
 
       // Verify the extract call includes image data
-      const callArgs = (infraLlm.extract as ReturnType<typeof vi.fn>).mock.calls[0];
+      const callArgs = (infraLlm.extract as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(callArgs[1]).toEqual(expect.objectContaining({
         image: expect.objectContaining({ base64: content, mediaType: 'image/jpeg' }),
       }));
@@ -223,7 +223,7 @@ describe('FileParseHandler', () => {
       }, infraLlm));
 
       expect(infraLlm.extract).toHaveBeenCalledOnce();
-      const callArgs = (infraLlm.extract as ReturnType<typeof vi.fn>).mock.calls[0];
+      const callArgs = (infraLlm.extract as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(callArgs[1].image.mediaType).toBe('image/jpeg');
     });
   });
@@ -433,10 +433,11 @@ describe('FileParseHandler', () => {
 
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.type).toBe('pdf');
-        expect(result.data.raw_text).toContain('Acme Corp');
-        expect(result.data.raw_text).toContain('123.45');
-        expect(result.data.confidence).toBeGreaterThan(0);
+        const data = result.data as { type: string; raw_text: string; confidence: number };
+        expect(data.type).toBe('pdf');
+        expect(data.raw_text).toContain('Acme Corp');
+        expect(data.raw_text).toContain('123.45');
+        expect(data.confidence).toBeGreaterThan(0);
       }
     });
 

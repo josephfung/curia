@@ -7,6 +7,7 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { QueryRelationshipsHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { EdgeType } from '../../src/memory/types.js';
 
 // makeEntityMemoryWithStore returns both for tests that need direct store access
 // (e.g. to simulate pre-migration duplicates by bypassing upsert logic)
@@ -113,7 +114,10 @@ describe('QueryRelationshipsHandler', () => {
     const mem = makeEntityMemory();
     const { entity: a } = await mem.createEntity({ type: 'person', label: 'Alice', properties: {}, source: 'test' });
     const { entity: b } = await mem.createEntity({ type: 'person', label: 'Bob', properties: {}, source: 'test' });
-    await mem.upsertEdge(a.id, b.id, 'colleague', {}, 'test', 0.7);
+    // 'colleague' is not a member of the EdgeType union; the test only needs an
+    // edge to exist so it can assert last_confirmed_at is an ISO string, so the
+    // exact relationship type is not load-bearing — preserve the runtime value.
+    await mem.upsertEdge(a.id, b.id, 'colleague' as unknown as EdgeType, {}, 'test', 0.7);
 
     const handler = new QueryRelationshipsHandler();
     const ctx = makeCtx(mem, { entity: 'Alice' });

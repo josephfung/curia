@@ -109,7 +109,7 @@ describe('ImageGenerateHandler', () => {
     const ctx = makeCtx({ prompt: '  a mountain at sunset  ' });
     await handler.execute(ctx);
 
-    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
     expect(body.prompt).toBe('a mountain at sunset');
   });
 
@@ -129,7 +129,7 @@ describe('ImageGenerateHandler', () => {
     });
     await handler.execute(ctx);
 
-    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
     expect(body.size).toBe('1024x1024');
     expect(body.quality).toBe('standard');
     expect(body.style).toBe('natural');
@@ -150,7 +150,7 @@ describe('ImageGenerateHandler', () => {
 
     // The skill forwarded the call — result depends on the (mocked) API, not our validation
     expect(fetchSpy).toHaveBeenCalledOnce();
-    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
     expect(body.size).toBe('1200x628');
     expect(body.style).toBe('watercolour');
     expect(body.quality).toBe('ultra');

@@ -113,7 +113,7 @@ describe('SendDraftHandler', () => {
 
   it('returns error when outboundGateway is missing', async () => {
     const ctx = makeCtx({});
-    (ctx as Record<string, unknown>).outboundGateway = undefined;
+    (ctx as unknown as Record<string, unknown>).outboundGateway = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/outboundGateway/i);
@@ -121,7 +121,7 @@ describe('SendDraftHandler', () => {
 
   it('returns error when bus is missing', async () => {
     const ctx = makeCtx({});
-    (ctx as Record<string, unknown>).bus = undefined;
+    (ctx as unknown as Record<string, unknown>).bus = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/bus/i);
@@ -343,7 +343,7 @@ describe('SendDraftHandler', () => {
 
       await handler.execute(ctx);
       // sendEmailDraft's second argument is the accountId
-      const usedAccount = sendEmailDraft.mock.calls[0][1];
+      const usedAccount = sendEmailDraft.mock.calls[0]![1];
       expect(usedAccount).toBe('personal');
     });
 

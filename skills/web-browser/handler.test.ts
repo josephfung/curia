@@ -257,7 +257,7 @@ describe('web-browser block_ads + incognito inputs (#987)', () => {
 describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)', () => {
   // Reach into the mock page's shared locator (the one every getBy/locator stub returns).
   function getSharedLocator(session: BrowserSession) {
-    return (session.page as unknown as { getByRole: ReturnType<typeof vi.fn> })
+    return (session.page as unknown as { getByRole: (role: string, opts: { name: string }) => unknown })
       .getByRole('button', { name: 'x' });
   }
 

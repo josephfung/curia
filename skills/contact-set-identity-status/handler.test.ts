@@ -83,7 +83,7 @@ describe('ContactSetIdentityStatusHandler', () => {
 
   it('returns error when contactService is not available', async () => {
     const ctx = makeCtx({ input: { identity_id: VALID_UUID, status: 'defunct' } });
-    (ctx as Record<string, unknown>).contactService = undefined;
+    (ctx as unknown as Record<string, unknown>).contactService = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/contactService/);

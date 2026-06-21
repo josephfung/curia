@@ -269,7 +269,7 @@ describe('DateResolveHandler', () => {
 
   it('falls back to UTC when timezone is not set', async () => {
     const ctx = makeCtx({ date: '2026-05-19' });
-    (ctx as Record<string, unknown>).timezone = undefined;
+    (ctx as unknown as Record<string, unknown>).timezone = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     if (result.success) {
@@ -300,7 +300,7 @@ describe('DateResolveHandler', () => {
 
   it('sets displayTimezone to null when timezone is not configured', async () => {
     const ctx = makeCtx({ date: '2026-05-19' });
-    (ctx as Record<string, unknown>).timezone = undefined;
+    (ctx as unknown as Record<string, unknown>).timezone = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     if (result.success) {

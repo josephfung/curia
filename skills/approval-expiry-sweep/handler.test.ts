@@ -127,7 +127,7 @@ describe('ApprovalExpirySweepHandler', () => {
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
-    expect(result.data.expired).toBe(2);
+    expect((result.data as { expired: number }).expired).toBe(2);
   });
 
   it('sends no notification for low/medium tier expirations', async () => {
@@ -143,7 +143,7 @@ describe('ApprovalExpirySweepHandler', () => {
     expect(sendNotificationMock).not.toHaveBeenCalled();
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
-    expect(result.data.notified).toBe(0);
+    expect((result.data as { notified: number }).notified).toBe(0);
   });
 
   it('sends a single batched notification for high/critical expirations', async () => {
@@ -160,7 +160,7 @@ describe('ApprovalExpirySweepHandler', () => {
     // Exactly one batched notification covering the high + critical rows
     expect(sendNotificationMock).toHaveBeenCalledTimes(1);
 
-    const payload = sendNotificationMock.mock.calls[0][0];
+    const payload = sendNotificationMock.mock.calls[0]![0];
     expect(payload.notificationType).toBe('approval_expired');
     expect(payload.ceoEmail).toBe('ceo@example.com');
 
@@ -174,7 +174,7 @@ describe('ApprovalExpirySweepHandler', () => {
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
-    expect(result.data.notified).toBe(2);
+    expect((result.data as { notified: number }).notified).toBe(2);
   });
 
   it('only notifies about rows that actually expired (concurrent resolution)', async () => {
@@ -195,14 +195,14 @@ describe('ApprovalExpirySweepHandler', () => {
 
     // Notification built from the 1 actually-expired row only
     expect(sendNotificationMock).toHaveBeenCalledTimes(1);
-    const payload = sendNotificationMock.mock.calls[0][0];
+    const payload = sendNotificationMock.mock.calls[0]![0];
     expect(payload.subject).toContain('1 request(s)');
     expect(payload.body).toContain('high-ref');
     expect(payload.body).not.toContain('crit-ref');
 
     expect(result.success).toBe(true);
     if (!result.success) throw new Error('unreachable');
-    expect(result.data.expired).toBe(1);
+    expect((result.data as { expired: number }).expired).toBe(1);
   });
 
   it('skips notification when CEO_PRIMARY_EMAIL is not set', async () => {

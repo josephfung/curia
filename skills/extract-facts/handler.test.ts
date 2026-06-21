@@ -316,7 +316,7 @@ describe('ExtractFactsHandler', () => {
     const log = pino({ level: 'silent' });
     const warnSpy = vi.spyOn(log, 'warn');
     const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' }, infraLlm);
-    (ctx as Record<string, unknown>).log = log;
+    (ctx as unknown as Record<string, unknown>).log = log;
 
     const result = await handler.execute(ctx);
 

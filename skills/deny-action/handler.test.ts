@@ -6,6 +6,7 @@ import type { SkillContext } from '../../src/skills/types.js';
 import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import { createSilentLogger } from '../../src/logger.js';
+import type { Logger } from '../../src/logger.js';
 
 const PENDING_ROW = {
   id: 10,
@@ -105,7 +106,7 @@ describe('DenyActionHandler', () => {
     const handler = new DenyActionHandler();
 
     const result = await handler.execute(makeCtx({
-      log: mockLog,
+      log: mockLog as unknown as Logger,
       taskMetadata: {
         originator: { systemRole: 'principal' as const, initiatedAt: new Date().toISOString() },
       },
