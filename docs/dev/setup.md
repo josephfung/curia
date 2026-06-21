@@ -177,7 +177,7 @@ pnpm run seed-vault
 
 Restart Curia (`pnpm local`) — the email channel activates automatically when all three Nylas secrets are in the vault.
 
-> **Multiple email accounts:** The three vars above wire up a single "legacy" email account. To configure multiple named accounts with per-account outbound policies (e.g. a Curia account that sends directly and a personal account that requires your approval), use `channel_accounts.email` in `config/local.yaml`. See [configuration.md](configuration.md#configlocalyaml--deployment-overrides) for details and an example.
+> **Multiple email accounts:** Additional accounts are managed from the console after first boot — go to **Settings → Channels → Email → Email accounts**. Each account stores its Nylas grant in the vault at `channel.email.<name>.nylas_grant_id`. See [configuration.md](configuration.md#email-accounts) for details.
 
 ### OpenAI (Embeddings)
 

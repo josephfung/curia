@@ -20,36 +20,6 @@ channels:
   # Set SIGNAL_SOCKET_PATH + SIGNAL_PHONE_NUMBER at runtime to enable the Signal adapter.
   # Trust level and unknown-sender policy live in config/channel-trust.yaml.
 
-# Multi-account email configuration (spec §03-email-channel.md).
-#
-# Note: email credentials may now also be supplied via the secrets vault (keys
-# `channel.email.*`) and managed in the Channels console page. The config path
-# below remains supported and is preferred for multi-account setups.
-#
-# channel_accounts.email defines one or more named Nylas-backed email accounts.
-# Each account has its own grant ID and self-email address. All accounts send
-# directly via the OutboundGateway (autonomy-gated).
-#
-# Credential values may be supplied inline or as env-var references using the
-# `env:VAR_NAME` syntax (recommended for secrets):
-#
-#   nylas_grant_id: "env:NYLAS_GRANT_ID"
-#   self_email:     "env:NYLAS_SELF_EMAIL"
-#
-# Backward compatibility: if this block is absent, the email channel falls back to the
-# single-account env-var mode (NYLAS_API_KEY / NYLAS_GRANT_ID / NYLAS_SELF_EMAIL).
-#
-# Example:
-# (Keys are the logical account names; they become the accountId on bus events.)
-#
-# channel_accounts:
-#   email:
-#     curia:
-#       nylas_grant_id: "env:NYLAS_GRANT_ID_CURIA"
-#       self_email:     "env:NYLAS_SELF_EMAIL_CURIA"
-#
-# channel_accounts: {}
-
 # Rate limits for automatic contact creation from email participants.
 # Prevents spam campaigns from flooding the contacts table.
 # Both limits are anti-flood guardrails — normal business email should never hit them.
