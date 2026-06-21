@@ -248,35 +248,11 @@ repo. Your deployment tooling writes it to the server at deploy time.
 - A key present only in `local.yaml` is added. A key present only in
   `default.yaml` is preserved unchanged.
 
-### Primary use case: multi-account email
+### Email accounts
 
-The most common reason to use `local.yaml` is to configure
-`channel_accounts.email`, which defines the named email accounts Curia manages.
-Because this structure varies per deployment, it belongs in `local.yaml` rather
-than `default.yaml`.
+Email accounts are managed in the console, not in YAML. Go to **Settings → Channels → Email → Email accounts** to add, edit, or remove agent-owned mailboxes. Each account stores its Nylas grant in the vault at `channel.email.<name>.nylas_grant_id`. `NYLAS_API_KEY` remains the shared app-level key and is still seeded via the vault in the usual way. Changes take effect on restart.
 
-Example `local.yaml`:
-
-```yaml
-channel_accounts:
-  email:
-    curia:
-      nylas_grant_id: "env:NYLAS_GRANT_ID"
-      self_email:     "env:NYLAS_SELF_EMAIL"
-```
-
-The `env:VAR_NAME` references are resolved from environment variables at
-startup — no credentials are stored in `local.yaml`. The actual grant IDs and
-email addresses live in `.env`.
-
-> **Note:** The multi-account `channel_accounts.email` path resolves
-> `env:VAR` references straight from `.env`, **not** from the vault — it is the
-> one path the vault-only model ([ADR-021](../adr/021-vault-only-secret-resolution.md))
-> does not yet cover. The legacy single-account Nylas secrets *are* vault-resolved.
-> Routing multi-account secrets through the vault is tracked as follow-up work (#920).
-
-For a full description of the `channel_accounts.email` schema, see the
-`channel_accounts` comment block in `config/default.yaml`.
+The legacy `channel_accounts.email` YAML path (previously configured in `config/local.yaml`) is retired as of #1101. Remove any `channel_accounts:` block from `local.yaml` if upgrading — it will be ignored on startup.
 
 ### Error handling
 
@@ -384,9 +360,7 @@ from `.env`.
 | `WEB_APP_BOOTSTRAP_SECRET` | Yes | vault | Web app login secret |
 | `OPENAI_API_KEY` | Tier 2 | vault | Enables entity memory and semantic search |
 | `OPENROUTER_API_KEY` | Optional | vault | Enables multi-model routing via OpenRouter (Gemini Flash, DeepSeek V3, GPT-4o). When set, tiers can map to OpenRouter-hosted models. |
-| `NYLAS_API_KEY` | Tier 2 | vault | Email channel |
-| `NYLAS_GRANT_ID` | Tier 2 | vault | Email grant (connected account) |
-| `NYLAS_SELF_EMAIL` | Tier 2 | vault | Address Curia reads and sends from |
+| `NYLAS_API_KEY` | Tier 2 | vault | Shared Nylas app key for the email channel. Per-account grants are managed in the console (Settings → Channels → Email) and stored in the vault at `channel.email.<name>.nylas_grant_id`. |
 | `SIGNAL_PHONE_NUMBER` | Tier 3 | vault | Enables Signal channel |
 | `TAVILY_API_KEY` | Tier 3 | vault | Gates `web-search` (`install.requires_secrets`). Provision `tavily_api_key` via the console (Settings → Skills → web-search); the env var is a fallback only and should be unset in production. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Optional | `.env` | Path to service account JSON for Google Drive |

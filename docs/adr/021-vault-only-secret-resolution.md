@@ -111,13 +111,9 @@ seeding, so Anthropic lives in the vault like every other secret.
 
 ## Known limitations
 
-- **Multi-account YAML email is not covered.** When `channel_accounts.email` is
-  configured in `config/local.yaml`, `resolveChannelAccounts()` (`src/config.ts`)
-  resolves each account's `nylas_grant_id` / `self_email` via `resolveEnvValue()`,
-  which reads `env:VAR` references straight from `process.env` — bypassing the vault.
-  #911 only migrates the legacy single-account path (`config.nylasGrantId`). So
-  "vault-only" is not whole-system true for multi-account YAML deployments. No such
-  deployment is live yet; routing the `env:VAR` resolver through the vault is tracked
-  as follow-up in #920.
+- **Email accounts resolved (#1101).** The `channel_accounts.email` env-bypass gap
+  tracked in #920 is closed: email accounts are now managed via the `email_accounts`
+  table with per-account Nylas grants stored in the vault at
+  `channel.email.<name>.nylas_grant_id`. The YAML path is retired.
 - **Google Workspace OAuth secrets are deferred to #913.** They are not part of #911's
   migration and are tracked separately.
