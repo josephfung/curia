@@ -522,7 +522,11 @@ export class CeoNylasClient {
       throw new NylasApiError(res.status, operation, `Nylas ${operation}: HTTP ${res.status} — ${text}`);
     }
 
-    const json = (await res.json()) as { data: T; next_cursor?: string };
+    const json = (await res.json()) as { data?: T; next_cursor?: string };
+    if (json.data === undefined) {
+      this.log.error({ status: res.status, operation }, `nylas: ${operation} response missing data envelope`);
+      throw new NylasApiError(res.status, operation, `Nylas ${operation}: response missing data envelope`);
+    }
     return { data: json.data, nextCursor: json.next_cursor };
   }
 }
