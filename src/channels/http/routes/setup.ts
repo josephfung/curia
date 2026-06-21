@@ -2,9 +2,8 @@
 //
 // These endpoints back the wizard's new "About you" step and let the frontend
 // decide which onboarding screen to land on. They are intentionally narrow:
-// no general-purpose contact CRUD, no channel-identity creation — that's the
-// job of bootstrapCeoContact (env-var bootstrap) and the future per-channel
-// verification flows respectively.
+// no general-purpose contact CRUD, no channel-identity creation — channel
+// identities are bound later via the per-channel verification flows.
 //
 // Endpoints:
 //   POST /api/setup/principal — name-only principal creation (idempotent)

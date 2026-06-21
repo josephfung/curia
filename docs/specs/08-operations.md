@@ -20,8 +20,9 @@ vault** (vault-first; see [spec 03 — Secrets Access](03-skills-and-execution.m
 and ADR-020/021). Only four bootstrap values live in `.env`, because they are needed to reach
 and unlock the vault itself: `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`, `DB_USER`, `DB_PASSWORD`.
 (Alongside these, `.env` also holds non-secret operational config such as `HTTP_PORT`,
-`POSTGRES_PORT`, `NYLAS_POLL_INTERVAL_MS`, `TIMEZONE`, `CEO_PRIMARY_EMAIL`, and the Google OAuth
-client settings.)
+`POSTGRES_PORT`, `NYLAS_POLL_INTERVAL_MS`, `TIMEZONE`, and the Google OAuth client settings.
+The principal's email is not env config — it lives in the contacts store, resolved via
+`system_role = 'principal'`, since #1049.)
 
 Config files may still reference an env var via interpolation where the value is genuinely an
 environment value rather than a secret:

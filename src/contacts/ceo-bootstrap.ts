@@ -1,35 +1,23 @@
 // src/contacts/ceo-bootstrap.ts
 //
-// CEO contact bootstrap.
+// Principal contact utilities.
 //
-// Ensures the CEO's primary email is linked to a principal-tier, verified contact
-// before the email adapter starts polling. Without this, the first inbound email
-// from the CEO triggers auto-creation via extractParticipants(), which always
-// creates contacts as unknown-tier — causing their messages to be held.
-//
-// Also ensures the CEO contact has a KG person node (kg_node_id). Without one,
-// entity context enrichment is non-functional for the CEO: no facts, standing
-// instructions, or relationship data can be stored or retrieved. See issue #380.
-//
-// This module is called once at startup. It is idempotent under serial execution
-// (safe for single-process deployments, consistent with the migration runner).
-// Handles three cases:
-//   1. Contact + identity already exist at tier='principal'/verified → ensure kg_node_id, no-op otherwise
-//   2. Contact + identity exist at lower tier/unverified → repair via repairPrincipalMetadata + verify
-//   3. Neither exists → create KG node, then create contact + identity in a transaction
+// The env-var-driven CEO bootstrap (`bootstrapCeoContact`, keyed on CEO_PRIMARY_EMAIL)
+// was removed in #1049: the in-app onboarding wizard (#771) now creates the principal,
+// and `findContactBySystemRole('principal')` is the single startup resolution path
+// (see src/index.ts). What remains here are the shared, channel-agnostic utilities the
+// wizard path (ensure-principal.ts) and the startup resolution both rely on:
+//   - repairPrincipalMetadata: idempotent self-heal of role/system_role/tier/kind
+//   - insertKgPersonNode / createAndLinkKgNode: KG person-node creation + linkage
 //
 // Legacy status/trust_level columns are not written by this module (#955).
+//
+// TODO(#1049 follow-up): the filename `ceo-bootstrap.ts` is now a misnomer — these are
+// generic principal/KG utilities. Renaming was left out of scope to avoid churning the
+// ensure-principal.ts import; rename in a dedicated cleanup if it becomes confusing.
 
-import { randomUUID } from 'crypto';
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
-
-export interface CeoContactBootstrapResult {
-  contactId: string;
-  kgNodeId: string;
-  /** true if the contact already existed (possibly promoted), false if newly created */
-  alreadyExisted: boolean;
-}
 
 /**
  * Repair a principal/CEO contact's capability metadata to the canonical values.
@@ -69,195 +57,6 @@ export async function repairPrincipalMetadata(contactId: string, pool: DbPool, l
     );
     throw err;
   }
-}
-
-/**
- * Ensure the CEO's primary email contact exists, is confirmed + verified, and has a
- * linked KG person node.
- *
- * @param ceoPrimaryEmail  The CEO's primary email address (from CEO_PRIMARY_EMAIL env)
- * @param displayName      Display name to use if creating a new contact (defaults to "CEO")
- * @param pool             Postgres connection pool
- * @param logger           Pino logger
- */
-export async function bootstrapCeoContact(
-  ceoPrimaryEmail: string,
-  displayName: string,
-  pool: DbPool,
-  logger: Logger,
-): Promise<CeoContactBootstrapResult> {
-  // Look up by channel identity first — this is the authoritative key for email senders.
-  // Also fetch kg_node_id and display_name so we can detect and fix the missing-KG-node case.
-  // Fetch tier (the canonical capability axis, #945) instead of the legacy status column.
-  // repairPrincipalMetadata will be called before any gate checks so tier reflects the
-  // current canonical value even if the row was written by older code.
-  const existing = await pool.query<{
-    contact_id: string;
-    contact_tier: string;
-    identity_verified: boolean;
-    kg_node_id: string | null;
-    display_name: string;
-  }>(
-    `SELECT ci.contact_id,
-            c.tier          AS contact_tier,
-            ci.verified     AS identity_verified,
-            c.kg_node_id,
-            c.display_name
-     FROM contact_channel_identities ci
-     JOIN contacts c ON c.id = ci.contact_id
-     WHERE ci.channel = 'email' AND ci.channel_identifier = $1`,
-    [ceoPrimaryEmail],
-  );
-
-  if (existing.rows[0]) {
-    const { contact_id, contact_tier, identity_verified, display_name: existingName } = existing.rows[0];
-    let { kg_node_id } = existing.rows[0];
-
-    // Always ensure role = 'ceo', tier = 'principal', and kind = 'principal' on the CEO
-    // contact regardless of which path brought us here. This is idempotent — the UPDATE
-    // is a no-op when all values are already correct. Setting role keeps metadata consistent
-    // even if the contact was initially auto-created without a role.
-    // repairPrincipalMetadata logs with context and rethrows on failure (see its body).
-    await repairPrincipalMetadata(contact_id, pool, logger);
-
-    // Backfill KG node if missing. This handles existing deployments where the contact
-    // was created without a KG node (pre-#380 fix). Uses the contact's existing display_name
-    // rather than the passed-in default so we don't overwrite a name that was already set.
-    if (!kg_node_id) {
-      kg_node_id = await createAndLinkKgNode(contact_id, existingName, pool);
-      logger.info(
-        { contactId: contact_id, kgNodeId: kg_node_id, email: ceoPrimaryEmail },
-        'ceo-bootstrap: backfilled KG person node for existing CEO contact',
-      );
-    }
-
-    // Already at principal tier + identity verified — nothing else to do.
-    // After repairPrincipalMetadata, a CEO contact is always at tier='principal',
-    // so this is the fast-path for every steady-state startup. (#955: gate was
-    // previously on contact_status === 'confirmed'; the tier check is equivalent
-    // for the principal because repairPrincipalMetadata already ran above.)
-    if (contact_tier === 'principal' && identity_verified) {
-      logger.info({ contactId: contact_id, kgNodeId: kg_node_id, email: ceoPrimaryEmail }, 'ceo-bootstrap: CEO contact already at principal tier and verified');
-      return { contactId: contact_id, kgNodeId: kg_node_id, alreadyExisted: true };
-    }
-
-    // Promote in-place: update the identity verified flag if needed.
-    // The contact's tier is already set to 'principal' by repairPrincipalMetadata above,
-    // so we do not write status here — #955 removes that column.
-    if (!identity_verified) {
-      await pool.query(
-        `UPDATE contact_channel_identities
-         SET verified = true, verified_at = now(), updated_at = now()
-         WHERE channel = 'email' AND channel_identifier = $1`,
-        [ceoPrimaryEmail],
-      );
-    }
-
-    logger.info(
-      { contactId: contact_id, kgNodeId: kg_node_id, email: ceoPrimaryEmail, wasTier: contact_tier, wasVerified: identity_verified },
-      'ceo-bootstrap: CEO contact promoted to principal tier + verified',
-    );
-    return { contactId: contact_id, kgNodeId: kg_node_id, alreadyExisted: true };
-  }
-
-  // No existing record — create the KG person node first, then create the contact and
-  // channel identity in a single transaction so a partial failure cannot leave an orphaned
-  // contacts row. The KG node is created outside the transaction intentionally: if the
-  // transaction fails with 23505 (concurrent startup race), we rescue the orphaned KG node
-  // by linking it to the winning contact (see below).
-  //
-  // Note: creating the KG node before the transaction means a failed transaction leaves an
-  // unlinked kg_nodes row. This is acceptable for single-process deployments — next startup
-  // will find the contact (via the winning process) and take the existing-contact path above.
-  const kgNodeId = await insertKgPersonNode(displayName, pool);
-
-  const contactId = randomUUID();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    // tier='principal' and kind='principal' added in migration 055 (issue #945).
-    // status/trust_level are legacy columns not written here (#955).
-    await client.query(
-      `INSERT INTO contacts (id, kg_node_id, display_name, role, system_role, tier, kind, created_at, updated_at)
-       VALUES ($1, $2, $3, 'ceo', 'principal', 'principal', 'principal', now(), now())`,
-      [contactId, kgNodeId, displayName],
-    );
-    await client.query(
-      `INSERT INTO contact_channel_identities
-         (id, contact_id, channel, channel_identifier, verified, verified_at, source, created_at, updated_at)
-       VALUES ($1, $2, 'email', $3, true, now(), 'bootstrap', now(), now())`,
-      [randomUUID(), contactId, ceoPrimaryEmail],
-    );
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    // 23505 = unique_violation: another instance won the race and already created the
-    // identity. Re-query for the winning row and treat as idempotent success.
-    // We also rescue the KG node we created above by linking it to the winner's contact
-    // if the winner ran old code and has no kg_node_id yet.
-    const pgCode = (err as { code?: string }).code;
-    const constraint = (err as { constraint?: string }).constraint;
-    // If the violation is the system_role partial unique index, a contact with
-    // system_role='principal' already exists under a different email. This is a
-    // data-integrity problem that requires manual resolution — re-querying by email
-    // would return no rows and give a misleading warning, so log clearly and rethrow.
-    if (pgCode === '23505' && constraint?.startsWith('idx_contacts_system_role_')) {
-      logger.error(
-        { constraint, email: ceoPrimaryEmail },
-        'ceo-bootstrap: another contact already holds system_role=principal — refusing to create a second principal. Inspect the contacts table and reconcile manually.',
-      );
-      throw err;
-    }
-    if (pgCode === '23505') {
-      const winner = await pool.query<{ contact_id: string; kg_node_id: string | null }>(
-        `SELECT c.id AS contact_id, c.kg_node_id
-         FROM contact_channel_identities ci
-         JOIN contacts c ON c.id = ci.contact_id
-         WHERE ci.channel = 'email' AND ci.channel_identifier = $1`,
-        [ceoPrimaryEmail],
-      );
-      if (winner.rows[0]) {
-        const winnerContactId = winner.rows[0].contact_id;
-        let winnerKgNodeId = winner.rows[0].kg_node_id;
-        if (!winnerKgNodeId) {
-          // Winner ran old code — link the orphaned KG node we already created to them.
-          await pool.query(
-            `UPDATE contacts SET kg_node_id = $1, updated_at = now() WHERE id = $2 AND kg_node_id IS NULL`,
-            [kgNodeId, winnerContactId],
-          );
-          // Re-SELECT to confirm the rescue UPDATE landed — a third concurrent process may
-          // have beaten us to it, in which case the winner's kg_node_id is theirs, not ours.
-          const recheck = await pool.query<{ kg_node_id: string | null }>(
-            `SELECT kg_node_id FROM contacts WHERE id = $1`,
-            [winnerContactId],
-          );
-          winnerKgNodeId = recheck.rows[0]?.kg_node_id ?? null;
-          if (!winnerKgNodeId) {
-            throw new Error(
-              `ceo-bootstrap: winner contact ${winnerContactId} still has no kg_node_id after rescue UPDATE — inspect contacts table`,
-            );
-          }
-        }
-        // Self-heal: the winner may be an older writer that left tier/kind at
-        // migration defaults. Repair before returning (mirrors the main path).
-        await repairPrincipalMetadata(winnerContactId, pool, logger);
-        logger.info({ contactId: winnerContactId, kgNodeId: winnerKgNodeId, email: ceoPrimaryEmail }, 'ceo-bootstrap: concurrent startup race resolved — existing CEO contact used');
-        return { contactId: winnerContactId, kgNodeId: winnerKgNodeId, alreadyExisted: true };
-      }
-      // 23505 fired but the winner re-query returned no rows — the winning contact may have
-      // been deleted between the violation and the re-query, or a different constraint fired.
-      logger.warn(
-        { pgCode, email: ceoPrimaryEmail },
-        'ceo-bootstrap: 23505 unique violation but winner re-query returned no rows — re-throwing',
-      );
-    }
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  logger.info({ contactId, kgNodeId, email: ceoPrimaryEmail }, 'ceo-bootstrap: CEO contact created with KG person node');
-  return { contactId, kgNodeId, alreadyExisted: false };
 }
 
 /**

@@ -9,12 +9,34 @@
 // times with no new expired rows returns early with { expired: 0, notified: 0 }.
 //
 // Non-fatal failure modes:
-//   - CEO_PRIMARY_EMAIL not configured → expiry still happens, notification skipped
+//   - no principal email on file → expiry still happens, notification skipped
 //   - outboundGateway absent → expiry still happens, notification skipped
 //   - sendNotification() returns false → logged at warn, not propagated (expiry is done)
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
+
+/**
+ * Resolve the principal's email address from the contacts store.
+ *
+ * findContactBySystemRole('principal') is the single source of truth for principal
+ * identity (#1049 removed the CEO_PRIMARY_EMAIL env var this skill used to read from
+ * process.env). Returns null — a silent skip — when there is no contactService, no
+ * principal, or no verified email on file. Prefers a verified+active email but falls
+ * back to any verified email so an alert still has a destination if the only known
+ * address is flagged bounced/defunct.
+ */
+async function resolvePrincipalEmail(ctx: SkillContext): Promise<string | null> {
+  if (!ctx.contactService) return null;
+  const principal = await ctx.contactService.findContactBySystemRole('principal');
+  if (!principal) return null;
+  const withIdentities = await ctx.contactService.getContactWithIdentities(principal.id);
+  const identities = withIdentities?.identities ?? [];
+  const email =
+    identities.find((id) => id.channel === 'email' && id.verified && id.status === 'active') ??
+    identities.find((id) => id.channel === 'email' && id.verified);
+  return email?.channelIdentifier ?? null;
+}
 
 // Tiers that warrant a CEO notification on expiry.
 // 'none' and 'low' expirations are recorded in the log but not surfaced as alerts —
@@ -76,16 +98,16 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
             'approval-expiry-sweep: outboundGateway not available — skipping expiry notification for high/critical rows',
           );
         } else {
-          // Read directly from process.env rather than ctx.secret() — ctx.secret()
-          // throws on a missing variable, which would surface as skill failure even
-          // though expiry already committed. A missing email should be a silent skip.
-          const ceoEmail = process.env['CEO_PRIMARY_EMAIL'] ?? '';
+          // Resolve the principal's email from the contacts store (#1049) — the
+          // CEO_PRIMARY_EMAIL env var this skill used to read no longer exists. A
+          // missing principal/email is a silent skip: expiry already committed, so we
+          // never fail the sweep over a missing notification address.
+          const ceoEmail = await resolvePrincipalEmail(ctx);
 
           if (!ceoEmail) {
-            // Not configured — expiry is already done, just skip the notification.
             ctx.log.warn(
               { notifiableCount: notifiable.length },
-              'approval-expiry-sweep: CEO_PRIMARY_EMAIL not configured — skipping expiry notification',
+              'approval-expiry-sweep: no principal email on file — skipping expiry notification',
             );
           } else {
             const subject = `Approval expired — ${notifiable.length} request(s) expired without response`;

@@ -61,7 +61,7 @@ export interface PiiRedactorOptions {
   /** Extra patterns from config (loaded once at startup and threaded through). */
   extraPatterns: PiiPattern[];
   /**
-   * The CEO's contact UUID, resolved from ceoPrimaryEmail at startup by bootstrapCeoContact().
+   * The principal's contact UUID, resolved at startup via findContactBySystemRole('principal') (#1049).
    * When set, any message destined for this exact contact ID bypasses PII redaction entirely,
    * regardless of trust_level. This is the primary CEO identification mechanism — more stable
    * than trust_level because it is an immutable UUID resolved once at startup, not a DB field
@@ -125,7 +125,8 @@ export class PiiRedactor {
     }
 
     // Step 2: CEO contact ID bypass — structural principal bypass.
-    // The CEO contact UUID is resolved once from ceoPrimaryEmail at startup and stored here.
+    // The principal contact UUID is resolved once via findContactBySystemRole('principal')
+    // at startup and stored here (#1049).
     // A UUID match is tamper-proof: it cannot be accidentally elevated via contact management
     // code paths (unlike a trust-level field, which has a setTrustLevel() API).
     if (this.ceoContactId && context.recipientContactId === this.ceoContactId) {

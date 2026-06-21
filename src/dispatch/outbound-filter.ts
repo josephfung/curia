@@ -364,9 +364,9 @@ export class OutboundContentFilter {
     recipientEmail: string,
     recipientTier: ContactTier,
   ): FilterFinding[] {
-    // Only add ceoEmail if it is actually configured — an empty string (missing
-    // CEO_PRIMARY_EMAIL env var) would be a no-op entry that never matches but
-    // obscures the fact that the config is incomplete.
+    // Only add ceoEmail if it is actually known — an empty string (no verified
+    // principal email on file) would be a no-op entry that never matches but
+    // obscures the fact that the principal identity is incomplete.
     const allowedEmails = new Set([
       recipientEmail.toLowerCase(),
       ...(this.config.ceoEmail ? [this.config.ceoEmail.toLowerCase()] : []),

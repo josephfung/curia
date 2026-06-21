@@ -64,29 +64,20 @@ async function main(): Promise<void> {
     );
     await profileService.initialize();
 
+    // Resolve the principal's display name by system_role — the single source of truth
+    // (#1049). Mirrors how index.ts resolves the principal contact at startup.
     let executiveDisplayName = 'the executive';
-    if (config.ceoPrimaryEmail) {
-      const nameResult = await pool.query<{ display_name: string }>(
-        `SELECT c.display_name
-         FROM contacts c
-         JOIN contact_channel_identities ci ON ci.contact_id = c.id
-         WHERE ci.channel = 'email' AND ci.channel_identifier = $1`,
-        [config.ceoPrimaryEmail],
-      );
-      if (nameResult.rows[0]?.display_name) {
-        executiveDisplayName = nameResult.rows[0].display_name;
-      } else {
-        // Warn rather than fail — name is cosmetic; a fallback won't invalidate red-team results.
-        process.stderr.write(
-          `render-coordinator-prompt: warning: CEO contact not found for ${config.ceoPrimaryEmail}.\n` +
-          '  Executive display name will be "the executive" in the rendered prompt.\n' +
-          '  Has the wizard been completed on this instance?\n',
-        );
-      }
+    const nameResult = await pool.query<{ display_name: string }>(
+      `SELECT display_name FROM contacts WHERE system_role = 'principal' LIMIT 1`,
+    );
+    if (nameResult.rows[0]?.display_name) {
+      executiveDisplayName = nameResult.rows[0].display_name;
     } else {
+      // Warn rather than fail — name is cosmetic; a fallback won't invalidate red-team results.
       process.stderr.write(
-        'render-coordinator-prompt: warning: CEO_PRIMARY_EMAIL is not set.\n' +
-        '  Executive display name will be "the executive" in the rendered prompt.\n',
+        'render-coordinator-prompt: warning: no principal contact found.\n' +
+        '  Executive display name will be "the executive" in the rendered prompt.\n' +
+        '  Has the onboarding wizard been completed on this instance?\n',
       );
     }
 

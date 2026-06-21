@@ -2,18 +2,19 @@
 //
 // Name-only principal contact creation for the in-app onboarding wizard (issue #771).
 //
-// Unlike bootstrapCeoContact (which is keyed on CEO_PRIMARY_EMAIL and creates an email
-// channel identity at the same time), this helper takes only a display name. It exists
-// so the wizard's Step 1 "About you" can create the principal as a named entity before
-// any channel identity is bound. Channel identities (email, Signal) are added later via
+// This helper takes only a display name and creates no channel identity. It exists so
+// the wizard's Step 1 "About you" can create the principal as a named entity before any
+// channel identity is bound. Channel identities (email, Signal) are added later via
 // per-channel verification flows — see docs/wip/2026-05-10-principal-identity-design.md.
+// Since #1049 this is the *only* principal-creation path (the env-var-driven CEO bootstrap
+// was removed); startup resolution is read-only via findContactBySystemRole('principal').
 //
 // Behavior:
 //   1. If a contact with system_role='principal' already exists, return it. Backfill
 //      kg_node_id if missing (preserving the existing display_name — we don't rename).
-//   2. Otherwise create the principal contact + KG person node, mirroring the field
-//      set bootstrapCeoContact uses (role='ceo', tier='principal', kind='principal',
-//      system_role='principal'). Legacy status/trust_level columns are not written (#955).
+//   2. Otherwise create the principal contact + KG person node with the canonical field
+//      set (role='ceo', tier='principal', kind='principal', system_role='principal').
+//      Legacy status/trust_level columns are not written (#955).
 //      No contact_channel_identities row is inserted.
 //
 // Idempotent under serial AND concurrent execution. Handles the 23505 race on the

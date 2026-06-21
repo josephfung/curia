@@ -1,15 +1,24 @@
 // tests/integration/ceo-bootstrap.test.ts
 //
-// Integration tests for bootstrapCeoContact.
-// Verifies that the CEO contact is created with a linked KG person node in all
-// three cases, and that existing contacts with kg_node_id = NULL are backfilled.
+// Integration tests for the principal/KG utilities in src/contacts/ceo-bootstrap.ts.
+//
+// The env-var-driven bootstrapCeoContact was removed in #1049 — these tests now cover
+// the surviving, shared helpers that the onboarding-wizard path (ensure-principal.ts)
+// and the startup principal resolution (src/index.ts) both depend on:
+//   - insertKgPersonNode: create / ON-CONFLICT-promote a permanent person node
+//   - createAndLinkKgNode: link a freshly created node to a contact with kg_node_id = NULL
+//   - repairPrincipalMetadata: idempotent self-heal of role/system_role/tier/kind
 //
 // Requires a running Postgres with migrations applied.
 // Skips gracefully when DATABASE_URL is not set.
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
-import { bootstrapCeoContact } from '../../src/contacts/ceo-bootstrap.js';
+import {
+  insertKgPersonNode,
+  createAndLinkKgNode,
+  repairPrincipalMetadata,
+} from '../../src/contacts/ceo-bootstrap.js';
 import { createLogger } from '../../src/logger.js';
 
 const { Pool } = pg;
@@ -17,14 +26,15 @@ const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
-describeIf('bootstrapCeoContact', () => {
+describeIf('ceo-bootstrap principal/KG utilities', () => {
   let pool: pg.Pool;
-  const testEmail = 'ceo-bootstrap-test@example.com';
   const logger = createLogger('silent');
+  // Distinct labels per concern so cleanup with a single LIKE prefix catches them all.
+  const LABEL = 'Bootstrap Test CEO';
+  const OTHER_LABEL = 'Bootstrap Test Other Person';
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    // Verify required tables exist
     await pool.query('SELECT 1 FROM contacts LIMIT 0');
     await pool.query('SELECT 1 FROM kg_nodes LIMIT 0');
   });
@@ -33,231 +43,158 @@ describeIf('bootstrapCeoContact', () => {
     await pool.end();
   });
 
-  // Clean up test rows before each test so cases don't bleed into each other
   beforeEach(async () => {
-    await pool.query(
-      `DELETE FROM contact_channel_identities WHERE channel = 'email' AND channel_identifier = $1`,
-      [testEmail],
-    );
-    await pool.query(
-      `DELETE FROM contacts WHERE role = 'ceo' AND display_name LIKE 'Bootstrap Test%'`,
-    );
-    // Delete ALL kg_nodes for the test label prefix regardless of source — tests that
-    // pre-seed extraction nodes (to simulate pre-existing slow_decay nodes) won't be
-    // cleaned up by a source='bootstrap' filter alone.
-    await pool.query(
-      `DELETE FROM kg_nodes WHERE label LIKE 'Bootstrap Test%'`,
-    );
+    // Order matters: contacts reference kg_nodes via kg_node_id, so clear contacts first.
+    await pool.query(`DELETE FROM contacts WHERE display_name LIKE 'Bootstrap Test%'`);
+    await pool.query(`DELETE FROM kg_nodes WHERE label LIKE 'Bootstrap Test%'`);
   });
 
-  it('case 3: creates contact, channel identity, and KG person node from scratch', async () => {
-    const result = await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
+  describe('insertKgPersonNode', () => {
+    it('creates a permanent person node from scratch', async () => {
+      const id = await insertKgPersonNode(LABEL, pool);
+      expect(id).toBeTruthy();
 
-    expect(result.alreadyExisted).toBe(false);
-    expect(result.contactId).toBeTruthy();
-    expect(result.kgNodeId).toBeTruthy();
+      const node = await pool.query<{
+        type: string; label: string; decay_class: string; source: string; confidence: number;
+      }>(
+        `SELECT type, label, decay_class, source, confidence FROM kg_nodes WHERE id = $1`,
+        [id],
+      );
+      expect(node.rows[0]).toBeDefined();
+      expect(node.rows[0]!.type).toBe('person');
+      expect(node.rows[0]!.label).toBe(LABEL);
+      expect(node.rows[0]!.decay_class).toBe('permanent');
+      expect(node.rows[0]!.source).toBe('bootstrap');
+      expect(node.rows[0]!.confidence).toBe(1);
+    });
 
-    // Verify the contact row was created with the correct fields
-    const contact = await pool.query<{
-      id: string; display_name: string; role: string; tier: string; kg_node_id: string;
-    }>(
-      `SELECT id, display_name, role, tier, kg_node_id FROM contacts WHERE id = $1`,
-      [result.contactId],
-    );
-    expect(contact.rows[0]).toBeDefined();
-    expect(contact.rows[0].display_name).toBe('Bootstrap Test CEO');
-    expect(contact.rows[0].role).toBe('ceo');
-    expect(contact.rows[0].tier).toBe('principal');
-    expect(contact.rows[0].kg_node_id).toBe(result.kgNodeId);
+    it('promotes a pre-existing slow_decay person node to permanent on conflict', async () => {
+      // Simulate what email-based extraction creates before any bootstrap runs:
+      // a person node with the default slow_decay for the principal's display name.
+      const preExistingNodeId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+         VALUES ($1, 'person', $2, '{}', 0.7, 'slow_decay', 'extraction', now(), now())`,
+        [preExistingNodeId, LABEL],
+      );
 
-    // Verify the KG node was created with correct metadata
-    const node = await pool.query<{
-      id: string; type: string; label: string; decay_class: string; source: string; confidence: number;
-    }>(
-      `SELECT id, type, label, decay_class, source, confidence FROM kg_nodes WHERE id = $1`,
-      [result.kgNodeId],
-    );
-    expect(node.rows[0]).toBeDefined();
-    expect(node.rows[0].type).toBe('person');
-    expect(node.rows[0].label).toBe('Bootstrap Test CEO');
-    expect(node.rows[0].decay_class).toBe('permanent');
-    expect(node.rows[0].source).toBe('bootstrap');
-    expect(node.rows[0].confidence).toBe(1);
+      const id = await insertKgPersonNode(LABEL, pool);
+      expect(id).toBe(preExistingNodeId);
 
-    // Verify the channel identity was created and verified
-    const identity = await pool.query<{ verified: boolean; source: string }>(
-      `SELECT verified, source FROM contact_channel_identities
-       WHERE contact_id = $1 AND channel = 'email' AND channel_identifier = $2`,
-      [result.contactId, testEmail],
-    );
-    expect(identity.rows[0]).toBeDefined();
-    expect(identity.rows[0].verified).toBe(true);
-    expect(identity.rows[0].source).toBe('bootstrap');
+      const node = await pool.query<{ decay_class: string; confidence: number; source: string }>(
+        `SELECT decay_class, confidence, source FROM kg_nodes WHERE id = $1`,
+        [preExistingNodeId],
+      );
+      expect(node.rows[0]).toBeDefined();
+      expect(node.rows[0]!.decay_class).toBe('permanent');
+      expect(node.rows[0]!.confidence).toBeGreaterThanOrEqual(1.0);
+      // source is preserved (not overwritten) to keep the audit trail intact
+      expect(node.rows[0]!.source).toBe('extraction');
+    });
+
+    it('does not demote confidence when the conflicting node already has confidence >= 1.0', async () => {
+      const preExistingNodeId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+         VALUES ($1, 'person', $2, '{}', 1.0, 'permanent', 'bootstrap', now(), now())`,
+        [preExistingNodeId, LABEL],
+      );
+
+      const id = await insertKgPersonNode(LABEL, pool);
+      expect(id).toBe(preExistingNodeId);
+
+      const node = await pool.query<{ decay_class: string; confidence: number }>(
+        `SELECT decay_class, confidence FROM kg_nodes WHERE id = $1`,
+        [preExistingNodeId],
+      );
+      expect(node.rows[0]).toBeDefined();
+      expect(node.rows[0]!.decay_class).toBe('permanent');
+      expect(node.rows[0]!.confidence).toBe(1.0);
+    });
+
+    it('does not affect person nodes with a different label', async () => {
+      const unrelatedNodeId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+         VALUES ($1, 'person', $2, '{}', 0.7, 'slow_decay', 'extraction', now(), now())`,
+        [unrelatedNodeId, OTHER_LABEL],
+      );
+
+      await insertKgPersonNode(LABEL, pool);
+
+      const node = await pool.query<{ decay_class: string }>(
+        `SELECT decay_class FROM kg_nodes WHERE id = $1`,
+        [unrelatedNodeId],
+      );
+      expect(node.rows[0]).toBeDefined();
+      expect(node.rows[0]!.decay_class).toBe('slow_decay');
+    });
   });
 
-  it('case 1: returns existing IDs when contact is already confirmed + verified', async () => {
-    // Seed via the first call
-    const first = await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
-    expect(first.alreadyExisted).toBe(false);
+  describe('createAndLinkKgNode', () => {
+    it('creates a node and links it to a contact whose kg_node_id is NULL', async () => {
+      const contactId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO contacts (id, display_name, role, tier, kind, created_at, updated_at)
+         VALUES ($1, $2, 'ceo', 'principal', 'principal', now(), now())`,
+        [contactId, LABEL],
+      );
 
-    // Second call should be a no-op
-    const second = await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
-    expect(second.alreadyExisted).toBe(true);
-    expect(second.contactId).toBe(first.contactId);
-    expect(second.kgNodeId).toBe(first.kgNodeId);
+      const kgNodeId = await createAndLinkKgNode(contactId, LABEL, pool);
+      expect(kgNodeId).toBeTruthy();
 
-    // No duplicate KG nodes should exist for this contact
-    const nodeCount = await pool.query<{ count: string }>(
-      `SELECT COUNT(*) AS count FROM kg_nodes WHERE label = 'Bootstrap Test CEO' AND source = 'bootstrap'`,
-    );
-    expect(Number(nodeCount.rows[0].count)).toBe(1);
+      const contact = await pool.query<{ kg_node_id: string }>(
+        `SELECT kg_node_id FROM contacts WHERE id = $1`,
+        [contactId],
+      );
+      expect(contact.rows[0]!.kg_node_id).toBe(kgNodeId);
+    });
   });
 
-  it('case 2: promotes provisional contact and assigns KG node', async () => {
-    // Insert a provisional contact + unverified identity directly (simulates
-    // the auto-creation path from extractParticipants)
-    const contactId = crypto.randomUUID();
-    await pool.query(
-      `INSERT INTO contacts (id, display_name, role, tier, created_at, updated_at)
-       VALUES ($1, 'Bootstrap Test CEO', null, 'unknown', now(), now())`,
-      [contactId],
-    );
-    await pool.query(
-      `INSERT INTO contact_channel_identities (id, contact_id, channel, channel_identifier, verified, source, created_at, updated_at)
-       VALUES ($1, $2, 'email', $3, false, 'auto', now(), now())`,
-      [crypto.randomUUID(), contactId, testEmail],
-    );
+  describe('repairPrincipalMetadata', () => {
+    it('repairs a contact left at migration-default capability metadata', async () => {
+      // Simulate a row written by older code / auto-creation: unknown tier, person kind, no role.
+      const contactId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO contacts (id, display_name, role, system_role, tier, kind, created_at, updated_at)
+         VALUES ($1, $2, null, null, 'unknown', 'person', now(), now())`,
+        [contactId, LABEL],
+      );
 
-    const result = await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
+      await repairPrincipalMetadata(contactId, pool, logger);
 
-    expect(result.alreadyExisted).toBe(true);
-    expect(result.contactId).toBe(contactId);
-    expect(result.kgNodeId).toBeTruthy();
+      const contact = await pool.query<{
+        role: string; system_role: string; tier: string; kind: string;
+      }>(
+        `SELECT role, system_role, tier, kind FROM contacts WHERE id = $1`,
+        [contactId],
+      );
+      expect(contact.rows[0]!.role).toBe('ceo');
+      expect(contact.rows[0]!.system_role).toBe('principal');
+      expect(contact.rows[0]!.tier).toBe('principal');
+      expect(contact.rows[0]!.kind).toBe('principal');
+    });
 
-    // Contact should now be promoted to principal tier
-    const contact = await pool.query<{ tier: string; kg_node_id: string }>(
-      `SELECT tier, kg_node_id FROM contacts WHERE id = $1`,
-      [contactId],
-    );
-    expect(contact.rows[0].tier).toBe('principal');
-    expect(contact.rows[0].kg_node_id).toBe(result.kgNodeId);
+    it('is an idempotent no-op when the row is already canonical', async () => {
+      const contactId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO contacts (id, display_name, role, system_role, tier, kind, created_at, updated_at)
+         VALUES ($1, $2, 'ceo', 'principal', 'principal', 'principal', now(), now() - interval '1 hour')`,
+        [contactId, LABEL],
+      );
+      const before = await pool.query<{ updated_at: Date }>(
+        `SELECT updated_at FROM contacts WHERE id = $1`,
+        [contactId],
+      );
 
-    // Identity should now be verified
-    const identity = await pool.query<{ verified: boolean }>(
-      `SELECT verified FROM contact_channel_identities WHERE contact_id = $1 AND channel = 'email'`,
-      [contactId],
-    );
-    expect(identity.rows[0].verified).toBe(true);
-  });
+      await repairPrincipalMetadata(contactId, pool, logger);
 
-  it('backfills kg_node_id on a confirmed contact that has none', async () => {
-    // Simulate a contact created by old code: confirmed + verified but kg_node_id = NULL
-    const contactId = crypto.randomUUID();
-    await pool.query(
-      `INSERT INTO contacts (id, display_name, role, tier, created_at, updated_at)
-       VALUES ($1, 'Bootstrap Test CEO', 'ceo', 'known', now(), now())`,
-      [contactId],
-    );
-    await pool.query(
-      `INSERT INTO contact_channel_identities (id, contact_id, channel, channel_identifier, verified, verified_at, source, created_at, updated_at)
-       VALUES ($1, $2, 'email', $3, true, now(), 'bootstrap', now(), now())`,
-      [crypto.randomUUID(), contactId, testEmail],
-    );
-
-    // Confirm kg_node_id starts as NULL
-    const before = await pool.query<{ kg_node_id: string | null }>(
-      `SELECT kg_node_id FROM contacts WHERE id = $1`,
-      [contactId],
-    );
-    expect(before.rows[0].kg_node_id).toBeNull();
-
-    const result = await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
-
-    expect(result.alreadyExisted).toBe(true);
-    expect(result.contactId).toBe(contactId);
-    expect(result.kgNodeId).toBeTruthy();
-
-    // kg_node_id should now be set
-    const after = await pool.query<{ kg_node_id: string }>(
-      `SELECT kg_node_id FROM contacts WHERE id = $1`,
-      [contactId],
-    );
-    expect(after.rows[0].kg_node_id).toBe(result.kgNodeId);
-
-    // KG node should be a permanent bootstrap person node
-    const node = await pool.query<{ type: string; decay_class: string; source: string }>(
-      `SELECT type, decay_class, source FROM kg_nodes WHERE id = $1`,
-      [result.kgNodeId],
-    );
-    expect(node.rows[0].type).toBe('person');
-    expect(node.rows[0].decay_class).toBe('permanent');
-    expect(node.rows[0].source).toBe('bootstrap');
-  });
-
-  it('promotes a pre-existing slow_decay person node to permanent on conflict', async () => {
-    // Simulate what email-based extraction creates before bootstrap runs:
-    // a person node with the default slow_decay for the CEO's display name.
-    const preExistingNodeId = crypto.randomUUID();
-    await pool.query(
-      `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
-       VALUES ($1, 'person', 'Bootstrap Test CEO', '{}', 0.7, 'slow_decay', 'extraction', now(), now())`,
-      [preExistingNodeId],
-    );
-
-    // Bootstrap should find this node via the ON CONFLICT index and promote it.
-    const result = await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
-
-    expect(result.kgNodeId).toBe(preExistingNodeId);
-
-    const node = await pool.query<{ decay_class: string; confidence: number; source: string }>(
-      `SELECT decay_class, confidence, source FROM kg_nodes WHERE id = $1`,
-      [preExistingNodeId],
-    );
-    expect(node.rows[0]).toBeDefined();
-    expect(node.rows[0].decay_class).toBe('permanent');
-    expect(node.rows[0].confidence).toBeGreaterThanOrEqual(1.0);
-    // source is preserved (not overwritten) to keep the audit trail intact
-    expect(node.rows[0].source).toBe('extraction');
-  });
-
-  it('does not demote confidence when the conflicting node already has confidence >= 1.0', async () => {
-    // Pre-seed a permanent node at confidence=1.0 — bootstrap should not lower it.
-    const preExistingNodeId = crypto.randomUUID();
-    await pool.query(
-      `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
-       VALUES ($1, 'person', 'Bootstrap Test CEO', '{}', 1.0, 'permanent', 'bootstrap', now(), now())`,
-      [preExistingNodeId],
-    );
-
-    const result = await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
-
-    expect(result.kgNodeId).toBe(preExistingNodeId);
-
-    const node = await pool.query<{ decay_class: string; confidence: number }>(
-      `SELECT decay_class, confidence FROM kg_nodes WHERE id = $1`,
-      [preExistingNodeId],
-    );
-    expect(node.rows[0]).toBeDefined();
-    expect(node.rows[0].decay_class).toBe('permanent');
-    expect(node.rows[0].confidence).toBe(1.0);
-  });
-
-  it('does not affect person nodes with a different label', async () => {
-    // A third-party contact node should be left at slow_decay after bootstrap runs.
-    const unrelatedNodeId = crypto.randomUUID();
-    await pool.query(
-      `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
-       VALUES ($1, 'person', 'Bootstrap Test Other Person', '{}', 0.7, 'slow_decay', 'extraction', now(), now())`,
-      [unrelatedNodeId],
-    );
-
-    await bootstrapCeoContact(testEmail, 'Bootstrap Test CEO', pool, logger);
-
-    const node = await pool.query<{ decay_class: string }>(
-      `SELECT decay_class FROM kg_nodes WHERE id = $1`,
-      [unrelatedNodeId],
-    );
-    expect(node.rows[0]).toBeDefined();
-    expect(node.rows[0].decay_class).toBe('slow_decay');
+      // The WHERE guard makes a correct row a no-op, so updated_at must not change.
+      const after = await pool.query<{ updated_at: Date }>(
+        `SELECT updated_at FROM contacts WHERE id = $1`,
+        [contactId],
+      );
+      expect(after.rows[0]!.updated_at.getTime()).toBe(before.rows[0]!.updated_at.getTime());
+    });
   });
 });

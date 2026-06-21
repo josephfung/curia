@@ -21,8 +21,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Principal KG node decay class** — `insertKgPersonNode`'s `ON CONFLICT` handler now promotes `decay_class` to `permanent` and pins `confidence` to `GREATEST(existing, 1.0)`, so a pre-existing `slow_decay` person node (created by email extraction before bootstrap ran) is repaired instead of left eligible for DreamEngine archival. Migration 062 backfills any already-affected instance. (#1004)
 
+### Removed
+
+- **`CEO_PRIMARY_EMAIL`** — removed the env var (and `config.ceoPrimaryEmail`, `bootstrapCeoContact`) now that in-app onboarding (#771) creates the principal; `repairPrincipalMetadata` is preserved and runs at startup. (#1049)
+
 ### Changed
 
+- **Principal identity is contacts-only** — `findContactBySystemRole('principal')` is now the single startup source of truth; the `PiiRedactor` bypass, CEO notifiers, outbound filter, and email adapter all read the principal contact (resolved once at boot) instead of `config.ceoPrimaryEmail`. Fixes principal-bound messages being wrongly redacted in fresh-setup mode. (#1049)
 - **`SecretCapturedPayload`** — gained an optional `resumeToken` field (public bus event surface). (#995)
 - **Coordinator Drive moves** — pinned `update_drive_file` to the coordinator and documented reparenting (`add_parents`/`remove_parents`), so "move this doc into a folder" requests are performed instead of declined. (#1062)
 - **`skills/**` typecheck** — CI now type-checks all skill handlers and tests, closing the scope blind spot. (#1075)

@@ -42,8 +42,9 @@ that bootstrap the vault itself:
 
 A secret cannot live in the vault it unlocks, so these four remain in `.env` by
 necessity. (Non-secret config — `HTTP_PORT`, `LOG_LEVEL`, `TIMEZONE` — and identity
-config — `CEO_PRIMARY_EMAIL`, `CEO_SIGNAL_NUMBER` — also stay in `.env`, but they are
-not secrets and are out of scope here.)
+config — `CEO_SIGNAL_NUMBER` — also stay in `.env`, but they are not secrets and are
+out of scope here. The principal's email is not env config at all: it lives in the
+contacts store, resolved via `system_role = 'principal'`, since #1049.)
 
 Every other secret resolves from the vault only. There is no `?? process.env`.
 

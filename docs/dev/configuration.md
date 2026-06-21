@@ -379,7 +379,6 @@ from `.env`.
 | `DATABASE_URL` | Yes | `.env` | Postgres connection string (also reads the vault that hosts the secrets) |
 | `DB_USER` / `DB_PASSWORD` | Yes | `.env` | Postgres credentials |
 | `TIMEZONE` | Yes | `.env` | IANA timezone (e.g. `America/Toronto`) |
-| `CEO_PRIMARY_EMAIL` | Recommended | `.env` | Prevents first CEO email from being held |
 | `ANTHROPIC_API_KEY` | Yes | vault | Powers all agents |
 | `API_TOKEN` | Yes | vault | Authenticates HTTP API requests |
 | `WEB_APP_BOOTSTRAP_SECRET` | Yes | vault | Web app login secret |

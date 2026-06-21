@@ -120,10 +120,10 @@ identity over five steps.
 | 5 — Review | Summary card, Confirm & save button | none |
 
 **Step 1 auto-skip.** When a principal contact already exists at mount time
-(e.g. deployments that seeded one via `CEO_PRIMARY_EMAIL`), the wizard
-detects this from `GET /api/setup/status` and silently advances past step 1
-to step 2. "Back" from step 2 is a no-op in this case rather than flickering
-through the auto-skip again.
+(e.g. a prior wizard run on this instance), the wizard detects this from
+`GET /api/setup/status` and silently advances past step 1 to step 2. "Back"
+from step 2 is a no-op in this case rather than flickering through the
+auto-skip again.
 
 **Tone options.** The 1–3 baseline pills come from `TONE_OPTIONS` in
 [apps/console/src/pages/wizard-utils.ts](../../apps/console/src/pages/wizard-utils.ts).
@@ -301,7 +301,7 @@ greeting + first interview question appears as agent reply
 |------|--------|
 | `scripts/setup.sh` — prereq checks, secret generation, Postgres start, migrations, stack up | Done |
 | `package.json` script `setup` → `bash scripts/setup.sh` | Done |
-| `.env.example` — `DB_USER=curia`, commented `CEO_PRIMARY_EMAIL` placeholder | Done |
+| `.env.example` — `DB_USER=curia`; principal created via the wizard, no email env var (#1049) | Done |
 | README Quickstart — single-command `pnpm run setup` block | Done |
 | `apps/console/src/pages/WizardPage.tsx` — 5-step React form (About you, Identity, Tone, Posture, Review) | Done |
 | `apps/console/src/router.tsx` — `/setup` route sibling to the dashboard | Done |
