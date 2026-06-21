@@ -15,47 +15,11 @@ import type { SkillRegistry } from './registry.js';
 import { connectStdio, connectSse } from './mcp-client.js';
 import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
-import type { ActionRisk } from './types.js';
 import type { SecretsService } from '../secrets/secrets-service.js';
-
-// ---------------------------------------------------------------------------
-// Config types — mirrors schemas/skills-config.json
-// ---------------------------------------------------------------------------
-
-interface McpStdioServerEntry {
-  name: string;
-  transport: 'stdio';
-  action_risk: ActionRisk;
-  sensitivity?: 'normal' | 'elevated';
-  timeout_ms?: number;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  /** Constant parameter values injected into every tool call from this server.
-   *  Keys are parameter names; values are literal strings or "env:VAR_NAME" references.
-   *  Listed parameters are stripped from the tool schema — agents never see them. */
-  fixed_inputs?: Record<string, string>;
-}
-
-interface McpSseServerEntry {
-  name: string;
-  transport: 'sse';
-  action_risk: ActionRisk;
-  sensitivity?: 'normal' | 'elevated';
-  timeout_ms?: number;
-  url: string;
-  headers?: Record<string, string>;
-  /** Constant parameter values injected into every tool call from this server.
-   *  Keys are parameter names; values are literal strings or "env:VAR_NAME" references.
-   *  Listed parameters are stripped from the tool schema — agents never see them. */
-  fixed_inputs?: Record<string, string>;
-}
-
-type McpServerEntry = McpStdioServerEntry | McpSseServerEntry;
-
-interface SkillsConfig {
-  servers?: McpServerEntry[];
-}
+import type {
+  McpServerEntry,
+  SkillsConfig,
+} from './mcp-config-types.js';
 
 // ---------------------------------------------------------------------------
 // Config loader
@@ -67,7 +31,7 @@ interface SkillsConfig {
  * configured is a valid deployment state.
  * Throws on YAML parse errors so startup fails loudly on broken config.
  */
-function loadSkillsConfig(configDir: string): SkillsConfig {
+export function loadSkillsConfig(configDir: string): SkillsConfig {
   const filePath = path.join(configDir, 'skills.yaml');
   try {
     const parsed = yaml.load(fs.readFileSync(filePath, 'utf-8'));
