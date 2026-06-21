@@ -4,6 +4,7 @@ import { Sidebar } from '../components/Sidebar.js';
 import { Topbar } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
+import { EmailAccountsSection } from '../components/EmailAccountsSection.js';
 
 // ── Types (mirror src/channels/credential-resolver.ts CredentialFieldStatus and
 //    src/registry/channel-registry-types.ts ChannelRegistryEntry) ──────────────
@@ -233,6 +234,10 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
               </div>
             </div>
           )}
+
+          {/* Email accounts sub-section — only for the email channel.
+              Lets the operator manage Nylas-backed mailboxes the agent uses. */}
+          {entry.name === 'email' && <EmailAccountsSection />}
 
           <div className="form-field">
             <label>Installed</label>
