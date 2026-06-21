@@ -57,7 +57,7 @@ describe('email gate/adapter agreement (per-account table+vault model)', () => {
     // Gate side: configResolvedKeys built the SAME way index.ts builds it when
     // resolvedEmailAccounts.length > 0 (grant_id + self_email always; api_key because present).
     const configResolvedKeys = new Set<string>(['nylas_grant_id', 'nylas_self_email', 'nylas_api_key']);
-    const status = await channelCredentialStatus({ secrets, configResolvedKeys }, emailDescriptor);
+    const status = await channelCredentialStatus({ secrets, env: {}, configResolvedKeys }, emailDescriptor);
     expect(status.requiredResolvable).toBe(true);
   });
 
@@ -73,7 +73,7 @@ describe('email gate/adapter agreement (per-account table+vault model)', () => {
     // so with an empty result it passes an empty set. With nothing in the vault either, the gate
     // must report email unresolvable — agreeing with the adapter that email is off.
     const configResolvedKeys = new Set<string>();
-    const status = await channelCredentialStatus({ secrets, configResolvedKeys }, emailDescriptor);
+    const status = await channelCredentialStatus({ secrets, env: {}, configResolvedKeys }, emailDescriptor);
     expect(status.requiredResolvable).toBe(false);
   });
 });
