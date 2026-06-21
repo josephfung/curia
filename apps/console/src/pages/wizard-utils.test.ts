@@ -11,9 +11,34 @@ import {
   validatePrincipalName,
   PRINCIPAL_NAME_MAX_LENGTH,
   buildIdentityPayload,
+  assistantFullName,
+  defaultSignature,
+  DEFAULT_WIZARD_STATE,
   type WizardState,
   type LocalIdentity,
 } from './wizard-utils.js';
+
+// ── assistantFullName / defaultSignature ──────────────────────────────────────
+
+describe('assistantFullName', () => {
+  it('pairs a first name with the Curia surname', () => {
+    expect(assistantFullName('Sam')).toBe('Sam Curia');
+  });
+});
+
+describe('defaultSignature', () => {
+  it('builds the full default signature block', () => {
+    expect(defaultSignature('Sam')).toBe('--\nSam Curia\nDigital EA');
+  });
+
+  it('backs the populated DEFAULT_WIZARD_STATE signature (not blank)', () => {
+    expect(DEFAULT_WIZARD_STATE.signature).toBe('--\nAlex Curia\nDigital EA');
+  });
+
+  it('backs the DEFAULT_WIZARD_STATE name', () => {
+    expect(DEFAULT_WIZARD_STATE.name).toBe('Alex Curia');
+  });
+});
 
 // ── toggleToneSelection ───────────────────────────────────────────────────────
 
