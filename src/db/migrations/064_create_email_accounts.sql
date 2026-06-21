@@ -15,9 +15,10 @@
 CREATE TABLE email_accounts (
   -- Logical account id. Stamped onto inbound.message as accountId for reply routing,
   -- and used as the poll high-water-mark key (<name>.last_seen_at). Constrained to
-  -- [a-z0-9][a-z0-9_-]* at the application layer because it is embedded in the dotted
-  -- vault key channel.email.<name>.nylas_grant_id.
-  name        TEXT        PRIMARY KEY,
+  -- [a-z0-9][a-z0-9_-]* because it is embedded in the dotted vault key
+  -- channel.email.<name>.nylas_grant_id. Enforced at the DB level (not just in the HTTP
+  -- layer) so the invariant holds even if a future writer bypasses the route validation.
+  name        TEXT        PRIMARY KEY CHECK (name ~ '^[a-z0-9][a-z0-9_-]*$'),
   self_email  TEXT        NOT NULL,
   provider    TEXT        NOT NULL DEFAULT 'nylas',
   enabled     BOOLEAN     NOT NULL DEFAULT true,

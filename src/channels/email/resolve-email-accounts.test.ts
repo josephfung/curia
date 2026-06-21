@@ -46,4 +46,17 @@ describe('resolveEmailAccounts', () => {
     expect(result.map(a => a.name)).toEqual(['curia']);
     expect(warn).toHaveBeenCalledOnce();
   });
+
+  it('skips an account whose vault read throws, without aborting the others', async () => {
+    const repo = fakeRepo([row({ name: 'curia', selfEmail: 'c@x.com' }), row({ name: 'sales', selfEmail: 's@x.com' })]);
+    const secrets = { get: async (n: string) => {
+      if (n === 'channel.email.curia.nylas_grant_id') throw new Error('vault blip');
+      return 'grant-s';
+    } };
+    const warn = vi.fn();
+    const result = await resolveEmailAccounts(repo, { get: secrets.get }, { ...(logger as unknown as object), warn } as never);
+    // curia is skipped (its read threw); sales still resolves — boot is not aborted.
+    expect(result.map(a => a.name)).toEqual(['sales']);
+    expect(warn).toHaveBeenCalledOnce();
+  });
 });

@@ -20,7 +20,18 @@ export async function resolveEmailAccounts(
   const resolved: ResolvedEmailAccount[] = [];
   for (const acct of rows) {
     if (!acct.enabled) continue;
-    const grant = await secrets.get(emailAccountGrantSecretName(acct.name));
+    // Per-account isolation: a transient vault read failure for one account must skip only
+    // that account (fail-closed) rather than throw and abort resolution for every account.
+    let grant: string | null = null;
+    try {
+      grant = await secrets.get(emailAccountGrantSecretName(acct.name));
+    } catch (err) {
+      logger.warn(
+        { err, account: acct.name },
+        'Email account grant lookup failed — skipping this account',
+      );
+      continue;
+    }
     if (!grant) {
       logger.warn(
         { account: acct.name },

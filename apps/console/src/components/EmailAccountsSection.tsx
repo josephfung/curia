@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../api.js';
 
 // Mirrors the Task 9 email-accounts registry entry shape.
@@ -42,14 +42,23 @@ export function EmailAccountsSection() {
   const [selfEmail, setSelfEmail] = useState('');
   const [grantId, setGrantId] = useState('');
 
+  // Monotonic request id: load() runs on mount and after every mutation, so a slow
+  // earlier load can resolve after a newer one. Only the latest request is allowed to
+  // write state, so a stale response can't clobber a fresh one (e.g. revert a just-added
+  // account back to "No accounts yet").
+  const loadSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       const res = await apiFetch('/api/registry/email-accounts');
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { accounts: EmailAccount[] };
+      if (seq !== loadSeq.current) return; // a newer load() started; discard this result
       setAccounts(data.accounts ?? []);
       setErr(null);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setErr(e instanceof Error ? e.message : 'Failed to load accounts');
     }
   }, []);

@@ -54,6 +54,17 @@ export async function backfillEmailAccounts(deps: BackfillDeps): Promise<void> {
   }
 
   await secrets.set(emailAccountGrantSecretName(LEGACY_ACCOUNT_NAME), grant);
-  await repo.create({ name: LEGACY_ACCOUNT_NAME, selfEmail });
+  try {
+    await repo.create({ name: LEGACY_ACCOUNT_NAME, selfEmail });
+  } catch (err) {
+    // Concurrent startup: another instance may have completed the backfill between our
+    // count() check and this create(), losing the PK race. That is a benign no-op — the
+    // row now exists. Only rethrow if the table is still empty (a real create failure).
+    if ((await repo.count()) > 0) {
+      logger.info({ account: LEGACY_ACCOUNT_NAME }, 'Email account backfill already completed by another instance');
+      return;
+    }
+    throw err;
+  }
   logger.info({ account: LEGACY_ACCOUNT_NAME }, 'Backfilled legacy email account into email_accounts');
 }

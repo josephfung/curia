@@ -23,6 +23,15 @@ describe('email-account-secrets', () => {
     expect(isPerAccountEmailGrantKey('user.foo')).toBe(false);
   });
 
+  it('rejects account segments that violate the account-name slug policy', () => {
+    // The matcher must enforce the same charset as EMAIL_ACCOUNT_NAME_RE so the vault
+    // scope-guard cannot accept keys for identities the console could never create.
+    expect(isPerAccountEmailGrantKey('channel.email.Curia.nylas_grant_id')).toBe(false);   // uppercase
+    expect(isPerAccountEmailGrantKey('channel.email.-lead.nylas_grant_id')).toBe(false);   // leading dash
+    expect(isPerAccountEmailGrantKey('channel.email.bad name.nylas_grant_id')).toBe(false); // space
+    expect(isPerAccountEmailGrantKey('channel.email.x!.nylas_grant_id')).toBe(false);       // punctuation
+  });
+
   it('validates account names', () => {
     expect(isValidEmailAccountName('curia')).toBe(true);
     expect(isValidEmailAccountName('sales-eu_2')).toBe(true);

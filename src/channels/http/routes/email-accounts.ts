@@ -123,22 +123,34 @@ export async function emailAccountsRoutes(
       return reply.status(400).send({ error: `unsupported provider '${provider}' — only 'nylas' is supported` });
     }
 
-    // Check for duplicate before writing anything.
+    // Fast-path duplicate check for a clean 409 in the common (non-concurrent) case.
+    // The INSERT's PRIMARY KEY is the real guard for the concurrent race (handled below).
     if (await repo.get(name)) {
       return reply.status(409).send({ error: `email account '${name}' already exists` });
     }
 
     try {
-      // Write the grant to the vault BEFORE creating the row. If the row INSERT fails,
-      // we end up with a harmless orphan vault entry that the next successful create
-      // will overwrite. The inverse (row without a grant) would leave an account in a
-      // permanently broken state since the grant is required for the channel to function.
-      await secretsService.set(emailAccountGrantSecretName(name), grantId);
+      // Create the row FIRST so the PRIMARY KEY decides the winner atomically. Under two
+      // concurrent POSTs for the same name, the loser's INSERT throws 23505 *before* it
+      // writes any grant, so it can never overwrite the winner's grant (the prior
+      // grant-first ordering had exactly that race). Then write the grant; if that fails,
+      // compensate by deleting the row so we never leave an account without its grant.
       const row = await repo.create({ name, selfEmail, provider, createdBy: ACTOR });
+      try {
+        await secretsService.set(emailAccountGrantSecretName(name), grantId);
+      } catch (err) {
+        await repo.delete(name).catch(() => {});
+        throw err;
+      }
       request.log.info({ account: name }, 'email account created');
       // hasGrant: true — we just wrote it; status only, never the value.
       return reply.status(201).send({ account: { ...row, hasGrant: true } });
     } catch (err) {
+      // Postgres unique_violation: a concurrent request won the create race. Report the
+      // accurate 409 rather than a misleading 500.
+      if (err instanceof Error && (err as { code?: string }).code === '23505') {
+        return reply.status(409).send({ error: `email account '${name}' already exists` });
+      }
       request.log.error({ err, name }, 'POST /api/registry/email-accounts failed');
       return reply.status(500).send({ error: 'Failed to create email account. Check server logs.' });
     }

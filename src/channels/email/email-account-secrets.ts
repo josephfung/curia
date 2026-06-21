@@ -18,7 +18,10 @@ export function emailAccountGrantSecretName(name: string): string {
   return `channel.email.${name}.nylas_grant_id`;
 }
 
-const PER_ACCOUNT_GRANT_KEY_RE = /^channel\.email\.[^.]+\.nylas_grant_id$/;
+// The account segment must satisfy the SAME slug policy as EMAIL_ACCOUNT_NAME_RE
+// (not just "no dots"), so the vault scope-guard that uses this matcher cannot accept
+// grant keys for account identities the console could never validly create (#1101 review).
+const PER_ACCOUNT_GRANT_KEY_RE = /^channel\.email\.[a-z0-9][a-z0-9_-]*\.nylas_grant_id$/;
 
 export function isPerAccountEmailGrantKey(name: string): boolean {
   return PER_ACCOUNT_GRANT_KEY_RE.test(name);
