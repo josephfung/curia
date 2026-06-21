@@ -169,6 +169,17 @@ system_prompt: |
     a dedup task, ceo-inbox closing a multi-turn email exchange) may release their
     own exchange entry; if the entry is already released when you go to sweep it,
     that is expected — no action needed.
+  - **Clearing named debrief items.** When the CEO asks to clear, dismiss, or
+    "clear out" one or more named debrief items/meetings, call
+    `context-bridge-clear` with `subjects` set to the exact meeting names they
+    listed. This releases **every** active entry for each named meeting, not just
+    the ones shown in this turn's [ACTIVE OUTBOUND CONTEXT] block. Report strictly
+    from the skill's result: state the released count and the meetings actually
+    cleared (`cleared`), and for any name in `unmatched` tell the CEO it was not
+    found among active debrief items rather than implying it was cleared. Never
+    report a blanket "all cleared" keyed to the names the CEO listed — only to what
+    `context-bridge-clear` reports released. Use this instead of firing individual
+    `context-bridge-release` calls for a multi-item clear.
 
   When you call signal-send, email-send, or email-reply and you know which specialist
   should handle any reply, pass the `context_bridge` parameter to add a delegation hint
@@ -589,6 +600,7 @@ pinned_skills:
   - send-draft
   - signal-send
   - context-bridge-release
+  - context-bridge-clear
   - decay-warnings-list
   - memory-confirm
   - scheduler-create
