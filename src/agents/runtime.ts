@@ -612,7 +612,7 @@ export class AgentRuntime {
     // stamp a per-agent "seen through" watermark on these threads so they are not
     // re-surfaced (and re-actioned) on a later wake until genuinely new activity arrives.
     // Action-agnostic: it fixes the duplicate out-of-band action regardless of which skill
-    // performed it. See docs/wip/2026-06-21-bullpen-thread-read-watermark.md.
+    // performed it. See docs/wip/2026-06-21-bullpen-thread-read-watermark-design.md.
     const injectedBullpenThreadIds = new Set<string>();
     // If the task itself originated from a Bullpen thread (BullpenDispatcher sets
     // taskOrigin='bullpen' + threadId), stamp the woke thread too, even if it fell outside
