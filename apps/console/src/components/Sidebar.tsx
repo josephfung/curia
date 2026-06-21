@@ -32,8 +32,9 @@ const ROUTES: Record<string, string> = {
   jobs:     '/jobs',
   skills:   '/skills',
   agents:   '/agents',
-  channels: '/channels',
-  settings: '/settings/workspace',
+  channels:   '/channels',
+  'mcp-skills': '/mcp-skills',
+  settings:   '/settings/workspace',
 };
 
 function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) => void }) {
@@ -74,7 +75,7 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
   // Expand the Settings group when on any of its pages (Skills/Agents are now
   // standalone pages but still live under the sidebar's Settings group).
   const [settingsOpen, setSettingsOpen] = useState(
-    activeView === 'settings' || activeView === 'skills' || activeView === 'agents' || activeView === 'channels',
+    activeView === 'settings' || activeView === 'skills' || activeView === 'agents' || activeView === 'channels' || activeView === 'mcp-skills',
   );
   const [principalName, setPrincipalName] = useState<string | null>(null);
   const { setOpen } = useMobileMenu();
@@ -194,6 +195,12 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
               >
                 <IconWand />
                 Channels
+              </button>
+              <button
+                className={`nav-sub-item${activeView === 'mcp-skills' ? ' active' : ''}`}
+                onClick={() => go('mcp-skills')}
+              >
+                MCP Skills
               </button>
               <button
                 className={`nav-sub-item${activeView === 'settings' ? ' active' : ''}`}
