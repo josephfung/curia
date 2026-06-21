@@ -2,6 +2,7 @@
 // Drives the MCP server install/enable lifecycle, mirroring ChannelRegistryService.
 // All MCP servers are toggleable; there is no non-toggleable equivalent.
 import { normalizeSecretValue } from '../channels/credential-resolver.js';
+import type { Logger } from '../logger.js';
 import type { McpServerEntry } from '../skills/mcp-config-types.js';
 import {
   McpGuardError,
@@ -23,6 +24,7 @@ export class McpRegistryService {
     /** Optional: returns the flat vault key names declared by local skills. Used during
      *  uninstall to avoid deleting keys still needed by skills (flat keys are shared). */
     private readonly getSkillDeclaredKeys: () => string[] = () => [],
+    private readonly logger?: Logger,
   ) {}
 
   private descriptor(name: string): McpServerEntry {
@@ -41,8 +43,10 @@ export class McpRegistryService {
       try {
         const raw = await this.secrets.get(decl.key);
         configured = !!normalizeSecretValue(raw);
-      } catch {
-        // Vault read failure → treat as unconfigured; don't crash the list endpoint.
+      } catch (err) {
+        // Vault read failure: treat as unconfigured so list/enable don't crash,
+        // but log at error so operators can distinguish "not set" from "vault broken".
+        this.logger?.error({ err, key: decl.key }, 'vault read failed in secretStatus — treating as unconfigured');
         configured = false;
       }
       if (decl.required && !configured) requiredResolvable = false;

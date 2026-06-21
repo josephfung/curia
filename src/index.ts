@@ -901,16 +901,17 @@ async function main(): Promise<void> {
     mcpConfig.servers ?? [],
     secretsService,
     () => skillDeclaredKeys,
+    logger,
   );
 
+  let enabledMcpServers = new Set<string>();
   try {
     await reconcileMcpRegistry({ service: mcpRegistryService, servers: mcpConfig.servers ?? [], logger });
+    enabledMcpServers = await mcpRegistryService.enabledServerNames();
   } catch (err) {
     logger.fatal({ err }, 'MCP server registry reconciliation failed');
     process.exit(1);
   }
-
-  const enabledMcpServers = await mcpRegistryService.enabledServerNames();
   // ───────────────────────────────────────────────────────────────────────────
 
   // MCP server connections — connects to each server in config/skills.yaml,
