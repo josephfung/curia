@@ -23,14 +23,6 @@ import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js'
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
 
-// Skills that deliver a message to an external recipient. When a Bullpen-originated
-// task is fulfilled by calling one of these (the "please send this to the CEO" relay
-// pattern), the runtime closes the originating thread so it is never re-actioned on a
-// later wake — the duplicate-outbound bug in #1065. The set is the deterministic
-// counterpart to the LLM-facing close_after convention: it does not depend on the model
-// remembering to close the thread.
-const OUTBOUND_RELAY_SKILLS = new Set(['signal-send', 'email-send', 'email-reply', 'send-draft']);
-
 export interface AgentConfig {
   agentId: string;
   systemPrompt: string;
@@ -615,12 +607,30 @@ export class AgentRuntime {
       }
     }
 
+    // Bullpen read-watermark (#1065). Accumulate every thread injected into this agent's
+    // context across the task's refreshBullpenContext calls. At successful completion we
+    // stamp a per-agent "seen through" watermark on these threads so they are not
+    // re-surfaced (and re-actioned) on a later wake until genuinely new activity arrives.
+    // Action-agnostic: it fixes the duplicate out-of-band action regardless of which skill
+    // performed it. See docs/wip/2026-06-21-bullpen-thread-read-watermark.md.
+    const injectedBullpenThreadIds = new Set<string>();
+    // If the task itself originated from a Bullpen thread (BullpenDispatcher sets
+    // taskOrigin='bullpen' + threadId), stamp the woke thread too, even if it fell outside
+    // the top-N injected ambient set.
+    const taskMetadataRecord = taskEvent.payload.metadata as Record<string, unknown> | undefined;
+    if (
+      taskMetadataRecord?.['taskOrigin'] === 'bullpen' &&
+      typeof taskMetadataRecord['threadId'] === 'string'
+    ) {
+      injectedBullpenThreadIds.add(taskMetadataRecord['threadId'] as string);
+    }
+
     // Inject pending Bullpen threads as a system message so the agent is aware
     // of active inter-agent discussions. Inserted after sender context (if any),
     // before conversation history — matching spec context budget priority order.
     // Refreshed before every chatWithRetry call so the model sees current thread
     // state, not a stale snapshot from the start of the task (#213).
-    await this.refreshBullpenContext(messages, bullpenInsertAt, agentId);
+    await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, injectedBullpenThreadIds);
 
     // Record bullpen context in the budget for observability. Match by the
     // same `[Bullpen` sentinel that refreshBullpenContext uses so the two
@@ -723,20 +733,6 @@ export class AgentRuntime {
     // Accumulate skill names across all tool-use turns so we can report them
     // on the agent.response event for audit and monitoring.
     const skillsCalled: string[] = [];
-
-    // Bullpen outbound-relay close (#1065). When this task was created from a Bullpen
-    // thread (BullpenDispatcher sets taskOrigin='bullpen' + threadId), capture the
-    // originating thread id. If the agent fulfils the request by relaying it out-of-band
-    // (an OUTBOUND_RELAY_SKILLS call) rather than replying in-thread, we close that thread
-    // the moment the relay succeeds — otherwise it stays open and gets re-sent on the next
-    // coordinator wake. Set to undefined for non-bullpen tasks so nothing is closed.
-    const taskMetadataRecord = taskEvent.payload.metadata as Record<string, unknown> | undefined;
-    const bullpenOriginThreadId =
-      taskMetadataRecord?.['taskOrigin'] === 'bullpen' && typeof taskMetadataRecord['threadId'] === 'string'
-        ? (taskMetadataRecord['threadId'] as string)
-        : undefined;
-    // Guard so we only issue the close once even if multiple sends happen in one task.
-    let bullpenRelayThreadClosed = false;
 
     // Clarification short-circuit state. When a specialist calls request-clarification,
     // the runtime detects the protocol marker in the skill result and short-circuits the
@@ -904,50 +900,6 @@ export class AgentRuntime {
         if (result.success) {
           // Success: reset consecutive error counter
           budget.consecutiveErrors = 0;
-
-          // Bullpen outbound-relay close (#1065): a Bullpen-originated request was just
-          // fulfilled by an out-of-band send. Close the originating thread now so it is
-          // not re-surfaced and re-sent on a later coordinator wake. Closing immediately
-          // (rather than at task end) means the thread can't re-send even if the task
-          // later fails or times out, and refreshBullpenContext drops it from this task's
-          // own context too. closeThread is authorized for the thread creator or the
-          // coordinator; any other agent (or an already-closed thread) is a no-op we log.
-          if (
-            bullpenOriginThreadId &&
-            !bullpenRelayThreadClosed &&
-            OUTBOUND_RELAY_SKILLS.has(toolCall.name) &&
-            this.config.bullpenService
-          ) {
-            try {
-              await this.config.bullpenService.closeThread(bullpenOriginThreadId, agentId);
-              bullpenRelayThreadClosed = true;
-              logger.info(
-                { agentId, threadId: bullpenOriginThreadId, skill: toolCall.name },
-                'Closed originating Bullpen thread after outbound relay (#1065)',
-              );
-            } catch (err) {
-              // closeThread throws for three distinct reasons (see BullpenService.closeThread):
-              //   - thread not found / already closed — benign: the thread can't re-send anyway.
-              //   - agent not authorized (not creator/coordinator) — leaves the thread OPEN.
-              //   - Postgres UPDATE failure (transient) — leaves the thread OPEN.
-              // The last two mean the #1065 duplicate-send can recur, and this is the only
-              // close attempt, so surface them at error level (alertable) while keeping the
-              // benign case at warn. Either way it's non-fatal: the send already happened, so
-              // aborting the task would be worse than leaving bookkeeping incomplete.
-              const benign = err instanceof Error && /not found/i.test(err.message);
-              if (benign) {
-                logger.warn(
-                  { err, agentId, threadId: bullpenOriginThreadId, skill: toolCall.name },
-                  'Bullpen relay-close skipped: originating thread already closed or missing',
-                );
-              } else {
-                logger.error(
-                  { err, agentId, threadId: bullpenOriginThreadId, skill: toolCall.name },
-                  'Bullpen relay-close FAILED — originating thread left open, duplicate outbound may be re-sent (#1065)',
-                );
-              }
-            }
-          }
 
           // Dynamic tool-list expansion: when skill-registry returns successfully,
           // append the discovered skills' full tool definitions to the working list
@@ -1123,7 +1075,7 @@ export class AgentRuntime {
 
       // Refresh Bullpen context before the next LLM round so the model sees
       // any new replies or closures that occurred during skill execution (#213).
-      await this.refreshBullpenContext(messages, bullpenInsertAt, agentId);
+      await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, injectedBullpenThreadIds);
 
       // Continue the loop — the full conversation history is now in messages
       response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent);
@@ -1241,6 +1193,22 @@ export class AgentRuntime {
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);
+
+    // Bullpen read-watermark (#1065): on a successful completion, mark every thread this
+    // agent had in context as seen up to its current latest message. They won't be
+    // re-surfaced (and re-actioned) on a later wake until newer activity arrives. Skipped
+    // on the fallback/error path so an unfinished thread gets another turn. Best-effort:
+    // a watermark write failure must not turn a completed task into a failure.
+    if (!isResponseError && this.config.bullpenService && injectedBullpenThreadIds.size > 0) {
+      try {
+        await this.config.bullpenService.markThreadsSeen(agentId, [...injectedBullpenThreadIds]);
+      } catch (err) {
+        logger.error(
+          { err, agentId, threadCount: injectedBullpenThreadIds.size },
+          'Failed to mark Bullpen threads seen — they may be re-surfaced on the next wake',
+        );
+      }
+    }
   }
 
   /**
@@ -1259,6 +1227,9 @@ export class AgentRuntime {
     messages: Message[],
     bullpenInsertAt: number,
     agentId: string,
+    // Accumulates the thread ids injected into context across the task's refresh calls,
+    // so the caller can stamp the read watermark on them at completion (#1065).
+    seenCollector?: Set<string>,
   ): Promise<void> {
     if (!this.config.bullpenService) return;
 
@@ -1274,6 +1245,11 @@ export class AgentRuntime {
         agentId,
         this.config.bullpenWindowMinutes ?? 60,
       );
+
+      // Record every injected thread so it can be watermarked at task completion.
+      if (seenCollector) {
+        for (const t of pendingThreads) seenCollector.add(t.threadId);
+      }
 
       // Build the replacement message BEFORE mutating the array, so that a
       // formatBullpenContext failure preserves the stale message rather than

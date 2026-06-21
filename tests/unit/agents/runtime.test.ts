@@ -3074,16 +3074,15 @@ describe('context budget', () => {
   });
 });
 
-// Enforced bullpen close on the outbound-relay path (#1065). When the coordinator
-// fulfils a Bullpen-originated "please send this" request by relaying it out-of-band
-// (signal-send / email-send / etc.) instead of replying in-thread, the originating
-// thread was left status=open and re-surfaced on the coordinator's next wake — causing
-// a duplicate outbound message to the principal. The runtime must close the originating
-// thread the moment the relay succeeds, so it can never be re-actioned.
-describe('AgentRuntime bullpen outbound-relay close (#1065)', () => {
-  // Builds a real in-memory bullpen with one open thread whose first (and only)
-  // message was posted by a non-coordinator creator — mirroring a specialist asking
-  // the coordinator to relay something to the principal.
+// Bullpen read-watermark (#1065). A thread the agent fulfils out-of-band (a send, a
+// spreadsheet write, anything that leaves no in-thread reply) used to be re-injected into
+// the agent's context on its next wake and re-actioned — a duplicate out-of-band action.
+// The runtime now stamps a per-agent "seen through" watermark on every thread it had in
+// context at successful task completion, so a handled thread is not re-surfaced until
+// genuinely new activity arrives. Action-agnostic: no per-skill allowlist.
+describe('AgentRuntime bullpen read-watermark (#1065)', () => {
+  // Real in-memory bullpen with one open thread whose only message is from a
+  // non-coordinator creator — mirroring a specialist asking the coordinator to do something.
   async function makeBullpenWithOpenRequest(creatorAgentId = 'meeting-debrief') {
     const bullpenService = BullpenService.createInMemory();
     const { thread } = await bullpenService.openThread(
@@ -3096,71 +3095,36 @@ describe('AgentRuntime bullpen outbound-relay close (#1065)', () => {
     return { bullpenService, threadId: thread.id };
   }
 
-  it('closes the originating thread after the coordinator relays via signal-send', async () => {
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
-    bus.subscribe('agent.response', 'dispatch', () => {});
-    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
-
-    const provider = createToolUseProvider('signal-send', { to: '+1555', message: 'Your meeting with Lisa…' });
-    const mockExecution = {
-      invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }),
-    } as unknown as ExecutionLayer;
-
-    const agent = new AgentRuntime({
+  function makeCoordinator(bus: EventBus, logger: ReturnType<typeof createLogger>, bullpenService: BullpenService, provider: LLMProvider, executionLayer?: ExecutionLayer) {
+    return new AgentRuntime({
       agentId: 'coordinator',
       systemPrompt: 'You are the coordinator.',
       provider,
       resolvedModel: 'mock-model',
       bus,
       logger,
-      executionLayer: mockExecution,
+      ...(executionLayer ? { executionLayer } : {}),
       bullpenService,
       pinnedSkills: ['signal-send'],
       skillToolDefs: [{ name: 'signal-send', description: 'Send a Signal message', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
     });
-    agent.register();
+  }
 
-    const task = createAgentTask({
-      agentId: 'coordinator',
-      conversationId: threadId,
-      channelId: 'bullpen',
-      senderId: 'meeting-debrief',
-      content: `You've been mentioned in Bullpen thread "Debrief prompt: Lisa" (thread_id: ${threadId}).`,
-      metadata: { taskOrigin: 'bullpen', threadId },
-      parentEventId: 'discuss-1',
-    });
-    await bus.publish('dispatch', task);
-
-    const after = await bullpenService.getThread(threadId);
-    expect(after?.thread.status).toBe('closed');
-  });
-
-  it('does not re-surface the request to the coordinator after the relay closed it', async () => {
-    // Acceptance criterion: a later coordinator wake must not re-encounter the
-    // already-fulfilled request as a pending open thread.
+  it('stops re-surfacing the thread to the coordinator after it handles a bullpen-origin task', async () => {
+    // The core fix: after the coordinator fulfils the request (here via signal-send, but
+    // the watermark does not care which skill), the thread must drop out of its pending
+    // context — even though it remains status=open — so a later wake can't re-action it.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
     const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
 
-    // Before the relay the request is pending for the coordinator.
+    // Before handling, the request is pending for the coordinator.
     const before = await bullpenService.getPendingThreadsForAgent('coordinator', 60);
     expect(before.map(t => t.threadId)).toContain(threadId);
 
-    const provider = createToolUseProvider('signal-send', { to: '+1555', message: 'hi' });
-    const agent = new AgentRuntime({
-      agentId: 'coordinator',
-      systemPrompt: 'You are the coordinator.',
-      provider,
-      resolvedModel: 'mock-model',
-      bus,
-      logger,
-      executionLayer: { invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }) } as unknown as ExecutionLayer,
-      bullpenService,
-      pinnedSkills: ['signal-send'],
-      skillToolDefs: [{ name: 'signal-send', description: 'Send a Signal message', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
-    });
+    const provider = createToolUseProvider('signal-send', { to: '+1555', message: 'Your meeting with Lisa…' });
+    const agent = makeCoordinator(bus, logger, bullpenService, provider, { invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }) } as unknown as ExecutionLayer);
     agent.register();
 
     await bus.publish('dispatch', createAgentTask({
@@ -3168,131 +3132,117 @@ describe('AgentRuntime bullpen outbound-relay close (#1065)', () => {
       conversationId: threadId,
       channelId: 'bullpen',
       senderId: 'meeting-debrief',
-      content: 'relay this',
+      content: `You've been mentioned in Bullpen thread (thread_id: ${threadId}).`,
       metadata: { taskOrigin: 'bullpen', threadId },
       parentEventId: 'discuss-1',
+    }));
+
+    // The thread is still open (we do not close it) but no longer pending for the coordinator.
+    const after = await bullpenService.getThread(threadId);
+    expect(after?.thread.status).toBe('open');
+    const afterPending = await bullpenService.getPendingThreadsForAgent('coordinator', 60);
+    expect(afterPending.map(t => t.threadId)).not.toContain(threadId);
+  });
+
+  it('watermarks a thread that was only injected as ambient context (unrelated wake)', async () => {
+    // The exact repro: the coordinator is woken for an UNRELATED task while the request
+    // thread sits in its ambient context. Handling that task must watermark the ambient
+    // thread so it cannot be re-actioned afterward — no bullpen-origin metadata involved.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+
+    const provider = createMockProvider('handled the unrelated thing');
+    const agent = makeCoordinator(bus, logger, bullpenService, provider);
+    agent.register();
+
+    // A plain non-bullpen task — the request thread is only ambient context here.
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-unrelated',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'do something unrelated',
+      parentEventId: 'inbound-1',
     }));
 
     const afterPending = await bullpenService.getPendingThreadsForAgent('coordinator', 60);
     expect(afterPending.map(t => t.threadId)).not.toContain(threadId);
   });
 
-  it('does not close the thread when the bullpen task makes no outbound send', async () => {
-    // A bullpen-origin task that only reads (no relay) must stay open so the
-    // discussion can continue — the close is gated on an actual outbound send.
+  it('re-surfaces the thread when genuinely new activity arrives after it was handled', async () => {
+    // The watermark only suppresses already-seen state. A new message must bring the
+    // thread back so the agent can act on the new content.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
     const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
 
-    const provider = createToolUseProvider('web-fetch', { url: 'https://example.com' });
-    const agent = new AgentRuntime({
-      agentId: 'coordinator',
-      systemPrompt: 'You are the coordinator.',
-      provider,
-      resolvedModel: 'mock-model',
-      bus,
-      logger,
-      executionLayer: { invoke: vi.fn().mockResolvedValue({ success: true, data: 'page' }) } as unknown as ExecutionLayer,
-      bullpenService,
-      pinnedSkills: ['web-fetch'],
-      skillToolDefs: [{ name: 'web-fetch', description: 'Fetch', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
-    });
+    const provider = createMockProvider('seen');
+    const agent = makeCoordinator(bus, logger, bullpenService, provider);
+    agent.register();
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator', conversationId: 'conv-x', channelId: 'signal',
+      senderId: 'user', content: 'unrelated', parentEventId: 'inbound-1',
+    }));
+    // Watermarked → not pending.
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).not.toContain(threadId);
+
+    // New message from the creator advances last_message_at past the watermark.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Date.now() + 60_000));
+    try {
+      await bullpenService.postMessage(threadId, 'meeting-debrief', 'one more thing', []);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).toContain(threadId);
+  });
+
+  it('does not watermark on an error/fallback completion (thread still surfaces)', async () => {
+    // If the agent could not produce a real response, the thread must remain pending so
+    // the work gets another attempt — only successful completions watermark.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+
+    // tool_use with NO execution layer → the runtime yields an isError fallback response.
+    const provider = createToolUseProvider('signal-send', { to: '+1555', message: 'hi' });
+    const agent = makeCoordinator(bus, logger, bullpenService, provider /* no executionLayer */);
     agent.register();
 
     await bus.publish('dispatch', createAgentTask({
-      agentId: 'coordinator',
-      conversationId: threadId,
-      channelId: 'bullpen',
-      senderId: 'meeting-debrief',
-      content: 'look something up',
-      metadata: { taskOrigin: 'bullpen', threadId },
-      parentEventId: 'discuss-1',
+      agentId: 'coordinator', conversationId: threadId, channelId: 'bullpen',
+      senderId: 'meeting-debrief', content: 'relay this',
+      metadata: { taskOrigin: 'bullpen', threadId }, parentEventId: 'discuss-1',
     }));
 
-    const after = await bullpenService.getThread(threadId);
-    expect(after?.thread.status).toBe('open');
+    const afterPending = await bullpenService.getPendingThreadsForAgent('coordinator', 60);
+    expect(afterPending.map(t => t.threadId)).toContain(threadId);
   });
 
-  it('completes the task without crashing when closeThread throws after a relay', async () => {
-    // The close is best-effort: if it throws (unauthorized agent, transient DB error)
-    // the agent task must still complete — the outbound send already happened, so
-    // aborting would be worse. The runtime logs the failure rather than propagating it.
+  it('completes the task without crashing when markThreadsSeen throws', async () => {
+    // Watermarking is best-effort: a write failure must not turn a completed task into a failure.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     const seenResponses: AgentResponseEvent[] = [];
     bus.subscribe('agent.response', 'dispatch', (e) => { seenResponses.push(e as AgentResponseEvent); });
     const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
-    // Force the close to fail with a non-benign error (thread is left open).
-    vi.spyOn(bullpenService, 'closeThread').mockRejectedValue(new Error('connection terminated'));
+    vi.spyOn(bullpenService, 'markThreadsSeen').mockRejectedValue(new Error('connection terminated'));
 
-    const provider = createToolUseProvider('signal-send', { to: '+1555', message: 'hi' });
-    const agent = new AgentRuntime({
-      agentId: 'coordinator',
-      systemPrompt: 'You are the coordinator.',
-      provider,
-      resolvedModel: 'mock-model',
-      bus,
-      logger,
-      executionLayer: { invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }) } as unknown as ExecutionLayer,
-      bullpenService,
-      pinnedSkills: ['signal-send'],
-      skillToolDefs: [{ name: 'signal-send', description: 'Send a Signal message', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
-    });
+    const provider = createMockProvider('done');
+    const agent = makeCoordinator(bus, logger, bullpenService, provider);
     agent.register();
 
     await bus.publish('dispatch', createAgentTask({
-      agentId: 'coordinator',
-      conversationId: threadId,
-      channelId: 'bullpen',
-      senderId: 'meeting-debrief',
-      content: 'relay this',
-      metadata: { taskOrigin: 'bullpen', threadId },
-      parentEventId: 'discuss-1',
+      agentId: 'coordinator', conversationId: threadId, channelId: 'bullpen',
+      senderId: 'meeting-debrief', content: 'relay this',
+      metadata: { taskOrigin: 'bullpen', threadId }, parentEventId: 'discuss-1',
     }));
 
-    // Task still completed (a non-error response was published) despite the close failure.
     expect(seenResponses).toHaveLength(1);
     expect(seenResponses[0]!.payload.isError).toBeFalsy();
-    // The close failed, so the thread remains open (the failure is surfaced via logs).
-    const after = await bullpenService.getThread(threadId);
-    expect(after?.thread.status).toBe('open');
-  });
-
-  it('does not close any thread when an outbound send happens outside a bullpen-origin task', async () => {
-    // Guard: a normal (non-bullpen) task that sends a Signal message must not
-    // touch bullpen threads even if one is open and the coordinator participates.
-    const logger = createLogger('error');
-    const bus = new EventBus(logger);
-    bus.subscribe('agent.response', 'dispatch', () => {});
-    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
-
-    const provider = createToolUseProvider('signal-send', { to: '+1555', message: 'unrelated' });
-    const agent = new AgentRuntime({
-      agentId: 'coordinator',
-      systemPrompt: 'You are the coordinator.',
-      provider,
-      resolvedModel: 'mock-model',
-      bus,
-      logger,
-      executionLayer: { invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }) } as unknown as ExecutionLayer,
-      bullpenService,
-      pinnedSkills: ['signal-send'],
-      skillToolDefs: [{ name: 'signal-send', description: 'Send a Signal message', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
-    });
-    agent.register();
-
-    // No taskOrigin: 'bullpen' metadata — this is an ordinary outbound task.
-    await bus.publish('dispatch', createAgentTask({
-      agentId: 'coordinator',
-      conversationId: 'conv-unrelated',
-      channelId: 'signal',
-      senderId: 'user',
-      content: 'text the CEO something',
-      parentEventId: 'inbound-1',
-    }));
-
-    const after = await bullpenService.getThread(threadId);
-    expect(after?.thread.status).toBe('open');
   });
 });

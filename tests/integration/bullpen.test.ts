@@ -92,4 +92,45 @@ describeIf('BullpenService integration (Postgres)', () => {
     // ...and the thread is now closed, so further posts are rejected.
     await expect(service.postMessage(thread.id, 'coordinator', 'Too late', [])).rejects.toThrow('closed');
   });
+
+  // Read watermark (#1065): markThreadsSeen stops re-surfacing a handled thread until
+  // newer activity arrives. Exercises the bullpen_thread_reads table + the LEFT JOIN.
+  it('markThreadsSeen suppresses a pending thread until a newer message arrives', async () => {
+    const { thread } = await service.openThread(
+      `${runId} — Watermark test`,
+      'meeting-debrief',
+      ['meeting-debrief', 'coordinator'],
+      'Please relay this to the principal',
+      ['coordinator'],
+    );
+    // Pending for the coordinator before it has been seen.
+    expect((await service.getPendingThreadsForAgent('coordinator', 60)).map(p => p.threadId)).toContain(thread.id);
+
+    // The coordinator handles it out of band; the runtime stamps the watermark.
+    await service.markThreadsSeen('coordinator', [thread.id]);
+    // Still open, but no longer pending for the coordinator.
+    expect((await service.getThread(thread.id))!.thread.status).toBe('open');
+    expect((await service.getPendingThreadsForAgent('coordinator', 60)).map(p => p.threadId)).not.toContain(thread.id);
+
+    // A new message advances last_message_at past the watermark → re-surfaces.
+    await service.postMessage(thread.id, 'meeting-debrief', 'one more thing', []);
+    expect((await service.getPendingThreadsForAgent('coordinator', 60)).map(p => p.threadId)).toContain(thread.id);
+  });
+
+  it('markThreadsSeen is monotonic and per-agent', async () => {
+    const { thread } = await service.openThread(
+      `${runId} — Watermark monotonic`,
+      'creator',
+      ['creator', 'coordinator', 'agent-c'],
+      'Hi',
+      [],
+    );
+    // Advance the watermark to the current latest message.
+    await service.markThreadsSeen('coordinator', [thread.id]);
+    // A redundant stamp at the same state is a no-op and must not lower the watermark or throw.
+    await service.markThreadsSeen('coordinator', [thread.id]);
+    expect((await service.getPendingThreadsForAgent('coordinator', 60)).map(p => p.threadId)).not.toContain(thread.id);
+    // A different participant who never saw it still has it pending.
+    expect((await service.getPendingThreadsForAgent('agent-c', 60)).map(p => p.threadId)).toContain(thread.id);
+  });
 });

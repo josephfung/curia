@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BullpenService, formatBullpenContext } from '../../../src/memory/bullpen.js';
 import type { PendingThreadContext } from '../../../src/memory/bullpen.js';
 
@@ -140,6 +140,46 @@ describe('BullpenService (in-memory)', () => {
     expect(pending[0]?.recentMessages).toHaveLength(5);
     // Should be the last 5 messages
     expect(pending[0]?.recentMessages[4]?.content).toBe('Msg 8');
+  });
+
+  // Read watermark (#1065): a thread the agent has been shown stops re-surfacing until
+  // a newer message arrives — so an out-of-band-handled request isn't re-actioned.
+  it('markThreadsSeen suppresses a previously-pending thread for that agent', async () => {
+    const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', []);
+    expect((await service.getPendingThreadsForAgent('agent-b', 60))).toHaveLength(1);
+
+    await service.markThreadsSeen('agent-b', [thread.id]);
+    expect((await service.getPendingThreadsForAgent('agent-b', 60))).toHaveLength(0);
+  });
+
+  it('markThreadsSeen is per-agent — other participants still see the thread', async () => {
+    const { thread } = await service.openThread('Test', 'creator', ['creator', 'agent-b', 'agent-c'], 'Hi', []);
+    await service.markThreadsSeen('agent-b', [thread.id]);
+    expect((await service.getPendingThreadsForAgent('agent-b', 60))).toHaveLength(0);
+    // agent-c never saw it, so it is still pending for them.
+    expect((await service.getPendingThreadsForAgent('agent-c', 60)).map(t => t.threadId)).toContain(thread.id);
+  });
+
+  it('a new message re-surfaces a watermarked thread', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-21T10:00:00Z'));
+    try {
+      const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', []);
+      await service.markThreadsSeen('agent-b', [thread.id]);
+      expect((await service.getPendingThreadsForAgent('agent-b', 60))).toHaveLength(0);
+
+      // Newer activity advances last_message_at past the watermark.
+      vi.setSystemTime(new Date('2026-06-21T10:05:00Z'));
+      await service.postMessage(thread.id, 'coordinator', 'one more thing', []);
+      const pending = await service.getPendingThreadsForAgent('agent-b', 60);
+      expect(pending.map(t => t.threadId)).toContain(thread.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('markThreadsSeen ignores unknown thread ids without throwing', async () => {
+    await expect(service.markThreadsSeen('agent-b', ['00000000-0000-0000-0000-000000000000'])).resolves.toBeUndefined();
   });
 });
 
