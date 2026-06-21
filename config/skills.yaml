@@ -52,16 +52,24 @@ servers:
   # Prerequisites (one-time human setup — see docs/dev/google-drive.md):
   #   1. Create a Google Cloud Project, enable Drive/Sheets/Docs/Gmail/Calendar APIs
   #   2. Create an OAuth 2.0 Desktop App credential
-  #   3. Seed google_oauth_client_id / google_oauth_client_secret / curia_google_email
-  #      into the vault (see .env.example: GOOGLE_OAUTH_CLIENT_ID=... pnpm run seed-vault)
+  #   3. Seed the required secrets into the vault (see docs/dev/google-drive.md)
   #   4. Run the OAuth flow once locally to cache tokens (~/.workspace-mcp/cli-tokens/)
   #
-  # Empty-string env values below are resolved from the encrypted VAULT at spawn
-  # time by mcp-loader (vault-only, #913): the lowercased key name is the vault key
-  # (GOOGLE_OAUTH_CLIENT_ID -> google_oauth_client_id). A missing secret skips this
-  # whole server. Only these declared keys are passed to the subprocess (plus a safe
-  # base set: PATH, HOME, USER, etc.). This enforces least-privilege: DB_PASSWORD,
-  # ANTHROPIC_API_KEY, etc. never reach the third-party process.
+  # Secrets are declared in the `secrets:` block and resolved from the encrypted
+  # vault at spawn time. The `secrets:` list defines which credentials are required,
+  # and how they are injected into the process:
+  #   - `key:` vault key name (e.g. google_oauth_client_id)
+  #   - `label:` human-readable field label for the web console
+  #   - `required:` whether this secret must be present (if false, missing is OK)
+  #   - `secret:` whether the value is sensitive (should be masked in the web console)
+  #   - `inject:` how to pass it to the process:
+  #       - `env: VAR_NAME` → set as environment variable
+  #       - `fixed_input: tool_parameter_name` → inject into tool call as fixed_inputs
+  #
+  # A missing required secret skips this whole server. Only declared keys are passed
+  # to the subprocess (plus a safe base set: PATH, HOME, USER, etc.). This enforces
+  # least-privilege: DB_PASSWORD, ANTHROPIC_API_KEY, etc. never reach the third-party
+  # process.
   - name: google-workspace
     transport: stdio
     command: uvx
@@ -69,21 +77,31 @@ servers:
       - workspace-mcp
       - --tool-tier
       - complete
+    secrets:
+      - key: google_oauth_client_id
+        label: "Google OAuth client ID"
+        required: true
+        secret: false
+        inject:
+          env: GOOGLE_OAUTH_CLIENT_ID
+      - key: google_oauth_client_secret
+        label: "Google OAuth client secret"
+        required: true
+        secret: true
+        inject:
+          env: GOOGLE_OAUTH_CLIENT_SECRET
+      - key: curia_google_email
+        label: "Curia Google account email"
+        required: true
+        secret: false
+        inject:
+          fixed_input: user_google_email
     env:
-      GOOGLE_OAUTH_CLIENT_ID: ""
-      GOOGLE_OAUTH_CLIENT_SECRET: ""
       # Allow the workspace-mcp subprocess to read files from the TempFileStore
       # directory. Without this, create_drive_file rejects file:// URLs pointing
       # to /run/curia-tempfiles/ because validate_file_path only allows reads
       # from its own STORAGE_DIR by default.
       ALLOWED_FILE_DIRS: "/run/curia-tempfiles"
-    # Bind the Google Workspace user email at the tool layer so agents never see
-    # or reason about it. The "env:CURIA_GOOGLE_EMAIL" reference resolves from the
-    # vault (key curia_google_email) at startup, vault-only (#913). This replaces
-    # the system prompt injection approach (#387) which was fragile because LLMs
-    # could hallucinate different email addresses.
-    fixed_inputs:
-      user_google_email: "env:CURIA_GOOGLE_EMAIL"
     action_risk: low
     sensitivity: normal
     timeout_ms: 60000
