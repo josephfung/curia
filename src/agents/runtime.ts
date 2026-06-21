@@ -23,6 +23,14 @@ import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js'
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
 
+// Skills that deliver a message to an external recipient. When a Bullpen-originated
+// task is fulfilled by calling one of these (the "please send this to the CEO" relay
+// pattern), the runtime closes the originating thread so it is never re-actioned on a
+// later wake — the duplicate-outbound bug in #1065. The set is the deterministic
+// counterpart to the LLM-facing close_after convention: it does not depend on the model
+// remembering to close the thread.
+const OUTBOUND_RELAY_SKILLS = new Set(['signal-send', 'email-send', 'email-reply', 'send-draft']);
+
 export interface AgentConfig {
   agentId: string;
   systemPrompt: string;
@@ -716,6 +724,20 @@ export class AgentRuntime {
     // on the agent.response event for audit and monitoring.
     const skillsCalled: string[] = [];
 
+    // Bullpen outbound-relay close (#1065). When this task was created from a Bullpen
+    // thread (BullpenDispatcher sets taskOrigin='bullpen' + threadId), capture the
+    // originating thread id. If the agent fulfils the request by relaying it out-of-band
+    // (an OUTBOUND_RELAY_SKILLS call) rather than replying in-thread, we close that thread
+    // the moment the relay succeeds — otherwise it stays open and gets re-sent on the next
+    // coordinator wake. Set to undefined for non-bullpen tasks so nothing is closed.
+    const taskMetadataRecord = taskEvent.payload.metadata as Record<string, unknown> | undefined;
+    const bullpenOriginThreadId =
+      taskMetadataRecord?.['taskOrigin'] === 'bullpen' && typeof taskMetadataRecord['threadId'] === 'string'
+        ? (taskMetadataRecord['threadId'] as string)
+        : undefined;
+    // Guard so we only issue the close once even if multiple sends happen in one task.
+    let bullpenRelayThreadClosed = false;
+
     // Clarification short-circuit state. When a specialist calls request-clarification,
     // the runtime detects the protocol marker in the skill result and short-circuits the
     // tool-use loop — emitting a deterministic JSON response instead of asking the LLM
@@ -882,6 +904,36 @@ export class AgentRuntime {
         if (result.success) {
           // Success: reset consecutive error counter
           budget.consecutiveErrors = 0;
+
+          // Bullpen outbound-relay close (#1065): a Bullpen-originated request was just
+          // fulfilled by an out-of-band send. Close the originating thread now so it is
+          // not re-surfaced and re-sent on a later coordinator wake. Closing immediately
+          // (rather than at task end) means the thread can't re-send even if the task
+          // later fails or times out, and refreshBullpenContext drops it from this task's
+          // own context too. closeThread is authorized for the thread creator or the
+          // coordinator; any other agent (or an already-closed thread) is a no-op we log.
+          if (
+            bullpenOriginThreadId &&
+            !bullpenRelayThreadClosed &&
+            OUTBOUND_RELAY_SKILLS.has(toolCall.name) &&
+            this.config.bullpenService
+          ) {
+            try {
+              await this.config.bullpenService.closeThread(bullpenOriginThreadId, agentId);
+              bullpenRelayThreadClosed = true;
+              logger.info(
+                { agentId, threadId: bullpenOriginThreadId, skill: toolCall.name },
+                'Closed originating Bullpen thread after outbound relay (#1065)',
+              );
+            } catch (err) {
+              // Not authorized to close, or thread already closed/missing — non-fatal.
+              // Log so the audit trail shows the relay happened but the close was skipped.
+              logger.warn(
+                { err, agentId, threadId: bullpenOriginThreadId, skill: toolCall.name },
+                'Failed to close originating Bullpen thread after outbound relay — it may be re-surfaced',
+              );
+            }
+          }
 
           // Dynamic tool-list expansion: when skill-registry returns successfully,
           // append the discovered skills' full tool definitions to the working list
