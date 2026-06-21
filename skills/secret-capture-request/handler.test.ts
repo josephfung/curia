@@ -128,4 +128,47 @@ describe('SecretCaptureRequestHandler', () => {
       },
     }]);
   });
+
+  it('retargets origin at the coordinator and mints a resume_token when delegated (#995)', async () => {
+    const minter = fakeMinter();
+    const originator = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' };
+    const ctx = makeCtx(
+      { secret_name: 'Aeroplan password', resume_intent: 'check the Aeroplan balance' },
+      {
+        secretCapture: minter,
+        // Specialist's own (internal) routing — must NOT be used as the resume target:
+        conversationId: 'delegate-xyz',
+        channelId: 'internal',
+        agentId: 'accounts-specialist',
+        taskMetadata: {
+          originator,
+          delegationOrigin: { conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator', originalTask: 'log into Aeroplan and check balance' },
+        },
+      },
+    );
+    await new SecretCaptureRequestHandler().execute(ctx);
+    const call = (minter.userCalls[0] as { origin: Record<string, unknown> });
+    // Re-entry targets the coordinator on its deliverable channel, not the internal specialist ctx.
+    expect(call.origin.conversationId).toBe('user-conv');
+    expect(call.origin.channelId).toBe('email');
+    expect(call.origin.agentId).toBe('coordinator');
+    expect(call.origin.originator).toEqual(originator);
+    // The resume_token names the specialist to re-delegate to.
+    const { decodeResumeToken } = await import('../../src/agents/resume-token.js');
+    const decoded = decodeResumeToken(call.origin.resumeToken as string)!;
+    expect(decoded.agent).toBe('accounts-specialist');
+    expect(decoded.original_task).toBe('log into Aeroplan and check balance');
+  });
+
+  it('does NOT set resumeToken or retarget when not delegated (coordinator-minted)', async () => {
+    const minter = fakeMinter();
+    const ctx = makeCtx(
+      { secret_name: 'Aeroplan password' },
+      { secretCapture: minter, conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator' },
+    );
+    await new SecretCaptureRequestHandler().execute(ctx);
+    const call = (minter.userCalls[0] as { origin: Record<string, unknown> });
+    expect(call.origin.agentId).toBe('coordinator');
+    expect(call.origin).not.toHaveProperty('resumeToken');
+  });
 });

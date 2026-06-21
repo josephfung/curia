@@ -7,6 +7,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { CaptureValueFormat } from '../../src/secrets/secret-capture-service.js';
+import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 /** Build the operator-facing magic-link URL. Prod uses ctx.appOrigin; dev falls back to the
@@ -51,29 +52,22 @@ export class SecretCaptureRequestHandler implements SkillHandler {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
 
-    // Capture the origin routing context (#972) so that when the user fills the link, the
-    // capture endpoint can re-enter THIS agent in THIS conversation to continue. Holds no
-    // secret material — only routing + the agent's own description of what it's doing. The
-    // originator is forwarded opaquely from the task metadata so the resumed task is attributed
-    // to whoever started the chain. resume_intent falls back to the label when not supplied.
+    // resume_intent falls back to the label when not supplied.
     const resumeIntent = typeof resume_intent === 'string' && resume_intent.trim()
       ? resume_intent.trim()
       : labelStr;
-    const originator = ctx.taskMetadata?.originator as Record<string, unknown> | undefined;
+
+    // Build the capture origin via the shared helper (#995): re-enter this agent directly when
+    // coordinator-minted, or retarget at the coordinator with a resume_token when this skill runs
+    // as a delegated specialist. Holds no secret value.
+    const origin = buildCaptureOrigin(ctx, resumeIntent);
 
     try {
       const { rawToken, secretName, expiresAt } = await ctx.secretCapture.mintUserSecret({
         rawName: secret_name,
         label: labelStr,
         valueFormat,
-        origin: {
-          conversationId: ctx.conversationId,
-          channelId: ctx.channelId,
-          agentId: ctx.agentId,
-          taskEventId: ctx.taskEventId,
-          originator,
-          resumeIntent,
-        },
+        origin,
       });
       const captureUrl = buildCaptureUrl(ctx, rawToken);
       const expiresLocal = toLocalIso(Math.floor(expiresAt.getTime() / 1000), ctx.timezone);
