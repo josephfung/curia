@@ -61,8 +61,9 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     const result = await new DelegateHandler().execute(makeCtx(bus));
     expect(result.success).toBe(true);
 
-    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
-    expect(task.payload.metadata).toMatchObject({
+    const task = published.find(e => e.type === 'agent.task');
+    expect(task).toBeDefined();
+    expect((task as AgentTaskEvent).payload.metadata).toMatchObject({
       delegationOrigin: {
         conversationId: 'user-conv',
         channelId: 'email',
@@ -80,8 +81,9 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     );
     expect(result.success).toBe(true);
 
-    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
-    expect(task.payload.metadata).toMatchObject({
+    const task = published.find(e => e.type === 'agent.task');
+    expect(task).toBeDefined();
+    expect((task as AgentTaskEvent).payload.metadata).toMatchObject({
       delegationOrigin: {
         conversationId: 'user-conv',
         channelId: 'email',
@@ -89,7 +91,7 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
         originalTask: 'find the acquisition comps',
       },
     });
-    expect(task.payload.metadata).not.toHaveProperty('originator');
+    expect((task as AgentTaskEvent).payload.metadata).not.toHaveProperty('originator');
   });
 });
 
@@ -105,10 +107,11 @@ describe('DelegateHandler resume_token decode', () => {
       makeCtx(bus, { input: { agent: 'research-analyst', task: 'use the public filings only', resume_token } }),
     );
     expect(result.success).toBe(true);
-    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
-    expect(task.payload.content).toContain('compile the acquisition comps'); // original_task
-    expect(task.payload.content).toContain('gathered 3 of 5 comps');          // progress/context
-    expect(task.payload.content).toContain('use the public filings only');    // CEO direction (task)
+    const task = published.find(e => e.type === 'agent.task');
+    expect(task).toBeDefined();
+    expect((task as AgentTaskEvent).payload.content).toContain('compile the acquisition comps'); // original_task
+    expect((task as AgentTaskEvent).payload.content).toContain('gathered 3 of 5 comps');          // progress/context
+    expect((task as AgentTaskEvent).payload.content).toContain('use the public filings only');    // CEO direction (task)
   });
 
   it('rejects a malformed resume_token without publishing a task', async () => {
@@ -162,7 +165,8 @@ describe('DelegateHandler resume_token decode', () => {
       expect.stringMatching(/version mismatch/i),
     );
     // Despite the mismatch it still proceeds and builds the brief.
-    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
-    expect(task.payload.content).toContain('orig task');
+    const task = published.find(e => e.type === 'agent.task');
+    expect(task).toBeDefined();
+    expect((task as AgentTaskEvent).payload.content).toContain('orig task');
   });
 });

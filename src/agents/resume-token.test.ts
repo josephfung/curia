@@ -32,6 +32,11 @@ describe('resume-token', () => {
     expect(decodeResumeToken('!!!not base64 json!!!')).toBeNull();
   });
 
+  it('returns null for valid base64 that decodes to JSON null', () => {
+    // JSON.parse('null') returns JavaScript null; accessing .agent on it would throw without the guard.
+    expect(decodeResumeToken(Buffer.from('null').toString('base64'))).toBeNull();
+  });
+
   it('returns null when required string fields are missing or wrong-typed', () => {
     const bad = Buffer.from(JSON.stringify({ v: 1, agent: 'a', original_task: 'x' })).toString('base64'); // no context
     expect(decodeResumeToken(bad)).toBeNull();

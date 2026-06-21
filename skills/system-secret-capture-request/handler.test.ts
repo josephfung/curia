@@ -134,11 +134,14 @@ describe('SystemSecretCaptureRequestHandler (#995)', () => {
     );
     const result = await new SystemSecretCaptureRequestHandler().execute(ctx);
     expect(result.success).toBe(true);
+    expect(minter.systemCalls[0]).toBeDefined();
     const call = minter.systemCalls[0]! as { origin: Record<string, unknown> };
     expect(call.origin.conversationId).toBe('user-conv');
     expect(call.origin.channelId).toBe('web');
     expect(call.origin.agentId).toBe('coordinator');
     expect(call.origin.originator).toEqual(originator);
-    expect(decodeResumeToken(call.origin.resumeToken as string)!.agent).toBe('setup-wizard');
+    const decoded = decodeResumeToken(call.origin.resumeToken as string);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.agent).toBe('setup-wizard');
   });
 });
