@@ -132,4 +132,37 @@ describe('vault routes', () => {
     expect(res.statusCode).toBe(401);
     expect(secrets.sets).toEqual([]);
   });
+
+  // --- per-account email grant key tests (#1101) ---
+
+  it('accepts a per-account email grant key', async () => {
+    // channel.email.<name>.nylas_grant_id is the per-account grant pattern added
+    // by the email-accounts console flow; it must be writable here.
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    const res = await put(app, 'channel.email.curia.nylas_grant_id', { value: 'grant_abc' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+    expect(secrets.sets).toEqual([{ name: 'channel.email.curia.nylas_grant_id', value: 'grant_abc' }]);
+  });
+
+  it('still rejects an undeclared, non-credential key', async () => {
+    // Widening the guard to accept per-account grant keys must not open the door
+    // to arbitrary undeclared names.
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    const res = await put(app, 'random_key', { value: 'x' });
+    expect(res.statusCode).toBe(400);
+    expect(secrets.sets).toEqual([]);
+  });
+
+  it('rejects a per-account key for a non-grant field', async () => {
+    // channel.email.<name>.nylas_api_key is not the per-account grant pattern;
+    // only nylas_grant_id is written per-account. This must stay rejected.
+    const secrets = fakeSecrets();
+    app = await build(secrets, fakeRegistry());
+    const res = await put(app, 'channel.email.curia.nylas_api_key', { value: 'nk_live_abc' });
+    expect(res.statusCode).toBe(400);
+    expect(secrets.sets).toEqual([]);
+  });
 });
