@@ -158,6 +158,7 @@ describe('SecretCaptureRequestHandler', () => {
     const decoded = decodeResumeToken(call.origin.resumeToken as string)!;
     expect(decoded.agent).toBe('accounts-specialist');
     expect(decoded.original_task).toBe('log into Aeroplan and check balance');
+    expect(call.origin.resumeIntent).toBe('check the Aeroplan balance');
   });
 
   it('does NOT set resumeToken or retarget when not delegated (coordinator-minted)', async () => {
