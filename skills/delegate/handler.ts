@@ -180,28 +180,37 @@ export class DelegateHandler implements SkillHandler {
       'Delegating task to specialist',
     );
 
+    // Forward the coordinator's relay context so that if the specialist mints a secret-capture
+    // link, the capture origin can re-enter the COORDINATOR (a deliverable channel) and re-delegate
+    // back to this specialist via resume_token (#995). originalTask is the specialist's brief, used
+    // to build that resume_token. Only `delegate` sets delegationOrigin — it is the structural
+    // signal that a task is running as a delegated specialist.
+    const delegationMetadata: Record<string, unknown> = {
+      delegationOrigin: {
+        conversationId: ctx.conversationId,
+        channelId: ctx.channelId,
+        agentId: ctx.agentId,
+        originalTask: effectiveTask,
+      },
+    };
+    // Preserve the originator forwarding (#972) — without it the specialist loses the chain's
+    // TaskOriginator and isPrincipalOriginated() goes false for every skill in its turn.
+    if (ctx.taskMetadata?.originator) {
+      delegationMetadata.originator = ctx.taskMetadata.originator;
+    }
+
     // Publish an agent.task event for the specialist.
     // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
     // to the Coordinator's skill.invoke event, but SkillContext doesn't currently
     // carry the invoking event's ID. TODO: Add invokeEventId to SkillContext so
     // capability-gated skills can maintain the full audit causal chain.
-    //
-    // Forward the parent task's originator so the specialist inherits the original
-    // TaskOriginator. Without this, a CEO-initiated task delegated to a specialist
-    // would lose its originator at the delegation boundary and isPrincipalOriginated()
-    // would return false for all skill calls inside the specialist's turn.
     const taskEvent = createAgentTask({
       agentId: agent,
       conversationId,
       channelId: 'internal',
       senderId: 'coordinator',
       content: effectiveTask,
-      // Forward only the originator field, not the full taskMetadata. Other metadata fields
-      // (e.g. future billing context, routing hints) are coordinator-internal and should
-      // not propagate transitively down the delegation chain unless explicitly designed to.
-      metadata: ctx.taskMetadata?.originator
-        ? { originator: ctx.taskMetadata.originator }
-        : undefined,
+      metadata: delegationMetadata,
       parentEventId: `delegate-${randomUUID()}`,
     });
 
