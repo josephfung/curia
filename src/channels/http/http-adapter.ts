@@ -88,6 +88,11 @@ export interface HttpAdapterConfig {
    * the supervisor brings the new process up). Exposed via GET /api/setup/status.
    */
   bootStartedAt: string;
+  /**
+   * Constrained LLM access for POST /api/setup/suggest-name (wizard starter-name
+   * suggestion, #799). Optional — the endpoint degrades to "unavailable" when absent.
+   */
+  infraLlmService?: import('../../skills/infra-llm.js').InfraLlmService;
 }
 
 export class HttpAdapter implements Channel {
@@ -322,6 +327,7 @@ export class HttpAdapter implements Channel {
         scheduleProcessExit: (delayMs) => {
           setTimeout(() => process.exit(0), delayMs);
         },
+        infraLlmService: this.config.infraLlmService,
       });
     }
 
