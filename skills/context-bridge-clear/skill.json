@@ -1,0 +1,22 @@
+{
+  "name": "context-bridge-clear",
+  "description": "Release ALL active outbound context bridge entries for one or more named meetings/subjects at once. Use when the CEO asks to clear, dismiss, or 'clear out' named debrief items. Matches every active entry whose meeting subject equals a given name (case-insensitive), regardless of whether its entry_id appeared in the [ACTIVE OUTBOUND CONTEXT] block. Returns the actual released count per subject and any names that matched nothing — confirm to the CEO from this result, not from the names requested. Accepts `subjects` (array) or a single `subject`.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "subjects": "string[]"
+  },
+  "outputs": {
+    "released": "number",
+    "cleared": "object[]",
+    "unmatched": "string[]"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "allowed_callers": ["coordinator"],
+  "capabilities": [
+    "outboundContext"
+  ]
+}
