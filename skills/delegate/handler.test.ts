@@ -6,6 +6,7 @@ import type { SkillContext } from '../../src/skills/types.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { BusEvent, AgentTaskEvent } from '../../src/bus/events.js';
 import { createAgentResponse } from '../../src/bus/events.js';
+import { encodeResumeToken } from '../../src/agents/resume-token.js';
 
 /** Fake bus that, when an agent.task is published, immediately delivers a successful
  *  agent.response parented to it so DelegateHandler's await resolves. */
@@ -89,5 +90,45 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
       },
     });
     expect(task.payload.metadata).not.toHaveProperty('originator');
+  });
+});
+
+describe('DelegateHandler resume_token decode', () => {
+  it('builds a task brief from a valid resume_token (original task + progress + CEO direction)', async () => {
+    const { bus, published } = makeBus();
+    const resume_token = encodeResumeToken({
+      agent: 'research-analyst',
+      originalTask: 'compile the acquisition comps',
+      context: 'gathered 3 of 5 comps; blocked on the private ones',
+    });
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, { input: { agent: 'research-analyst', task: 'use the public filings only', resume_token } }),
+    );
+    expect(result.success).toBe(true);
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    expect(task.payload.content).toContain('compile the acquisition comps'); // original_task
+    expect(task.payload.content).toContain('gathered 3 of 5 comps');          // progress/context
+    expect(task.payload.content).toContain('use the public filings only');    // CEO direction (task)
+  });
+
+  it('rejects a malformed resume_token without publishing a task', async () => {
+    const { bus, published } = makeBus();
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, { input: { agent: 'research-analyst', task: 'continue', resume_token: '!!!not base64 json!!!' } }),
+    );
+    if (result.success) throw new Error('expected delegate to reject a malformed resume_token');
+    expect(result.error).toMatch(/could not be decoded|corrupted/i);
+    expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
+  });
+
+  it('rejects a resume_token minted for a different specialist (cross-agent guard)', async () => {
+    const { bus, published } = makeBus();
+    const resume_token = encodeResumeToken({ agent: 'accounts-specialist', originalTask: 'x', context: 'y' });
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, { input: { agent: 'research-analyst', task: 'continue', resume_token } }),
+    );
+    if (result.success) throw new Error('expected delegate to reject a cross-agent resume_token');
+    expect(result.error).toMatch(/accounts-specialist/);
+    expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
   });
 });

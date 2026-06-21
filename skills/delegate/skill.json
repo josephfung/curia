@@ -1,7 +1,7 @@
 {
   "name": "delegate",
   "description": "Delegate a task to a specialist agent. Use this when the user's request requires specialized expertise (research, expense tracking, etc.). Provide the specialist's name and a clear task description.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
