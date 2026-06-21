@@ -33,10 +33,11 @@ export class McpRegistryService {
     return d;
   }
 
-  private async secretStatus(server: McpServerEntry): Promise<{ fields: McpSecretFieldStatus[]; requiredResolvable: boolean }> {
+  private async secretStatus(server: McpServerEntry): Promise<{ fields: McpSecretFieldStatus[]; requiredResolvable: boolean; vaultReadFailed: boolean }> {
     const decls = server.transport === 'stdio' ? (server.secrets ?? []) : [];
     const fields: McpSecretFieldStatus[] = [];
     let requiredResolvable = true;
+    let vaultReadFailed = false;
 
     for (const decl of decls) {
       let configured = false;
@@ -44,16 +45,18 @@ export class McpRegistryService {
         const raw = await this.secrets.get(decl.key);
         configured = !!normalizeSecretValue(raw);
       } catch (err) {
-        // Vault read failure: treat as unconfigured so list/enable don't crash,
-        // but log at error so operators can distinguish "not set" from "vault broken".
+        // Vault read failure: treat as unconfigured so list() stays functional (don't crash
+        // the whole MCP page on a transient vault error), but track the failure so enable()
+        // can surface it as an infra 500 rather than masking it as a 400 credentials error.
         this.logger?.error({ err, key: decl.key }, 'vault read failed in secretStatus — treating as unconfigured');
         configured = false;
+        vaultReadFailed = true;
       }
       if (decl.required && !configured) requiredResolvable = false;
       fields.push({ key: decl.key, label: decl.label, secret: decl.secret, configured });
     }
 
-    return { fields, requiredResolvable };
+    return { fields, requiredResolvable, vaultReadFailed };
   }
 
   async list(): Promise<McpRegistryEntry[]> {
@@ -90,7 +93,12 @@ export class McpRegistryService {
     const server = this.descriptor(name);
     const row = await this.repo.getRow(name);
     if (!row) throw new McpGuardError(`Cannot enable '${name}': not installed. Install it first.`);
-    const { requiredResolvable } = await this.secretStatus(server);
+    const { requiredResolvable, vaultReadFailed } = await this.secretStatus(server);
+    if (vaultReadFailed) {
+      // Vault infra failure — not a credential error, so don't throw McpGuardError (400).
+      // Let it propagate as a plain Error so the route layer returns 500.
+      throw new Error(`Cannot enable '${name}': vault read failed. Check server logs.`);
+    }
     if (!requiredResolvable) {
       throw new McpGuardError(`Cannot enable '${name}': required credentials are not configured.`);
     }
@@ -108,6 +116,8 @@ export class McpRegistryService {
 
   async uninstall(name: string, _actor: string): Promise<void> {
     const server = this.descriptor(name);
+    const row = await this.repo.getRow(name);
+    if (!row) throw new McpGuardError(`Cannot uninstall '${name}': not installed.`);
     // Delete only vault keys exclusively owned by this server — flat keys may be
     // shared by other servers or local skills, and deleting them would break those.
     const ownKeys = new Set(

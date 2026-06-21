@@ -322,6 +322,18 @@ export async function loadMcpServers(
       continue;
     }
 
+    // SSE servers: the secrets: block is schema-valid but not injected (no subprocess).
+    // Warn early so the operator knows their config is a no-op and should use headers: instead.
+    if (serverEntry.transport === 'sse') {
+      const rawSecrets = (serverEntry as unknown as Record<string, unknown>)['secrets'];
+      if (Array.isArray(rawSecrets) && rawSecrets.length > 0) {
+        logger.warn(
+          { server: serverEntry.name },
+          'SSE MCP server declares secrets: block, but SSE transport has no subprocess — secrets are not injected. Use headers: for SSE auth instead.',
+        );
+      }
+    }
+
     // Resolve credentials and build the env for the subprocess.
     // New path: if the server declares a secrets: block, resolve from it and merge with
     // any non-secret env literals. Legacy path: resolve env: "" sentinels and
@@ -346,6 +358,20 @@ export async function loadMcpServers(
       connectEntry = { ...serverEntry, env: { ...literalEnv, ...secretsResult.env } } as McpStdioServerEntry;
       // Any old literal fixed_inputs + secrets block fixed_inputs.
       const literalFixed = 'fixed_inputs' in serverEntry ? (serverEntry.fixed_inputs ?? {}) : {};
+      // Guard against partial migrations: if fixed_inputs still carries 'env:VAR' sentinels while
+      // secrets: is also present, those sentinels would land as literal strings in the subprocess
+      // env instead of being vault-resolved. Fail fast so the misconfiguration is obvious.
+      const sentinelKeys = Object.entries(literalFixed)
+        .filter(([, v]) => v.startsWith('env:'))
+        .map(([k]) => k);
+      if (sentinelKeys.length > 0) {
+        logger.error(
+          { server: serverEntry.name, keys: sentinelKeys },
+          "MCP server has secrets: block but fixed_inputs still contains 'env:VAR' sentinels — " +
+          'migrate them to the secrets: block and remove from fixed_inputs; skipping this server',
+        );
+        continue;
+      }
       Object.assign(resolvedFixedInputs, literalFixed, secretsResult.fixedInputs);
       logger.info(
         { server: serverEntry.name, envKeys: Object.keys(secretsResult.env), fixedKeys: Object.keys(secretsResult.fixedInputs) },

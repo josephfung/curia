@@ -54,8 +54,8 @@ const MAX_SECRET_VALUE_LENGTH = 8192;
 
 export interface VaultRouteOptions {
   secretsService: VaultSecretsPort;
-  /** Used to scope writes to secrets that some skill actually declares it needs. */
-  registryService: RegistryService;
+  /** Optional: when present, declared skill secret keys are added to the write allowlist. */
+  registryService?: RegistryService;
   webAppBootstrapSecret: string;
   sessions: SessionStore;
   /** Optional: when present, declared MCP secret keys are added to the write allowlist. */
@@ -110,7 +110,7 @@ export async function vaultRoutes(
     // server. This is the line between "configure a declared secret / known channel credential"
     // and "write any key into the vault". Arbitrary `channel.*` names that aren't in the
     // catalog are still rejected; arbitrary MCP keys not declared in config are too.
-    const isSkillDeclared = registryService.declaredSecretNames().includes(name);
+    const isSkillDeclared = registryService?.declaredSecretNames().includes(name) ?? false;
     const isMcpDeclared = options.mcpRegistryService?.declaredSecretKeys().includes(name) ?? false;
     if (!isSkillDeclared && !isChannelCredentialKey(name) && !isMcpDeclared) {
       request.log.info({ name }, 'vault set rejected: name not declared by any skill, MCP server, or channel');

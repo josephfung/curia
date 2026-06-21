@@ -361,19 +361,23 @@ export class HttpAdapter implements Channel {
         webAppBootstrapSecret,
         sessions,
       });
+    }
 
-      // Vault routes — secrets status + skill-secret entry for the registry UI's
-      // install-time gate. Requires both services: registryService scopes which
-      // secret names may be written.
-      if (this.config.secretsService) {
-        await this.app.register(vaultRoutes, {
-          secretsService: this.config.secretsService,
-          registryService: this.config.registryService,
-          mcpRegistryService: this.config.mcpRegistryService,
-          webAppBootstrapSecret,
-          sessions,
-        });
-      }
+    // Vault routes — secrets status + credential entry for skill and MCP console UIs.
+    // Mounted whenever either the skill registry OR the MCP registry is present, so the
+    // credential-save endpoint works for MCP-only deployments (without a skill registry).
+    if (
+      webAppBootstrapSecret &&
+      this.config.secretsService &&
+      (this.config.registryService || this.config.mcpRegistryService)
+    ) {
+      await this.app.register(vaultRoutes, {
+        secretsService: this.config.secretsService,
+        registryService: this.config.registryService,
+        mcpRegistryService: this.config.mcpRegistryService,
+        webAppBootstrapSecret,
+        sessions,
+      });
     }
 
     // Channel registry routes — the channel install/enable lifecycle for the console UI.
