@@ -22,16 +22,9 @@
 import { randomUUID } from 'node:crypto';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createAgentTask, type AgentResponseEvent } from '../../src/bus/events.js';
-
-/** Version marker for resume tokens — allows forward-compatible format changes. */
-const RESUME_TOKEN_VERSION = 1;
-
-interface ResumeTokenPayload {
-  v: number;
-  agent: string;
-  original_task: string;
-  context: string;
-}
+// Resume-token format lives in ONE place (#995): decode + version via the shared helper, so a
+// future format change can't silently desync this handler from runtime.ts and the resume subscriber.
+import { decodeResumeToken, RESUME_TOKEN_VERSION } from '../../src/agents/resume-token.js';
 
 // Default wait for the specialist to respond — appropriate for interactive tasks.
 // Long-running scheduled tasks should pass timeout_ms explicitly (injected by the runtime
@@ -108,71 +101,72 @@ export class DelegateHandler implements SkillHandler {
     // no special resume detection logic needed in its prompt.
     let effectiveTask = task;
     if (resume_token && typeof resume_token === 'string') {
-      try {
-        const decoded = JSON.parse(
-          Buffer.from(resume_token, 'base64').toString('utf-8'),
-        ) as Record<string, unknown>;
-
-        if (decoded.v !== RESUME_TOKEN_VERSION) {
-          ctx.log.warn(
-            { targetAgent: agent, tokenVersion: decoded.v, expectedVersion: RESUME_TOKEN_VERSION },
-            'resume_token version mismatch — attempting to use anyway',
-          );
-        }
-
-        // Runtime validation: the token is opaque to the LLM, so a corrupted
-        // token must not silently produce a broken task brief.
-        const payload = decoded as unknown as ResumeTokenPayload;
-        if (!payload.original_task || !payload.context) {
-          const versionNote = decoded.v !== RESUME_TOKEN_VERSION
-            ? ` Token version ${String(decoded.v)} does not match expected version ${RESUME_TOKEN_VERSION} — this may be the cause.`
-            : '';
-          return {
-            success: false,
-            error: `resume_token is missing required fields (original_task, context).${versionNote} The token may be corrupted — ask the CEO to repeat their request.`,
-          };
-        }
-
-        // Guard against cross-agent token misuse: if the coordinator passes a
-        // resume_token generated for one specialist but targets a different one,
-        // the task brief would contain another agent's context. Reject early.
-        if (payload.agent && payload.agent !== agent) {
-          ctx.log.warn(
-            { targetAgent: agent, tokenAgent: payload.agent },
-            'resume_token was generated for a different agent — possible cross-agent token misuse',
-          );
-          return {
-            success: false,
-            error: `resume_token was generated for agent '${payload.agent}' but is being used to delegate to '${agent}'. Re-delegate to the correct specialist or ask the CEO to repeat their request.`,
-          };
-        }
-
-        effectiveTask = [
-          'You are continuing a task that was paused to get the CEO\'s direction.',
-          '',
-          '## Original Task',
-          payload.original_task,
-          '',
-          '## Your Progress So Far',
-          payload.context,
-          '',
-          '## CEO\'s Direction',
-          task,
-          '',
-          'Continue from where you left off.',
-        ].join('\n');
-
-        ctx.log.info(
-          { targetAgent: agent, originalAgent: payload.agent },
-          'Resuming task with resume_token — constructed task brief from original context + CEO direction',
-        );
-      } catch (err) {
-        ctx.log.error({ err, targetAgent: agent }, 'Failed to decode resume_token');
+      // Decode via the shared helper, which returns null (never throws) for malformed base64/JSON
+      // or non-string required fields. The token is opaque to the LLM, so an undecodable one must
+      // not silently produce a broken task brief.
+      const payload = decodeResumeToken(resume_token);
+      if (!payload) {
+        ctx.log.error({ targetAgent: agent }, 'Failed to decode resume_token');
         return {
           success: false,
           error: 'resume_token could not be decoded. The token may be corrupted — ask the CEO to repeat their request.',
         };
       }
+
+      // The helper is lenient on version; warn (but proceed) so a future format change surfaces in
+      // logs rather than silently misbehaving.
+      if (payload.v !== RESUME_TOKEN_VERSION) {
+        ctx.log.warn(
+          { targetAgent: agent, tokenVersion: payload.v, expectedVersion: RESUME_TOKEN_VERSION },
+          'resume_token version mismatch — attempting to use anyway',
+        );
+      }
+
+      // Even with valid types, empty original_task/context can't form a usable brief — reject so a
+      // corrupted token never yields a degenerate task.
+      if (!payload.original_task || !payload.context) {
+        const versionNote = payload.v !== RESUME_TOKEN_VERSION
+          ? ` Token version ${String(payload.v)} does not match expected version ${RESUME_TOKEN_VERSION} — this may be the cause.`
+          : '';
+        return {
+          success: false,
+          error: `resume_token is missing required fields (original_task, context).${versionNote} The token may be corrupted — ask the CEO to repeat their request.`,
+        };
+      }
+
+      // Guard against cross-agent token misuse: if the coordinator passes a
+      // resume_token generated for one specialist but targets a different one,
+      // the task brief would contain another agent's context. Reject early.
+      if (payload.agent && payload.agent !== agent) {
+        ctx.log.warn(
+          { targetAgent: agent, tokenAgent: payload.agent },
+          'resume_token was generated for a different agent — possible cross-agent token misuse',
+        );
+        return {
+          success: false,
+          error: `resume_token was generated for agent '${payload.agent}' but is being used to delegate to '${agent}'. Re-delegate to the correct specialist or ask the CEO to repeat their request.`,
+        };
+      }
+
+      effectiveTask = [
+        'You are continuing a task that was paused to get the CEO\'s direction.',
+        '',
+        '## Original Task',
+        payload.original_task,
+        '',
+        '## Your Progress So Far',
+        payload.context,
+        '',
+        '## CEO\'s Direction',
+        task,
+        '',
+        'Continue from where you left off.',
+      ].join('\n');
+
+      ctx.log.info(
+        { targetAgent: agent, originalAgent: payload.agent },
+        'Resuming task with resume_token — constructed task brief from original context + CEO direction',
+      );
     }
 
     ctx.log.info(
