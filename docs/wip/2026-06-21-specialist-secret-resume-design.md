@@ -88,49 +88,56 @@ This is the structural signal that "this task is running as a delegated speciali
   - `originator` = forwarded `originator` (unchanged)
   - `resumeIntent` = the ask (unchanged; `system-secret-capture-request` derives it from the
     label, since it has no `resume_intent` input)
-  - **new** `delegateAgent` = `ctx.agentId` (the specialist to re-delegate to)
-  - **new** `resumeToken` = the token above
+  - **new** `resumeToken` = the token above. Its embedded `agent` field already names the
+    specialist to re-delegate to, so **no separate `delegateAgent` field is needed** — the
+    subscriber decodes the token to recover the name. The capture origin's `agentId` is a
+    genuinely different value (the **coordinator**, the re-entry target), so it stays.
 
 When `delegationOrigin` is absent (coordinator minting directly — today's only live path),
-behavior is **unchanged**: origin = the coordinator's own ctx, no `delegateAgent`/`resumeToken`.
+behavior is **unchanged**: origin = the coordinator's own ctx, no `resumeToken`.
 
 `system-secret-capture-request` currently passes no origin; this design adds the same origin
 threading to it (it always runs as the setup-wizard specialist).
 
 ### 3. Persist + propagate the new fields
 
-- **Migration:** add nullable `delegate_agent TEXT` and `resume_token TEXT` columns to
-  `secret_capture_tokens`. (Verify migration prefix uniqueness before merge — see project
-  CLAUDE.md migration-numbering hazard.)
+- **Migration:** add a single nullable `resume_token TEXT` column to `secret_capture_tokens`.
+  (Verify migration prefix uniqueness before merge — see project CLAUDE.md migration-numbering
+  hazard.)
 - `CaptureOrigin` and `CapturedContext` (`secret-capture-service.ts`): add optional
-  `delegateAgent` + `resumeToken`; round-trip them through `mint()`/`redeem()`.
-- `SecretCapturedPayload` (`src/bus/events.ts`): add optional `delegateAgent` + `resumeToken`.
-  The capture endpoint (`routes/secret-capture.ts`) forwards them from `CapturedContext`.
+  `resumeToken`; round-trip it through `mint()`/`redeem()`.
+- `SecretCapturedPayload` (`src/bus/events.ts`): add optional `resumeToken`. The capture
+  endpoint (`routes/secret-capture.ts`) forwards it from `CapturedContext`.
 
 ### 4. Re-enter the coordinator (resume subscriber)
 
 `secret-capture-resume-subscriber.ts` `handle()`:
 
-- When the payload carries `delegateAgent` + `resumeToken`, build the synthetic `agent.task`
-  targeting the **coordinator** (origin routing already points at it, so the existing
-  `NON_DELIVERABLE_CHANNELS` guard passes), with content along the lines of:
+- When the payload carries a `resumeToken`, decode it (shared `decodeResumeToken` helper) to
+  recover the specialist name (`token.agent`). On decode failure, fall back to skip-with-log
+  (defensive; the token is system-minted so this shouldn't happen). Then build the synthetic
+  `agent.task` targeting the **coordinator** (origin routing already points at it via the
+  origin's `agentId`/`conversationId`/`channelId`, so the existing `NON_DELIVERABLE_CHANNELS`
+  guard passes), with content along the lines of:
 
   > The secret `'<label>'` a specialist asked for was just captured and saved to the vault.
-  > Specialist `<delegateAgent>` paused waiting for it. Re-delegate to `<delegateAgent>` to
+  > Specialist `<token.agent>` paused waiting for it. Re-delegate to `<token.agent>` to
   > continue, passing this resume_token **exactly** as given:
   >
   > `<resumeToken>`
   >
-  > Then relay its reply to the user. (Original goal: `<resumeIntent>`.)
+  > Then relay its reply to the user. (Original goal: `<resumeIntent>`.) If `<token.agent>`
+  > reports it is still missing other secrets it already requested, relay that — do not send
+  > new links for secrets whose links are still pending.
 
-  The coordinator then calls `delegate(agent: <delegateAgent>, task: "…the secret is now
+  The coordinator then calls `delegate(agent: <token.agent>, task: "…the secret is now
   available, continue…", resume_token: <token>)`. The existing `delegate` decode path
-  validates the token (incl. its cross-agent guard, since `resume_token.agent ===
-  delegateAgent`), constructs the brief, runs the specialist, and the coordinator relays the
-  result on its user-facing conversation.
+  validates the token (incl. its cross-agent guard, since `resume_token.agent` ===
+  the agent the coordinator was told to use), constructs the brief, runs the specialist, and
+  the coordinator relays the result on its user-facing conversation.
 
-- When `delegateAgent`/`resumeToken` are absent, behavior is **unchanged** (coordinator
-  self-resume / direct agent resume from #972).
+- When `resumeToken` is absent, behavior is **unchanged** (coordinator self-resume / direct
+  agent resume from #972).
 
 - The PR #984 forward guard **stays** as a safety net for genuinely unroutable mints (an
   internal-channel mint with no `delegationOrigin`, which shouldn't occur but must not
@@ -160,10 +167,48 @@ larger, intersects onboarding internals, and a redeem causing a process exit is 
 That remains the onboarding restart/poll flow's job; this design at least ensures the wizard
 *informs* the user instead of the capture dead-ending.
 
+### 6. Multi-secret captures and partial completion
+
+A single task can need several secrets (e.g. "log into Aeroplan" → username + password). The
+specialist mints one link per secret in a single turn and returns them all; the coordinator
+relays them. Each capture token carries its own `resume_token`, all pointing at the
+coordinator. Resume is then fully event-driven — each redeem independently fires
+`secret.captured` → coordinator re-delegation — so the user **never has to say "done"**; the
+conversation picks itself up:
+
+```
+User:  please log into my Aeroplan account and check my balance
+Curia: I'll need your username and password — two secure links: <link 1> <link 2>
+[user fills link 1]
+Curia: got your username, still waiting on the password.
+[user fills link 2]
+Curia: got the password. your Aeroplan balance is 42,150 points.
+```
+
+The resumed specialist runs **statelessly**: re-delegation creates a fresh `delegate-<uuid>`
+conversation from the brief (`original_task` + `context`), so the specialist does not see the
+turn where it minted the links. It infers progress from **vault state + brief** (read the
+vault: username present, password absent → "still waiting on password"). This is reliable for
+reporting outstanding status. To keep it from naively re-minting a link for a still-pending
+secret, the re-delegate task content (§4) and the specialist-resume brief both instruct it to
+report what's outstanding and not re-send links that are already pending. This follows #972's
+"the agent reasons from context" philosophy rather than introducing outstanding-request
+bookkeeping (explicitly out of scope).
+
+Concurrency note: if the user fills both links near-simultaneously, two `secret.captured`
+events fire and two re-delegations run; the per-event-id dedup guard does not coalesce them
+(different events). The worst case is two relayed status messages (one partial, one
+complete), possibly out of order — not a correctness failure. The common sequential path is
+clean.
+
+Enablement note: this scenario only becomes *runnable* once a specialist actually pins a
+capture skill — #995 builds the mechanism, not the specialist. The coordinator-direct variant
+(coordinator owns the Aeroplan task itself) already works today via #972.
+
 ## Invariants preserved
 
 - **No-value privacy invariant.** `resume_token` is `base64(JSON{v, agent, original_task,
-  context})` — names and NL only. `delegateAgent` is an agent name. `resumeIntent` is NL.
+  context})` — names and NL only. `resumeIntent` is NL.
   No secret value appears in any token column, event, task, or log on the re-delegation path.
   A test asserts this explicitly.
 - **`originator` preserved.** Forwarded: mint origin → `secret.captured` → synthetic
@@ -177,10 +222,10 @@ That remains the onboarding restart/poll flow's job; this design at least ensure
 | Delegate | `skills/delegate/handler.ts` | Forward `delegationOrigin` metadata |
 | Capture skill (user) | `skills/secret-capture-request/handler.ts` | Build resume_token + retarget origin when delegated |
 | Capture skill (system) | `skills/system-secret-capture-request/handler.ts` | Add origin threading + resume_token when delegated |
-| Resume token format | new `src/agents/resume-token.ts` (or shared helper) | Extract the `{v,agent,original_task,context}` + caps logic used by runtime and the capture skills |
-| Service | `src/secrets/secret-capture-service.ts` | `delegateAgent`/`resumeToken` on `CaptureOrigin`/`CapturedContext` + SQL |
-| Migration | `src/db/migrations/NNN_*.sql` | Nullable `delegate_agent`, `resume_token` columns |
-| Event | `src/bus/events.ts` | Optional `delegateAgent`/`resumeToken` on `SecretCapturedPayload` |
+| Resume token format | new `src/agents/resume-token.ts` (or shared helper) | `encodeResumeToken`/`decodeResumeToken` for `{v,agent,original_task,context}` + caps logic; used by runtime, the capture skills, and the subscriber |
+| Service | `src/secrets/secret-capture-service.ts` | `resumeToken` on `CaptureOrigin`/`CapturedContext` + SQL |
+| Migration | `src/db/migrations/NNN_*.sql` | Nullable `resume_token` column |
+| Event | `src/bus/events.ts` | Optional `resumeToken` on `SecretCapturedPayload` |
 | Endpoint | `src/channels/http/routes/secret-capture.ts` | Forward new fields onto the event |
 | Subscriber | `src/secrets/secret-capture-resume-subscriber.ts` | Coordinator re-delegate branch + guard comment |
 | Wizard prompt | `agents/setup-wizard.yaml` | Restart-messaging line + version bump |
@@ -188,14 +233,20 @@ That remains the onboarding restart/poll flow's job; this design at least ensure
 ## Testing
 
 - **Delegate** forwards `delegationOrigin` (and still forwards `originator`).
-- **secret-capture-request**: builds resume_token + `delegateAgent` and retargets origin to
-  the coordinator when `delegationOrigin` is present; unchanged when absent.
+- **secret-capture-request**: builds resume_token and retargets origin to the coordinator
+  when `delegationOrigin` is present; unchanged when absent.
 - **system-secret-capture-request**: same, and now passes origin at all.
-- **Service**: `delegateAgent`/`resumeToken` round-trip through mint → redeem.
-- **Resume subscriber**: a specialist-minted capture (delegateAgent + resumeToken present,
-  origin = coordinator routing) → publishes a coordinator-targeted task containing the
-  re-delegate instruction + resume_token, with routing registered; the no-delegation
-  internal-channel mint still skips (updated #984-guard test).
+- **resume-token helper**: `encodeResumeToken`/`decodeResumeToken` round-trip; decode rejects
+  malformed/oversized input.
+- **Service**: `resumeToken` round-trips through mint → redeem.
+- **Resume subscriber**: a specialist-minted capture (resumeToken present, origin =
+  coordinator routing) → decodes the token for the specialist name → publishes a
+  coordinator-targeted task containing the re-delegate instruction + resume_token, with
+  routing registered; the no-delegation internal-channel mint still skips (updated
+  #984-guard test); a malformed resume_token skips with a log.
+- **Multi-secret / partial resume**: two outstanding capture tokens for one task → filling
+  the first re-delegates and the brief reflects only the captured secret (specialist reports
+  the other still outstanding); filling the second completes.
 - **Privacy**: no secret value in token columns, event, synthetic task, or logs.
 - **Originator**: preserved through the re-delegation path.
 - **Integration** (real Postgres): specialist-minted capture → redeem → coordinator
