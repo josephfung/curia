@@ -65,7 +65,10 @@ channel_accounts:
     });
     const config = loadYamlConfig(dir);
     expect(config.skillOutput?.maxLength).toBe(50000);
-    expect(config.channel_accounts?.email?.['curia']?.self_email).toBe('curia@example.com');
+    // channel_accounts is now a loosely-typed detection field (Record<string, unknown>).
+    // Cast through unknown to access the inner value for testing purposes.
+    const curia = config.channel_accounts?.email?.['curia'] as Record<string, unknown> | undefined;
+    expect(curia?.['self_email']).toBe('curia@example.com');
   });
 
   it('local.yaml scalar overrides default.yaml scalar', () => {
