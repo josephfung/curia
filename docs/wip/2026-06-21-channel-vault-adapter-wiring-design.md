@@ -76,6 +76,27 @@ Resolution rules, matching `applyVaultSecrets` / `channelCredentialStatus`:
   used by `applyVaultSecrets`, so a whitespace-only row doesn't wire up a broken channel.
 - Never log secret values — log a names-only `present` map like `applyVaultSecrets` does.
 
+### Namespace safety (invariant — do not relax)
+
+The overlay reads a **fixed, hardcoded allowlist of exactly five `channel.*` keys** —
+`channel.email.{nylas_api_key,nylas_grant_id,nylas_self_email}`,
+`channel.signal.{phone_number,socket_path}`. It MUST NOT:
+- enumerate the vault (`secrets.list()`), nor
+- scan by prefix (`channel.*`, or anything else), nor
+- read any key it does not name literally.
+
+This keeps it structurally unable to touch the other two vault namespaces:
+- **`user.<slug>`** — secrets captured by specialist / general-purpose agents
+  (`resolveUserSecretName`). The `user.` prefix is a sandbox that "cannot be produced by
+  snake_case system keys or `channel.*` credential keys" (secret-capture-service.ts:33-36),
+  so an agent literally cannot name a key this overlay reads.
+- **dot-free snake_case** — skill secrets (`tavily_api_key`, `ceo_nylas_grant_id`) and
+  system/bootstrap secrets. None match `channel.<name>.<key>`.
+
+Only operator-provided channel credentials (written by the Channels UI to `channel.*`) are
+ever consumed here. A test asserts the overlay performs no `list()` call and reads only the
+five named keys, locking the invariant against a future "just scan the prefix" refactor.
+
 ### Wiring in `index.ts`
 
 Call it immediately after `applyVaultSecrets` (index.ts:313), inside the same fatal-on-error
@@ -134,6 +155,9 @@ No hot-reload of adapters (that would be a much larger lifecycle change, out of 
 - **whitespace-only vault row** → treated as absent (falls through to env/config).
 - **vault read throws** → logged, treated as absent, no throw.
 - Secret values never appear in logged output (assert on the `present` names-only map).
+- **namespace safety**: the fake `secrets` port records every `get(name)` call; assert the
+  overlay calls `get` only with the five named `channel.*` keys, never `list()`, and never a
+  `user.*` or dot-free key — locking the allowlist against a future prefix-scan refactor.
 
 Integration coverage tying overlay → `resolveChannelAccounts` → registry agreement:
 - vault-only email creds → `resolveChannelAccounts` yields one `curia` account **and**
