@@ -670,10 +670,30 @@ async function main(): Promise<void> {
       // principalEmail: prefer a verified+active email; fall back to any verified email so
       // operational alerts (suspension/recovery/approval) still have a destination even when
       // the only known address is flagged bounced/defunct — dropping the alert is worse.
-      const emailIdentity =
-        principalIdentities.find((id) => id.channel === 'email') ??
-        allIdentities.find((id) => id.channel === 'email' && id.verified);
-      principalEmail = emailIdentity?.channelIdentifier ?? '';
+      const activeEmail = principalIdentities.find((id) => id.channel === 'email');
+      const fallbackEmail = activeEmail ?? allIdentities.find((id) => id.channel === 'email' && id.verified);
+      principalEmail = fallbackEmail?.channelIdentifier ?? '';
+
+      // Make the degraded choice visible: when we fall back to a verified-but-inactive
+      // (defunct/bounced) address, operational alerts may silently bounce. Without this
+      // warning the only signal is `hasEmail: true` below, which looks healthy.
+      if (!activeEmail && fallbackEmail) {
+        logger.warn(
+          { contactId: principalContact.id, status: fallbackEmail.status },
+          'Principal has no active verified email — falling back to a flagged (defunct/bounced) address; operational alerts may not be delivered',
+        );
+      }
+
+      // Restore the escalation the removed env-var bootstrap used to emit: a live email
+      // adapter with no usable principal email is the most dangerous config — the first
+      // inbound email from the principal is not matched to their contact and is held as
+      // provisional. Surface at error so it shows up in log aggregators (not just info).
+      if (!principalEmail && config.nylasApiKey && config.nylasGrantId) {
+        logger.error(
+          { contactId: principalContact.id },
+          'Principal has no verified email but the email adapter is active — inbound email from the principal WILL be held as provisional until an email identity is bound',
+        );
+      }
 
       logger.info(
         { contactId: principalContact.id, kgNodeId: principalContact.kgNodeId, hasEmail: !!principalEmail },
@@ -683,9 +703,15 @@ async function main(): Promise<void> {
       logger.info('No principal contact found — startup will enter setup-required mode (complete onboarding at /setup).');
     }
   } catch (err) {
+    // This catch spans findContactBySystemRole, getContactWithIdentities, AND
+    // repairPrincipalMetadata — any of which throwing is fatal (a mis-resolved or
+    // mis-tiered principal is worse than booting with trust gates that may not apply).
+    // Don't assert a single root cause; the env-var bootstrap this replaces was
+    // non-fatal, so this is a deliberate fail-closed change.
     logger.fatal(
       { err },
-      'Failed to resolve principal contact — check that migration 035 (add_system_role) has been applied',
+      "Failed to resolve or repair the principal contact at startup — inspect the principal row " +
+        "(contacts WHERE system_role = 'principal') and verify migration 035 (add_system_role) is applied",
     );
     process.exit(1);
   }
