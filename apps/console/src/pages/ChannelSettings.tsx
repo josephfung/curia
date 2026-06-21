@@ -218,6 +218,9 @@ function ChannelDrawer({ entry, onClose, onChanged }: {
           {!locked && entry.credentialFields.length > 0 && (
             <div className="form-field">
               <label>Credentials</label>
+              <p className="settings-page-sub" style={{ margin: '0 0 4px' }}>
+                Saved credentials take effect on the next restart.
+              </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {entry.credentialFields.map(field => (
                   <CredentialRow
