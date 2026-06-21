@@ -68,10 +68,11 @@ export interface EmailAdapterConfig {
   /** This account's own email address — used to filter out self-sent messages */
   selfEmail: string;
   /**
-   * Additional sender addresses to suppress, beyond selfEmail.
-   * Case-insensitive.
+   * Addresses to suppress on inbound, in addition to this account's own selfEmail.
+   * Auto-derived (#1101) from the union of every configured account's self_email, so the
+   * agent never replies to a mailbox it owns. Case-insensitive.
    */
-  excludedSenderEmails: string[];
+  suppressedSenderEmails: string[];
   /**
    * CEO's email address — used as the recipient for rate-limit notification emails.
    * When absent, rate-limit notifications are logged but not emailed.
@@ -412,17 +413,17 @@ export class EmailAdapter implements Channel {
           continue;
         }
 
-        // Skip emails from any additionally-excluded sender addresses (e.g. Curia's
-        // outbound address on a monitored inbox, to prevent self-reply loops).
+        // Skip emails from any suppressed sender addresses (auto-derived union of all
+        // owned mailbox addresses per #1101, to prevent cross-account reply loops).
         if (
           fromEmail &&
-          this.config.excludedSenderEmails.some(
-            (excluded) => normalizeForComparison(excluded) === normalizeForComparison(fromEmail),
+          this.config.suppressedSenderEmails.some(
+            (suppressed) => normalizeForComparison(suppressed) === normalizeForComparison(fromEmail),
           )
         ) {
           this.config.logger.debug(
             { fromEmail, accountId: this.config.accountId },
-            'Email skipped — sender is in excludedSenderEmails',
+            'Email skipped — sender is in suppressedSenderEmails',
           );
           skipped.excluded++;
           continue;
