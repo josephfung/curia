@@ -84,9 +84,18 @@ export function computeRecoveryTimeout(expectedDurationSeconds: number): number 
  * produced by wake_at / SchedulerService.enqueueTaskWake. Such payloads carry no task
  * description (the real intent lives in intent_anchor and the linked task row), so they
  * must be excluded from drift detection — see the guard in handleCompletion (#1064).
+ *
+ * Accepts `unknown` and null-checks before dereferencing: although job.taskPayload is typed
+ * Record<string, unknown>, it ultimately comes from DB JSONB. The column is NOT NULL, but a
+ * JSON-null literal (distinct from SQL NULL) can still round-trip to JS `null`, so reading
+ * `['type']` off it unguarded would throw a TypeError inside the drift-check guard — where
+ * handleCompletion's outer try/catch would swallow it and skip completeJobRun, stranding the
+ * run in 'running' until watchdog recovery. Anything that isn't a non-null object is "not a
+ * task-wake envelope" → false.
  */
-function isTaskWakePayload(payload: Record<string, unknown>): boolean {
-  return payload['type'] === 'task-wake';
+function isTaskWakePayload(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false;
+  return (payload as Record<string, unknown>)['type'] === 'task-wake';
 }
 
 export interface SchedulerConfig {

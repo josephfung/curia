@@ -940,6 +940,46 @@ describe('Scheduler', () => {
       });
     });
 
+    // Regression: job.taskPayload comes from DB JSONB and can round-trip to JS `null` (a
+    // JSON-null literal, distinct from SQL NULL which the NOT NULL column blocks). The
+    // task-wake guard must null-check before reading `['type']`, otherwise it throws a
+    // TypeError that handleCompletion's try/catch swallows — skipping completeJobRun and
+    // stranding the run in 'running' until watchdog recovery (#1086 review).
+    it('does not throw when taskPayload is null; job still completes', async () => {
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: 'task-99',
+        intentAnchor: 'Research AI safety articles weekly.',
+        taskPayload: null, // JSONB null round-tripped from the DB
+        lastRunSummary: null,
+      });
+      // Guard must not throw, so the (non-task-wake) drift check still runs; keep it benign.
+      driftDetector.check.mockResolvedValueOnce(null);
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-nullpayload',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
+      });
+
+      await vi.waitFor(() => {
+        // The job must still reach terminal completion — no swallowed TypeError in the guard.
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+      });
+    });
+
     // Regression: the drift-pause notification used to embed the original intent and the raw
     // payload verbatim, so the coordinator re-interpreted it as an actionable instruction and
     // re-sent the original outbound message (#1064). The notification must be review-only and
