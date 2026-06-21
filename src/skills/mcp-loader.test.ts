@@ -11,8 +11,10 @@ import {
   mergeFixedInputs,
   resolveStdioEnvFromVault,
   resolveFixedInputFromVault,
+  resolveSecretsBlock,
   loadSkillsConfig,
 } from './mcp-loader.js';
+import type { McpSecretDeclaration } from './mcp-config-types.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -320,5 +322,71 @@ servers:
     const config = loadSkillsConfig(tmpDir);
     const server = config.servers![0]! as import('./mcp-config-types.js').McpStdioServerEntry;
     expect(server.secrets).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveSecretsBlock — declarative credential resolution from the vault
+// ---------------------------------------------------------------------------
+
+describe('resolveSecretsBlock', () => {
+  // Minimal stub backed by a plain map. Cast through unknown because SecretsService
+  // has additional methods (pool, set, getJSON, etc.) not exercised here.
+  const makeSecrets = (map: Record<string, string | null>): SecretsService => ({
+    get: async (key: string) => map[key] ?? null,
+  }) as unknown as SecretsService;
+
+  it('injects resolved value into env when inject.env is set', async () => {
+    const decls: McpSecretDeclaration[] = [{
+      key: 'atproto_identifier', label: 'Handle', required: true, secret: false,
+      inject: { env: 'ATPROTO_IDENTIFIER' },
+    }];
+    const result = await resolveSecretsBlock(decls, makeSecrets({ atproto_identifier: 'user.bsky.social' }), 'test-server');
+    expect(result.env).toEqual({ ATPROTO_IDENTIFIER: 'user.bsky.social' });
+    expect(result.fixedInputs).toEqual({});
+  });
+
+  it('injects resolved value into fixedInputs when inject.fixed_input is set', async () => {
+    const decls: McpSecretDeclaration[] = [{
+      key: 'curia_google_email', label: 'Email', required: true, secret: false,
+      inject: { fixed_input: 'user_google_email' },
+    }];
+    const result = await resolveSecretsBlock(decls, makeSecrets({ curia_google_email: 'me@example.com' }), 'test-server');
+    expect(result.fixedInputs).toEqual({ user_google_email: 'me@example.com' });
+    expect(result.env).toEqual({});
+  });
+
+  it('throws when a required secret is missing from the vault', async () => {
+    const decls: McpSecretDeclaration[] = [{
+      key: 'atproto_password', label: 'Password', required: true, secret: true,
+      inject: { env: 'ATPROTO_PASSWORD' },
+    }];
+    await expect(resolveSecretsBlock(decls, makeSecrets({}), 'atproto-mcp'))
+      .rejects.toThrow('atproto-mcp');
+  });
+
+  it('silently skips optional secrets that are absent', async () => {
+    const decls: McpSecretDeclaration[] = [{
+      key: 'optional_key', label: 'Optional', required: false, secret: false,
+      inject: { env: 'OPTIONAL_VAR' },
+    }];
+    const result = await resolveSecretsBlock(decls, makeSecrets({}), 'test-server');
+    expect(result.env).toEqual({});
+  });
+
+  it('returns empty maps when declarations array is empty', async () => {
+    const result = await resolveSecretsBlock([], makeSecrets({}), 'test-server');
+    expect(result).toEqual({ env: {}, fixedInputs: {} });
+  });
+
+  it('does not fall back to process.env', async () => {
+    process.env['SHOULD_NOT_READ'] = 'leaked';
+    const decls: McpSecretDeclaration[] = [{
+      key: 'should_not_read', label: 'Test', required: false, secret: false,
+      inject: { env: 'SHOULD_NOT_READ' },
+    }];
+    const result = await resolveSecretsBlock(decls, makeSecrets({}), 'test-server');
+    expect(result.env['SHOULD_NOT_READ']).toBeUndefined();
+    delete process.env['SHOULD_NOT_READ'];
   });
 });

@@ -17,7 +17,9 @@ import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
 import type { SecretsService } from '../secrets/secrets-service.js';
 import type {
+  McpSecretDeclaration,
   McpServerEntry,
+  McpStdioServerEntry,
   SkillsConfig,
 } from './mcp-config-types.js';
 
@@ -214,6 +216,42 @@ export async function resolveFixedInputFromVault(
   return value;
 }
 
+/**
+ * Resolve all credentials declared in a server's `secrets:` block from the vault.
+ * For each declaration: reads `key` from vault; if `inject.env`, places the value in
+ * the returned `env` map under that var name; if `inject.fixed_input`, places it in
+ * `fixedInputs`. A missing required secret throws so the caller can skip the server.
+ * Missing optional secrets are silently skipped. Vault-only — no process.env fallback.
+ */
+export async function resolveSecretsBlock(
+  declarations: McpSecretDeclaration[],
+  secrets: SecretsService,
+  serverName: string,
+): Promise<{ env: Record<string, string>; fixedInputs: Record<string, string> }> {
+  const env: Record<string, string> = {};
+  const fixedInputs: Record<string, string> = {};
+
+  for (const decl of declarations) {
+    const value = (await secrets.get(decl.key))?.trim();
+    if (!value) {
+      if (decl.required) {
+        throw new Error(
+          `MCP server '${serverName}': required secret "${decl.key}" is not set in the vault`,
+        );
+      }
+      continue;
+    }
+    if (decl.inject.env) {
+      env[decl.inject.env] = value;
+    } else {
+      // inject.fixed_input is the only other option per the discriminated union
+      fixedInputs[decl.inject.fixed_input!] = value;
+    }
+  }
+
+  return { env, fixedInputs };
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -265,60 +303,77 @@ export async function loadMcpServers(
       continue;
     }
 
-    // Resolve fixed_inputs once at startup. These values are captured in closures
-    // and merged into every callTool invocation for this server's tools.
-    // "env:VAR" references (e.g. "env:CURIA_GOOGLE_EMAIL") are resolved from the
-    // vault here, vault-only (#913) — a missing secret skips this server entirely
-    // (same as a connection failure). This keeps google-workspace optional:
-    // deployments without the secret simply don't get Workspace tools, rather than
-    // crashing the process.
-    const rawFixedInputs = 'fixed_inputs' in serverEntry ? serverEntry.fixed_inputs : undefined;
+    // Resolve credentials and build the env for the subprocess.
+    // New path: if the server declares a secrets: block, resolve from it and merge with
+    // any non-secret env literals. Legacy path: resolve env: "" sentinels and
+    // fixed_inputs: "env:VAR" references from the vault (kept for backward-compat).
+    const declarations = serverEntry.transport === 'stdio' ? ((serverEntry as McpStdioServerEntry).secrets ?? []) : [];
     const resolvedFixedInputs: Record<string, string> = {};
-    if (rawFixedInputs) {
-      let resolutionFailed = false;
-      for (const [key, value] of Object.entries(rawFixedInputs)) {
-        try {
-          resolvedFixedInputs[key] = await resolveFixedInputFromVault(
-            value,
-            secrets,
-            `MCP server '${serverEntry.name}' fixed_inputs.${key}`,
-          );
-        } catch (err) {
-          logger.error(
-            { err, server: serverEntry.name, key },
-            'fixed_inputs resolution failed — skipping this MCP server',
-          );
-          resolutionFailed = true;
-          break;
-        }
-      }
-      if (resolutionFailed) continue;
-      logger.info(
-        { server: serverEntry.name, keys: Object.keys(resolvedFixedInputs) },
-        'MCP server fixed_inputs resolved',
-      );
-    }
-
-    // Resolve a stdio server's env block from the vault before spawning (#913).
-    // The empty-string sentinel resolves vault-only by the lowercased key name; a
-    // missing secret skips the whole server, the same loud-fail contract as a
-    // missing fixed_input. connectEntry carries the resolved literals into
-    // connectStdio so buildChildEnv never has to touch process.env for secrets.
     let connectEntry: McpServerEntry = serverEntry;
-    if (serverEntry.transport === 'stdio' && serverEntry.env) {
+
+    if (declarations.length > 0) {
+      let secretsResult: { env: Record<string, string>; fixedInputs: Record<string, string> };
       try {
-        const resolvedEnv = await resolveStdioEnvFromVault(
-          serverEntry.env,
-          secrets,
-          serverEntry.name,
-        );
-        connectEntry = { ...serverEntry, env: resolvedEnv };
+        secretsResult = await resolveSecretsBlock(declarations, secrets, serverEntry.name);
       } catch (err) {
         logger.error(
           { err, server: serverEntry.name },
-          'env secret resolution from vault failed — skipping this MCP server',
+          'secrets block resolution failed — skipping this MCP server',
         );
         continue;
+      }
+      // Non-secret literals in env: pass through; secrets block env values overlay them.
+      const literalEnv = serverEntry.transport === 'stdio' ? ((serverEntry as McpStdioServerEntry).env ?? {}) : {};
+      connectEntry = { ...serverEntry, env: { ...literalEnv, ...secretsResult.env } } as McpStdioServerEntry;
+      // Any old literal fixed_inputs + secrets block fixed_inputs.
+      const literalFixed = 'fixed_inputs' in serverEntry ? (serverEntry.fixed_inputs ?? {}) : {};
+      Object.assign(resolvedFixedInputs, literalFixed, secretsResult.fixedInputs);
+      logger.info(
+        { server: serverEntry.name, envKeys: Object.keys(secretsResult.env), fixedKeys: Object.keys(secretsResult.fixedInputs) },
+        'MCP server secrets block resolved',
+      );
+    } else {
+      // Legacy path: env: "" sentinels and fixed_inputs: "env:VAR" references.
+      const rawFixedInputs = 'fixed_inputs' in serverEntry ? serverEntry.fixed_inputs : undefined;
+      if (rawFixedInputs) {
+        let resolutionFailed = false;
+        for (const [key, value] of Object.entries(rawFixedInputs)) {
+          try {
+            resolvedFixedInputs[key] = await resolveFixedInputFromVault(
+              value,
+              secrets,
+              `MCP server '${serverEntry.name}' fixed_inputs.${key}`,
+            );
+          } catch (err) {
+            logger.error(
+              { err, server: serverEntry.name, key },
+              'fixed_inputs resolution failed — skipping this MCP server',
+            );
+            resolutionFailed = true;
+            break;
+          }
+        }
+        if (resolutionFailed) continue;
+        logger.info(
+          { server: serverEntry.name, keys: Object.keys(resolvedFixedInputs) },
+          'MCP server fixed_inputs resolved',
+        );
+      }
+      if (serverEntry.transport === 'stdio' && serverEntry.env) {
+        try {
+          const resolvedEnv = await resolveStdioEnvFromVault(
+            serverEntry.env,
+            secrets,
+            serverEntry.name,
+          );
+          connectEntry = { ...serverEntry, env: resolvedEnv };
+        } catch (err) {
+          logger.error(
+            { err, server: serverEntry.name },
+            'env secret resolution from vault failed — skipping this MCP server',
+          );
+          continue;
+        }
       }
     }
 
