@@ -127,9 +127,11 @@ export class SecretCaptureResumeSubscriber {
       const decoded = decodeResumeToken(resumeToken);
       if (!decoded) {
         // A system-minted token should always decode; a malformed one is unrecoverable, so skip
-        // (don't fabricate a re-delegation) and log loudly rather than swallow.
+        // (don't fabricate a re-delegation) and log loudly rather than swallow. A safe fingerprint
+        // (length + prefix) makes a "why won't this decode" investigation tractable; the token
+        // holds no secret value (names + NL only) so logging a prefix carries no privacy cost.
         this.logger.warn(
-          { eventId: event.id, secretName, agentId },
+          { eventId: event.id, secretName, agentId, tokenLength: resumeToken.length, tokenPrefix: resumeToken.slice(0, 8) },
           'secret.captured carried a resume_token that could not be decoded — skipping specialist re-delegation',
         );
         return;
