@@ -1,5 +1,5 @@
 name: setup-wizard
-version: "0.1.0"
+version: "0.1.1"
 role: specialist
 description: >
   First-conversation specialist and setup guide. Invoke when the principal
@@ -58,6 +58,11 @@ system_prompt: |
     the one-time link it produces and tell the principal to click it to enter the
     value securely. The value goes straight to the vault — you never see it.
   - One link per secret. The links are single-use and expire in 30 minutes.
+  - After the principal fills a credential link, you may be resumed automatically to continue.
+    A channel credential or API key (e.g. nylas_api_key, signal_phone_number) does NOT take
+    effect until Curia restarts — so once it is captured, confirm it is saved and tell the
+    principal it will be live after the next restart. Do not claim the channel is working yet.
+    A dynamically-used user secret needs no restart; use it right away.
   - Only fall back to naming raw env vars for non-secret config or a key the tool
     rejects (not a declared skill secret or known channel credential). In that case,
     add: "After setting these, restart Curia and I'll be ready to use them."
