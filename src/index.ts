@@ -63,7 +63,6 @@ import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.j
 import { EmailAdapter } from './channels/email/email-adapter.js';
 import { EmailAccountsRepo } from './channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from './channels/email/resolve-email-accounts.js';
-import { backfillEmailAccounts } from './channels/email/backfill-email-accounts.js';
 import { SignalRpcClient } from './channels/signal/signal-rpc-client.js';
 import { SignalAdapter } from './channels/signal/signal-adapter.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
@@ -703,28 +702,11 @@ async function main(): Promise<void> {
   }
 
   // Email channel — optional. Accounts are managed via the console (email_accounts table,
-  // migration 064). On first boot after the migration, backfillEmailAccounts seeds the table
-  // from the legacy single-account NYLAS_GRANT_ID + NYLAS_SELF_EMAIL env vars (idempotent).
-  // The retired channel_accounts.email YAML path is only still read for the backfill seeding
-  // transition; it is no longer the source of truth.
-  //
+  // migration 064). Grants live in the vault under channel.email.<name>.nylas_grant_id.
   // One NylasClient is constructed per account (needed by OutboundGateway's client map).
   // EmailAdapters are constructed further below, after OutboundGateway is ready,
   // and started after the dispatcher is registered to avoid dropping inbound messages.
-  // The email_accounts table is the source of truth for which mailboxes the agent owns
-  // (#1101). Grants live in the vault under channel.email.<name>.nylas_grant_id. The console
-  // manages this table at runtime; on first boot after the migration the table is empty, so
-  // backfillEmailAccounts seeds the legacy single-account creds (idempotent — no-op once the
-  // table is populated). resolveEmailAccounts then reads the table + vault into the runtime
-  // shape used below (and read by the channel-registry credential gate further down).
   const emailAccountsRepo = new EmailAccountsRepo(pool);
-  await backfillEmailAccounts({
-    repo: emailAccountsRepo,
-    secrets: secretsService,
-    config,
-    channelAccountsBlock: yamlConfig.channel_accounts?.email,
-    logger,
-  });
   const resolvedEmailAccounts = await resolveEmailAccounts(emailAccountsRepo, secretsService, logger);
   const nylasClientMap = new Map<string, NylasClient>();
 
@@ -732,10 +714,10 @@ async function main(): Promise<void> {
     if (resolvedEmailAccounts.length > 0) {
       logger.warn('NYLAS_API_KEY not set — email channel disabled despite accounts being configured');
     } else {
-      logger.warn('NYLAS_API_KEY/NYLAS_GRANT_ID not set — email channel disabled');
+      logger.warn('NYLAS_API_KEY not set — email channel disabled');
     }
   } else if (resolvedEmailAccounts.length === 0) {
-    logger.warn('No email accounts resolved — email channel disabled. Add an account via the console (or set NYLAS_GRANT_ID + NYLAS_SELF_EMAIL for the legacy backfill path on first boot).');
+    logger.warn('No email accounts resolved — email channel disabled. Add an account via the console (Settings → Channels → Email).');
   } else {
     for (const account of resolvedEmailAccounts) {
       nylasClientMap.set(account.name, new NylasClient(config.nylasApiKey, account.nylasGrantId, logger));
@@ -1449,11 +1431,9 @@ async function main(): Promise<void> {
 
   // The most dangerous email config: adapter(s) are live but the principal has no usable
   // (verified + active) email, so the first inbound email from the principal is not matched
-  // to their contact and is held as provisional. Keyed on the actually-constructed adapters
-  // so it covers multi-account `channel_accounts.email` setups too, not just the legacy
-  // single `nylasGrantId` path (#1049 review). Surface at error for log aggregators. This is
-  // the escalation the removed env-var bootstrap used to emit; it lives here (rather than in
-  // the principal-resolution block) because adapter activeness is only known after this point.
+  // to their contact and is held as provisional. Surface at error for log aggregators.
+  // Lives here (not in the principal-resolution block) because adapter activeness is only
+  // known after this point.
   if (emailAdapters.length > 0 && principalContact && !principalEmail) {
     logger.error(
       { contactId: principalContact.id },
