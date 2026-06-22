@@ -43,7 +43,8 @@ tasks:
       keys:
         - channel.email.nylas_api_key
         - channel.email.nylas_grant_id
-    credential_how_to: "Get your Nylas API key and grant ID at app.nylas.com (free tier works). Enter them in Settings → Channels → Email."
+        - channel.email.nylas_self_email
+    credential_how_to: "Get your Nylas API key and grant ID at app.nylas.com (free tier works). Enter the API key, grant ID, and your mailbox email address in Settings → Channels → Email."
     docs_url: /channels/email-setup
 
   - id: signal

@@ -134,11 +134,12 @@ describe('setup-status', () => {
       expect(tour?.status).toBe('done');
     });
 
-    it('email: done when both nylas secrets are present', async () => {
+    it('email: done when all three nylas secrets are present', async () => {
       const ctx = makeCtx({
         secrets: {
           'channel.email.nylas_api_key': 'nyk_v0_abc',
           'channel.email.nylas_grant_id': 'grant-xyz',
+          'channel.email.nylas_self_email': 'ceo@example.com',
         },
       });
       const result = await handler.execute(ctx);
@@ -148,9 +149,9 @@ describe('setup-status', () => {
       expect(email?.status).toBe('done');
     });
 
-    it('email: pending when nylas_api_key is missing', async () => {
+    it('email: pending when a required nylas secret is missing', async () => {
       const ctx = makeCtx({
-        secrets: { 'channel.email.nylas_grant_id': 'grant-xyz' }, // api_key absent
+        secrets: { 'channel.email.nylas_grant_id': 'grant-xyz' }, // api_key and self_email absent
       });
       const result = await handler.execute(ctx);
       expect(result.success).toBe(true);
@@ -168,6 +169,24 @@ describe('setup-status', () => {
       const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
       const email = data.tasks.find(t => t.id === 'email');
       expect(email?.status).toBe('deferred');
+    });
+
+    it('email: done even when also in the deferrals store (done wins over deferred)', async () => {
+      // email secrets are present (done=true) AND email is in the deferrals store
+      // The status must be 'done', not 'deferred'
+      const ctx = makeCtx({
+        secrets: {
+          'channel.email.nylas_api_key': 'nyk_v0_abc',
+          'channel.email.nylas_grant_id': 'grant-xyz',
+          'channel.email.nylas_self_email': 'ceo@example.com',
+        },
+        existingDeferrals: JSON.stringify(['email']),
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
+      const email = data.tasks.find(t => t.id === 'email');
+      expect(email?.status).toBe('done');
     });
 
     it('summary counts are accurate', async () => {
@@ -195,6 +214,7 @@ describe('setup-status', () => {
         secrets: {
           'channel.email.nylas_api_key': 'nyk_v0_abc',
           'channel.email.nylas_grant_id': 'grant-xyz',
+          'channel.email.nylas_self_email': 'ceo@example.com',
           'user.tavily_api_key': 'tvly-abc',
         },
         behavioralPreferences: ['prefers bullet points'],

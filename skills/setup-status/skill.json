@@ -13,6 +13,7 @@
   "secrets": [
     "channel.email.nylas_api_key",
     "channel.email.nylas_grant_id",
+    "channel.email.nylas_self_email",
     "channel.signal.socket_path",
     "channel.signal.phone_number",
     "user.tavily_api_key",
