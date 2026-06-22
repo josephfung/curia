@@ -123,7 +123,7 @@ import { OutboundContextService } from './dispatch/outbound-context.js';
 import { applyTaskManagement } from './agents/task-management.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import * as fs from 'node:fs';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { RegistryRepo } from './registry/registry-repo.js';
 import { RegistryService } from './registry/registry-service.js';
 import { reconcileRegistries, type RegistryDefaults } from './registry/reconcile.js';

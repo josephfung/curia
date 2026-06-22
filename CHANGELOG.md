@@ -14,6 +14,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 ## [Unreleased]
 
 ### Changed
+- **`js-yaml`** — bumped from 4.2.0 to 5.0.0; migrated all imports to named exports (`import * as yaml`) and added empty/comment-only input guards to preserve v4 null-return behavior in config loaders and startup validator.
+
+### Changed
 
 - **`config/default.yaml`** — trimmed verbose comment blocks (dispatch rate-limit, injection patterns, PII patterns, outbound filter) to concise inline notes.
 - **`.env.example`** — removed three obsolete sections (vault secrets reference list, Signal channel setup guide, Google Drive / Workspace MCP setup guide).

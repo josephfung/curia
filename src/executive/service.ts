@@ -19,7 +19,7 @@
 // Every profile change emits a config.change bus event via the audit trail.
 
 import * as fs from 'node:fs';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import chokidar, { type FSWatcher } from 'chokidar';
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';

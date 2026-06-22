@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 // UUID v4 format: 8-4-4-4-12 hex groups separated by hyphens.
 // Used to validate agentContactId before system prompt interpolation —

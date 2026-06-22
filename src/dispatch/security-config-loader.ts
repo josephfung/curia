@@ -5,7 +5,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import * as path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 export interface ExtraInjectionPattern {
   regex: RegExp;
