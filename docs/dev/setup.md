@@ -88,13 +88,13 @@ a six-step React form wizard:
    auto-skips when a principal already exists; it pre-populates the current
    name so it can be corrected if needed.
 2. **Your details** — the principal's operational profile. Captures timezone
-   (required), email (required), preferred name, title, and working hours
-   (all optional). The email is stored as a verified principal identity that
-   comes online after the wizard's restart. The selected timezone informs agent
-   reasoning via entity-context enrichment. Note: the system timezone (cron
-   scheduler, environment variable `TIMEZONE`) remains env-driven separate
-   from the wizard selection. Aligning the system clock to match the principal's
-   contact timezone is tracked as a follow-up.
+   (required), email, preferred name, title, and working hours (all optional).
+   The email is stored as a verified principal identity that comes online after
+   the wizard's restart. The selected timezone informs agent reasoning via
+   entity-context enrichment. Note: the system timezone (cron scheduler,
+   environment variable `TIMEZONE`) remains env-driven separate from the wizard
+   selection. Aligning the system clock to match the principal's contact
+   timezone is tracked as a follow-up.
 3. **Identity** — assistant name, title, optional email signature.
 4. **Tone** — 1–3 baseline tone words + verbosity and directness sliders.
 5. **Posture** — decision-making posture + initial behavioral preferences.
