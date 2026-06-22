@@ -89,11 +89,15 @@ export class CeoInboxDraftComposeHandler implements SkillHandler {
       'ceo-inbox-draft-compose: creating compose draft',
     );
 
-    // Guard: if the LLM wrote HTML directly, pass it through unchanged — running HTML
-    // through markdownToHtml() would escape the tags, making them visible as literal text.
-    const htmlBody = looksLikeHtml(body) ? body : markdownToHtml(body);
-
     try {
+      // Guard: if the LLM wrote HTML directly, pass it through unchanged — running HTML
+      // through markdownToHtml() would escape the tags, making them visible as literal text.
+      const isHtml = looksLikeHtml(body);
+      if (isHtml) {
+        ctx.log.debug({ bodyLength: body.length, subject }, 'ceo-inbox-draft-compose: LLM wrote HTML body — passing through unchanged');
+      }
+      const htmlBody = isHtml ? body : markdownToHtml(body);
+
       const draft = await client.createDraft({
         subject,
         body: htmlBody,

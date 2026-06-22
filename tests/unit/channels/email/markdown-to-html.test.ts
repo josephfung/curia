@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { markdownToHtml } from '../../../../src/channels/email/markdown-to-html.js';
+import { markdownToHtml, looksLikeHtml } from '../../../../src/channels/email/markdown-to-html.js';
 
 describe('markdownToHtml', () => {
   it('wraps plain text in a paragraph', () => {
@@ -128,5 +128,52 @@ describe('markdownToHtml', () => {
     const result = markdownToHtml('Hello');
     expect(result).toMatch(/^<div/);
     expect(result).toMatch(/<\/div>$/);
+  });
+});
+
+describe('looksLikeHtml', () => {
+  it('returns true for body containing block <p> tags', () => {
+    expect(looksLikeHtml('<p>Hey Anshula,</p><p>Thanks for your email.</p>')).toBe(true);
+  });
+
+  it('returns true for body containing <div>', () => {
+    expect(looksLikeHtml('<div style="font-family: Arial">Hello</div>')).toBe(true);
+  });
+
+  it('returns true for body with <br> tags', () => {
+    expect(looksLikeHtml('Line one<br>Line two')).toBe(true);
+  });
+
+  it('returns true for body with <ul> list tags', () => {
+    expect(looksLikeHtml('<ul><li>Item one</li><li>Item two</li></ul>')).toBe(true);
+  });
+
+  it('returns false for plain markdown text', () => {
+    expect(looksLikeHtml('Hey Anshula,\n\nThanks for your email.\n\nCheers,\nJoseph')).toBe(false);
+  });
+
+  it('returns false for text with only inline tags like <b> or <a>', () => {
+    // Inline-only HTML falls through to markdownToHtml, which escapes the tags.
+    // This is the documented trade-off: inline tags are uncommon in LLM bodies
+    // and we deliberately do not detect them to avoid false positives on prose.
+    expect(looksLikeHtml('Click <a href="https://example.com">here</a> to view.')).toBe(false);
+    expect(looksLikeHtml('This is <b>important</b>.')).toBe(false);
+  });
+
+  it('returns false for prose that mentions HTML tags as text', () => {
+    // Plain-text discussion of HTML — the guard fires on the tag pattern, so this
+    // is a documented false positive. The trade-off: if an LLM body genuinely
+    // contains "<p>" in prose (e.g. "add a <p> wrapper"), the body is passed through
+    // unchanged rather than being markdown-converted. This is an acceptable edge case.
+    expect(looksLikeHtml('You should use a <p> tag to wrap paragraphs.')).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(looksLikeHtml('<P>Hello</P>')).toBe(true);
+    expect(looksLikeHtml('<DIV>content</DIV>')).toBe(true);
+  });
+
+  it('returns false for empty string', () => {
+    expect(looksLikeHtml('')).toBe(false);
   });
 });

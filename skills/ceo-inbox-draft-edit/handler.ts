@@ -130,7 +130,16 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
       }
       // Guard: if the LLM wrote HTML directly, pass it through unchanged — running HTML
       // through markdownToHtml() would escape the tags, making them visible as literal text.
-      updates.body = looksLikeHtml(body) ? body : markdownToHtml(body);
+      try {
+        const isHtml = looksLikeHtml(body);
+        if (isHtml) {
+          ctx.log.debug({ bodyLength: body.length, draftId }, 'ceo-inbox-draft-edit: LLM wrote HTML body — passing through unchanged');
+        }
+        updates.body = isHtml ? body : markdownToHtml(body);
+      } catch (err) {
+        ctx.log.error({ err, draftId }, 'ceo-inbox-draft-edit: failed to convert body to HTML');
+        return { success: false, error: 'Failed to convert email body to HTML' };
+      }
     }
 
     ctx.log.info(

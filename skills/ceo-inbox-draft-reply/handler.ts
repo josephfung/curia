@@ -115,7 +115,11 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
       // Guard: if the LLM wrote HTML directly (despite the skill manifest saying markdown),
       // pass it through unchanged — running HTML through markdownToHtml() would escape the
       // tags (e.g. <p> → &lt;p&gt;), which then renders as visible "<p>" text in Gmail.
-      const htmlBody = looksLikeHtml(body) ? body : markdownToHtml(body);
+      const bodyIsHtml = looksLikeHtml(body);
+      if (bodyIsHtml) {
+        ctx.log.debug({ bodyLength: body.length, replyToMessageId }, 'ceo-inbox-draft-reply: LLM wrote HTML body — passing through unchanged');
+      }
+      const htmlBody = bodyIsHtml ? body : markdownToHtml(body);
       let draftBody = htmlBody;
       try {
         const htmlQuote = buildReplyQuote(original, ctx.timezone, { format: 'html' });
