@@ -42,6 +42,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Email accounts** — manage one or many agent-owned mailboxes from the console; per-account Nylas grants stored in the vault. (#1101)
 - **Specialist secret-capture resume** — a delegated specialist (or the setup-wizard) that mints a secret-capture link is now resumed on redeem: migration 061 adds `resume_token` to `secret_capture_tokens`, re-entry routes through the coordinator, which re-delegates to the specialist via the `delegate` resume_token. Preserves the no-value and originator invariants. (#995)
 - **MCP skill credentials** — MCP servers declare required secrets in `skills.yaml` via a `secrets:` block; the web console presents credential fields (masked or plain), writes to the encrypted vault, and gates enable/disable on whether required secrets resolve. Mirrors the Channels registry pattern. New `mcp_server_registry` table, `McpRegistryService`, `reconcileMcpRegistry`, and `/api/registry/mcp/*` routes. `loadMcpServers` now filters to enabled servers only. (#1100 or the PR number for this branch)
+- `setup-status` skill: read-only, returns the setup catalog with each task's live-derived status (`done` / `pending` / `deferred`). Catalog (`catalog.yaml`) is owned by the skill bundle, not core.
+- `setup-defer` skill: write (`action_risk: low`), persists/clears setup task deferrals in config-store (`setup_wizard/deferrals`).
+- `setup-wizard` v0.2.0: outcome-backward concierge prompt — instant wins first, then outcome question → shortest path → defer the rest. Routes email/Signal to console, lone API keys to in-chat capture. Catalog-aware (full menu on request, resume deferred tasks). Replaces v0.1.x turn-by-turn script.
+- `CLAUDE.md` coaching note: contributors adding new credentialed capabilities or changing default behavior should update the setup-wizard catalog and its docs.
 
 ### Fixed
 
