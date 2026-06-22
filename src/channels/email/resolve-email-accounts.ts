@@ -32,14 +32,17 @@ export async function resolveEmailAccounts(
       );
       continue;
     }
-    if (!grant) {
+    // Trim before the truthiness check: a vault entry set to '   ' would pass !grant but
+    // fail Nylas auth at bootstrap, causing a cryptic runtime error instead of a clean skip.
+    const trimmedGrant = grant.trim();
+    if (!trimmedGrant) {
       logger.warn(
         { account: acct.name },
         'Email account has no nylas_grant_id in the vault — skipping (re-add the grant in the console)',
       );
       continue;
     }
-    resolved.push({ name: acct.name, nylasGrantId: grant, selfEmail: acct.selfEmail });
+    resolved.push({ name: acct.name, nylasGrantId: trimmedGrant, selfEmail: acct.selfEmail });
   }
   return resolved;
 }
