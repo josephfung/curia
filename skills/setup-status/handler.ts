@@ -44,12 +44,28 @@ async function loadCatalog(): Promise<CatalogTask[]> {
   const raw = await readFile(catalogPath, 'utf-8');
   // js-yaml v5: yaml.load() is safe by default — arbitrary-type tags (!!python/object etc.)
   // were removed in v5. safeLoad() no longer exists. See js-yaml v5 migration guide.
-  const parsed = yaml.load(raw) as { tasks: CatalogTask[] };
-  catalogCache = parsed.tasks;
+  const parsed = yaml.load(raw) as unknown;
+  // Guard against malformed catalog files — a bad YAML structure should be a loud
+  // error that identifies the catalog as the source, not a cryptic TypeError later.
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !Array.isArray((parsed as { tasks?: unknown }).tasks)
+  ) {
+    throw new Error(
+      `setup-status: catalog.yaml parsed to an unexpected structure — expected { tasks: [...] }. Got: ${JSON.stringify(parsed)?.slice(0, 200)}`,
+    );
+  }
+  catalogCache = (parsed as { tasks: CatalogTask[] }).tasks;
   return catalogCache;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// The exact substring the execution layer uses when a declared secret has no value.
+// Only this error class should return false — vault infrastructure errors and
+// undeclared-key programming errors must propagate.
+const SECRET_ABSENT_MSG = 'is declared but not set in the environment';
 
 /** Returns true when the named secret is present in the vault, false otherwise.
  *  ctx.secret() throws when the key is absent — we use try/catch to check presence
@@ -58,8 +74,16 @@ function secretPresent(ctx: SkillContext, name: string): boolean {
   try {
     ctx.secret(name);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Only the "key absent" case should return false — vault errors and
+    // undeclared-key programming errors must propagate so they surface
+    // through the handler's standard error path instead of silently
+    // misreporting all credentialed tasks as pending.
+    if (message.includes(SECRET_ABSENT_MSG)) {
+      return false;
+    }
+    throw err;
   }
 }
 
@@ -68,7 +92,16 @@ function secretPresent(ctx: SkillContext, name: string): boolean {
 async function loadDeferredSet(ctx: SkillContext): Promise<Set<string>> {
   if (!ctx.entityMemory) return new Set();
   const configStore = new ConfigStore(ctx.entityMemory, ctx.log);
-  const stored = await configStore.get('setup_wizard', 'deferrals');
+  let stored: string | null;
+  try {
+    stored = await configStore.get('setup_wizard', 'deferrals');
+  } catch (err) {
+    // KG read failed — treat as no deferrals rather than aborting the entire
+    // status call. Deferred state is non-critical UX. Log at warn so the
+    // operator can see the degradation.
+    ctx.log.warn({ err }, 'setup-status: failed to read deferrals from config-store — treating as empty');
+    return new Set();
+  }
   if (!stored) return new Set();
   try {
     const parsed = JSON.parse(stored) as unknown;

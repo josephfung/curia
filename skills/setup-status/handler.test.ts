@@ -69,6 +69,7 @@ function makeCtx(overrides: Partial<{
   existingDeferrals: string;
   behavioralPreferences: string[];
   activeJobs: Array<{ intentAnchor?: string | null }>;
+  secretError: Error;
 }> = {}): SkillContext {
   const secrets = overrides.secrets ?? {};
   return {
@@ -76,8 +77,12 @@ function makeCtx(overrides: Partial<{
     entityMemory: makeEntityMemory(overrides.existingDeferrals) as unknown as EntityMemory,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as SkillContext['log'],
     secret: vi.fn((name: string) => {
+      // Vault infrastructure error takes priority — throws for every key, simulating
+      // a vault outage rather than a missing specific key.
+      if (overrides.secretError) throw overrides.secretError;
       if (secrets[name] !== undefined) return secrets[name];
-      throw new Error(`Secret not found: ${name}`);
+      // Use the real execution-layer message format so SECRET_ABSENT_MSG matching works in tests.
+      throw new Error(`Secret '${name}' is declared but not set in the environment`);
     }),
     officeIdentityService: {
       get: () => ({
@@ -202,6 +207,17 @@ describe('setup-status', () => {
 
     it('returns error when entityMemory is absent', async () => {
       const ctx = { input: {}, log: { error: vi.fn() } } as unknown as SkillContext;
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+    });
+
+    it('propagates vault infrastructure errors (does not silently treat them as pending)', async () => {
+      // secret() throws a non-"absent" error for all keys, simulating a vault outage
+      // or decrypt failure. The handler must surface { success: false }, NOT treat
+      // every credentialed task as pending and return { success: true }.
+      const ctx = makeCtx({
+        secretError: new Error('Vault read failed: decrypt operation timed out'),
+      });
       const result = await handler.execute(ctx);
       expect(result.success).toBe(false);
     });
