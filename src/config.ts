@@ -1,4 +1,4 @@
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
@@ -397,15 +397,21 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     );
   }
   let defaultParsed: unknown;
-  try {
-    defaultParsed = yaml.load(defaultRaw);
-  } catch (err) {
-    throw new Error(
-      `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  // js-yaml v5 throws on empty input instead of returning undefined; guard here
+  // to preserve the "empty file = no config" contract.
+  if (defaultRaw.trim() === '') {
+    defaultParsed = undefined;
+  } else {
+    try {
+      defaultParsed = yaml.load(defaultRaw);
+    } catch (err) {
+      throw new Error(
+        `Failed to load config/default.yaml: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
   if (defaultParsed === undefined) {
-    // Empty file (yaml.load returns undefined for '') — treat as no config.
+    // Empty file — treat as no config.
     base = {};
   } else if (defaultParsed === null || typeof defaultParsed !== 'object' || Array.isArray(defaultParsed)) {
     // Explicit YAML null, a scalar, or a sequence — all invalid for a config root.
@@ -433,15 +439,20 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   }
   if (localRaw !== null) {
     let localParsed: unknown;
-    try {
-      localParsed = yaml.load(localRaw);
-    } catch (err) {
-      throw new Error(
-        `Failed to load config/local.yaml: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    // js-yaml v5 throws on empty input; guard here to preserve the "empty file = no override" contract.
+    if (localRaw.trim() === '') {
+      localParsed = undefined;
+    } else {
+      try {
+        localParsed = yaml.load(localRaw);
+      } catch (err) {
+        throw new Error(
+          `Failed to load config/local.yaml: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
     if (localParsed === undefined) {
-      // Empty file (yaml.load returns undefined for '') — treat as no override.
+      // Empty file — treat as no override.
     } else if (localParsed === null || typeof localParsed !== 'object' || Array.isArray(localParsed)) {
       // Explicit YAML null, a scalar, or a sequence — all invalid for a config root.
       throw new Error('config/local.yaml must contain a YAML mapping at the root');

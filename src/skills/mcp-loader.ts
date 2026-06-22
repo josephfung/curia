@@ -9,7 +9,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import type { SkillManifest, SkillHandler, SkillContext, SkillResult } from './types.js';
 import type { SkillRegistry } from './registry.js';
 import { connectStdio, connectSse } from './mcp-client.js';
@@ -36,7 +36,10 @@ import type {
 export function loadSkillsConfig(configDir: string): SkillsConfig {
   const filePath = path.join(configDir, 'skills.yaml');
   try {
-    const parsed = yaml.load(fs.readFileSync(filePath, 'utf-8'));
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    // js-yaml v5 throws on empty input; treat an empty file as no MCP servers configured.
+    if (raw.trim() === '') return {};
+    const parsed = yaml.load(raw);
     if (parsed == null) return {};
     if (typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('config/skills.yaml must contain a YAML mapping at the root');

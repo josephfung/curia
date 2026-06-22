@@ -164,7 +164,7 @@ describe('loadYamlConfig — local.yaml errors', () => {
   });
 
   it('throws when local.yaml contains explicit YAML null (not the same as an empty file)', () => {
-    // yaml.load('') returns undefined (empty file → skip).
+    // Empty file → empty-string guard fires before yaml.load, returns undefined → skip.
     // yaml.load('null') returns null (explicit null document → error).
     const dir = writeTempConfigDir({
       defaultYaml: '',

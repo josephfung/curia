@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import type { TestCase, Turn, ExpectedBehavior, BehaviorWeight } from './types.js';
 
 const VALID_WEIGHTS: BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];

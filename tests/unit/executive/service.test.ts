@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import type { ExecutiveProfile } from '../../../src/executive/types.js';
 import { validateProfile, compileWritingVoiceBlock } from '../../../src/executive/service.js';
 

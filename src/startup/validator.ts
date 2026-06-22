@@ -13,8 +13,16 @@ import * as path from 'node:path';
 // Under ESM (nodenext), the named import `{ Ajv }` is the constructor; the default
 // import gives a non-constructable value in TypeScript 6 strict mode.
 import { Ajv, type ErrorObject } from 'ajv';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import type { Logger } from '../logger.js';
+
+// js-yaml v5 throws on empty or comment-only input (no actual YAML document) instead
+// of returning undefined. This helper restores the v4 contract: a file with no
+// non-comment, non-whitespace content is treated as null (= no document = skip).
+function loadYamlNullable(content: string): unknown {
+  const hasContent = content.split('\n').some(l => { const t = l.trim(); return t !== '' && !t.startsWith('#'); });
+  return hasContent ? yaml.load(content) : null;
+}
 
 // loadSchema takes the schemas dir as a parameter rather than computing it from
 // `import.meta.dirname`. The tsup bundle collapses every source file into a single
@@ -83,7 +91,8 @@ export async function runStartupValidation(opts: {
   // 1. Validate config/default.yaml (absent file is OK — all fields are optional)
   const configPath = path.join(configDir, configFileName);
   if (fs.existsSync(configPath)) {
-    const raw = yaml.load(fs.readFileSync(configPath, 'utf-8'));
+    const content = fs.readFileSync(configPath, 'utf-8');
+    const raw = loadYamlNullable(content);
     // null/empty YAML is valid (same as no config)
     if (raw != null) {
       if (!validateConfig(raw)) {
@@ -97,7 +106,8 @@ export async function runStartupValidation(opts: {
   // 2. Validate config/skills.yaml (absent file is OK — no MCP servers configured)
   const skillsConfigPath = path.join(configDir, 'skills.yaml');
   if (fs.existsSync(skillsConfigPath)) {
-    const raw = yaml.load(fs.readFileSync(skillsConfigPath, 'utf-8'));
+    const content = fs.readFileSync(skillsConfigPath, 'utf-8');
+    const raw = loadYamlNullable(content);
     if (raw != null) {
       if (!validateSkillsConfig(raw)) {
         throw new Error(
@@ -115,7 +125,8 @@ export async function runStartupValidation(opts: {
 
     for (const file of agentFiles) {
       const filePath = path.join(agentsDir, file);
-      const raw = yaml.load(fs.readFileSync(filePath, 'utf-8'));
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const raw = loadYamlNullable(content);
       if (raw == null) {
         throw new Error(`Startup validation failed: agent config file is empty: ${filePath}`);
       }

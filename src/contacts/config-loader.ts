@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import type { AuthConfig, RolePermissions, PermissionDef, TrustLevel, UnknownSenderPolicy, ChannelPolicyConfig } from './types.js';
 
 interface RawRoleEntry {
