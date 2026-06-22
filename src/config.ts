@@ -89,12 +89,6 @@ export interface YamlConfig {
      *  Messages exceeding this are rejected by the dispatcher before routing. */
     max_message_bytes?: number;
   };
-  /**
-   * @deprecated Removed as a configuration path (#1101). Retained as a loosely-typed
-   * field ONLY so the one-time email-accounts backfill can detect a residual block and
-   * warn about accounts it cannot auto-migrate. Remove together with the backfill.
-   */
-  channel_accounts?: { email?: Record<string, unknown> };
   browser?: {
     sessionTtlMs?: number;
     sweepIntervalMs?: number;

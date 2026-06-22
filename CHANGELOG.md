@@ -16,6 +16,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`config/default.yaml`** — trimmed verbose comment blocks (dispatch rate-limit, injection patterns, PII patterns, outbound filter) to concise inline notes.
+- **`.env.example`** — removed three obsolete sections (vault secrets reference list, Signal channel setup guide, Google Drive / Workspace MCP setup guide).
+
+### Removed
+
+- **Email accounts backfill** — `backfillEmailAccounts` and its test deleted; import, call site, and `channel_accounts` YAML field removed. All deployments have run the migration (#1101).
 
 ### Fixed
 

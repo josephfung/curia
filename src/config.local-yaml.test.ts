@@ -55,20 +55,11 @@ describe('loadYamlConfig — local.yaml merge', () => {
   it('adds keys from local.yaml that are absent from default.yaml', () => {
     const dir = writeTempConfigDir({
       defaultYaml: 'skillOutput:\n  maxLength: 50000\n',
-      localYaml: `
-channel_accounts:
-  email:
-    curia:
-      nylas_grant_id: literal-grant-id
-      self_email: curia@example.com
-`,
+      localYaml: 'delegate:\n  defaultTimeoutMs: 120000\n',
     });
     const config = loadYamlConfig(dir);
     expect(config.skillOutput?.maxLength).toBe(50000);
-    // channel_accounts is now a loosely-typed detection field (Record<string, unknown>).
-    // Cast through unknown to access the inner value for testing purposes.
-    const curia = config.channel_accounts?.email?.['curia'] as unknown as Record<string, unknown> | undefined;
-    expect(curia?.['self_email']).toBe('curia@example.com');
+    expect(config.delegate?.defaultTimeoutMs).toBe(120000);
   });
 
   it('local.yaml scalar overrides default.yaml scalar', () => {
