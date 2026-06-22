@@ -1,0 +1,24 @@
+{
+  "name": "setup-status",
+  "description": "Return the setup catalog with each task's live-derived status (done / pending / deferred / always_available). Call this at the start of every setup session and after any credential is captured. Never guess at setup state — always call this.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {},
+  "outputs": {
+    "tasks": "CatalogTaskWithStatus[] — catalog tasks with status, tier, handoff surface, credential_how_to, docs_url",
+    "summary": "{ total: number, done: number, pending: number, deferred: number }"
+  },
+  "permissions": [],
+  "secrets": [
+    "channel.email.nylas_api_key",
+    "channel.email.nylas_grant_id",
+    "channel.signal.socket_path",
+    "channel.signal.phone_number",
+    "user.tavily_api_key",
+    "user.openai_api_key"
+  ],
+  "timeout": 15000,
+  "capabilities": ["entityMemory", "schedulerService", "officeIdentityService"],
+  "allowed_callers": ["setup-wizard"]
+}

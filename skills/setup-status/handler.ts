@@ -1,0 +1,151 @@
+// skills/setup-status/handler.ts
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import * as yaml from 'js-yaml';
+import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { ConfigStore } from '../../src/memory/config-store.js';
+
+// ── Catalog types ──────────────────────────────────────────────────────────
+
+type CompletionCheck =
+  | { type: 'behavioral_preferences' }
+  | { type: 'scheduler_has_active_debrief' }
+  | { type: 'always_available' }
+  | { type: 'vault_secrets_all'; keys: string[] };
+
+interface CatalogTask {
+  id: string;
+  label: string;
+  value_prop: string;
+  tier: string;
+  handoff: 'in-chat' | 'console';
+  handoff_path?: string;
+  optional?: boolean;
+  completion_check: CompletionCheck;
+  credential_how_to: string | null;
+  docs_url: string | null;
+}
+
+type TaskStatus = 'done' | 'pending' | 'deferred';
+
+interface CatalogTaskWithStatus extends Omit<CatalogTask, 'completion_check'> {
+  status: TaskStatus;
+}
+
+// ── Catalog loading ────────────────────────────────────────────────────────
+
+// Module-level cache — catalog.yaml is static, safe to cache across invocations.
+// Tests that need a fresh catalog can use vi.resetModules() if needed.
+let catalogCache: CatalogTask[] | null = null;
+
+async function loadCatalog(): Promise<CatalogTask[]> {
+  if (catalogCache) return catalogCache;
+  const catalogPath = join(import.meta.dirname, 'catalog.yaml');
+  const raw = await readFile(catalogPath, 'utf-8');
+  // js-yaml v5: yaml.load() is safe by default — arbitrary-type tags (!!python/object etc.)
+  // were removed in v5. safeLoad() no longer exists. See js-yaml v5 migration guide.
+  const parsed = yaml.load(raw) as { tasks: CatalogTask[] };
+  catalogCache = parsed.tasks;
+  return catalogCache;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/** Returns true when the named secret is present in the vault, false otherwise.
+ *  ctx.secret() throws when the key is absent — we use try/catch to check presence
+ *  without consuming the value. */
+function secretPresent(ctx: SkillContext, name: string): boolean {
+  try {
+    ctx.secret(name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Loads the set of deferred task IDs from the ConfigStore. Returns an empty set
+ *  when no deferrals have been stored (or if the stored value is malformed). */
+async function loadDeferredSet(ctx: SkillContext): Promise<Set<string>> {
+  if (!ctx.entityMemory) return new Set();
+  const configStore = new ConfigStore(ctx.entityMemory, ctx.log);
+  const stored = await configStore.get('setup_wizard', 'deferrals');
+  if (!stored) return new Set();
+  try {
+    const parsed = JSON.parse(stored) as unknown;
+    const arr = Array.isArray(parsed)
+      ? parsed.filter((x): x is string => typeof x === 'string')
+      : [];
+    return new Set(arr);
+  } catch {
+    ctx.log.warn({ stored }, 'setup-status: deferrals value was not valid JSON — treating as empty');
+    return new Set();
+  }
+}
+
+// ── Handler ────────────────────────────────────────────────────────────────
+
+export class SetupStatusHandler implements SkillHandler {
+  async execute(ctx: SkillContext): Promise<SkillResult> {
+    if (!ctx.entityMemory) {
+      return { success: false, error: 'setup-status requires entityMemory capability.' };
+    }
+
+    try {
+      const [tasks, deferred] = await Promise.all([loadCatalog(), loadDeferredSet(ctx)]);
+
+      // Resolve live state once (batched, not per-task) to avoid redundant service calls.
+      const behavioralPreferences = ctx.officeIdentityService?.get()?.behavioralPreferences ?? [];
+      const personaDone = behavioralPreferences.length > 0;
+
+      let debriefDone = false;
+      if (ctx.schedulerService) {
+        const jobs = await ctx.schedulerService.listJobs({ status: 'active' });
+        debriefDone = jobs.some(
+          j => typeof (j as { intentAnchor?: unknown }).intentAnchor === 'string'
+            && ((j as { intentAnchor: string }).intentAnchor).includes('debrief'),
+        );
+      }
+
+      const annotated: CatalogTaskWithStatus[] = tasks.map(task => {
+        let done = false;
+        const check = task.completion_check;
+
+        switch (check.type) {
+          case 'behavioral_preferences':
+            done = personaDone;
+            break;
+          case 'scheduler_has_active_debrief':
+            done = debriefDone;
+            break;
+          case 'always_available':
+            done = true;
+            break;
+          case 'vault_secrets_all':
+            done = check.keys.every(k => secretPresent(ctx, k));
+            break;
+        }
+
+        // "done" wins over deferred — a completed task is done regardless of deferral.
+        const status: TaskStatus = done ? 'done' : deferred.has(task.id) ? 'deferred' : 'pending';
+
+        // Strip completion_check from the output — it's an internal implementation detail.
+        const { completion_check: _check, ...rest } = task;
+        void _check;
+        return { ...rest, status };
+      });
+
+      const summary = {
+        total: annotated.length,
+        done: annotated.filter(t => t.status === 'done').length,
+        pending: annotated.filter(t => t.status === 'pending').length,
+        deferred: annotated.filter(t => t.status === 'deferred').length,
+      };
+
+      return { success: true, data: { tasks: annotated, summary } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.log.error({ err }, 'setup-status failed');
+      return { success: false, error: message };
+    }
+  }
+}
