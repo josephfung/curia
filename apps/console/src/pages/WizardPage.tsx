@@ -33,6 +33,24 @@ const TOTAL_STEPS = 6;
 // in useChatSession.ts exactly.
 const ONBOARDING_KICKOFF_KEY = 'curia:onboarding:welcome-banner-pending';
 
+// ── Module-level constants ────────────────────────────────────────────────────
+
+// IANA timezone list. Intl.supportedValuesOf is available in ES2022+ browsers;
+// guard with typeof so the app still works in older environments that don't
+// support it (the small fallback list covers the most common zones).
+const IANA_ZONES: string[] = (typeof Intl !== 'undefined' && typeof (Intl as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf === 'function')
+  ? (Intl as { supportedValuesOf: (key: string) => string[] }).supportedValuesOf('timeZone')
+  : [
+      'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+      'America/Toronto', 'America/Vancouver', 'America/Sao_Paulo',
+      'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Amsterdam',
+      'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Singapore', 'Asia/Kolkata',
+      'Australia/Sydney', 'Australia/Melbourne', 'Pacific/Auckland', 'UTC',
+    ];
+
+// Weekday labels for the working-hours toggle buttons (0=Sun..6=Sat).
+const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'] as const;
+
 // ── Identity API types ────────────────────────────────────────────────────────
 
 interface IdentityResponse {
@@ -638,22 +656,6 @@ export default function WizardPage() {
   // title, and optional working hours. POSTs to /api/setup/principal/profile.
   // All fields except timezone are optional — skipping them is fine (#392).
 
-  // IANA timezone list. Intl.supportedValuesOf is available in ES2022+ browsers;
-  // guard with typeof so the app still works in older environments that don't
-  // support it (the small fallback list covers the most common zones).
-  const ianaZones: string[] = (typeof Intl !== 'undefined' && typeof (Intl as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf === 'function')
-    ? (Intl as { supportedValuesOf: (key: string) => string[] }).supportedValuesOf('timeZone')
-    : [
-        'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
-        'America/Toronto', 'America/Vancouver', 'America/Sao_Paulo',
-        'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Amsterdam',
-        'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Singapore', 'Asia/Kolkata',
-        'Australia/Sydney', 'Australia/Melbourne', 'Pacific/Auckland', 'UTC',
-      ];
-
-  // Weekday labels for the working-hours toggle buttons (0=Sun..6=Sat).
-  const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'] as const;
-
   // Working hours helpers — only assembled when the operator has set start/end times.
   const wh = state.workingHours;
 
@@ -703,7 +705,7 @@ export default function WizardPage() {
           {state.timezone === '' && (
             <option value="" disabled>Select a timezone…</option>
           )}
-          {ianaZones.map(tz => (
+          {IANA_ZONES.map(tz => (
             <option key={tz} value={tz}>{tz}</option>
           ))}
         </select>
