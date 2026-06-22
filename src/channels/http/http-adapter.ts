@@ -98,6 +98,12 @@ export interface HttpAdapterConfig {
    * suggestion, #799). Optional — the endpoint degrades to "unavailable" when absent.
    */
   infraLlmService?: import('../../skills/infra-llm.js').InfraLlmService;
+  /**
+   * KG fact store for principal profile endpoints (#392). Optional — only available
+   * when OPENAI_API_KEY is configured (entity memory requires embeddings). Passed
+   * through to setupRoutes; individual endpoints 503 when absent.
+   */
+  entityMemory?: import('../../memory/entity-memory.js').EntityMemory;
 }
 
 export class HttpAdapter implements Channel {
@@ -333,6 +339,8 @@ export class HttpAdapter implements Channel {
           setTimeout(() => process.exit(0), delayMs);
         },
         infraLlmService: this.config.infraLlmService,
+        contactService: this.config.contactService,
+        entityMemory: this.config.entityMemory,
       });
     }
 

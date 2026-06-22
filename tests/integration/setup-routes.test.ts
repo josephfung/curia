@@ -18,7 +18,12 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import pg from 'pg';
 import { setupRoutes } from '../../src/channels/http/routes/setup.js';
-import { createLogger } from '../../src/logger.js';
+import { createLogger, createSilentLogger } from '../../src/logger.js';
+import { ContactService } from '../../src/contacts/contact-service.js';
+import { EntityMemory } from '../../src/memory/entity-memory.js';
+import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
+import { EmbeddingService } from '../../src/memory/embedding.js';
+import { MemoryValidator } from '../../src/memory/validation.js';
 
 const { Pool } = pg;
 
@@ -59,6 +64,16 @@ describeIf('/api/setup/* routes', () => {
     );
     await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
 
+    // Build the services needed by setup routes (#392). Mirrors the pattern in
+    // tests/integration/contacts.test.ts — EmbeddingService.createForTesting()
+    // produces a no-op embedder (no OpenAI key required), which is fine here
+    // since the existing tests don't exercise KG-backed endpoints yet.
+    const embeddingService = EmbeddingService.createForTesting();
+    const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
+    const validator = new MemoryValidator(kgStore, embeddingService);
+    const entityMemory = new EntityMemory(kgStore, validator, embeddingService, createSilentLogger());
+    const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
+
     // Each test app gets its own bootStartedAt — when we exercise the polling
     // loop's "different boot" detection in the frontend later, the same logic
     // applies here: a new process produces a strictly-later timestamp.
@@ -82,6 +97,8 @@ describeIf('/api/setup/* routes', () => {
         setupRequiredAtBoot,
         bootStartedAt,
         scheduleProcessExit,
+        contactService,
+        entityMemory,
       });
       await app.ready();
       return app;
@@ -98,6 +115,14 @@ describeIf('/api/setup/* routes', () => {
   afterAll(async () => {
     await appSetupMode.close();
     await appNormalMode.close();
+    // Clean up in FK dependency order: identities → contacts → edges → nodes.
+    await pool.query(
+      `DELETE FROM contact_channel_identities WHERE contact_id IN
+         (SELECT id FROM contacts WHERE system_role = 'principal')`,
+    );
+    await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+    await pool.query('DELETE FROM kg_edges');
+    await pool.query('DELETE FROM kg_nodes');
     await pool.end();
   });
 

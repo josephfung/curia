@@ -23,12 +23,18 @@ import { ensurePrincipalContact } from '../../../contacts/ensure-principal.js';
 import { isIdentityConfigured } from './identity.js';
 import type { InfraLlmService } from '../../../skills/infra-llm.js';
 import { parseSuggestedFirstName, SUGGEST_NAME_PROMPT } from './suggest-name.js';
+import type { ContactService } from '../../../contacts/contact-service.js';
+import type { EntityMemory } from '../../../memory/entity-memory.js';
 
 export interface SetupRouteOptions {
   webAppBootstrapSecret: string;
   sessions: SessionStore;
   pool: Pool;
   logger: Logger;
+  /** Canonical contact writes + identity linking for the principal profile step (#392). */
+  contactService: ContactService;
+  /** KG fact store for the principal's working-hours fact (#392). */
+  entityMemory: EntityMemory | undefined;
   /**
    * Whether the process booted in setup-required mode (no principal at boot, so
    * email + Signal adapters were skipped). Captured at startup and never changes
