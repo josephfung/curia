@@ -504,4 +504,144 @@ describeIf('/api/setup/* routes', () => {
       expect(processExitCalls).toHaveLength(0);
     });
   });
+
+  describe('GET /api/setup/principal', () => {
+    // Each test creates/deletes a principal — clear before each so the partial
+    // unique index doesn't collide across tests.
+    beforeEach(async () => {
+      await pool.query(
+        `DELETE FROM contact_channel_identities WHERE contact_id IN
+           (SELECT id FROM contacts WHERE system_role = 'principal')`,
+      );
+      await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+      await pool.query('DELETE FROM kg_edges');
+      await pool.query('DELETE FROM kg_nodes');
+    });
+
+    it('GET /api/setup/principal returns { exists:false } when no principal', async () => {
+      // beforeEach has cleared the principal
+      const res = await appSetupMode.inject({
+        method: 'GET', url: '/api/setup/principal', headers: AUTH_HEADER,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ exists: false, displayName: null });
+    });
+
+    it('GET /api/setup/principal returns the persisted profile', async () => {
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Profile Owner' },
+      });
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: {
+          timezone: 'America/Vancouver',
+          email: 'owner@example.com',
+          preferredName: 'Owner',
+          title: 'CEO',
+          workingHours: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
+        },
+      });
+
+      const res = await appSetupMode.inject({
+        method: 'GET', url: '/api/setup/principal', headers: AUTH_HEADER,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        exists: true,
+        displayName: 'Profile Owner',
+        timezone: 'America/Vancouver',
+        preferredName: 'Owner',
+        title: 'CEO',
+        email: 'owner@example.com',
+        workingHours: 'Mon–Fri, 9:00 AM–5:00 PM',
+      });
+    });
+  });
+
+  describe('POST /api/setup/principal/profile', () => {
+    // Each test creates a principal — clear before each so the partial unique
+    // index doesn't collide.
+    beforeEach(async () => {
+      await pool.query(
+        `DELETE FROM contact_channel_identities WHERE contact_id IN
+           (SELECT id FROM contacts WHERE system_role = 'principal')`,
+      );
+      await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+      await pool.query('DELETE FROM kg_edges');
+      await pool.query('DELETE FROM kg_nodes');
+    });
+
+    it('POST profile rejects an invalid timezone with 422', async () => {
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'TZ Tester' },
+      });
+      const res = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: { timezone: 'Mars/Olympus_Mons' },
+      });
+      expect(res.statusCode).toBe(422);
+    });
+
+    it('POST profile 409s when no principal exists', async () => {
+      const res = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: { timezone: 'America/Toronto' },
+      });
+      expect(res.statusCode).toBe(409);
+    });
+
+    it('POST profile writes canonical fields, links a verified email, and stores a working-hours fact', async () => {
+      const created = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Full Profile' },
+      });
+      const { contactId, kgNodeId } = created.json() as { contactId: string; kgNodeId: string };
+
+      const res = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: {
+          timezone: 'America/Vancouver', email: 'FULL@Example.com',
+          preferredName: 'Full', title: 'Founder',
+          workingHours: { start: '08:00', end: '16:00', days: [1, 2, 3, 4, 5] },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const contact = await pool.query<{ timezone: string; preferred_name: string; title: string; primary_email: string }>(
+        `SELECT timezone, preferred_name, title, primary_email FROM contacts WHERE id = $1`, [contactId],
+      );
+      expect(contact.rows[0]).toMatchObject({
+        timezone: 'America/Vancouver', preferred_name: 'Full', title: 'Founder',
+        primary_email: 'full@example.com', // lower-cased
+      });
+
+      const ident = await pool.query<{ verified: boolean; status: string; source: string }>(
+        `SELECT verified, status, source FROM contact_channel_identities
+           WHERE contact_id = $1 AND channel = 'email'`, [contactId],
+      );
+      expect(ident.rows[0]).toMatchObject({ verified: true, status: 'active', source: 'ceo_stated' });
+
+      const fact = await pool.query<{ value: string }>(
+        `SELECT n.properties->>'value' AS value FROM kg_edges e JOIN kg_nodes n ON n.id = e.target_node_id
+           WHERE e.source_node_id = $1 AND n.type = 'fact'
+             AND lower(n.properties->>'attribute') = 'working_hours' LIMIT 1`, [kgNodeId],
+      );
+      expect(fact.rows[0]!.value).toBe('Mon–Fri, 8:00 AM–4:00 PM');
+    });
+
+    it('POST profile leaves omitted optional fields untouched', async () => {
+      const created = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Partial' },
+      });
+      const { contactId } = created.json() as { contactId: string };
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: { timezone: 'America/Toronto', title: 'CTO' },
+      });
+      const row = await pool.query<{ preferred_name: string | null; primary_email: string | null }>(
+        `SELECT preferred_name, primary_email FROM contacts WHERE id = $1`, [contactId],
+      );
+      expect(row.rows[0]).toMatchObject({ preferred_name: null, primary_email: null });
+    });
+  });
 });

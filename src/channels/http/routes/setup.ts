@@ -25,6 +25,7 @@ import type { InfraLlmService } from '../../../skills/infra-llm.js';
 import { parseSuggestedFirstName, SUGGEST_NAME_PROMPT } from './suggest-name.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import type { EntityMemory } from '../../../memory/entity-memory.js';
+import { validateWorkingHours, serializeWorkingHours } from '../../../contacts/working-hours.js';
 
 export interface SetupRouteOptions {
   webAppBootstrapSecret: string;
@@ -74,6 +75,10 @@ const AUTH_RATE = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }
 
 const MAX_DISPLAY_NAME_LENGTH = 200;
 
+// Pragmatic address shape check — full RFC validation is unnecessary; the address is
+// the principal's own and is normalized to lowercase before linking.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export async function setupRoutes(
   app: FastifyInstance,
   options: SetupRouteOptions,
@@ -84,6 +89,7 @@ export async function setupRoutes(
     pool,
     logger,
     contactService,
+    entityMemory,
     setupRequiredAtBoot,
     bootStartedAt,
     scheduleProcessExit,
@@ -166,6 +172,159 @@ export async function setupRoutes(
       return reply.status(500).send({
         error: 'Failed to create principal contact. Check server logs.',
       });
+    }
+  });
+
+  // -- GET /api/setup/principal --
+  //
+  // Loads the principal's name + operational profile so the wizard can pre-populate
+  // Steps 1 and 2 (#392). Returns { exists:false } (not 404) when no principal yet —
+  // the wizard treats that as a fresh install.
+  app.get('/api/setup/principal', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    try {
+      const principal = await contactService.findContactBySystemRole('principal');
+      if (!principal) {
+        return reply.send({
+          exists: false, displayName: null, timezone: null,
+          preferredName: null, title: null, email: null, workingHours: null,
+        });
+      }
+      const withIdentities = await contactService.getContactWithIdentities(principal.id);
+      const email = (withIdentities?.identities ?? [])
+        .find((i) => i.channel === 'email' && i.verified && i.status === 'active')
+        ?.channelIdentifier ?? null;
+
+      // Working-hours fact: a 'fact' node linked to the principal's KG node whose
+      // properties.attribute === 'working_hours'. Mirrors the assembler's getFacts query.
+      let workingHours: string | null = null;
+      if (principal.kgNodeId) {
+        const facts = await pool.query<{ value: string | null }>(
+          `SELECT n.properties->>'value' AS value
+             FROM kg_edges e JOIN kg_nodes n ON n.id = e.target_node_id
+            WHERE e.source_node_id = $1 AND e.type = 'relates_to'
+              AND n.type = 'fact' AND lower(n.properties->>'attribute') = 'working_hours'
+            ORDER BY n.last_confirmed_at DESC LIMIT 1`,
+          [principal.kgNodeId],
+        );
+        workingHours = facts.rows[0]?.value ?? null;
+      }
+
+      return reply.send({
+        exists: true,
+        displayName: principal.displayName,
+        timezone: principal.timezone ?? null,
+        preferredName: principal.preferredName ?? null,
+        title: principal.title ?? null,
+        email,
+        workingHours,
+      });
+    } catch (err) {
+      logger.error({ err }, 'GET /api/setup/principal: failed to load principal profile');
+      return reply.status(500).send({ error: 'Failed to load principal profile. Check server logs.' });
+    }
+  });
+
+  // -- POST /api/setup/principal/profile --
+  //
+  // Persists the principal operational profile collected in the wizard's "Your details"
+  // step (#392): timezone + preferred name + title onto canonical contact columns; the
+  // email as a verified ceo_stated channel identity (so index.ts resolves principalEmail
+  // after the wizard-end restart); working hours as a KG fact surfaced by entity-context.
+  // Requires the principal to exist (created in Step 1). Omitted optional fields are not
+  // written, so a partial submit never clobbers an existing value.
+  app.post('/api/setup/principal/profile', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+
+    const body = (request.body ?? {}) as {
+      timezone?: unknown; email?: unknown; preferredName?: unknown;
+      title?: unknown; workingHours?: unknown;
+    };
+
+    // timezone is required and must be a real IANA zone (same guard as config.ts).
+    if (typeof body.timezone !== 'string' || body.timezone.trim().length === 0) {
+      return reply.status(400).send({ error: 'timezone is required.' });
+    }
+    const timezone = body.timezone.trim();
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: timezone });
+    } catch {
+      return reply.status(422).send({ error: `"${timezone}" is not a recognized IANA timezone.` });
+    }
+
+    // Optional fields — validate shape before any write.
+    let email: string | undefined;
+    if (body.email !== undefined && body.email !== null && body.email !== '') {
+      if (typeof body.email !== 'string' || !EMAIL_RE.test(body.email.trim())) {
+        return reply.status(422).send({ error: 'email is not a valid address.' });
+      }
+      email = body.email.trim().toLowerCase();
+    }
+    const preferredName =
+      typeof body.preferredName === 'string' && body.preferredName.trim() ? body.preferredName.trim() : undefined;
+    const title =
+      typeof body.title === 'string' && body.title.trim() ? body.title.trim() : undefined;
+
+    let workingHoursValue: string | undefined;
+    if (body.workingHours !== undefined && body.workingHours !== null) {
+      const wh = validateWorkingHours(body.workingHours);
+      if (!wh) return reply.status(422).send({ error: 'workingHours is malformed.' });
+      workingHoursValue = serializeWorkingHours(wh);
+    }
+
+    try {
+      const principal = await contactService.findContactBySystemRole('principal');
+      if (!principal) {
+        return reply.status(409).send({ error: 'No principal exists yet — complete Step 1 first.' });
+      }
+
+      // Email first: updateContactFields validates primaryEmail against existing channel
+      // identities, so the identity must be linked before primary_email is set. ceo_stated
+      // is auto-verified (AUTO_VERIFIED_SOURCES), so this lands verified+active.
+      if (email) {
+        await contactService.linkIdentity({
+          contactId: principal.id, channel: 'email', channelIdentifier: email,
+          source: 'ceo_stated', verified: true,
+        });
+      }
+
+      // Canonical columns — only defined fields are written (updateContactFields drops
+      // undefined entries, so omitted optionals are never clobbered).
+      await contactService.updateContactFields(principal.id, {
+        timezone,
+        ...(preferredName !== undefined ? { preferredName } : {}),
+        ...(title !== undefined ? { title } : {}),
+        ...(email !== undefined ? { primaryEmail: email } : {}),
+      });
+
+      // Working hours → KG fact on the principal's node. Carries properties.attribute so
+      // storeFact runs contradiction detection (a wizard re-run updates, not duplicates).
+      // entityMemory is optional (disabled when OPENAI_API_KEY is unset) — skip gracefully
+      // rather than failing the whole profile save; timezone/email/name don't need the KG.
+      if (workingHoursValue && principal.kgNodeId) {
+        if (entityMemory) {
+          await entityMemory.storeFact({
+            entityNodeId: principal.kgNodeId,
+            label: 'Working hours',
+            properties: { attribute: 'working_hours', value: workingHoursValue, category: 'preference' },
+            confidence: 1.0,
+            decayClass: 'permanent',
+            source: 'system:setup-wizard',
+          });
+        } else {
+          // KG is unavailable (no OPENAI_API_KEY) — log and continue. The canonical
+          // contact fields (timezone, email, name) are already persisted above.
+          logger.warn(
+            { kgNodeId: principal.kgNodeId },
+            'POST /api/setup/principal/profile: working hours not persisted — entityMemory is unavailable (KG disabled)',
+          );
+        }
+      }
+
+      return reply.send({ ok: true });
+    } catch (err) {
+      logger.error({ err }, 'POST /api/setup/principal/profile: failed to persist profile');
+      return reply.status(500).send({ error: 'Failed to save profile. Check server logs.' });
     }
   });
 
