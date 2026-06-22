@@ -102,6 +102,25 @@ describe('CeoNylasClient request envelope handling', () => {
     });
     await expect(request).rejects.toBeInstanceOf(NylasApiError);
   });
+
+  it('throws a NylasApiError when a successful response body is null', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(null), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const client = new CeoNylasClient('key', 'grant', logger);
+    const request = client.listFolders();
+
+    await expect(request).rejects.toMatchObject({
+      name: 'NylasApiError',
+      status: 200,
+      endpoint: 'listFolders',
+      message: 'Nylas listFolders: response missing data envelope',
+    });
+    await expect(request).rejects.toBeInstanceOf(NylasApiError);
+  });
 });
 
 describe('CeoNylasClient.listMessages — folder alias normalization', () => {
