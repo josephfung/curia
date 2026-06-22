@@ -35,18 +35,23 @@ export function validateWorkingHours(value: unknown): WorkingHours | null {
 
 /** "09:00" → "9:00 AM"; "17:00" → "5:00 PM"; "00:00" → "12:00 AM". */
 function formatTime(hhmm: string): string {
-  const [h, m] = hhmm.split(':').map((n) => parseInt(n, 10));
-  const hour = h!;
+  const parts = hhmm.split(':').map((n) => parseInt(n, 10));
+  const hour = parts[0] ?? 0;
+  const min = parts[1] ?? 0;
   const meridiem = hour < 12 ? 'AM' : 'PM';
   const twelve = hour % 12 === 0 ? 12 : hour % 12;
-  return `${twelve}:${String(m!).padStart(2, '0')} ${meridiem}`;
+  return `${twelve}:${String(min).padStart(2, '0')} ${meridiem}`;
 }
 
 /** Render days: a fully-contiguous run becomes "Mon–Fri"; otherwise "Mon, Wed, Fri". */
 function formatDays(days: number[]): string {
   const isContiguous =
-    days.length >= 2 && days.every((d, i) => i === 0 || d === days[i - 1]! + 1);
-  if (isContiguous) return `${DAY_ABBR[days[0]!]}–${DAY_ABBR[days[days.length - 1]!]}`;
+    days.length >= 2 && days.every((d, i) => i === 0 || d === (days[i - 1] ?? -1) + 1);
+  const first = days[0];
+  const last = days[days.length - 1];
+  if (isContiguous && first !== undefined && last !== undefined) {
+    return `${DAY_ABBR[first]}–${DAY_ABBR[last]}`;
+  }
   return days.map((d) => DAY_ABBR[d]).join(', ');
 }
 

@@ -284,11 +284,19 @@ export async function setupRoutes(
       // Email first: updateContactFields validates primaryEmail against existing channel
       // identities, so the identity must be linked before primary_email is set. ceo_stated
       // is auto-verified (AUTO_VERIFIED_SOURCES), so this lands verified+active.
+      // Guard against re-running the wizard with the same email: linkIdentity does a plain
+      // INSERT and would hit the unique index on (channel, lower(channel_identifier)).
       if (email) {
-        await contactService.linkIdentity({
-          contactId: principal.id, channel: 'email', channelIdentifier: email,
-          source: 'ceo_stated', verified: true,
-        });
+        const existing = await contactService.getIdentitiesForContact(principal.id);
+        const alreadyLinked = existing.some(
+          (id) => id.channel === 'email' && id.channelIdentifier === email,
+        );
+        if (!alreadyLinked) {
+          await contactService.linkIdentity({
+            contactId: principal.id, channel: 'email', channelIdentifier: email,
+            source: 'ceo_stated', verified: true,
+          });
+        }
       }
 
       // Canonical columns — only defined fields are written (updateContactFields drops

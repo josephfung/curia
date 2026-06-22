@@ -309,6 +309,10 @@ describe('buildProfilePayload', () => {
 
 describe('detectBrowserTimezone', () => {
   it('returns a non-empty IANA-looking string', () => {
-    expect(detectBrowserTimezone()).toMatch(/^[A-Za-z]+\/[A-Za-z_]+/);
+    // CI environments often report 'UTC' — a valid IANA zone without a slash.
+    // Accept any non-empty string that Intl recognises as a real zone.
+    const tz = detectBrowserTimezone();
+    expect(tz.length).toBeGreaterThan(0);
+    expect(() => Intl.DateTimeFormat(undefined, { timeZone: tz })).not.toThrow();
   });
 });

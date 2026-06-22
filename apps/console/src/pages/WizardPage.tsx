@@ -145,17 +145,16 @@ export default function WizardPage() {
   const [identityConfigured, setIdentityConfigured] = useState<boolean | null>(null);
 
   // Pre-populate form from current identity, setup status, and existing principal
-  // profile on mount. All three fetches run in parallel. Identity and status are
-  // required — errors bubble to the load-error render. The principal fetch is
-  // best-effort: a 404 or network blip just falls back to browser-detected
-  // timezone and blank optionals (#392).
+  // profile on mount. Identity and status are required — errors bubble to the
+  // load-error render. The principal fetch is best-effort: a 404 or network
+  // blip falls back to browser-detected timezone and blank optionals (#392).
+  // It runs separately so a flaky /api/setup/principal never breaks the wizard.
   useEffect(() => {
     async function load() {
       try {
-        const [identityRes, statusRes, principalRes] = await Promise.all([
+        const [identityRes, statusRes] = await Promise.all([
           apiFetch('/api/identity'),
           apiFetch('/api/setup/status'),
-          apiFetch('/api/setup/principal'),
         ]);
         if (!identityRes.ok) throw new Error(await extractError(identityRes));
         if (!statusRes.ok) throw new Error(await extractError(statusRes));
@@ -190,8 +189,15 @@ export default function WizardPage() {
           principalTitle: DEFAULT_WIZARD_STATE.principalTitle,
           workingHours: DEFAULT_WIZARD_STATE.workingHours,
         });
-        // Merge existing principal profile into state; fall back to browser timezone
-        // detection if the principal doesn't exist yet or the fetch failed.
+      } catch (err) {
+        setLoadError(err instanceof Error ? err.message : 'Failed to load identity');
+      }
+
+      // Best-effort: merge existing principal profile into state.
+      // A 404 (no principal yet) or any network error falls back to browser
+      // timezone; it must NOT throw into the outer catch above.
+      try {
+        const principalRes = await apiFetch('/api/setup/principal');
         if (principalRes.ok) {
           const p = await principalRes.json() as PrincipalProfileResponse;
           setState(s => ({
@@ -202,7 +208,7 @@ export default function WizardPage() {
             preferredName: p.preferredName ?? '',
             principalTitle: p.title ?? '',
             // workingHours stays structured in the form; a returning operator re-enters
-            // it if they want to change it. (The string is shown as the current value hint.)
+            // it if they want to change it.
           }));
         } else {
           if (principalRes.status !== 404) {
@@ -210,8 +216,8 @@ export default function WizardPage() {
           }
           setState(s => ({ ...s, timezone: detectBrowserTimezone() }));
         }
-      } catch (err) {
-        setLoadError(err instanceof Error ? err.message : 'Failed to load identity');
+      } catch {
+        setState(s => ({ ...s, timezone: detectBrowserTimezone() }));
       }
     }
     void load();
@@ -757,9 +763,18 @@ export default function WizardPage() {
         />
       </div>
 
-      <div className="wizard-label" style={{ marginTop: 16 }}>
+      <div className="wizard-label" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
         Working hours{' '}
         <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(Optional)</span>
+        {wh !== null && (
+          <button
+            type="button"
+            style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 400, background: 'none', border: 'none', color: 'var(--color-muted)', cursor: 'pointer', textTransform: 'none', letterSpacing: 0 }}
+            onClick={() => setState(s => ({ ...s, workingHours: null }))}
+          >
+            Clear
+          </button>
+        )}
       </div>
       <div className="wizard-subheading" style={{ marginTop: 0, marginBottom: 12 }}>
         Leave blank to skip — your assistant will work around the clock.

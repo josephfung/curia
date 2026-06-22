@@ -101,7 +101,8 @@ export interface HttpAdapterConfig {
   /**
    * KG fact store for principal profile endpoints (#392). Optional — only available
    * when OPENAI_API_KEY is configured (entity memory requires embeddings). Passed
-   * through to setupRoutes; individual endpoints 503 when absent.
+   * through to setupRoutes; working-hours fact storage is skipped gracefully when absent
+   * (timezone/email/name writes still succeed).
    */
   entityMemory?: import('../../memory/entity-memory.js').EntityMemory;
 }

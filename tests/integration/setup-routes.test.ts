@@ -229,6 +229,7 @@ describeIf('/api/setup/* routes', () => {
       const row = await pool.query<{ display_name: string }>(
         `SELECT display_name FROM contacts WHERE id = $1`, [contactId],
       );
+      expect(row.rows).toHaveLength(1);
       expect(row.rows[0]!.display_name).toBe('Corrected Name');
     });
 
@@ -610,6 +611,7 @@ describeIf('/api/setup/* routes', () => {
       const contact = await pool.query<{ timezone: string; preferred_name: string; title: string; primary_email: string }>(
         `SELECT timezone, preferred_name, title, primary_email FROM contacts WHERE id = $1`, [contactId],
       );
+      expect(contact.rows).toHaveLength(1);
       expect(contact.rows[0]).toMatchObject({
         timezone: 'America/Vancouver', preferred_name: 'Full', title: 'Founder',
         primary_email: 'full@example.com', // lower-cased
@@ -619,6 +621,7 @@ describeIf('/api/setup/* routes', () => {
         `SELECT verified, status, source FROM contact_channel_identities
            WHERE contact_id = $1 AND channel = 'email'`, [contactId],
       );
+      expect(ident.rows).toHaveLength(1);
       expect(ident.rows[0]).toMatchObject({ verified: true, status: 'active', source: 'ceo_stated' });
 
       const fact = await pool.query<{ value: string }>(
@@ -626,6 +629,7 @@ describeIf('/api/setup/* routes', () => {
            WHERE e.source_node_id = $1 AND n.type = 'fact'
              AND lower(n.properties->>'attribute') = 'working_hours' LIMIT 1`, [kgNodeId],
       );
+      expect(fact.rows).toHaveLength(1);
       expect(fact.rows[0]!.value).toBe('Mon–Fri, 8:00 AM–4:00 PM');
     });
 
