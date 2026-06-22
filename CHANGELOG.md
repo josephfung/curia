@@ -29,10 +29,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Setup wizard — name step** — Step 1 no longer auto-skips when a principal exists; it pre-populates the current name so it can be corrected. (#392)
 - **MCP Skills icon** — added missing plug icon to the MCP Skills sidebar nav item to match all other Settings sub-items.
 
 ### Added
 
+- **Setup wizard — principal operational profile** — new "Your details" step captures the principal's timezone, email, preferred name, title, and working hours; email is stored as a verified identity that comes online after the wizard's restart. (#392)
 - **Wizard name suggestion** — the onboarding wizard prefills the assistant name and email signature from an LLM-suggested first name via `POST /api/setup/suggest-name`, doubling as an early smoke test of the Anthropic key; silent static fallback on any failure. (#799)
 - **Email accounts** — manage one or many agent-owned mailboxes from the console; per-account Nylas grants stored in the vault. (#1101)
 - **Specialist secret-capture resume** — a delegated specialist (or the setup-wizard) that mints a secret-capture link is now resumed on redeem: migration 061 adds `resume_token` to `secret_capture_tokens`, re-entry routes through the coordinator, which re-delegates to the specialist via the `delegate` resume_token. Preserves the no-value and originator invariants. (#995)
