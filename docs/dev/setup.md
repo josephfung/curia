@@ -82,7 +82,7 @@ in a separate terminal — it attaches a CLI channel to the running stack.
 
 After logging in for the first time, the app detects that the office identity
 has not been configured and redirects you to `/setup` automatically. This is
-a five-step React form wizard:
+a six-step React form wizard:
 
 1. **About you** — the CEO's name (the principal contact). This step no longer
    auto-skips when a principal already exists; it pre-populates the current
