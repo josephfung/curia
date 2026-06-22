@@ -132,10 +132,14 @@ export class SetupStatusHandler implements SkillHandler {
 
       let debriefDone = false;
       if (ctx.schedulerService) {
-        const jobs = await ctx.schedulerService.listJobs({ status: 'active' });
+        // Recurring jobs cycle pending→running→pending; 'active' is a task-row status,
+        // not a scheduled_jobs status. Fetch all jobs and exclude terminal states instead.
+        const TERMINAL_STATUSES = new Set(['cancelled', 'completed', 'failed']);
+        const jobs = await ctx.schedulerService.listJobs();
         debriefDone = jobs.some(
-          j => typeof (j as { intentAnchor?: unknown }).intentAnchor === 'string'
-            && ((j as { intentAnchor: string }).intentAnchor).includes('debrief'),
+          j =>
+            !TERMINAL_STATUSES.has(j.status ?? '') &&
+            j.intentAnchor?.includes('debrief'),
         );
       }
 

@@ -68,7 +68,7 @@ function makeCtx(overrides: Partial<{
   secrets: Record<string, string>;
   existingDeferrals: string;
   behavioralPreferences: string[];
-  activeJobs: Array<{ intentAnchor?: string | null }>;
+  activeJobs: Array<{ intentAnchor?: string | null; status?: string }>;
   secretError: Error;
 }> = {}): SkillContext {
   const secrets = overrides.secrets ?? {};
@@ -94,7 +94,15 @@ function makeCtx(overrides: Partial<{
       }),
     } as unknown as SkillContext['officeIdentityService'],
     schedulerService: {
-      listJobs: vi.fn(async () => (overrides.activeJobs ?? []) as unknown[]),
+      // Honor the status filter so future regressions to this filter logic are caught:
+      // if a filter is provided, only return jobs matching that status.
+      listJobs: vi.fn(async (filters?: { status?: string; agentId?: string }) => {
+        const jobs = overrides.activeJobs ?? [];
+        if (filters?.status) {
+          return jobs.filter((j: { status?: string }) => j.status === filters.status) as unknown[];
+        }
+        return jobs as unknown[];
+      }),
     } as unknown as SkillContext['schedulerService'],
   } as unknown as SkillContext;
 }
@@ -122,7 +130,7 @@ describe('setup-status', () => {
     });
 
     it('debrief: done when an active job with debrief in intentAnchor exists', async () => {
-      const ctx = makeCtx({ activeJobs: [{ intentAnchor: 'daily_debrief' }] });
+      const ctx = makeCtx({ activeJobs: [{ intentAnchor: 'daily_debrief', status: 'pending' }] });
       const result = await handler.execute(ctx);
       expect(result.success).toBe(true);
       const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
@@ -234,7 +242,7 @@ describe('setup-status', () => {
           'user.tavily_api_key': 'tvly-abc',
         },
         behavioralPreferences: ['prefers bullet points'],
-        activeJobs: [{ intentAnchor: 'weekly_debrief' }],
+        activeJobs: [{ intentAnchor: 'weekly_debrief', status: 'pending' }],
       });
       const result = await handler.execute(ctx);
       expect(result.success).toBe(true);
