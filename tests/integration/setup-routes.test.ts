@@ -18,7 +18,12 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import pg from 'pg';
 import { setupRoutes } from '../../src/channels/http/routes/setup.js';
-import { createLogger } from '../../src/logger.js';
+import { createLogger, createSilentLogger } from '../../src/logger.js';
+import { ContactService } from '../../src/contacts/contact-service.js';
+import { EntityMemory } from '../../src/memory/entity-memory.js';
+import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
+import { EmbeddingService } from '../../src/memory/embedding.js';
+import { MemoryValidator } from '../../src/memory/validation.js';
 
 const { Pool } = pg;
 
@@ -59,6 +64,16 @@ describeIf('/api/setup/* routes', () => {
     );
     await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
 
+    // Build the services needed by setup routes (#392). Mirrors the pattern in
+    // tests/integration/contacts.test.ts — EmbeddingService.createForTesting()
+    // produces a no-op embedder (no OpenAI key required), which is fine here
+    // since the existing tests don't exercise KG-backed endpoints yet.
+    const embeddingService = EmbeddingService.createForTesting();
+    const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
+    const validator = new MemoryValidator(kgStore, embeddingService);
+    const entityMemory = new EntityMemory(kgStore, validator, embeddingService, createSilentLogger());
+    const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
+
     // Each test app gets its own bootStartedAt — when we exercise the polling
     // loop's "different boot" detection in the frontend later, the same logic
     // applies here: a new process produces a strictly-later timestamp.
@@ -73,7 +88,9 @@ describeIf('/api/setup/* routes', () => {
       const app = Fastify();
       // rate-limit plugin is required because setup routes attach { config: { rateLimit: ... } }
       // per route — without it Fastify errors on registration.
-      await app.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
+      // allowList bypasses rate-limit enforcement in tests so that the route-level
+      // max:10 cap doesn't throttle requests as the test count grows.
+      await app.register(rateLimit, { max: 1000, timeWindow: '1 minute', allowList: () => true });
       await app.register(setupRoutes, {
         webAppBootstrapSecret: TEST_SECRET,
         sessions,
@@ -82,6 +99,8 @@ describeIf('/api/setup/* routes', () => {
         setupRequiredAtBoot,
         bootStartedAt,
         scheduleProcessExit,
+        contactService,
+        entityMemory,
       });
       await app.ready();
       return app;
@@ -98,6 +117,14 @@ describeIf('/api/setup/* routes', () => {
   afterAll(async () => {
     await appSetupMode.close();
     await appNormalMode.close();
+    // Clean up in FK dependency order: identities → contacts → edges → nodes.
+    await pool.query(
+      `DELETE FROM contact_channel_identities WHERE contact_id IN
+         (SELECT id FROM contacts WHERE system_role = 'principal')`,
+    );
+    await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+    await pool.query('DELETE FROM kg_edges');
+    await pool.query('DELETE FROM kg_nodes');
     await pool.end();
   });
 
@@ -123,6 +150,17 @@ describeIf('/api/setup/* routes', () => {
   });
 
   describe('POST /api/setup/principal', () => {
+    // Each test in this block creates a principal, but the partial unique index on
+    // system_role='principal' allows at most one row. Clear it before each test so
+    // tests that create a principal don't collide with one another.
+    beforeEach(async () => {
+      await pool.query(
+        `DELETE FROM contact_channel_identities WHERE contact_id IN
+           (SELECT id FROM contacts WHERE system_role = 'principal')`,
+      );
+      await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+    });
+
     it('creates a principal contact and returns its IDs', async () => {
       const res = await appSetupMode.inject({
         method: 'POST',
@@ -168,6 +206,43 @@ describeIf('/api/setup/* routes', () => {
       const secondBody = JSON.parse(second.body);
       expect(secondBody.alreadyExisted).toBe(true);
       expect(secondBody.contactId).toBe(firstBody.contactId);
+    });
+
+    it('renames the principal when called again with a different name', async () => {
+      const first = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Original Name' },
+      });
+      expect(first.statusCode).toBe(200);
+      const { contactId } = first.json() as { contactId: string };
+
+      const second = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Corrected Name' },
+      });
+      expect(second.statusCode).toBe(200);
+      const body = second.json() as { alreadyExisted: boolean; renamed: boolean; contactId: string };
+      expect(body.alreadyExisted).toBe(true);
+      expect(body.renamed).toBe(true);
+      expect(body.contactId).toBe(contactId);
+
+      const row = await pool.query<{ display_name: string }>(
+        `SELECT display_name FROM contacts WHERE id = $1`, [contactId],
+      );
+      expect(row.rows).toHaveLength(1);
+      expect(row.rows[0]!.display_name).toBe('Corrected Name');
+    });
+
+    it('does not rename when the same name is submitted', async () => {
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Same Name' },
+      });
+      const again = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Same Name' },
+      });
+      expect((again.json() as { renamed: boolean }).renamed).toBe(false);
     });
 
     it('returns 400 when the name is missing', async () => {
@@ -428,6 +503,149 @@ describeIf('/api/setup/* routes', () => {
       });
       expect(res.statusCode).toBe(401);
       expect(processExitCalls).toHaveLength(0);
+    });
+  });
+
+  describe('GET /api/setup/principal', () => {
+    // Each test creates/deletes a principal — clear before each so the partial
+    // unique index doesn't collide across tests.
+    beforeEach(async () => {
+      await pool.query(
+        `DELETE FROM contact_channel_identities WHERE contact_id IN
+           (SELECT id FROM contacts WHERE system_role = 'principal')`,
+      );
+      await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+      await pool.query('DELETE FROM kg_edges');
+      await pool.query('DELETE FROM kg_nodes');
+    });
+
+    it('GET /api/setup/principal returns { exists:false } when no principal', async () => {
+      // beforeEach has cleared the principal
+      const res = await appSetupMode.inject({
+        method: 'GET', url: '/api/setup/principal', headers: AUTH_HEADER,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ exists: false, displayName: null });
+    });
+
+    it('GET /api/setup/principal returns the persisted profile', async () => {
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Profile Owner' },
+      });
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: {
+          timezone: 'America/Vancouver',
+          email: 'owner@example.com',
+          preferredName: 'Owner',
+          title: 'CEO',
+          workingHours: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
+        },
+      });
+
+      const res = await appSetupMode.inject({
+        method: 'GET', url: '/api/setup/principal', headers: AUTH_HEADER,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        exists: true,
+        displayName: 'Profile Owner',
+        timezone: 'America/Vancouver',
+        preferredName: 'Owner',
+        title: 'CEO',
+        email: 'owner@example.com',
+        workingHours: 'Mon–Fri, 9:00 AM–5:00 PM',
+      });
+    });
+  });
+
+  describe('POST /api/setup/principal/profile', () => {
+    // Each test creates a principal — clear before each so the partial unique
+    // index doesn't collide.
+    beforeEach(async () => {
+      await pool.query(
+        `DELETE FROM contact_channel_identities WHERE contact_id IN
+           (SELECT id FROM contacts WHERE system_role = 'principal')`,
+      );
+      await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+      await pool.query('DELETE FROM kg_edges');
+      await pool.query('DELETE FROM kg_nodes');
+    });
+
+    it('POST profile rejects an invalid timezone with 422', async () => {
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'TZ Tester' },
+      });
+      const res = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: { timezone: 'Mars/Olympus_Mons' },
+      });
+      expect(res.statusCode).toBe(422);
+    });
+
+    it('POST profile 409s when no principal exists', async () => {
+      const res = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: { timezone: 'America/Toronto' },
+      });
+      expect(res.statusCode).toBe(409);
+    });
+
+    it('POST profile writes canonical fields, links a verified email, and stores a working-hours fact', async () => {
+      const created = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Full Profile' },
+      });
+      const { contactId, kgNodeId } = created.json() as { contactId: string; kgNodeId: string };
+
+      const res = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: {
+          timezone: 'America/Vancouver', email: 'FULL@Example.com',
+          preferredName: 'Full', title: 'Founder',
+          workingHours: { start: '08:00', end: '16:00', days: [1, 2, 3, 4, 5] },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const contact = await pool.query<{ timezone: string; preferred_name: string; title: string; primary_email: string }>(
+        `SELECT timezone, preferred_name, title, primary_email FROM contacts WHERE id = $1`, [contactId],
+      );
+      expect(contact.rows).toHaveLength(1);
+      expect(contact.rows[0]).toMatchObject({
+        timezone: 'America/Vancouver', preferred_name: 'Full', title: 'Founder',
+        primary_email: 'full@example.com', // lower-cased
+      });
+
+      const ident = await pool.query<{ verified: boolean; status: string; source: string }>(
+        `SELECT verified, status, source FROM contact_channel_identities
+           WHERE contact_id = $1 AND channel = 'email'`, [contactId],
+      );
+      expect(ident.rows).toHaveLength(1);
+      expect(ident.rows[0]).toMatchObject({ verified: true, status: 'active', source: 'ceo_stated' });
+
+      const fact = await pool.query<{ value: string }>(
+        `SELECT n.properties->>'value' AS value FROM kg_edges e JOIN kg_nodes n ON n.id = e.target_node_id
+           WHERE e.source_node_id = $1 AND n.type = 'fact'
+             AND lower(n.properties->>'attribute') = 'working_hours' LIMIT 1`, [kgNodeId],
+      );
+      expect(fact.rows).toHaveLength(1);
+      expect(fact.rows[0]!.value).toBe('Mon–Fri, 8:00 AM–4:00 PM');
+    });
+
+    it('POST profile leaves omitted optional fields untouched', async () => {
+      const created = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER, payload: { name: 'Partial' },
+      });
+      const { contactId } = created.json() as { contactId: string };
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal/profile', headers: AUTH_HEADER,
+        payload: { timezone: 'America/Toronto', title: 'CTO' },
+      });
+      const row = await pool.query<{ preferred_name: string | null; primary_email: string | null }>(
+        `SELECT preferred_name, primary_email FROM contacts WHERE id = $1`, [contactId],
+      );
+      expect(row.rows[0]).toMatchObject({ preferred_name: null, primary_email: null });
     });
   });
 });

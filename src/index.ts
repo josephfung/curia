@@ -2066,6 +2066,10 @@ async function main(): Promise<void> {
     bootStartedAt,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
     infraLlmService,
+    // Powers principal profile endpoints in setup routes (#392). Undefined when
+    // OPENAI_API_KEY is not set (entity memory requires embeddings); individual
+    // endpoints handle the absent case in Tasks 3–5.
+    entityMemory,
   });
 
   try {

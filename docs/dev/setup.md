@@ -82,16 +82,25 @@ in a separate terminal — it attaches a CLI channel to the running stack.
 
 After logging in for the first time, the app detects that the office identity
 has not been configured and redirects you to `/setup` automatically. This is
-a five-step React form wizard:
+a six-step React form wizard:
 
-1. **About you** — the CEO's name (the principal contact). Auto-skipped if
-   a principal already exists (e.g. from a prior wizard run on this instance).
-2. **Identity** — assistant name, title, optional email signature.
-3. **Tone** — 1–3 baseline tone words + verbosity and directness sliders.
-4. **Posture** — decision-making posture + initial behavioral preferences.
-5. **Review** — confirm and save.
+1. **About you** — the CEO's name (the principal contact). This step no longer
+   auto-skips when a principal already exists; it pre-populates the current
+   name so it can be corrected if needed.
+2. **Your details** — the principal's operational profile. Captures timezone
+   (required), email, preferred name, title, and working hours (all optional).
+   The email is stored as a verified principal identity that comes online after
+   the wizard's restart. The selected timezone informs agent reasoning via
+   entity-context enrichment. Note: the system timezone (cron scheduler,
+   environment variable `TIMEZONE`) remains env-driven separate from the wizard
+   selection. Aligning the system clock to match the principal's contact
+   timezone is tracked as a follow-up.
+3. **Identity** — assistant name, title, optional email signature.
+4. **Tone** — 1–3 baseline tone words + verbosity and directness sliders.
+5. **Posture** — decision-making posture + initial behavioral preferences.
+6. **Review** — confirm and save.
 
-When you submit step 5, the wizard saves the identity, hot reloads it, and
+When you submit step 6, the wizard saves the identity, hot reloads it, and
 (if the process booted in setup-required mode) asks the supervisor to
 restart so the email and Signal channels can come online. You'll see a
 brief "Setting up channels…" screen during the restart, then land directly

@@ -1,12 +1,17 @@
 // Pure helper functions for the wizard — no React, no DOM, fully testable.
 
+export interface WizardWorkingHours {
+  start: string; // "HH:MM"
+  end: string;   // "HH:MM"
+  days: number[]; // 0=Sun..6=Sat
+}
+
 export interface WizardState {
   // Step 1 — About you. Captured separately from the assistant identity below
   // and POSTed to /api/setup/principal so the principal contact exists before
-  // the rest of the form is saved. Auto-skipped when a principal is already
-  // present (e.g. from a prior wizard run on this instance).
+  // the rest of the form is saved. Pre-populated on a re-run; never auto-skipped.
   principalName: string;
-  // Steps 2–5 — assistant identity, tone, posture, review.
+  // Steps 3–6 — assistant identity, tone, posture, review.
   name: string;
   title: string;
   signature: string;
@@ -15,6 +20,12 @@ export interface WizardState {
   directness: number;  // 0–100
   posture: 'conservative' | 'balanced' | 'proactive';
   preferences: string;
+  // Step 2 — Your details (principal operational profile, #392).
+  timezone: string;
+  email: string;
+  preferredName: string;
+  principalTitle: string; // distinct from `title` (the assistant's title, Step 3)
+  workingHours: WizardWorkingHours | null;
 }
 
 // Local mirror of the OfficeIdentity shape from the backend identity API.
@@ -69,6 +80,11 @@ export const DEFAULT_WIZARD_STATE: WizardState = {
   directness: 75,
   posture: 'conservative',
   preferences: '',
+  timezone: '',
+  email: '',
+  preferredName: '',
+  principalTitle: '',
+  workingHours: null,
 };
 
 // Backend's POST /api/setup/principal accepts up to 200 characters; enforce the
@@ -200,4 +216,44 @@ export function buildIdentityPayload(
   };
 
   return { identity, note: 'Saved via onboarding wizard' };
+}
+
+// Browser timezone detection for the Step 2 prefill (#392). Falls back to the
+// backend default if the platform doesn't expose a resolved zone.
+export function detectBrowserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Toronto';
+  } catch (err) {
+    // Should never fire in a modern browser — defensive guard only.
+    console.warn('[wizard-utils] detectBrowserTimezone failed, using default:', err);
+    return 'America/Toronto';
+  }
+}
+
+const PROFILE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Email is optional in Step 2. Returns null when blank (allowed) or valid; an error
+// string when present-but-malformed.
+export function validateProfileEmail(email: string): string | null {
+  const trimmed = email.trim();
+  if (trimmed.length === 0) return null;
+  if (!PROFILE_EMAIL_RE.test(trimmed)) return 'Enter a valid email address.';
+  return null;
+}
+
+// Builds the POST /api/setup/principal/profile body, omitting empty optionals so the
+// backend never clobbers an existing value with a blank.
+export function buildProfilePayload(state: WizardState): {
+  timezone: string; email?: string; preferredName?: string; title?: string;
+  workingHours?: WizardWorkingHours;
+} {
+  const payload: {
+    timezone: string; email?: string; preferredName?: string; title?: string;
+    workingHours?: WizardWorkingHours;
+  } = { timezone: state.timezone.trim() };
+  if (state.email.trim()) payload.email = state.email.trim();
+  if (state.preferredName.trim()) payload.preferredName = state.preferredName.trim();
+  if (state.principalTitle.trim()) payload.title = state.principalTitle.trim();
+  if (state.workingHours) payload.workingHours = state.workingHours;
+  return payload;
 }
