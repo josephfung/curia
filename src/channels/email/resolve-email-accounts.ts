@@ -32,9 +32,9 @@ export async function resolveEmailAccounts(
       );
       continue;
     }
-    // Trim before the truthiness check: a vault entry set to '   ' would pass !grant but
-    // fail Nylas auth at bootstrap, causing a cryptic runtime error instead of a clean skip.
-    const trimmedGrant = grant.trim();
+    // Coalesce null to '' before trimming: handles both a missing vault entry and a
+    // whitespace-only value ('   ') — either would pass !grant but fail Nylas auth.
+    const trimmedGrant = (grant ?? '').trim();
     if (!trimmedGrant) {
       logger.warn(
         { account: acct.name },
