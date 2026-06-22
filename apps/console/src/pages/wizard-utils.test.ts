@@ -220,6 +220,11 @@ describe('buildIdentityPayload', () => {
     directness: 80,
     posture: 'conservative',
     preferences: 'Flag investor emails',
+    timezone: 'America/Toronto',
+    email: '',
+    preferredName: '',
+    principalTitle: '',
+    workingHours: null,
   };
 
   it('maps WizardState onto identity correctly', () => {

@@ -18,11 +18,15 @@ import {
   assistantFullName,
   defaultSignature,
   DEFAULT_ASSISTANT_FIRST_NAME,
+  detectBrowserTimezone,
+  validateProfileEmail,
+  buildProfilePayload,
   type WizardState,
+  type WizardWorkingHours,
   type LocalIdentity,
 } from './wizard-utils.js';
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 6;
 
 // localStorage key consumed by useChatSession to fire the auto-kickoff message
 // on the first chat mount after the wizard completes. Must match the constant
@@ -41,6 +45,18 @@ interface SetupStatusResponse {
   identityConfigured: boolean;
   externalAdaptersPending: boolean;
   bootStartedAt: string;
+}
+
+// Response from GET /api/setup/principal — returns existing principal profile
+// data for pre-filling Step 2 on a wizard re-run (#392).
+interface PrincipalProfileResponse {
+  exists: boolean;
+  displayName: string | null;
+  timezone: string | null;
+  preferredName: string | null;
+  title: string | null;
+  email: string | null;
+  workingHours: string | null; // serialized string; the form keeps its own structured state
 }
 
 // State machine for the post-save restart flow. `idle` covers both "haven't
@@ -90,6 +106,7 @@ export default function WizardPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [principalError, setPrincipalError] = useState('');
   const [principalSubmitting, setPrincipalSubmitting] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [assistantNameError, setAssistantNameError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -109,17 +126,18 @@ export default function WizardPage() {
   // it exists for.
   const [identityConfigured, setIdentityConfigured] = useState<boolean | null>(null);
 
-  // Pre-populate form from current identity and check setup status on mount.
-  // Run both fetches in parallel; setup status drives the Step 1 auto-skip
-  // (deployments that already have a principal — e.g. CEO_PRIMARY_EMAIL — go
-  // straight to step 2). identity drives the form's pre-fill so a wizard
-  // re-run shows the existing values instead of defaults.
+  // Pre-populate form from current identity, setup status, and existing principal
+  // profile on mount. All three fetches run in parallel. Identity and status are
+  // required — errors bubble to the load-error render. The principal fetch is
+  // best-effort: a 404 or network blip just falls back to browser-detected
+  // timezone and blank optionals (#392).
   useEffect(() => {
     async function load() {
       try {
-        const [identityRes, statusRes] = await Promise.all([
+        const [identityRes, statusRes, principalRes] = await Promise.all([
           apiFetch('/api/identity'),
           apiFetch('/api/setup/status'),
+          apiFetch('/api/setup/principal'),
         ]);
         if (!identityRes.ok) throw new Error(await extractError(identityRes));
         if (!statusRes.ok) throw new Error(await extractError(statusRes));
@@ -147,7 +165,30 @@ export default function WizardPage() {
           directness: id.tone.directness ?? DEFAULT_WIZARD_STATE.directness,
           posture: id.decisionStyle.externalActions || DEFAULT_WIZARD_STATE.posture,
           preferences: '', // always blank on entry — append mode
+          // Step 2 profile fields — defaults until the principal fetch resolves below
+          timezone: DEFAULT_WIZARD_STATE.timezone,
+          email: DEFAULT_WIZARD_STATE.email,
+          preferredName: DEFAULT_WIZARD_STATE.preferredName,
+          principalTitle: DEFAULT_WIZARD_STATE.principalTitle,
+          workingHours: DEFAULT_WIZARD_STATE.workingHours,
         });
+        // Merge existing principal profile into state; fall back to browser timezone
+        // detection if the principal doesn't exist yet or the fetch failed.
+        if (principalRes.ok) {
+          const p = await principalRes.json() as PrincipalProfileResponse;
+          setState(s => ({
+            ...s,
+            principalName: p.displayName ?? s.principalName,
+            timezone: p.timezone ?? detectBrowserTimezone(),
+            email: p.email ?? '',
+            preferredName: p.preferredName ?? '',
+            principalTitle: p.title ?? '',
+            // workingHours stays structured in the form; a returning operator re-enters
+            // it if they want to change it. (The string is shown as the current value hint.)
+          }));
+        } else {
+          setState(s => ({ ...s, timezone: detectBrowserTimezone() }));
+        }
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : 'Failed to load identity');
       }
@@ -206,16 +247,6 @@ export default function WizardPage() {
     void suggest();
     return () => { cancelled = true; };
   }, [existingIdentity, identityConfigured]);
-
-  // Auto-skip Step 1 when the principal already exists. Runs after the mount
-  // fetch sets principalExists and on any subsequent step change. The route
-  // navigation updates `currentStep`, which re-runs this effect; the guard
-  // (`principalExists && currentStep === 1`) keeps it from looping.
-  useEffect(() => {
-    if (principalExists && currentStep === 1) {
-      void navigate({ to: '/setup', search: { step: 2 } });
-    }
-  }, [principalExists, currentStep, navigate]);
 
   // Post-restart polling loop. Runs only while restartState === 'waiting'.
   // Polls /api/setup/status every RESTART_POLL_INTERVAL_MS, tolerating
@@ -320,25 +351,47 @@ export default function WizardPage() {
     }
   }
 
+  // Step 2 ("Your details") validates timezone + optional email, then POSTs the
+  // profile to /api/setup/principal/profile and advances to Step 3.
+  async function handleProfileContinue(): Promise<void> {
+    const tzError = state.timezone.trim() ? null : 'Select your timezone.';
+    const emailError = validateProfileEmail(state.email);
+    if (tzError || emailError) {
+      setProfileError(tzError ?? emailError);
+      return;
+    }
+    setProfileError(null);
+    try {
+      const res = await apiFetch('/api/setup/principal/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildProfilePayload(state)),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setProfileError(data.error ?? 'Could not save your details. Please try again.');
+        return;
+      }
+      await goTo(3);
+    } catch {
+      setProfileError('Could not save your details. Please try again.');
+    }
+  }
+
   function handleContinue() {
-    // Step 2 is the assistant identity form (formerly step 1). Same non-empty
-    // assertion as before — the renamed validator is the only difference.
-    if (currentStep === 2) {
+    // Step 3 is the assistant identity form. Validate the name before advancing.
+    if (currentStep === 3) {
       if (!validateNonEmptyName(state.name)) {
         setAssistantNameError('Assistant name is required.');
         return;
       }
       setAssistantNameError('');
     }
-    if (currentStep < TOTAL_STEPS) goTo(currentStep + 1);
+    if (currentStep < TOTAL_STEPS) void goTo(currentStep + 1);
   }
 
   function handleBack() {
-    // When the principal already exists, Step 1 is auto-skipped; going Back from
-    // Step 2 would bounce back to Step 2 via the auto-skip effect, so just no-op
-    // for clarity instead of flickering.
-    if (currentStep === 2 && principalExists) return;
-    if (currentStep > 1) goTo(currentStep - 1);
+    if (currentStep > 1) void goTo(currentStep - 1);
   }
 
   async function handleSubmit() {
@@ -453,16 +506,12 @@ export default function WizardPage() {
     );
   }
 
-  // Wait for BOTH the identity prefill AND the setup-status snapshot before
-  // rendering any step. Without this gate:
-  //   - Step 1 was reachable before principalExists resolved, so the auto-skip
-  //     effect couldn't decide whether to bounce the user forward — they could
-  //     fill in their name and submit before the wizard knew they shouldn't be
-  //     on this step in the first place.
-  //   - The Step 2 Back button rendered with `principalExists === null` (falsy),
-  //     so a Back click went to Step 1 and immediately bounced back, producing
-  //     a flicker.
-  // Both go away once we hold the render until both pieces of state are known.
+  // Wait for the identity prefill AND the setup-status snapshot before rendering
+  // any step. The three fetches (identity, status, principal) all run in parallel
+  // inside load(); existingIdentity and principalExists (null until the status
+  // fetch resolves) serve as the gate. Without the gate, Step 1 could render
+  // before state.principalName and state.timezone are pre-populated from the
+  // principal response, leaving the fields momentarily blank on a re-run.
   if (!existingIdentity || principalExists === null) {
     return (
       <div className="wizard-page">
@@ -540,8 +589,8 @@ export default function WizardPage() {
   //
   // Captures the operator's own name and POSTs it to /api/setup/principal so
   // the principal contact exists before the assistant identity is saved on
-  // step 5. Auto-skipped (via the effect above) when a principal is already
-  // present — typically CEO_PRIMARY_EMAIL deployments that bootstrapped one.
+  // Step 6. The input is pre-populated from the loaded principal when one
+  // already exists (e.g. a wizard re-run). Step 1 is never auto-skipped.
 
   const step1 = (
     <div className="wizard-content">
@@ -583,9 +632,190 @@ export default function WizardPage() {
     </div>
   );
 
-  // ── Step 2: Assistant identity ─────────────────────────────────────────────
+  // ── Step 2: Your details (principal operational profile) ───────────────────
+  //
+  // Collects the operator's timezone (required), contact email, preferred name,
+  // title, and optional working hours. POSTs to /api/setup/principal/profile.
+  // All fields except timezone are optional — skipping them is fine (#392).
 
-  const step2Identity = (
+  // IANA timezone list. Intl.supportedValuesOf is available in ES2022+ browsers;
+  // guard with typeof so the app still works in older environments that don't
+  // support it (the small fallback list covers the most common zones).
+  const ianaZones: string[] = (typeof Intl !== 'undefined' && typeof (Intl as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf === 'function')
+    ? (Intl as { supportedValuesOf: (key: string) => string[] }).supportedValuesOf('timeZone')
+    : [
+        'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+        'America/Toronto', 'America/Vancouver', 'America/Sao_Paulo',
+        'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Amsterdam',
+        'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Singapore', 'Asia/Kolkata',
+        'Australia/Sydney', 'Australia/Melbourne', 'Pacific/Auckland', 'UTC',
+      ];
+
+  // Weekday labels for the working-hours toggle buttons (0=Sun..6=Sat).
+  const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'] as const;
+
+  // Working hours helpers — only assembled when the operator has set start/end times.
+  const wh = state.workingHours;
+
+  function setWorkingHoursStart(val: string): void {
+    setState(s => ({
+      ...s,
+      workingHours: s.workingHours
+        ? { ...s.workingHours, start: val }
+        : { start: val, end: '17:00', days: [1, 2, 3, 4, 5] },
+    }));
+  }
+
+  function setWorkingHoursEnd(val: string): void {
+    setState(s => ({
+      ...s,
+      workingHours: s.workingHours
+        ? { ...s.workingHours, end: val }
+        : { start: '09:00', end: val, days: [1, 2, 3, 4, 5] },
+    }));
+  }
+
+  function toggleWorkingHoursDay(day: number): void {
+    setState(s => {
+      // If workingHours is null, initialise with sensible defaults before toggling.
+      const existing: WizardWorkingHours = s.workingHours ?? { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] };
+      const days = existing.days.includes(day)
+        ? existing.days.filter(d => d !== day)
+        : [...existing.days, day].sort((a, b) => a - b);
+      return { ...s, workingHours: { ...existing, days } };
+    });
+  }
+
+  const step2Profile = (
+    <div className="wizard-content">
+      <div className="wizard-heading">Your details</div>
+      <div className="wizard-subheading">
+        Help your assistant work in your context. Timezone is required; everything else is optional.
+      </div>
+
+      <div className="wizard-field">
+        <label htmlFor="w-timezone">Timezone *</label>
+        <select
+          id="w-timezone"
+          value={state.timezone}
+          onChange={e => setState(s => ({ ...s, timezone: e.target.value }))}
+        >
+          {state.timezone === '' && (
+            <option value="" disabled>Select a timezone…</option>
+          )}
+          {ianaZones.map(tz => (
+            <option key={tz} value={tz}>{tz}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="wizard-field">
+        <label htmlFor="w-profile-email">
+          Email <span style={{ fontWeight: 400 }}>(Optional)</span>
+        </label>
+        <input
+          id="w-profile-email"
+          type="email"
+          value={state.email}
+          placeholder="you@example.com"
+          onChange={e => {
+            setState(s => ({ ...s, email: e.target.value }));
+            if (profileError) setProfileError(null);
+          }}
+        />
+      </div>
+
+      <div className="wizard-field">
+        <label htmlFor="w-preferred-name">
+          Preferred name <span style={{ fontWeight: 400 }}>(Optional — how your assistant addresses you)</span>
+        </label>
+        <input
+          id="w-preferred-name"
+          type="text"
+          value={state.preferredName}
+          placeholder="e.g. Jamie"
+          onChange={e => setState(s => ({ ...s, preferredName: e.target.value }))}
+        />
+      </div>
+
+      <div className="wizard-field">
+        <label htmlFor="w-principal-title">
+          Your title <span style={{ fontWeight: 400 }}>(Optional)</span>
+        </label>
+        <input
+          id="w-principal-title"
+          type="text"
+          value={state.principalTitle}
+          placeholder="e.g. Chief Executive Officer"
+          onChange={e => setState(s => ({ ...s, principalTitle: e.target.value }))}
+        />
+      </div>
+
+      <div className="wizard-label" style={{ marginTop: 16 }}>
+        Working hours{' '}
+        <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(Optional)</span>
+      </div>
+      <div className="wizard-subheading" style={{ marginTop: 0, marginBottom: 12 }}>
+        Leave blank to skip — your assistant will work around the clock.
+      </div>
+
+      <div className="wizard-field">
+        <label htmlFor="w-wh-start">Start</label>
+        <input
+          id="w-wh-start"
+          type="time"
+          value={wh?.start ?? ''}
+          onChange={e => setWorkingHoursStart(e.target.value)}
+        />
+      </div>
+      <div className="wizard-field">
+        <label htmlFor="w-wh-end">End</label>
+        <input
+          id="w-wh-end"
+          type="time"
+          value={wh?.end ?? ''}
+          onChange={e => setWorkingHoursEnd(e.target.value)}
+        />
+      </div>
+
+      <div className="wizard-label" style={{ marginTop: 8 }}>Days</div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+        {WEEKDAY_LABELS.map((label, idx) => {
+          const selected = wh?.days.includes(idx) ?? false;
+          return (
+            <button
+              key={label}
+              type="button"
+              className={`tone-pill${selected ? ' selected' : ''}`}
+              onClick={() => toggleWorkingHoursDay(idx)}
+              style={{ minWidth: 36 }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {profileError && <div className="wizard-step1-error">{profileError}</div>}
+
+      <div className="wizard-nav">
+        <button type="button" className="btn-wizard-back" onClick={handleBack}>
+          ← Back
+        </button>
+        <button
+          type="button"
+          className="btn-wizard-next"
+          onClick={() => void handleProfileContinue()}
+        >
+          Next →
+        </button>
+      </div>
+    </div>
+  );
+
+  // ── Step 3: Assistant identity ─────────────────────────────────────────────
+
+  const step3Identity = (
     <div className="wizard-content">
       <div className="wizard-heading">What should your assistant be called?</div>
       <div className="wizard-subheading">
@@ -630,13 +860,9 @@ export default function WizardPage() {
         />
       </div>
       <div className="wizard-nav">
-        {principalExists ? (
-          <span />
-        ) : (
-          <button type="button" className="btn-wizard-back" onClick={handleBack}>
-            ← Back
-          </button>
-        )}
+        <button type="button" className="btn-wizard-back" onClick={handleBack}>
+          ← Back
+        </button>
         <button type="button" className="btn-wizard-next" onClick={handleContinue}>
           Next →
         </button>
@@ -644,11 +870,11 @@ export default function WizardPage() {
     </div>
   );
 
-  // ── Step 3: Tone ───────────────────────────────────────────────────────────
+  // ── Step 4: Tone ───────────────────────────────────────────────────────────
 
   const atToneMax = state.toneBaseline.length >= 3;
 
-  const step3Tone = (
+  const step4Tone = (
     <div className="wizard-content">
       <div className="wizard-heading">How should your assistant communicate?</div>
       <div className="wizard-subheading">Pick 1–3 words that describe the tone you want.</div>
@@ -715,7 +941,7 @@ export default function WizardPage() {
     </div>
   );
 
-  // ── Step 4: Posture & preferences ──────────────────────────────────────────
+  // ── Step 5: Posture & preferences ──────────────────────────────────────────
 
   const POSTURE_OPTIONS: Array<{
     value: WizardState['posture'];
@@ -727,7 +953,7 @@ export default function WizardPage() {
     { value: 'proactive',    title: 'Proactive',    desc: 'Bias toward action; less checking in' },
   ];
 
-  const step4Posture = (
+  const step5Posture = (
     <div className="wizard-content">
       <div className="wizard-heading">How should your assistant decide?</div>
       <div className="wizard-subheading">
@@ -775,7 +1001,7 @@ export default function WizardPage() {
     </div>
   );
 
-  // ── Step 5: Review ─────────────────────────────────────────────────────────
+  // ── Step 6: Review ─────────────────────────────────────────────────────────
 
   const words = state.toneBaseline;
   const tonePhrase =
@@ -799,7 +1025,7 @@ export default function WizardPage() {
     reviewRows.push({ label: 'Preference', value: `"${state.preferences.trim()}"` });
   }
 
-  const step5Review = (
+  const step6Review = (
     <div className="wizard-content">
       <div className="wizard-heading">Does everything look right?</div>
       <div className="wizard-subheading">Go back to change anything, or save to get started.</div>
@@ -832,10 +1058,11 @@ export default function WizardPage() {
 
   const steps: Record<number, JSX.Element> = {
     1: step1,
-    2: step2Identity,
-    3: step3Tone,
-    4: step4Posture,
-    5: step5Review,
+    2: step2Profile,
+    3: step3Identity,
+    4: step4Tone,
+    5: step5Posture,
+    6: step6Review,
   };
 
   return (
