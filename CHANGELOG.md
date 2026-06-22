@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+- **`ceo-inbox-draft-reply`** — HTML tags no longer leak into draft bodies when the LLM writes HTML directly; `looksLikeHtml()` guard added across all draft handlers.
+
 ### Changed
 - **`js-yaml`** — bumped from 4.2.0 to 5.0.0; migrated all imports to named exports (`import * as yaml`) and added empty/comment-only input guards to preserve v4 null-return behavior in config loaders and startup validator.
 

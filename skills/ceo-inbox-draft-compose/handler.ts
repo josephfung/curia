@@ -1,6 +1,6 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../_shared/ceo-nylas-client.js';
-import { markdownToHtml } from '../../src/channels/email/markdown-to-html.js';
+import { markdownToHtml, looksLikeHtml } from '../../src/channels/email/markdown-to-html.js';
 import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../src/skills/_shared/read-attachments.js';
 
@@ -89,15 +89,15 @@ export class CeoInboxDraftComposeHandler implements SkillHandler {
       'ceo-inbox-draft-compose: creating compose draft',
     );
 
-    let htmlBody: string;
     try {
-      htmlBody = markdownToHtml(body);
-    } catch (err) {
-      ctx.log.error({ err, subject }, 'ceo-inbox-draft-compose: failed to convert body to HTML');
-      return { success: false, error: 'Failed to convert email body to HTML' };
-    }
+      // Guard: if the LLM wrote HTML directly, pass it through unchanged — running HTML
+      // through markdownToHtml() would escape the tags, making them visible as literal text.
+      const isHtml = looksLikeHtml(body);
+      if (isHtml) {
+        ctx.log.debug({ bodyLength: body.length, subject }, 'ceo-inbox-draft-compose: LLM wrote HTML body — passing through unchanged');
+      }
+      const htmlBody = isHtml ? body : markdownToHtml(body);
 
-    try {
       const draft = await client.createDraft({
         subject,
         body: htmlBody,
