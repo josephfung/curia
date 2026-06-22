@@ -13,6 +13,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+- **`ceo-inbox-draft-reply`** — HTML tags leaked into the draft body when the LLM wrote HTML directly in the `body` parameter. Root cause: the skill manifest described `body` as "HTML body", instructing the LLM to write HTML, but the handler passes the body through `markdownToHtml()` which HTML-escapes tags, making them render as visible `<p>` text in Gmail. Fixed by correcting the manifest description to "plain text or markdown" and adding a `looksLikeHtml()` guard in all three draft handlers to pass HTML through unchanged.
+
 ### Changed
 - **`js-yaml`** — bumped from 4.2.0 to 5.0.0; migrated all imports to named exports (`import * as yaml`) and added empty/comment-only input guards to preserve v4 null-return behavior in config loaders and startup validator.
 

@@ -1,7 +1,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../_shared/ceo-nylas-client.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
-import { markdownToHtml } from '../../src/channels/email/markdown-to-html.js';
+import { markdownToHtml, looksLikeHtml } from '../../src/channels/email/markdown-to-html.js';
 import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../src/skills/_shared/read-attachments.js';
 
@@ -112,8 +112,10 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
 
       // Convert the LLM-authored markdown body to HTML before combining with the
       // quote — this path bypasses the gateway, so markdownToHtml is not called there.
-      // Formatting is non-fatal — a failure must not block draft creation.
-      const htmlBody = markdownToHtml(body);
+      // Guard: if the LLM wrote HTML directly (despite the skill manifest saying markdown),
+      // pass it through unchanged — running HTML through markdownToHtml() would escape the
+      // tags (e.g. <p> → &lt;p&gt;), which then renders as visible "<p>" text in Gmail.
+      const htmlBody = looksLikeHtml(body) ? body : markdownToHtml(body);
       let draftBody = htmlBody;
       try {
         const htmlQuote = buildReplyQuote(original, ctx.timezone, { format: 'html' });

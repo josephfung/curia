@@ -102,3 +102,22 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
+
+// ---------------------------------------------------------------------------
+// HTML detection guard
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true when the input already contains block-level HTML tags.
+ *
+ * Used by skill handlers to detect when the LLM has written HTML directly in
+ * a body field that expects markdown. Passing HTML through markdownToHtml()
+ * would HTML-escape the tags (turning <p> into &lt;p&gt;), which then renders
+ * as visible "<p>" text in the email client.
+ *
+ * Handlers should use this to skip markdownToHtml() when the input is already
+ * HTML, passing the body through unchanged instead.
+ */
+export function looksLikeHtml(text: string): boolean {
+  return /<(p|div|br|ul|ol|li|h[1-6]|blockquote|table|tr|td|th)\b/i.test(text.trim());
+}
