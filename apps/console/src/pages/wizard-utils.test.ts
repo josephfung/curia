@@ -14,6 +14,9 @@ import {
   assistantFullName,
   defaultSignature,
   DEFAULT_WIZARD_STATE,
+  detectBrowserTimezone,
+  validateProfileEmail,
+  buildProfilePayload,
   type WizardState,
   type LocalIdentity,
 } from './wizard-utils.js';
@@ -259,5 +262,48 @@ describe('buildIdentityPayload', () => {
   it('sets note to "Saved via onboarding wizard"', () => {
     const { note } = buildIdentityPayload(state, existingIdentity);
     expect(note).toBe('Saved via onboarding wizard');
+  });
+});
+
+// ── validateProfileEmail ──────────────────────────────────────────────────────
+
+describe('validateProfileEmail', () => {
+  it('returns null for empty (optional field)', () => {
+    expect(validateProfileEmail('')).toBeNull();
+    expect(validateProfileEmail('   ')).toBeNull();
+  });
+  it('returns null for a valid address', () => {
+    expect(validateProfileEmail('a@b.com')).toBeNull();
+  });
+  it('returns an error for a malformed address', () => {
+    expect(validateProfileEmail('not-an-email')).toMatch(/valid/i);
+  });
+});
+
+// ── buildProfilePayload ───────────────────────────────────────────────────────
+
+describe('buildProfilePayload', () => {
+  it('includes timezone and omits empty optionals', () => {
+    const state = { ...DEFAULT_WIZARD_STATE, timezone: 'America/Vancouver' };
+    expect(buildProfilePayload(state)).toEqual({ timezone: 'America/Vancouver' });
+  });
+  it('includes provided optionals and trims them', () => {
+    const state = {
+      ...DEFAULT_WIZARD_STATE, timezone: 'America/Toronto',
+      email: '  Me@Example.com ', preferredName: ' Jo ', principalTitle: ' CEO ',
+      workingHours: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
+    };
+    expect(buildProfilePayload(state)).toEqual({
+      timezone: 'America/Toronto', email: 'Me@Example.com', preferredName: 'Jo',
+      title: 'CEO', workingHours: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
+    });
+  });
+});
+
+// ── detectBrowserTimezone ─────────────────────────────────────────────────────
+
+describe('detectBrowserTimezone', () => {
+  it('returns a non-empty IANA-looking string', () => {
+    expect(detectBrowserTimezone()).toMatch(/^[A-Za-z]+\/[A-Za-z_]+/);
   });
 });
