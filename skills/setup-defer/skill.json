@@ -1,0 +1,22 @@
+{
+  "name": "setup-defer",
+  "description": "Record or clear a setup-wizard task deferral. Use when the principal says they want to skip a setup task for now. Deferred tasks resurface as 'pending (deferred)' on the next setup-status call — never as done. Use action 'resume' to clear a deferral when the principal is ready to tackle it.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "task_id": "string (catalog task id, e.g. 'email', 'signal', 'web_research', 'kg_memory', 'persona', 'debrief')",
+    "action": "string ('defer' to skip a task, 'resume' to un-skip it)"
+  },
+  "outputs": {
+    "task_id": "string",
+    "action": "string",
+    "deferred": "string[] (full updated list of deferred task ids after this operation)",
+    "summary": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["entityMemory"],
+  "allowed_callers": ["setup-wizard"]
+}
