@@ -83,6 +83,7 @@ export async function setupRoutes(
     sessions,
     pool,
     logger,
+    contactService,
     setupRequiredAtBoot,
     bootStartedAt,
     scheduleProcessExit,
@@ -104,7 +105,8 @@ export async function setupRoutes(
   // Creates the principal contact with `system_role='principal'` from a display
   // name alone. No channel identity is bound — verification flows handle that
   // later, per channel. Idempotent: a second call when the principal already
-  // exists returns the existing IDs and does not rename.
+  // exists returns the existing IDs. If the submitted name differs from the
+  // stored name, the contact is renamed so Step 1 can correct a typo (#392).
   app.post('/api/setup/principal', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
 
@@ -125,10 +127,37 @@ export async function setupRoutes(
 
     try {
       const result = await ensurePrincipalContact({ displayName: trimmed }, pool, logger);
+      let renamed = false;
+      if (result.alreadyExisted) {
+        // The principal already exists. Step 1 is no longer auto-skipped (#392), so a
+        // second submit is the operator correcting the name — apply it instead of no-op'ing.
+        const current = await contactService.findContactBySystemRole('principal');
+        if (current && current.displayName !== trimmed) {
+          await contactService.updateDisplayName(result.contactId, trimmed);
+          renamed = true;
+          // Best-effort: keep the KG person-node label in sync so KG browsing shows the
+          // corrected name. The unique index idx_kg_nodes_unique (lower(label), type) can
+          // reject the rename if another non-fact node already owns that label; that's
+          // non-fatal — the contact column is the authoritative display name.
+          try {
+            await pool.query(
+              `UPDATE kg_nodes SET label = $1, last_confirmed_at = now()
+                 WHERE id = $2 AND type = 'person'`,
+              [trimmed, result.kgNodeId],
+            );
+          } catch (kgErr) {
+            logger.warn(
+              { kgErr, kgNodeId: result.kgNodeId },
+              'POST /api/setup/principal: KG label rename skipped (likely label collision); contact display_name still updated',
+            );
+          }
+        }
+      }
       return reply.send({
         contactId: result.contactId,
         kgNodeId: result.kgNodeId,
         alreadyExisted: result.alreadyExisted,
+        renamed,
       });
     } catch (err) {
       logger.error({ err }, 'POST /api/setup/principal: failed to ensure principal contact');

@@ -88,7 +88,9 @@ describeIf('/api/setup/* routes', () => {
       const app = Fastify();
       // rate-limit plugin is required because setup routes attach { config: { rateLimit: ... } }
       // per route — without it Fastify errors on registration.
-      await app.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
+      // allowList bypasses rate-limit enforcement in tests so that the route-level
+      // max:10 cap doesn't throttle requests as the test count grows.
+      await app.register(rateLimit, { max: 1000, timeWindow: '1 minute', allowList: () => true });
       await app.register(setupRoutes, {
         webAppBootstrapSecret: TEST_SECRET,
         sessions,
@@ -148,6 +150,17 @@ describeIf('/api/setup/* routes', () => {
   });
 
   describe('POST /api/setup/principal', () => {
+    // Each test in this block creates a principal, but the partial unique index on
+    // system_role='principal' allows at most one row. Clear it before each test so
+    // tests that create a principal don't collide with one another.
+    beforeEach(async () => {
+      await pool.query(
+        `DELETE FROM contact_channel_identities WHERE contact_id IN
+           (SELECT id FROM contacts WHERE system_role = 'principal')`,
+      );
+      await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+    });
+
     it('creates a principal contact and returns its IDs', async () => {
       const res = await appSetupMode.inject({
         method: 'POST',
@@ -193,6 +206,42 @@ describeIf('/api/setup/* routes', () => {
       const secondBody = JSON.parse(second.body);
       expect(secondBody.alreadyExisted).toBe(true);
       expect(secondBody.contactId).toBe(firstBody.contactId);
+    });
+
+    it('renames the principal when called again with a different name', async () => {
+      const first = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Original Name' },
+      });
+      expect(first.statusCode).toBe(200);
+      const { contactId } = first.json() as { contactId: string };
+
+      const second = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Corrected Name' },
+      });
+      expect(second.statusCode).toBe(200);
+      const body = second.json() as { alreadyExisted: boolean; renamed: boolean; contactId: string };
+      expect(body.alreadyExisted).toBe(true);
+      expect(body.renamed).toBe(true);
+      expect(body.contactId).toBe(contactId);
+
+      const row = await pool.query<{ display_name: string }>(
+        `SELECT display_name FROM contacts WHERE id = $1`, [contactId],
+      );
+      expect(row.rows[0]!.display_name).toBe('Corrected Name');
+    });
+
+    it('does not rename when the same name is submitted', async () => {
+      await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Same Name' },
+      });
+      const again = await appSetupMode.inject({
+        method: 'POST', url: '/api/setup/principal', headers: AUTH_HEADER,
+        payload: { name: 'Same Name' },
+      });
+      expect((again.json() as { renamed: boolean }).renamed).toBe(false);
     });
 
     it('returns 400 when the name is missing', async () => {
