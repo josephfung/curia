@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **`config/default.yaml`** — trimmed verbose comment blocks (dispatch rate-limit, injection patterns, PII patterns, outbound filter) to concise inline notes.
+
 ### Fixed
 
 - **MCP Skills icon** — added missing plug icon to the MCP Skills sidebar nav item to match all other Settings sub-items.

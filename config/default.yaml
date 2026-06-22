@@ -50,20 +50,8 @@ dispatch:
   # event fires and background memory extraction (extract-relationships, etc.) runs.
   conversationCheckpointDebounceMs: 600000   # 10 minutes
 
-  # In-memory rate limiting for the dispatch layer (spec §06-audit-and-security.md).
-  # Protects against message flooding from malfunctioning channels, abusive senders,
-  # or compromised integrations. Two independent limits are enforced:
-  #
-  #   global     — total messages per window across all senders; enforced before any
-  #                policy-gate processing (guards against aggregate DoS flooding).
-  #   per-sender — messages per sender per window; enforced after policy gates
-  #                (blocked/held senders are already dropped before this check).
-  #
-  # Excess messages are dropped silently — no response is sent to the sender.
-  # Violations are audit-logged as message.rejected events with reason
-  # 'global_rate_limited' or 'sender_rate_limited', and logged at warn level.
-  #
-  # Changes take effect on restart.
+  # In-memory flood protection. Excess messages are dropped silently and
+  # audit-logged as message.rejected. Changes take effect on restart.
   rate_limit:
     window_ms: 60000        # 1-minute fixed window
     max_per_sender: 15      # messages per sender per window (15 allows for an active chat burst)
@@ -133,30 +121,10 @@ debrief:
   contextBridgeTtlHours: 48      # TTL for context bridge entries linking replies to the debrief agent
 
 security:
-  # Layer 1 prompt injection detection (spec §06-audit-and-security.md).
-  #
-  # Additional regex patterns to check beyond the built-in defaults.
-  # Built-in defaults cover: "ignore previous instructions", "ignore all prior
-  # instructions", "you are now", "system:", "[system]", "act as", "disregard your".
-  #
-  # Each entry must have:
-  #   regex  — a valid JavaScript regex string (case-insensitive matching is applied automatically)
-  #   label  — human-readable name that appears in audit log findings
-  #
-  # Example:
-  #   extra_injection_patterns:
-  #     - regex: "forget everything above"
-  #       label: "forget everything above"
-  #     - regex: "new\\s+persona"
-  #       label: "new persona"
-  #
-  # Changes take effect on restart — no code changes required.
-  #
-  # ⚠️  ReDoS warning: avoid patterns with unbounded nested quantifiers such as
-  # (a+)+ or (.+)+ — these can cause catastrophic backtracking on adversarial input
-  # and may freeze the Node.js event loop. Prefer simple bounded patterns (e.g.
-  # "forget\s+everything" rather than "(forget.+)+"). These patterns run in the
-  # main process on every inbound message, so keep them efficient.
+  # Additional prompt-injection regex patterns beyond the built-in defaults.
+  # Each entry: { regex: "...", label: "human-readable name" } — case-insensitive.
+  # ⚠️ Avoid unbounded nested quantifiers (e.g. (a+)+) — ReDoS risk on the hot path.
+  # Changes take effect on restart.
   extra_injection_patterns: []
 
   # Message trust score computation weights (spec §06-audit-and-security.md).
@@ -180,49 +148,15 @@ security:
     financial: 0.8            # payments, financial commitments
 
 pii:
-  # Extra PII patterns to scrub from LLM-facing error strings, beyond the built-in
-  # defaults (spec §06-audit-and-security.md — PII Handling).
-  #
-  # Built-in defaults (sourced from @openredaction/openredaction):
-  #   - Email addresses       → [EMAIL]
-  #   - US-format phone numbers (also matches CA)   → [PHONE]
-  #   - UK phone numbers      → [PHONE]
-  #   - Credit card numbers   → [CREDIT_CARD]
-  #   - US SSNs (keyword-prefixed, e.g. "SSN: 123-45-6789") → [SSN]
-  #
-  # Add custom patterns here for any PII types specific to your deployment
-  # (employee IDs, account numbers, national IDs, etc.).
-  #
-  # Each entry must have:
-  #   regex       — a valid JavaScript regex string (gi flags applied automatically)
-  #   replacement — the placeholder to substitute, e.g. "[EMPLOYEE_ID]"
-  #
-  # Example:
-  #   extra_patterns:
-  #     - regex: "EMP-\\d{6}"
-  #       replacement: "[EMPLOYEE_ID]"
-  #     - regex: "\\b\\d{3}[-\\s]?\\d{3}[-\\s]?\\d{3}\\b"
-  #       replacement: "[CA_SIN]"
-  #
-  # Changes take effect on restart — no code changes required.
-  #
-  # ⚠️  ReDoS warning: avoid patterns with unbounded nested quantifiers such as
-  # (a+)+ or (.+)+ — these can cause catastrophic backtracking on adversarial input.
-  # These patterns run on every LLM-facing error message.
+  # Additional PII patterns to scrub from LLM-facing error strings.
+  # Each entry: { regex: "...", replacement: "[PLACEHOLDER]" } — gi flags applied.
+  # ⚠️ Avoid unbounded nested quantifiers (e.g. (a+)+) — ReDoS risk.
+  # Changes take effect on restart.
   extra_patterns: []
 
-  # Outbound PII redaction policy - controls which PII patterns are redacted
-  # in outbound channel messages (email, Signal replies).
-  #
-  # Detection uses openredaction (same library as the log/LLM scrubber).
-  # This config controls only policy: which detected patterns pass through
-  # on which channels. Patterns not in a channel's allow list are redacted.
-  #
-  # The principal bypass is handled structurally via ceoContactId UUID match
-  # at startup — no trust_override config needed.
-  #
-  # default: 'block' means all detected PII not explicitly allowed is redacted.
-  # Configure exceptions, not rules.
+  # Outbound PII redaction policy for channel messages (email, Signal).
+  # default: 'block' — all detected PII is redacted unless explicitly allowed per channel.
+  # Principal bypass is handled structurally (ceoContactId UUID match at startup).
   outbound_redaction:
     enabled: true
     default: block
@@ -261,28 +195,15 @@ intentDrift:
 filter:
   llmJudge:
     enabled: true
-    # Default works out of the box (claude-haiku-4-5 — smaller/cheaper than the opus coordinator).
-    #
-    # >>> STRONGLY RECOMMENDED <<<: point this at a DIFFERENT vendor/family than the
-    # fast/standard/powerful agent tiers above (e.g. an OpenRouter Gemini or DeepSeek
-    # model such as 'google/gemini-3.1-flash-lite'). Model diversity is the security
-    # value here: an attack crafted to fool the Claude coordinator should not also fool
-    # the reviewer. Requires the corresponding provider API key (e.g. OPENROUTER_API_KEY).
+    # Recommended: use a different vendor/family than the agent tiers for model diversity
+    # (an attack tuned for the coordinator should not also fool the reviewer).
     model: claude-haiku-4-5
     timeout_ms: 5000
-    # split (default) | open | closed. See src/config.ts for semantics.
-    failMode: split
+    failMode: split   # split (default) | open | closed — see src/config.ts
 
-# Escalation-line policy judge (issue #948).
-# Classifies the sensitivity of outbound disclosures and the consequence of
-# proposed actions, then maps tier × class → allow / escalate.
-# Consumed by the disclosure gate (#949) and action gate (#950).
-#
-# Fail-closed by design: timeout / provider error / malformed verdict all
-# result in 'escalate' — there is no failMode knob.
-#
-# >>> STRONGLY RECOMMENDED <<<: use a DIFFERENT model family than the coordinator
-# for the same model-diversity security value as filter.llmJudge above.
+# Escalation-line policy judge — classifies outbound disclosures and proposed actions,
+# maps tier × class → allow/escalate. Fail-closed: timeout/error → escalate.
+# Recommended: use a different model family than the coordinator (model diversity).
 escalation:
   judge:
     enabled: true
