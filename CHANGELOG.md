@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP Skills icon** — added missing plug icon to the MCP Skills sidebar nav item to match all other Settings sub-items.
+
 ### Added
 
 - **Wizard name suggestion** — the onboarding wizard prefills the assistant name and email signature from an LLM-suggested first name via `POST /api/setup/suggest-name`, doubling as an early smoke test of the Anthropic key; silent static fallback on any failure. (#799)

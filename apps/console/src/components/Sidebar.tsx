@@ -13,6 +13,7 @@ import {
   IconSettings,
   IconWand,
   IconAutonomy,
+  IconPlug,
   IconChevron,
 } from './Icons';
 
@@ -200,6 +201,7 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
                 className={`nav-sub-item${activeView === 'mcp-skills' ? ' active' : ''}`}
                 onClick={() => go('mcp-skills')}
               >
+                <IconPlug />
                 MCP Skills
               </button>
               <button
