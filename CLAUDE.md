@@ -136,6 +136,28 @@ When adding a new agent, ensure it receives the autonomy block via the runtime i
 1. Create `agents/<name>.yaml` with required fields (name, description, model, system_prompt)
 2. Optionally add `handler: ./<name>.handler.ts` for custom logic
 
+### Setup wizard — keep the catalog current
+
+When adding a **significant new capability** — a new channel adapter, a new
+third-party integration, a credential-requiring skill bundle, or a major skill
+that changes what a new user would want to configure — check whether the setup
+wizard catalog needs a matching entry:
+
+- The catalog lives in `skills/setup-status/catalog.yaml`. It is the canonical
+  list of "what a new user sets up" and is owned by the setup-wizard agent, not
+  core.
+- If your change adds a configurable capability, add a catalog entry with:
+  - A `completion_check` (how setup-status detects it is done)
+  - A `credential_how_to` summary (one-sentence inline guide)
+  - A `docs_url` pointing to the relevant curia-docs page
+- If the docs page does not exist yet, create it in `curia-docs` as part of
+  shipping the capability — not as a follow-up.
+- If your change **removes** or **renames** a capability, remove or update the
+  catalog entry and its docs link.
+
+Keeping the catalog current is part of shipping the capability, not a follow-up
+task.
+
 ### Reaching the principal
 
 The runtime injects a **`## Principal Contact Details`** block into every agent's

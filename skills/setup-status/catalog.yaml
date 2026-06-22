@@ -1,0 +1,87 @@
+# skills/setup-status/catalog.yaml
+# Setup-wizard task catalog. Owned here — not a core module.
+# Each completion_check type is implemented in handler.ts.
+tasks:
+  - id: persona
+    label: "Assistant persona & preferences"
+    value_prop: "Tune tone, working style, and behavioral guidelines — takes one conversation turn, no credentials."
+    tier: instant
+    handoff: in-chat
+    completion_check:
+      type: behavioral_preferences
+    credential_how_to: null
+    docs_url: null
+
+  - id: debrief
+    label: "Scheduled debrief"
+    value_prop: "Regular digest at end of day or end of week — takes one conversation turn, no credentials."
+    tier: instant
+    handoff: in-chat
+    completion_check:
+      type: scheduler_has_active_debrief
+    credential_how_to: null
+    docs_url: null
+
+  - id: capability_tour
+    label: "Capability tour"
+    value_prop: "See what is ready to use right now — zero setup needed."
+    tier: instant
+    handoff: in-chat
+    completion_check:
+      type: always_available
+    credential_how_to: null
+    docs_url: null
+
+  - id: email
+    label: "Email (Nylas)"
+    value_prop: "Lets Curia read, draft, and send email on your behalf — unlocks ceo-inbox."
+    tier: heavy
+    handoff: console
+    handoff_path: /settings/channels
+    completion_check:
+      type: vault_secrets_all
+      keys:
+        - channel.email.nylas_api_key
+        - channel.email.nylas_grant_id
+        - channel.email.nylas_self_email
+    credential_how_to: "Get your Nylas API key and grant ID at app.nylas.com (free tier works). Enter the API key, grant ID, and your mailbox email address in Settings → Channels → Email."
+    docs_url: /channels/email-setup
+
+  - id: signal
+    label: "Signal"
+    value_prop: "Private, end-to-end encrypted messaging — Curia's highest-trust channel."
+    tier: medium
+    handoff: console
+    handoff_path: /settings/channels
+    completion_check:
+      type: vault_secrets_all
+      keys:
+        - channel.signal.socket_path
+        - channel.signal.phone_number
+    credential_how_to: "Set up signal-cli (included in docker-compose.yml), then enter the socket path and your phone number in Settings → Channels → Signal."
+    docs_url: /channels/signal-setup
+
+  - id: web_research
+    label: "Web research (Tavily)"
+    value_prop: "Live web search for research tasks and news monitoring."
+    tier: one-key
+    handoff: in-chat
+    completion_check:
+      type: vault_secrets_all
+      keys:
+        - user.tavily_api_key
+    credential_how_to: "Get a free API key at tavily.com. I'll send you a secure link to enter it."
+    docs_url: /integrations/tavily
+
+  - id: kg_memory
+    label: "KG entity memory (OpenAI embeddings)"
+    value_prop: "Semantic relationship memory across people, projects, and context."
+    tier: one-key
+    handoff: in-chat
+    optional: true
+    completion_check:
+      type: vault_secrets_all
+      keys:
+        - user.openai_api_key
+    credential_how_to: "Get an OpenAI API key at platform.openai.com. I'll send you a secure link to enter it. This is optional — Curia works without it."
+    docs_url: /integrations/openai-embeddings
