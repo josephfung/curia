@@ -119,5 +119,5 @@ function escapeHtml(text: string): string {
  * HTML, passing the body through unchanged instead.
  */
 export function looksLikeHtml(text: string): boolean {
-  return /<(p|div|br|ul|ol|li|h[1-6]|blockquote|table|tr|td|th)\b/i.test(text.trim());
+  return /<(html|head|body|p|div|br|ul|ol|li|h[1-6]|blockquote|table|tr|td|th)\b/i.test(text.trim());
 }

@@ -136,6 +136,11 @@ describe('looksLikeHtml', () => {
     expect(looksLikeHtml('<p>Hey Anshula,</p><p>Thanks for your email.</p>')).toBe(true);
   });
 
+  it('returns true for full-document HTML with <html>/<body> tags', () => {
+    expect(looksLikeHtml('<html><body><p>Hello</p></body></html>')).toBe(true);
+    expect(looksLikeHtml('<html lang="en"><head><title>Hi</title></head><body>Hi</body></html>')).toBe(true);
+  });
+
   it('returns true for body containing <div>', () => {
     expect(looksLikeHtml('<div style="font-family: Arial">Hello</div>')).toBe(true);
   });
@@ -160,11 +165,11 @@ describe('looksLikeHtml', () => {
     expect(looksLikeHtml('This is <b>important</b>.')).toBe(false);
   });
 
-  it('returns false for prose that mentions HTML tags as text', () => {
-    // Plain-text discussion of HTML — the guard fires on the tag pattern, so this
-    // is a documented false positive. The trade-off: if an LLM body genuinely
-    // contains "<p>" in prose (e.g. "add a <p> wrapper"), the body is passed through
-    // unchanged rather than being markdown-converted. This is an acceptable edge case.
+  it('returns true for prose that mentions HTML block tags (documented false positive)', () => {
+    // The guard fires on the tag pattern even in prose — if an LLM body says "add a <p>
+    // wrapper", we pass it through unchanged rather than markdown-converting it.
+    // Acceptable trade-off: false positives here are benign (HTML body is already valid);
+    // false negatives would re-introduce the escaped-tag bug.
     expect(looksLikeHtml('You should use a <p> tag to wrap paragraphs.')).toBe(true);
   });
 
