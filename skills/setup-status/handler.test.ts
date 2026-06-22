@@ -138,6 +138,15 @@ describe('setup-status', () => {
       expect(debrief?.status).toBe('done');
     });
 
+    it('debrief: pending when the debrief job is suspended (not running)', async () => {
+      const ctx = makeCtx({ activeJobs: [{ intentAnchor: 'daily_debrief', status: 'suspended' }] });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
+      const debrief = data.tasks.find(t => t.id === 'debrief');
+      expect(debrief?.status).toBe('pending');
+    });
+
     it('capability_tour: always done', async () => {
       const ctx = makeCtx();
       const result = await handler.execute(ctx);
@@ -200,6 +209,28 @@ describe('setup-status', () => {
       const data = (result as { success: true; data: { tasks: Array<{ id: string; status: string }> } }).data;
       const email = data.tasks.find(t => t.id === 'email');
       expect(email?.status).toBe('done');
+    });
+
+    it('vault_keys are exposed for vault_secrets_all tasks and absent for non-vault tasks', async () => {
+      const ctx = makeCtx();
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      const data = (result as {
+        success: true;
+        data: { tasks: Array<{ id: string; vault_keys?: string[] }> };
+      }).data;
+      // vault_secrets_all task — keys must be present for agent to call system-secret-capture-request
+      const webResearch = data.tasks.find(t => t.id === 'web_research');
+      expect(webResearch?.vault_keys).toEqual(['user.tavily_api_key']);
+      const email = data.tasks.find(t => t.id === 'email');
+      expect(email?.vault_keys).toEqual([
+        'channel.email.nylas_api_key',
+        'channel.email.nylas_grant_id',
+        'channel.email.nylas_self_email',
+      ]);
+      // non-vault task — vault_keys must be absent
+      const persona = data.tasks.find(t => t.id === 'persona');
+      expect(persona?.vault_keys).toBeUndefined();
     });
 
     it('summary counts are accurate', async () => {

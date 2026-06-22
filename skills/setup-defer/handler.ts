@@ -11,6 +11,19 @@ import { ConfigStore } from '../../src/memory/config-store.js';
 const NAMESPACE = 'setup_wizard';
 const KEY = 'deferrals';
 
+// Canonical task IDs from catalog.yaml. Validated here so out-of-catalog
+// deferrals fail fast rather than silently being stored and never matched.
+// Keep in sync with skills/setup-status/catalog.yaml when tasks are added/removed.
+const VALID_TASK_IDS = new Set([
+  'persona',
+  'debrief',
+  'capability_tour',
+  'email',
+  'signal',
+  'web_research',
+  'kg_memory',
+]);
+
 export class SetupDeferHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.entityMemory) {
@@ -19,8 +32,18 @@ export class SetupDeferHandler implements SkillHandler {
 
     const { task_id, action } = ctx.input as { task_id?: unknown; action?: unknown };
 
-    if (typeof task_id !== 'string' || !task_id.trim()) {
+    // Normalize whitespace before any comparison or storage — " email " and "email"
+    // must be treated identically so deferrals stored here match what setup-status reads.
+    const tid = typeof task_id === 'string' ? task_id.trim() : null;
+
+    if (!tid) {
       return { success: false, error: 'task_id must be a non-empty string.' };
+    }
+    if (!VALID_TASK_IDS.has(tid)) {
+      return {
+        success: false,
+        error: `task_id must be one of: ${[...VALID_TASK_IDS].join(', ')}.`,
+      };
     }
     if (action !== 'defer' && action !== 'resume') {
       return { success: false, error: 'action must be "defer" or "resume".' };
@@ -45,13 +68,13 @@ export class SetupDeferHandler implements SkillHandler {
       }
 
       if (action === 'defer') {
-        // Idempotent: only add the task_id if it isn't already in the list
-        if (!deferred.includes(task_id)) {
-          deferred = [...deferred, task_id];
+        // Idempotent: only add the normalized id if it isn't already in the list
+        if (!deferred.includes(tid)) {
+          deferred = [...deferred, tid];
         }
       } else {
-        // action === 'resume': remove the task_id from the list
-        deferred = deferred.filter(id => id !== task_id);
+        // action === 'resume': remove the normalized id from the list
+        deferred = deferred.filter(id => id !== tid);
       }
 
       await configStore.set(NAMESPACE, KEY, JSON.stringify(deferred));
@@ -59,13 +82,13 @@ export class SetupDeferHandler implements SkillHandler {
       return {
         success: true,
         data: {
-          task_id,
+          task_id: tid,
           action,
           deferred,
           summary:
             action === 'defer'
-              ? `"${task_id}" deferred. ${deferred.length} task(s) deferred total.`
-              : `"${task_id}" removed from deferrals. ${deferred.length} task(s) deferred remaining.`,
+              ? `"${tid}" deferred. ${deferred.length} task(s) deferred total.`
+              : `"${tid}" removed from deferrals. ${deferred.length} task(s) deferred remaining.`,
         },
       };
     } catch (err) {

@@ -30,6 +30,8 @@ type TaskStatus = 'done' | 'pending' | 'deferred';
 
 interface CatalogTaskWithStatus extends Omit<CatalogTask, 'completion_check'> {
   status: TaskStatus;
+  // Present for vault_secrets_all tasks — the agent uses keys[0] with system-secret-capture-request.
+  vault_keys?: string[];
 }
 
 // ── Catalog loading ────────────────────────────────────────────────────────
@@ -133,8 +135,11 @@ export class SetupStatusHandler implements SkillHandler {
       let debriefDone = false;
       if (ctx.schedulerService) {
         // Recurring jobs cycle pending→running→pending; 'active' is a task-row status,
-        // not a scheduled_jobs status. Fetch all jobs and exclude terminal states instead.
-        const TERMINAL_STATUSES = new Set(['cancelled', 'completed', 'failed']);
+        // not a scheduled_jobs status. Fetch all jobs and exclude terminal + hold states instead.
+        // 'suspended' = job paused by the scheduler after repeated failures.
+        // 'paused' = job paused manually via pauseJobForDrift() or operator action.
+        // Both mean the schedule is not running and should not count as "done".
+        const TERMINAL_STATUSES = new Set(['cancelled', 'completed', 'failed', 'suspended', 'paused']);
         const jobs = await ctx.schedulerService.listJobs();
         debriefDone = jobs.some(
           j =>
@@ -145,30 +150,37 @@ export class SetupStatusHandler implements SkillHandler {
 
       const annotated: CatalogTaskWithStatus[] = tasks.map(task => {
         let done = false;
-        const check = task.completion_check;
+        // Cast to include undefined: catalog.yaml is loaded without per-entry validation,
+        // so a malformed entry missing completion_check must not throw a TypeError here.
+        const check = task.completion_check as CompletionCheck | undefined;
 
-        switch (check.type) {
-          case 'behavioral_preferences':
-            done = personaDone;
-            break;
-          case 'scheduler_has_active_debrief':
-            done = debriefDone;
-            break;
-          case 'always_available':
-            done = true;
-            break;
-          case 'vault_secrets_all':
-            done = check.keys.every(k => secretPresent(ctx, k));
-            break;
+        if (check) {
+          switch (check.type) {
+            case 'behavioral_preferences':
+              done = personaDone;
+              break;
+            case 'scheduler_has_active_debrief':
+              done = debriefDone;
+              break;
+            case 'always_available':
+              done = true;
+              break;
+            case 'vault_secrets_all':
+              done = check.keys.every(k => secretPresent(ctx, k));
+              break;
+          }
+        } else {
+          ctx.log.warn({ taskId: task.id }, 'setup-status: task has invalid completion_check — reporting pending');
         }
 
         // "done" wins over deferred — a completed task is done regardless of deferral.
         const status: TaskStatus = done ? 'done' : deferred.has(task.id) ? 'deferred' : 'pending';
 
-        // Strip completion_check from the output — it's an internal implementation detail.
+        // Expose vault key names so the agent can pass the correct key to
+        // system-secret-capture-request for in-chat credential capture tasks.
         const { completion_check: _check, ...rest } = task;
-        void _check;
-        return { ...rest, status };
+        const vault_keys = _check?.type === 'vault_secrets_all' ? _check.keys : undefined;
+        return vault_keys ? { ...rest, status, vault_keys } : { ...rest, status };
       });
 
       const summary = {

@@ -111,6 +111,21 @@ describe('setup-defer', () => {
     expect(result.success).toBe(false);
   });
 
+  it('normalizes whitespace in task_id — " email " stores and returns as "email"', async () => {
+    const ctx = makeCtx({ task_id: ' email ', action: 'defer' });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: { deferred: string[]; task_id: string } }).data;
+    expect(data.task_id).toBe('email');
+    expect(data.deferred).toEqual(['email']);
+  });
+
+  it('returns error for an unknown task_id not in the catalog', async () => {
+    const ctx = makeCtx({ task_id: 'nonexistent_task', action: 'defer' });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+  });
+
   it('returns error when entityMemory is absent', async () => {
     const ctx = {
       input: { task_id: 'email', action: 'defer' },
