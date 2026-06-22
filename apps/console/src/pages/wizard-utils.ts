@@ -9,10 +9,9 @@ export interface WizardWorkingHours {
 export interface WizardState {
   // Step 1 — About you. Captured separately from the assistant identity below
   // and POSTed to /api/setup/principal so the principal contact exists before
-  // the rest of the form is saved. Auto-skipped when a principal is already
-  // present (e.g. from a prior wizard run on this instance).
+  // the rest of the form is saved. Pre-populated on a re-run; never auto-skipped.
   principalName: string;
-  // Steps 2–5 — assistant identity, tone, posture, review.
+  // Steps 3–6 — assistant identity, tone, posture, review.
   name: string;
   title: string;
   signature: string;
@@ -224,7 +223,9 @@ export function buildIdentityPayload(
 export function detectBrowserTimezone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Toronto';
-  } catch {
+  } catch (err) {
+    // Should never fire in a modern browser — defensive guard only.
+    console.warn('[wizard-utils] detectBrowserTimezone failed, using default:', err);
     return 'America/Toronto';
   }
 }

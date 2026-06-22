@@ -248,8 +248,11 @@ export async function setupRoutes(
     const timezone = body.timezone.trim();
     try {
       Intl.DateTimeFormat(undefined, { timeZone: timezone });
-    } catch {
-      return reply.status(422).send({ error: `"${timezone}" is not a recognized IANA timezone.` });
+    } catch (err) {
+      if (err instanceof RangeError) {
+        return reply.status(422).send({ error: `"${timezone}" is not a recognized IANA timezone.` });
+      }
+      throw err; // unexpected — propagate to the outer catch for structured logging + 500
     }
 
     // Optional fields — validate shape before any write.
@@ -319,6 +322,13 @@ export async function setupRoutes(
             'POST /api/setup/principal/profile: working hours not persisted — entityMemory is unavailable (KG disabled)',
           );
         }
+      } else if (workingHoursValue && !principal.kgNodeId) {
+        // Principal exists but has no KG node yet — working hours cannot be stored
+        // as a KG fact. The canonical contact fields are still persisted above.
+        logger.warn(
+          { contactId: principal.id },
+          'POST /api/setup/principal/profile: principal has no kg_node_id, working hours not persisted',
+        );
       }
 
       return reply.send({ ok: true });

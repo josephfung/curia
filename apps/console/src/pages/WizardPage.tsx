@@ -205,6 +205,9 @@ export default function WizardPage() {
             // it if they want to change it. (The string is shown as the current value hint.)
           }));
         } else {
+          if (principalRes.status !== 404) {
+            console.warn('[WizardPage] GET /api/setup/principal returned', principalRes.status, '— falling back to browser timezone');
+          }
           setState(s => ({ ...s, timezone: detectBrowserTimezone() }));
         }
       } catch (err) {
@@ -340,7 +343,7 @@ export default function WizardPage() {
 
   // Step 1 ("About you") writes through to the backend before advancing so the
   // principal contact exists by the time the assistant identity is saved at
-  // step 5. The endpoint is idempotent — a retry after a transient failure is
+  // step 6 (the review step). The endpoint is idempotent — a retry after a transient failure is
   // safe and will return alreadyExisted=true on success.
   async function handlePrincipalContinue() {
     const validationError = validatePrincipalName(state.principalName);
@@ -391,8 +394,9 @@ export default function WizardPage() {
         return;
       }
       await goTo(3);
-    } catch {
-      setProfileError('Could not save your details. Please try again.');
+    } catch (err) {
+      console.debug('[WizardPage] profile save failed:', err);
+      setProfileError(err instanceof Error ? err.message : 'Could not save your details. Please try again.');
     }
   }
 
