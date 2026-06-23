@@ -60,7 +60,7 @@ describe('connectStdio', () => {
       logger,
     );
 
-    expect(lastStdioOptions.stderr).toBe('pipe');
+    expect(lastStdioOptions!.stderr).toBe('pipe');
 
     stderrEmitter.emit('data', Buffer.from('line one\nline two\n'));
 

@@ -6,6 +6,8 @@ import type { Logger } from '../../../../src/logger.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { knowledgeGraphRoutes } from '../../../../src/channels/http/routes/kg.js';
+import type { EventBus } from '../../../../src/bus/bus.js';
+import type { EventRouter } from '../../../../src/channels/http/event-router.js';
 
 function createLogger(): Logger {
   return {
@@ -41,6 +43,25 @@ function createTransactionalPool(client: Partial<PoolClient>): Pick<Pool, 'query
     query: vi.fn(),
     connect: vi.fn().mockResolvedValue(client),
   } as unknown as Pick<Pool, 'query' | 'connect'>;
+}
+
+// Minimal EventBus stub — KG non-chat routes never touch the bus directly,
+// but KnowledgeGraphRouteOptions now requires bus + eventRouter for chat endpoints.
+function createMockBus(): EventBus {
+  return {
+    publish: vi.fn().mockResolvedValue(undefined),
+    subscribe: vi.fn(),
+  } as unknown as EventBus;
+}
+
+// Minimal EventRouter stub for the same reason.
+function createMockEventRouter(): EventRouter {
+  return {
+    waitForResponse: vi.fn(),
+    cancelPending: vi.fn(),
+    addSseClient: vi.fn().mockReturnValue(() => { /* cleanup noop */ }),
+    setupSubscriptions: vi.fn(),
+  } as unknown as EventRouter;
 }
 
 // A minimal valid Contact shape returned by contactService.getContact() stubs.
@@ -79,7 +100,7 @@ function makeContact(overrides: Record<string, unknown> = {}) {
 describe('knowledgeGraphRoutes', () => {
   const pool = {
     query: vi.fn(),
-  } as unknown as Pick<Pool, 'query'>;
+  } as unknown as Pool;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -93,6 +114,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({ method: 'GET', url: '/api/kg/nodes' });
@@ -102,7 +126,7 @@ describe('knowledgeGraphRoutes', () => {
   });
 
   it('returns node results when authenticated', async () => {
-    pool.query.mockResolvedValueOnce({
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       rows: [
         {
           id: '11111111-1111-1111-1111-111111111111',
@@ -125,6 +149,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({
@@ -149,6 +176,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({ method: 'GET', url: '/' });
@@ -165,6 +195,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({
@@ -192,6 +225,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: undefined,
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({ method: 'GET', url: '/api/kg/nodes' });
@@ -216,6 +252,8 @@ describe('knowledgeGraphRoutes', () => {
       secureCookies: false,
       sessions: new Map(),
       contactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     // Trailing '@' makes the address invalid, forcing the matcher to explore
@@ -250,6 +288,8 @@ describe('knowledgeGraphRoutes', () => {
       secureCookies: false,
       sessions: new Map(),
       contactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({
@@ -288,6 +328,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     // The rate-limit onRequest hook runs before the handler's assertSecret check,
@@ -333,6 +376,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -365,6 +410,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -397,6 +444,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -429,6 +478,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -463,6 +514,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -496,6 +549,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -534,6 +589,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -568,6 +625,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -594,6 +653,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -619,6 +680,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({

@@ -16,6 +16,7 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 import { CeoInboxListHandler } from '../../skills/ceo-inbox-list/handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
+import type { Logger } from '../../src/logger.js';
 
 const { Pool } = pg;
 
@@ -69,7 +70,7 @@ function makeCtx(entityMemory: EntityMemory): SkillContext {
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
-    },
+    } as unknown as Logger,
     entityMemory,
   };
 }
@@ -125,7 +126,7 @@ describeIf('ceo-inbox-list watermark (#866)', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
-    const data = result.data as { count: number };
+    const data = (result as { success: true; data: unknown }).data as { count: number };
     expect(data.count).toBe(3);
 
     // Give the async ConfigStore write time to complete.
@@ -168,7 +169,7 @@ describeIf('ceo-inbox-list watermark (#866)', () => {
 
     // The handler must return the backlog even though the stored watermark was in the future.
     expect(result.success).toBe(true);
-    const data = result.data as { count: number };
+    const data = (result as { success: true; data: unknown }).data as { count: number };
     expect(data.count).toBe(2);
 
     // The warn log must have fired for the future watermark.

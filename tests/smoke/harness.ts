@@ -24,6 +24,7 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { SkillRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { discoverSkillManifests, loadSkillsFromDirectory } from '../../src/skills/loader.js';
+import { ModelRegistry } from '../../src/agents/llm/model-registry.js';
 import { ContactService } from '../../src/contacts/contact-service.js';
 import { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import { NylasClient } from '../../src/channels/email/nylas-client.js';
@@ -86,7 +87,8 @@ export async function createHarness(): Promise<CuriaHarness> {
   // 5. LLM provider — smoke tests require a real API key since they exercise
   //    the full agent stack end-to-end.
   if (!config.anthropicApiKey) throw new Error('ANTHROPIC_API_KEY required for smoke tests');
-  const llmProvider = new AnthropicProvider(config.anthropicApiKey, logger);
+  const modelRegistry = new ModelRegistry(logger);
+  const llmProvider = new AnthropicProvider(config.anthropicApiKey, logger, modelRegistry);
 
   // Working memory — Postgres-backed, same as production.
   const memory = WorkingMemory.createWithPostgres(pool, logger);
@@ -151,7 +153,6 @@ export async function createHarness(): Promise<CuriaHarness> {
       contactService,
       contentFilter,
       bus,
-      ceoEmail: config.nylasSelfEmail,
       logger,
     });
   }
@@ -159,7 +160,7 @@ export async function createHarness(): Promise<CuriaHarness> {
   // Execution layer — with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway passed through so email skills
   // work in tests that exercise them.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, heldMessages: undefined });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway });
 
   // Load all agent configs from the agents/ directory.
   const agentsDir = path.resolve(import.meta.dirname, '../../agents');
@@ -210,7 +211,7 @@ export async function createHarness(): Promise<CuriaHarness> {
 
   // Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after agents so agent.task already has handlers.
-  const dispatcher = new Dispatcher({ bus, logger, contactResolver, heldMessages: undefined, channelPolicies: undefined });
+  const dispatcher = new Dispatcher({ bus, logger, contactResolver, channelPolicies: undefined });
   dispatcher.register();
 
   // -- No HTTP adapter, no CLI adapter, no SIGTERM handler --

@@ -89,9 +89,17 @@ describe('Job routes', () => {
       consecutiveFailures: 0,
       createdBy: 'api',
       createdAt: '2026-03-29T00:00:00Z',
+      timezone: 'UTC',
       agentTaskId: null,
       intentAnchor: null,
       progress: null,
+      taskTitle: null,
+      runStartedAt: null,
+      expectedDurationSeconds: null,
+      lastRunOutcome: null,
+      lastRunSummary: null,
+      lastRunContext: null,
+      originator: null,
     };
     vi.mocked(scheduler.getJob).mockResolvedValueOnce(fakeJob);
 
@@ -118,9 +126,17 @@ describe('Job routes', () => {
       consecutiveFailures: 0,
       createdBy: 'api',
       createdAt: '2026-03-29T00:00:00Z',
+      timezone: 'UTC',
       agentTaskId: null,
       intentAnchor: null,
       progress: null,
+      taskTitle: null,
+      runStartedAt: null,
+      expectedDurationSeconds: null,
+      lastRunOutcome: null,
+      lastRunSummary: null,
+      lastRunContext: null,
+      originator: null,
     };
     vi.mocked(scheduler.getJob).mockResolvedValueOnce(createdJob);
 
@@ -219,9 +235,17 @@ describe('Job routes', () => {
     consecutiveFailures: 0,
     createdBy: 'api',
     createdAt: '2026-03-29T00:00:00Z',
+    timezone: 'UTC',
     agentTaskId: null,
     intentAnchor: null,
     progress: null,
+    taskTitle: null,
+    runStartedAt: null,
+    expectedDurationSeconds: null,
+    lastRunOutcome: null,
+    lastRunSummary: null,
+    lastRunContext: null,
+    originator: null,
   };
 
   it('PATCH /api/jobs/:id unsuspends a suspended job', async () => {

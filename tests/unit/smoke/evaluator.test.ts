@@ -46,7 +46,7 @@ describe('Evaluator', () => {
       // with no indication that the parse failed.
       parseJudgeResponse('not valid json');
 
-      const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
+      const output = stderrSpy.mock.calls.map((c: unknown) => String((c as unknown[])[0])).join('');
       expect(output).toContain('Failed to parse judge response');
     });
 
@@ -60,7 +60,7 @@ describe('Evaluator', () => {
       });
       parseJudgeResponse(raw, behaviors);
 
-      const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
+      const output = stderrSpy.mock.calls.map((c: unknown) => String((c as unknown[])[0])).join('');
       expect(output).toContain("unexpected behavior ID 'classify_urgent'");
       expect(output).toContain("'classify-urgent'");
     });
@@ -75,7 +75,7 @@ describe('Evaluator', () => {
       });
       parseJudgeResponse(raw, behaviors);
 
-      const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
+      const output = stderrSpy.mock.calls.map((c: unknown) => String((c as unknown[])[0])).join('');
       expect(output).toContain("did not return a score for expected behavior 'b'");
     });
 
@@ -139,7 +139,7 @@ describe('Evaluator', () => {
       ];
       computeWeightedScore(behaviors, scores);
 
-      const output = stderrSpy.mock.calls.map(c => String(c[0])).join('');
+      const output = stderrSpy.mock.calls.map((c: unknown) => String((c as unknown[])[0])).join('');
       expect(output).toContain("No score entry for behavior 'b'");
     });
 

@@ -12,6 +12,7 @@ describe('Memory bus events', () => {
       nodeId: 'node-123',
       nodeType: 'fact',
       label: 'Bob is CEO',
+      sensitivity: 'internal',
       source: 'agent:coordinator/task:task-1/channel:cli',
       parentEventId: 'task-event-id',
     });

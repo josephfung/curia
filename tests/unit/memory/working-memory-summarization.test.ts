@@ -136,7 +136,7 @@ describe('WorkingMemory — context summarization', () => {
     };
 
     const pool = buildMockPool(queryHandler);
-    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: mockProvider };
+    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: mockProvider, model: 'claude-3-5-haiku-20241022' };
     const memory = WorkingMemory.createWithPostgres(pool, { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never, config);
 
     await memory.addTurn(CONV, AGENT, { role: 'user', content: 'Hello' });
@@ -149,7 +149,7 @@ describe('WorkingMemory — context summarization', () => {
   it('calls LLM when active count exceeds threshold', async () => {
     const { pool, mockProvider } = buildPool(21, 11); // 21 active, keep 10, archive 11
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
-    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: mockProvider };
+    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: mockProvider, model: 'claude-3-5-haiku-20241022' };
 
     const memory = WorkingMemory.createWithPostgres(pool, logger, config);
     await memory.addTurn(CONV, AGENT, { role: 'user', content: 'Trigger turn' });
@@ -166,7 +166,7 @@ describe('WorkingMemory — context summarization', () => {
     const toArchiveCount = 11;
     const { pool, mockProvider } = buildPool(21, toArchiveCount);
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
-    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: mockProvider };
+    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: mockProvider, model: 'claude-3-5-haiku-20241022' };
 
     const memory = WorkingMemory.createWithPostgres(pool, logger, config);
     await memory.addTurn(CONV, AGENT, { role: 'user', content: 'Trigger turn' });
@@ -175,7 +175,7 @@ describe('WorkingMemory — context summarization', () => {
     const client = await (pool as unknown as { connect(): Promise<{ query: MockedFunction<() => unknown>; release: () => void }> }).connect();
 
     // BEGIN and COMMIT must have been called
-    const clientCalls = (client.query as MockedFunction<() => unknown>).mock.calls.map((c) => (c[0] as string).trim());
+    const clientCalls = (client.query as MockedFunction<() => unknown>).mock.calls.map((c) => ((c as unknown[])[0] as string).trim());
     expect(clientCalls).toContain('BEGIN');
     expect(clientCalls).toContain('COMMIT');
 
@@ -189,11 +189,11 @@ describe('WorkingMemory — context summarization', () => {
 
     // Verify the summary content is the LLM's response
     const insertParams = (client.query as MockedFunction<() => unknown>).mock.calls.find(
-      (c) => (c[0] as string).startsWith('INSERT INTO working_memory'),
+      (c) => ((c as unknown[])[0] as string).startsWith('INSERT INTO working_memory'),
     );
     // Third parameter ($3) is the summary content
-    expect((insertParams![1] as string[])[2]).toContain('[Conversation summary]');
-    expect((insertParams![1] as string[])[2]).toContain('SUMMARY: key decisions made.');
+    expect(((insertParams as unknown as unknown[])[1] as string[])[2]).toContain('[Conversation summary]');
+    expect(((insertParams as unknown as unknown[])[1] as string[])[2]).toContain('SUMMARY: key decisions made.');
   });
 
   it('get() excludes archived rows (queries with archived = false)', async () => {
@@ -255,7 +255,7 @@ describe('WorkingMemory — context summarization', () => {
 
     const pool = buildMockPool(queryHandler);
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
-    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: errorProvider };
+    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: errorProvider, model: 'claude-3-5-haiku-20241022' };
 
     const memory = WorkingMemory.createWithPostgres(pool, logger, config);
 
@@ -284,7 +284,7 @@ describe('WorkingMemory — context summarization', () => {
 
     const pool = buildMockPool(queryHandler);
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
-    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: throwingProvider };
+    const config: SummarizationConfig = { threshold: 20, keepWindow: 10, provider: throwingProvider, model: 'claude-3-5-haiku-20241022' };
 
     const memory = WorkingMemory.createWithPostgres(pool, logger, config);
     await expect(memory.addTurn(CONV, AGENT, { role: 'user', content: 'Message' })).resolves.toBeUndefined();

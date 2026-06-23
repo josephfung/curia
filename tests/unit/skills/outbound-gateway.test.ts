@@ -1062,7 +1062,7 @@ describe('OutboundGateway.getSignalGroupMembers', () => {
     const { logger, nylasClient, contactService, contentFilter, bus } = createMocks();
 
     const gateway = new OutboundGateway({
-      nylasClient,
+      nylasClients: new Map([['test-account', nylasClient]]),
       contactService,
       contentFilter,
       bus,
@@ -2523,7 +2523,7 @@ describe('CEO recipient bypass on send()', () => {
     expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
     // autonomy.send_blocked must NOT fire — we bypassed the gate
     const publishedEvents = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
-      .map(([, evt]: [string, BusEvent]) => evt.type);
+      .map(([, evt]) => (evt as BusEvent).type);
     expect(publishedEvents).not.toContain('autonomy.send_blocked');
   });
 

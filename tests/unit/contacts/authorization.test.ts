@@ -58,6 +58,7 @@ const testConfig: AuthConfig = {
     email: 'low',
     http: 'medium',
   },
+  channelPolicies: {},
 };
 
 describe('AuthorizationService', () => {
@@ -365,7 +366,8 @@ describe('AuthorizationService', () => {
     const service = new AuthorizationService(configWithPartialDefaults);
     const result = service.evaluate({
       role: 'Sister',     // No 'sister' in roles → tries tierDefaults
-      tier: 'trusted',    // 'trusted' not in partial tierDefaults → falls to unknown role      channel: 'cli',
+      tier: 'trusted',    // 'trusted' not in partial tierDefaults → falls to unknown role
+      channel: 'cli',
       overrides: [],
     });
     // Falls through to unknown role → denied: ['*']

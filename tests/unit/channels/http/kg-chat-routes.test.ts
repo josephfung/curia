@@ -14,6 +14,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { knowledgeGraphRoutes } from '../../../../src/channels/http/routes/kg.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import { type EventRouter } from '../../../../src/channels/http/event-router.js';
+import type { ContactService } from '../../../../src/contacts/contact-service.js';
+import type { SessionStore } from '../../../../src/channels/http/session-auth.js';
 
 function createLogger(): Logger {
   return {
@@ -66,6 +68,8 @@ describe('KG chat routes', () => {
       secureCookies: false,
       bus: createMockBus(),
       eventRouter: createMockEventRouter(),
+      contactService: {} as unknown as ContactService,
+      sessions: new Map() as unknown as SessionStore,
     });
 
     const response = await app.inject({
@@ -88,6 +92,8 @@ describe('KG chat routes', () => {
       secureCookies: false,
       bus: createMockBus(),
       eventRouter: createMockEventRouter(),
+      contactService: {} as unknown as ContactService,
+      sessions: new Map() as unknown as SessionStore,
     });
 
     // inject() can't hold an SSE connection open, but the auth guard fires
@@ -116,6 +122,8 @@ describe('KG chat routes', () => {
       secureCookies: false,
       bus,
       eventRouter,
+      contactService: {} as unknown as ContactService,
+      sessions: new Map() as unknown as SessionStore,
     });
 
     const response = await app.inject({
@@ -148,6 +156,8 @@ describe('KG chat routes', () => {
       secureCookies: false,
       bus: createMockBus(),
       eventRouter: createMockEventRouter(),
+      contactService: {} as unknown as ContactService,
+      sessions: new Map() as unknown as SessionStore,
     });
 
     const response = await app.inject({
@@ -177,6 +187,8 @@ describe('KG chat routes', () => {
       secureCookies: false,
       bus,
       eventRouter: createMockEventRouter(),
+      contactService: {} as unknown as ContactService,
+      sessions: new Map() as unknown as SessionStore,
     });
 
     const response = await app.inject({
@@ -203,6 +215,8 @@ describe('KG chat routes', () => {
       secureCookies: false,
       bus,
       eventRouter,
+      contactService: {} as unknown as ContactService,
+      sessions: new Map() as unknown as SessionStore,
     });
 
     const response = await app.inject({
@@ -233,6 +247,8 @@ describe('KG chat routes', () => {
       secureCookies: false,
       bus: createMockBus(),
       eventRouter: createMockEventRouter(),
+      contactService: {} as unknown as ContactService,
+      sessions: new Map() as unknown as SessionStore,
     });
 
     const response = await app.inject({
@@ -258,6 +274,8 @@ describe('KG web UI shell', () => {
       secureCookies: false,
       bus: createMockBus(),
       eventRouter: createMockEventRouter(),
+      contactService: {} as unknown as ContactService,
+      sessions: new Map() as unknown as SessionStore,
     });
 
     const response = await app.inject({ method: 'GET', url: '/old' });

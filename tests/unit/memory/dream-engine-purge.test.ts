@@ -12,7 +12,10 @@ function makeBus(): EventBus {
 }
 
 function makeSilentLogger() {
-  return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
+  // Cast through unknown to never so this minimal mock can be passed to DreamEngine,
+  // which expects a full pino.Logger. Tests that need to assert on mock calls should
+  // create their own inline mock object and cast separately (see the third test).
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as never;
 }
 
 function makePool() {
@@ -75,7 +78,9 @@ describe('DreamEngine — working memory purge', () => {
 
   it('logs a purge failure but does not throw', async () => {
     const { pool } = makePool();
-    const logger = makeSilentLogger();
+    // Hold a typed reference for assertions; pass as never to satisfy pino.Logger.
+    const loggerMock = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const logger = loggerMock as unknown as never;
     const mockWorkingMemory = {
       purgeExpired: vi.fn().mockRejectedValue(new Error('DB connection lost')),
     } as unknown as WorkingMemory;
@@ -91,7 +96,7 @@ describe('DreamEngine — working memory purge', () => {
 
     // Should not throw — purge failure is best-effort
     await expect(engine.runDecayPass()).resolves.toBeDefined();
-    expect(logger.error).toHaveBeenCalledWith(
+    expect(loggerMock.error).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.any(Error) }),
       expect.stringContaining('working memory purge failed'),
     );

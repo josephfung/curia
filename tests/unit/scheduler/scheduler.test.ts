@@ -1229,7 +1229,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'You are the coordinator.',
           schedule: [
             { cron: '0 9 * * 1', task: 'weekly-standup' },
@@ -1238,7 +1238,7 @@ describe('Scheduler', () => {
         },
         {
           name: 'researcher',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'You research things.',
           // No schedule block — should be skipped.
         },
@@ -1264,7 +1264,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'no-schedule',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'No schedule.',
         },
       ];
@@ -1278,7 +1278,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'empty-sched',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Empty schedule.',
           schedule: [],
         },
@@ -1295,7 +1295,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'writing-scout',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Scout.',
           schedule: [
             { cron: '30 8 * * 2', task: 'Run the writing scout', agent_id: 'coordinator' },
@@ -1304,7 +1304,7 @@ describe('Scheduler', () => {
         // coordinator must be in the config list so the unknown-agent guard allows the target
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
         },
       ];
@@ -1325,7 +1325,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'writing-scout',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Scout.',
           schedule: [
             { cron: '30 8 * * 2', task: 'Check the shared inbox', agent_id: 'coordinator' },
@@ -1333,7 +1333,7 @@ describe('Scheduler', () => {
         },
         {
           name: 'researcher',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Research.',
           schedule: [
             { cron: '30 8 * * 2', task: 'Check the shared inbox', agent_id: 'coordinator' },
@@ -1341,7 +1341,7 @@ describe('Scheduler', () => {
         },
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
         },
       ];
@@ -1366,7 +1366,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'my-agent',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Agent.',
           schedule: [
             { cron: '0 9 * * 1', task: 'weekly task' },
@@ -1389,13 +1389,13 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'agent-a',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'A.',
           schedule: [{ cron: '0 9 * * 1', task: 'task', agent_id: 'agent-b' }],
         },
         {
           name: 'agent-b',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'B.',
           schedule: [{ cron: '0 9 * * 1', task: 'task', agent_id: 'agent-a' }],
         },
@@ -1417,7 +1417,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [{ cron: '0 9 * * 1', task: 'task', agent_id: 'coordinator' }],
         },
@@ -1432,7 +1432,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'my-agent',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Agent.',
           schedule: [
             { cron: '0 9 * * 1', task: 'weekly task', agent_id: 'nonexistent-agent' },
@@ -1458,7 +1458,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'agent-x',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'test',
           schedule: [
             { cron: '0 1 * * *', task: 'fail-task' },
@@ -1483,7 +1483,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [
             {
@@ -1515,7 +1515,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [
             { cron: '0 9 * * 1', task: 'weekly-standup' },
@@ -1557,7 +1557,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'agent-x',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'test',
           schedule: [
             { cron: '0 1 * * *', task: 'fail-task' },
@@ -1594,7 +1594,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'writing-scout',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Scout.',
           schedule: [
             { cron: '30 8 * * 2', task: 'Run the writing scout', agent_id: 'coordinator' },
@@ -1602,7 +1602,7 @@ describe('Scheduler', () => {
         },
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
         },
       ];
@@ -1628,7 +1628,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'no-schedule',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'No schedule.',
         },
       ];
@@ -1645,7 +1645,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [{ cron: '0 9 * * *', task: 'brief' }],
         },
@@ -1666,7 +1666,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [{ cron: '0 9 * * *', task: 'brief' }],
         },
@@ -1689,7 +1689,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [{ cron: '0 9 * * *', task: 'brief' }],
         },

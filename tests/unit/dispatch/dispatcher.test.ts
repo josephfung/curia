@@ -22,7 +22,7 @@ const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model
  */
 function makeResolverWithContact(opts: { contactConfidence: number; tier?: ContactTier; kind?: ContactKind }): ContactResolver {
   return {
-    resolve: async (_channel, _senderId) => ({
+    resolve: async (_channel: string, _senderId: string) => ({
       resolved: true,
       contactId: 'test-contact-id',
       displayName: 'Test Contact',
@@ -45,7 +45,7 @@ function makeResolverWithContact(opts: { contactConfidence: number; tier?: Conta
  */
 function makeResolverWithNoContact(): ContactResolver {
   return {
-    resolve: async (channel, senderId) => ({ resolved: false, channel, senderId }),
+    resolve: async (channel: string, senderId: string) => ({ resolved: false, channel, senderId }),
   } as unknown as ContactResolver;
 }
 
@@ -423,7 +423,9 @@ describe('Dispatcher — messageTrustScore', () => {
 
     expect(tasks).toHaveLength(1);
     // Verify the emitted task carries tier='unknown' so the runtime's LOW-TRUST injection fires.
-    expect(tasks[0]!.payload.senderContext?.tier).toBe('unknown');
+    // Cast through SenderContext since the senderContext union includes UnknownSenderContext which
+    // lacks 'tier' — at this point the dispatcher resolved the sender so it's a SenderContext.
+    expect((tasks[0]!.payload.senderContext as { tier: string })?.tier).toBe('unknown');
   });
 
   it('confirmed contact with contact_confidence=0 routes unconditionally (issue #459)', async () => {
@@ -588,7 +590,7 @@ describe('Dispatcher — contact.unknown event payload', () => {
       bus,
       logger,
       contactResolver: resolver,
-      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow' } },
+      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow', threaded: false } },
     });
     dispatcher.register();
 
@@ -816,7 +818,7 @@ describe('Dispatcher — CC role preamble', () => {
     const bus = new EventBus(logger);
 
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
@@ -846,7 +848,7 @@ describe('Dispatcher — CC role preamble', () => {
     const bus = new EventBus(logger);
 
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
@@ -883,7 +885,7 @@ describe('Dispatcher — CC role preamble', () => {
     const bus = new EventBus(logger);
 
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
@@ -914,7 +916,7 @@ describe('Dispatcher — CC role preamble', () => {
     const bus = new EventBus(logger);
 
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
@@ -948,7 +950,7 @@ describe('Dispatcher — CC role preamble', () => {
     const bus = new EventBus(logger);
 
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
@@ -974,7 +976,7 @@ describe('Dispatcher — CC role preamble', () => {
     const bus = new EventBus(logger);
 
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
@@ -997,7 +999,7 @@ describe('Dispatcher — CC role preamble', () => {
     const bus = new EventBus(logger);
 
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
@@ -1021,7 +1023,7 @@ describe('Dispatcher — CC role preamble', () => {
     const bus = new EventBus(logger);
 
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     const dispatcher = new Dispatcher({ bus, logger });
     dispatcher.register();
@@ -1078,7 +1080,7 @@ describe('Dispatcher message size limit', () => {
     coordinator.register();
 
     const outbound: OutboundMessageEvent[] = [];
-    bus.subscribe('outbound.message', 'channel', (e) => outbound.push(e as OutboundMessageEvent));
+    bus.subscribe('outbound.message', 'channel', (e) => { outbound.push(e as OutboundMessageEvent); });
 
     // 10 bytes exactly — at limit
     makeDispatcher(bus, 10);
@@ -1099,7 +1101,7 @@ describe('Dispatcher message size limit', () => {
     const bus = new EventBus(logger);
 
     const rejected: MessageRejectedEvent[] = [];
-    bus.subscribe('message.rejected', 'channel', (e) => rejected.push(e as MessageRejectedEvent));
+    bus.subscribe('message.rejected', 'channel', (e) => { rejected.push(e as MessageRejectedEvent); });
 
     makeDispatcher(bus, 5); // 5 byte limit
 
@@ -1123,7 +1125,7 @@ describe('Dispatcher message size limit', () => {
     const bus = new EventBus(logger);
 
     const tasks: AgentTaskEvent[] = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     makeDispatcher(bus, 5);
 
@@ -1143,7 +1145,7 @@ describe('Dispatcher message size limit', () => {
     const bus = new EventBus(logger);
 
     const rejected: MessageRejectedEvent[] = [];
-    bus.subscribe('message.rejected', 'channel', (e) => rejected.push(e as MessageRejectedEvent));
+    bus.subscribe('message.rejected', 'channel', (e) => { rejected.push(e as MessageRejectedEvent); });
 
     makeDispatcher(bus, 1); // absurdly low limit
 
@@ -1170,7 +1172,7 @@ describe('Dispatcher message size limit', () => {
     const bus = new EventBus(logger);
 
     const rejected: MessageRejectedEvent[] = [];
-    bus.subscribe('message.rejected', 'channel', (e) => rejected.push(e as MessageRejectedEvent));
+    bus.subscribe('message.rejected', 'channel', (e) => { rejected.push(e as MessageRejectedEvent); });
 
     makeDispatcher(bus, 3); // 3-byte limit — passes char-length check but fails byte-length
 
@@ -1219,7 +1221,7 @@ describe('Dispatcher — outbound.message recipientId', () => {
     dispatcher.register();
 
     const outboundEvents: OutboundMessageEvent[] = [];
-    bus.subscribe('outbound.message', 'channel', (e) => outboundEvents.push(e as OutboundMessageEvent));
+    bus.subscribe('outbound.message', 'channel', (e) => { outboundEvents.push(e as OutboundMessageEvent); });
 
     await bus.publish('channel', createInboundMessage({
       conversationId: 'email:thread-reply',
@@ -1266,7 +1268,7 @@ describe('originator metadata stamping', () => {
       bus,
       logger,
       contactResolver: ceoResolver,
-      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow' } },
+      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow', threaded: false } },
     });
     dispatcher.register();
 
@@ -1314,7 +1316,7 @@ describe('originator metadata stamping', () => {
       bus,
       logger,
       contactResolver: nonCeoResolver,
-      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow' } },
+      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow', threaded: false } },
     });
     dispatcher.register();
 
@@ -1363,7 +1365,7 @@ describe('originator metadata stamping', () => {
       bus,
       logger,
       contactResolver: nonCeoResolver,
-      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow' } },
+      channelPolicies: { signal: { trust: 'high', unknownSender: 'allow', threaded: false } },
     });
     dispatcher.register();
 
@@ -1448,7 +1450,7 @@ describe('Dispatcher — thread-participants block', () => {
     logger = createLogger('error');
     bus = new EventBus(logger);
     tasks = [];
-    bus.subscribe('agent.task', 'agent', (e) => tasks.push(e as AgentTaskEvent));
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
   });
 
   it('injects [Thread participants] line for email with participants metadata', async () => {
@@ -1887,7 +1889,8 @@ describe('Dispatcher — automated sender tier gate bypass (#953)', () => {
     // The automated sender must reach the coordinator despite tier='unknown' + 'ignore' policy.
     expect(rejected).toHaveLength(0);
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]!.payload.senderContext?.kind).toBe('automated');
+    // Cast since senderContext union includes UnknownSenderContext which lacks 'kind'.
+    expect((tasks[0]!.payload.senderContext as { kind: string })?.kind).toBe('automated');
   });
 });
 

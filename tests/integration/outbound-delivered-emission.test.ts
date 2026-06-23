@@ -11,6 +11,7 @@ import type { OutboundContentFilter } from '../../src/dispatch/outbound-filter.j
 import type { OutboundContextService } from '../../src/dispatch/outbound-context.js';
 import { SignalSendHandler } from '../../skills/signal-send/handler.js';
 import signalSendManifest from '../../skills/signal-send/skill.json' with { type: 'json' };
+import type { SignalRpcClient } from '../../src/channels/signal/signal-rpc-client.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -28,7 +29,7 @@ describe('outbound.delivered emission (#729)', () => {
     const signalClient = {
       send: vi.fn().mockResolvedValue(undefined),
       listGroups: vi.fn().mockResolvedValue([]),
-    };
+    } as unknown as SignalRpcClient;
 
     // Mock ContactService — resolveByChannelIdentity is called twice:
     //   1. In OutboundGateway.send() Step 1 (blocked-contact check + trust capture)
