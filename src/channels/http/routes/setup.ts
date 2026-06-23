@@ -258,10 +258,14 @@ export async function setupRoutes(
     // Optional fields — validate shape before any write.
     let email: string | undefined;
     if (body.email !== undefined && body.email !== null && body.email !== '') {
-      if (typeof body.email !== 'string' || !EMAIL_RE.test(body.email.trim())) {
+      // Trim once; also caps length before EMAIL_RE runs to avoid ReDoS — the domain
+      // portion is ambiguous across '.' chars, causing quadratic backtracking on crafted
+      // inputs. RFC 5321 caps email at 254 chars so this always finishes in O(1) time.
+      const trimmedEmail = typeof body.email === 'string' ? body.email.trim() : '';
+      if (!trimmedEmail || trimmedEmail.length > 254 || !EMAIL_RE.test(trimmedEmail)) {
         return reply.status(422).send({ error: 'email is not a valid address.' });
       }
-      email = body.email.trim().toLowerCase();
+      email = trimmedEmail.toLowerCase();
     }
     const preferredName =
       typeof body.preferredName === 'string' && body.preferredName.trim() ? body.preferredName.trim() : undefined;
