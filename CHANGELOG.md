@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Model-tier fallback resilience** — when a tier's primary model returns `NOT_FOUND` (e.g. OpenRouter drops a model from its catalog), the agent runtime automatically re-routes to the fallback tier's model (`fast`→`standard`, `standard`→`powerful`, `powerful`→`standard`) instead of surfacing an error. Engagement is logged as a `model.fallback` audit event. (#813)
+
 ### Changed
 
 - **TypeScript test coverage** — `tests/**/*.ts` is now covered by typecheck (`tsconfig.tests.json`, third pass in the `typecheck` script); type drift between shared types and test fixtures is now caught by CI. (#1105)

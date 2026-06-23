@@ -88,3 +88,27 @@ describe('ModelRouter', () => {
     expect(() => new ModelRouter(config, registry, logger)).toThrow('not found in the model registry');
   });
 });
+
+describe('ModelRouter.getFallbackTier', () => {
+  const router = new ModelRouter(defaultConfig, registry, logger);
+
+  it('fast falls back to standard', () => {
+    expect(router.getFallbackTier('fast')).toBe('standard');
+  });
+
+  it('standard falls back to powerful', () => {
+    expect(router.getFallbackTier('standard')).toBe('powerful');
+  });
+
+  it('powerful falls back to standard', () => {
+    expect(router.getFallbackTier('powerful')).toBe('standard');
+  });
+
+  it('fallback tier resolves to a valid model', () => {
+    // Fallback tier always succeeds — all tiers are validated at construction.
+    const fastFallback = router.getFallbackTier('fast');
+    const resolved = router.resolve(fastFallback);
+    expect(resolved.model).toBe('claude-sonnet-4-6');
+    expect(resolved.tier).toBe('standard');
+  });
+});

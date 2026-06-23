@@ -160,6 +160,35 @@ with the cursor persisted in `last_run_context` so successive runs advance throu
 without re-scanning. The contacts agent's `error_budget` is raised to 30 turns to accommodate the
 batched work. See [spec 09 — Contacts & Identity](09-contacts-and-identity.md).
 
+### Provider model fallback (#813)
+
+When OpenRouter (or another provider) removes a model from its catalog, every agent
+using that tier starts returning `NOT_FOUND` errors until the operator manually remaps
+the tier — typically hours later, with silent `agent.error` accumulation in between.
+
+The runtime handles this transparently: on a `NOT_FOUND` response from the primary
+model, it automatically re-routes to the **fallback tier's** model before surfacing
+the error. Fallback rules are fixed and require no configuration:
+
+| Primary tier | Fallback tier |
+|---|---|
+| `fast` | `standard` |
+| `standard` | `powerful` |
+| `powerful` | `standard` |
+
+When the fallback succeeds, the agent completes normally and the caller sees no error.
+If the fallback also fails, the fallback's error is surfaced (not the original NOT_FOUND).
+
+Fallback engagement is always logged: a pino `warn` fires immediately, and a durable
+`model.fallback` bus event is written to the audit log with the agent ID, tier, failed
+model, fallback model, and reason. This gives operators a grep-able signal without
+requiring an emergency page. The `model.fallback` event appears in the audit dashboard
+alongside `llm.call` events so the pattern is visible at a glance.
+
+**Out of scope:** only `NOT_FOUND` triggers fallback. `AUTH_FAILURE`, `VALIDATION_ERROR`,
+and other non-retryable errors still fail hard — they indicate caller or config problems,
+not model availability.
+
 ---
 
 ## Error Classification

@@ -1815,11 +1815,22 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
+    // Pre-resolve the fallback tier model and provider (#813).
+    // The fallback tier rules are fixed: fast→standard, standard→powerful, powerful→standard.
+    // All three tiers are already validated above, so these lookups always succeed.
+    const fallbackTier = modelRouter.getFallbackTier(resolved.tier);
+    const fallbackResolved = modelRouter.resolve(fallbackTier);
+    const fallbackProviderName = modelRegistry.getProvider(fallbackResolved.model);
+    const agentFallbackProvider = fallbackProviderName ? providerRegistry.get(fallbackProviderName) : undefined;
+
     const agent = new AgentRuntime({
       agentId: agentConfig.name,
       systemPrompt,
       provider: agentProvider,
       resolvedModel: resolved.model,
+      tier: resolved.tier,
+      fallbackModel: fallbackResolved.model,
+      fallbackProvider: agentFallbackProvider,
       bus,
       logger,
       memory,
