@@ -807,7 +807,28 @@ export class ExecutionLayer {
           }
         }
       } else {
-        // autonomyConfig is null — pre-migration or empty table. Fail-open.
+        // autonomyConfig is null — pre-migration or empty table.
+        //
+        // Fail-OPEN is correct for a live turn: a transient DB issue must not silently disable an
+        // agent acting under a human's direction. But a WOKEN task has no human in the loop, and
+        // with no score the bypass ladder cannot compute effective standing — so the same null
+        // that downgrades its inherited standing (effective-standing.ts) would otherwise let it run
+        // every non-read skill ungated, making the downgrade cosmetic. For a woken task we fail
+        // CLOSED on non-read actions instead (#1125): no score → no autonomous consequential action.
+        const isWoken = (options?.taskMetadata as Record<string, unknown> | undefined)?.['wakeContext'] !== undefined;
+        if (isWoken && manifest.action_risk !== 'none') {
+          skillLogger.warn(
+            { skillName, actionRisk: manifest.action_risk, agentId: options?.agentId, taskEventId: options?.taskEventId },
+            'autonomy gate: score unavailable on a woken task — failing closed (no human in the loop)',
+          );
+          return {
+            success: false,
+            error: this.wrapSkillError(
+              `Skill '${skillName}' blocked — the autonomy score is temporarily unavailable and this is an autonomous (woken) task. ` +
+              `It will be retried once the score can be read.`,
+            ),
+          };
+        }
         skillLogger.warn({ skillName }, 'autonomy gate: autonomy_config not found — skipping gate (fail-open, pre-migration?)');
       }
     }
@@ -929,7 +950,17 @@ export class ExecutionLayer {
         ? buildRateLimitSourceKey(options.agentId ?? 'human-approved', options.taskEventId, options.channelId)
         : undefined,
       // Forward task-level metadata so skills can inspect task-wide signals.
-      taskMetadata: options?.taskMetadata,
+      // EFFECTIVE standing (#1125), not raw lineage: handlers that still self-check
+      // isPrincipalOriginated(ctx.taskMetadata) (e.g. send-draft, contact-set-tier — normal-
+      // sensitivity skills the execution-layer gates don't cover) must see the post-ladder
+      // standing, or a heartbeat-woken principal-lineage task would ride borrowed standing the
+      // ladder downgraded. It also keeps lineage-forwarding handlers (delegate, scheduler-create,
+      // bullpen) from minting a fresh sub-task with standing the woken task no longer holds — a
+      // derived sub-turn carries no wakeContext and would otherwise escape the ladder entirely.
+      // For a live turn this is referentially identical to the raw metadata. Audit logs above
+      // read the raw lineage directly from options.taskMetadata, not from here. (#1126 abolishes
+      // these handler re-checks; until then, effective standing is the safe input.)
+      taskMetadata: effectiveTaskMetadata,
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.
       timezone: this.timezone,

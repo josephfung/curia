@@ -353,7 +353,7 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "same_task": { "type": "integer", "minimum": 0, "maximum": 100 },
+            "same_task": { "type": "integer", "minimum": 60, "maximum": 100 },
             "derived_child": { "type": "integer", "minimum": 0, "maximum": 100 }
           }
         }

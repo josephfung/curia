@@ -82,7 +82,11 @@ export function computeEffectiveTaskMetadata(
   // The ladder only ever DOWNGRADES. agent/null lineage has no standing to lose.
   if (originator.systemRole !== 'principal' && originator.systemRole !== 'system') return metadata;
 
-  const threshold = wakeContext.derived ? ladder.derivedChildThreshold : ladder.sameTaskThreshold;
+  // Fail safe toward the conservative (higher) column: anything that isn't explicitly
+  // derived === false is treated as a derived child. A wakeContext with a missing/malformed
+  // `derived` should require posture D, not the easier posture B.
+  const derived = wakeContext.derived !== false;
+  const threshold = derived ? ladder.derivedChildThreshold : ladder.sameTaskThreshold;
   const keepsStanding = liveScore !== null && liveScore >= threshold;
   if (keepsStanding) return metadata; // posture B (same-task) or D (derived) — lineage retained
 

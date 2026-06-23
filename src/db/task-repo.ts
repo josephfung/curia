@@ -163,6 +163,13 @@ export class TaskRepo {
       // Atomic CTE: insert task + insert linked one-shot wake-up job in one round-trip.
       // The task_payload carries minimal context; the dispatcher (issue 4) loads the full
       // task from tasks.id via the scheduled_jobs.task_id FK.
+      //
+      // @TODO(#1125/#1127): this specific-`wake_at` wake job does NOT carry the originator on its
+      // scheduled_jobs row (and stamps no `standing`), so fireJob fires it with metadata: undefined
+      // — the woken task gets no lineage, no wakeContext, and therefore no bypass. That is the
+      // conservative/safe direction (propose-only), and deliberately out of #1125's scope, which
+      // covers only the open-ended BacklogHeartbeat path. Threading lineage onto specific wakes is
+      // a follow-up (it must NOT be subject to the heartbeat ladder — the time was pre-chosen).
       const cteSql = `
         WITH new_task AS (
           INSERT INTO tasks (
@@ -271,7 +278,7 @@ export class TaskRepo {
         t.id, t.agent_id, t.intent_anchor, t.title, t.description, t.status, t.progress,
         t.error_budget, t.conversation_id, t.created_at, t.updated_at, t.owner,
         t.waiting_on_contact_id, t.waiting_on_text, t.parent_task_id, t.blocked_by_task_id,
-        t.priority, t.due_at, t.source, t.source_agent_id, t.created_by, t.tags,
+        t.priority, t.due_at, t.source, t.source_agent_id, t.created_by, t.tags, t.originator,
         (
           SELECT sj.run_at FROM scheduled_jobs sj
           WHERE sj.task_id = t.id AND sj.status = 'pending'

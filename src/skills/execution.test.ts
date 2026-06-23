@@ -800,6 +800,73 @@ describe('autonomy gates', () => {
       expect(handler.execute).toHaveBeenCalledOnce();
     });
 
+    it('exposes EFFECTIVE standing to the handler via ctx.taskMetadata (closes the send-draft self-check hole)', async () => {
+      // A normal/none skill whose only gate is a handler self-check on ctx.taskMetadata must see
+      // the downgraded standing for a woken principal-lineage task, not the raw lineage.
+      const registry = new SkillRegistry();
+      let seenRole: unknown;
+      const handler: SkillHandler = {
+        execute: async (ctx) => {
+          seenRole = (ctx.taskMetadata?.originator as { systemRole?: string } | undefined)?.systemRole;
+          return { success: true, data: 'ok' };
+        },
+      };
+      registry.register(makeRiskyManifest('reads-meta', 'none'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(50) });
+
+      await layer.invoke('reads-meta', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+      expect(seenRole).toBe('agent'); // downgraded — a self-check would correctly reject
+
+      // The contactId (audit field) is preserved through the downgrade.
+      let seenContactId: unknown;
+      const handler2: SkillHandler = {
+        execute: async (ctx) => {
+          seenContactId = (ctx.taskMetadata?.originator as { contactId?: string } | undefined)?.contactId;
+          return { success: true, data: 'ok' };
+        },
+      };
+      const registry2 = new SkillRegistry();
+      registry2.register(makeRiskyManifest('reads-meta-2', 'none'), handler2);
+      await new ExecutionLayer(registry2, logger, { autonomyService: makeAutonomyService(50) })
+        .invoke('reads-meta-2', {}, undefined, {
+          taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+        });
+      expect(seenContactId).toBe('ceo-id');
+    });
+
+    it('fails CLOSED on a woken task when the autonomy score is unavailable', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+      // getConfig returns null (pre-migration / DB blip) — fail-open for live turns, fail-closed for wakes.
+      const nullService = { getConfig: async () => null } as unknown as import('../autonomy/autonomy-service.js').AutonomyService;
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: nullService });
+
+      const result = await layer.invoke('send-email', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('temporarily unavailable');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('still fails OPEN on a LIVE turn when the score is unavailable (no regression)', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+      const nullService = { getConfig: async () => null } as unknown as import('../autonomy/autonomy-service.js').AutonomyService;
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: nullService });
+
+      // No wakeContext → live turn → existing fail-open behaviour preserved.
+      const result = await layer.invoke('send-email', {}, undefined, {
+        taskMetadata: { originator: principalLineage },
+      });
+      expect(result.success).toBe(true);
+    });
+
     it('honours custom ladder thresholds passed to the constructor', async () => {
       const registry = new SkillRegistry();
       const handler = makeHandler('ok');
