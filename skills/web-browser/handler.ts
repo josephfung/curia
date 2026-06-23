@@ -14,7 +14,7 @@ import type { Page, Frame, Locator } from 'playwright';
 // its own module so the DOM lib it needs is scoped there, not leaked into this
 // server-side handler. See dom-extract.ts.
 import { extractFrameContent } from './dom-extract.js';
-import { jitteredDelay, simulateHumanPresence } from '../../src/browser/human-behavior.js';
+import { jitteredDelay, simulateHumanPresence, humanClick, humanType } from '../../src/browser/human-behavior.js';
 
 // Maximum cleaned DOM content length before truncation.
 // Prevents token blowout on content-heavy pages.
@@ -195,7 +195,9 @@ export class WebBrowserHandler implements SkillHandler {
             return { success: false, error: 'click requires selector (string — describe the element in natural language)' };
           }
           const clickTarget = await resolveLocator(page, selector, ctx.log);
-          await clickTarget.click();
+          // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
+          // scores natural pointer paths as more human-like than direct .click(). (#1053)
+          await humanClick(page, clickTarget);
           // Adaptive settle: a click may trigger navigation or an in-page update. Wait
           // briefly for the DOM to settle, but don't fail the action if nothing navigates.
           await settleAfterInteraction(page, ctx, sessionId);
@@ -284,7 +286,16 @@ export class WebBrowserHandler implements SkillHandler {
           }
 
           const typeTarget = await resolveLocator(page, selector, ctx.log);
-          await typeTarget.fill(fillValue);
+          if (hasSecretRef) {
+            // Secrets must be filled atomically via .fill() — humanType types char-by-char
+            // and would produce key events that could leak the value through input event
+            // listeners or autocomplete. Atomic fill is the safe path for credentials. (#973)
+            await typeTarget.fill(fillValue);
+          } else {
+            // Literal text: use humanType for realistic keystroke cadence so behavioral
+            // challenge JS scores the typing as human. (#1053)
+            await humanType(page, fillValue);
+          }
           break;
         }
 
@@ -380,10 +391,7 @@ async function settleAfterInteraction(page: Page, ctx: SkillContext, sessionId: 
  * the LLM can still see an unrecognized block page and decide for itself.
  */
 function isHardBlock(title: string): boolean {
-  // "Just a moment..." is Cloudflare's JS challenge page title — it CAN clear on reload,
-  // so it enters the soft-block retry path. If it survives the reload we treat it as a
-  // permanent block and fail fast (same as the others). (#1053)
-  return /access denied|attention required|verify you are (?:a )?human|are you a robot|pardon our interruption|just a moment/i.test(title);
+  return /access denied|attention required|verify you are (?:a )?human|are you a robot|pardon our interruption/i.test(title);
 }
 
 // A near-empty body after load is a soft-block tell (CF/JS challenge serving a stub page),

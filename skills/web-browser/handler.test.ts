@@ -234,15 +234,17 @@ describe('web-browser type action with secret_ref (#973)', () => {
     expect(fill).not.toHaveBeenCalled();
   });
 
-  it('still supports a literal text fill (non-secret path unchanged)', async () => {
-    const { ctx, fill } = makeSkillContext({
+  it('still supports a literal text fill (non-secret path uses humanType for realistic cadence)', async () => {
+    const { ctx } = makeSkillContext({
       input: { action: 'type', selector: '#search', text: 'hello world' },
     });
 
     const result = await new WebBrowserHandler().execute(ctx);
 
     expect(result.success).toBe(true);
-    expect(fill).toHaveBeenCalledWith('hello world');
+    // Literal text now uses humanType (keystroke cadence) rather than fill(), so that
+    // behavioral challenge JS scores the typing as human. (#1053)
+    expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), 'hello world');
   });
 });
 
@@ -425,8 +427,9 @@ describe('web-browser iframe awareness', () => {
     const result = await new WebBrowserHandler().execute(ctx);
 
     expect(result.success).toBe(true);
-    // The click landed on the CHILD FRAME's element, not the top page.
-    expect(frameLocator.click).toHaveBeenCalled();
+    // The click resolved to the CHILD FRAME's locator and was dispatched via humanClick
+    // (not locator.click directly — humanClick provides realistic mouse-movement telemetry).
+    expect(vi.mocked(humanClick)).toHaveBeenCalled();
   });
 
   it('resolveLocator skips a child frame that throws (detached) and continues', async () => {
@@ -479,9 +482,10 @@ describe('web-browser iframe awareness', () => {
     const result = await new WebBrowserHandler().execute(ctxD);
 
     // The detached frame's throw must NOT fail the action — it's skipped and the main
-    // frame's CSS fallback resolves instead.
+    // frame's CSS fallback resolves instead. The click is dispatched via humanClick, not
+    // locator.click directly (humanClick provides realistic mouse-movement telemetry). (#1053)
     expect(result.success).toBe(true);
-    expect(mainClick).toHaveBeenCalled();
+    expect(vi.mocked(humanClick)).toHaveBeenCalled();
   });
 
   it('get_content includes labelled iframe content', async () => {
@@ -801,13 +805,16 @@ describe('web-browser navigate hardening — dwell + soft-block reload (#1053)',
     expect(page.reload).not.toHaveBeenCalled();
   });
 
-  it('reloads once on a soft block, then succeeds when the reload clears it', async () => {
+  it('reloads once on a soft block (near-empty body), then succeeds when the reload clears it', async () => {
     const fill = vi.fn();
     const page = makeMockPage('content', fill, 'https://shop.example.com/');
-    // First title read = CF challenge; after reload = clean page.
-    page.title = vi.fn()
-      .mockResolvedValueOnce('Just a moment...')
-      .mockResolvedValue('Shop — Home');
+    // Make isLikelyEmpty fire on first check (text too short = soft block stub page),
+    // then return normal content length after reload.
+    page.evaluate = vi.fn()
+      .mockResolvedValueOnce(10)   // first check: < 50 chars → isLikelyEmpty returns true → triggers reload
+      .mockResolvedValue(500);     // after reload: > 50 chars → isLikelyEmpty returns false → success
+    // title is always clean (not a hard block title)
+    page.title = vi.fn().mockResolvedValue('Shop — Home');
     const ctx = makeNavCtx(page);
 
     const result = await new WebBrowserHandler().execute(ctx);
