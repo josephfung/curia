@@ -160,6 +160,88 @@ describe('CeoNylasClient — 429 retry / backoff', () => {
     expect((caughtErr as NylasApiError).status).toBe(401);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('caps Retry-After at 30s when the header specifies a larger value', async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimitResponse('120')) // 120s >> 30s cap
+      .mockResolvedValue(successResponse([{ id: 'f1', name: 'INBOX' }]));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const log = makeLogger();
+    const client = makeClient(log);
+    const promise = client.listFolders();
+    await vi.runAllTimersAsync();
+    await promise;
+
+    // The delay must be ≤ 30s * 1.25 jitter ceiling.
+    const firstDelay = setTimeoutSpy.mock.calls[0]?.[1];
+    expect(firstDelay).toBeLessThanOrEqual(30_000 * 1.25);
+    // A warning should be logged that Retry-After was clamped.
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ retryAfterSeconds: 120 }),
+      expect.stringContaining('Retry-After exceeds cap'),
+    );
+  });
+
+  it('logs a warning when Retry-After is an unparseable date-format string', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimitResponse('Wed, 01 Jan 2025 00:00:00 GMT'))
+      .mockResolvedValue(successResponse([{ id: 'f1', name: 'INBOX' }]));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const log = makeLogger();
+    const client = makeClient(log);
+    const promise = client.listFolders();
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ retryAfterRaw: 'Wed, 01 Jan 2025 00:00:00 GMT' }),
+      expect.stringContaining('unparseable Retry-After'),
+    );
+  });
+
+  it('does not retry 5xx on non-GET methods (POST) to avoid duplicate sends', async () => {
+    // createFolder uses POST — a 503 on it must NOT be retried.
+    const fetchMock = vi.fn().mockResolvedValue(makeResponse(503, { error: 'service unavailable' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = makeClient();
+    let caughtErr: unknown;
+    const promise = client.createFolder('TestLabel').catch((e: unknown) => {
+      caughtErr = e;
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(caughtErr).toBeInstanceOf(NylasApiError);
+    expect((caughtErr as NylasApiError).status).toBe(503);
+    // No retry — only the single initial attempt.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries 5xx on GET methods (safe to retry idempotent reads)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(makeResponse(503, { error: 'service unavailable' }))
+      .mockResolvedValue(successResponse([{ id: 'f1', name: 'INBOX' }]));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = makeClient();
+    const promise = client.listFolders();
+    await vi.runAllTimersAsync();
+    const folders = await promise;
+
+    expect(folders).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ── limit clamping tests ─────────────────────────────────────────────────────
