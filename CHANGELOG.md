@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ceo-nylas-client`** — 429 rate-limit responses are now retried with exponential backoff and jitter (up to 3 attempts), honoring the `Retry-After` header; exhausted retries throw a typed `NylasApiError(429)` that cannot be misread as an auth/credential failure. List endpoints clamp `limit` to ≤ 20 per Nylas guidance. (#1058)
+
 ### Added
 
 - **Model-tier fallback resilience** — reroutes `NOT_FOUND` across fixed tier rules and emits a `model.fallback` audit event (spec 05, #813).
