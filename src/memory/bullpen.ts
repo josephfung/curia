@@ -377,10 +377,10 @@ class PostgresBullpenBackend implements BullpenBackend {
     for (const row of threadsRes.rows) {
       // Pin the first message (original request) plus the last (LIMIT-1) most recent
       // messages so agents on long threads always have the founding context (#1090).
-      // The CTE assigns two row numbers — one ascending (rn_asc=1 is the first message)
-      // and one descending (rn_desc<=14 are the 14 most recent) — then the WHERE picks
-      // the union of both sets. DISTINCT eliminates overlap when the thread is short
-      // enough that the first message is also among the last 14.
+      // ROW_NUMBER() produces exactly one row per physical message, so the WHERE
+      // (rn_asc=1 OR rn_desc<=14) selects a disjoint or overlapping subset with no
+      // duplicates — DISTINCT is intentionally omitted (it would collapse genuinely
+      // distinct messages that happen to share payload values).
       const msgsRes = await this.pool.query<{
         sender_id: string; content: unknown; mentioned_agent_ids: string[]; created_at: Date;
       }>(
@@ -391,12 +391,19 @@ class PostgresBullpenBackend implements BullpenBackend {
            FROM bullpen_messages
            WHERE thread_id = $1
          )
-         SELECT DISTINCT sender_id, content, mentioned_agent_ids, created_at
+         SELECT sender_id, content, mentioned_agent_ids, created_at
          FROM ranked
          WHERE rn_asc = 1 OR rn_desc <= $2
          ORDER BY created_at ASC`,
         [row.id, RECENT_MSG_LIMIT - 1],
       );
+      if (msgsRes.rows.length === 0) {
+        // The outer query confirmed this thread has messages, but the CTE found none —
+        // data inconsistency or a very tight race with deletion. Skip rather than inject
+        // an empty context block that would confuse the agent.
+        this.logger.error({ threadId: row.id }, 'Bullpen getPendingThreadsForAgent: CTE returned 0 rows for thread with messages — skipping');
+        continue;
+      }
       const recentMessages = msgsRes.rows.map(m => ({
         senderAgentId: m.sender_id,
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),

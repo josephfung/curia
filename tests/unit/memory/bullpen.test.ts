@@ -142,6 +142,20 @@ describe('BullpenService (in-memory)', () => {
     expect(pending[0]?.recentMessages[7]?.content).toBe('Msg 8');
   });
 
+  it('getPendingThreadsForAgent shows all messages without duplication at exactly the window limit', async () => {
+    // 15 messages == RECENT_MSG_LIMIT: should take the "show all" path, not the pin path.
+    const { thread } = await service.openThread('Boundary', 'coordinator', ['coordinator', 'agent-b'], 'Msg 1', []);
+    for (let i = 2; i <= 15; i++) {
+      await service.postMessage(thread.id, 'coordinator', `Msg ${i}`, []);
+    }
+    const pending = await service.getPendingThreadsForAgent('agent-b', 60);
+    expect(pending[0]?.recentMessages).toHaveLength(15);
+    // First message must appear exactly once (no duplication from the pin logic)
+    expect(pending[0]?.recentMessages.filter(m => m.content === 'Msg 1')).toHaveLength(1);
+    // totalMessages equals recentMessages.length — no truncation indicator needed
+    expect(pending[0]?.totalMessages).toBe(pending[0]?.recentMessages.length);
+  });
+
   it('getPendingThreadsForAgent pins the first message when a thread exceeds the window limit (#1090)', async () => {
     // Build a thread with 17 messages (> RECENT_MSG_LIMIT of 15).
     const { thread } = await service.openThread('Long thread', 'coordinator', ['coordinator', 'agent-b'], 'Msg 1', ['agent-b']);
