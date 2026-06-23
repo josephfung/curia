@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bullpen long-thread context** — agents woken by a new reply in a thread with more than 15 messages now always see the original request (first message) in their ambient context, alongside the 14 most recent messages; the first message no longer silently falls off the window. (#1090)
+
 ### Security
 
 - **Setup wizard email ReDoS** — added a 254-char length cap before `EMAIL_RE.test()` in the principal profile route, preventing quadratic backtracking on crafted inputs (CodeQL #185).
