@@ -687,6 +687,138 @@ describe('autonomy gates', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Bypass ladder (#1125): a heartbeat wake carries a `wakeContext` marker, so the
+  // live score can only DOWNGRADE inherited lineage standing — never grant it.
+  // ---------------------------------------------------------------------------
+
+  describe('bypass ladder — woken/derived tasks', () => {
+    const principalLineage = {
+      contactId: 'ceo-id', systemRole: 'principal' as const, channel: 'email',
+      initiatedAt: '2026-06-23T00:00:00.000Z', tier: 'principal' as const,
+    };
+    const systemLineage = {
+      contactId: 'system', systemRole: 'system' as const, channel: 'declarative',
+      initiatedAt: '2026-06-23T00:00:00.000Z', tier: null,
+    };
+
+    function elevatedManifest(name: string): SkillManifest {
+      return { ...makeRiskyManifest(name, 'none'), sensitivity: 'elevated' };
+    }
+
+    it('same-task wake of a principal task KEEPS the principal-bypass at score >= 70', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('ok');
+      // high-risk needs 80; only the principal-bypass lets it run at 70.
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(70) });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('same-task wake of a principal task LOSES the bypass at score < 70 (propose-only)', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // needs 80
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(69) });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false); // downgraded to agent → Gate B blocks (69 < 80)
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('elevated gate INPUT is effective standing: principal same-task wake passes at >= 70', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('ok');
+      registry.register(elevatedManifest('approve-grant-recommendation'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(70) });
+
+      const result = await layer.invoke('approve-grant-recommendation', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('elevated gate blocks a principal same-task wake once the score drops below 70', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(elevatedManifest('approve-grant-recommendation'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(69) });
+
+      const result = await layer.invoke('approve-grant-recommendation', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('elevated privileges');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('derived child of a system task needs posture D (>= 90) to retain system standing on the elevated gate', async () => {
+      const registry = new SkillRegistry();
+      const handlerLow = makeHandler('no');
+      registry.register(elevatedManifest('contact-merge'), handlerLow);
+      // 85 clears posture B but NOT posture D → derived child downgrades to agent → elevated blocked.
+      const blocked = await new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(85) })
+        .invoke('contact-merge', {}, undefined, {
+          taskMetadata: { originator: systemLineage, wakeContext: { derived: true } },
+        });
+      expect(blocked.success).toBe(false);
+      expect(handlerLow.execute).not.toHaveBeenCalled();
+
+      const registry2 = new SkillRegistry();
+      const handlerHigh = makeHandler('ok');
+      registry2.register(elevatedManifest('contact-merge'), handlerHigh);
+      // 90 clears posture D → system standing retained → elevated gate satisfied by system origination.
+      const allowed = await new ExecutionLayer(registry2, logger, { autonomyService: makeAutonomyService(90) })
+        .invoke('contact-merge', {}, undefined, {
+          taskMetadata: { originator: systemLineage, wakeContext: { derived: true } },
+        });
+      expect(allowed.success).toBe(true);
+      expect(handlerHigh.execute).toHaveBeenCalledOnce();
+    });
+
+    it('a LIVE principal turn (no wakeContext) keeps the bypass regardless of score', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // needs 80
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(10) });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskMetadata: { originator: principalLineage }, // no wakeContext → live turn
+      });
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('honours custom ladder thresholds passed to the constructor', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // needs 80
+      // sameTask threshold lowered to 50 → a wake at 55 keeps the principal bypass.
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(55),
+        bypassLadder: { sameTaskThreshold: 50, derivedChildThreshold: 80 },
+      });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(true);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Gate C: Contact-tier gate (issue #950)
   // Score 100 so Gates A and B never fire — any block is Gate C.
   // ---------------------------------------------------------------------------

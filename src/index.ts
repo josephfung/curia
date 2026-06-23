@@ -48,6 +48,7 @@ import { EntityMemory } from './memory/entity-memory.js';
 import { ConfigStore } from './memory/config-store.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
+import { DEFAULT_BYPASS_LADDER } from './autonomy/effective-standing.js';
 import { loadSkillsFromDirectory, discoverSkillManifests, validateAllowedCallers } from './skills/loader.js';
 import type { SkillDiscovery } from './skills/loader.js';
 import { loadMcpServers, loadSkillsConfig } from './skills/mcp-loader.js';
@@ -1634,7 +1635,13 @@ async function main(): Promise<void> {
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
   // infraLlmService provides constrained LLM access (classify/extract) with telemetry.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort });
+  // Bypass-ladder thresholds (#1125) — how much lineage standing a woken/derived task inherits
+  // at the live autonomy score. Falls back to the module defaults (70 / 90) per field.
+  const bypassLadder = {
+    sameTaskThreshold: yamlConfig.autonomy?.bypass_ladder?.same_task ?? DEFAULT_BYPASS_LADDER.sameTaskThreshold,
+    derivedChildThreshold: yamlConfig.autonomy?.bypass_ladder?.derived_child ?? DEFAULT_BYPASS_LADDER.derivedChildThreshold,
+  };
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete

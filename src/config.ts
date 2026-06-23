@@ -324,6 +324,21 @@ export interface YamlConfig {
      *  heartbeat surfaces it as an orphaned wait. Default 48. */
     staleWaitThresholdHours?: number;
   };
+  autonomy?: {
+    /**
+     * Bypass-ladder thresholds (#1125) — raw autonomy scores governing how much LINEAGE
+     * standing a heartbeat-woken task inherits. The live score can only ever DOWNGRADE
+     * inherited standing, never grant it. Defaults: same_task 70, derived_child 90.
+     */
+    bypass_ladder?: {
+      /** Min live score for a same-task heartbeat wake to keep lineage standing (posture B).
+       *  Should not drop below 60 (see effective-standing.ts). Default 70. */
+      same_task?: number;
+      /** Min live score for a freshly-derived child task to keep lineage standing (posture D).
+       *  Default 90. */
+      derived_child?: number;
+    };
+  };
 }
 
 /**
