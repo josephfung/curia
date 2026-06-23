@@ -351,12 +351,80 @@ export class Scheduler {
     // Atomically claim the job by setting status to 'running' only if it's still
     // in a claimable state. The rowCount check prevents double-firing if another
     // scheduler instance (or overlapping poll) claimed the same job.
-    const claimResult = await this.pool.query(
-      `UPDATE scheduled_jobs SET status = $1, run_started_at = now() WHERE id = $2 AND status IN ('pending', 'failed')`,
-      ['running', job.id],
-    );
+    //
+    // For cron jobs, also advance next_run_at to the next scheduled occurrence at
+    // claim time — not just at completion. This closes a second re-fire window:
+    // if the publish step throws and the error handler reverts status to 'pending',
+    // the row's next_run_at is already in the future so the next poll's SELECT
+    // (WHERE next_run_at <= now()) skips it instead of re-firing it. (#1124)
+    //
+    // rowCount is typed number|null by pg; null must be treated the same as 0 —
+    // both mean 0 rows updated, i.e. another poller already claimed the job.
+    let claimResult: { rowCount: number | null };
+    if (job.cronExpr) {
+      // Compute next_run_at before the claim UPDATE so it can be written atomically.
+      // nextRunFromCron() can throw on a corrupt cron expression (e.g. direct DB insert
+      // bypassing createJob validation). Guard it here so a throw does NOT cause the outer
+      // pollDueJobs error handler to attempt reverting status = 'running' when the job was
+      // never claimed — that revert would be a silent no-op, leaving next_run_at in the past
+      // and causing an infinite tight-loop re-fire on every poll. Transition to 'failed'
+      // instead so the job stops being selected.
+      let nextRunAt: Date;
+      try {
+        nextRunAt = this.schedulerService.nextRunFromCron(job.cronExpr, job.timezone);
+      } catch (err: unknown) {
+        const agentErr = classifyError(err, 'scheduler-fire-job');
+        this.logger.error(
+          { err: agentErr, jobId: job.id, cronExpr: job.cronExpr, timezone: job.timezone },
+          'Invalid cron expression — marking job failed to prevent retry storm',
+        );
+        // Set next_run_at = NULL so the poll SELECT (WHERE next_run_at <= now()) never
+        // re-selects this job. Without it, the job stays 'failed' with a past next_run_at
+        // and fires again on every poll. Guard with status IN (...) to avoid clobbering
+        // a concurrent cancellation that could have occurred after the SELECT.
+        // Guard on cron_expr/timezone: if updateJob() changed the cron between poll and
+        // here, this UPDATE won't match (rowCount=0) and the job stays 'pending' with the
+        // new (now-valid) expression — correctly deferring until the next poll.
+        await this.pool.query(
+          `UPDATE scheduled_jobs
+              SET status = 'failed',
+                  last_error = $2,
+                  next_run_at = NULL
+            WHERE id = $1
+              AND status IN ('pending', 'failed')
+              AND cron_expr = $3
+              AND timezone = $4`,
+          [job.id, agentErr.message, job.cronExpr, job.timezone],
+        );
+        return;
+      }
+      // Optimistic-concurrency guard on cron_expr/timezone: if updateJob() changes
+      // the expression between the poll SELECT and this claim UPDATE, the WHERE won't
+      // match (rowCount=0), the job skips as "already claimed", and the next poll fires
+      // it with the correct (updated) expression and next_run_at.
+      claimResult = await this.pool.query(
+        `UPDATE scheduled_jobs
+            SET status = $1, run_started_at = now(), next_run_at = $3
+          WHERE id = $2
+            AND status IN ('pending', 'failed')
+            AND cron_expr = $4
+            AND timezone = $5`,
+        ['running', job.id, nextRunAt, job.cronExpr, job.timezone],
+      );
+    } else {
+      claimResult = await this.pool.query(
+        `UPDATE scheduled_jobs SET status = $1, run_started_at = now() WHERE id = $2 AND status IN ('pending', 'failed')`,
+        ['running', job.id],
+      );
+    }
     if (claimResult.rowCount === 0) {
       this.logger.debug({ jobId: job.id }, 'Job already claimed; skipping fire');
+      return;
+    }
+    // rowCount === null is an anomalous pg driver state (UPDATE always returns a count).
+    // Treat it as 0 but log at warn so it's visible in production.
+    if (claimResult.rowCount === null) {
+      this.logger.warn({ jobId: job.id }, 'Claim UPDATE returned null rowCount — treating as already claimed, skipping fire');
       return;
     }
 
