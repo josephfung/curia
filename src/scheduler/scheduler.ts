@@ -382,21 +382,34 @@ export class Scheduler {
         // re-selects this job. Without it, the job stays 'failed' with a past next_run_at
         // and fires again on every poll. Guard with status IN (...) to avoid clobbering
         // a concurrent cancellation that could have occurred after the SELECT.
+        // Guard on cron_expr/timezone: if updateJob() changed the cron between poll and
+        // here, this UPDATE won't match (rowCount=0) and the job stays 'pending' with the
+        // new (now-valid) expression — correctly deferring until the next poll.
         await this.pool.query(
           `UPDATE scheduled_jobs
               SET status = 'failed',
                   last_error = $2,
                   next_run_at = NULL
-            WHERE id = $1 AND status IN ('pending', 'failed')`,
-          [job.id, agentErr.message],
+            WHERE id = $1
+              AND status IN ('pending', 'failed')
+              AND cron_expr = $3
+              AND timezone = $4`,
+          [job.id, agentErr.message, job.cronExpr, job.timezone],
         );
         return;
       }
+      // Optimistic-concurrency guard on cron_expr/timezone: if updateJob() changes
+      // the expression between the poll SELECT and this claim UPDATE, the WHERE won't
+      // match (rowCount=0), the job skips as "already claimed", and the next poll fires
+      // it with the correct (updated) expression and next_run_at.
       claimResult = await this.pool.query(
         `UPDATE scheduled_jobs
             SET status = $1, run_started_at = now(), next_run_at = $3
-          WHERE id = $2 AND status IN ('pending', 'failed')`,
-        ['running', job.id, nextRunAt],
+          WHERE id = $2
+            AND status IN ('pending', 'failed')
+            AND cron_expr = $4
+            AND timezone = $5`,
+        ['running', job.id, nextRunAt, job.cronExpr, job.timezone],
       );
     } else {
       claimResult = await this.pool.query(

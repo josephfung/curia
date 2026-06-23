@@ -344,6 +344,31 @@ describe('Scheduler', () => {
       );
     });
 
+    it('skips firing when cron expression changed between poll and claim (optimistic-concurrency guard)', async () => {
+      // Scenario: updateJob() changes cron_expr after the poll SELECT but before the
+      // claim UPDATE. The WHERE includes cron_expr/timezone so the UPDATE matches 0 rows,
+      // and the job is skipped. The next poll fires it with the corrected expression.
+      const row = fakeDbRow(); // cron_expr: '0 9 * * *', timezone: 'UTC'
+      const nextRun = new Date('2026-06-24T09:00:00.000Z');
+      schedulerService.nextRunFromCron.mockReturnValueOnce(nextRun);
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 0, rows: [] }); // cron changed, WHERE didn't match
+
+      await scheduler.pollDueJobs();
+
+      expect(bus.publish).not.toHaveBeenCalled();
+      const [claimSql, claimParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('cron_expr = $4');
+      expect(claimSql).toContain('timezone = $5');
+      expect(claimParams[3]).toBe('0 9 * * *');
+      expect(claimParams[4]).toBe('UTC');
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1' }),
+        'Job already claimed; skipping fire',
+      );
+    });
+
     it('marks cron job failed (not pending) when nextRunFromCron throws, preventing retry storm', async () => {
       // If nextRunFromCron throws (e.g. corrupt cron_expr inserted directly into DB),
       // the outer pollDueJobs error handler would try to revert status='running' — but
@@ -371,7 +396,13 @@ describe('Scheduler', () => {
       expect(failSql).toContain('next_run_at = NULL');
       // Status guard prevents clobbering a concurrent cancellation
       expect(failSql).toContain("status IN ('pending', 'failed')");
+      // Optimistic-concurrency guard: if updateJob() fixed the cron between poll and here,
+      // this WHERE won't match and the job stays 'pending' with the corrected expression
+      expect(failSql).toContain('cron_expr = $3');
+      expect(failSql).toContain('timezone = $4');
       expect(failParams[0]).toBe('job-1');
+      expect(failParams[2]).toBe('bad-expr');
+      expect(failParams[3]).toBe('UTC');
     });
 
     it('advances next_run_at in claim UPDATE for cron jobs', async () => {
@@ -388,6 +419,12 @@ describe('Scheduler', () => {
       expect(claimSql).toContain('next_run_at');
       expect(claimParams).toContain(nextRun);
       expect(schedulerService.nextRunFromCron).toHaveBeenCalledWith('0 9 * * *', 'UTC');
+      // Optimistic-concurrency guard: cron_expr/timezone in WHERE prevents overwriting a
+      // next_run_at that updateJob() just set with a concurrent cron-expression change
+      expect(claimSql).toContain('cron_expr = $4');
+      expect(claimSql).toContain('timezone = $5');
+      expect(claimParams[3]).toBe('0 9 * * *');
+      expect(claimParams[4]).toBe('UTC');
     });
 
     it('does not include next_run_at in claim UPDATE for one-shot jobs', async () => {
