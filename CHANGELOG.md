@@ -19,8 +19,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`ceo-inbox` batch triage** — the inbox is now drained in fixed-size batches that self-continue until empty, using read/archive status as the "already-triaged" marker; replaces the >10-unread overflow mode and its `inbox-overflow` to-do noise. Triaged 📌 Seen / 🚨 Urgent / ⚠️ Stuck are now marked read (tracked via label/star), not left unread. (#1123)
+- **`ceo-inbox-list`** — removed the code-owned watermark (and the `received_after_hours` input); it is now a plain "list unread" skill that returns `has_more` so the agent can drain in batches. (spec 19, #1123)
 - **TypeScript test coverage** — `tests/**/*.ts` is now covered by typecheck (`tsconfig.tests.json`, third pass in the `typecheck` script); type drift between shared types and test fixtures is now caught by CI. (#1105)
 - **`web-browser` skill** — replaced the `playwright-extra` + stealth-plugin stack with Patchright and added a human-behavior layer (curved mouse, paced typing, post-load dwell + presence) plus one soft-block reload-retry, to reduce Cloudflare/DataDome-style blocking. (#1053)
+
+### Removed
+
+- **`ceo-inbox` overflow mode** — deleted the >10-unread top-5-plus-`inbox-overflow`-tasks load-shedding path and the `ceo-inbox-list` watermark it depended on (and the watermark integration test). Batch draining replaces it. (#1123)
 
 ### Fixed
 
