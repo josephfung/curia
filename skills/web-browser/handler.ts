@@ -290,10 +290,17 @@ export class WebBrowserHandler implements SkillHandler {
             // Secrets must be filled atomically via .fill() — humanType types char-by-char
             // and would produce key events that could leak the value through input event
             // listeners or autocomplete. Atomic fill is the safe path for credentials. (#973)
+            // TODO(#1053 Task 5): wire secrets through humanClick focus + Ctrl+A/Delete clear
+            // + humanType once the full human-type-for-secrets decision is confirmed (the #973
+            // guarantee is about reflected-content scrubbing, not keystrokes — so humanType
+            // is safe per the spec, but this branch was left on fill() during Task 4 to keep
+            // the typecheck clean while Task 5 was still pending).
             await typeTarget.fill(fillValue);
           } else {
             // Literal text: use humanType for realistic keystroke cadence so behavioral
             // challenge JS scores the typing as human. (#1053)
+            // TODO(#1053 Task 5): also add humanClick focus step + Ctrl+A/Delete clear before
+            // humanType (the focus step was not wired here during Task 4).
             await humanType(page, fillValue);
           }
           break;
