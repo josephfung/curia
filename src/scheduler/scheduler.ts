@@ -351,11 +351,31 @@ export class Scheduler {
     // Atomically claim the job by setting status to 'running' only if it's still
     // in a claimable state. The rowCount check prevents double-firing if another
     // scheduler instance (or overlapping poll) claimed the same job.
-    const claimResult = await this.pool.query(
-      `UPDATE scheduled_jobs SET status = $1, run_started_at = now() WHERE id = $2 AND status IN ('pending', 'failed')`,
-      ['running', job.id],
-    );
-    if (claimResult.rowCount === 0) {
+    //
+    // For cron jobs, also advance next_run_at to the next scheduled occurrence at
+    // claim time — not just at completion. This closes a second re-fire window:
+    // if the publish step throws and the error handler reverts status to 'pending',
+    // the row's next_run_at is already in the future so the next poll's SELECT
+    // (WHERE next_run_at <= now()) skips it instead of re-firing it. (#1124)
+    //
+    // rowCount is typed number|null by pg; null must be treated the same as 0 —
+    // both mean 0 rows updated, i.e. another poller already claimed the job.
+    let claimResult: { rowCount: number | null };
+    if (job.cronExpr) {
+      const nextRunAt = this.schedulerService.nextRunFromCron(job.cronExpr, job.timezone);
+      claimResult = await this.pool.query(
+        `UPDATE scheduled_jobs
+            SET status = $1, run_started_at = now(), next_run_at = $3
+          WHERE id = $2 AND status IN ('pending', 'failed')`,
+        ['running', job.id, nextRunAt],
+      );
+    } else {
+      claimResult = await this.pool.query(
+        `UPDATE scheduled_jobs SET status = $1, run_started_at = now() WHERE id = $2 AND status IN ('pending', 'failed')`,
+        ['running', job.id],
+      );
+    }
+    if (claimResult.rowCount === 0 || claimResult.rowCount === null) {
       this.logger.debug({ jobId: job.id }, 'Job already claimed; skipping fire');
       return;
     }

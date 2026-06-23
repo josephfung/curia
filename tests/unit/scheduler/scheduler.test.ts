@@ -311,6 +311,63 @@ describe('Scheduler', () => {
       expect(claimParams).toContain('job-1');
     });
 
+    // Regression: scheduler fired same cron job 3x in 80s (#1124). The atomic claim UPDATE
+    // uses rowCount to detect concurrent claims — rowCount=0 means another poller claimed
+    // first, so this poller must skip. pg types rowCount as number|null; both 0 and null
+    // must abort, otherwise a null rowCount bypasses the guard and fires a duplicate.
+    it('skips firing when claim UPDATE returns rowCount=0 (concurrent claim)', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 0, rows: [] }); // already claimed
+
+      await scheduler.pollDueJobs();
+
+      expect(bus.publish).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1' }),
+        'Job already claimed; skipping fire',
+      );
+    });
+
+    it('skips firing when claim UPDATE returns rowCount=null (pg null-safety)', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: null, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      expect(bus.publish).not.toHaveBeenCalled();
+    });
+
+    it('advances next_run_at in claim UPDATE for cron jobs', async () => {
+      const row = fakeDbRow(); // cron_expr: '0 9 * * *', timezone: 'UTC'
+      const nextRun = new Date('2026-06-24T09:00:00.000Z');
+      schedulerService.nextRunFromCron.mockReturnValueOnce(nextRun);
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [claimSql, claimParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('next_run_at');
+      expect(claimParams).toContain(nextRun);
+      expect(schedulerService.nextRunFromCron).toHaveBeenCalledWith('0 9 * * *', 'UTC');
+    });
+
+    it('does not include next_run_at in claim UPDATE for one-shot jobs', async () => {
+      const row = fakeDbRow({ cron_expr: null, run_at: new Date('2026-06-24T09:00:00.000Z').toISOString() });
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      expect(schedulerService.nextRunFromCron).not.toHaveBeenCalled();
+      const [claimSql] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).not.toContain('next_run_at');
+    });
+
     it('uses a unique conversationId per run (not job ID)', async () => {
       const jobId = 'job-unique-conv';
       const firedEvent = { id: 'fired-evt-1' };

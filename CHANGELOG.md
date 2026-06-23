@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Bullpen long-thread context** — agents woken by a new reply in a thread with more than 15 messages now always see the original request (first message) in their ambient context, alongside the 14 most recent messages; the first message no longer silently falls off the window. (#1090)
+- **Scheduler duplicate-fire race condition** — claim-time `next_run_at` advancement and null-safe `rowCount` guard prevent duplicate cron fires. (#1124)
 
 ### Security
 
