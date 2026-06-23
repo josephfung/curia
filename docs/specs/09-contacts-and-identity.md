@@ -294,7 +294,9 @@ The **principal** is the human Curia is built to serve — the CEO, founder, or 
 
 ### Bootstrap-time materialization
 
-At startup, `contactService.findContactBySystemRole('principal')` resolves the principal's `contacts.id` (a UUID) and the runtime caches it. The principal's contact ID is immutable for a deployment, so bootstrap-time resolution is correct — there is no per-turn refresh.
+The principal contact is created during the setup wizard's "About you" step (`POST /api/setup/principal`) and lives exclusively in the `contacts` table — there is no `CEO_PRIMARY_EMAIL` env var or YAML bootstrap path. `repairPrincipalMetadata` runs at every startup to fix any missing `tier='principal'` or `kind='principal'` flags on the principal row.
+
+At startup, `contactService.findContactBySystemRole('principal')` is the single source of truth for resolving the principal's `contacts.id` (a UUID). All components that need to know who the principal is — the `PiiRedactor` bypass, CEO notifiers, the outbound filter, and the email adapter — read from the principal contact row rather than from config or env. The runtime caches the ID once; the principal's contact ID is immutable for a deployment, so bootstrap-time resolution is always correct — there is no per-turn refresh.
 
 ### Exposure to agents: `${principal_contact_id}`
 

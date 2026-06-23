@@ -1,22 +1,20 @@
 # 18 — Onboarding
 
 **Date:** 2026-06-01
-**Status:** Shipped (v0.32)
+**Status:** Shipped (v0.32; Layer 2 expanded in v0.37; Layer 3 rewritten in v0.37)
 
 ## Goal
 
 Take a new contributor from `git clone` to a working, personalized Curia
-instance in one path with no detours. The onboarding flow spans three layers
-that were designed and shipped together as the v0.32 milestone:
+instance in one path with no detours. The onboarding flow spans three layers:
 
 1. **Host bootstrap** — a single `pnpm run setup` command brings up Postgres,
    applies migrations, and starts the stack.
-2. **Form wizard** (`/setup`) — captures assistant identity, voice, and
-   decision posture; writes them through the existing identity API.
-3. **In-chat specialist** (`setup-wizard` agent) — runs automatically on the
-   first chat message after the form wizard exits, interviews the principal
-   about priorities and working hours, and guides any remaining integration
-   setup.
+2. **Form wizard** (`/setup`) — captures the principal's identity and operational
+   profile, plus the assistant's identity, voice, and decision posture.
+3. **In-chat specialist** (`setup-wizard` agent) — an outcome-backward concierge
+   that runs on first chat and whenever the principal asks for help setting up
+   integrations; catalog-aware and deferral-aware.
 
 The three layers are independent (each can be re-entered or skipped), but
 when run in sequence they constitute the end-to-end first-run experience.
@@ -91,8 +89,8 @@ is absent — that signals a previous run was interrupted partway.
 ## Layer 2 — Form wizard at `/setup`
 
 A React route in the console app (`apps/console/src/pages/WizardPage.tsx`)
-that captures the principal contact + the configurable parts of the office
-identity over five steps.
+that captures the principal contact and operational profile, plus the
+configurable parts of the office identity, over six steps.
 
 ### Routing
 
@@ -102,28 +100,23 @@ identity over five steps.
 - The auth guard checks `configured: boolean` from `GET /api/identity`. If
   `configured === false`, it redirects to `/setup` before letting the user
   through to `/`.
-- After successful submit on step 5, the wizard navigates **directly to
+- After successful submit on step 6, the wizard navigates **directly to
   `/chat`** (not to `/`) so the kickoff message can fire immediately.
 - `/setup` remains accessible directly even when configured — it can be
-  used as a manual re-run tool until a Settings UI is built.
-- Step state lives in the URL as `?step=1`..`?step=5` (TanStack Router
-  search params, clamped 1–5). Field values do not persist across reloads.
+  used as a manual re-run tool.
+- Step state lives in the URL as `?step=1`..`?step=6` (TanStack Router
+  search params, clamped 1–6). Field values do not persist across reloads.
 
 ### Step content
 
 | Step | Captures | Validation |
 |------|----------|------------|
-| 1 — About you | `principalName` (the CEO's name) — written through `POST /api/setup/principal` (idempotent) before advancing | non-empty |
-| 2 — Identity | `name`, `title`, `signature` (optional) | `name` required |
-| 3 — Tone | `toneBaseline` (1–3 pills from `TONE_OPTIONS`), `verbosity` slider 0–100, `directness` slider 0–100 | 1 ≤ pills ≤ 3 |
-| 4 — Posture | `posture` (Conservative / Balanced / Proactive), `preferences` textarea (appended to existing `behavioralPreferences`, not replaced) | none |
-| 5 — Review | Summary card, Confirm & save button | none |
-
-**Step 1 auto-skip.** When a principal contact already exists at mount time
-(e.g. a prior wizard run on this instance), the wizard detects this from
-`GET /api/setup/status` and silently advances past step 1 to step 2. "Back"
-from step 2 is a no-op in this case rather than flickering through the
-auto-skip again.
+| 1 — About you | `principalName` (the CEO's name) — written through `POST /api/setup/principal` (idempotent) before advancing. Pre-populates the current name on re-entry so it can be corrected; no longer auto-skips when a principal already exists. | non-empty |
+| 2 — Your details | Principal operational profile: `timezone` (required, IANA string), `preferredName`, `title`, `primaryEmail`, `workingHours` (all optional). Written through `POST /api/setup/principal/profile`; email is stored as a verified `contact_channel_identity` that comes online after the wizard's restart. | timezone required |
+| 3 — Identity | `name`, `title`, `signature` (optional). The assistant name and email signature are prefilled via `POST /api/setup/suggest-name` (LLM-suggested first name, silent static fallback on failure). | `name` required |
+| 4 — Tone | `toneBaseline` (1–3 pills from `TONE_OPTIONS`), `verbosity` slider 0–100, `directness` slider 0–100 | 1 ≤ pills ≤ 3 |
+| 5 — Posture | `posture` (Conservative / Balanced / Proactive), `preferences` textarea (appended to existing `behavioralPreferences`, not replaced) | none |
+| 6 — Review | Summary card, Confirm & save button | none |
 
 **Tone options.** The 1–3 baseline pills come from `TONE_OPTIONS` in
 [apps/console/src/pages/wizard-utils.ts](../../apps/console/src/pages/wizard-utils.ts).
@@ -136,10 +129,16 @@ as a follow-up.
 - **On mount:** `GET /api/identity` populates the form with current values
   (the defaults seeded from `src/identity/defaults.ts` on first boot, or the
   last saved values on re-entry); `GET /api/setup/status` resolves
-  `principalExists` for the auto-skip decision.
+  `principalExists` to pre-populate step 1.
 - **On step 1 advance:** `POST /api/setup/principal` with `{ name }` writes
   the principal contact before the user moves to step 2.
-- **On submit (step 5):**
+- **On step 2 advance:** `POST /api/setup/principal/profile` with the
+  operational profile fields writes timezone, preferred name, title, email,
+  and working hours to the principal contact row.
+- **On step 3 mount:** `POST /api/setup/suggest-name` fires to pre-fill the
+  assistant name and signature (silent fallback on failure — also serves as
+  an early Anthropic key smoke test).
+- **On submit (step 6):**
   1. `PUT /api/identity` with the compiled identity payload and
      `note: 'Saved via onboarding wizard'`.
   2. `POST /api/identity/reload` to refresh the in-memory cache.
@@ -158,7 +157,7 @@ as a follow-up.
 
 ### Submit failure
 
-Inline error message under the Confirm button. The wizard stays on step 5
+Inline error message under the Confirm button. The wizard stays on step 6
 with the button re-enabled. The PUT itself is a single atomic write to
 `office_identity_versions`, so a failure mid-pipeline (e.g. between the
 reload and the restart) is recoverable by re-submitting. The restart-wait
@@ -170,25 +169,24 @@ state has its own 60-second timeout; on timeout it falls into a
 - A Settings link to re-run the wizard (deferred until the settings page
   is migrated to the console).
 - Backend-driven `BASELINE_TONE_OPTIONS` (still hard-coded; `@TODO`).
-- Any redesign of wizard copy (the v0.32 work was a straight port from
-  the legacy KG-app embedded HTML).
+- Aligning the system timezone (cron scheduler, `TIMEZONE` env var) to the
+  wizard-captured principal timezone — tracked as a follow-up.
 
 ---
 
-## Layer 3 — `setup-wizard` specialist agent
+## Layer 3 — `setup-wizard` specialist agent (v0.2.0)
 
 A delegated specialist that owns the conversational first-experience after
-the form wizard exits, and that the coordinator can re-invoke for "help me
-set up X" requests later.
+the form wizard exits, and that the coordinator re-invokes for any "help me
+set up X" request thereafter.
 
 ### Delegation model
 
 `setup-wizard` is a specialist — not a user-facing agent. The coordinator
 remains the only voice. The specialist's output is paraphrased and relayed
-by the coordinator, following the same pattern as `research-analyst`. No
-new routing logic was added; the coordinator's `${available_specialists}`
-injection picks it up automatically from
-[agents/setup-wizard.yaml](../../agents/setup-wizard.yaml).
+by the coordinator, following the same pattern as `research-analyst`. The
+coordinator's `${available_specialists}` injection picks it up automatically
+from [agents/setup-wizard.yaml](../../agents/setup-wizard.yaml).
 
 The "first conversation" signal is the kickoff message text
 (`"Just finished setup — say hi!"`) arriving in the task brief — not a
@@ -204,28 +202,29 @@ The flag is cleared **synchronously in the `useRef` initializer**, not in
 the effect — this prevents React strict mode's double-mount from firing a
 second kickoff in development. The effect itself runs once with empty deps.
 
-### Conversation flow
+### Conversation approach (v0.2.0 — outcome-backward concierge)
 
-| Turn | Specialist output |
-|------|-------------------|
-| 1 | Warm greeting + "What takes up most of your time right now — email, scheduling, research, staying on top of news?" |
-| 2 | Map answer to concrete next steps (email-heavy → Nylas env vars; research → web search already wired). Persist a preference via `behavioral-preferences-update` (append). Ask: "What are your usual working hours and timezone?" |
-| 3 | Acknowledge hours. Ask: "Would a regular debrief be useful — daily summary, weekly digest?" |
-| 4 | If yes: schedule via `scheduler-create`. Close with a brief summary. |
+The v0.2.0 prompt replaces the fixed 4-turn interview script with an
+**outcome-backward concierge** approach:
 
-The coordinator personalizes the relay with the principal's name; the
-specialist writes only what the coordinator should say.
+1. **Instant wins first.** The agent identifies tasks that are already
+   done (via `setup-status`) and acknowledges them. No re-explaining.
+2. **Outcome question.** "What do you most want Curia to do for you?" —
+   the answer maps to the shortest path to a working integration.
+3. **Shortest path.** Routes based on what the principal needs: email/Signal
+   setup → console Channels page; lone API keys → in-chat secret capture.
+4. **Defer the rest.** Remaining tasks are surfaced as optional follow-ups
+   and can be deferred with `setup-defer` (`setup_wizard/deferrals` in
+   config-store).
 
-### Re-invocation paths
-
-| Trigger | Specialist behaviour |
-|---------|----------------------|
-| "Help me set up Nylas / Twilio / Signal / OpenAI" | Return env var names, restart note, "v2 in-app flow coming" caveat |
-| "What can you do?" | Call `skill-registry`, return ~5 plain-language bullets grouped by category |
-| "Just finished setup — say hi!" (kickoff text) | Run the 4-turn flow above |
+The catalog of setup tasks (`skills/setup-status/catalog.yaml`) is owned
+by the skill bundle. The agent can show the full menu on request and can
+resume deferred tasks in any subsequent session.
 
 ### Skills pinned to setup-wizard
 
+- `setup-status` — read-only; returns the catalog with each task's live status
+- `setup-defer` — write; persists or clears deferrals for catalog tasks
 - `behavioral-preferences-update` (appends to `OfficeIdentity.behavioralPreferences`)
 - `scheduler-create`, `scheduler-list`, `scheduler-cancel`
 - `skill-registry`
@@ -237,10 +236,8 @@ and `inject_specialists: false` keep the agent focused.
 
 ### `behavioral-preferences-update` skill
 
-A new skill that mirrors `executive-profile-update`. Writes to
-`OfficeIdentity.behavioralPreferences` via the `officeIdentityService`
-capability (added to the execution layer for this milestone — mirrors the
-existing `executiveProfileService` pattern).
+Writes to `OfficeIdentity.behavioralPreferences` via the
+`officeIdentityService` capability.
 
 | Property | Value |
 |----------|-------|
@@ -254,13 +251,11 @@ Persistence calls `OfficeIdentityService.update(...)` with `'skill'` as the
 See [13 — Office Identity](13-office-identity.md#officeidentityservice) for
 the underlying service contract.
 
-### Out of scope (v2, tracked in #808)
+### Out of scope
 
 - In-app Nylas OAuth flow and grant capture.
 - Phone number provisioning (Twilio) walkthrough.
 - Signal channel verification.
-- OpenAI key collection and secure storage.
-- Persistent step-state tracking across sessions.
 
 ---
 
@@ -276,9 +271,10 @@ auth guard sees configured === false
   ↓  redirects to /setup
 [ form wizard ]                                   ← Layer 2
   step 1 (About you) → POST /api/setup/principal
-       (auto-skipped if a principal already exists)
-  steps 2–4 (Identity, Tone, Posture) — local state only
-  step 5 (Review) submit:
+  step 2 (Your details) → POST /api/setup/principal/profile
+  step 3 (Identity) — LLM suggest-name prefill, local state
+  steps 4–5 (Tone, Posture) — local state only
+  step 6 (Review) submit:
        PUT /api/identity  →  POST /api/identity/reload
                           →  GET /api/setup/status
        if externalAdaptersPending: POST /api/setup/restart,
@@ -288,9 +284,10 @@ auth guard sees configured === false
 /chat mounts
   ↓  useChatSession sees the localStorage flag, clears it,
   ↓  auto-sends "Just finished setup — say hi!"
-coordinator delegates to setup-wizard               ← Layer 3
+coordinator delegates to setup-wizard               ← Layer 3 (v0.2.0)
   ↓
-greeting + first interview question appears as agent reply
+outcome-backward concierge: instant wins → outcome question
+→ shortest path to first integration → defer the rest
 ```
 
 ---
@@ -303,17 +300,23 @@ greeting + first interview question appears as agent reply
 | `package.json` script `setup` → `bash scripts/setup.sh` | Done |
 | `.env.example` — `DB_USER=curia`; principal created via the wizard, no email env var (#1049) | Done |
 | README Quickstart — single-command `pnpm run setup` block | Done |
-| `apps/console/src/pages/WizardPage.tsx` — 5-step React form (About you, Identity, Tone, Posture, Review) | Done |
+| `apps/console/src/pages/WizardPage.tsx` — 6-step React form (About you, Your details, Identity, Tone, Posture, Review) | Done |
 | `apps/console/src/router.tsx` — `/setup` route sibling to the dashboard | Done |
 | Auth guard — redirect to `/setup` when `configured === false` | Done |
 | `POST /api/setup/principal`, `GET /api/setup/status`, `POST /api/setup/restart` — wizard backend | Done |
+| `POST /api/setup/principal/profile` — principal operational profile endpoint (timezone, email, preferred name, title, working hours) | Done |
+| `POST /api/setup/suggest-name` — LLM-suggested assistant name; silent fallback | Done |
+| Step 1 pre-populates current principal name (no auto-skip on re-entry) | Done |
 | Setup-required boot mode — process stays up without principal so the wizard is reachable | Done |
 | Legacy KG-app wizard HTML/JS in `src/channels/http/routes/kg.ts` — removed | Done |
-| `agents/setup-wizard.yaml` — specialist with pinned skills and inject_specialists off | Done |
+| `agents/setup-wizard.yaml` v0.2.0 — outcome-backward concierge prompt; `setup-status` + `setup-defer` added to pinned skills | Done |
+| `skills/setup-status/` — catalog-driven, live-derived status per task; `catalog.yaml` owned by skill bundle | Done |
+| `skills/setup-defer/` — persists/clears deferrals in config-store `setup_wizard/deferrals` | Done |
 | `skills/behavioral-preferences-update/` — manifest + handler + tests | Done |
 | `officeIdentityService` capability — added to `SkillContext`, loader, execution, bootstrap | Done |
 | Chat auto-kickoff — `useChatSession.ts` reads + clears localStorage flag, sends `KICKOFF_TEXT` | Done |
 | `tests/integration/setup-wizard-delegate.test.ts` — kickoff delegates, normal greeting doesn't | Done |
+| Wizard notifies user a restart is needed for captured credentials (secret-capture resume flow) | Done |
 
 ---
 
