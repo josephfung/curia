@@ -126,7 +126,7 @@ function makeSkillContext(opts: {
 describe('web-browser type action with secret_ref (#973)', () => {
   it('fills the resolved secret value and never returns it', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx, fill } = makeSkillContext({
+    const { ctx } = makeSkillContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
       resolveSecretRef,
     });
@@ -135,8 +135,8 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
     expect(result.success).toBe(true);
     expect(resolveSecretRef).toHaveBeenCalledWith('user.aeroplan_password');
-    // The resolved value was typed into the field...
-    expect(fill).toHaveBeenCalledWith(SECRET_VALUE);
+    // The resolved value was typed into the field via humanType (human keystroke cadence)...
+    expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), SECRET_VALUE);
     // ...but never appears in the data returned to the LLM.
     expect(JSON.stringify(result)).not.toContain(SECRET_VALUE);
   });
@@ -201,7 +201,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
   it('rejects when both text and secret_ref are supplied (mutually exclusive)', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx, fill } = makeSkillContext({
+    const { ctx } = makeSkillContext({
       input: { action: 'type', selector: '#pass', text: 'literal', secret_ref: 'user.aeroplan_password' },
       resolveSecretRef,
     });
@@ -210,7 +210,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
     expect(result.success).toBe(false);
     expect(resolveSecretRef).not.toHaveBeenCalled();
-    expect(fill).not.toHaveBeenCalled();
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
   });
 
   it('rejects when neither text nor secret_ref is supplied', async () => {
@@ -221,7 +221,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
   it('errors clearly when secret_ref is used but the resolver capability is absent', async () => {
     // resolveSecretRef undefined — the skill was invoked without the secretResolver capability.
-    const { ctx, fill } = makeSkillContext({
+    const { ctx } = makeSkillContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
     });
 
@@ -231,7 +231,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
     if (!result.success) {
       expect(result.error).toMatch(/secret_ref|resolver|capability/i);
     }
-    expect(fill).not.toHaveBeenCalled();
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
   });
 
   it('still supports a literal text fill (non-secret path uses humanType for realistic cadence)', async () => {
@@ -836,5 +836,26 @@ describe('web-browser navigate hardening — dwell + soft-block reload (#1053)',
     if (!result.success) expect(result.error).toMatch(/blocked automated access/i);
     // No presence simulation once we've declared the page undrivable.
     expect(vi.mocked(simulateHumanPresence)).not.toHaveBeenCalled();
+  });
+});
+
+describe('web-browser click uses human behavior (#1053)', () => {
+  it('routes click through humanClick', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('page body content for the click target test', fill, 'https://example.com/');
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const ctx = {
+      input: { action: 'click', selector: 'Submit button' },
+      log: logger,
+      browserService: {
+        getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-click', session }),
+        closeSession: vi.fn(),
+      } as unknown as BrowserService,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(humanClick)).toHaveBeenCalledTimes(1);
   });
 });

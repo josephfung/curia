@@ -286,23 +286,15 @@ export class WebBrowserHandler implements SkillHandler {
           }
 
           const typeTarget = await resolveLocator(page, selector, ctx.log);
-          if (hasSecretRef) {
-            // Secrets must be filled atomically via .fill() — humanType types char-by-char
-            // and would produce key events that could leak the value through input event
-            // listeners or autocomplete. Atomic fill is the safe path for credentials. (#973)
-            // TODO(#1053 Task 5): wire secrets through humanClick focus + Ctrl+A/Delete clear
-            // + humanType once the full human-type-for-secrets decision is confirmed (the #973
-            // guarantee is about reflected-content scrubbing, not keystrokes — so humanType
-            // is safe per the spec, but this branch was left on fill() during Task 4 to keep
-            // the typecheck clean while Task 5 was still pending).
-            await typeTarget.fill(fillValue);
-          } else {
-            // Literal text: use humanType for realistic keystroke cadence so behavioral
-            // challenge JS scores the typing as human. (#1053)
-            // TODO(#1053 Task 5): also add humanClick focus step + Ctrl+A/Delete clear before
-            // humanType (the focus step was not wired here during Task 4).
-            await humanType(page, fillValue);
-          }
+          // Focus the field with a human cursor approach, clear any existing content
+          // (humanType appends; we want replace semantics), then type with human cadence.
+          // The same for both the visible-text and secret_ref paths — registering the secret
+          // above already gates the #973 redaction; scrubbing covers reflected content/URL,
+          // not keystrokes. ControlOrMeta = Cmd on macOS (dev), Ctrl on Linux (prod). (#1053)
+          await humanClick(page, typeTarget);
+          await page.keyboard.press('ControlOrMeta+a');
+          await page.keyboard.press('Delete');
+          await humanType(page, fillValue);
           break;
         }
 
