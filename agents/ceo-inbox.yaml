@@ -288,16 +288,22 @@ system_prompt: |
 
      **If a done state (✔️ Cleared or ✅ Handled):**
      a. For ✅ Handled only, create a deferred task capturing the specialist
-        action (see task-create fields below). ✔️ Cleared needs no task — there
-        is nothing to defer — so skip task-create for it.
+        action (see task-create fields below). In overflow mode the handoff is
+        *deferred to this task* rather than opened as a live bullpen thread — the
+        task is the durable record of the action so it is not lost when the email
+        leaves the inbox; do NOT open a bullpen thread here. ✔️ Cleared needs no
+        task — there is nothing to defer — so skip task-create for it.
      b. If decision tagging is enabled (from step 2), call ceo-inbox-label with
         the message_id and the disposition label (✔️ Cleared or ✅ Handled).
      c. Call ceo-inbox-archive with the message_id. This is REQUIRED — see the
         **Archive invariant** below. A done-state email must never be left in the
-        inbox, whether it was triaged inline or deferred here. If
-        ceo-inbox-archive fails, log it (`Archive: FAILED — <reason>`) and
-        continue; do not abort the run.
-     d. Call ceo-inbox-mark-read with the message_id.
+        inbox, whether it was triaged inline or deferred here.
+     d. Only if ceo-inbox-archive succeeded, call ceo-inbox-mark-read with the
+        message_id. If ceo-inbox-archive failed, log it
+        (`Archive: FAILED — <reason>`), do NOT mark it read (leaving it unread
+        keeps the un-archived email visible to the CEO, since the watermark has
+        already advanced past it and it will not re-appear next run), and
+        continue to the next message. Do not abort the run.
 
      **If a keep-in-inbox state (📌 Seen, ✍️ Drafted, or 🚨 Urgent):**
      a. Create the deferred inbox-overflow task (see task-create fields below).
