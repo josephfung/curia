@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`ceo-inbox` batch triage** — drains the inbox in fixed-size, self-continuing batches keyed on read/archive status; replaces the >10-unread overflow mode and its `inbox-overflow` to-do noise. (#1123)
 - **TypeScript test coverage** — `tests/**/*.ts` is now covered by typecheck (`tsconfig.tests.json`, third pass in the `typecheck` script); type drift between shared types and test fixtures is now caught by CI. (#1105)
 - **`web-browser` skill** — replaced the `playwright-extra` + stealth-plugin stack with Patchright and added a human-behavior layer (curved mouse, paced typing, post-load dwell + presence) plus one soft-block reload-retry, to reduce Cloudflare/DataDome-style blocking. (#1053)
 
