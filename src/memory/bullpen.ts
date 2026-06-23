@@ -386,15 +386,15 @@ class PostgresBullpenBackend implements BullpenBackend {
       }>(
         `WITH ranked AS (
            SELECT sender_id, content, mentioned_agent_ids, created_at,
-             ROW_NUMBER() OVER (ORDER BY created_at ASC)  AS rn_asc,
-             ROW_NUMBER() OVER (ORDER BY created_at DESC) AS rn_desc
+             ROW_NUMBER() OVER (ORDER BY created_at ASC,  id ASC)  AS rn_asc,
+             ROW_NUMBER() OVER (ORDER BY created_at DESC, id DESC) AS rn_desc
            FROM bullpen_messages
            WHERE thread_id = $1
          )
          SELECT sender_id, content, mentioned_agent_ids, created_at
          FROM ranked
          WHERE rn_asc = 1 OR rn_desc <= $2
-         ORDER BY created_at ASC`,
+         ORDER BY created_at ASC, id ASC`,
         [row.id, RECENT_MSG_LIMIT - 1],
       );
       if (msgsRes.rows.length === 0) {
