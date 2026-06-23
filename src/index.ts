@@ -1815,11 +1815,38 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
+    // Pre-resolve the fallback tier model and provider (#813).
+    // The fallback tier rules are fixed: fast→standard, standard→powerful, powerful→standard.
+    // All three tiers are already validated above, so these lookups always succeed.
+    const fallbackTier = modelRouter.getFallbackTier(resolved.tier);
+    const fallbackResolved = modelRouter.resolve(fallbackTier);
+    const fallbackProviderName = modelRegistry.getProvider(fallbackResolved.model);
+    if (!fallbackProviderName) {
+      // All tier models are validated at construction, so a missing provider name here
+      // means the model-registry is inconsistent with the provider-registry — fail fast.
+      logger.error(
+        { agentId: agentConfig.name, fallbackModel: fallbackResolved.model },
+        'Fallback model has no registered provider — check model-registry.ts',
+      );
+      process.exit(1);
+    }
+    const agentFallbackProvider = providerRegistry.get(fallbackProviderName);
+    if (!agentFallbackProvider) {
+      logger.error(
+        { agentId: agentConfig.name, fallbackModel: fallbackResolved.model, fallbackProviderName },
+        'Fallback provider not found in provider registry — check provider setup',
+      );
+      process.exit(1);
+    }
+
     const agent = new AgentRuntime({
       agentId: agentConfig.name,
       systemPrompt,
       provider: agentProvider,
       resolvedModel: resolved.model,
+      tier: resolved.tier,
+      fallbackModel: fallbackResolved.model,
+      fallbackProvider: agentFallbackProvider,
       bus,
       logger,
       memory,

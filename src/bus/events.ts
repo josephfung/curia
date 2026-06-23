@@ -425,6 +425,23 @@ interface LlmCallPayload {
   responseHash: string;
 }
 
+// ModelFallbackEngagedPayload — emitted by the agent runtime when the primary
+// model for a tier returns NOT_FOUND and execution is re-routed to the fallback
+// tier's model (#813). Visible in audit_log for operator alerting and post-incident
+// analysis without requiring a grep across pino logs.
+interface ModelFallbackEngagedPayload {
+  agentId: string;
+  conversationId: string;
+  /** Capability tier whose primary model failed. 'unknown' only when tier was not configured. */
+  tier: 'fast' | 'standard' | 'powerful' | 'unknown';
+  /** Primary model that returned NOT_FOUND. */
+  failedModel: string;
+  /** Fallback model being attempted. */
+  fallbackModel: string;
+  /** Error type that triggered the fallback — currently always NOT_FOUND. */
+  reason: 'NOT_FOUND';
+}
+
 // ContextBudgetPayload — emitted by the agent runtime after assembling context
 // for each LLM call. Reports per-tier token estimates, budget utilization, and
 // which tiers were dropped. Co-located with llm.call events in audit_log for
@@ -792,6 +809,14 @@ export interface LlmCallEvent extends BaseEvent {
   payload: LlmCallPayload;
 }
 
+// ModelFallbackEngagedEvent — published when the primary tier model is unavailable
+// and execution falls through to the fallback tier's model (#813).
+export interface ModelFallbackEngagedEvent extends BaseEvent {
+  type: 'model.fallback';
+  sourceLayer: 'agent';
+  payload: ModelFallbackEngagedPayload;
+}
+
 // EmbeddingCallPayload — emitted by EmbeddingService (OpenAI backend) after each
 // successful embedding API call. Tracks model, token consumption, estimated cost,
 // and latency. Allows embedding costs to appear in the same audit log as llm.call.
@@ -989,6 +1014,7 @@ export type BusEvent =
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
   | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
+  | ModelFallbackEngagedEvent  // #813: primary tier model unavailable, routing to fallback tier
   | ContextBudgetEvent        // #24: context budget utilization per LLM call
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
@@ -1445,6 +1471,20 @@ export function createLlmCall(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'llm.call',
+    sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createModelFallbackEngaged(
+  payload: ModelFallbackEngagedPayload & { parentEventId: string },
+): ModelFallbackEngagedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'model.fallback',
     sourceLayer: 'agent',
     payload: rest,
     parentEventId,
