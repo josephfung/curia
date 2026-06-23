@@ -53,6 +53,13 @@ export interface PendingThreadContext {
   }>;
 }
 
+// Maximum messages shown per thread in the ambient context. When a thread exceeds
+// this limit, the first message (original request) is always pinned so agents never
+// lose the context that gave the thread its purpose, plus the last (LIMIT-1) most
+// recent messages. At 15 the tail covers most real threads in full; the first-pin
+// only kicks in for genuinely long conversations. (#1090)
+const RECENT_MSG_LIMIT = 15;
+
 // -- Backend interface --
 
 interface BullpenBackend {
@@ -147,7 +154,13 @@ class InMemoryBullpenBackend implements BullpenBackend {
       const lastMsg = msgs[msgs.length - 1]!;
       if (lastMsg.senderId === agentId) continue;
 
-      const recentMessages = msgs.slice(-5).map(m => ({
+      // Pin the first message so the original request is always visible, then fill
+      // the rest of the window with the most recent messages (#1090). When the thread
+      // is short enough to fit in the window we take all messages as-is.
+      const selected = msgs.length <= RECENT_MSG_LIMIT
+        ? msgs
+        : [msgs[0]!, ...msgs.slice(-(RECENT_MSG_LIMIT - 1))];
+      const recentMessages = selected.map(m => ({
         senderAgentId: m.senderId,
         content: m.content,
         mentionedAgentIds: m.mentionedAgentIds,
@@ -362,15 +375,29 @@ class PostgresBullpenBackend implements BullpenBackend {
 
     const results: PendingThreadContext[] = [];
     for (const row of threadsRes.rows) {
+      // Pin the first message (original request) plus the last (LIMIT-1) most recent
+      // messages so agents on long threads always have the founding context (#1090).
+      // The CTE assigns two row numbers — one ascending (rn_asc=1 is the first message)
+      // and one descending (rn_desc<=14 are the 14 most recent) — then the WHERE picks
+      // the union of both sets. DISTINCT eliminates overlap when the thread is short
+      // enough that the first message is also among the last 14.
       const msgsRes = await this.pool.query<{
         sender_id: string; content: unknown; mentioned_agent_ids: string[]; created_at: Date;
       }>(
-        `SELECT sender_id, content, mentioned_agent_ids, created_at
-         FROM bullpen_messages WHERE thread_id = $1
-         ORDER BY created_at DESC LIMIT 5`,
-        [row.id],
+        `WITH ranked AS (
+           SELECT sender_id, content, mentioned_agent_ids, created_at,
+             ROW_NUMBER() OVER (ORDER BY created_at ASC)  AS rn_asc,
+             ROW_NUMBER() OVER (ORDER BY created_at DESC) AS rn_desc
+           FROM bullpen_messages
+           WHERE thread_id = $1
+         )
+         SELECT DISTINCT sender_id, content, mentioned_agent_ids, created_at
+         FROM ranked
+         WHERE rn_asc = 1 OR rn_desc <= $2
+         ORDER BY created_at ASC`,
+        [row.id, RECENT_MSG_LIMIT - 1],
       );
-      const recentMessages = msgsRes.rows.reverse().map(m => ({
+      const recentMessages = msgsRes.rows.map(m => ({
         senderAgentId: m.sender_id,
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
         mentionedAgentIds: m.mentioned_agent_ids,
@@ -533,14 +560,16 @@ export class BullpenService {
 
 /**
  * Formats pending Bullpen threads as a compact system-message block for LLM context injection.
- * Shows up to 5 threads × 5 recent messages each.
+ * Shows up to 5 threads × up to RECENT_MSG_LIMIT messages each. For threads that exceed the
+ * limit, the first message (original request) is always pinned alongside the most recent ones
+ * so agents never lose the founding context of a long conversation (#1090).
  */
 export function formatBullpenContext(pending: PendingThreadContext[]): string {
   if (pending.length === 0) return '';
   const lines: string[] = [`[Bullpen — ${pending.length} active thread${pending.length === 1 ? '' : 's'}]`];
   for (const thread of pending) {
     const showing = thread.recentMessages.length < thread.totalMessages
-      ? ` — showing last ${thread.recentMessages.length}`
+      ? ` — first + last ${thread.recentMessages.length - 1} of ${thread.totalMessages}`
       : '';
     lines.push('');
     lines.push(`Thread "${thread.topic}" (thread_id: ${thread.threadId}, ${thread.totalMessages} total messages${showing}):`);
@@ -552,7 +581,7 @@ export function formatBullpenContext(pending: PendingThreadContext[]): string {
       lines.push(`  ${msg.senderAgentId} [${ts}]: "${mentions}${msg.content}"`);
     }
     if (thread.recentMessages.length < thread.totalMessages) {
-      lines.push(`  → Call bullpen get_thread for full history.`);
+      lines.push(`  → Middle messages omitted. Call bullpen get_thread for full history.`);
     }
   }
   // Thread-closure convention (#881): bullpen threads tend to be left open because
