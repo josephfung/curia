@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, makeSystemOriginator } from '../../../src/contacts/principal.js';
+import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, makeSystemOriginator, capOriginatorToParent } from '../../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 
 describe('isPrincipalOriginated', () => {
@@ -163,5 +163,38 @@ describe('makeSystemOriginator', () => {
     expect(new Date(a.initiatedAt).getTime()).not.toBeNaN();
     expect(new Date(b.initiatedAt).getTime()).not.toBeNaN();
     expect(a.initiatedAt).not.toBe(b.initiatedAt);
+  });
+});
+
+describe('capOriginatorToParent', () => {
+  function originator(systemRole: 'principal' | 'system' | 'agent', contactId: string = systemRole): TaskOriginator {
+    return { contactId, systemRole, channel: 'test', initiatedAt: '2026-06-23T00:00:00.000Z' };
+  }
+
+  it('returns the child when it is below the parent (no upgrade needed)', () => {
+    const child = originator('agent');
+    expect(capOriginatorToParent(child, originator('principal'))).toBe(child);
+  });
+
+  it('caps the child DOWN to the parent when the child claims higher standing', () => {
+    const parent = originator('system');
+    const result = capOriginatorToParent(originator('principal'), parent);
+    expect(result).toBe(parent);
+    expect(result?.systemRole).toBe('system');
+  });
+
+  it('prefers the child on equal rank (preserves its audit fields)', () => {
+    const child = originator('principal', 'ceo-a');
+    const result = capOriginatorToParent(child, originator('principal', 'ceo-b'));
+    expect(result?.contactId).toBe('ceo-a');
+  });
+
+  it('floors to null when the parent has no lineage', () => {
+    expect(capOriginatorToParent(originator('principal'), null)).toBeNull();
+    expect(capOriginatorToParent(originator('principal'), undefined)).toBeNull();
+  });
+
+  it('returns null when the child has no lineage', () => {
+    expect(capOriginatorToParent(null, originator('principal'))).toBeNull();
   });
 });

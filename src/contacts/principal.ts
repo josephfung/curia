@@ -6,7 +6,31 @@
 //
 // See docs/wip/2026-05-10-principal-identity-design.md
 
-import type { ContactTier, TaskOriginator } from './types.js';
+import type { ContactTier, SystemRole, TaskOriginator } from './types.js';
+
+// Standing rank for lineage capping — higher = more authority. Used ONLY to ensure a child
+// task is never stamped with lineage above its parent's (the inheritance ceiling, #1125). This
+// is a coarse audit-time cap, distinct from the runtime bypass ladder in effective-standing.ts.
+const STANDING_RANK: Record<NonNullable<SystemRole>, number> = { principal: 3, system: 2, agent: 1 };
+
+function originatorRank(o: TaskOriginator | null | undefined): number {
+  if (!o || o.systemRole == null) return 0;
+  return STANDING_RANK[o.systemRole] ?? 0;
+}
+
+/**
+ * Cap a new task's lineage to its parent's. Returns whichever of (child, parent) has the LOWER
+ * standing rank, so a child task can never carry standing above its parent — the design's
+ * "child tasks copy the parent's lineage, never upgraded above the parent" (#1125). null-safe:
+ * a null/absent originator on either side floors the result to that null (no standing). Equal
+ * rank prefers the child so its own audit fields (contactId/channel) are preserved.
+ */
+export function capOriginatorToParent(
+  child: TaskOriginator | null | undefined,
+  parent: TaskOriginator | null | undefined,
+): TaskOriginator | null {
+  return originatorRank(child) <= originatorRank(parent) ? (child ?? null) : (parent ?? null);
+}
 
 /**
  * Check whether a task was originated by the principal (the human Curia serves).
