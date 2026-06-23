@@ -367,6 +367,10 @@ describe('Scheduler', () => {
       const [failSql, failParams] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(failSql).toContain("status = 'failed'");
       expect(failSql).toContain('last_error');
+      // next_run_at = NULL prevents the poll SELECT from re-selecting this job on every tick
+      expect(failSql).toContain('next_run_at = NULL');
+      // Status guard prevents clobbering a concurrent cancellation
+      expect(failSql).toContain("status IN ('pending', 'failed')");
       expect(failParams[0]).toBe('job-1');
     });
 

@@ -372,14 +372,23 @@ export class Scheduler {
       let nextRunAt: Date;
       try {
         nextRunAt = this.schedulerService.nextRunFromCron(job.cronExpr, job.timezone);
-      } catch (err) {
+      } catch (err: unknown) {
+        const agentErr = classifyError(err, 'scheduler-fire-job');
         this.logger.error(
-          { err, jobId: job.id, cronExpr: job.cronExpr, timezone: job.timezone },
+          { err: agentErr, jobId: job.id, cronExpr: job.cronExpr, timezone: job.timezone },
           'Invalid cron expression — marking job failed to prevent retry storm',
         );
+        // Set next_run_at = NULL so the poll SELECT (WHERE next_run_at <= now()) never
+        // re-selects this job. Without it, the job stays 'failed' with a past next_run_at
+        // and fires again on every poll. Guard with status IN (...) to avoid clobbering
+        // a concurrent cancellation that could have occurred after the SELECT.
         await this.pool.query(
-          `UPDATE scheduled_jobs SET status = 'failed', last_error = $2 WHERE id = $1`,
-          [job.id, String(err)],
+          `UPDATE scheduled_jobs
+              SET status = 'failed',
+                  last_error = $2,
+                  next_run_at = NULL
+            WHERE id = $1 AND status IN ('pending', 'failed')`,
+          [job.id, agentErr.message],
         );
         return;
       }
