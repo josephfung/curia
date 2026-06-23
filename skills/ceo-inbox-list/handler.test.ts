@@ -143,6 +143,23 @@ describe('CeoInboxListHandler — batch listing (no watermark)', () => {
     expect(data.count).toBe(1);
     expect(data.has_more).toBe(false);
   });
+
+  it('keeps has_more=true (probe-based) even when a Curia-self message is in a full window', async () => {
+    // limit 5 → fetch 6. One of the 6 is Curia-self (filtered out), but the raw
+    // probe still had > limit results, so real backlog must not be under-reported.
+    const self = 'curia@example.com';
+    const ctx = makeCtx({ unread_only: true, limit: 5 }, { selfEmail: self });
+    const real = unreadMessages(5) as Array<{ from: Array<{ email: string; name: string }> }>;
+    const curia = { id: 'mc', threadId: 'tc', date: 99, subject: 'self', from: [{ email: self, name: 'Curia' }], to: [], cc: [], snippet: '', unread: true, folders: ['INBOX'], attachments: [] };
+    const fetchSpy = mockFetchReturning([curia, ...real]); // 6 raw, 1 filtered
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean };
+    expect(data.count).toBe(5); // 5 real returned
+    expect(data.has_more).toBe(true); // raw.length (6) > limit (5)
+  });
 });
 
 describe('CeoInboxListHandler — drafts routing (#1000)', () => {

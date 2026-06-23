@@ -96,13 +96,16 @@ export class CeoInboxListHandler implements SkillHandler {
         );
       }
 
-      // `has_more` is computed from the filtered set vs the requested limit, so a
-      // full batch signals "more real (non-Curia) unread remain." Curia-self
-      // messages are excluded here and are never marked read by this read-only
-      // skill, so in the pathological case where ≥ limit+1 of the very newest
-      // unread are Curia-originated, has_more reports false and older real mail
-      // would wait — acceptable because Curia does not bulk-email the CEO inbox.
-      const hasMore = filtered.length > limit;
+      // `has_more` is computed from the RAW probe (limit + 1), not the filtered
+      // set, so the Curia-self filter can never make it under-report a real
+      // backlog. Under-reporting would silently abandon real unread mail until
+      // the next cron tick; over-reporting only costs at most one extra empty
+      // self-wake. So: if Nylas had more than `limit` matching unread, signal
+      // more. (Pathological edge: a batch that is ENTIRELY Curia-self returns
+      // count 0 with has_more true — the caller's "count 0 → finish/exit" rule
+      // terminates cleanly there, since this read-only skill never marks the
+      // Curia-self messages read. Acceptable: Curia does not bulk-email the CEO.)
+      const hasMore = raw.length > limit;
       const messages = filtered.slice(0, limit);
 
       return {
