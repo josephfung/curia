@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.10.0"
+version: "0.10.1"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -267,28 +267,75 @@ system_prompt: |
      candidates (time-sensitive asks from known contacts), then ✅ Handled, then
      ✍️ Drafted, then others. Within a tier, prefer older messages.
   2. Process only those top 5 through the full triage protocol (steps 4-5).
-  3. For each remaining message beyond the top 5 (oldest first), create a
-     deferred inbox-overflow task, then mark it as read so it does not
-     re-appear in the next run:
-     - Call task-create with:
+  3. For each remaining message beyond the top 5 (oldest first), make a
+     lightweight disposition decision using subject, sender, and snippet ONLY
+     (do not read the full body, call entity-context, or draft anything — this
+     is best-effort load shedding, not full triage). Decide whether the message
+     is a **done state** or a **keep-in-inbox state**:
+
+     - **Done state** — the email is resolved and needs no further inbox presence:
+       - **✔️ Cleared**: a receipt, newsletter, or automated notification with
+         no human action required.
+       - **✅ Handled**: a task a deployed specialist can act on autonomously
+         (e.g. a PR to review, an expense to file). The *action* is deferred to a
+         task, but the email itself is resolved and should leave the inbox.
+     - **Keep-in-inbox state** — the email needs the CEO's eyes or a human reply:
+       📌 Seen (personal/sensitive/uncertain), ✍️ Drafted (a reply is warranted),
+       or 🚨 Urgent (time-sensitive decision). When in doubt, treat the message
+       as keep-in-inbox — never archive something you are unsure about.
+
+     Then act based on the disposition:
+
+     **If a done state (✔️ Cleared or ✅ Handled):**
+     a. For ✅ Handled only, create a deferred task capturing the specialist
+        action (see task-create fields below). ✔️ Cleared needs no task — there
+        is nothing to defer — so skip task-create for it.
+     b. If decision tagging is enabled (from step 2), call ceo-inbox-label with
+        the message_id and the disposition label (✔️ Cleared or ✅ Handled).
+     c. Call ceo-inbox-archive with the message_id. This is REQUIRED — see the
+        **Archive invariant** below. A done-state email must never be left in the
+        inbox, whether it was triaged inline or deferred here. If
+        ceo-inbox-archive fails, log it (`Archive: FAILED — <reason>`) and
+        continue; do not abort the run.
+     d. Call ceo-inbox-mark-read with the message_id.
+
+     **If a keep-in-inbox state (📌 Seen, ✍️ Drafted, or 🚨 Urgent):**
+     a. Create the deferred inbox-overflow task (see task-create fields below).
+     b. If decision tagging is enabled, call ceo-inbox-label with the message_id
+        and the disposition label.
+     c. Do NOT call ceo-inbox-archive — the email stays in the inbox for the CEO.
+     d. Call ceo-inbox-mark-read with the message_id.
+
+     **task-create fields** (for ✅ Handled and all keep-in-inbox states):
        - title: "<sender name>: <subject>" (one line from the list output)
        - description: one short sentence summarizing what the email is about
        - owner: 'ceo'
        - tags: ['inbox-overflow']
        - priority: 0-100 based on urgency signals from subject and snippet
-     - If task-create fails: do NOT call ceo-inbox-mark-read. Log the failure:
-         Overflow task FAILED for "<sender>: <subject>" — <error>
-       Continue to the next overflow message. (Note: the message may not
-       re-appear in the next run because the high-water mark already advanced
-       past it at list time. Treat persistent failures as lost overflow items.)
 
-     - Call ceo-inbox-mark-read with the message_id.
+     **task-create failure** (only applies when a task is required — i.e. ✅
+     Handled and keep-in-inbox states; ✔️ Cleared creates no task): do NOT call
+     ceo-inbox-mark-read or ceo-inbox-archive for that message. Log the failure:
+         Overflow task FAILED for "<sender>: <subject>" — <error>
+     Continue to the next overflow message. (Note: the message may not re-appear
+     in the next run because the high-water mark already advanced past it at list
+     time. Treat persistent failures as lost overflow items.)
   4. After handling all overflow messages, proceed to step 4 to triage the
      top 5 only.
 
+  **Archive invariant (all processing paths):** Archiving is bound to the
+  *classification*, not to which path processed the message. Any email you assign
+  a done-state disposition — ✔️ Cleared or ✅ Handled — MUST be archived via
+  ceo-inbox-archive, whether it was triaged inline (steps 4-5) or deferred in
+  overflow mode above. Conversely, never archive a 📌 Seen, ✍️ Drafted,
+  🚨 Urgent, or ⚠️ Stuck message. The deferred task captures any follow-up work;
+  the archive is what actually cleans the inbox.
+
   LLM time per burst must not scale linearly past 10 — if the inbox grows to
-  50 unread, you process 5 inline and create 45 tasks. The CEO sees the deferred
-  items in the next digest's "For you to do" section.
+  50 unread, you process 5 inline and shed the other 45 with the lightweight
+  done-state check above (archiving the ✔️ Cleared / ✅ Handled ones, deferring
+  the rest to tasks). The CEO sees deferred items in the next digest's "For you
+  to do" section.
 
   If the count is ≤ 10, process each message oldest-first (no change).
 
@@ -632,6 +679,7 @@ system_prompt: |
     Rules loaded: N active (M total)
     Rules applied: N matches across all messages
     Overflow tasks created: N (omit line if 0)
+    Overflow archived: N done-state emails archived in overflow mode (omit line if 0)
     Follow-up tasks created: N — owner=curia|ceo (omit line if 0)
 
   ## Date Verification

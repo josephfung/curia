@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Bullpen long-thread context** — agents woken by a new reply in a thread with more than 15 messages now always see the original request (first message) in their ambient context, alongside the 14 most recent messages; the first message no longer silently falls off the window. (#1090)
 - **Scheduler duplicate-fire race condition** — claim-time `next_run_at` advancement and null-safe `rowCount` guard prevent duplicate cron fires. (#1124)
+- **ceo-inbox overflow archive gap** — the overflow path now classifies each deferred email and archives done-state ones (✔️ Cleared / ✅ Handled) instead of leaving them in the inbox; archiving is now an invariant of the classification, not the processing path. (#1123)
 
 ### Security
 
