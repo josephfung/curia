@@ -19,6 +19,9 @@ const testConfig = {
   intervalMs: 86400000,
   archiveThreshold: 0.05,
   halfLifeDays: { permanent: null as null, slow_decay: 180, fast_decay: 21 },
+  edgeCountPercentile: 0.95,
+  edgeCountFloor: 5,
+  warnHoldBackDays: 30,
 };
 
 describeIf('DreamEngine integration', () => {

@@ -111,8 +111,9 @@ describe('ContactDedupExcludeHandler', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.contact_a_excluded).toBe(true);
-      expect(result.data.contact_b_excluded).toBe(true);
+      const data = result.data as { contact_a_excluded: boolean; contact_b_excluded: boolean };
+      expect(data.contact_a_excluded).toBe(true);
+      expect(data.contact_b_excluded).toBe(true);
     }
     expect(storeFactMock).toHaveBeenCalledTimes(2);
 
@@ -144,8 +145,9 @@ describe('ContactDedupExcludeHandler', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.contact_a_excluded).toBe(true);
-      expect(result.data.contact_b_excluded).toBe(false);
+      const data = result.data as { contact_a_excluded: boolean; contact_b_excluded: boolean };
+      expect(data.contact_a_excluded).toBe(true);
+      expect(data.contact_b_excluded).toBe(false);
     }
     // Only one write — B has no KG node to attach a fact to
     expect(storeFactMock).toHaveBeenCalledTimes(1);
@@ -209,8 +211,9 @@ describe('ContactDedupExcludeHandler', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.contact_a_excluded).toBe(false);
-      expect(result.data.contact_b_excluded).toBe(true);
+      const data = result.data as { contact_a_excluded: boolean; contact_b_excluded: boolean };
+      expect(data.contact_a_excluded).toBe(false);
+      expect(data.contact_b_excluded).toBe(true);
     }
   });
 

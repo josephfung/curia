@@ -43,6 +43,7 @@ function stubMessage(overrides: Partial<NylasMessage> = {}): NylasMessage {
     date: Math.floor(Date.now() / 1000),
     unread: true,
     folders: ['INBOX'],
+    attachments: [],
     ...overrides,
   };
 }
@@ -156,7 +157,6 @@ describe('Draft Fallback Flow Integration', () => {
         contactService: mockContactService,
         contentFilter,
         bus,
-        ceoEmail: 'ceo@company.com',
         logger,
         autonomyService,
         actionLogRepo,
@@ -238,7 +238,6 @@ describe('Draft Fallback Flow Integration', () => {
         contactService: mockContactService,
         contentFilter,
         bus,
-        ceoEmail: 'ceo@company.com',
         logger,
         autonomyService,
         actionLogRepo,
@@ -305,7 +304,6 @@ describe('Draft Fallback Flow Integration', () => {
         contactService: mockContactService,
         contentFilter,
         bus,
-        ceoEmail: 'ceo@company.com',
         logger,
         autonomyService,
         actionLogRepo,

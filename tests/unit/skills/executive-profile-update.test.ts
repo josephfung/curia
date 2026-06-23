@@ -69,7 +69,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
     expect(service.update).toHaveBeenCalledOnce();
 
     // Check that only formality changed — tone, patterns, vocab, signOff preserved
-    const updatedConfig = service.update.mock.calls[0][0] as ExecutiveProfile;
+    const updatedConfig = (service.update.mock.calls as unknown[][])[0]![0] as unknown as ExecutiveProfile;
     expect(updatedConfig.writingVoice.formality).toBe(25);
     expect(updatedConfig.writingVoice.tone).toEqual(['direct', 'warm']);
     expect(updatedConfig.writingVoice.patterns).toEqual(['Short sentences', 'Uses em dashes freely']);
@@ -88,7 +88,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
       service,
     ));
 
-    const updatedConfig = service.update.mock.calls[0][0] as ExecutiveProfile;
+    const updatedConfig = (service.update.mock.calls as unknown[][])[0]![0] as unknown as ExecutiveProfile;
     expect(updatedConfig.writingVoice.tone).toEqual(['confident', 'casual']);
     // Other fields unchanged
     expect(updatedConfig.writingVoice.formality).toBe(50);
@@ -105,7 +105,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
       service,
     ));
 
-    const updatedConfig = service.update.mock.calls[0][0] as ExecutiveProfile;
+    const updatedConfig = (service.update.mock.calls as unknown[][])[0]![0] as unknown as ExecutiveProfile;
     // avoid updated, prefer unchanged
     expect(updatedConfig.writingVoice.vocabulary.avoid).toEqual(['utilize', 'circle back']);
     expect(updatedConfig.writingVoice.vocabulary.prefer).toEqual(['straightforward', 'folks']);
@@ -122,7 +122,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
       service,
     ));
 
-    const updatedConfig = service.update.mock.calls[0][0] as ExecutiveProfile;
+    const updatedConfig = (service.update.mock.calls as unknown[][])[0]![0] as unknown as ExecutiveProfile;
     expect(updatedConfig.writingVoice.signOff).toBe('Best, Joseph');
   });
 
@@ -137,7 +137,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
       service,
     ));
 
-    const updatedConfig = service.update.mock.calls[0][0] as ExecutiveProfile;
+    const updatedConfig = (service.update.mock.calls as unknown[][])[0]![0] as unknown as ExecutiveProfile;
     expect(updatedConfig.writingVoice.signOff).toBe('Cheers,\n\nJoseph');
   });
 
@@ -152,7 +152,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
       service,
     ));
 
-    const updatedConfig = service.update.mock.calls[0][0] as ExecutiveProfile;
+    const updatedConfig = (service.update.mock.calls as unknown[][])[0]![0] as unknown as ExecutiveProfile;
     expect(updatedConfig.writingVoice.signOff).toBe('from snake_case');
   });
 
@@ -187,9 +187,9 @@ describe('ExecutiveProfileUpdateHandler', () => {
     ));
 
     // changedBy is a fixed source label, not the caller identity
-    expect(service.update.mock.calls[0][1]).toBe('skill');
+    expect((service.update.mock.calls as unknown[][])[0]![1]).toBe('skill');
     // Actor identity goes in the note
-    const note = service.update.mock.calls[0][2] as string;
+    const note = (service.update.mock.calls as unknown[][])[0]![2] as string;
     expect(note).toContain('ceo-contact-uuid');
   });
 
@@ -204,7 +204,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
       service,
     ));
 
-    const updatedConfig = service.update.mock.calls[0][0] as ExecutiveProfile;
+    const updatedConfig = (service.update.mock.calls as unknown[][])[0]![0] as unknown as ExecutiveProfile;
     expect(updatedConfig.writingVoice.formality).toBe(35);
   });
 

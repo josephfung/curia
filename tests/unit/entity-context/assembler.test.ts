@@ -34,7 +34,7 @@ function makeSequentialPool(responses: Array<{ rows: unknown[] }>): DbPool {
       // A silent empty-rows fallback would mask regressions where extra DB calls are added.
       throw new Error(`Unexpected query call #${callIndex} — add a response to makeSequentialPool`);
     }
-    return Promise.resolve(res as ReturnType<DbPool['query']>);
+    return Promise.resolve(res as unknown as ReturnType<DbPool['query']>);
   });
   return pool;
 }

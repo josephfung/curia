@@ -101,6 +101,7 @@ describe('Event Types', () => {
       conversationId: 'email:thread-abc',
       agentId: 'coordinator',
       channelId: 'email',
+      through: 'cli',
       since: '2026-04-08T10:00:00Z',
       turns: [
         { role: 'user', content: 'Alice is my wife' },

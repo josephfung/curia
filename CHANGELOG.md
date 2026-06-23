@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **TypeScript test coverage** — `tests/**/*.ts` is now covered by typecheck (`tsconfig.tests.json`, third pass in the `typecheck` script); type drift between shared types and test fixtures is now caught by CI. (#1105)
+
 ### Fixed
 
 - **Bullpen long-thread context** — agents woken by a new reply in a thread with more than 15 messages now always see the original request (first message) in their ambient context, alongside the 14 most recent messages; the first message no longer silently falls off the window. (#1090)

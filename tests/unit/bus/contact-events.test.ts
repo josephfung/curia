@@ -22,6 +22,9 @@ describe('Contact bus events', () => {
     const event = createContactUnknown({
       channel: 'telegram',
       senderId: '99999',
+      channelTrustLevel: 'low',
+      messageTrustScore: 0,
+      routingDecision: 'ignore',
       parentEventId: 'inbound-event-id',
     });
     expect(event.type).toBe('contact.unknown');

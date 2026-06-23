@@ -9,7 +9,8 @@ describe('LLMProvider interface', () => {
         return {
           type: 'text',
           content: `Echo: ${messages[messages.length - 1]?.content ?? ''}`,
-          usage: { inputTokens: 10, outputTokens: 5 },
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: { requestedModel: 'test', actualModel: 'test', providerRequestId: 'test' },
         };
       },
     };
@@ -38,7 +39,8 @@ describe('LLMResponse tool_use variant', () => {
       type: 'tool_use',
       toolCalls: [{ id: 'call-1', name: 'web-fetch', input: { url: 'https://example.com' } }],
       content: 'Let me look that up for you.',
-      usage: { inputTokens: 100, outputTokens: 50 },
+      usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: { requestedModel: 'test', actualModel: 'test', providerRequestId: 'test' },
     };
     expect(response.type).toBe('tool_use');
     if (response.type === 'tool_use') {

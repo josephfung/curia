@@ -57,7 +57,7 @@ describe('AuditLogger.log — null byte sanitization', () => {
 
     // Manually inject a deeply nested null byte into the payload to simulate
     // binary web-fetch content surfacing in a nested skill result structure
-    (event.payload as Record<string, unknown>)['nested'] = {
+    (event.payload as unknown as Record<string, unknown>)['nested'] = {
       arr: ['a\u0000b', { deep: 'x\u0000y' }],
     };
 
@@ -99,7 +99,7 @@ describe('AuditLogger.log — null byte sanitization', () => {
       content: 'check',
     });
 
-    (event.payload as Record<string, unknown>)['meta'] = {
+    (event.payload as unknown as Record<string, unknown>)['meta'] = {
       count: 42,
       flag: true,
       nothing: null,
@@ -120,7 +120,7 @@ describe('AuditLogger.log — null byte sanitization', () => {
     });
 
     const ts = new Date('2026-04-10T08:30:00.000Z');
-    (event.payload as Record<string, unknown>)['mergedAt'] = ts;
+    (event.payload as unknown as Record<string, unknown>)['mergedAt'] = ts;
 
     await logger.log(event);
 

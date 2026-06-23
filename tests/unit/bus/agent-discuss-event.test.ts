@@ -29,7 +29,7 @@ describe('agent.discuss event', () => {
 
   it('parentEventId is NOT in the payload', () => {
     const event = createAgentDiscuss(basePayload);
-    expect((event.payload as Record<string, unknown>)['parentEventId']).toBeUndefined();
+    expect((event.payload as unknown as Record<string, unknown>)['parentEventId']).toBeUndefined();
   });
 
   it('agent layer can publish agent.discuss', () => {
