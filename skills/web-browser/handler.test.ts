@@ -5,7 +5,24 @@
 // ctx.resolveSecretRef and fills the resolved value WITHOUT the value ever entering
 // the skill's return data, and any page content read back is scrubbed of it.
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock the human-behavior module so dwell/presence/click/type are observable spies with no
+// real delays. Hoisted by vitest; the handler imports these and gets the spies. (#1053)
+vi.mock('../../src/browser/human-behavior.js', () => ({
+  jitteredDelay: vi.fn().mockResolvedValue(undefined),
+  simulateHumanPresence: vi.fn().mockResolvedValue(undefined),
+  humanClick: vi.fn().mockResolvedValue(undefined),
+  humanType: vi.fn().mockResolvedValue(undefined),
+}));
+
+import {
+  jitteredDelay,
+  simulateHumanPresence,
+  humanClick,
+  humanType,
+} from '../../src/browser/human-behavior.js';
+
 import pino from 'pino';
 import { WebBrowserHandler } from './handler.js';
 import { BrowserSession } from '../../src/browser/browser-session.js';
@@ -14,6 +31,14 @@ import type { SkillContext } from '../../src/skills/types.js';
 import type { BrowserContext, Page } from 'playwright';
 
 const logger = pino({ level: 'silent' });
+
+// Reset human-behavior spies between tests so call counts don't bleed across cases.
+beforeEach(() => {
+  vi.mocked(jitteredDelay).mockClear();
+  vi.mocked(simulateHumanPresence).mockClear();
+  vi.mocked(humanClick).mockClear();
+  vi.mocked(humanType).mockClear();
+});
 
 const SECRET_VALUE = 'sup3r-s3cr3t-pw';
 
@@ -59,8 +84,10 @@ function makeMockPage(
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
-    keyboard: { press: vi.fn().mockResolvedValue(undefined) },
-    mouse: { wheel: vi.fn().mockResolvedValue(undefined) },
+    keyboard: { press: vi.fn().mockResolvedValue(undefined), type: vi.fn().mockResolvedValue(undefined) },
+    mouse: { wheel: vi.fn().mockResolvedValue(undefined), move: vi.fn().mockResolvedValue(undefined) },
+    reload: vi.fn().mockResolvedValue({ status: () => 200 }),
+    viewportSize: vi.fn().mockReturnValue({ width: 1280, height: 720 }),
     getByRole: vi.fn().mockReturnValue(locator),
     getByLabel: vi.fn().mockReturnValue(locator),
     getByText: vi.fn().mockReturnValue(locator),
@@ -99,7 +126,7 @@ function makeSkillContext(opts: {
 describe('web-browser type action with secret_ref (#973)', () => {
   it('fills the resolved secret value and never returns it', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx, fill } = makeSkillContext({
+    const { ctx } = makeSkillContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
       resolveSecretRef,
     });
@@ -108,8 +135,8 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
     expect(result.success).toBe(true);
     expect(resolveSecretRef).toHaveBeenCalledWith('user.aeroplan_password');
-    // The resolved value was typed into the field...
-    expect(fill).toHaveBeenCalledWith(SECRET_VALUE);
+    // The resolved value was typed into the field via humanType (human keystroke cadence)...
+    expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), SECRET_VALUE, expect.anything());
     // ...but never appears in the data returned to the LLM.
     expect(JSON.stringify(result)).not.toContain(SECRET_VALUE);
   });
@@ -174,7 +201,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
   it('rejects when both text and secret_ref are supplied (mutually exclusive)', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx, fill } = makeSkillContext({
+    const { ctx } = makeSkillContext({
       input: { action: 'type', selector: '#pass', text: 'literal', secret_ref: 'user.aeroplan_password' },
       resolveSecretRef,
     });
@@ -183,7 +210,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
     expect(result.success).toBe(false);
     expect(resolveSecretRef).not.toHaveBeenCalled();
-    expect(fill).not.toHaveBeenCalled();
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
   });
 
   it('rejects when neither text nor secret_ref is supplied', async () => {
@@ -194,7 +221,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
   it('errors clearly when secret_ref is used but the resolver capability is absent', async () => {
     // resolveSecretRef undefined — the skill was invoked without the secretResolver capability.
-    const { ctx, fill } = makeSkillContext({
+    const { ctx } = makeSkillContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
     });
 
@@ -204,18 +231,20 @@ describe('web-browser type action with secret_ref (#973)', () => {
     if (!result.success) {
       expect(result.error).toMatch(/secret_ref|resolver|capability/i);
     }
-    expect(fill).not.toHaveBeenCalled();
+    expect(vi.mocked(humanType)).not.toHaveBeenCalled();
   });
 
-  it('still supports a literal text fill (non-secret path unchanged)', async () => {
-    const { ctx, fill } = makeSkillContext({
+  it('still supports a literal text fill (non-secret path uses humanType for realistic cadence)', async () => {
+    const { ctx } = makeSkillContext({
       input: { action: 'type', selector: '#search', text: 'hello world' },
     });
 
     const result = await new WebBrowserHandler().execute(ctx);
 
     expect(result.success).toBe(true);
-    expect(fill).toHaveBeenCalledWith('hello world');
+    // Literal text now uses humanType (keystroke cadence) rather than fill(), so that
+    // behavioral challenge JS scores the typing as human. (#1053)
+    expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), 'hello world', expect.anything());
   });
 });
 
@@ -398,8 +427,9 @@ describe('web-browser iframe awareness', () => {
     const result = await new WebBrowserHandler().execute(ctx);
 
     expect(result.success).toBe(true);
-    // The click landed on the CHILD FRAME's element, not the top page.
-    expect(frameLocator.click).toHaveBeenCalled();
+    // The click resolved to the CHILD FRAME's locator and was dispatched via humanClick
+    // (not locator.click directly — humanClick provides realistic mouse-movement telemetry).
+    expect(vi.mocked(humanClick)).toHaveBeenCalled();
   });
 
   it('resolveLocator skips a child frame that throws (detached) and continues', async () => {
@@ -452,9 +482,10 @@ describe('web-browser iframe awareness', () => {
     const result = await new WebBrowserHandler().execute(ctxD);
 
     // The detached frame's throw must NOT fail the action — it's skipped and the main
-    // frame's CSS fallback resolves instead.
+    // frame's CSS fallback resolves instead. The click is dispatched via humanClick, not
+    // locator.click directly (humanClick provides realistic mouse-movement telemetry). (#1053)
     expect(result.success).toBe(true);
-    expect(mainClick).toHaveBeenCalled();
+    expect(vi.mocked(humanClick)).toHaveBeenCalled();
   });
 
   it('get_content includes labelled iframe content', async () => {
@@ -744,5 +775,107 @@ describe('web-browser hard-block detection', () => {
 
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(true);
+  });
+});
+
+describe('web-browser navigate hardening — dwell + soft-block reload (#1053)', () => {
+  function makeNavCtx(page: ReturnType<typeof makeMockPage>) {
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-nav', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    return {
+      input: { action: 'navigate', url: 'https://example.com' },
+      log: logger,
+      browserService,
+    } as unknown as SkillContext;
+  }
+
+  it('dwells and simulates presence after a clean navigation', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('Example Domain content here for a normal page', fill, 'https://example.com/');
+    const ctx = makeNavCtx(page);
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(simulateHumanPresence)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(jitteredDelay)).toHaveBeenCalled();
+    expect(page.reload).not.toHaveBeenCalled();
+  });
+
+  it('reloads once on a soft block (near-empty body), then succeeds when the reload clears it', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('content', fill, 'https://shop.example.com/');
+    // Make isLikelyEmpty fire on first check (tiny stub page: minimal text, tiny HTML,
+    // no interactive elements), then return a normal-looking page after reload.
+    // isLikelyEmpty now requires ALL THREE signals to be below threshold before it
+    // treats a page as empty — so the "clear" return must exceed at least one. (#1053)
+    page.evaluate = vi.fn()
+      .mockResolvedValueOnce({ textLength: 10, htmlLength: 200, interactiveCount: 0 })  // first: all thresholds met → empty
+      .mockResolvedValue({ textLength: 500, htmlLength: 5_000, interactiveCount: 3 });  // after reload: not empty → success
+    // title is always clean (not a hard block title)
+    page.title = vi.fn().mockResolvedValue('Shop — Home');
+    const ctx = makeNavCtx(page);
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(page.reload).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(simulateHumanPresence)).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a hard-block error when the soft block persists after the reload', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('content', fill, 'https://walled.example.com/', { title: 'Access Denied' });
+    const ctx = makeNavCtx(page);
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect(page.reload).toHaveBeenCalledTimes(1);
+    if (!result.success) expect(result.error).toMatch(/blocked automated access/i);
+    // No presence simulation once we've declared the page undrivable.
+    expect(vi.mocked(simulateHumanPresence)).not.toHaveBeenCalled();
+  });
+
+  it('returns a hard-block error when isLikelyEmpty persists after the reload', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('content', fill, 'https://empty.example.com/');
+    // evaluate always returns a stub-page metrics object — isLikelyEmpty fires on both
+    // the first check and the post-reload re-check (all three signals below threshold),
+    // so the block persists and the handler fails fast. (#1053)
+    page.evaluate = vi.fn().mockResolvedValue({ textLength: 10, htmlLength: 200, interactiveCount: 0 });
+    page.title = vi.fn().mockResolvedValue('Empty Page'); // not a hard-block title
+    const ctx = makeNavCtx(page);
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect(page.reload).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(simulateHumanPresence)).not.toHaveBeenCalled();
+    if (!result.success) expect(result.error).toMatch(/blocked automated access/i);
+  });
+});
+
+describe('web-browser click uses human behavior (#1053)', () => {
+  it('routes click through humanClick', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('page body content for the click target test', fill, 'https://example.com/');
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const ctx = {
+      input: { action: 'click', selector: 'Submit button' },
+      log: logger,
+      browserService: {
+        getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-click', session }),
+        closeSession: vi.fn(),
+      } as unknown as BrowserService,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(humanClick)).toHaveBeenCalledTimes(1);
   });
 });

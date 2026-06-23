@@ -31,20 +31,18 @@ import type { ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, lstatSync, readlinkSync } from 'node:fs';
 import { homedir, hostname as osHostname } from 'node:os';
 import { join } from 'node:path';
-import { chromium as stealthChromium } from 'playwright-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+// Patchright is a drop-in Playwright fork that patches the protocol-level leaks the old
+// stealth plugin couldn't reach — most importantly the CDP `Runtime.enable` /
+// console / exec-context leaks detection vendors key on, plus Playwright's own header
+// signatures. We keep the real-Chrome channel + persistent-context model unchanged; only
+// the launcher changes. The rest of the file types against the 'playwright' BrowserContext
+// (structurally identical), hence the existing `as unknown as BrowserContext` casts. (#1053)
+import { chromium } from 'patchright';
 import type { BrowserContext, BrowserContextOptions } from 'playwright';
 import { PlaywrightBlocker } from '@ghostery/adblocker-playwright';
 import type { Logger } from '../logger.js';
 import { BrowserSession } from './browser-session.js';
 import type { SessionId } from './types.js';
-
-// Register the stealth plugin once at module load. It patches the residual automation
-// signals (navigator.plugins, window.chrome, WebGL vendor/renderer, permissions.query,
-// and the User-Agent) that --disable-blink-features=AutomationControlled alone leaves
-// exposed. It applies at the browser level, so it covers both the persistent context and
-// any incognito context spun off the same browser.
-stealthChromium.use(StealthPlugin());
 
 interface BrowserServiceOptions {
   logger: Logger;
@@ -383,11 +381,14 @@ export class BrowserService {
   // --- Private helpers ---
 
   /**
-   * Fingerprint/context options shared by the persistent context and any incognito
-   * context. We deliberately DO NOT set userAgent — with the real Chrome channel and the
-   * stealth plugin's UA-override evasion the genuine current UA is sent, so it can never
-   * go stale (the old hardcoded Chrome/122 was a bot tell). timezoneId is set only when a
-   * timezone is configured, aligning the context with the principal.
+   * Fingerprint/context options shared by the persistent context and any incognito context.
+   * We deliberately DO NOT set userAgent (or any sec-ch-ua / userAgentData override): with
+   * the real Chrome channel, Chrome natively emits a COMPLETE, mutually-consistent identity
+   * set (UA + client hints + userAgentData) for the true binary version and OS. Overriding
+   * any single surface without perfectly mirroring the others manufactures exactly the
+   * inconsistency detection keys on — and a hardcoded UA goes stale into a bot tell (#987).
+   * timezoneId is set only when a timezone is configured, aligning the context with the
+   * principal. (#1053)
    */
   private buildContextOptions(): BrowserContextOptions {
     return {
@@ -421,7 +422,7 @@ export class BrowserService {
    * Launch the single persistent browser context (the principal's profile). Tries the
    * configured channel (e.g. real Chrome) first and falls back to bundled Chromium if it
    * isn't installed, so the skill degrades instead of failing to boot. Cast through unknown:
-   * playwright-extra returns a playwright-core BrowserContext, structurally identical to the
+   * patchright returns its own BrowserContext, structurally identical to the
    * 'playwright' BrowserContext we type against.
    */
   private async launchPersistentContext(): Promise<BrowserContext> {
@@ -438,9 +439,11 @@ export class BrowserService {
     const baseOptions = {
       headless: false,
       args: [
-        '--disable-blink-features=AutomationControlled', // removes navigator.webdriver flag
-        '--no-sandbox',                                   // required in container environments
-        '--disable-dev-shm-usage',                        // prevents /dev/shm OOM in Docker
+        // Patchright owns the navigator.webdriver / AutomationControlled surface, so we no
+        // longer pass --disable-blink-features=AutomationControlled (stacking a flag it
+        // manages is a documented anti-pattern). These two are container requirements. (#1053)
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
       ],
       ...this.buildContextOptions(),
     };
@@ -451,7 +454,7 @@ export class BrowserService {
     this.channelFallbackActive = false;
 
     try {
-      const context = await stealthChromium.launchPersistentContext(
+      const context = await chromium.launchPersistentContext(
         this.profileDir,
         this.channel ? { ...baseOptions, channel: this.channel } : baseOptions,
       ) as unknown as BrowserContext;
@@ -470,7 +473,7 @@ export class BrowserService {
         { err, requestedChannel: this.channel },
         'Browser channel launch failed — DEGRADED to bundled Chromium (weaker fingerprint than configured); is the channel installed in the image?',
       );
-      const context = await stealthChromium.launchPersistentContext(
+      const context = await chromium.launchPersistentContext(
         this.profileDir,
         baseOptions,
       ) as unknown as BrowserContext;

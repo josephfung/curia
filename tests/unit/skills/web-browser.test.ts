@@ -38,7 +38,7 @@ function makeMockBrowserService(): BrowserService {
       title: vi.fn().mockResolvedValue('Example'),
       waitForTimeout: vi.fn().mockResolvedValue(null),
       waitForLoadState: vi.fn().mockResolvedValue(null),
-      keyboard: { press: vi.fn().mockResolvedValue(null) },
+      keyboard: { press: vi.fn().mockResolvedValue(null), type: vi.fn().mockResolvedValue(null) },
       mouse: { wheel: vi.fn().mockResolvedValue(null) },
       frames: vi.fn().mockReturnValue([mainFrame]),
       mainFrame: vi.fn().mockReturnValue(mainFrame),
