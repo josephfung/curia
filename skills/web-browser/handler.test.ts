@@ -837,6 +837,23 @@ describe('web-browser navigate hardening — dwell + soft-block reload (#1053)',
     // No presence simulation once we've declared the page undrivable.
     expect(vi.mocked(simulateHumanPresence)).not.toHaveBeenCalled();
   });
+
+  it('returns a hard-block error when isLikelyEmpty persists after the reload', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('content', fill, 'https://empty.example.com/');
+    // evaluate always returns a tiny number — isLikelyEmpty fires on both the
+    // first check and the post-reload re-check, so the block persists.
+    page.evaluate = vi.fn().mockResolvedValue(10);
+    page.title = vi.fn().mockResolvedValue('Empty Page'); // not a hard-block title
+    const ctx = makeNavCtx(page);
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect(page.reload).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(simulateHumanPresence)).not.toHaveBeenCalled();
+    if (!result.success) expect(result.error).toMatch(/blocked automated access/i);
+  });
 });
 
 describe('web-browser click uses human behavior (#1053)', () => {

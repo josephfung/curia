@@ -180,8 +180,10 @@ export class WebBrowserHandler implements SkillHandler {
 
           // Fail fast on a hard edge block that survived the reload (IP/edge-level — retrying
           // won't help). Surface a distinct, actionable error rather than an empty page.
+          // Re-check isLikelyEmpty here too: if the page was near-empty before the reload
+          // AND still near-empty after, it's a persistent soft block — not a transient stub.
           const status = response?.status();
-          if (isHardBlock(pageTitle)) {
+          if (isHardBlock(pageTitle) || (await isLikelyEmpty(page))) {
             ctx.log.warn({ sessionId, url: parsedUrl.toString(), status, pageTitle }, 'Navigation hit a hard edge block');
             return {
               success: false,
