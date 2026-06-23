@@ -362,7 +362,27 @@ export class Scheduler {
     // both mean 0 rows updated, i.e. another poller already claimed the job.
     let claimResult: { rowCount: number | null };
     if (job.cronExpr) {
-      const nextRunAt = this.schedulerService.nextRunFromCron(job.cronExpr, job.timezone);
+      // Compute next_run_at before the claim UPDATE so it can be written atomically.
+      // nextRunFromCron() can throw on a corrupt cron expression (e.g. direct DB insert
+      // bypassing createJob validation). Guard it here so a throw does NOT cause the outer
+      // pollDueJobs error handler to attempt reverting status = 'running' when the job was
+      // never claimed — that revert would be a silent no-op, leaving next_run_at in the past
+      // and causing an infinite tight-loop re-fire on every poll. Transition to 'failed'
+      // instead so the job stops being selected.
+      let nextRunAt: Date;
+      try {
+        nextRunAt = this.schedulerService.nextRunFromCron(job.cronExpr, job.timezone);
+      } catch (err) {
+        this.logger.error(
+          { err, jobId: job.id, cronExpr: job.cronExpr, timezone: job.timezone },
+          'Invalid cron expression — marking job failed to prevent retry storm',
+        );
+        await this.pool.query(
+          `UPDATE scheduled_jobs SET status = 'failed', last_error = $2 WHERE id = $1`,
+          [job.id, String(err)],
+        );
+        return;
+      }
       claimResult = await this.pool.query(
         `UPDATE scheduled_jobs
             SET status = $1, run_started_at = now(), next_run_at = $3
@@ -375,8 +395,14 @@ export class Scheduler {
         ['running', job.id],
       );
     }
-    if (claimResult.rowCount === 0 || claimResult.rowCount === null) {
+    if (claimResult.rowCount === 0) {
       this.logger.debug({ jobId: job.id }, 'Job already claimed; skipping fire');
+      return;
+    }
+    // rowCount === null is an anomalous pg driver state (UPDATE always returns a count).
+    // Treat it as 0 but log at warn so it's visible in production.
+    if (claimResult.rowCount === null) {
+      this.logger.warn({ jobId: job.id }, 'Claim UPDATE returned null rowCount — treating as already claimed, skipping fire');
       return;
     }
 
