@@ -168,13 +168,15 @@ export class WebBrowserHandler implements SkillHandler {
           // reload ONCE if the page looks blocked or served a near-empty stub. One retry,
           // not a loop. (#1053)
           let pageTitle = await readTitle();
-          if (isHardBlock(pageTitle) || (await isLikelyEmpty(page))) {
+          if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
             ctx.log.info({ sessionId, url: parsedUrl.toString(), pageTitle }, 'Soft block suspected — dwelling and reloading once');
             await jitteredDelay(1500, 3000);
             await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch((err) => {
               ctx.log.debug({ err, sessionId }, 'Reload during soft-block recovery failed — proceeding with current DOM');
             });
-            await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch(() => {});
+            await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
+              ctx.log.debug({ err, sessionId }, 'networkidle not reached after soft-block reload — proceeding with current DOM');
+            });
             pageTitle = await readTitle();
           }
 
@@ -183,7 +185,7 @@ export class WebBrowserHandler implements SkillHandler {
           // Re-check isLikelyEmpty here too: if the page was near-empty before the reload
           // AND still near-empty after, it's a persistent soft block — not a transient stub.
           const status = response?.status();
-          if (isHardBlock(pageTitle) || (await isLikelyEmpty(page))) {
+          if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
             ctx.log.warn({ sessionId, url: parsedUrl.toString(), status, pageTitle }, 'Navigation hit a hard edge block');
             return {
               success: false,
@@ -404,11 +406,12 @@ function isHardBlock(title: string): boolean {
 // A near-empty body after load is a soft-block tell (CF/JS challenge serving a stub page),
 // distinct from isHardBlock's title match. Best-effort: an evaluate failure is treated as
 // "not empty" so we never reload on a transient read error. (#1053)
-async function isLikelyEmpty(page: Page): Promise<boolean> {
+async function isLikelyEmpty(page: Page, log: SkillContext['log']): Promise<boolean> {
   try {
     const len = await page.evaluate(() => (document.body?.innerText ?? '').trim().length);
     return typeof len === 'number' && len < 50;
-  } catch {
+  } catch (err) {
+    log.debug({ err }, 'isLikelyEmpty: page.evaluate failed — treating as non-empty (best-effort)');
     return false;
   }
 }
