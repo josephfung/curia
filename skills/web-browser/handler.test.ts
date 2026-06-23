@@ -5,7 +5,24 @@
 // ctx.resolveSecretRef and fills the resolved value WITHOUT the value ever entering
 // the skill's return data, and any page content read back is scrubbed of it.
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock the human-behavior module so dwell/presence/click/type are observable spies with no
+// real delays. Hoisted by vitest; the handler imports these and gets the spies. (#1053)
+vi.mock('../../src/browser/human-behavior.js', () => ({
+  jitteredDelay: vi.fn().mockResolvedValue(undefined),
+  simulateHumanPresence: vi.fn().mockResolvedValue(undefined),
+  humanClick: vi.fn().mockResolvedValue(undefined),
+  humanType: vi.fn().mockResolvedValue(undefined),
+}));
+
+import {
+  jitteredDelay,
+  simulateHumanPresence,
+  humanClick,
+  humanType,
+} from '../../src/browser/human-behavior.js';
+
 import pino from 'pino';
 import { WebBrowserHandler } from './handler.js';
 import { BrowserSession } from '../../src/browser/browser-session.js';
@@ -14,6 +31,14 @@ import type { SkillContext } from '../../src/skills/types.js';
 import type { BrowserContext, Page } from 'playwright';
 
 const logger = pino({ level: 'silent' });
+
+// Reset human-behavior spies between tests so call counts don't bleed across cases.
+beforeEach(() => {
+  vi.mocked(jitteredDelay).mockClear();
+  vi.mocked(simulateHumanPresence).mockClear();
+  vi.mocked(humanClick).mockClear();
+  vi.mocked(humanType).mockClear();
+});
 
 const SECRET_VALUE = 'sup3r-s3cr3t-pw';
 
@@ -59,8 +84,10 @@ function makeMockPage(
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     screenshot: vi.fn().mockResolvedValue(Buffer.from('png')),
-    keyboard: { press: vi.fn().mockResolvedValue(undefined) },
-    mouse: { wheel: vi.fn().mockResolvedValue(undefined) },
+    keyboard: { press: vi.fn().mockResolvedValue(undefined), type: vi.fn().mockResolvedValue(undefined) },
+    mouse: { wheel: vi.fn().mockResolvedValue(undefined), move: vi.fn().mockResolvedValue(undefined) },
+    reload: vi.fn().mockResolvedValue({ status: () => 200 }),
+    viewportSize: vi.fn().mockReturnValue({ width: 1280, height: 720 }),
     getByRole: vi.fn().mockReturnValue(locator),
     getByLabel: vi.fn().mockReturnValue(locator),
     getByText: vi.fn().mockReturnValue(locator),
@@ -744,5 +771,63 @@ describe('web-browser hard-block detection', () => {
 
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(true);
+  });
+});
+
+describe('web-browser navigate hardening — dwell + soft-block reload (#1053)', () => {
+  function makeNavCtx(page: ReturnType<typeof makeMockPage>) {
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-nav', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    return {
+      input: { action: 'navigate', url: 'https://example.com' },
+      log: logger,
+      browserService,
+    } as unknown as SkillContext;
+  }
+
+  it('dwells and simulates presence after a clean navigation', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('Example Domain content here for a normal page', fill, 'https://example.com/');
+    const ctx = makeNavCtx(page);
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(simulateHumanPresence)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(jitteredDelay)).toHaveBeenCalled();
+    expect(page.reload).not.toHaveBeenCalled();
+  });
+
+  it('reloads once on a soft block, then succeeds when the reload clears it', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('content', fill, 'https://shop.example.com/');
+    // First title read = CF challenge; after reload = clean page.
+    page.title = vi.fn()
+      .mockResolvedValueOnce('Just a moment...')
+      .mockResolvedValue('Shop — Home');
+    const ctx = makeNavCtx(page);
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(page.reload).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(simulateHumanPresence)).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a hard-block error when the soft block persists after the reload', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('content', fill, 'https://walled.example.com/', { title: 'Access Denied' });
+    const ctx = makeNavCtx(page);
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect(page.reload).toHaveBeenCalledTimes(1);
+    if (!result.success) expect(result.error).toMatch(/blocked automated access/i);
+    // No presence simulation once we've declared the page undrivable.
+    expect(vi.mocked(simulateHumanPresence)).not.toHaveBeenCalled();
   });
 });
