@@ -13,75 +13,50 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Fixed
-- **`ceo-inbox-draft-reply`** — HTML tags no longer leak into draft bodies when the LLM writes HTML directly; `looksLikeHtml()` guard added across all draft handlers.
+## [0.37.0] — 2026-06-22 — "Jane"
 
-### Changed
-- **`js-yaml`** — bumped from 4.2.0 to 5.0.0; migrated all imports to named exports (`import * as yaml`) and added empty/comment-only input guards to preserve v4 null-return behavior in config loaders and startup validator.
-
-### Changed
-
-- **`config/default.yaml`** — trimmed verbose comment blocks (dispatch rate-limit, injection patterns, PII patterns, outbound filter) to concise inline notes.
-- **`.env.example`** — removed three obsolete sections (vault secrets reference list, Signal channel setup guide, Google Drive / Workspace MCP setup guide).
-- **`package.json`** — removed dead `pnpm.onlyBuiltDependencies` block (ignored by pnpm 11; superseded by `allowBuilds` in `pnpm-workspace.yaml`).
-- **`.nvmrc`** — added, pins Node 24 to match the `engines` field.
-
-### Removed
-
-- **Email accounts backfill** — `backfillEmailAccounts` and its test deleted; import, call site, and `channel_accounts` YAML field removed. All deployments have run the migration (#1101).
-
-### Fixed
-
-- **Setup wizard — name step** — Step 1 no longer auto-skips when a principal exists; it pre-populates the current name so it can be corrected. (#392)
-- **MCP Skills icon** — added missing plug icon to the MCP Skills sidebar nav item to match all other Settings sub-items.
+> **Jane** *(Speaker for the Dead, 1986, Orson Scott Card)* — a hyperintelligent being who lives in the ansible network, holds every key, knows every identity, and asks one question before charting the fastest path. v0.37 gives Curia the same instincts: credentials move into the vault, principal identity resolves from contacts alone, and the setup wizard asks what you need first, then gets you there.
 
 ### Added
 
-- **Setup wizard — principal operational profile** — new "Your details" step captures the principal's timezone, email, preferred name, title, and working hours; email is stored as a verified identity that comes online after the wizard's restart. (#392)
-- **Wizard name suggestion** — the onboarding wizard prefills the assistant name and email signature from an LLM-suggested first name via `POST /api/setup/suggest-name`, doubling as an early smoke test of the Anthropic key; silent static fallback on any failure. (#799)
-- **Email accounts** — manage one or many agent-owned mailboxes from the console; per-account Nylas grants stored in the vault. (#1101)
-- **Specialist secret-capture resume** — a delegated specialist (or the setup-wizard) that mints a secret-capture link is now resumed on redeem: migration 061 adds `resume_token` to `secret_capture_tokens`, re-entry routes through the coordinator, which re-delegates to the specialist via the `delegate` resume_token. Preserves the no-value and originator invariants. (#995)
-- **MCP skill credentials** — MCP servers declare required secrets in `skills.yaml` via a `secrets:` block; the web console presents credential fields (masked or plain), writes to the encrypted vault, and gates enable/disable on whether required secrets resolve. Mirrors the Channels registry pattern. New `mcp_server_registry` table, `McpRegistryService`, `reconcileMcpRegistry`, and `/api/registry/mcp/*` routes. `loadMcpServers` now filters to enabled servers only. (#1100 or the PR number for this branch)
-- `setup-status` skill: read-only, returns the setup catalog with each task's live-derived status (`done` / `pending` / `deferred`). Catalog (`catalog.yaml`) is owned by the skill bundle, not core.
-- `setup-defer` skill: write (`action_risk: low`), persists/clears setup task deferrals in config-store (`setup_wizard/deferrals`).
-- `setup-wizard` v0.2.0: outcome-backward concierge prompt — instant wins first, then outcome question → shortest path → defer the rest. Routes email/Signal to console, lone API keys to in-chat capture. Catalog-aware (full menu on request, resume deferred tasks). Replaces v0.1.x turn-by-turn script.
-- `CLAUDE.md` coaching note: contributors adding new credentialed capabilities or changing default behavior should update the setup-wizard catalog and its docs.
-
-### Fixed
-
-- **Principal KG node decay class** — `insertKgPersonNode`'s `ON CONFLICT` handler now promotes `decay_class` to `permanent` and pins `confidence` to `GREATEST(existing, 1.0)`, so a pre-existing `slow_decay` person node (created by email extraction before bootstrap ran) is repaired instead of left eligible for DreamEngine archival. Migration 062 backfills any already-affected instance. (#1004)
-
-### Removed
-
-- **`channel_accounts` YAML** — email accounts are no longer configured via `config/local.yaml`; the env-backed multi-account path is retired (supersedes #920). (#1101)
-- **`CEO_PRIMARY_EMAIL`** — removed the env var (and `config.ceoPrimaryEmail`, `bootstrapCeoContact`) now that in-app onboarding (#771) creates the principal; `repairPrincipalMetadata` is preserved and runs at startup. (#1049)
+- **Email accounts** — manage one or many agent-owned mailboxes from the console (Settings → Channels → Email); per-account Nylas grants stored in the vault at `channel.email.<name>.nylas_grant_id`. (#1101)
+- **MCP skill credentials** — MCP servers declare required secrets via a `secrets:` block in `skills.yaml`; the console (Settings → MCP Skills) presents credential fields, writes to the encrypted vault, and gates enable/disable on whether all secrets resolve. New `mcp_server_registry` table and `McpRegistryService`.
+- **Specialist secret-capture resume** — a specialist that mints a secret-capture link is now resumed on redemption; migration 061 adds `resume_token` to `secret_capture_tokens`, and the coordinator re-delegates to the originating specialist on redeem. (#995)
+- **Setup wizard v2** — outcome-backward concierge: instant wins first (via `setup-status`), then one outcome question, then the shortest path to the first working integration; remaining tasks deferred with `setup-defer`. Replaces the fixed turn-by-turn script. (#392)
+- **Setup wizard — principal profile** — new "Your details" step 2 captures timezone, preferred name, title, email, and working hours via `POST /api/setup/principal/profile`. (#392)
+- **Wizard name suggestion** — assistant name and signature are prefilled via `POST /api/setup/suggest-name` (LLM call; silent static fallback on failure); also an early smoke test of the Anthropic key. (#799)
 
 ### Changed
 
-- **Default assistant signature** — the seeded `DEFAULT_OFFICE_IDENTITY` email signature is now `--\n<name> Curia\nDigital EA`, pre-populated (not just placeheld) in the onboarding wizard. (#799)
-- **Default assistant title** — the seeded `DEFAULT_OFFICE_IDENTITY` title is now `Digital EA`, matching the role line in the default signature so the onboarding wizard shows a consistent title and signature. (#799)
-- **Principal identity is contacts-only** — `findContactBySystemRole('principal')` is now the single startup source of truth; the `PiiRedactor` bypass, CEO notifiers, outbound filter, and email adapter all read the principal contact (resolved once at boot) instead of `config.ceoPrimaryEmail`. Fixes principal-bound messages being wrongly redacted in fresh-setup mode. (#1049)
+- **Principal identity is contacts-only** — `findContactBySystemRole('principal')` is the single source of truth at startup; the `PiiRedactor` bypass, CEO notifiers, outbound filter, and email adapter all read the principal contact row. (#1049)
+- **Default assistant signature and title** — seeded to `Digital EA` / `-- <name> Curia\nDigital EA`, pre-populated in the wizard instead of shown as a placeholder. (#799)
+- **Vault credential overlay at boot** — `applyChannelVaultSecrets()` wires channel vault credentials onto runtime config before adapters are constructed; whitespace-only vault values read as absent on both the gate and the overlay. (#964)
+- **Coordinator Drive moves** — `update_drive_file` is pinned to the coordinator and reparenting via `add_parents`/`remove_parents` is now invoked, so "move this doc into a folder" requests work. (#1062)
+- **`skills/**` typecheck** — CI now type-checks all skill handlers and tests. (#1075)
+- **`js-yaml`** — bumped to 5.0.0; imports migrated to named exports (`import * as yaml`). (#*)
 - **`SecretCapturedPayload`** — gained an optional `resumeToken` field (public bus event surface). (#995)
-- **Coordinator Drive moves** — pinned `update_drive_file` to the coordinator and documented reparenting (`add_parents`/`remove_parents`), so "move this doc into a folder" requests are performed instead of declined. (#1062)
-- **`skills/**` typecheck** — CI now type-checks all skill handlers and tests, closing the scope blind spot. (#1075)
-- **CodeAnt review rules** — scoped `.codeant/instructions.json` so known false-positive patterns (skill-handler `String(err)` returns, the MCP loader's warn-not-crash `continue`, awaited loader calls in tests) stop firing. (#1098)
 
 ### Fixed
 
-- **Channel registry** — email/signal creds saved via the Channels UI (`channel.*` vault keys) now wire up the adapter at boot, so the registry's `enabled + resolvable` state and real adapter boot can no longer disagree; the gate and the runtime overlay share one `normalizeSecretValue()` so a whitespace-only vault value reads as absent on both. (#964)
-- **Bullpen duplicate out-of-band actions** — a per-agent read watermark (`bullpen_thread_reads`) stops a thread an agent has already had in context from being re-injected on a later wake until newer activity arrives, so a request fulfilled out-of-band (a send, a spreadsheet write, anything) is no longer re-actioned. Action-agnostic. (#1065)
-- **Drift detector false-positives on wake jobs** — the scheduler no longer drift-checks task-bound `wake_at` jobs (whose payload is the contentless `{"type":"task-wake"}` envelope), so meeting-debriefs and reminders complete instead of being wrongly paused; the drift-pause notification is now review-only and carries no re-executable intent, ending the duplicate outbound send. (#1064)
-- **Autonomy test skips** — `autonomy-routes` and `autonomy-service-pagination` tests now `describe.skip` when `DATABASE_URL` is unset instead of throwing in `beforeAll`, matching the other integration tests and removing 2 spurious local failures. (#519)
-- **Latent skill handler type errors** — fixed 34 errors surfaced by the new skills typecheck (`calendar-list-events` `PromiseSettledResult` narrowing, indexed-access guards). (#1075)
-- **`drive-download-file`** — dropped the unsupported `supportsAllDrives` flag from `files.export` that broke overload resolution. (#1075)
-- **Debrief clear** — "clear meeting X" now releases *all* active outbound-context entries for each named meeting via the new `context-bridge-clear` skill (matches by meeting subject across the whole active table, not just the injected window) and confirms from what was actually released, surfacing any names it couldn't match instead of reporting blanket success. meeting-debrief stamps a `{subject, eventId}` key on every debrief send and self-clears both prompt and reminder when a debrief closes. `context-bridge-clear` is pinned to coordinator, contacts, ceo-inbox, and meeting-debrief. (#975)
-- **Contacts dedup task lifecycle** — the contacts specialist now closes dedup review tasks (`task-complete`) and self-sweeps the exchange's outbound-context entry on every terminal outcome (merge, exclude, defer), so resolved dedups no longer linger as `open` in the morning digest. (#1052)
-- **Silent context sweep** — `context-bridge-release` drops its `coordinator`-only `allowed_callers` restriction; specialists (`contacts`, `ceo-inbox`) can release their own exchange entries instead of asking "Sweep those too?". (#1052)
-- **Coordinator sweep trigger** — tightened from the ambiguous "after the exchange is complete" to an explicit close-on-result rule, so stale `[ACTIVE OUTBOUND CONTEXT]` entries stop accumulating across multi-turn specialist conversations. (#1052)
+- **Debrief clear** — `context-bridge-clear` matches all active outbound-context entries by meeting subject (not just the injected window); meeting-debrief stamps `{subject, eventId}` on every send and self-clears on close. (#975)
+- **Bullpen duplicate actions** — a per-agent read watermark (`bullpen_thread_reads`) stops a thread from being re-injected until newer activity arrives. (#1065)
+- **Drift detector false-positives** — task-bound wake jobs are no longer drift-checked; the duplicate outbound send on drift-pause is eliminated. (#1064)
+- **Contacts dedup lifecycle** — resolved dedups now close their review task and sweep the outbound-context entry on every terminal outcome (merge, exclude, defer). (#1052)
+- **Context sweep callers** — `context-bridge-release` drops its coordinator-only `allowed_callers` restriction; specialists can release their own exchange entries. (#1052)
+- **Coordinator sweep trigger** — tightened to an explicit close-on-result rule; stale `[ACTIVE OUTBOUND CONTEXT]` entries no longer accumulate across multi-turn specialist conversations. (#1052)
+- **Principal KG node decay class** — `insertKgPersonNode`'s `ON CONFLICT` handler promotes `decay_class` to `permanent`; migration 062 backfills affected instances. (#1004)
+- **`ceo-inbox-draft-reply`** — HTML tags no longer leak into draft bodies (`looksLikeHtml()` guard added to all draft handlers).
+- **Setup wizard — name step** — step 1 pre-populates the current principal name and no longer auto-skips on re-entry. (#392)
+- **`drive-download-file`** — removed the unsupported `supportsAllDrives` flag from `files.export`. (#1075)
+
+### Removed
+
+- **`channel_accounts` YAML and `CEO_PRIMARY_EMAIL`** — email accounts are managed from the console; the env-backed config path and `bootstrapCeoContact` are retired. (#1101, #1049)
+- **Email accounts backfill** — `backfillEmailAccounts` deleted; all deployments have run migration 064. (#1101)
 
 ### Security
 
-- **Google Workspace OAuth secrets in the vault** — `google_oauth_client_id`, `google_oauth_client_secret`, and `curia_google_email` now resolve from the encrypted vault instead of plaintext `.env`; `drive-download-file` reads them via audited `ctx.secret()`, and the `google-workspace` MCP subprocess resolves them (and its `env:` fixed_input) from the vault at spawn time, vault-only. (#913)
+- **Google Workspace OAuth secrets** — `google_oauth_client_id`, `google_oauth_client_secret`, and `curia_google_email` now resolve from the encrypted vault; `drive-download-file` and the `google-workspace` MCP subprocess read them via `ctx.secret()`, vault-only. (#913)
 
 ## [0.36.0] — 2026-06-20 — "Reverend Mother"
 
