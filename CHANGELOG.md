@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **Setup wizard email ReDoS** — added a 254-char length cap before `EMAIL_RE.test()` in the principal profile route, preventing quadratic backtracking on crafted inputs (CodeQL #185).
+
 ## [0.37.0] — 2026-06-22 — "Jane"
 
 > **Jane** *(Speaker for the Dead, 1986, Orson Scott Card)* — a hyperintelligent being who lives in the ansible network, holds every key, knows every identity, and asks one question before charting the fastest path. v0.37 gives Curia the same instincts: credentials move into the vault, principal identity resolves from contacts alone, and the setup wizard asks what you need first, then gets you there.
