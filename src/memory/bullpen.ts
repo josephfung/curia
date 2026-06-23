@@ -385,7 +385,7 @@ class PostgresBullpenBackend implements BullpenBackend {
         sender_id: string; content: unknown; mentioned_agent_ids: string[]; created_at: Date;
       }>(
         `WITH ranked AS (
-           SELECT sender_id, content, mentioned_agent_ids, created_at,
+           SELECT id, sender_id, content, mentioned_agent_ids, created_at,
              ROW_NUMBER() OVER (ORDER BY created_at ASC,  id ASC)  AS rn_asc,
              ROW_NUMBER() OVER (ORDER BY created_at DESC, id DESC) AS rn_desc
            FROM bullpen_messages
