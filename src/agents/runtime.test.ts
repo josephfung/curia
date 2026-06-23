@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentRuntime } from './runtime.js';
 import type { LLMProvider, LLMResponse } from './llm/provider.js';
 import { EventBus } from '../bus/bus.js';
-import { createAgentTask, type AgentResponseEvent, type ModelFallbackEngagedEvent } from '../bus/events.js';
+import { createAgentTask, type AgentErrorEvent, type AgentResponseEvent, type ModelFallbackEngagedEvent } from '../bus/events.js';
 import { createSilentLogger } from '../logger.js';
 import { randomUUID } from 'node:crypto';
 
@@ -28,13 +28,13 @@ function makeSuccessResponse(model: string): LLMResponse {
   };
 }
 
-function makeNotFoundResponse(): LLMResponse {
+function makeNotFoundResponse(source = 'openrouter', message = '404 No endpoints found'): LLMResponse {
   return {
     type: 'error',
     error: {
       type: 'NOT_FOUND',
-      source: 'openrouter',
-      message: '404 No endpoints found',
+      source,
+      message,
       retryable: false,
       context: { status: 404 },
       timestamp: new Date(),
@@ -65,8 +65,10 @@ function makeProvider(id: string, response: LLMResponse): LLMProvider {
 async function runTask(bus: EventBus, agentId: string, content = 'hello'): Promise<{
   response: AgentResponseEvent | null;
   fallbackEvents: ModelFallbackEngagedEvent[];
+  errorEvents: AgentErrorEvent[];
 }> {
   const fallbackEvents: ModelFallbackEngagedEvent[] = [];
+  const errorEvents: AgentErrorEvent[] = [];
   let resolveResponse: (ev: AgentResponseEvent) => void;
   const responsePromise = new Promise<AgentResponseEvent>(res => { resolveResponse = res; });
 
@@ -75,6 +77,9 @@ async function runTask(bus: EventBus, agentId: string, content = 'hello'): Promi
   });
   bus.subscribe('model.fallback', 'system', event => {
     fallbackEvents.push(event as ModelFallbackEngagedEvent);
+  });
+  bus.subscribe('agent.error', 'system', event => {
+    errorEvents.push(event as AgentErrorEvent);
   });
 
   const parentId = randomUUID();
@@ -95,7 +100,7 @@ async function runTask(bus: EventBus, agentId: string, content = 'hello'): Promi
     new Promise<null>(res => setTimeout(() => res(null), 5_000)),
   ]);
 
-  return { response, fallbackEvents };
+  return { response, fallbackEvents, errorEvents };
 }
 
 // ------------------------------------------------------------------
@@ -178,8 +183,9 @@ describe('AgentRuntime model fallback (#813)', () => {
   });
 
   it('(c) surfaces an error when both primary and fallback fail', async () => {
-    const primary = makeProvider('openrouter', makeNotFoundResponse());
-    const fallback = makeProvider('anthropic', makeNotFoundResponse());
+    // Use distinct sources so we can verify it's the fallback's error that surfaces.
+    const primary = makeProvider('openrouter', makeNotFoundResponse('openrouter', 'primary model gone'));
+    const fallback = makeProvider('anthropic', makeNotFoundResponse('anthropic', 'fallback model gone'));
 
     const runtime = new AgentRuntime({
       agentId: AGENT_ID,
@@ -194,7 +200,7 @@ describe('AgentRuntime model fallback (#813)', () => {
     });
     runtime.register();
 
-    const { response, fallbackEvents } = await runTask(bus, AGENT_ID);
+    const { response, fallbackEvents, errorEvents } = await runTask(bus, AGENT_ID);
 
     // Should still get a response, but it's an error response
     expect(response).not.toBeNull();
@@ -203,6 +209,11 @@ describe('AgentRuntime model fallback (#813)', () => {
     // model.fallback event was still published (we attempted the fallback)
     expect(fallbackEvents).toHaveLength(1);
     expect(fallbackEvents[0]!.payload.failedModel).toBe(PRIMARY_MODEL);
+
+    // The agent.error event must carry the fallback's source, proving it's the fallback
+    // error that was surfaced rather than the primary NOT_FOUND.
+    expect(errorEvents).toHaveLength(1);
+    expect(errorEvents[0]!.payload.source).toBe('anthropic');
 
     expect(primary.chat).toHaveBeenCalledOnce();
     expect(fallback.chat).toHaveBeenCalledOnce();

@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Model-tier fallback resilience** — when a tier's primary model returns `NOT_FOUND` (e.g. OpenRouter drops a model from its catalog), the agent runtime automatically re-routes to the fallback tier's model (`fast`→`standard`, `standard`→`powerful`, `powerful`→`standard`) instead of surfacing an error. Engagement is logged as a `model.fallback` audit event. (#813)
+- **Model-tier fallback resilience** — reroutes `NOT_FOUND` across fixed tier rules and emits a `model.fallback` audit event (spec 05, #813).
 
 ### Changed
 

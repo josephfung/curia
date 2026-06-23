@@ -1821,7 +1821,23 @@ async function main(): Promise<void> {
     const fallbackTier = modelRouter.getFallbackTier(resolved.tier);
     const fallbackResolved = modelRouter.resolve(fallbackTier);
     const fallbackProviderName = modelRegistry.getProvider(fallbackResolved.model);
-    const agentFallbackProvider = fallbackProviderName ? providerRegistry.get(fallbackProviderName) : undefined;
+    if (!fallbackProviderName) {
+      // All tier models are validated at construction, so a missing provider name here
+      // means the model-registry is inconsistent with the provider-registry — fail fast.
+      logger.error(
+        { agentId: agentConfig.name, fallbackModel: fallbackResolved.model },
+        'Fallback model has no registered provider — check model-registry.ts',
+      );
+      process.exit(1);
+    }
+    const agentFallbackProvider = providerRegistry.get(fallbackProviderName);
+    if (!agentFallbackProvider) {
+      logger.error(
+        { agentId: agentConfig.name, fallbackModel: fallbackResolved.model, fallbackProviderName },
+        'Fallback provider not found in provider registry — check provider setup',
+      );
+      process.exit(1);
+    }
 
     const agent = new AgentRuntime({
       agentId: agentConfig.name,

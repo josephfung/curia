@@ -1385,15 +1385,38 @@ export class AgentRuntime {
           { agentId, failedModel: modelForCall, fallbackModel: this.config.fallbackModel, tier: this.config.tier },
           'Primary model NOT_FOUND — attempting fallback tier model',
         );
-        await this.publishModelFallbackEngaged(agentErr, taskEvent, modelForCall ?? 'unknown');
+        await this.publishModelFallbackEngaged(taskEvent, modelForCall ?? 'unknown');
 
         // @TODO: params.messages were assembled against the primary model's context window.
         // For powerful→standard downgrades the fallback may have a smaller window,
         // causing the fallback call to fail with a context-overflow error. Re-budgeting
         // mid-flight is non-trivial; for now the common cases (fast→standard,
         // standard→powerful) are larger-or-equal so this is safe. (#813)
+        let fallbackResponse: LLMResponse;
         const fallbackStartMs = Date.now();
-        const fallbackResponse = await this.config.fallbackProvider.chat({ ...params, model: this.config.fallbackModel });
+        try {
+          fallbackResponse = await this.config.fallbackProvider.chat({ ...params, model: this.config.fallbackModel });
+        } catch (err) {
+          // Provider threw synchronously (network failure, misconfiguration, etc.) —
+          // normalize into AgentError so the audit trail stays complete.
+          const thrownErr: AgentError = {
+            type: 'UNKNOWN',
+            source: this.config.fallbackProvider.id,
+            message: err instanceof Error ? err.message : String(err),
+            retryable: false,
+            context: { raw: String(err) },
+            timestamp: new Date(),
+          };
+          budget.consecutiveErrors += 1;
+          budget.turnsUsed += 1;
+          logger.error(
+            { agentId, err, fallbackModel: this.config.fallbackModel },
+            'Fallback provider threw an unexpected exception',
+          );
+          await this.publishAgentError(thrownErr, taskEvent);
+          await this.sendErrorResponse(taskEvent);
+          return null;
+        }
         const fallbackLatencyMs = Date.now() - fallbackStartMs;
 
         if (fallbackResponse.type !== 'error') {
@@ -1516,7 +1539,6 @@ export class AgentRuntime {
    * and the runtime is re-routing to the fallback tier's model (#813).
    */
   private async publishModelFallbackEngaged(
-    agentErr: AgentError,
     taskEvent: AgentTaskEvent,
     failedModel: string,
   ): Promise<void> {
@@ -1528,7 +1550,7 @@ export class AgentRuntime {
         tier: this.config.tier ?? 'unknown',
         failedModel,
         fallbackModel: this.config.fallbackModel ?? 'unknown',
-        reason: agentErr.type,
+        reason: 'NOT_FOUND',
         parentEventId: taskEvent.id,
       });
       await bus.publish('agent', event);

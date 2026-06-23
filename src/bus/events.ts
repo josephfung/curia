@@ -432,14 +432,14 @@ interface LlmCallPayload {
 interface ModelFallbackEngagedPayload {
   agentId: string;
   conversationId: string;
-  /** Capability tier whose primary model failed (fast | standard | powerful). */
-  tier: string;
+  /** Capability tier whose primary model failed. 'unknown' only when tier was not configured. */
+  tier: 'fast' | 'standard' | 'powerful' | 'unknown';
   /** Primary model that returned NOT_FOUND. */
   failedModel: string;
   /** Fallback model being attempted. */
   fallbackModel: string;
   /** Error type that triggered the fallback — currently always NOT_FOUND. */
-  reason: string;
+  reason: 'NOT_FOUND';
 }
 
 // ContextBudgetPayload — emitted by the agent runtime after assembling context
