@@ -88,3 +88,81 @@ describe('linearStrategy.path', () => {
     expect(pts[pts.length - 1]).toEqual({ x: 40, y: 0 });
   });
 });
+
+import { vi } from 'vitest';
+import type { Page, Locator } from 'playwright';
+import {
+  jitteredDelay,
+  humanClick,
+  humanType,
+  simulateHumanPresence,
+} from './human-behavior.js';
+
+const noopSleep = () => Promise.resolve();
+
+describe('jitteredDelay', () => {
+  it('sleeps for the computed jitter and resolves', async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    await jitteredDelay(100, 100, { sleep, rng: () => 0.5 });
+    expect(sleep).toHaveBeenCalledWith(100);
+  });
+});
+
+describe('humanType', () => {
+  it('types each character via the keyboard', async () => {
+    const type = vi.fn().mockResolvedValue(undefined);
+    const page = { keyboard: { type } } as unknown as Page;
+    await humanType(page, 'ab.', { sleep: noopSleep, rng: () => 0 });
+    expect(type).toHaveBeenCalledTimes(3);
+    expect(type).toHaveBeenNthCalledWith(1, 'a', { delay: 0 });
+    expect(type).toHaveBeenNthCalledWith(3, '.', { delay: 0 });
+  });
+});
+
+describe('humanClick', () => {
+  function mockPage() {
+    return {
+      mouse: { move: vi.fn().mockResolvedValue(undefined) },
+      viewportSize: vi.fn().mockReturnValue({ width: 1280, height: 720 }),
+    } as unknown as Page;
+  }
+  it('moves the cursor along a path, then clicks', async () => {
+    const page = mockPage();
+    const click = vi.fn().mockResolvedValue(undefined);
+    const locator = {
+      boundingBox: vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 }),
+      click,
+    } as unknown as Locator;
+    await humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 });
+    expect((page.mouse.move as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+  it('still clicks when the bounding box is unavailable (best-effort)', async () => {
+    const page = mockPage();
+    const click = vi.fn().mockResolvedValue(undefined);
+    const locator = {
+      boundingBox: vi.fn().mockRejectedValue(new Error('detached')),
+      click,
+    } as unknown as Locator;
+    await humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 });
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('simulateHumanPresence', () => {
+  it('moves the mouse and scrolls without throwing', async () => {
+    const page = {
+      mouse: { move: vi.fn().mockResolvedValue(undefined), wheel: vi.fn().mockResolvedValue(undefined) },
+      viewportSize: vi.fn().mockReturnValue({ width: 1280, height: 720 }),
+    } as unknown as Page;
+    await simulateHumanPresence(page, { sleep: noopSleep, rng: () => 0.5 });
+    expect((page.mouse.wheel as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+  });
+  it('swallows errors from the page (best-effort)', async () => {
+    const page = {
+      mouse: { move: vi.fn().mockRejectedValue(new Error('boom')), wheel: vi.fn() },
+      viewportSize: vi.fn().mockReturnValue({ width: 1280, height: 720 }),
+    } as unknown as Page;
+    await expect(simulateHumanPresence(page, { sleep: noopSleep, rng: () => 0.5 })).resolves.toBeUndefined();
+  });
+});

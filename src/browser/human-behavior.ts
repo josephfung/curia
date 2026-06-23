@@ -7,6 +7,8 @@
 // the testable logic; the page-driving functions wrap them. All randomness is injected via
 // `rng` and all sleeps via `sleep` so the logic is deterministic under test. (#1053)
 
+import type { Page, Locator } from 'playwright';
+
 export type Rng = () => number;
 
 export interface Point {
@@ -96,4 +98,102 @@ export function computeKeyDelay(char: string, rng: Rng = Math.random): number {
   if ('.!?'.includes(char)) delay += 100 + rng() * 200;
   else if (',;:'.includes(char)) delay += 50 + rng() * 100;
   return delay;
+}
+
+// ─── Page-driving helpers ────────────────────────────────────────────────────
+// All randomness injected via `rng`, all sleeps via `sleep` — fully testable
+// without real timers or a real browser.
+
+export interface BehaviorOptions {
+  rng?: Rng;
+  sleep?: (ms: number) => Promise<void>;
+  strategy?: MouseMoveStrategy;
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Randomized wait within [minMs, maxMs]. */
+export async function jitteredDelay(
+  minMs: number,
+  maxMs: number,
+  opts: BehaviorOptions = {},
+): Promise<void> {
+  const { rng = Math.random, sleep = defaultSleep } = opts;
+  await sleep(computeJitter(minMs, maxMs, rng));
+}
+
+/**
+ * Type `text` character-by-character with human cadence: per-key delay, longer pauses after
+ * punctuation, and an occasional "thinking" pause every 10-30 chars. Drives page.keyboard,
+ * so the caller must focus the target first.
+ */
+export async function humanType(page: Page, text: string, opts: BehaviorOptions = {}): Promise<void> {
+  const { rng = Math.random, sleep = defaultSleep } = opts;
+  let sinceLastPause = 0;
+  let pauseThreshold = 10 + Math.floor(rng() * 20);
+  for (const char of text) {
+    await page.keyboard.type(char, { delay: 0 });
+    let delay = computeKeyDelay(char, rng);
+    if (++sinceLastPause >= pauseThreshold) {
+      delay += 150 + rng() * 250;
+      sinceLastPause = 0;
+      pauseThreshold = 10 + Math.floor(rng() * 20);
+    }
+    await sleep(delay);
+  }
+}
+
+/**
+ * Move the cursor to a random point inside the locator's box along a curved path, pause,
+ * then click. The cursor "arrives from" a random viewport point so the path is a real curve
+ * rather than a teleport. Best-effort: any movement failure is swallowed and we still click.
+ */
+export async function humanClick(page: Page, locator: Locator, opts: BehaviorOptions = {}): Promise<void> {
+  const { rng = Math.random, sleep = defaultSleep, strategy = bezierStrategy } = opts;
+  try {
+    const box = await locator.boundingBox();
+    if (box) {
+      const vp = page.viewportSize() ?? { width: 1280, height: 720 };
+      const from: Point = { x: rng() * vp.width, y: rng() * vp.height };
+      const target: Point = {
+        x: box.x + box.width * (0.3 + rng() * 0.4),
+        y: box.y + box.height * (0.3 + rng() * 0.4),
+      };
+      for (const p of strategy.path(from, target, rng)) {
+        await page.mouse.move(p.x, p.y);
+      }
+      await sleep(computeJitter(80, 200, rng));
+    }
+  } catch {
+    // Best-effort: never let the movement layer fail the click.
+  }
+  await locator.click({ timeout: 10_000 });
+}
+
+/**
+ * Simulate casual browsing before the first meaningful interaction: a few curved mouse moves
+ * across the viewport plus a short scroll down and back up. Best-effort — must never fail the
+ * caller's navigation.
+ */
+export async function simulateHumanPresence(page: Page, opts: BehaviorOptions = {}): Promise<void> {
+  const { rng = Math.random, sleep = defaultSleep, strategy = bezierStrategy } = opts;
+  try {
+    const vp = page.viewportSize() ?? { width: 1280, height: 720 };
+    let current: Point = { x: rng() * vp.width, y: rng() * vp.height };
+    const moves = 3 + Math.floor(rng() * 3);
+    for (let i = 0; i < moves; i++) {
+      const target: Point = { x: 50 + rng() * (vp.width - 100), y: 50 + rng() * (vp.height - 100) };
+      for (const p of strategy.path(current, target, rng)) {
+        await page.mouse.move(p.x, p.y);
+      }
+      current = target;
+      await jitteredDelay(150, 400, { rng, sleep });
+    }
+    await page.mouse.wheel(0, 100 + rng() * 200);
+    await jitteredDelay(300, 800, { rng, sleep });
+    await page.mouse.wheel(0, -(100 + rng() * 200));
+    await jitteredDelay(200, 500, { rng, sleep });
+  } catch {
+    // Best-effort: presence simulation must never fail the navigation.
+  }
 }
