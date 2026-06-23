@@ -129,17 +129,21 @@ export async function jitteredDelay(
  */
 export async function humanType(page: Page, text: string, opts: BehaviorOptions = {}): Promise<void> {
   const { rng = Math.random, sleep = defaultSleep } = opts;
-  let sinceLastPause = 0;
-  let pauseThreshold = 10 + Math.floor(rng() * 20);
-  for (const char of text) {
-    await page.keyboard.type(char, { delay: 0 });
-    let delay = computeKeyDelay(char, rng);
-    if (++sinceLastPause >= pauseThreshold) {
-      delay += 150 + rng() * 250;
-      sinceLastPause = 0;
-      pauseThreshold = 10 + Math.floor(rng() * 20);
+  try {
+    let sinceLastPause = 0;
+    let pauseThreshold = 10 + Math.floor(rng() * 20);
+    for (const char of text) {
+      await page.keyboard.type(char, { delay: 0 });
+      let delay = computeKeyDelay(char, rng);
+      if (++sinceLastPause >= pauseThreshold) {
+        delay += 150 + rng() * 250;
+        sinceLastPause = 0;
+        pauseThreshold = 10 + Math.floor(rng() * 20);
+      }
+      await sleep(delay);
     }
-    await sleep(delay);
+  } catch {
+    // Best-effort: never let a keyboard error fail the calling action.
   }
 }
 
