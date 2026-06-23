@@ -136,7 +136,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
     expect(result.success).toBe(true);
     expect(resolveSecretRef).toHaveBeenCalledWith('user.aeroplan_password');
     // The resolved value was typed into the field via humanType (human keystroke cadence)...
-    expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), SECRET_VALUE);
+    expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), SECRET_VALUE, expect.anything());
     // ...but never appears in the data returned to the LLM.
     expect(JSON.stringify(result)).not.toContain(SECRET_VALUE);
   });
@@ -244,7 +244,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
     expect(result.success).toBe(true);
     // Literal text now uses humanType (keystroke cadence) rather than fill(), so that
     // behavioral challenge JS scores the typing as human. (#1053)
-    expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), 'hello world');
+    expect(vi.mocked(humanType)).toHaveBeenCalledWith(expect.anything(), 'hello world', expect.anything());
   });
 });
 
@@ -808,11 +808,13 @@ describe('web-browser navigate hardening — dwell + soft-block reload (#1053)',
   it('reloads once on a soft block (near-empty body), then succeeds when the reload clears it', async () => {
     const fill = vi.fn();
     const page = makeMockPage('content', fill, 'https://shop.example.com/');
-    // Make isLikelyEmpty fire on first check (text too short = soft block stub page),
-    // then return normal content length after reload.
+    // Make isLikelyEmpty fire on first check (tiny stub page: minimal text, tiny HTML,
+    // no interactive elements), then return a normal-looking page after reload.
+    // isLikelyEmpty now requires ALL THREE signals to be below threshold before it
+    // treats a page as empty — so the "clear" return must exceed at least one. (#1053)
     page.evaluate = vi.fn()
-      .mockResolvedValueOnce(10)   // first check: < 50 chars → isLikelyEmpty returns true → triggers reload
-      .mockResolvedValue(500);     // after reload: > 50 chars → isLikelyEmpty returns false → success
+      .mockResolvedValueOnce({ textLength: 10, htmlLength: 200, interactiveCount: 0 })  // first: all thresholds met → empty
+      .mockResolvedValue({ textLength: 500, htmlLength: 5_000, interactiveCount: 3 });  // after reload: not empty → success
     // title is always clean (not a hard block title)
     page.title = vi.fn().mockResolvedValue('Shop — Home');
     const ctx = makeNavCtx(page);
@@ -841,9 +843,10 @@ describe('web-browser navigate hardening — dwell + soft-block reload (#1053)',
   it('returns a hard-block error when isLikelyEmpty persists after the reload', async () => {
     const fill = vi.fn();
     const page = makeMockPage('content', fill, 'https://empty.example.com/');
-    // evaluate always returns a tiny number — isLikelyEmpty fires on both the
-    // first check and the post-reload re-check, so the block persists.
-    page.evaluate = vi.fn().mockResolvedValue(10);
+    // evaluate always returns a stub-page metrics object — isLikelyEmpty fires on both
+    // the first check and the post-reload re-check (all three signals below threshold),
+    // so the block persists and the handler fails fast. (#1053)
+    page.evaluate = vi.fn().mockResolvedValue({ textLength: 10, htmlLength: 200, interactiveCount: 0 });
     page.title = vi.fn().mockResolvedValue('Empty Page'); // not a hard-block title
     const ctx = makeNavCtx(page);
 

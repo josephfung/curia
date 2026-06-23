@@ -168,11 +168,16 @@ export class WebBrowserHandler implements SkillHandler {
           // reload ONCE if the page looks blocked or served a near-empty stub. One retry,
           // not a loop. (#1053)
           let pageTitle = await readTitle();
+          // Capture the reload response separately so any subsequent hard-block error can
+          // report the post-reload HTTP status (the status from the initial `goto` may no
+          // longer be representative after the recovery attempt). (#1053)
+          let reloadResponse: Awaited<ReturnType<typeof page.reload>> | undefined;
           if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
             ctx.log.info({ sessionId, url: parsedUrl.toString(), pageTitle }, 'Soft block suspected — dwelling and reloading once');
             await jitteredDelay(1500, 3000);
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch((err) => {
+            reloadResponse = await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch((err) => {
               ctx.log.debug({ err, sessionId }, 'Reload during soft-block recovery failed — proceeding with current DOM');
+              return undefined;
             });
             await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
               ctx.log.debug({ err, sessionId }, 'networkidle not reached after soft-block reload — proceeding with current DOM');
@@ -184,7 +189,8 @@ export class WebBrowserHandler implements SkillHandler {
           // won't help). Surface a distinct, actionable error rather than an empty page.
           // Re-check isLikelyEmpty here too: if the page was near-empty before the reload
           // AND still near-empty after, it's a persistent soft block — not a transient stub.
-          const status = response?.status();
+          // Use the reload response status when available — it reflects the post-recovery state.
+          const status = reloadResponse?.status() ?? response?.status();
           if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
             ctx.log.warn({ sessionId, url: parsedUrl.toString(), status, pageTitle }, 'Navigation hit a hard edge block');
             return {
@@ -196,7 +202,7 @@ export class WebBrowserHandler implements SkillHandler {
           // Clean (or recovered) navigation: dwell + simulate human presence so behavioral
           // challenge JS can score human-like telemetry before the first interaction. (#1053)
           await jitteredDelay(2000, 4000);
-          await simulateHumanPresence(page);
+          await simulateHumanPresence(page, { log: ctx.log });
           break;
         }
 
@@ -207,7 +213,7 @@ export class WebBrowserHandler implements SkillHandler {
           const clickTarget = await resolveLocator(page, selector, ctx.log);
           // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
           // scores natural pointer paths as more human-like than direct .click(). (#1053)
-          await humanClick(page, clickTarget);
+          await humanClick(page, clickTarget, { log: ctx.log });
           // Adaptive settle: a click may trigger navigation or an in-page update. Wait
           // briefly for the DOM to settle, but don't fail the action if nothing navigates.
           await settleAfterInteraction(page, ctx, sessionId);
@@ -301,10 +307,10 @@ export class WebBrowserHandler implements SkillHandler {
           // The same for both the visible-text and secret_ref paths — registering the secret
           // above already gates the #973 redaction; scrubbing covers reflected content/URL,
           // not keystrokes. ControlOrMeta = Cmd on macOS (dev), Ctrl on Linux (prod). (#1053)
-          await humanClick(page, typeTarget);
+          await humanClick(page, typeTarget, { log: ctx.log });
           await page.keyboard.press('ControlOrMeta+a');
           await page.keyboard.press('Delete');
-          await humanType(page, fillValue);
+          await humanType(page, fillValue, { log: ctx.log });
           break;
         }
 
@@ -404,12 +410,22 @@ function isHardBlock(title: string): boolean {
 }
 
 // A near-empty body after load is a soft-block tell (CF/JS challenge serving a stub page),
-// distinct from isHardBlock's title match. Best-effort: an evaluate failure is treated as
-// "not empty" so we never reload on a transient read error. (#1053)
+// distinct from isHardBlock's title match. Three signals are required to reduce false
+// positives on minimal-but-legitimate pages (e.g. a login form that has only icon buttons
+// and placeholder text). Best-effort: an evaluate failure is treated as "not empty" so we
+// never trigger a reload on a transient read error. (#1053)
 async function isLikelyEmpty(page: Page, log: SkillContext['log']): Promise<boolean> {
   try {
-    const len = await page.evaluate(() => (document.body?.innerText ?? '').trim().length);
-    return typeof len === 'number' && len < 50;
+    const metrics = await page.evaluate(() => ({
+      textLength: (document.body?.innerText ?? '').trim().length,
+      htmlLength: document.body?.innerHTML.length ?? 0,
+      interactiveCount: document.querySelectorAll(
+        'input, textarea, select, button, a[href], [role="button"], [contenteditable="true"]',
+      ).length,
+    }));
+    // Only call a page empty if it has very little text, very little HTML,
+    // AND no interactive elements — a login form with placeholders/icons won't match. (#1053)
+    return metrics.textLength < 50 && metrics.htmlLength < 1_000 && metrics.interactiveCount === 0;
   } catch (err) {
     log.debug({ err }, 'isLikelyEmpty: page.evaluate failed — treating as non-empty (best-effort)');
     return false;

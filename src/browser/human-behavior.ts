@@ -108,6 +108,8 @@ export interface BehaviorOptions {
   rng?: Rng;
   sleep?: (ms: number) => Promise<void>;
   strategy?: MouseMoveStrategy;
+  /** Optional logger for debug-level diagnostics. Accepts any pino logger instance. */
+  log?: Pick<import('pino').Logger, 'debug'>;
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -128,7 +130,7 @@ export async function jitteredDelay(
  * so the caller must focus the target first.
  */
 export async function humanType(page: Page, text: string, opts: BehaviorOptions = {}): Promise<void> {
-  const { rng = Math.random, sleep = defaultSleep } = opts;
+  const { rng = Math.random, sleep = defaultSleep, log } = opts;
   try {
     let sinceLastPause = 0;
     let pauseThreshold = 10 + Math.floor(rng() * 20);
@@ -142,8 +144,11 @@ export async function humanType(page: Page, text: string, opts: BehaviorOptions 
       }
       await sleep(delay);
     }
-  } catch {
-    // Best-effort: never let a keyboard error fail the calling action.
+  } catch (err) {
+    // A keyboard error means text was likely not typed — surface it as a real failure
+    // rather than silently succeeding with an empty field. (#1053)
+    log?.debug({ err }, 'humanType: keyboard error');
+    throw err;
   }
 }
 
@@ -153,7 +158,7 @@ export async function humanType(page: Page, text: string, opts: BehaviorOptions 
  * rather than a teleport. Best-effort: any movement failure is swallowed and we still click.
  */
 export async function humanClick(page: Page, locator: Locator, opts: BehaviorOptions = {}): Promise<void> {
-  const { rng = Math.random, sleep = defaultSleep, strategy = bezierStrategy } = opts;
+  const { rng = Math.random, sleep = defaultSleep, strategy = bezierStrategy, log } = opts;
   try {
     const box = await locator.boundingBox();
     if (box) {
@@ -168,8 +173,10 @@ export async function humanClick(page: Page, locator: Locator, opts: BehaviorOpt
       }
       await sleep(computeJitter(80, 200, rng));
     }
-  } catch {
-    // Best-effort: never let the movement layer fail the click.
+  } catch (err) {
+    // Best-effort: movement failure must not prevent the click — behavioral telemetry
+    // is decorative; the click itself is what matters. Log so it's observable. (#1053)
+    log?.debug({ err }, 'humanClick: movement failed — falling back to direct click');
   }
   await locator.click({ timeout: 10_000 });
 }
@@ -180,7 +187,7 @@ export async function humanClick(page: Page, locator: Locator, opts: BehaviorOpt
  * caller's navigation.
  */
 export async function simulateHumanPresence(page: Page, opts: BehaviorOptions = {}): Promise<void> {
-  const { rng = Math.random, sleep = defaultSleep, strategy = bezierStrategy } = opts;
+  const { rng = Math.random, sleep = defaultSleep, strategy = bezierStrategy, log } = opts;
   try {
     const vp = page.viewportSize() ?? { width: 1280, height: 720 };
     let current: Point = { x: rng() * vp.width, y: rng() * vp.height };
@@ -197,7 +204,9 @@ export async function simulateHumanPresence(page: Page, opts: BehaviorOptions = 
     await jitteredDelay(300, 800, { rng, sleep });
     await page.mouse.wheel(0, -(100 + rng() * 200));
     await jitteredDelay(200, 500, { rng, sleep });
-  } catch {
-    // Best-effort: presence simulation must never fail the navigation.
+  } catch (err) {
+    // Best-effort: presence simulation is purely decorative and must never fail the
+    // navigation. Log so it's observable in case of repeated failures. (#1053)
+    log?.debug({ err }, 'simulateHumanPresence: page error swallowed (best-effort)');
   }
 }
