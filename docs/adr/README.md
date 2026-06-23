@@ -44,7 +44,6 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [020](020-secrets-vault.md) | Application-layer AES-256-GCM secrets vault in PostgreSQL — structural typing, per-invocation pre-warm cache, env-var fallback for incremental migration | Accepted |
 | [021](021-vault-only-secret-resolution.md) | Vault-only secret resolution — remove the env fallback; only the four vault-bootstrap values stay in `.env`, everything else seeds via `seed-vault` | Accepted |
 | [022](022-skill-agent-registry.md) | DB-gated skill/agent registry — install/enable lifecycle with startup reconciliation and restart-based enforcement | Accepted |
-| [023](023-ceo-inbox-batch-drain-via-read-status.md) | ceo-inbox batch draining via read-status (no watermark), self-continue until empty; replaces overflow mode | Accepted |
 
 ## Adding new ADRs
 
