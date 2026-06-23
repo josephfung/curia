@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **TypeScript test coverage** — `tests/**/*.ts` is now covered by typecheck (`tsconfig.tests.json`, third pass in the `typecheck` script); type drift between shared types and test fixtures is now caught by CI. (#1105)
+- **`web-browser` skill** — replaced the `playwright-extra` + stealth-plugin stack with Patchright and added a human-behavior layer (curved mouse, paced typing, post-load dwell + presence) plus one soft-block reload-retry, to reduce Cloudflare/DataDome-style blocking. (#1053)
 
 ### Fixed
 
@@ -25,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **Setup wizard email ReDoS** — added a 254-char length cap before `EMAIL_RE.test()` in the principal profile route, preventing quadratic backtracking on crafted inputs (CodeQL #185).
+- **`web-browser` skill** — closed the CDP `Runtime.enable` protocol leak that the old stealth plugin left exposed, by moving to Patchright. (#1053)
 
 ## [0.37.0] — 2026-06-22 — "Jane"
 

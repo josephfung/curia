@@ -120,6 +120,12 @@ export class WebBrowserHandler implements SkillHandler {
     let injectedSecretThisAction = false;
 
     try {
+      // GUIDANCE (#1053): on bot-protected sites, prefer real UI interaction (click/type/
+      // select via these actions) over issuing fetch() inside page.evaluate(). A fetch() from
+      // page context is blocked at the TLS/fingerprint layer even with valid cookies, because
+      // it doesn't carry the browser's network fingerprint — whereas driving the real UI lets
+      // the site's own JS make requests through Chromium's genuine network stack.
+
       // --- Dispatch action ---
       switch (action as BrowserAction) {
         case 'navigate': {
