@@ -168,7 +168,7 @@ Invocation flow:
 
 1. **Resolve** — look up skill in registry by name (local or MCP)
 2. **Normalize inputs** — convert timestamp inputs to UTC-offset ISO strings using the configured local timezone
-3. **Validate elevation** — if `sensitivity: elevated`, reject if the task was not principal-originated
+3. **Validate elevation** — if `sensitivity: elevated`, reject unless the task's **effective standing** is principal- or system-originated. Effective standing is the task's lineage for a live turn, but for a heartbeat-woken task it is the lineage downgraded by the autonomy bypass ladder (see [14-autonomy-engine.md](14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks)) — so a woken task below its posture threshold no longer satisfies the gate (#1125)
 4. **Validate caller** — if `allowed_callers` is set on the manifest, reject unless the calling agent is in the list (CEO-approved re-executions bypass this gate)
 5. **Build context** — assemble `SkillContext` with scoped secrets, logger, and per-skill service grants
 6. **Execute** — call `handler.execute(ctx)` with a timeout wrapper (local), or `tools/call` (MCP)

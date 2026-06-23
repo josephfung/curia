@@ -108,6 +108,7 @@ adjacent migration `048_add_contact_canonical_attributes.sql` (see [spec 09](09-
 | `waiting_on_contact_id` | `UUID REFERENCES contacts(id)` | Preferred way to record "waiting on a person." |
 | `waiting_on_text` | `TEXT` | Soft alternative when no contact row exists yet. |
 | `tags` | `TEXT[] NOT NULL DEFAULT '{}'` | Lightweight clustering (`'debrief-pending'`, `'inbox-drain'`) without a goals entity. |
+| `originator` | `JSONB` | **Lineage** (migration 065, #1125): the chain's `TaskOriginator`, copied from the creating event's originator at creation; child tasks copy the parent's lineage, never above it. Immutable; pure audit + the *ceiling* an effective-standing computation may inherit. NULL on pre-065 / unstamped rows → treated as agent / no-bypass. |
 
 Preserved verbatim from `agent_tasks`: `intent_anchor` (durable goal statement),
 `progress` JSONB (multi-burst execution state), `error_budget`, `conversation_id`,
@@ -235,6 +236,18 @@ IS NULL`: a task explicitly waiting on a specific person is **excluded entirely*
 delayed, so the heartbeat never re-pings a human (that nudge is the owner's job via a
 `wake_at`). The two thresholds differ deliberately — poke an in-flight task within half a
 workday, but give a forgotten timer 48h before the backstop fires.
+
+### 5.3 Lineage on the wake (#1125)
+
+The candidate query returns each task's `originator` (lineage) plus a `derived` flag
+(`source = 'agent' OR parent_task_id IS NOT NULL`). `enqueueTaskWake` persists the originator
+onto the wake `scheduled_jobs` row and carries `derived` in its `task_payload.standing`; when
+the scheduler fires the wake it stamps a `wakeContext` onto the `agent.task` metadata. The
+execution layer reads that marker and applies the autonomy **bypass ladder** — the woken task's
+effective standing is the lineage downgraded by the live score, never raised. See
+[14-autonomy-engine.md](14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks).
+A specific `wake_at` job and a `scheduler-create` job are *not* heartbeat wakes: they carry no
+`wakeContext` and keep their originator at fire time.
 
 ---
 

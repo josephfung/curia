@@ -220,6 +220,18 @@ Implementation: the execution layer calls `isPrincipalOriginated()` before evalu
 
 Scope: principal bypass applies to Gates A and B only. The elevated-skill gate (`sensitivity: 'elevated'`) is **not** bypassed — elevated skills have their own stricter access control that requires principal origination regardless of autonomy score.
 
+### Effective standing — the bypass ladder (woken/derived tasks)
+
+The principal-bypass and the elevated-skill gate consume **effective standing**, not raw lineage. For a **live turn** (a fresh inbound, a specific scheduler-create fire) effective standing *is* the task's lineage — behaviour above is unchanged. For a **heartbeat-woken** task the score-keyed **bypass ladder** governs how much of the chain's lineage standing the woken execution inherits. The lineage (`tasks.originator`, see [19-tasks-and-backlog.md](19-tasks-and-backlog.md)) is pure audit and the *ceiling*; the live score can only ever **downgrade** it to `agent` (propose-only), never grant standing the lineage didn't have.
+
+| Live score | Same-task heartbeat wake | Agent-spawned (derived) child task |
+|---|---|---|
+| `< same_task` (70) | downgrade → agent | downgrade → agent |
+| `same_task`–`derived_child` (70–89) | keep lineage standing | downgrade → agent |
+| `>= derived_child` (90) | keep lineage standing | keep lineage standing |
+
+A wake carries a `wakeContext` marker (stamped by the scheduler when it fires a `BacklogHeartbeat`-minted job); a task is **derived** when `source = 'agent'` or it has a parent. Effective standing is computed from the **live** score at invocation, so lowering the score removes inherited bypass on the very next action. Thresholds are configurable under `autonomy.bypass_ladder` (`same_task` default 70, `derived_child` default 90); `same_task` must not drop below 60. The gate's *requirement* is unchanged (principal-or-system); only its *input* is effective standing. See `docs/wip/2026-06-22-woken-task-authorization-design.md` (#1125, foundation for #1060).
+
 ---
 
 ## Implementation Status
