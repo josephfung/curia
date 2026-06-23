@@ -93,7 +93,8 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - **Attachments (inbound):** parsed and passed through as `Attachment[]`
 - **Attachments (outbound, v0.33):** all five outbound email skills (`email-send`, `email-reply`, `email-draft-save`, `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`) accept an `attachments` input. Files are read from `file://` URLs backed by `TempFileStore`, validated, and forwarded to Nylas (multipart `FormData` on the CEO-inbox path; `Buffer` content via the Nylas SDK on the Curia-outbound path), capped at 20 MB total / 10 attachments. The `drive-download-file` skill bridges Google Drive → `TempFileStore`, returning a `file://` URL so Drive files can be attached.
 - **CEO inbox drafts (v0.35):** the CEO inbox can now find, read, and edit unsent drafts. `ceo-inbox-list` / `ceo-inbox-search` query Nylas's `/drafts` resource (the DRAFTS folder) when scoped with `folder: 'DRAFTS'`; `ceo-inbox-read` accepts a `draft_id` to return a draft's full body; and the new `ceo-inbox-draft-edit` skill updates a draft's recipients/subject/body. Draft results key on `drafts` (not `messages`) so a genuine "none" is distinguishable from a silent zero, and the inbox poll watermark is not applied to drafts.
-- Secrets: `NYLAS_API_KEY`, `NYLAS_GRANT_ID`, `NYLAS_SELF_EMAIL`
+- **Email accounts (v0.37):** multiple agent-owned mailboxes are managed from the console under **Settings → Channels → Email → Email accounts**. Each account is a row in the `email_accounts` table (migration `064_create_email_accounts.sql`) with its Nylas grant stored in the vault at a per-account key (`channel.email.<name>.nylas_grant_id`). The shared app-level `NYLAS_API_KEY` remains an env-bootstrapped vault secret. The legacy `channel_accounts.email` YAML path and `CEO_PRIMARY_EMAIL` env var are retired.
+- **Vault credential wiring (v0.37):** at startup `applyChannelVaultSecrets()` overlays channel vault credentials (`channel.<name>.<field>`) onto the runtime config before adapters are constructed, so credentials saved via the Channels console take effect on the next restart without any env-var or YAML change.
 - Nylas abstracts away provider differences (Gmail, Outlook, IMAP) and handles OAuth
 
 ### Signal (via signal-cli)
@@ -194,3 +195,8 @@ Each adapter implements reconnection with exponential backoff:
 | Outbound message queue for disconnected channels (max 100, delivered on reconnect) | Not Done |
 | Email reply quoting — `email-reply` appends the quoted original message body to drafts and sends | Done |
 | Email search — `is:unread` is embedded into the Nylas search string when `unread_only` is set alongside a search query | Done |
+| Email accounts table (`email_accounts`, migration 064) + `EmailAccountsRepo` CRUD | Done |
+| Per-account vault grant keys (`channel.email.<name>.nylas_grant_id`) | Done |
+| Console email accounts UI — list, add, edit, delete from Settings → Channels → Email | Done |
+| Email resolver — reads from `email_accounts` table + vault, replacing YAML `channel_accounts` | Done |
+| Vault credential overlay at boot — `applyChannelVaultSecrets()` wires channel vault creds before adapter construction | Done |

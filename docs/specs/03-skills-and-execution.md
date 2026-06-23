@@ -90,9 +90,18 @@ mcp_servers:
       Authorization: "Bearer <token>"
     action_risk: low
     permissions: ["workspace:read", "workspace:write"]
+    secrets:                             # optional — declares vault keys this server needs
+      - key: google_oauth_client_id      # vault key name
+        label: "Google OAuth Client ID"
+        masked: false
+      - key: google_oauth_client_secret
+        label: "Google OAuth Client Secret"
+        masked: true
 ```
 
 Supported transports: `stdio` (local subprocess) and `http` (StreamableHTTP — the current MCP SDK recommended transport for hosted servers). The deprecated `sse` transport has been migrated.
+
+**MCP credential management.** MCP servers may declare required secrets via a `secrets:` block (`McpSecretDeclaration[]` — `key`, `label`, `masked`). The web console's **Settings → MCP Skills** page presents credential fields for each declaration, writes values to the encrypted vault, and gates enable/disable on whether all required secrets resolve. This mirrors the Channels registry pattern. Internally, `McpRegistryService` (`mcp_server_registry` table, `reconcileMcpRegistry` bootstrap step) tracks install/enable state for each MCP server. `loadMcpServers` filters to enabled servers only.
 
 At startup, the framework connects to each MCP server, discovers tools via `tools/list`, and registers them in the skill registry alongside local skills. Agents don't know or care whether a tool is local or MCP.
 
@@ -234,6 +243,9 @@ The framework ships with these skills (in `skills/` as part of core):
 - `bullpen` — inter-agent discussion threads; `post`/`reply` persist the thread/message synchronously and fire-and-forget the `agent.discuss` publish so a slow subscriber can't push the handler past its timeout (see *Timeout safety* above)
 - `template-doc-request` — structured document request template (scheduling templates retired; calendar specialist composes scheduling email text directly)
 - `image-generate` — generate an image from a text prompt via DALL-E 3; returns a temporary CDN URL (~1hr TTL)
+- `setup-status` — read-only (`action_risk: none`); returns the setup catalog (`skills/setup-status/catalog.yaml`) with each task's live-derived status (`done` / `pending` / `deferred`). The catalog is owned by the skill bundle, not core.
+- `setup-defer` — write (`action_risk: low`); persists or clears a setup task deferral in config-store (`setup_wizard/deferrals`). Pinned to `setup-wizard`.
+- `context-bridge-clear` — write (`action_risk: low`); bulk-releases active outbound-context entries matching a list of meeting subjects across the full active window (not just the injected slice). Pinned to coordinator, contacts, ceo-inbox, and meeting-debrief.
 
 > **Removed from scope:** `file-reader` and `file-writer` were originally planned but removed after security review. General-purpose filesystem access from LLM-driven agents on a single-tenant VPS creates an unacceptable prompt-injection-to-file-exfiltration attack vector. Email attachments (the primary use case) are handled in-memory via the Nylas SDK's streaming/buffer APIs. Agent-created documents should use the knowledge graph. If a narrowly-scoped filesystem need arises later, build a purpose-specific skill rather than a general reader/writer.
 
@@ -290,3 +302,7 @@ These are not bundled but documented as recommended integrations:
 | Built-in skill: `request-clarification` — multi-turn clarification systemized as a reusable skill | Done |
 | Built-in skill: `file-parse` — accepts `temp_file_url` as an alternative to `content_base64`, with `CURIA_TEMPFILE_DIR` path validation | Done |
 | Built-in skill: `context-bridge-release` — coordinator-only, marks outbound context entries released | Done |
+| Built-in skill: `context-bridge-clear` — bulk release by meeting subject; pinned to coordinator, contacts, ceo-inbox, meeting-debrief | Done |
+| Built-in skill: `setup-status` — catalog-driven, live-derived status per setup task | Done |
+| Built-in skill: `setup-defer` — persists/clears setup task deferrals in config-store | Done |
+| MCP skill credentials — `secrets:` block in `skills.yaml`; `McpRegistryService` + `mcp_server_registry` table; console credential UI; enable gate on secret resolution | Done |

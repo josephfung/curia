@@ -21,7 +21,7 @@ channels:
     enabled: true   # Set to false to disable the terminal CLI entirely
 ```
 
-Signal and email are **not** controlled here — they activate based on environment variables (`SIGNAL_PHONE_NUMBER`, `NYLAS_API_KEY`, etc.). See [setup.md](setup.md) for details.
+Signal and email are **not** controlled here — they are governed by the channel registry (install/enable lifecycle). Enable them via **Settings → Channels** in the console once their credentials are in the vault. See [setup.md](setup.md) for details.
 
 ---
 
@@ -279,7 +279,7 @@ configured. Create it when you add the first server.
 ```yaml
 servers:
   - name: gdrive
-    transport: stdio          # "stdio" spawns a local process; "sse" connects to an HTTP endpoint
+    transport: stdio          # "stdio" spawns a local process; "http" connects to a StreamableHTTP endpoint
     command: npx
     args: ["-y", "@modelcontextprotocol/server-gdrive"]
     action_risk: low          # required — none | low | medium | high | critical
@@ -287,6 +287,10 @@ servers:
     timeout_ms: 30000         # optional — per-invocation timeout in ms (default: 30000)
     # env:                    # optional — extra env vars for the spawned process only
     #   SOME_VAR: value       # vars already in .env are inherited automatically
+    # secrets:                # optional — declare vault keys this server needs
+    #   - key: my_api_key     # vault key name (stored encrypted, injected at spawn time)
+    #     label: "My API Key"
+    #     masked: true        # true → shown as ••••• in the console credential form
 ```
 
 Connection failures at startup are non-fatal but logged at `error` level — a
