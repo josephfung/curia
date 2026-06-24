@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Health LLM canary** — derives tier failure from an explicit most-recent-outcome flag instead of comparing `lastErrorAt > lastSuccessAt`, which tied (and masked the error as healthy) when both landed in the same millisecond. (#1163)
 - **`outbound-gateway`** — content-filter blocks now return the principal-safe reason and rule names so agents can self-correct and retry. (#1051)
+- **`outbound-gateway` draft path** — `sendEmailDraft()` blocks now return the same principal-safe reason and rule names, so blocked draft sends are self-correctable too. (#1158)
 - **Scheduler double-fire** — the cron-branch claim UPDATE now re-checks `next_run_at <= now()`, so overlapping poll cycles can no longer re-claim a just-completed recurring job and send a duplicate (e.g. two daily digests). (#1159)
 - **`approveGrantRecommendation` / `declineGrantRecommendation`** — concurrent calls on the same pending recommendation no longer produce an auth-state contradiction; both operations now run inside a single transaction so approve's permission override and status transition are atomic. (#1068)
 - **`ceo-nylas-client`** — 429 responses retry with exponential backoff (up to 3 attempts), honoring `Retry-After`; exhaustion throws a typed `NylasApiError(429)` that cannot be misread as an auth failure. (#1058)
