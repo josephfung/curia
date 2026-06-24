@@ -152,7 +152,7 @@ export function checkBrowser(service: BrowserServiceHealth | undefined): CheckRe
   // context.browser() — returns null for persistent contexts launched with
   // launchPersistentContext, which means connected (the browser IS the context).
   const browser = service.browserContext.browser();
-  if (browser === null) return 'ok'; // persistent context: no separate Browser object
+  if (browser === null) return 'fail'; // browser() returns null only in Electron/Android contexts — anomalous for Curia; treat as fail
   return browser.isConnected() ? 'ok' : 'fail';
 }
 
