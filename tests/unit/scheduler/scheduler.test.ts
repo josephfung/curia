@@ -325,7 +325,7 @@ describe('Scheduler', () => {
       expect(bus.publish).not.toHaveBeenCalled();
       expect(logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({ jobId: 'job-1' }),
-        'Job already claimed; skipping fire',
+        expect.stringContaining('skipping fire'),
       );
     });
 
@@ -365,7 +365,7 @@ describe('Scheduler', () => {
       expect(claimParams[4]).toBe('UTC');
       expect(logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({ jobId: 'job-1' }),
-        'Job already claimed; skipping fire',
+        expect.stringContaining('skipping fire'),
       );
     });
 
@@ -425,6 +425,27 @@ describe('Scheduler', () => {
       expect(claimSql).toContain('timezone = $5');
       expect(claimParams[3]).toBe('0 9 * * *');
       expect(claimParams[4]).toBe('UTC');
+    });
+
+    // Regression (duplicate daily digest, 2026-06-24): two overlapping pollDueJobs cycles
+    // each captured the same still-pending cron job in their in-memory list. Poll A claimed
+    // and fired it; completeJobRun reset the recurring job to status='pending'; Poll B then
+    // re-claimed it because the claim UPDATE gated only on status — NOT on next_run_at. The
+    // claim must re-check next_run_at <= now() (the same predicate the SELECT used) so that a
+    // stale concurrent claim, whose row's next_run_at was already advanced to the future by
+    // the first claim, matches 0 rows and skips. (#1124 advanced next_run_at but only protected
+    // the NEXT poll's SELECT, not a concurrent poll already holding the row.)
+    it('gates the cron claim UPDATE on next_run_at <= now() to block stale concurrent re-claims', async () => {
+      const row = fakeDbRow();
+      schedulerService.nextRunFromCron.mockReturnValueOnce(new Date('2026-06-25T09:00:00.000Z'));
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [claimSql] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('next_run_at <= now()');
     });
 
     it('does not include next_run_at in claim UPDATE for one-shot jobs', async () => {

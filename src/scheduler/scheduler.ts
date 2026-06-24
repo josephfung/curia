@@ -408,13 +408,26 @@ export class Scheduler {
       // the expression between the poll SELECT and this claim UPDATE, the WHERE won't
       // match (rowCount=0), the job skips as "already claimed", and the next poll fires
       // it with the correct (updated) expression and next_run_at.
+      //
+      // next_run_at <= now() re-checks the SAME predicate the poll SELECT used, so the
+      // claim is idempotent against overlapping poll cycles. The agent runs synchronously
+      // inside fireJob (bus.publish awaits handlers), so a single poll can take minutes to
+      // drain while the 30s interval keeps launching new polls. A job still 'pending' when
+      // poll B's SELECT runs gets captured into poll B's in-memory list; poll A then claims
+      // and fires it, and completeJobRun resets the recurring job to 'pending'. Without this
+      // guard, poll B's later claim would succeed (status is 'pending' again) and fire a
+      // duplicate — e.g. two daily digests on 2026-06-24. With it, the first claim advances
+      // next_run_at to the future, so any stale concurrent claim matches 0 rows and skips.
+      // (#1124 advanced next_run_at but only shielded the NEXT poll's SELECT, not a
+      // concurrent poll already holding the row.)
       claimResult = await this.pool.query(
         `UPDATE scheduled_jobs
             SET status = $1, run_started_at = now(), next_run_at = $3
           WHERE id = $2
             AND status IN ('pending', 'failed')
             AND cron_expr = $4
-            AND timezone = $5`,
+            AND timezone = $5
+            AND next_run_at <= now()`,
         ['running', job.id, nextRunAt, job.cronExpr, job.timezone],
       );
     } else {
@@ -424,7 +437,15 @@ export class Scheduler {
       );
     }
     if (claimResult.rowCount === 0) {
-      this.logger.debug({ jobId: job.id }, 'Job already claimed; skipping fire');
+      // 0 rows now has three distinct causes, all benign: another poller/instance
+      // claimed the row first, cron_expr/timezone drifted between SELECT and claim, or
+      // (cron jobs) next_run_at was already advanced into the future by a prior poll's
+      // claim — the overlapping-poll de-dup this guard exists for. Word the message so a
+      // missed-fire investigation isn't misled into thinking a real claim happened.
+      this.logger.debug(
+        { jobId: job.id, cronExpr: job.cronExpr },
+        'Claim matched 0 rows; skipping fire (already claimed, cron/timezone drift, or next_run_at already advanced by a prior poll)',
+      );
       return;
     }
     // rowCount === null is an anomalous pg driver state (UPDATE always returns a count).
