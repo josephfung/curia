@@ -1140,13 +1140,15 @@ export class ContactService {
     const rec = await this.backend.getGrantRecommendation(id);
     if (!rec || rec.status !== 'pending') return false;
 
-    return this.backend.withTransaction(async (client) => {
-      const resolved = await this.backend.resolveGrantRecommendation(id, 'declined', actorId, client);
-      if (resolved) {
-        this.logger?.info({ id, contactId: rec.contactId, permission: rec.permission, actorId }, 'contacts: grant recommendation declined (anti-nag recorded)');
-      }
-      return resolved;
+    const declined = await this.backend.withTransaction(async (client) => {
+      return this.backend.resolveGrantRecommendation(id, 'declined', actorId, client);
     });
+
+    // Log AFTER withTransaction resolves so the audit entry only fires on committed state.
+    if (declined) {
+      this.logger?.info({ id, contactId: rec.contactId, permission: rec.permission, actorId }, 'contacts: grant recommendation declined (anti-nag recorded)');
+    }
+    return declined;
   }
 
   /**
