@@ -14,7 +14,6 @@ const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
 import type { AgentTaskEvent } from '../../src/bus/events.js';
-import type { Pool } from 'pg';
 import pino from 'pino';
 import type { HealthService } from '../../src/health/health-service.js';
 
@@ -42,10 +41,6 @@ describe('HTTP API integration', () => {
   const bus = new EventBus(logger);
   const agentRegistry = new AgentRegistry();
   agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
-
-  const mockPool = {
-    query: async () => ({ rows: [{ '?column?': 1 }] }),
-  } as unknown as Pool;
 
   const eventRouter = new EventRouter(logger);
 
@@ -146,10 +141,6 @@ describe('HTTP API — unknown_sender: ignore policy', () => {
   const app = Fastify();
   const bus = new EventBus(logger);
   const eventRouter = new EventRouter(logger);
-
-  const mockPool = {
-    query: async () => ({ rows: [{ '?column?': 1 }] }),
-  } as unknown as Pool;
 
   beforeAll(async () => {
     eventRouter.setupSubscriptions(bus);
