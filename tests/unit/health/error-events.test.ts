@@ -27,7 +27,8 @@ describe('embedding.error event factory', () => {
       errorType: 'FETCH_FAILED',
     });
     expect(event.type).toBe('embedding.error');
-    expect(event.sourceLayer).toBe('agent');
+    // embedding.error fires from infrastructure paths (same as embedding.call), not agent tasks
+    expect(event.sourceLayer).toBe('system');
     expect(event.payload.model).toBe('text-embedding-3-small');
   });
 });

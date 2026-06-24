@@ -885,7 +885,9 @@ interface EmbeddingErrorPayload {
 
 export interface EmbeddingErrorEvent extends BaseEvent {
   type: 'embedding.error';
-  sourceLayer: 'agent';
+  // sourceLayer 'system' because embedding errors fire from infrastructure paths
+  // (same as EmbeddingCallEvent) — not from agent tasks.
+  sourceLayer: 'system';
   payload: EmbeddingErrorPayload;
 }
 
@@ -896,7 +898,7 @@ export function createEmbeddingError(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'embedding.error',
-    sourceLayer: 'agent',
+    sourceLayer: 'system',
     payload,
   };
 }

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   checkDb,
   checkBus,
+  checkBrowser,
   checkEmail,
   checkScheduler,
 } from '../../../src/health/health-checks.js';
@@ -15,6 +16,22 @@ describe('checkDb', () => {
   it('returns fail when query throws', async () => {
     const pool = { query: vi.fn().mockRejectedValue(new Error('connection refused')) } as never;
     expect(await checkDb(pool)).toBe('fail');
+  });
+});
+
+describe('checkBrowser', () => {
+  it('returns skipped when no service provided', () => {
+    expect(checkBrowser(undefined)).toBe('skipped');
+  });
+
+  it('returns ok when browserContext is a live object', () => {
+    // BrowserService uses launchPersistentContext — liveness = context object exists.
+    // No .browser() call needed; the context object itself is the liveness signal.
+    expect(checkBrowser({ browserContext: {} })).toBe('ok');
+  });
+
+  it('returns fail when browserContext is null (service stopped or relaunch failed)', () => {
+    expect(checkBrowser({ browserContext: null })).toBe('fail');
   });
 });
 

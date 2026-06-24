@@ -30,10 +30,11 @@ export interface SignalRpcClientHealth {
 export interface BrowserServiceHealth {
   /**
    * The persistent browser context, or null when the service is stopped.
-   * Playwright's BrowserContext does not have isConnected() — that method is on Browser.
-   * Liveness is probed via context.browser()?.isConnected() in checkBrowser().
+   * BrowserService uses launchPersistentContext — context.browser() always returns
+   * null for these contexts (Playwright behavior, not an error). Liveness is
+   * checked by whether the context object exists: stop() sets it to null.
    */
-  browserContext: { browser(): { isConnected(): boolean } | null } | null;
+  browserContext: object | null;
 }
 
 export interface McpSessionHealth {
@@ -141,19 +142,16 @@ export async function checkSignal(
 }
 
 /**
- * Check Playwright browser context connectivity. Non-critical.
- * Synchronous — isConnected() is a sync method on BrowserContext.
+ * Check Playwright browser context liveness. Non-critical.
+ * Synchronous — liveness is determined by whether the context object exists.
  * Skipped when no service is provided (browser not configured).
  */
 export function checkBrowser(service: BrowserServiceHealth | undefined): CheckResult {
   if (!service) return 'skipped';
-  if (!service.browserContext) return 'fail';
-  // isConnected() is on Browser, not BrowserContext. Reach the Browser via
-  // context.browser() — returns null for persistent contexts launched with
-  // launchPersistentContext, which means connected (the browser IS the context).
-  const browser = service.browserContext.browser();
-  if (browser === null) return 'fail'; // browser() returns null only in Electron/Android contexts — anomalous for Curia; treat as fail
-  return browser.isConnected() ? 'ok' : 'fail';
+  // BrowserService uses launchPersistentContext: context.browser() always returns null
+  // for persistent contexts (it's not an error). Liveness = context object exists;
+  // BrowserService sets context to null on stop() and during failed relaunch.
+  return service.browserContext !== null ? 'ok' : 'fail';
 }
 
 /**

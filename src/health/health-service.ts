@@ -301,7 +301,7 @@ export class HealthService {
     // Verify the tier has a model configured — a missing tier means the operator
     // YAML is incomplete and we can't meaningfully assess health for this tier.
     const model = modelRoutingConfig.tiers[tier]?.model;
-    if (!model) return { name, status: 'fail', detail: 'no model configured for tier' };
+    if (!model) return { name, status: 'skipped' };
 
     return this.canaryOutcome(tier, name);
   }

@@ -102,7 +102,7 @@ class OpenAIBackend implements EmbeddingBackend {
       // Publish embedding.error so HealthService can track embedding health.
       // Guard: bus is optional (may be null/undefined when used without bus wiring).
       if (this.bus) {
-        this.bus.publish('agent', createEmbeddingError({
+        this.bus.publish('system', createEmbeddingError({
           model: 'text-embedding-3-small',
           errorType: 'FETCH_FAILED',
         })).catch((publishErr: unknown) => {
@@ -117,7 +117,7 @@ class OpenAIBackend implements EmbeddingBackend {
       // Use .catch() so a body-read failure doesn't swallow the HTTP error
       const body = await response.text().catch(() => '<body unreadable>');
       if (this.bus) {
-        this.bus.publish('agent', createEmbeddingError({
+        this.bus.publish('system', createEmbeddingError({
           model: 'text-embedding-3-small',
           errorType: 'API_ERROR',
         })).catch((publishErr: unknown) => {
@@ -137,7 +137,7 @@ class OpenAIBackend implements EmbeddingBackend {
       json = await response.json() as { data: Array<{ embedding: number[] }>; usage?: { prompt_tokens?: number } };
     } catch (err) {
       if (this.bus) {
-        this.bus.publish('agent', createEmbeddingError({
+        this.bus.publish('system', createEmbeddingError({
           model: 'text-embedding-3-small',
           errorType: 'PARSE_ERROR',
         })).catch((publishErr: unknown) => {
