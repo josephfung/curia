@@ -161,7 +161,7 @@ interface ContactServiceBackend {
   elevateTierToKnown(contactId: string, reason: 'correspondence' | 'domain-validated' | 'judgment'): Promise<boolean>;
 
   getAuthOverrides(contactId: string): Promise<Array<{ permission: string; granted: boolean }>>;
-  createAuthOverride(override: AuthOverride): Promise<void>;
+  createAuthOverride(override: AuthOverride, client?: DbPoolClient): Promise<void>;
   revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
 
   // -- Grant recommendations (issue #952) --
@@ -169,7 +169,15 @@ interface ContactServiceBackend {
   getGrantRecommendation(id: string): Promise<GrantRecommendation | null>;
   findGrantRecommendation(contactId: string, permission: string): Promise<GrantRecommendation | null>;
   listGrantRecommendations(filters?: { status?: GrantRecommendationStatus; limit?: number }): Promise<GrantRecommendation[]>;
-  resolveGrantRecommendation(id: string, status: 'approved' | 'declined', resolvedBy: string): Promise<boolean>;
+  resolveGrantRecommendation(id: string, status: 'approved' | 'declined', resolvedBy: string, client?: DbPoolClient): Promise<boolean>;
+
+  /**
+   * Run a callback inside a single database transaction. The client is passed
+   * into the callback and must be threaded through any backend calls that
+   * should participate in the same transaction. For in-memory backends, JS is
+   * single-threaded so the callback runs directly with no client.
+   */
+  withTransaction<T>(fn: (client?: DbPoolClient) => Promise<T>): Promise<T>;
   createCalendarLink(calendar: ContactCalendar): Promise<void>;
   deleteCalendarLink(nylasCalendarId: string): Promise<boolean>;
   getCalendarsForContact(contactId: string): Promise<ContactCalendar[]>;
@@ -1071,38 +1079,76 @@ export class ContactService {
 
   /**
    * Approve a pending grant recommendation.
-   * Also writes the contact_auth_overrides row so the permission takes effect immediately.
+   * Atomically claims the recommendation (status pending → approved) and writes the
+   * contact_auth_overrides row inside a single transaction. This prevents the race where
+   * a concurrent declineGrantRecommendation wins the status transition while the auth
+   * override written by approve is left behind (issue #1068).
    * Returns false if the recommendation was not found or not in 'pending' status.
    */
   async approveGrantRecommendation(id: string, actorId: string): Promise<boolean> {
+    // Fast path: bail early without starting a transaction if already resolved.
     const rec = await this.backend.getGrantRecommendation(id);
     if (!rec || rec.status !== 'pending') return false;
 
-    // Grant the permission before resolving the recommendation, so any failure
-    // here leaves the recommendation pending (retryable) rather than approved-but-not-granted.
-    await this.grantPermission(rec.contactId, rec.permission, true, actorId);
-    const resolved = await this.backend.resolveGrantRecommendation(id, 'approved', actorId);
-    if (resolved) {
+    // Validate the contact exists before entering the transaction (read-only, idempotent).
+    const contact = await this.backend.getContact(rec.contactId);
+    if (!contact) throw new Error(`Contact not found: ${rec.contactId}`);
+
+    const approved = await this.backend.withTransaction(async (client) => {
+      // Claim the recommendation inside the transaction. For Postgres, the UPDATE holds
+      // a row-level lock until the transaction commits — a concurrent decline blocks
+      // until we commit or roll back, then finds status ≠ 'pending' and returns false.
+      const claimed = await this.backend.resolveGrantRecommendation(id, 'approved', actorId, client);
+      if (!claimed) {
+        // A concurrent call already resolved this recommendation; produce no side effects.
+        this.logger?.debug({ id, actorId }, 'contacts: approveGrantRecommendation lost concurrent race — recommendation already resolved');
+        return false;
+      }
+
+      // Write the auth override inside the same transaction so both writes are atomic.
+      // A failure here rolls back both, leaving the recommendation pending (retryable).
+      const override: AuthOverride = {
+        id: randomUUID(),
+        contactId: rec.contactId,
+        permission: rec.permission,
+        granted: true,
+        grantedBy: actorId,
+        createdAt: new Date(),
+        revokedAt: null,
+      };
+      await this.backend.createAuthOverride(override, client);
+      return true;
+    });
+
+    // Log AFTER withTransaction resolves so the audit entry only fires on committed state.
+    if (approved) {
       this.logger?.info({ id, contactId: rec.contactId, permission: rec.permission, actorId }, 'contacts: grant recommendation approved');
     }
-    return resolved;
+    return approved;
   }
 
   /**
    * Decline a pending grant recommendation.
+   * Wrapped in a transaction for parity with approveGrantRecommendation so that both
+   * operations participate in the same serialization guarantee (issue #1068).
    * The row is permanently retained in 'declined' state as an anti-nag ledger entry —
    * the recommendation engine must check for declined rows before suggesting again.
    * Returns false if the recommendation was not found or not in 'pending' status.
    */
   async declineGrantRecommendation(id: string, actorId: string): Promise<boolean> {
+    // Fast path: bail early without starting a transaction if already resolved.
     const rec = await this.backend.getGrantRecommendation(id);
     if (!rec || rec.status !== 'pending') return false;
 
-    const resolved = await this.backend.resolveGrantRecommendation(id, 'declined', actorId);
-    if (resolved) {
+    const declined = await this.backend.withTransaction(async (client) => {
+      return this.backend.resolveGrantRecommendation(id, 'declined', actorId, client);
+    });
+
+    // Log AFTER withTransaction resolves so the audit entry only fires on committed state.
+    if (declined) {
       this.logger?.info({ id, contactId: rec.contactId, permission: rec.permission, actorId }, 'contacts: grant recommendation declined (anti-nag recorded)');
     }
-    return resolved;
+    return declined;
   }
 
   /**
@@ -1780,14 +1826,15 @@ class PostgresContactBackend implements ContactServiceBackend {
     }));
   }
 
-  async createAuthOverride(override: AuthOverride): Promise<void> {
+  async createAuthOverride(override: AuthOverride, client?: DbPoolClient): Promise<void> {
     this.logger.debug(
       { contactId: override.contactId, permission: override.permission, granted: override.granted },
       'contacts: creating auth override',
     );
     // Upsert: if an active override exists for this contact+permission, update it.
     // The UNIQUE(contact_id, permission) constraint on the table supports this.
-    await this.pool.query(
+    const q = client ?? this.pool;
+    await q.query(
       `INSERT INTO contact_auth_overrides (id, contact_id, permission, granted, granted_by, created_at, revoked_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (contact_id, permission) DO UPDATE
@@ -1877,14 +1924,37 @@ class PostgresContactBackend implements ContactServiceBackend {
     return result.rows.map(row => this.rowToGrantRecommendation(row));
   }
 
-  async resolveGrantRecommendation(id: string, status: 'approved' | 'declined', resolvedBy: string): Promise<boolean> {
-    const result = await this.pool.query(
+  async resolveGrantRecommendation(id: string, status: 'approved' | 'declined', resolvedBy: string, client?: DbPoolClient): Promise<boolean> {
+    const q = client ?? this.pool;
+    const result = await q.query(
       `UPDATE grant_recommendations
        SET status = $2, resolved_at = now(), resolved_by = $3
        WHERE id = $1 AND status = 'pending'`,
       [id, status, resolvedBy],
     );
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async withTransaction<T>(fn: (client?: DbPoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      // Wrap ROLLBACK in its own try/catch: if ROLLBACK throws (e.g. connection severed),
+      // log and swallow that secondary error so the original err — the real root cause —
+      // is what propagates to the caller.
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        this.logger.error({ rollbackErr }, 'contacts: withTransaction ROLLBACK failed');
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   private rowToGrantRecommendation(row: {
@@ -2387,7 +2457,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return results;
   }
 
-  async createAuthOverride(override: AuthOverride): Promise<void> {
+  async createAuthOverride(override: AuthOverride, _client?: DbPoolClient): Promise<void> {
     // Upsert: find and replace any existing active override for the same contact+permission
     for (const [key, existing] of this.overrides.entries()) {
       if (
@@ -2574,7 +2644,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return results;
   }
 
-  async resolveGrantRecommendation(id: string, status: 'approved' | 'declined', resolvedBy: string): Promise<boolean> {
+  async resolveGrantRecommendation(id: string, status: 'approved' | 'declined', resolvedBy: string, _client?: DbPoolClient): Promise<boolean> {
     for (const [key, rec] of this.recommendations) {
       if (rec.id === id && rec.status === 'pending') {
         this.recommendations.set(key, { ...rec, status, resolvedAt: new Date(), resolvedBy });
@@ -2582,5 +2652,12 @@ class InMemoryContactBackend implements ContactServiceBackend {
       }
     }
     return false;
+  }
+
+  async withTransaction<T>(fn: (client?: DbPoolClient) => Promise<T>): Promise<T> {
+    // JS is single-threaded; no real database transaction is needed. Run the callback
+    // directly with no client so in-memory tests exercise the same code paths as
+    // Postgres without any pool machinery.
+    return fn(undefined);
   }
 }
