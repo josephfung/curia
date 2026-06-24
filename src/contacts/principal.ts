@@ -34,7 +34,14 @@ export function capOriginatorToParent(
 
 /**
  * Check whether a task was originated by the principal (the human Curia serves).
- * Used by the execution layer's elevated skill gate and CEO-authorized skill handlers.
+ * Used by CEO-authorized skill handlers and the autonomy gate's principal-bypass.
+ *
+ * NOTE: this checks LINEAGE (who started the task chain), which is satisfied by a woken
+ * principal-lineage task too. It is the correct notion for the autonomy principal-bypass
+ * (acting *within* CEO-authorized work, inheritable at high trust via the ladder), but it is
+ * NOT sufficient for the `elevated` gate — that requires a LIVE principal turn. Use
+ * isLivePrincipalTurn() for "the CEO is exercising authority right now". See ADR-017 and
+ * docs/wip/2026-06-22-woken-task-authorization-design.md §4.
  *
  * @param metadata  Task metadata (from ctx.taskMetadata or agent.task payload)
  */
@@ -44,6 +51,39 @@ export function isPrincipalOriginated(
   if (!metadata) return false;
   const originator = metadata.originator as TaskOriginator | undefined;
   return originator?.systemRole === 'principal';
+}
+
+/**
+ * Metadata key carrying the "live principal turn" signal (#1126). Stamped by the dispatcher
+ * ONLY when it processes a fresh principal inbound message; never set on wakes, derivations
+ * (delegated sub-tasks, child tasks), or scheduler fires. Lives as a SIBLING of `originator`
+ * on the task metadata so it survives computeEffectiveTaskMetadata() — which rewrites only the
+ * `originator` field — untouched. That pass-through is the desired behaviour, not incidental:
+ * a wake/derivation never carries this key in the first place, so nothing the ladder could
+ * downgrade is being preserved. SECURITY: the dispatcher strips any channel-supplied value of
+ * this key before stamping its own (see mergeTaskMetadata), so a crafted inbound cannot forge it.
+ */
+export const LIVE_PRINCIPAL_KEY = 'livePrincipal';
+
+/**
+ * True when THIS execution context is a live principal turn — the current turn originated from a
+ * fresh principal inbound. This is the sole satisfier of the `elevated` skill gate (#1126):
+ * system, agent, and woken/inherited principal-*lineage* contexts all return false, because
+ * lineage is not a live turn. This closes the self-approval hole with zero per-skill exceptions
+ * (a woken principal-lineage task can never approve its own pending action).
+ *
+ * Defence in depth: requires BOTH the live-turn marker AND principal lineage on the (effective)
+ * metadata. The marker alone is stamped only alongside a principal originator, but pairing the
+ * checks means a stray/forged marker without principal standing — or a marker on metadata whose
+ * effective originator the ladder has downgraded — still fails closed.
+ *
+ * @param metadata  Task metadata (the EFFECTIVE standing the execution layer feeds the gate)
+ */
+export function isLivePrincipalTurn(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!metadata) return false;
+  return metadata[LIVE_PRINCIPAL_KEY] === true && isPrincipalOriginated(metadata);
 }
 
 /**

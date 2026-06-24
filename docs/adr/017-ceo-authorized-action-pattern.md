@@ -107,3 +107,13 @@ legitimate CEO-directed sends.
   invocation time. It must not be used for skills that act autonomously based on
   inferred or cached intent — those should use the standard `action_risk` tiers
   and the Curia-initiated approval request flow (see ADR-018).
+
+## Update (#1126): "principal authority" sharpened to a *live* principal turn
+
+Two refinements land here, both tracked in `docs/wip/2026-06-22-woken-task-authorization-design.md` §4:
+
+1. **The `legacy ceoInitiated` flag is gone.** Origination is now carried by `taskMetadata.originator` (a `TaskOriginator` with a `systemRole`), stamped exclusively by the dispatch layer from the contact resolver — never settable by the LLM or a channel. The "task-origin check" in this ADR is realized through that field.
+
+2. **"Principal authority" is now *live* principal, and the `elevated` gate is the single enforcement point.** The `sensitivity: 'elevated'` mechanism — distinct from this ADR's `action_risk: 'none'` + handler-origin Option C — is redefined to require a **live principal turn**: the current turn must trace to a fresh principal inbound (a dispatcher-stamped `livePrincipal` signal), never to system, agent, or *inherited/woken* principal **lineage**. It is enforced solely at the execution-layer gate (`isLivePrincipalTurn`); the handler-level origination re-checks that previously duplicated it on every elevated skill were **abolished** — they had frozen the old "principal-only", then "principal-or-system", definitions and drifted out of sync. This closes the self-approval hole with zero per-skill exceptions.
+
+This ADR's **Option C pattern still stands** for the narrow class it was written for: `send-draft` (and `calendar-list-events`) remain `action_risk: 'none'` + a handler-level origination check, *because* `action_risk: 'none'` means the autonomy gate cannot govern them — so the handler check is load-bearing and is deliberately retained, not abolished. The "abolish handler re-checks" rule of #1126 applies to the `elevated` mechanism, which the live-principal gate fully covers; it does not strip the Option C handler check from skills the gate does not cover. The distinction between *lineage* (inheritable at high trust for `normal` skills, via the autonomy ladder) and a *live turn* (required for `elevated`) is the crux — see ADR-011's update and ADR-018.

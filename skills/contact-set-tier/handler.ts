@@ -1,6 +1,5 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { ContactTier, TaskOriginator } from '../../src/contacts/types.js';
-import { isPrincipalOriginated } from '../../src/contacts/principal.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -8,13 +7,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // be granted via chat or UI — it is set at bootstrap and protected by API guards.
 const SETTABLE_TIERS: ContactTier[] = ['blocked', 'unknown', 'known', 'trusted'];
 
+// SECURITY: setting a contact's tier alters authorization (tier drives the Gate C tier check),
+// so #1126 reclassified this from `elevated` to `normal` + action_risk:'high'. The handler no
+// longer re-checks origination — the execution-layer autonomy gate governs autonomous callers
+// (a woken/agent task needs score >= 80, else it surfaces an ADR-018 approval request), while a
+// live-principal-driven turn (incl. the delegated contacts specialist) clears it via the
+// principal-bypass. This is what lets the delegated contacts specialist run it at all — the old
+// `elevated` gate would reject every delegated (derived) turn under the #1126 live-principal rule.
 export class ContactSetTierHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    if (!isPrincipalOriginated(ctx.taskMetadata)) {
-      ctx.log.warn('contact-set-tier: rejected — task not originated by principal');
-      return { success: false, error: 'This skill requires principal authorization.' };
-    }
-
     const { contact_id, tier, reason } = ctx.input as {
       contact_id?: string;
       tier?: string;

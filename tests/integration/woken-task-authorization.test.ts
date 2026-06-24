@@ -1,11 +1,17 @@
-// woken-task-authorization.test.ts — integration coverage for the #1060 dedup scenario (#1125).
+// woken-task-authorization.test.ts — integration coverage for the #1060 dedup scenario (#1125/#1126).
 //
 // The full chain against a real Postgres: a system-cron-filed review task (source='agent', so a
 // DERIVED child, lineage='system') is heartbeat-woken; selectHeartbeatCandidates returns its
 // lineage + derived flag; enqueueTaskWake persists both onto the wake row; the metadata the
-// scheduler would fire is reconstructed from that row and fed to the REAL ExecutionLayer, which
-// applies the bypass ladder: an elevated skill is BLOCKED below posture D (score < 90, downgraded
-// to agent → surface-and-confirm) and ALLOWED at/above it (system standing retained).
+// scheduler would fire is reconstructed from that row and fed to the REAL ExecutionLayer.
+//
+// Two authorization facts are asserted end-to-end:
+//  - #1126 elevated gate: a woken (non-live) task NEVER satisfies an `elevated` skill, at ANY
+//    score — system/agent/woken-principal lineage all fail the live-principal requirement.
+//  - #1126 contact-merge (now `normal` + action_risk:'medium'): the dedup resolution. The woken
+//    derived task is BLOCKED below the medium threshold (surface-and-confirm via ADR-018) and
+//    auto-executes at/above it — the bypass ladder downgrades its system lineage to agent, so it
+//    is governed purely by the autonomy score.
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
@@ -36,10 +42,14 @@ function makeAutonomyService(score: number): AutonomyService {
   return { getConfig: async () => config } as unknown as AutonomyService;
 }
 
-function elevatedManifest(): SkillManifest {
+function makeManifest(
+  name: string,
+  sensitivity: 'normal' | 'elevated',
+  action_risk: SkillManifest['action_risk'],
+): SkillManifest {
   return {
-    name: 'contact-merge', description: 'merge two contacts', version: '1.0.0',
-    sensitivity: 'elevated', action_risk: 'none', inputs: {}, outputs: {},
+    name, description: name, version: '1.0.0',
+    sensitivity, action_risk, inputs: {}, outputs: {},
     permissions: [], secrets: [], timeout: 5000,
   };
 }
@@ -110,7 +120,7 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
     expect(rows[0]!.task_payload).toMatchObject({ type: 'task-wake', standing: { derived: true } });
   });
 
-  it('the woken derived task is BLOCKED below posture D and ALLOWED at it (surface-and-confirm)', async () => {
+  it('contact-merge (now normal+medium) on a woken dedup task: surface-and-confirm below 70, auto at/above', async () => {
     const taskId = await seedReviewTask();
     const candidate = (await selectHeartbeatCandidates(pool, {
       eligibleAgents: ['contacts'], idleThresholdHours: 4, staleWaitThresholdHours: 48, maxWakes: 5,
@@ -127,19 +137,48 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
 
     const handler: SkillHandler = { execute: async () => ({ success: true, data: 'merged' }) };
 
-    // Score 85: derived child below posture D (90) → downgraded to agent → elevated gate blocks.
-    const registry85 = new SkillRegistry();
-    registry85.register(elevatedManifest(), handler);
-    const blocked = await new ExecutionLayer(registry85, logger, { autonomyService: makeAutonomyService(85) })
+    // contact-merge is now `normal` + action_risk:'medium' (#1126). The wake's system lineage is
+    // downgraded to agent by the ladder (derived child below posture D), so the autonomy score
+    // alone governs it: below the medium threshold (70) → surface-and-confirm; at/above → auto.
+    const registryLow = new SkillRegistry();
+    registryLow.register(makeManifest('contact-merge', 'normal', 'medium'), handler);
+    const blocked = await new ExecutionLayer(registryLow, logger, { autonomyService: makeAutonomyService(65) })
       .invoke('contact-merge', {}, undefined, { taskMetadata });
-    expect(blocked.success).toBe(false);
-    if (!blocked.success) expect(blocked.error).toContain('elevated privileges');
+    expect(blocked.success).toBe(false); // 65 < 70 → ADR-018 surface-and-confirm
 
-    // Score 90: posture D met → system standing retained → elevated gate satisfied.
-    const registry90 = new SkillRegistry();
-    registry90.register(elevatedManifest(), handler);
-    const allowed = await new ExecutionLayer(registry90, logger, { autonomyService: makeAutonomyService(90) })
+    const registryHigh = new SkillRegistry();
+    registryHigh.register(makeManifest('contact-merge', 'normal', 'medium'), handler);
+    const allowed = await new ExecutionLayer(registryHigh, logger, { autonomyService: makeAutonomyService(75) })
       .invoke('contact-merge', {}, undefined, { taskMetadata });
-    expect(allowed.success).toBe(true);
+    expect(allowed.success).toBe(true); // 75 >= 70 → auto-merge
+  });
+
+  it('the #1126 elevated gate rejects a woken system-lineage task at ANY score (never a live turn)', async () => {
+    const taskId = await seedReviewTask();
+    const candidate = (await selectHeartbeatCandidates(pool, {
+      eligibleAgents: ['contacts'], idleThresholdHours: 4, staleWaitThresholdHours: 48, maxWakes: 5,
+    })).find((c) => c.id === taskId)!;
+    const { jobId } = await scheduler.enqueueTaskWake({
+      taskId, agentId: candidate.agentId, runAt: new Date(),
+      originator: candidate.originator, derived: candidate.derived,
+    });
+    const { rows } = await pool.query<{ originator: Record<string, unknown> | null; task_payload: Record<string, unknown> }>(
+      `SELECT originator, task_payload FROM scheduled_jobs WHERE id = $1`,
+      [jobId],
+    );
+    const taskMetadata = metadataFromWakeRow(rows[0]!);
+    const handler: SkillHandler = { execute: async () => ({ success: true, data: 'should not run' }) };
+
+    // Even at score 90 (posture D, system lineage retained as standing for the autonomy ladder),
+    // an `elevated` skill is blocked: the gate now requires a LIVE principal turn, which a wake
+    // never is. This is the self-approval-hole closure, end-to-end.
+    for (const score of [65, 90]) {
+      const registry = new SkillRegistry();
+      registry.register(makeManifest('exercise-authority', 'elevated', 'none'), handler);
+      const result = await new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(score) })
+        .invoke('exercise-authority', {}, undefined, { taskMetadata });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('live principal turn');
+    }
   });
 });

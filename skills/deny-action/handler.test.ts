@@ -64,11 +64,8 @@ function makeMockBus(): EventBus {
 }
 
 describe('DenyActionHandler', () => {
-  it('rejects non-CEO callers', async () => {
-    const handler = new DenyActionHandler();
-    const result = await handler.execute(makeCtx({ taskMetadata: {} }));
-    expect(result.success).toBe(false);
-  });
+  // #1126: authorization is enforced solely by the execution-layer live-principal gate
+  // (covered in src/skills/execution.test.ts); the handler no longer re-checks origination.
 
   it('returns error when actionLogRepo is missing', async () => {
     const handler = new DenyActionHandler();

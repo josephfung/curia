@@ -4,15 +4,18 @@
 // before committing. The Coordinator MUST present the preview to the CEO and
 // get confirmation before calling with dry_run: false.
 //
-// Elevated skill — principal origination enforced by the execution layer's
-// elevated-skill gate (isPrincipalOriginated). No handler-level caller guard
-// needed; caller may be undefined for delegated specialists.
+// SECURITY / AUTONOMY: #1126 reclassified contact-merge from `elevated` to `normal` +
+// action_risk:'medium' (autonomy-governed). A live-principal-driven turn (incl. the delegated
+// contacts specialist) clears the autonomy gate via the principal-bypass; an autonomous/woken
+// task needs score >= 70, else the merge surfaces an ADR-018 approval request — "surface and
+// confirm". There is NO handler-level origination re-check; the execution-layer gates are the
+// sole enforcement point. The `dry_run` flag remains the in-handler safety default (preview
+// before commit); the Coordinator/specialist presents the preview and only commits on
+// confirmation. caller may be undefined for delegated specialists.
 //
-// @TODO (autonomy): When the autonomy engine reaches "supervised" or higher, consider
-// lowering the confirmation requirement for `certain`-confidence merges. At "full" autonomy,
-// the Coordinator should execute merges from batch scan without CEO interruption. The
-// `dry_run` flag is the gate — at higher autonomy levels, `dry_run: false` is sent directly
-// for high-confidence pairs. See docs/specs/14-autonomy-engine.md.
+// @TODO (autonomy): the medium (70) threshold lets a sufficiently-trusted autonomous dedup task
+// auto-commit a `certain`-confidence merge. If that proves too eager, raise action_risk rather
+// than reintroducing a handler gate. See docs/specs/14-autonomy-engine.md.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 

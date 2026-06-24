@@ -1,8 +1,8 @@
 {
   "name": "executive-profile-update",
   "description": "Update the executive's writing voice profile. Accepts partial updates — only provide the fields you want to change. Requires CEO authorization. Use when the CEO asks to adjust their voice settings, after analyzing their writing patterns, or when they give feedback on drafted content.",
-  "version": "1.0.0",
-  "sensitivity": "elevated",
+  "version": "1.1.0",
+  "sensitivity": "normal",
   "capabilities": ["executiveProfileService"],
   "inputs": {
     "writing_voice": "object"

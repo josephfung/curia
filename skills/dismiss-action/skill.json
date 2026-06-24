@@ -1,7 +1,7 @@
 {
   "name": "dismiss-action",
   "description": "Dismiss a pending approval request because the CEO handled the action outside Curia (e.g. created the calendar event directly). Specify short_ref to target a specific request, or omit when only one is pending.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sensitivity": "elevated",
   "action_risk": "none",
   "inputs": {

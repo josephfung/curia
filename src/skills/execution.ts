@@ -19,7 +19,7 @@
 
 import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition, SkillManifest } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
-import { isPrincipalOriginated, isSystemOriginated, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
+import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -570,26 +570,29 @@ export class ExecutionLayer {
       this.bypassLadder,
     );
 
-    // Elevated-skill gate: require principal or system origination.
-    // Principal = CEO in an active conversation. System = operator-declared YAML job,
-    // version-controlled and reviewed — more trustworthy than agent-self-scheduled.
-    // Agent-originated tasks (systemRole: "agent") are deliberately excluded: those
-    // are autonomously invented by the LLM and must not have standing access to the
-    // approval queue.
+    // Elevated-skill gate (#1126): require a LIVE PRINCIPAL TURN — the current turn originated
+    // from a fresh principal inbound. This is the SOLE enforcement point for `elevated`; there
+    // are no handler-level re-checks (they froze the old "principal-only", then "principal-or-
+    // system", definitions and drifted out of sync — abolished in #1126). The live-principal
+    // signal is stamped by the dispatcher only on real principal inbounds and is structurally
+    // absent from wakes, derivations (delegated sub-tasks / child tasks), and scheduler fires.
     //
-    // The gate's REQUIREMENT stays principal-or-system in this issue; its INPUT is now
-    // effective standing — a woken task whose lineage the ladder has downgraded to agent
-    // (e.g. a heartbeat-woken review task below the posture threshold) no longer satisfies it.
-    // (#1126 redefines the requirement to a live principal turn and abolishes the handler
-    // re-checks below.)
+    // Consequences, by caller:
+    //  - System-declared jobs (the 8am digest) NO LONGER pass this gate. The one read that needed
+    //    it — list-pending-actions — moved to `normal` + allowed_callers:[coordinator] (#1126), so
+    //    the digest still works because the coordinator is the caller, not because of origination.
+    //  - A woken/derived PRINCIPAL-LINEAGE task fails: lineage is not a live turn. This closes the
+    //    self-approval hole with zero per-skill exceptions (a heartbeat-woken task can never approve
+    //    its own pending action). It can still inherit the principal-bypass of the *autonomy* gate
+    //    below via the ladder — a different, intentional notion of "principal" (acting within
+    //    CEO-authorized work vs. exercising authority now). See the autonomy gate's comment + ADR-017.
     //
-    // Handler-level defense-in-depth: skills that must never accept system origination
-    // (approve/deny/dismiss — require active CEO authorization) retain their own
-    // isPrincipalOriginated() checks. Read-only elevated skills (list-pending-actions)
-    // mirror this gate's logic. When changing this gate, audit elevated handler.ts files.
-    // See docs/wip/2026-05-10-principal-identity-design.md, docs/wip/2026-06-22-woken-task-authorization-design.md
+    // Reads EFFECTIVE standing for defence in depth (isLivePrincipalTurn also requires principal
+    // originator on the effective metadata), though a live turn carries no wakeContext so its
+    // effective standing equals its raw lineage.
+    // See docs/wip/2026-06-22-woken-task-authorization-design.md §4, ADR-017.
     if (manifest.sensitivity === 'elevated') {
-      if (!isPrincipalOriginated(effectiveTaskMetadata) && !isSystemOriginated(effectiveTaskMetadata)) {
+      if (!isLivePrincipalTurn(effectiveTaskMetadata)) {
         this.logger.warn(
           {
             skillName,
@@ -597,11 +600,11 @@ export class ExecutionLayer {
             // Log the raw LINEAGE (audit), not the downgraded effective standing.
             originator: (options?.taskMetadata as Record<string, unknown> | undefined)?.originator ?? null,
           },
-          'Elevated skill blocked: task not originated by principal or system (effective standing)',
+          'Elevated skill blocked: not a live principal turn (system, agent, and woken/inherited principal-lineage all fail)',
         );
         return {
           success: false,
-          error: this.wrapSkillError(`Skill '${skillName}' requires elevated privileges — task was not originated by the principal or a system-declared job`),
+          error: this.wrapSkillError(`Skill '${skillName}' requires a live principal turn — it can only be invoked directly by the principal (the CEO), not by a system job, an agent, or a woken/scheduled task`),
         };
       }
     }
@@ -956,16 +959,18 @@ export class ExecutionLayer {
         ? buildRateLimitSourceKey(options.agentId ?? 'human-approved', options.taskEventId, options.channelId)
         : undefined,
       // Forward task-level metadata so skills can inspect task-wide signals.
-      // EFFECTIVE standing (#1125), not raw lineage: handlers that still self-check
-      // isPrincipalOriginated(ctx.taskMetadata) (e.g. send-draft, contact-set-tier — normal-
-      // sensitivity skills the execution-layer gates don't cover) must see the post-ladder
-      // standing, or a heartbeat-woken principal-lineage task would ride borrowed standing the
-      // ladder downgraded. It also keeps lineage-forwarding handlers (delegate, scheduler-create,
+      // EFFECTIVE standing (#1125), not raw lineage. #1126 abolished the standing/origination
+      // re-checks on every elevated skill (the gate above is now the sole enforcement point), but
+      // two NORMAL skills the gate does not cover deliberately retain a re-check: send-draft and
+      // calendar-list-events (both action_risk:'none', so the autonomy gate cannot govern them —
+      // a read/none is autonomy-exempt). Those re-checks must see post-ladder standing, or a
+      // heartbeat-woken principal-lineage task would ride borrowed standing the ladder downgraded.
+      // Effective standing also keeps lineage-forwarding handlers (delegate, scheduler-create,
       // bullpen) from minting a fresh sub-task with standing the woken task no longer holds — a
       // derived sub-turn carries no wakeContext and would otherwise escape the ladder entirely.
-      // For a live turn this is referentially identical to the raw metadata. Audit logs above
-      // read the raw lineage directly from options.taskMetadata, not from here. (#1126 abolishes
-      // these handler re-checks; until then, effective standing is the safe input.)
+      // For a live turn this is referentially identical to the raw metadata (the live-principal
+      // signal, a sibling key, passes through computeEffectiveTaskMetadata untouched). Audit logs
+      // above read the raw lineage directly from options.taskMetadata, not from here.
       taskMetadata: effectiveTaskMetadata,
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.

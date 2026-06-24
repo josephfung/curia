@@ -73,14 +73,9 @@ function makeMockExecutionLayer(result?: SkillResult): ExecutionLayer {
 }
 
 describe('ApproveActionHandler', () => {
-  it('rejects non-CEO callers', async () => {
-    const handler = new ApproveActionHandler();
-    const result = await handler.execute(makeCtx({
-      taskMetadata: {},
-      caller: { contactId: 'user-99', role: 'contact', channel: 'email' },
-    }));
-    expect(result.success).toBe(false);
-  });
+  // #1126: authorization is enforced solely by the execution-layer live-principal gate
+  // (covered in src/skills/execution.test.ts). The handler no longer re-checks origination,
+  // so the old "rejects non-CEO callers" handler test has been removed.
 
   it('returns error when executionLayer is missing', async () => {
     const repo = makeMockRepo();

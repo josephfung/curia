@@ -4,20 +4,15 @@
 // to outcome = 'denied' and publishes a human.decision audit event.
 // No re-execution — the originally blocked skill stays blocked.
 //
-// SECURITY: sensitivity: "elevated" + isPrincipalOriginated check.
+// SECURITY: sensitivity: "elevated" — authorization is enforced solely by the execution-layer
+// live-principal gate (#1126). No handler-level re-check.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createHumanDecision } from '../../src/bus/events.js';
-import { isPrincipalOriginated } from '../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 
 export class DenyActionHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    if (!isPrincipalOriginated(ctx.taskMetadata)) {
-      ctx.log.warn('deny-action: rejected — task not originated by principal');
-      return { success: false, error: 'This skill requires principal authorization.' };
-    }
-
     if (!ctx.actionLogRepo) {
       return { success: false, error: 'deny-action requires actionLogRepo capability' };
     }

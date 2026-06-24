@@ -310,3 +310,22 @@ send mechanism.
 - The `approve-action`, `deny-action`, and `dismiss-action` skills must be
   `sensitivity: 'elevated'` (CEO-only) to prevent non-CEO contacts from
   approving actions. Same security model as `set-autonomy`.
+
+## Update (#1126): the approval loop gains its consequential actors, and `elevated` is sharpened
+
+#1126 makes this flow do more work. Consequential autonomous actions that previously
+hid behind the overloaded `elevated` gate (`contact-merge`, `contact-update`,
+`scheduler-create`, the contact permission/role/tier mutations, etc.) moved to
+`normal` + `action_risk`, so a woken/autonomous attempt that lacks the score now
+**blocks → files an approval request → the CEO's reply (a live principal turn) re-executes
+it** — exactly this ADR's flow, with no per-skill work. (For example, a heartbeat-woken
+contact-dedup task that can't clear `contact-merge`'s `medium` threshold surfaces the
+golden-record preview for confirmation rather than auto-merging.)
+
+Conversely, `elevated` was sharpened to mean a **live principal turn** (ADR-017 update):
+`approve-action` / `deny-action` / `dismiss-action` now require the CEO acting *now* — a
+woken principal-*lineage* task can never approve its own pending action (the self-approval
+hole closes with zero exceptions). The `humanApproved: true` re-execution path is unchanged
+and still bypasses the autonomy and caller gates; it does not bypass the `elevated` gate,
+but the queued skills are always `normal` (elevated skills are autonomy-exempt and so are
+never blocked into the queue).

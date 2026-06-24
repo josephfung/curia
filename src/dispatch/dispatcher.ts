@@ -5,6 +5,7 @@ import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator } from '../contacts/types.js';
 import { isAutomatedKind } from '../contacts/types.js';
+import { LIVE_PRINCIPAL_KEY } from '../contacts/principal.js';
 import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
@@ -21,9 +22,10 @@ function redactSenderId(value: string): string {
 
 /**
  * Merge channel-supplied metadata with injection findings and originator context.
- * SECURITY: strips both `ceoInitiated` (legacy) and `originator` after all untrusted
- * spreads — so neither channel metadata nor injection metadata can smuggle a forged
- * originator. The trusted `originatorMeta` spread wins last.
+ * SECURITY: strips `ceoInitiated` (legacy), `originator`, and `livePrincipal` after all
+ * untrusted spreads — so neither channel metadata nor injection metadata can smuggle a forged
+ * originator or a forged live-principal-turn signal (#1126). The trusted `originatorMeta` spread
+ * wins last and is the ONLY source of these fields.
  */
 function mergeTaskMetadata(
   channelMetadata: Record<string, unknown> | undefined,
@@ -36,6 +38,7 @@ function mergeTaskMetadata(
     ...(injectionMetadata ?? {}),
     ceoInitiated: undefined,          // strip legacy untrusted channel value (after all untrusted spreads)
     originator: undefined,            // strip untrusted channel value (after all untrusted spreads)
+    [LIVE_PRINCIPAL_KEY]: undefined,  // strip untrusted live-principal signal — stamped only below (#1126)
     ...(originatorMeta ?? {}),        // trusted stamp wins last
   };
 }
@@ -700,7 +703,20 @@ export class Dispatcher {
           initiatedAt: new Date().toISOString(),
           tier: 'unknown',
         };
-    const originatorMeta = { originator };
+    // Stamp the LIVE PRINCIPAL TURN signal (#1126) iff this inbound resolved to the principal.
+    // This is the sole satisfier of the `elevated` skill gate (approve/deny/dismiss actions,
+    // set-autonomy, grant-recommendation decisions). It is deliberately a SIBLING of `originator`
+    // — never a sub-field of it — so it passes through computeEffectiveTaskMetadata() (which
+    // rewrites only `originator`) untouched, and so it is structurally absent from every wake,
+    // delegated sub-task, and scheduler fire (those paths never reach this stamping site). A
+    // woken principal-LINEAGE task therefore carries the principal originator (for the autonomy
+    // principal-bypass ladder) but NOT this signal — which is exactly what closes the
+    // self-approval hole. SECURITY: any channel-supplied value of this key is stripped in
+    // mergeTaskMetadata before this trusted stamp is applied.
+    const originatorMeta: Record<string, unknown> = { originator };
+    if (originator.systemRole === 'principal') {
+      originatorMeta[LIVE_PRINCIPAL_KEY] = true;
+    }
     if (!senderContext?.resolved) {
       this.logger.warn(
         { channelId: payload.channelId, senderId: payload.senderId },

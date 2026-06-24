@@ -5,22 +5,16 @@
 // writes a child autonomy_action_log row for the re-execution result,
 // and publishes a human.decision audit event.
 //
-// SECURITY: sensitivity: "elevated" + isPrincipalOriginated check.
-// executionLayer capability is restricted to this skill.
+// SECURITY: sensitivity: "elevated" — authorization is enforced solely by the execution-layer
+// live-principal gate (#1126). No handler-level re-check: the gate already guarantees this skill
+// only runs in a live principal turn. executionLayer capability is restricted to this skill.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { createHumanDecision } from '../../src/bus/events.js';
-import { isPrincipalOriginated } from '../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 
 export class ApproveActionHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    // Principal-origin check
-    if (!isPrincipalOriginated(ctx.taskMetadata)) {
-      ctx.log.warn('approve-action: rejected — task not originated by principal');
-      return { success: false, error: 'This skill requires principal authorization.' };
-    }
-
     if (!ctx.actionLogRepo) {
       return { success: false, error: 'approve-action requires actionLogRepo capability' };
     }
@@ -61,8 +55,10 @@ export class ApproveActionHandler implements SkillHandler {
       ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'approve-action: row transitioned to approved');
 
       // Step 2: Re-execute the original skill with humanApproved bypass.
-      // Pass taskMetadata so that elevated-sensitivity skills pass the isPrincipalOriginated
-      // gate — the approval itself is already a principal-originated action (checked above).
+      // humanApproved skips the autonomy + caller gates (ADR-018). taskMetadata is forwarded so
+      // the re-executed handler reads the originating live-principal standing for its own audit /
+      // standing-continuity needs (the queued skill is always `normal` — elevated skills are
+      // autonomy-exempt and so are never blocked into the queue in the first place).
       const reResult = await ctx.executionLayer.invoke(
         row.skillName,
         row.payload,
