@@ -1,49 +1,49 @@
-// health.ts — GET /api/health endpoint.
+// health.ts — GET /api/health endpoint (thin shim over HealthService).
 //
-// Reports system status: database connectivity, registered agents,
-// loaded skills, and process uptime. Returns 200 for healthy, 503
-// for degraded (e.g., database is down).
+// All probe logic lives in HealthService. This route calls getStatus() and maps
+// the three-state result to HTTP status codes: 503 for 'down', 200 for all else.
 
 import type { FastifyInstance } from 'fastify';
-import type { Pool } from 'pg';
 import type { Logger } from '../../../logger.js';
+import type { HealthService } from '../../../health/health-service.js';
 
 export interface HealthRouteOptions {
-  pool: Pool;
-  logger: Logger;
-  agentNames: string[];
-  skillNames: string[];
+  healthService: HealthService;
+  /** Shared pino logger. HttpAdapter runs Fastify with logger:false, so request.log
+   *  is the abstract no-op logger — pass the real logger here for the error path. */
+  logger?: Logger;
 }
 
 export async function healthRoutes(
   app: FastifyInstance,
   options: HealthRouteOptions,
 ): Promise<void> {
-  const { pool, logger, agentNames, skillNames } = options;
-  const startTime = Date.now();
+  const { healthService, logger } = options;
 
   // Permissive rate limit: 60 req/min per IP — allows monitoring tools to probe every
-  // second while still preventing denial-of-service from rogue scanners. This is well
-  // above the expected load from any real health-check fleet.
+  // second while still preventing denial-of-service from rogue scanners.
   app.get('/api/health', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
-    let dbStatus = 'connected';
-
     try {
-      await pool.query('SELECT 1');
+      const result = await healthService.getStatus();
+      const statusCode = result.status === 'down' ? 503 : 200;
+      return reply.status(statusCode).send(result);
     } catch (err) {
-      logger.warn({ err }, 'Health check: database probe failed');
-      dbStatus = 'disconnected';
+      // If getStatus() throws, return a health-shaped 503 rather than a generic 500
+      // so monitoring tools configured for 503 still alert correctly.
+      logger?.error({ err }, 'Health check threw unexpectedly — returning 503');
+      return reply.status(503).send({
+        status: 'down' as const,
+        uptime_s: -1,
+        checks: {
+          db: 'fail' as const,
+          bus: 'fail' as const,
+          signal: 'skipped' as const,
+          email: 'skipped' as const,
+          browser: 'skipped' as const,
+          mcp: { google_workspace: 'skipped' as const },
+          scheduler: 'fail' as const,
+        },
+      });
     }
-
-    const status = dbStatus === 'connected' ? 'ok' : 'degraded';
-    const statusCode = status === 'ok' ? 200 : 503;
-
-    return reply.status(statusCode).send({
-      status,
-      database: dbStatus,
-      agents: agentNames,
-      skills: skillNames,
-      uptime: Math.floor((Date.now() - startTime) / 1000),
-    });
   });
 }

@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -137,6 +137,7 @@ import { reconcileChannelRegistry } from './registry/channel-reconcile.js';
 import { McpRegistryRepo } from './registry/mcp-registry-repo.js';
 import { McpRegistryService } from './registry/mcp-registry-service.js';
 import { reconcileMcpRegistry } from './registry/mcp-reconcile.js';
+import { HealthService } from './health/health-service.js';
 
 async function main(): Promise<void> {
   // Captured at the very start of main() so the wizard's post-setup polling
@@ -1585,6 +1586,32 @@ async function main(): Promise<void> {
     );
   }
 
+  // HealthService — observability layer for liveness probes and canary jobs (#434).
+  // Requires: pool, bus, logger (always available), scheduler (just constructed),
+  // mcpSessions (loaded at line 926), and modelRoutingConfig (from line 393).
+  // Tavily is configured as a vault secret (not a config field) — pass undefined;
+  // canary is skipped. Google Workspace MCP uses OAuth env vars (no credential file)
+  // — pass undefined; check falls back to a session ping if path is null.
+  const healthConfig = resolveHealthConfig(yamlConfig.health);
+  const healthService = new HealthService({
+    db: pool,
+    bus,
+    logger,
+    scheduler,
+    schedulerService,
+    emailAdapter: emailAdapters[0],
+    nylasClient: primaryNylasClient,
+    signalRpcClient,
+    browserService,
+    mcpSessions,
+    modelRoutingConfig,
+    config: healthConfig,
+    openaiApiKey: config.openaiApiKey,
+    tavilyApiKey: undefined,             // vault secret, not in config — canary skipped
+    googleWorkspaceConfigPath: undefined, // OAuth env vars, no credential file — canary skipped
+  });
+  await healthService.start();
+
   // Approval trigger — creates pending_approval rows and notifies CEO
   // when autonomy gates block a skill. See ADR-018 and issue #427.
   // Constructed unconditionally — row creation does not depend on the outbound stack.
@@ -2103,6 +2130,8 @@ async function main(): Promise<void> {
     // OPENAI_API_KEY is not set (entity memory requires embeddings); individual
     // endpoints handle the absent case in Tasks 3–5.
     entityMemory,
+    // Powers GET /api/health with real probes and canary state (#434).
+    healthService,
   });
 
   try {

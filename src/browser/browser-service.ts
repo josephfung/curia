@@ -196,6 +196,10 @@ export class BrowserService {
         this.attachDisconnectedHandler(ctx);
       }).catch(err => {
         this.logger.error({ err }, 'Browser restart failed');
+        // Clear the stale crashed context so checkBrowser() returns 'fail' during
+        // crash recovery. Without this, browserContext remains the dead reference
+        // and the health check would falsely report 'ok'.
+        this.context = null;
       });
     });
   }
@@ -376,6 +380,15 @@ export class BrowserService {
    */
   isChannelFallbackActive(): boolean {
     return this.channelFallbackActive;
+  }
+
+  /**
+   * Expose the persistent browser context for liveness probes. Null when the service
+   * has not been started or has been stopped. The probe calls isConnected() to confirm
+   * the browser process is still alive.
+   */
+  get browserContext(): BrowserContext | null {
+    return this.context;
   }
 
   // --- Private helpers ---
