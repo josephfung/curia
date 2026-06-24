@@ -5,6 +5,16 @@
 
 const NYLAS_BASE = 'https://api.us.nylas.com/v3/grants';
 
+// Nylas guidance: requests with limit > 20 on list endpoints trigger concurrent-user 429s.
+const NYLAS_MAX_LIST_LIMIT = 20;
+// Maximum number of retry attempts for 429 / 5xx responses before giving up.
+const NYLAS_MAX_RETRIES = 3;
+// Base backoff delay in ms — doubles each attempt (plus ±25% jitter).
+const NYLAS_BACKOFF_BASE_MS = 500;
+// Upper cap for any computed backoff delay, including a Retry-After header value.
+// Prevents a rogue or misbehaving Retry-After from hanging a skill indefinitely.
+const NYLAS_MAX_BACKOFF_MS = 30_000;
+
 // ── Response types ──────────────────────────────────────────────────────────
 
 export interface NylasParticipant {
@@ -160,7 +170,7 @@ export class CeoNylasClient {
 
   async listMessages(options: ListMessagesOptions = {}): Promise<NylasMessageSummary[]> {
     const params = new URLSearchParams();
-    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    params.set('limit', String(Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT)));
     if (options.query) {
       // Nylas v3: search_query_native cannot be combined with any other filter
       // param except limit and page_token — sending in/unread/received_after
@@ -263,7 +273,7 @@ export class CeoNylasClient {
   // filter here — callers must not apply inbox watermarks to drafts.
   async listDrafts(options: { limit?: number } = {}): Promise<NylasDraftSummary[]> {
     const params = new URLSearchParams();
-    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    params.set('limit', String(Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT)));
     const url = `${this.baseUrl}/drafts?${params}`;
     const data = await this.request<NylasApiDraftFull[]>('GET', url, 'listDrafts');
     return data.map(normalizeDraftSummary);
@@ -279,7 +289,7 @@ export class CeoNylasClient {
     options: { maxScan?: number; pageSize?: number } = {},
   ): Promise<{ drafts: NylasDraftSummary[]; truncated: boolean }> {
     const maxScan = options.maxScan ?? 500;
-    const pageSize = options.pageSize ?? 100;
+    const pageSize = Math.min(options.pageSize ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT);
 
     const drafts: NylasDraftSummary[] = [];
     let pageToken: string | undefined;
@@ -495,6 +505,16 @@ export class CeoNylasClient {
 
   // Same as request<T>, but also surfaces Nylas's `next_cursor` for paginated
   // list endpoints. request<T> delegates here and drops the cursor.
+  //
+  // 429 is retried regardless of HTTP method (the request was rejected before
+  // processing, so there's no duplicate-action risk). 5xx is retried only for
+  // GET — POST/PUT mutations may have been processed before the gateway returned
+  // 502/503, so retrying them risks duplicate sends or double-writes.
+  //
+  // Backoff honors the Retry-After header (capped at NYLAS_MAX_BACKOFF_MS) and
+  // falls back to exponential + ±25% jitter. After NYLAS_MAX_RETRIES attempts,
+  // a typed NylasApiError is thrown with an explicit message so downstream
+  // agents never misread a rate-limit as an auth/credential failure.
   private async requestWithCursor<T>(
     method: string,
     url: string,
@@ -508,26 +528,83 @@ export class CeoNylasClient {
       init.body = JSON.stringify(body);
     }
 
-    let res: Response;
-    try {
-      res = await fetch(url, init);
-    } catch (err) {
-      this.log.error({ err, operation }, `nylas: ${operation} fetch failed`);
-      throw new NylasApiError(0, operation, `Fetch failed: ${String(err)}`);
-    }
+    const isGet = method.toUpperCase() === 'GET';
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => '(unreadable body)');
-      this.log.error({ status: res.status, operation }, `nylas: ${operation} API error`);
-      throw new NylasApiError(res.status, operation, `Nylas ${operation}: HTTP ${res.status} — ${text}`);
-    }
+    let attempt = 0;
+    for (;;) {
+      let res: Response;
+      try {
+        res = await fetch(url, init);
+      } catch (err) {
+        this.log.error({ err, operation }, `nylas: ${operation} fetch failed`);
+        throw new NylasApiError(0, operation, `Fetch failed: ${String(err)}`);
+      }
 
-    const json = (await res.json()) as { data?: T; next_cursor?: string } | null;
-    if (json == null || json.data === undefined) {
-      this.log.error({ status: res.status, operation }, `nylas: ${operation} response missing data envelope`);
-      throw new NylasApiError(res.status, operation, `Nylas ${operation}: response missing data envelope`);
+      // 429 is always retriable (rejected before processing). 5xx only on GET
+      // (POST/PUT may have been processed before the gateway returned 5xx).
+      const isRetriable = res.status === 429 || (res.status >= 500 && isGet);
+      if (isRetriable && attempt < NYLAS_MAX_RETRIES) {
+        // Discard the body to release the connection slot before sleeping.
+        await res.body?.cancel();
+
+        const retryAfterRaw = res.headers.get('Retry-After');
+        const retryAfterSeconds = retryAfterRaw !== null ? Number(retryAfterRaw) : NaN;
+        let baseDelayMs: number;
+        if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+          baseDelayMs = retryAfterSeconds * 1000;
+          if (baseDelayMs > NYLAS_MAX_BACKOFF_MS) {
+            this.log.warn(
+              { retryAfterSeconds, operation },
+              `nylas: Retry-After exceeds cap — clamping to ${NYLAS_MAX_BACKOFF_MS}ms`,
+            );
+            baseDelayMs = NYLAS_MAX_BACKOFF_MS;
+          }
+        } else {
+          if (retryAfterRaw !== null) {
+            // Header present but not a plain-integer delta-seconds value (e.g. HTTP-date
+            // format). Log it and fall back to exponential backoff.
+            this.log.warn({ retryAfterRaw, operation }, 'nylas: unparseable Retry-After header — using backoff');
+          }
+          baseDelayMs = Math.min(NYLAS_BACKOFF_BASE_MS * 2 ** attempt, NYLAS_MAX_BACKOFF_MS);
+        }
+        // ±25% jitter to spread concurrent retries from multiple ceo-inbox skills.
+        const delayMs = Math.round(baseDelayMs * (0.75 + Math.random() * 0.5));
+        this.log.warn(
+          { status: res.status, operation, attempt, delayMs },
+          `nylas: ${operation} transient error — retrying after ${delayMs}ms`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        attempt++;
+        continue;
+      }
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '(unreadable body)');
+        if (res.status === 429) {
+          // Retries exhausted on a rate-limit. Throw a message that unambiguously
+          // identifies this as transient congestion, not an auth/credential problem,
+          // so agents cannot misnarrate it as "OAuth token expired."
+          this.log.error(
+            { status: 429, operation, totalAttempts: attempt + 1 },
+            `nylas: ${operation} rate limited — retries exhausted`,
+          );
+          throw new NylasApiError(
+            429,
+            operation,
+            `Nylas ${operation}: rate limited (HTTP 429) — transient, not an auth/credential failure. ${text}`,
+          );
+        }
+        this.log.error({ status: res.status, operation, totalAttempts: attempt + 1 }, `nylas: ${operation} API error`);
+        throw new NylasApiError(res.status, operation, `Nylas ${operation}: HTTP ${res.status} — ${text}`);
+      }
+
+      const json = (await res.json()) as { data?: T; next_cursor?: string } | null;
+      if (json == null || json.data === undefined) {
+        this.log.error({ status: res.status, operation }, `nylas: ${operation} response missing data envelope`);
+        throw new NylasApiError(res.status, operation, `Nylas ${operation}: response missing data envelope`);
+      }
+      return { data: json.data, nextCursor: json.next_cursor };
     }
-    return { data: json.data, nextCursor: json.next_cursor };
   }
 }
 
