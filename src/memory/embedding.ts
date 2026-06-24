@@ -2,7 +2,7 @@ import { EMBEDDING_DIMENSIONS } from './types.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
-import { createEmbeddingCall } from '../bus/events.js';
+import { createEmbeddingCall, createEmbeddingError } from '../bus/events.js';
 
 // Internal interface separating the transport/mock concern from the service API.
 // Lets us swap OpenAI for a deterministic fake in tests without touching callers.
@@ -99,6 +99,16 @@ class OpenAIBackend implements EmbeddingBackend {
         }),
       });
     } catch (err) {
+      // Publish embedding.error so HealthService can track embedding health.
+      // Guard: bus is optional (may be null/undefined when used without bus wiring).
+      if (this.bus) {
+        this.bus.publish('agent', createEmbeddingError({
+          model: 'text-embedding-3-small',
+          errorType: 'FETCH_FAILED',
+        })).catch((publishErr: unknown) => {
+          this.logger.warn({ publishErr }, 'Failed to publish embedding.error event');
+        });
+      }
       this.logger.error({ err, textLength: text.length }, 'OpenAI embedding fetch failed');
       throw new Error(`OpenAI embedding fetch error: ${(err as Error).message}`);
     }
@@ -106,6 +116,14 @@ class OpenAIBackend implements EmbeddingBackend {
     if (!response.ok) {
       // Use .catch() so a body-read failure doesn't swallow the HTTP error
       const body = await response.text().catch(() => '<body unreadable>');
+      if (this.bus) {
+        this.bus.publish('agent', createEmbeddingError({
+          model: 'text-embedding-3-small',
+          errorType: 'API_ERROR',
+        })).catch((publishErr: unknown) => {
+          this.logger.warn({ publishErr }, 'Failed to publish embedding.error event');
+        });
+      }
       this.logger.error({ status: response.status, body }, 'OpenAI embedding request failed');
       throw new Error(`OpenAI embedding API error: ${response.status}`);
     }
@@ -118,6 +136,14 @@ class OpenAIBackend implements EmbeddingBackend {
     try {
       json = await response.json() as { data: Array<{ embedding: number[] }>; usage?: { prompt_tokens?: number } };
     } catch (err) {
+      if (this.bus) {
+        this.bus.publish('agent', createEmbeddingError({
+          model: 'text-embedding-3-small',
+          errorType: 'PARSE_ERROR',
+        })).catch((publishErr: unknown) => {
+          this.logger.warn({ publishErr }, 'Failed to publish embedding.error event');
+        });
+      }
       this.logger.error({ err }, 'OpenAI embedding response JSON parse failed');
       throw new Error(`OpenAI embedding response parse error: ${(err as Error).message}`);
     }

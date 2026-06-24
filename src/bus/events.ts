@@ -809,6 +809,38 @@ export interface LlmCallEvent extends BaseEvent {
   payload: LlmCallPayload;
 }
 
+// LlmErrorEvent — published by TelemetryLlmProvider and AgentRuntime on every
+// failed LLM call (response.type === 'error'). Used by HealthService to maintain
+// the per-tier outcome tracker without making billed probe calls.
+interface LlmErrorPayload {
+  agentId: string;
+  conversationId: string;
+  /** Model that was requested — used by HealthService to reverse-map to a tier. */
+  requestedModel: string;
+  provider: string;
+  errorType: string;
+  parentEventId: string;
+}
+
+export interface LlmErrorEvent extends BaseEvent {
+  type: 'llm.error';
+  sourceLayer: 'agent';
+  payload: LlmErrorPayload;
+}
+
+export function createLlmError(
+  payload: LlmErrorPayload,
+): LlmErrorEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'llm.error',
+    sourceLayer: 'agent',
+    payload,
+    parentEventId: payload.parentEventId,
+  };
+}
+
 // ModelFallbackEngagedEvent — published when the primary tier model is unavailable
 // and execution falls through to the fallback tier's model (#813).
 export interface ModelFallbackEngagedEvent extends BaseEvent {
@@ -840,6 +872,33 @@ export interface EmbeddingCallEvent extends BaseEvent {
   type: 'embedding.call';
   sourceLayer: 'system';
   payload: EmbeddingCallPayload;
+}
+
+// EmbeddingErrorEvent — published by the OpenAI embedding backend on failure.
+// Used by HealthService to track embedding service health.
+// No parentEventId — embedding calls fire from KG/validator paths that
+// don't always have an agent.task event ID in scope.
+interface EmbeddingErrorPayload {
+  model: string;
+  errorType: string;
+}
+
+export interface EmbeddingErrorEvent extends BaseEvent {
+  type: 'embedding.error';
+  sourceLayer: 'agent';
+  payload: EmbeddingErrorPayload;
+}
+
+export function createEmbeddingError(
+  payload: EmbeddingErrorPayload,
+): EmbeddingErrorEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'embedding.error',
+    sourceLayer: 'agent',
+    payload,
+  };
 }
 
 // ContextBudgetEvent — published by the agent layer after assembling context for each LLM call.
@@ -1014,6 +1073,7 @@ export type BusEvent =
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
   | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
+  | LlmErrorEvent            // #434: failed LLM call — used by HealthService for tier health tracking
   | ModelFallbackEngagedEvent  // #813: primary tier model unavailable, routing to fallback tier
   | ContextBudgetEvent        // #24: context budget utilization per LLM call
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
@@ -1022,6 +1082,7 @@ export type BusEvent =
   | AutonomySkillBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
+  | EmbeddingErrorEvent        // #434: failed embedding call — used by HealthService for health tracking
   | TaskCreatedEvent           // Tasks v1: task created via task-create skill (#835)
   | TaskUpdatedEvent           // Tasks v1: task fields updated via task-update skill (#835)
   | TaskCompletedEvent         // Tasks v1: task set to done via task-complete skill (#835)

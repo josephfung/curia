@@ -1,6 +1,6 @@
 import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createContextBudget, createModelFallbackEngaged, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, type AgentTaskEvent } from '../bus/events.js';
 import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
@@ -1359,6 +1359,29 @@ export class AgentRuntime {
       }
     };
 
+    // Publish llm.error for failed provider calls — used by HealthService to track
+    // tier health without making billed probes. Fire-and-forget with try-catch like
+    // publishLlmCallEvent: telemetry failure must never abort an agent task.
+    const publishLlmErrorEvent = async (
+      response: LLMResponse & { type: 'error' },
+      requestedModel: string | undefined,
+      providerIdOverride?: string,
+    ): Promise<void> => {
+      try {
+        const event = createLlmError({
+          agentId,
+          conversationId: taskEvent.payload.conversationId,
+          requestedModel: requestedModel ?? 'unknown',
+          provider: providerIdOverride ?? provider.id,
+          errorType: response.error.type,
+          parentEventId: taskEvent.id,
+        });
+        await bus.publish('agent', event);
+      } catch (err) {
+        logger.error({ err, agentId }, 'Failed to publish llm.error telemetry event');
+      }
+    };
+
     // Prefer the explicitly resolved model; fall back to modelName so callers that
     // set only modelName (e.g. unit tests) still reach the provider without error.
     const modelForCall = this.config.resolvedModel ?? this.config.modelName;
@@ -1373,6 +1396,10 @@ export class AgentRuntime {
     }
 
     const agentErr = response.error;
+
+    // Publish llm.error before any retry/fallback so the tracker records the raw
+    // failure on each attempt, not just the final one.
+    await publishLlmErrorEvent(response, modelForCall);
 
     // Non-retryable errors: check for model fallback first, then bail.
     if (!agentErr.retryable) {
@@ -1435,6 +1462,7 @@ export class AgentRuntime {
           { agentId, errorType: fallbackErr.type, fallbackModel: this.config.fallbackModel },
           'Fallback model also failed',
         );
+        await publishLlmErrorEvent(fallbackResponse, this.config.fallbackModel, this.config.fallbackProvider.id);
         await this.publishAgentError(fallbackErr, taskEvent);
         await this.sendErrorResponse(taskEvent);
         return null;
@@ -1481,6 +1509,9 @@ export class AgentRuntime {
       }
 
       latestErr = retryResponse.error;
+
+      // Publish llm.error on every retry failure so the tracker records each raw attempt.
+      await publishLlmErrorEvent(retryResponse, modelForCall);
 
       // If the retry returned a non-retryable error, stop retrying immediately
       if (!latestErr.retryable) {

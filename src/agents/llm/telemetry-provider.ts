@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ToolResult } from './provider.js';
 import type { EventBus } from '../../bus/bus.js';
 import type { ModelRegistry } from './model-registry.js';
-import { createLlmCall } from '../../bus/events.js';
+import { createLlmCall, createLlmError } from '../../bus/events.js';
 import { createEstimateCostUsd } from './pricing.js';
 import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';
@@ -94,6 +94,28 @@ export class TelemetryLlmProvider implements LLMProvider {
         this.logger.warn(
           { err, serviceId: this.serviceId },
           'TelemetryLlmProvider: failed to publish llm.call event',
+        );
+      }
+    }
+
+    // Publish llm.error on failed responses so HealthService can track tier health
+    // without billed probe calls. Fire-and-forget inside try-catch — telemetry
+    // failure must never propagate to the system service.
+    if (response.type === 'error') {
+      try {
+        const event = createLlmError({
+          agentId: `system:${this.serviceId}`,
+          conversationId: 'system',
+          requestedModel: params.model ?? 'unknown',
+          provider: this.inner.id,
+          errorType: response.error.type,
+          parentEventId: 'system',
+        });
+        await this.bus.publish('agent', event);
+      } catch (err) {
+        this.logger.warn(
+          { err, serviceId: this.serviceId },
+          'TelemetryLlmProvider: failed to publish llm.error event',
         );
       }
     }
