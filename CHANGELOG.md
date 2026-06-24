@@ -21,7 +21,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Model-tier fallback resilience** — reroutes `NOT_FOUND` across fixed tier rules and emits a `model.fallback` audit event (spec 05, #813).
-- **Resumable tasks & projects design** — design memo (`docs/wip`) for work that outlasts one executor invocation: `plan`/`checkpoint` primitives, paused-as-success, progress-based circuit-breaker (spec 19 follow-on, #1150).
 
 ### Changed
 
