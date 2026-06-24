@@ -78,6 +78,11 @@ export interface InvokeOptions {
   parentEventId?: string;
   /** Task-level metadata forwarded from the agent.task event payload. */
   taskMetadata?: Record<string, unknown>;
+  /** Live-principal-turn signal (#1126) — forwarded from agent.task.payload.liveTurn, distinct
+   *  from taskMetadata so it can never be swept into a persisted row. The elevated-skill gate
+   *  requires it (plus principal lineage). Stamped only on fresh principal inbounds and forwarded
+   *  by `delegate` across a synchronous delegation. */
+  liveTurn?: boolean;
   /** When true, autonomy gates (A and B) are skipped — the skill runs as if the
    *  score were sufficient. Only the approve-action skill (#428) should set this.
    *  All other checks (elevated-skill gate, content filter, blocked-contact) still run.
@@ -587,12 +592,12 @@ export class ExecutionLayer {
     //    below via the ladder — a different, intentional notion of "principal" (acting within
     //    CEO-authorized work vs. exercising authority now). See the autonomy gate's comment + ADR-017.
     //
-    // Reads EFFECTIVE standing for defence in depth (isLivePrincipalTurn also requires principal
-    // originator on the effective metadata), though a live turn carries no wakeContext so its
-    // effective standing equals its raw lineage.
-    // See docs/wip/2026-06-22-woken-task-authorization-design.md §4, ADR-017.
+    // The signal is `options.liveTurn` (a DISTINCT field off the metadata bag, so it can never be
+    // persisted); isLivePrincipalTurn also requires principal originator on the effective metadata
+    // for defence in depth. A live turn carries no wakeContext, so its effective standing equals
+    // its raw lineage. See docs/wip/2026-06-22-woken-task-authorization-design.md §4, ADR-017.
     if (manifest.sensitivity === 'elevated') {
-      if (!isLivePrincipalTurn(effectiveTaskMetadata)) {
+      if (!isLivePrincipalTurn(options?.liveTurn, effectiveTaskMetadata)) {
         this.logger.warn(
           {
             skillName,
@@ -968,10 +973,13 @@ export class ExecutionLayer {
       // Effective standing also keeps lineage-forwarding handlers (delegate, scheduler-create,
       // bullpen) from minting a fresh sub-task with standing the woken task no longer holds — a
       // derived sub-turn carries no wakeContext and would otherwise escape the ladder entirely.
-      // For a live turn this is referentially identical to the raw metadata (the live-principal
-      // signal, a sibling key, passes through computeEffectiveTaskMetadata untouched). Audit logs
-      // above read the raw lineage directly from options.taskMetadata, not from here.
+      // For a live turn this is referentially identical to the raw metadata. Audit logs above
+      // read the raw lineage directly from options.taskMetadata, not from here.
       taskMetadata: effectiveTaskMetadata,
+      // Live-principal-turn signal (#1126), forwarded so the `delegate` skill can propagate it to
+      // a synchronously-delegated specialist (a specialist acting inside the CEO's live turn).
+      // Distinct from taskMetadata so no persistence skill can sweep it into a wakeable row.
+      liveTurn: options?.liveTurn,
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.
       timezone: this.timezone,

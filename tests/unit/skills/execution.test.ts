@@ -183,8 +183,8 @@ describe('ExecutionLayer', () => {
         role: 'ceo',
         channel: 'cli',
       }, {
+        liveTurn: true,
         taskMetadata: {
-          livePrincipal: true,
           originator: {
             contactId: 'primary-user',
             systemRole: 'principal' as const,
@@ -310,8 +310,8 @@ describe('ExecutionLayer', () => {
 
       const caller = { contactId: 'primary-user', role: 'ceo' as const, channel: 'cli' };
       await execution.invoke('elevated-skill', {}, caller, {
+        liveTurn: true,
         taskMetadata: {
-          livePrincipal: true,
           originator: {
             contactId: 'primary-user',
             systemRole: 'principal' as const,

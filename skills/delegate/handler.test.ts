@@ -93,6 +93,30 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     });
     expect((task as AgentTaskEvent).payload.metadata).not.toHaveProperty('originator');
   });
+
+  it('forwards the live-principal-turn signal across a synchronous delegation (#1126)', async () => {
+    // The crux of #1126's delegated-elevated support: a specialist delegated-to inside the CEO's
+    // live turn inherits liveTurn, so it can satisfy the elevated gate (e.g. contact-set-tier).
+    const { bus, published } = makeBus();
+    const result = await new DelegateHandler().execute(makeCtx(bus, { liveTurn: true }));
+    expect(result.success).toBe(true);
+
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    // liveTurn is a DISTINCT payload field, not a metadata-bag key — so it cannot be persisted.
+    expect(task.payload.liveTurn).toBe(true);
+    expect(task.payload.metadata).not.toHaveProperty('liveTurn');
+  });
+
+  it('does NOT forward a live signal when the delegating turn is not live', async () => {
+    // An autonomous/woken coordinator turn (no liveTurn) delegating to a specialist must not
+    // manufacture live-ness — the sub-task stays non-live and elevated skills stay blocked.
+    const { bus, published } = makeBus();
+    const result = await new DelegateHandler().execute(makeCtx(bus, { liveTurn: undefined }));
+    expect(result.success).toBe(true);
+
+    const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
+    expect(task.payload.liveTurn).toBeUndefined();
+  });
 });
 
 describe('DelegateHandler resume_token decode', () => {

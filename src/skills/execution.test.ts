@@ -549,14 +549,14 @@ describe('autonomy gates', () => {
     });
 
     // Must provide a LIVE PRINCIPAL TURN for elevated skills (#1126): principal originator
-    // PLUS the livePrincipal signal the dispatcher stamps on fresh principal inbounds.
+    // PLUS the distinct liveTurn flag the dispatcher stamps on fresh principal inbounds.
     const result = await layer.invoke('set-autonomy', { score: 90 }, {
       contactId: 'primary-user',
       role: 'ceo',
       channel: 'cli',
     }, {
+      liveTurn: true,
       taskMetadata: {
-        livePrincipal: true,
         originator: {
           contactId: 'primary-user',
           systemRole: 'principal' as const,
@@ -1390,10 +1390,10 @@ describe('humanApproved on InvokeOptions', () => {
     const layer = new ExecutionLayer(registry, logger);
 
     const result = await layer.invoke('elevated-thing', {}, undefined, {
+      // The distinct liveTurn flag the dispatcher stamps on a fresh principal inbound, alongside
+      // the principal originator. Both are required (isLivePrincipalTurn).
+      liveTurn: true,
       taskMetadata: {
-        // The live-principal signal the dispatcher stamps on a fresh principal inbound,
-        // alongside the principal originator. Both are required (isLivePrincipalTurn).
-        livePrincipal: true,
         originator: {
           contactId: 'primary-user',
           systemRole: 'principal' as const,
@@ -1407,9 +1407,9 @@ describe('humanApproved on InvokeOptions', () => {
     expect(handler.execute).toHaveBeenCalledOnce();
   });
 
-  it('blocks elevated skills when the principal signal is present but lineage is not principal (forgery defence)', async () => {
-    // isLivePrincipalTurn requires BOTH the marker AND principal originator on the effective
-    // metadata, so a stray/forged livePrincipal flag without principal standing fails closed.
+  it('blocks elevated skills when liveTurn is set but lineage is not principal (forgery defence)', async () => {
+    // isLivePrincipalTurn requires BOTH the liveTurn flag AND principal originator, so a stray
+    // liveTurn without principal standing fails closed.
     const registry = new SkillRegistry();
     const handler = makeHandler('should not run');
     const manifest: SkillManifest = {
@@ -1421,8 +1421,8 @@ describe('humanApproved on InvokeOptions', () => {
     const layer = new ExecutionLayer(registry, logger);
 
     const result = await layer.invoke('elevated-thing', {}, undefined, {
+      liveTurn: true,
       taskMetadata: {
-        livePrincipal: true,
         originator: {
           contactId: 'someone',
           systemRole: 'agent' as const,

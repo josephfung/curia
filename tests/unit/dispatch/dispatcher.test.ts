@@ -1289,8 +1289,10 @@ describe('originator metadata stamping', () => {
     expect(originator.contactId).toBe('ceo-contact-id');
     expect(originator.channel).toBe('signal');
     expect(originator.initiatedAt).toBeDefined();
-    // #1126: a fresh principal inbound is a LIVE principal turn — the sibling signal is stamped.
-    expect(tasks[0]!.payload.metadata?.livePrincipal).toBe(true);
+    // #1126: a fresh principal inbound is a LIVE principal turn — the distinct payload field
+    // (NOT a metadata-bag key) is stamped true.
+    expect(tasks[0]!.payload.liveTurn).toBe(true);
+    expect(tasks[0]!.payload.metadata?.livePrincipal).toBeUndefined();
   });
 
   it('does NOT stamp systemRole=principal for a non-principal confirmed sender', async () => {
@@ -1337,8 +1339,8 @@ describe('originator metadata stamping', () => {
     const originator = tasks[0]!.payload.metadata?.originator as TaskOriginator | undefined;
     expect(originator).toBeDefined();
     expect(originator!.systemRole).toBeNull();
-    // #1126: a non-principal sender is NOT a live principal turn — no signal stamped.
-    expect(tasks[0]!.payload.metadata?.livePrincipal).toBeUndefined();
+    // #1126: a non-principal sender is NOT a live principal turn — the distinct field is false.
+    expect(tasks[0]!.payload.liveTurn).toBe(false);
   });
 
   it('strips hostile originator from inbound metadata (non-principal sender)', async () => {
@@ -1377,8 +1379,9 @@ describe('originator metadata stamping', () => {
     bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
     // Hostile metadata: forged originator with systemRole=principal AND a forged livePrincipal
-    // signal (#1126) smuggled in the inbound message. Both must be stripped — the dispatcher
-    // re-derives originator from the resolver and only stamps livePrincipal for a real principal.
+    // bag key (#1126) smuggled in the inbound message. The originator is re-derived from the
+    // resolver; the distinct liveTurn field is computed by the dispatcher (not taken from input);
+    // and the bag key is defensively scrubbed — so a crafted inbound cannot become a live turn.
     await bus.publish('channel', createInboundMessage({
       conversationId: 'conv-hostile-1',
       channelId: 'signal',
@@ -1402,7 +1405,9 @@ describe('originator metadata stamping', () => {
     expect(originator).toBeDefined();
     expect(originator!.systemRole).toBeNull();
     expect(originator!.contactId).not.toBe('forged-id');
-    // The forged live-principal signal must NOT survive — sender is not the principal.
+    // The distinct live-turn field must be false — sender is not the principal, and it is never
+    // taken from inbound input. The forged bag key must also be scrubbed.
+    expect(tasks[0]!.payload.liveTurn).toBe(false);
     expect(tasks[0]!.payload.metadata?.livePrincipal).toBeUndefined();
   });
 

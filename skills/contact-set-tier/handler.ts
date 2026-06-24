@@ -7,13 +7,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // be granted via chat or UI — it is set at bootstrap and protected by API guards.
 const SETTABLE_TIERS: ContactTier[] = ['blocked', 'unknown', 'known', 'trusted'];
 
-// SECURITY: setting a contact's tier alters authorization (tier drives the Gate C tier check),
-// so #1126 reclassified this from `elevated` to `normal` + action_risk:'high'. The handler no
-// longer re-checks origination — the execution-layer autonomy gate governs autonomous callers
-// (a woken/agent task needs score >= 80, else it surfaces an ADR-018 approval request), while a
-// live-principal-driven turn (incl. the delegated contacts specialist) clears it via the
-// principal-bypass. This is what lets the delegated contacts specialist run it at all — the old
-// `elevated` gate would reject every delegated (derived) turn under the #1126 live-principal rule.
+// SECURITY: setting a contact's tier alters authorization itself (tier drives the Gate C check),
+// so #1126 keeps this `elevated` — a CEO-authority primitive requiring a LIVE principal turn,
+// never performed autonomously (even at max trust). The handler does not re-check origination;
+// the execution-layer live-principal gate is the sole enforcement point. The skill is pinned to
+// the delegated contacts specialist, which works because the live-principal signal is forwarded
+// across a SYNCHRONOUS delegation (#1126): "treat Dana as trusted" from the CEO reaches the
+// specialist as a live turn, while an autonomous/woken contacts task carries no live signal and
+// is correctly blocked. (action_risk:'high' is inert while elevated — elevated skills are
+// autonomy-gate-exempt — but documents the consequence class.)
 export class ContactSetTierHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     const { contact_id, tier, reason } = ctx.input as {

@@ -892,6 +892,9 @@ export class AgentRuntime {
           // Pass task-level metadata so skill handlers can inspect task-wide signals
           // without bus or dispatcher access.
           taskMetadata: taskEvent.payload.metadata,
+          // Live-principal-turn signal (#1126) — a distinct payload field (never in metadata), so
+          // it can't be persisted. Drives the elevated-skill gate; `delegate` forwards it onward.
+          liveTurn: taskEvent.payload.liveTurn,
         });
         const durationMs = Date.now() - startTime;
 

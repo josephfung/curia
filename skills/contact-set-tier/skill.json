@@ -2,7 +2,7 @@
   "name": "contact-set-tier",
   "description": "Set a contact's capability tier directly. Use when the CEO explicitly says to trust or block someone ('treat Dana as trusted', 'block this sender', 'John is a principal'). tier must be one of: blocked, unknown, known, trusted. (The 'principal' tier is structural and cannot be set via this skill.) contact_id must be a UUID from contact-lookup.",
   "version": "0.2.0",
-  "sensitivity": "normal",
+  "sensitivity": "elevated",
   "action_risk": "high",
   "inputs": {
     "contact_id": "string (UUID from contact-lookup or contact-create)",

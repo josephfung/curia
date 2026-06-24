@@ -204,31 +204,27 @@ describe('isLivePrincipalTurn (#1126 — the elevated gate predicate)', () => {
     contactId: 'ceo-1', systemRole: 'principal', channel: 'cli',
     initiatedAt: '2026-06-23T00:00:00.000Z',
   };
+  const meta = { originator: principal };
 
-  it('is true only when BOTH the livePrincipal signal AND principal lineage are present', () => {
-    expect(isLivePrincipalTurn({ livePrincipal: true, originator: principal })).toBe(true);
+  it('is true only when BOTH the distinct liveTurn flag AND principal lineage are present', () => {
+    expect(isLivePrincipalTurn(true, meta)).toBe(true);
   });
 
-  it('is false for principal lineage WITHOUT the live signal (a wake / derived turn)', () => {
+  it('is false for principal lineage WITHOUT the live flag (a wake / derived turn)', () => {
     // The self-approval hole closure: a woken principal-lineage task carries the originator
-    // (for the autonomy ladder) but never the live signal.
-    expect(isLivePrincipalTurn({ originator: principal })).toBe(false);
-    expect(isLivePrincipalTurn({ livePrincipal: false, originator: principal })).toBe(false);
+    // (for the autonomy ladder) but never the live-turn flag.
+    expect(isLivePrincipalTurn(undefined, meta)).toBe(false);
+    expect(isLivePrincipalTurn(false, meta)).toBe(false);
   });
 
-  it('is false for the live signal WITHOUT principal lineage (forgery / downgrade defence)', () => {
-    expect(isLivePrincipalTurn({ livePrincipal: true, originator: { ...principal, systemRole: 'agent' } })).toBe(false);
-    expect(isLivePrincipalTurn({ livePrincipal: true, originator: { ...principal, systemRole: 'system' } })).toBe(false);
-    expect(isLivePrincipalTurn({ livePrincipal: true })).toBe(false);
+  it('is false for the live flag WITHOUT principal lineage (forgery / downgrade defence)', () => {
+    expect(isLivePrincipalTurn(true, { originator: { ...principal, systemRole: 'agent' } })).toBe(false);
+    expect(isLivePrincipalTurn(true, { originator: { ...principal, systemRole: 'system' } })).toBe(false);
+    expect(isLivePrincipalTurn(true, {})).toBe(false);
+    expect(isLivePrincipalTurn(true, undefined)).toBe(false);
   });
 
-  it('only accepts the boolean true, not other truthy values', () => {
-    expect(isLivePrincipalTurn({ livePrincipal: 'true', originator: principal })).toBe(false);
-    expect(isLivePrincipalTurn({ livePrincipal: 1, originator: principal })).toBe(false);
-  });
-
-  it('is false for empty/absent metadata', () => {
-    expect(isLivePrincipalTurn({})).toBe(false);
-    expect(isLivePrincipalTurn(undefined)).toBe(false);
+  it('is false for empty/absent inputs', () => {
+    expect(isLivePrincipalTurn(undefined, undefined)).toBe(false);
   });
 });

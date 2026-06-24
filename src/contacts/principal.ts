@@ -54,36 +54,32 @@ export function isPrincipalOriginated(
 }
 
 /**
- * Metadata key carrying the "live principal turn" signal (#1126). Stamped by the dispatcher
- * ONLY when it processes a fresh principal inbound message; never set on wakes, derivations
- * (delegated sub-tasks, child tasks), or scheduler fires. Lives as a SIBLING of `originator`
- * on the task metadata so it survives computeEffectiveTaskMetadata() — which rewrites only the
- * `originator` field — untouched. That pass-through is the desired behaviour, not incidental:
- * a wake/derivation never carries this key in the first place, so nothing the ladder could
- * downgrade is being preserved. SECURITY: the dispatcher strips any channel-supplied value of
- * this key before stamping its own (see mergeTaskMetadata), so a crafted inbound cannot forge it.
- */
-export const LIVE_PRINCIPAL_KEY = 'livePrincipal';
-
-/**
  * True when THIS execution context is a live principal turn — the current turn originated from a
- * fresh principal inbound. This is the sole satisfier of the `elevated` skill gate (#1126):
- * system, agent, and woken/inherited principal-*lineage* contexts all return false, because
- * lineage is not a live turn. This closes the self-approval hole with zero per-skill exceptions
- * (a woken principal-lineage task can never approve its own pending action).
+ * fresh principal inbound (directly, or via a SYNCHRONOUS delegation that forwarded the signal).
+ * This is the sole satisfier of the `elevated` skill gate (#1126): system, agent, scheduled, and
+ * woken/inherited principal-*lineage* contexts all return false, because lineage is not a live
+ * turn. This closes the self-approval hole with zero per-skill exceptions (a woken principal-
+ * lineage task can never approve its own pending action).
  *
- * Defence in depth: requires BOTH the live-turn marker AND principal lineage on the (effective)
- * metadata. The marker alone is stamped only alongside a principal originator, but pairing the
- * checks means a stray/forged marker without principal standing — or a marker on metadata whose
- * effective originator the ladder has downgraded — still fails closed.
+ * `liveTurn` is a DISTINCT field (agent.task.payload.liveTurn → InvokeOptions.liveTurn), never a
+ * key in the task-metadata bag — so a skill that forwards `metadata` to a persisted row (jobs,
+ * tasks, bullpen) can never sweep it into wakeable state. The dispatcher stamps it only on a
+ * fresh principal inbound; `delegate` forwards it across a synchronous delegation; nothing else
+ * sets it, so wakes/scheduler fires/persisted tasks structurally lack it.
  *
- * @param metadata  Task metadata (the EFFECTIVE standing the execution layer feeds the gate)
+ * Defence in depth: requires BOTH the live-turn flag AND principal lineage on the (effective)
+ * metadata. The flag is only ever set alongside a principal originator, but pairing the checks
+ * means a stray flag without principal standing — or one on metadata whose effective originator
+ * the ladder has downgraded — still fails closed.
+ *
+ * @param liveTurn   The distinct live-turn flag from InvokeOptions (agent.task.payload.liveTurn)
+ * @param metadata   Task metadata (the EFFECTIVE standing the execution layer feeds the gate)
  */
 export function isLivePrincipalTurn(
+  liveTurn: boolean | undefined,
   metadata: Record<string, unknown> | undefined,
 ): boolean {
-  if (!metadata) return false;
-  return metadata[LIVE_PRINCIPAL_KEY] === true && isPrincipalOriginated(metadata);
+  return liveTurn === true && isPrincipalOriginated(metadata);
 }
 
 /**
