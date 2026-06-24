@@ -75,36 +75,72 @@ export class HealthService {
 
     // Track successful LLM calls per tier.
     bus.subscribe('llm.call', 'system', (event) => {
-      const e = event as LlmCallEvent;
-      const tier = this.modelToTier.get(e.payload.requestedModel);
-      if (tier) this.tracker.recordSuccess(tier);
+      try {
+        const e = event as LlmCallEvent;
+        const tier = this.modelToTier.get(e.payload.requestedModel);
+        if (tier) this.tracker.recordSuccess(tier);
+      } catch (err) {
+        logger.warn({ err }, 'HealthService: unexpected error in llm.call handler');
+      }
     });
 
     // Track failed LLM calls per tier.
     bus.subscribe('llm.error', 'system', (event) => {
-      const e = event as LlmErrorEvent;
-      const tier = this.modelToTier.get(e.payload.requestedModel);
-      if (tier) this.tracker.recordError(tier);
+      try {
+        const e = event as LlmErrorEvent;
+        const tier = this.modelToTier.get(e.payload.requestedModel);
+        if (tier) this.tracker.recordError(tier);
+      } catch (err) {
+        logger.warn({ err }, 'HealthService: unexpected error in llm.error handler');
+      }
     });
 
     // Track successful embedding calls.
     bus.subscribe('embedding.call', 'system', () => {
-      this.tracker.recordSuccess('embeddings');
+      try {
+        this.tracker.recordSuccess('embeddings');
+      } catch (err) {
+        logger.warn({ err }, 'HealthService: unexpected error in embedding.call handler');
+      }
     });
 
     // Track failed embedding calls.
     bus.subscribe('embedding.error', 'system', () => {
-      this.tracker.recordError('embeddings');
+      try {
+        this.tracker.recordError('embeddings');
+      } catch (err) {
+        logger.warn({ err }, 'HealthService: unexpected error in embedding.error handler');
+      }
     });
 
     // Track image-generate skill outcomes via skill.result events.
     bus.subscribe('skill.result', 'system', (event) => {
-      const e = event as SkillResultEvent;
-      if (e.payload.skillName !== 'image-generate') return;
-      if (e.payload.result.success) {
-        this.tracker.recordSuccess('image_gen');
-      } else {
-        this.tracker.recordError('image_gen');
+      try {
+        const e = event as SkillResultEvent;
+        if (e.payload.skillName !== 'image-generate') return;
+        if (e.payload.result.success) {
+          this.tracker.recordSuccess('image_gen');
+        } else {
+          this.tracker.recordError('image_gen');
+        }
+      } catch (err) {
+        logger.warn({ err }, 'HealthService: unexpected error in skill.result handler');
+      }
+    });
+
+    // Intercept the scheduler-fired health-canary task. The scheduler fires an
+    // agent.task event targeting agentId 'health-service' — but no AgentRuntime
+    // handles that agent. We subscribe at the system layer to run the canary directly.
+    bus.subscribe('agent.task', 'system', (event) => {
+      try {
+        // Cast through unknown — only accessing known fields after the guard below
+        const e = event as unknown as { payload: { agentId?: string } };
+        if (e.payload.agentId !== 'health-service') return;
+        void this.runCanaries().catch(err =>
+          logger.error({ err }, 'Health canary run failed'),
+        );
+      } catch (err) {
+        logger.warn({ err }, 'HealthService: unexpected error in agent.task handler');
       }
     });
 
@@ -145,9 +181,9 @@ export class HealthService {
 
     // Run all async probes concurrently to keep p99 latency low.
     const [db_check, signal_check, mcp_gw] = await Promise.all([
-      checkDb(db),
-      checkSignal(signalRpcClient),
-      checkMcpGoogleWorkspace(mcpSessions),
+      checkDb(db, this.deps.logger),
+      checkSignal(signalRpcClient, this.deps.logger),
+      checkMcpGoogleWorkspace(mcpSessions, this.deps.logger),
     ]);
 
     // Synchronous probes — no need to await.
@@ -241,7 +277,7 @@ export class HealthService {
     // Signal canary — reuse the same RPC ping as the liveness check.
     await run('signal', async () => {
       if (!signalRpcClient) return { name: 'signal', status: 'skipped' };
-      const result = await checkSignal(signalRpcClient);
+      const result = await checkSignal(signalRpcClient, logger);
       return { name: 'signal', status: result === 'ok' ? 'ok' : 'fail' };
     });
 

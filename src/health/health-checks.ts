@@ -10,6 +10,7 @@ import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { CheckResult } from './types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
+import type { Logger } from '../logger.js';
 
 // -- Structural health interfaces --
 // Using structural typing avoids hard import dependencies on concrete service
@@ -53,7 +54,7 @@ export interface McpSessionHealth {
  * Run SELECT 1 against the database connection pool with a 2-second hard timeout.
  * Critical check — a fail drives overall status to 'down'.
  */
-export async function checkDb(pool: Pool): Promise<CheckResult> {
+export async function checkDb(pool: Pool, logger: Logger): Promise<CheckResult> {
   try {
     await Promise.race([
       pool.query('SELECT 1'),
@@ -62,7 +63,8 @@ export async function checkDb(pool: Pool): Promise<CheckResult> {
       ),
     ]);
     return 'ok';
-  } catch {
+  } catch (err) {
+    logger.warn({ err }, 'checkDb: DB liveness probe failed');
     return 'fail';
   }
 }
@@ -78,6 +80,9 @@ export async function checkDb(pool: Pool): Promise<CheckResult> {
  * non-null in a healthy process).
  */
 export function checkBus(bus: EventBus): CheckResult {
+  // Null guard first — if bus is null (e.g. fallback HealthService in tests),
+  // dereferencing it below would throw a TypeError before we can return 'fail'.
+  if (bus == null) return 'fail';
   // Try the duck-typed listenerCount path first (test mocks and possible future
   // EventBus refactors that expose it). If absent, a non-null bus is our signal.
   const lc = (bus as unknown as { listenerCount?: (event: string) => number }).listenerCount;
@@ -86,8 +91,9 @@ export function checkBus(bus: EventBus): CheckResult {
     // the bus internals have been torn down (stop() in integration tests, or a bug).
     return lc.call(bus, 'agent.task') > 0 ? 'ok' : 'fail';
   }
-  // Fallback: bus is alive if it's a non-null object (best-effort).
-  return bus != null ? 'ok' : 'fail';
+  // Fallback: bus is alive if it's a non-null object (best-effort — EventBus
+  // does not expose listenerCount; follow-up: add subscriberCount() to EventBus).
+  return 'ok';
 }
 
 /**
@@ -126,6 +132,7 @@ export function checkEmail(
  */
 export async function checkSignal(
   client: SignalRpcClientHealth | undefined,
+  logger: Logger,
 ): Promise<CheckResult> {
   if (!client) return 'skipped';
   try {
@@ -136,7 +143,8 @@ export async function checkSignal(
       ),
     ]);
     return 'ok';
-  } catch {
+  } catch (err) {
+    logger.warn({ err }, 'checkSignal: Signal liveness probe failed');
     return 'fail';
   }
 }
@@ -161,6 +169,7 @@ export function checkBrowser(service: BrowserServiceHealth | undefined): CheckRe
  */
 export async function checkMcpGoogleWorkspace(
   mcpSessions: McpSessionHealth[],
+  logger: Logger,
 ): Promise<CheckResult> {
   const session = mcpSessions.find(s => s.serverId === 'google-workspace');
   if (!session) return 'skipped';
@@ -172,7 +181,8 @@ export async function checkMcpGoogleWorkspace(
       ),
     ]);
     return 'ok';
-  } catch {
+  } catch (err) {
+    logger.warn({ err }, 'checkMcpGoogleWorkspace: MCP probe failed');
     return 'fail';
   }
 }

@@ -106,7 +106,9 @@ export class TelemetryLlmProvider implements LLMProvider {
         const event = createLlmError({
           agentId: `system:${this.serviceId}`,
           conversationId: 'system',
-          requestedModel: params.model ?? 'unknown',
+          // Fall back to the inner provider's id when params.model is absent —
+          // 'unknown' would break the HealthService tier reverse-map lookup.
+          requestedModel: params.model ?? this.inner.id,
           provider: this.inner.id,
           errorType: response.error.type,
           parentEventId: 'system',

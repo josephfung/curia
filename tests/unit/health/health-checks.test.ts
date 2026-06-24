@@ -6,16 +6,21 @@ import {
   checkEmail,
   checkScheduler,
 } from '../../../src/health/health-checks.js';
+import type { Logger } from '../../../src/logger.js';
+
+// Stub logger — all three probe functions (checkDb, checkSignal, checkMcpGoogleWorkspace)
+// now require a logger to warn on failure. Tests that don't care about log output pass this.
+const stubLogger = { warn: () => {} } as unknown as Logger;
 
 describe('checkDb', () => {
   it('returns ok when SELECT 1 succeeds', async () => {
     const pool = { query: vi.fn().mockResolvedValue({}) } as never;
-    expect(await checkDb(pool)).toBe('ok');
+    expect(await checkDb(pool, stubLogger)).toBe('ok');
   });
 
   it('returns fail when query throws', async () => {
     const pool = { query: vi.fn().mockRejectedValue(new Error('connection refused')) } as never;
-    expect(await checkDb(pool)).toBe('fail');
+    expect(await checkDb(pool, stubLogger)).toBe('fail');
   });
 });
 
