@@ -224,6 +224,12 @@ export interface SkillContext {
   /** Arbitrary task-level metadata forwarded from the agent.task event payload.
    *  Skills that do not need it can ignore this field entirely. */
   taskMetadata?: Record<string, unknown>;
+  /** Live-principal-turn signal (#1126) — true when the current turn originated from a fresh
+   *  principal inbound (directly, or via a SYNCHRONOUS delegation that forwarded it). Distinct
+   *  from taskMetadata so it is never persisted. Only `delegate` reads this (to forward it to a
+   *  synchronously-delegated specialist); other skills can ignore it. The elevated-skill gate is
+   *  the real consumer, in the execution layer. */
+  liveTurn?: boolean;
   /** IANA timezone name (e.g. "America/Toronto") for formatting user-facing timestamps.
    *  Populated from the global config timezone. Skills returning timestamps for display
    *  should use toLocalIso() with this value rather than returning raw UTC strings. */

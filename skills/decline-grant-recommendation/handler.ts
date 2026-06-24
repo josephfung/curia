@@ -1,16 +1,12 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { isPrincipalOriginated } from '../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// SECURITY: sensitivity: "elevated" — authorization is enforced solely by the execution-layer
+// live-principal gate (#1126). No handler-level re-check.
 export class DeclineGrantRecommendationHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    if (!isPrincipalOriginated(ctx.taskMetadata)) {
-      ctx.log.warn('decline-grant-recommendation: rejected — task not originated by principal');
-      return { success: false, error: 'This skill requires principal authorization.' };
-    }
-
     const { recommendation_id } = ctx.input as { recommendation_id?: string };
     if (!recommendation_id || !UUID_RE.test(recommendation_id)) {
       return { success: false, error: 'Missing or invalid required input: recommendation_id (UUID)' };

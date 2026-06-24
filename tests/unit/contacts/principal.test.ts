@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, makeSystemOriginator, capOriginatorToParent } from '../../../src/contacts/principal.js';
+import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, isLivePrincipalTurn, makeSystemOriginator, capOriginatorToParent } from '../../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 
 describe('isPrincipalOriginated', () => {
@@ -196,5 +196,35 @@ describe('capOriginatorToParent', () => {
 
   it('returns null when the child has no lineage', () => {
     expect(capOriginatorToParent(null, originator('principal'))).toBeNull();
+  });
+});
+
+describe('isLivePrincipalTurn (#1126 — the elevated gate predicate)', () => {
+  const principal: TaskOriginator = {
+    contactId: 'ceo-1', systemRole: 'principal', channel: 'cli',
+    initiatedAt: '2026-06-23T00:00:00.000Z',
+  };
+  const meta = { originator: principal };
+
+  it('is true only when BOTH the distinct liveTurn flag AND principal lineage are present', () => {
+    expect(isLivePrincipalTurn(true, meta)).toBe(true);
+  });
+
+  it('is false for principal lineage WITHOUT the live flag (a wake / derived turn)', () => {
+    // The self-approval hole closure: a woken principal-lineage task carries the originator
+    // (for the autonomy ladder) but never the live-turn flag.
+    expect(isLivePrincipalTurn(undefined, meta)).toBe(false);
+    expect(isLivePrincipalTurn(false, meta)).toBe(false);
+  });
+
+  it('is false for the live flag WITHOUT principal lineage (forgery / downgrade defence)', () => {
+    expect(isLivePrincipalTurn(true, { originator: { ...principal, systemRole: 'agent' } })).toBe(false);
+    expect(isLivePrincipalTurn(true, { originator: { ...principal, systemRole: 'system' } })).toBe(false);
+    expect(isLivePrincipalTurn(true, {})).toBe(false);
+    expect(isLivePrincipalTurn(true, undefined)).toBe(false);
+  });
+
+  it('is false for empty/absent inputs', () => {
+    expect(isLivePrincipalTurn(undefined, undefined)).toBe(false);
   });
 });

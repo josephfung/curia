@@ -21,9 +21,12 @@ function redactSenderId(value: string): string {
 
 /**
  * Merge channel-supplied metadata with injection findings and originator context.
- * SECURITY: strips both `ceoInitiated` (legacy) and `originator` after all untrusted
- * spreads — so neither channel metadata nor injection metadata can smuggle a forged
- * originator. The trusted `originatorMeta` spread wins last.
+ * SECURITY: strips `ceoInitiated` (legacy) and `originator` after all untrusted spreads — so
+ * neither channel metadata nor injection metadata can smuggle a forged originator. The trusted
+ * `originatorMeta` spread wins last. (The live-principal-turn signal is NOT in this bag at all —
+ * it is a distinct agent.task payload field stamped separately below, #1126 — so it cannot be
+ * forged through metadata. The `livePrincipal: undefined` strip is belt-and-suspenders: it scrubs
+ * any stray channel-supplied bag key so no downstream code can ever mistake it for the signal.)
  */
 function mergeTaskMetadata(
   channelMetadata: Record<string, unknown> | undefined,
@@ -36,6 +39,8 @@ function mergeTaskMetadata(
     ...(injectionMetadata ?? {}),
     ceoInitiated: undefined,          // strip legacy untrusted channel value (after all untrusted spreads)
     originator: undefined,            // strip untrusted channel value (after all untrusted spreads)
+    livePrincipal: undefined,         // defensive scrub — legacy alias; the real signal is the distinct payload field (#1126)
+    liveTurn: undefined,              // defensive scrub — keep the real signal OFF the metadata bag so it can never be persisted (#1126)
     ...(originatorMeta ?? {}),        // trusted stamp wins last
   };
 }
@@ -700,7 +705,16 @@ export class Dispatcher {
           initiatedAt: new Date().toISOString(),
           tier: 'unknown',
         };
-    const originatorMeta = { originator };
+    // The LIVE PRINCIPAL TURN signal (#1126) is `true` iff this inbound resolved to the principal.
+    // It is the sole satisfier of the `elevated` skill gate. It is stamped as a DISTINCT field on
+    // the agent.task payload (below), NOT inside the metadata bag — so no skill that forwards
+    // `metadata` to a persisted row can ever sweep it into wakeable state. It is structurally
+    // absent from every wake, scheduler fire, and persisted task (those construct their own
+    // agent.task without it); `delegate` forwards it across a synchronous delegation only. A woken
+    // principal-LINEAGE task therefore carries the principal originator (for the autonomy
+    // principal-bypass ladder) but NOT this signal — which is what closes the self-approval hole.
+    const originatorMeta: Record<string, unknown> = { originator };
+    const liveTurn = originator.systemRole === 'principal';
     if (!senderContext?.resolved) {
       this.logger.warn(
         { channelId: payload.channelId, senderId: payload.senderId },
@@ -726,6 +740,8 @@ export class Dispatcher {
         injectionMetadata,
         originatorMeta,
       ),
+      // Distinct off-bag live-principal signal (#1126) — only ever true for a real principal inbound.
+      liveTurn,
       parentEventId: event.id,
     });
 

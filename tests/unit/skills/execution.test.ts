@@ -167,11 +167,13 @@ describe('ExecutionLayer', () => {
   });
 
   describe('elevated skill caller verification', () => {
-    // The elevated-skill gate now checks isPrincipalOriginated(taskMetadata) —
-    // the authorization signal is the task originator, not the immediate caller.
-    // See docs/wip/2026-05-10-principal-identity-design.md
+    // #1126: the elevated-skill gate requires a LIVE PRINCIPAL TURN — the metadata must carry
+    // a principal originator, and the invoke options must carry the dispatcher-stamped `liveTurn`
+    // signal (a distinct off-bag field). The immediate caller.role is not consulted. System/agent
+    // lineage and woken principal-lineage all fail.
+    // See docs/wip/2026-06-22-woken-task-authorization-design.md §4, ADR-017.
 
-    it('allows elevated skill when caller has ceo role', async () => {
+    it('allows elevated skill on a live principal turn (liveTurn + principal originator)', async () => {
       const handler: SkillHandler = {
         execute: async () => ({ success: true, data: 'ok' }),
       };
@@ -182,6 +184,7 @@ describe('ExecutionLayer', () => {
         role: 'ceo',
         channel: 'cli',
       }, {
+        liveTurn: true,
         taskMetadata: {
           originator: {
             contactId: 'primary-user',
@@ -208,7 +211,7 @@ describe('ExecutionLayer', () => {
       });
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('elevated privileges');
+        expect(result.error).toContain('live principal turn');
       }
     });
 
@@ -227,7 +230,7 @@ describe('ExecutionLayer', () => {
       });
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('elevated privileges');
+        expect(result.error).toContain('live principal turn');
       }
     });
 
@@ -245,7 +248,7 @@ describe('ExecutionLayer', () => {
       });
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('elevated privileges');
+        expect(result.error).toContain('live principal turn');
       }
     });
 
@@ -259,7 +262,7 @@ describe('ExecutionLayer', () => {
       const result = await execution.invoke('elevated-skill', {});
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('elevated privileges');
+        expect(result.error).toContain('live principal turn');
       }
     });
 
@@ -282,7 +285,7 @@ describe('ExecutionLayer', () => {
       });
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('elevated privileges');
+        expect(result.error).toContain('live principal turn');
       }
     });
 
@@ -308,6 +311,7 @@ describe('ExecutionLayer', () => {
 
       const caller = { contactId: 'primary-user', role: 'ceo' as const, channel: 'cli' };
       await execution.invoke('elevated-skill', {}, caller, {
+        liveTurn: true,
         taskMetadata: {
           originator: {
             contactId: 'primary-user',
@@ -459,7 +463,7 @@ describe('ExecutionLayer', () => {
       if (!result.success) {
         expect(result.error).toContain('<skill_error>');
         expect(result.error).toContain('</skill_error>');
-        expect(result.error).toContain('elevated privileges');
+        expect(result.error).toContain('live principal turn');
       }
     });
 

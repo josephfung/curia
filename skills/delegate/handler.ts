@@ -212,6 +212,15 @@ export class DelegateHandler implements SkillHandler {
       senderId: 'coordinator',
       content: effectiveTask,
       metadata: delegationMetadata,
+      // Forward the live-principal-turn signal (#1126) across this SYNCHRONOUS delegation: a
+      // specialist acting inside the CEO's live turn (e.g. the contacts specialist running
+      // contact-set-tier, or the setup-wizard minting a secret-capture link) inherits live-ness
+      // and can satisfy the elevated gate. This is safe precisely because delegation is
+      // ephemeral request/response — the sub-task is a bus event, never a persisted/wakeable row,
+      // and `liveTurn` is a distinct field no persistence skill copies. It is "live" only for the
+      // duration of this synchronous call; the moment work crosses an async boundary
+      // (scheduler-create, task wake_at, a persisted bullpen thread) the signal is gone.
+      liveTurn: ctx.liveTurn,
       parentEventId: `delegate-${randomUUID()}`,
     });
 

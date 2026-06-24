@@ -34,7 +34,14 @@ export function capOriginatorToParent(
 
 /**
  * Check whether a task was originated by the principal (the human Curia serves).
- * Used by the execution layer's elevated skill gate and CEO-authorized skill handlers.
+ * Used by CEO-authorized skill handlers and the autonomy gate's principal-bypass.
+ *
+ * NOTE: this checks LINEAGE (who started the task chain), which is satisfied by a woken
+ * principal-lineage task too. It is the correct notion for the autonomy principal-bypass
+ * (acting *within* CEO-authorized work, inheritable at high trust via the ladder), but it is
+ * NOT sufficient for the `elevated` gate — that requires a LIVE principal turn. Use
+ * isLivePrincipalTurn() for "the CEO is exercising authority right now". See ADR-017 and
+ * docs/wip/2026-06-22-woken-task-authorization-design.md §4.
  *
  * @param metadata  Task metadata (from ctx.taskMetadata or agent.task payload)
  */
@@ -44,6 +51,35 @@ export function isPrincipalOriginated(
   if (!metadata) return false;
   const originator = metadata.originator as TaskOriginator | undefined;
   return originator?.systemRole === 'principal';
+}
+
+/**
+ * True when THIS execution context is a live principal turn — the current turn originated from a
+ * fresh principal inbound (directly, or via a SYNCHRONOUS delegation that forwarded the signal).
+ * This is the sole satisfier of the `elevated` skill gate (#1126): system, agent, scheduled, and
+ * woken/inherited principal-*lineage* contexts all return false, because lineage is not a live
+ * turn. This closes the self-approval hole with zero per-skill exceptions (a woken principal-
+ * lineage task can never approve its own pending action).
+ *
+ * `liveTurn` is a DISTINCT field (agent.task.payload.liveTurn → InvokeOptions.liveTurn), never a
+ * key in the task-metadata bag — so a skill that forwards `metadata` to a persisted row (jobs,
+ * tasks, bullpen) can never sweep it into wakeable state. The dispatcher stamps it only on a
+ * fresh principal inbound; `delegate` forwards it across a synchronous delegation; nothing else
+ * sets it, so wakes/scheduler fires/persisted tasks structurally lack it.
+ *
+ * Defence in depth: requires BOTH the live-turn flag AND principal lineage on the (effective)
+ * metadata. The flag is only ever set alongside a principal originator, but pairing the checks
+ * means a stray flag without principal standing — or one on metadata whose effective originator
+ * the ladder has downgraded — still fails closed.
+ *
+ * @param liveTurn   The distinct live-turn flag from InvokeOptions (agent.task.payload.liveTurn)
+ * @param metadata   Task metadata (the EFFECTIVE standing the execution layer feeds the gate)
+ */
+export function isLivePrincipalTurn(
+  liveTurn: boolean | undefined,
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  return liveTurn === true && isPrincipalOriginated(metadata);
 }
 
 /**

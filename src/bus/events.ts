@@ -43,6 +43,14 @@ interface AgentTaskPayload {
   senderId: string;
   content: string;
   metadata?: Record<string, unknown>;
+  /** Live-principal-turn signal (#1126). A DISTINCT top-level field — deliberately NOT part of
+   *  `metadata` — so it can never be swept into a persisted row by a skill that forwards the
+   *  metadata bag (jobs/tasks/bullpen copy `originator` by name; they don't see this field).
+   *  Stamped `true` ONLY by the dispatcher on a fresh principal inbound, and forwarded by the
+   *  `delegate` skill across a SYNCHRONOUS delegation (so a specialist acting inside the CEO's
+   *  live turn inherits it). Structurally absent from every wake, scheduler fire, and persisted
+   *  task — those construct their own agent.task without it. The elevated-skill gate requires it. */
+  liveTurn?: boolean;
   /** Resolved sender context from the contact resolver. Undefined if contacts not configured. */
   senderContext?: import('../contacts/types.js').InboundSenderContext;
   /** Original task intent for persistent scheduler tasks. Undefined for one-shot and direct tasks.

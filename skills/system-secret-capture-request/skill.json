@@ -1,8 +1,8 @@
 {
   "name": "system-secret-capture-request",
   "description": "Mint a one-time, single-use, 30-minute link for the user to enter a SYSTEM secret during setup — an API key or channel credential (e.g. the Anthropic API key). The target name must be a secret declared by a skill or a known channel credential key. The value goes straight to the vault; you never see it. Setup-wizard only.",
-  "version": "0.1.3",
-  "sensitivity": "normal",
+  "version": "0.2.0",
+  "sensitivity": "elevated",
   "action_risk": "none",
   "inputs": {
     "secret_name": "string (the EXACT vault key to capture, e.g. 'anthropic_api_key' or 'channel.email.nylas_api_key')",

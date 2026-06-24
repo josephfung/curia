@@ -95,9 +95,12 @@ export class BullpenDispatcher {
             taskOrigin: 'bullpen',
             threadId,
             mentioned: isMentioned,
-            // Propagate the originator so the receiving agent's task carries the original
-            // TaskOriginator. Without this, a specialist agent involved in a CEO-authorized
-            // bullpen thread cannot invoke elevated skills.
+            // Propagate the originator (LINEAGE) so the receiving agent's task carries the
+            // original TaskOriginator — this drives the autonomy principal-bypass for `normal`
+            // skills at sufficient trust. NOTE (#1126): bullpen is a persisted/async path, so it
+            // intentionally does NOT carry the `liveTurn` signal — a bullpen-dispatched specialist
+            // is NOT a live principal turn and so correctly CANNOT invoke `elevated` skills. Do
+            // not "fix" that by forwarding liveTurn here: it would re-open the self-approval hole.
             ...(effectiveOriginator ? { originator: effectiveOriginator } : {}),
           },
           parentEventId: event.id,

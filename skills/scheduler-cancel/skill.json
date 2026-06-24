@@ -1,8 +1,8 @@
 {
   "name": "scheduler-cancel",
   "description": "Cancel a scheduled job by its ID. The job is soft-deleted (status set to cancelled) and preserved for audit history.",
-  "version": "1.0.0",
-  "sensitivity": "elevated",
+  "version": "1.1.0",
+  "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
     "job_id": "string"
