@@ -127,6 +127,34 @@ export function makeSystemOriginator(): TaskOriginator {
 }
 
 /**
+ * Create a TaskOriginator representing principal-initiated work from a principal-only
+ * surface (the console / dashboard) — issue #1127. The console's bootstrap secret is
+ * CEO-only, so any authenticated console request is unambiguously the principal; the
+ * durable `tasks` / `scheduled_jobs` rows it creates must carry principal **lineage** so
+ * they don't default to the conservative agent / no-bypass standing when later woken.
+ *
+ * This stamps lineage only. It deliberately does NOT confer a live principal turn — the
+ * `liveTurn` signal is computed by the dispatcher on the live inbound chat path and is
+ * never persisted on a wakeable row (see the woken-task-authorization design note §4).
+ *
+ * A factory (not a constant) so `initiatedAt` reflects the actual creation time. Tier is
+ * always 'principal' — the platform guarantees the principal contact's tier via
+ * repairPrincipalMetadata() at startup.
+ *
+ * @param contactId  The principal contact's id (resolve via findContactBySystemRole('principal')).
+ * @param channel    Where the work was initiated from (e.g. 'console').
+ */
+export function makePrincipalOriginator(contactId: string, channel: string): TaskOriginator {
+  return {
+    contactId,
+    systemRole: 'principal',
+    channel,
+    initiatedAt: new Date().toISOString(),
+    tier: 'principal',
+  };
+}
+
+/**
  * Extract the initiating contact's tier for the execution-layer action gate (issue #950).
  *
  * Returns null when:

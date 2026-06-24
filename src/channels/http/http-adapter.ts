@@ -323,6 +323,9 @@ export class HttpAdapter implements Channel {
         schedulerService: this.config.schedulerService,
         webAppBootstrapSecret,
         sessions,
+        // Needed so console-created jobs carry principal lineage (#1127).
+        contactService: this.config.contactService,
+        logger,
       });
     }
 

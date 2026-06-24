@@ -9,6 +9,7 @@ import { ContactValidationError } from '../../../contacts/contact-service.js';
 import type { ChannelIdentity, Contact, ContactCanonicalFields, ContactKind, ContactTier } from '../../../contacts/types.js';
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
+import { resolveConsoleOriginator } from '../console-originator.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
 import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
 
@@ -416,7 +417,13 @@ export async function knowledgeGraphRoutes(
     }
     // Resolve with defaults first, then validate — avoids dual-layer guard maintenance trap.
     const owner = typeof body.owner === 'string' ? body.owner : 'curia';
-    const source = typeof body.source === 'string' ? body.source : 'agent';
+    // Default source to 'ceo', not 'agent' (#1127). The console is a principal surface, so a task
+    // created here with no explicit source is the original unit of CEO-authorized work — NOT an
+    // agent-spawned side-effect. selectHeartbeatCandidates derives `derived = source='agent' OR
+    // parent_task_id IS NOT NULL`; a default of 'agent' would mark the task derived and the bypass
+    // ladder would downgrade its principal lineage at posture B (70-89), stranding it propose-only
+    // — defeating the originator stamp below. An explicit source from the client is still honoured.
+    const source = typeof body.source === 'string' ? body.source : 'ceo';
     if (!validOwners.includes(owner)) {
       return reply.status(400).send({ error: 'Invalid owner. Must be curia, ceo, or external.' });
     }
@@ -463,14 +470,21 @@ export async function knowledgeGraphRoutes(
       ? body.waitingOnText.trim()
       : null;
 
+    // Stamp principal lineage (#1127). The console is a principal-only surface, so a task
+    // created here must carry principal originator — otherwise, when the heartbeat later wakes
+    // it, the woken-task-authorization model would floor it to agent / no-bypass. This is a
+    // top-level task (no parent_task_id on this path), so capOriginatorToParent is a no-op and
+    // a direct stamp is correct. Lineage only — never the live-turn signal (persisted row).
+    const originator = await resolveConsoleOriginator(contactService, logger);
+
     try {
       const inserted = await pool.query(
         `INSERT INTO tasks (
            agent_id, title, intent_anchor, description, status, owner, priority,
            due_at, source, source_agent_id, tags, waiting_on_text,
-           progress, error_budget, conversation_id, updated_at
+           progress, error_budget, conversation_id, originator, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16::jsonb, now())
          RETURNING ${TASK_SELECT}`,
         [
           body.agentId.trim(),
@@ -488,11 +502,24 @@ export async function knowledgeGraphRoutes(
           JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? {}),
           JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? {}),
           conversationId,
+          // Serialize as JSON string for pg JSONB — null when no principal could be resolved.
+          originator ? JSON.stringify(originator) : null,
         ],
       );
       if (!inserted.rowCount) {
         logger.error('kg: INSERT tasks returned no rows');
         return reply.status(500).send({ error: 'Failed to create task.' });
+      }
+      // Correlatable breadcrumb (#1127): the lineage-resolution warning (in resolveConsoleOriginator)
+      // fires before the row exists, so it can't carry an id. Re-log here with the task id when
+      // lineage was dropped — otherwise the consequence (this task stranded propose-only when the
+      // heartbeat later wakes it) surfaces as a generic autonomy-gate block with no link back here.
+      if (!originator) {
+        const createdId = (inserted.rows[0] as { id?: string } | undefined)?.id;
+        logger.warn(
+          { taskId: createdId, channel: 'console' },
+          'kg: console task created WITHOUT principal lineage — it will be propose-only if woken (no principal contact resolved)',
+        );
       }
       return reply.status(201).send({
         task: serializeTask(inserted.rows[0]! as DbTaskRow),

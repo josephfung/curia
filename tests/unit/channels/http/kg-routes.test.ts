@@ -34,8 +34,13 @@ function createContactService(): ContactService {
     setRole: vi.fn(),
     updateContactFields: vi.fn(),
     validatePrimaryEmail: vi.fn(),
+    // Resolves the principal so console-created tasks carry principal lineage (#1127).
+    findContactBySystemRole: vi.fn().mockResolvedValue({ id: PRINCIPAL_CONTACT_ID }),
   } as unknown as ContactService;
 }
+
+// The principal contact id resolveConsoleOriginator() stamps on console-created tasks (#1127).
+const PRINCIPAL_CONTACT_ID = 'contact-principal';
 
 // Creates a pool mock that also supports pool.connect() for transaction tests.
 function createTransactionalPool(client: Partial<PoolClient>): Pick<Pool, 'query' | 'connect'> {
@@ -693,6 +698,95 @@ describe('knowledgeGraphRoutes', () => {
 
       expect(res.statusCode).toBe(400);
       expect(contactService.createContact).not.toHaveBeenCalled();
+      await app.close();
+    });
+  });
+
+  describe('POST /api/kg/tasks — principal lineage (#1127)', () => {
+    // Helper: register the routes with a contactService stub and return both so tests can
+    // inspect findContactBySystemRole and the INSERT params.
+    async function setupTasksApp(contactService: ContactService) {
+      const app = Fastify();
+      const logger = createLogger();
+      await app.register(knowledgeGraphRoutes, {
+        pool,
+        logger,
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
+      });
+      return { app, logger };
+    }
+
+    const validPayload = { agentId: 'coordinator', intentAnchor: 'follow up with vendor' };
+
+    it('stamps a principal TaskOriginator on the inserted task row', async () => {
+      const contactService = createContactService();
+      // INSERT returns the created row.
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 'task-1', agent_id: 'coordinator', title: 'follow up with vendor' }],
+      });
+      const { app } = await setupTasksApp(contactService);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/kg/tasks',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: validPayload,
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(contactService.findContactBySystemRole).toHaveBeenCalledWith('principal');
+
+      // The INSERT is the single pool.query call; its last param is the originator JSON.
+      const insertCall = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const sql = insertCall[0] as string;
+      const params = insertCall[1] as unknown[];
+      expect(sql).toContain('originator');
+      const originatorJson = params[params.length - 1] as string;
+      expect(JSON.parse(originatorJson)).toMatchObject({
+        contactId: PRINCIPAL_CONTACT_ID,
+        systemRole: 'principal',
+        channel: 'console',
+        tier: 'principal',
+      });
+      // Omitted source defaults to 'ceo' (non-derived), not 'agent' (#1127) — otherwise the
+      // heartbeat would mark the task derived and the ladder would downgrade the lineage we
+      // just stamped. source is the 9th INSERT param ($9).
+      expect(params[8]).toBe('ceo');
+      await app.close();
+    });
+
+    it('falls back to null originator when no principal contact exists', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.findContactBySystemRole).mockResolvedValueOnce(null);
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 'task-2', agent_id: 'coordinator', title: 'follow up with vendor' }],
+      });
+      const { app, logger } = await setupTasksApp(contactService);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/kg/tasks',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: validPayload,
+      });
+
+      expect(res.statusCode).toBe(201);
+      const insertCall = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const params = insertCall[1] as unknown[];
+      // Conservative default: no lineage stamped, but the task is still created.
+      expect(params[params.length - 1]).toBeNull();
+      // The drop must be observable with the created task id for later correlation (#1127).
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: 'task-2', channel: 'console' }),
+        expect.stringContaining('WITHOUT principal lineage'),
+      );
       await app.close();
     });
   });
