@@ -1,25 +1,32 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+// health.test.ts — legacy test, updated to use the new HealthService shim.
+//
+// The old route took pool/logger/agentNames/skillNames directly and did its own
+// db probe. Task 7 replaced that with a thin shim over HealthService.getStatus().
+// These tests now use a mock HealthService consistent with the new interface.
+
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import Fastify from 'fastify';
 import { healthRoutes } from '../../../../src/channels/http/routes/health.js';
-import type { Pool } from 'pg';
-import pino from 'pino';
-
-const logger = pino({ level: 'silent' });
+import type { HealthService } from '../../../../src/health/health-service.js';
 
 describe('GET /api/health', () => {
-  const mockPool = {
-    query: async () => ({ rows: [{ '?column?': 1 }] }),
-  } as unknown as Pool;
+  const healthServiceOk = {
+    getStatus: vi.fn().mockResolvedValue({
+      status: 'ok',
+      uptime_s: 42,
+      checks: {
+        db: 'ok', bus: 'ok', signal: 'skipped',
+        email: 'skipped', browser: 'skipped',
+        mcp: { google_workspace: 'skipped' },
+        scheduler: 'ok',
+      },
+    }),
+  } as unknown as HealthService;
 
   const app = Fastify();
 
   beforeAll(async () => {
-    app.register(healthRoutes, {
-      pool: mockPool,
-      logger,
-      agentNames: ['coordinator', 'research-analyst'],
-      skillNames: ['web-fetch', 'delegate'],
-    });
+    app.register(healthRoutes, { healthService: healthServiceOk });
     await app.ready();
   });
 
@@ -36,24 +43,26 @@ describe('GET /api/health', () => {
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
     expect(body.status).toBe('ok');
-    expect(body.database).toBe('connected');
-    expect(body.agents).toEqual(['coordinator', 'research-analyst']);
-    expect(body.skills).toEqual(['web-fetch', 'delegate']);
-    expect(body).toHaveProperty('uptime');
+    expect(body.uptime_s).toBe(42);
+    expect(body.checks.db).toBe('ok');
   });
 
-  it('returns 503 when database is down', async () => {
-    const failPool = {
-      query: async () => { throw new Error('connection refused'); },
-    } as unknown as Pool;
+  it('returns 503 when health service says down', async () => {
+    const healthServiceDown = {
+      getStatus: vi.fn().mockResolvedValue({
+        status: 'down',
+        uptime_s: 5,
+        checks: {
+          db: 'fail', bus: 'ok', signal: 'skipped',
+          email: 'skipped', browser: 'skipped',
+          mcp: { google_workspace: 'skipped' },
+          scheduler: 'ok',
+        },
+      }),
+    } as unknown as HealthService;
 
     const failApp = Fastify();
-    failApp.register(healthRoutes, {
-      pool: failPool,
-      logger,
-      agentNames: ['coordinator'],
-      skillNames: [],
-    });
+    failApp.register(healthRoutes, { healthService: healthServiceDown });
     await failApp.ready();
 
     const response = await failApp.inject({
@@ -63,8 +72,7 @@ describe('GET /api/health', () => {
 
     expect(response.statusCode).toBe(503);
     const body = JSON.parse(response.body);
-    expect(body.status).toBe('degraded');
-    expect(body.database).toBe('disconnected');
+    expect(body.status).toBe('down');
 
     await failApp.close();
   });
