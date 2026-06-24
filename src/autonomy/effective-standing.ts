@@ -36,6 +36,40 @@ export const DEFAULT_BYPASS_LADDER: BypassLadderConfig = {
 };
 
 /**
+ * Resolve + VALIDATE the bypass-ladder thresholds from raw (possibly local-yaml-overridden)
+ * config. The startup JSON-schema validator only checks `default.yaml`, so a local override is
+ * otherwise unchecked — and the schema cannot express the cross-field invariant. A misconfigured
+ * ladder (inverted, or `same_task` below restricted mode) would let a woken task ride inherited
+ * standing at a trust level this model exists to block, so we fail boot loudly rather than run
+ * with a silently weakened gate.
+ *
+ * Invariant: integers, `60 <= same_task <= derived_child <= 100`.
+ *  - `same_task >= 60`: keeping standing on a wake activates the principal-bypass; below restricted
+ *    mode (60) that would defeat the very block restricted mode enforces.
+ *  - `derived_child >= same_task`: a freshly-derived child must never be EASIER to trust than the
+ *    original task continuing its own work.
+ */
+export function resolveBypassLadder(
+  raw?: { same_task?: number; derived_child?: number },
+): BypassLadderConfig {
+  const sameTaskThreshold = raw?.same_task ?? DEFAULT_BYPASS_LADDER.sameTaskThreshold;
+  const derivedChildThreshold = raw?.derived_child ?? DEFAULT_BYPASS_LADDER.derivedChildThreshold;
+  if (
+    !Number.isInteger(sameTaskThreshold) ||
+    !Number.isInteger(derivedChildThreshold) ||
+    sameTaskThreshold < 60 ||
+    derivedChildThreshold > 100 ||
+    derivedChildThreshold < sameTaskThreshold
+  ) {
+    throw new Error(
+      `Invalid autonomy.bypass_ladder: require integers with 60 <= same_task <= derived_child <= 100 ` +
+        `(got same_task=${String(sameTaskThreshold)}, derived_child=${String(derivedChildThreshold)}).`,
+    );
+  }
+  return { sameTaskThreshold, derivedChildThreshold };
+}
+
+/**
  * Marker stamped on a heartbeat wake's agent.task metadata. Its mere PRESENCE signals a
  * non-live (woken) execution → the ladder applies. `derived` picks the ladder column.
  */

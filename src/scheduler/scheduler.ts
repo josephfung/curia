@@ -473,18 +473,24 @@ export class Scheduler {
     // 10am"). Without this, the task fires with no originator and isPrincipalOriginated() returns
     // false, blocking elevated skills.
     //
-    // For BacklogHeartbeat wakes (task_payload.type === 'task-wake', #1125) also stamp a
-    // wakeContext so the execution layer applies the bypass ladder: for an open-ended backlog
-    // wake the live autonomy score can only DOWNGRADE the lineage's standing, never grant it.
-    // A specific scheduler-create job carries no wakeContext and keeps its originator at fire
-    // time (the principal chose the action AND the time — already pre-authorized).
+    // For BacklogHeartbeat wakes (#1125) also stamp a wakeContext so the execution layer applies
+    // the bypass ladder + woken fail-closed path: for an open-ended backlog wake the live autonomy
+    // score can only DOWNGRADE the lineage's standing, never grant it.
+    //
+    // The woken marker is keyed on the `standing` envelope that `enqueueTaskWake` always writes —
+    // NOT on `job.originator`. A heartbeat wake of a pre-065 / unstamped task has a null originator
+    // but is still a woken autonomous execution that must be marked (the ladder is then a safe
+    // no-op — a null lineage has no standing to downgrade). A specific scheduler-create job
+    // (different payload) and a `wake_at` job (task-wake payload but no `standing`) carry no
+    // wakeContext and keep their originator at fire time — already pre-authorized, not laddered.
+    const taskWakeStanding = isTaskWakePayload(job.taskPayload)
+      ? (job.taskPayload as { standing?: { derived?: boolean } }).standing
+      : undefined;
     let metadata: Record<string, unknown> | undefined;
-    if (job.originator) {
-      metadata = { originator: job.originator };
-      if (isTaskWakePayload(job.taskPayload)) {
-        const standing = (job.taskPayload as { standing?: { derived?: boolean } }).standing;
-        metadata.wakeContext = makeWakeContext(standing?.derived === true);
-      }
+    if (job.originator || taskWakeStanding) {
+      metadata = {};
+      if (job.originator) metadata.originator = job.originator;
+      if (taskWakeStanding) metadata.wakeContext = makeWakeContext(taskWakeStanding.derived === true);
     }
 
     // Publish agent.task so the coordinator picks up the work.

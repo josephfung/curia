@@ -119,8 +119,11 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
       taskId, agentId: candidate.agentId, runAt: new Date(),
       originator: candidate.originator, derived: candidate.derived,
     });
-    const { rows } = await pool.query(`SELECT originator, task_payload FROM scheduled_jobs WHERE id = $1`, [jobId]);
-    const taskMetadata = metadataFromWakeRow(rows[0] as never);
+    const { rows } = await pool.query<{ originator: Record<string, unknown> | null; task_payload: Record<string, unknown> }>(
+      `SELECT originator, task_payload FROM scheduled_jobs WHERE id = $1`,
+      [jobId],
+    );
+    const taskMetadata = metadataFromWakeRow(rows[0]!);
 
     const handler: SkillHandler = { execute: async () => ({ success: true, data: 'merged' }) };
 

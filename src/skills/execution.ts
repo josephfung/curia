@@ -661,8 +661,13 @@ export class ExecutionLayer {
     // autonomyConfig was read once above (hoisted for the effective-standing ladder). Fail-open
     // when the service is not wired or the config table doesn't exist yet (getConfig → null).
     // humanApproved bypasses gates A and B — the skill runs as CEO-authorized.
-    if (this.autonomyService && manifest.sensitivity !== 'elevated' && !options?.humanApproved) {
-      if (autonomyConfig !== null) {
+    //
+    // The outer condition is NOT gated on `this.autonomyService`: the no-score branch below must
+    // be reachable even when the service is absent, so a woken task fails closed regardless of WHY
+    // the score is unavailable (unwired service vs. null config) — otherwise the metadata downgrade
+    // would be decorative for an autonomous execution with no human in the loop (#1125).
+    if (manifest.sensitivity !== 'elevated' && !options?.humanApproved) {
+      if (this.autonomyService && autonomyConfig !== null) {
         const currentScore = autonomyConfig.score;
 
         // Principal bypass — if the task's EFFECTIVE standing is principal, skip gates A and B.
@@ -807,7 +812,8 @@ export class ExecutionLayer {
           }
         }
       } else {
-        // autonomyConfig is null — pre-migration or empty table.
+        // No score available — autonomyService unwired, or autonomyConfig null (pre-migration /
+        // empty table / transient DB error).
         //
         // Fail-OPEN is correct for a live turn: a transient DB issue must not silently disable an
         // agent acting under a human's direction. But a WOKEN task has no human in the loop, and
@@ -829,7 +835,7 @@ export class ExecutionLayer {
             ),
           };
         }
-        skillLogger.warn({ skillName }, 'autonomy gate: autonomy_config not found — skipping gate (fail-open, pre-migration?)');
+        skillLogger.warn({ skillName }, 'autonomy gate: score unavailable — skipping gate (fail-open; service unwired or pre-migration?)');
       }
     }
 

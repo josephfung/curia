@@ -853,6 +853,23 @@ describe('autonomy gates', () => {
       expect(handler.execute).not.toHaveBeenCalled();
     });
 
+    it('fails CLOSED on a woken task even when no autonomy service is wired', async () => {
+      // Defense-in-depth: with no service the gates are skipped entirely, so the metadata downgrade
+      // would be decorative for an autonomous execution — the woken brake must still apply.
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+      const layer = new ExecutionLayer(registry, logger); // no autonomyService
+
+      const result = await layer.invoke('send-email', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('temporarily unavailable');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
     it('still fails OPEN on a LIVE turn when the score is unavailable (no regression)', async () => {
       const registry = new SkillRegistry();
       const handler = makeHandler('ok');

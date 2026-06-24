@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeEffectiveTaskMetadata,
   makeWakeContext,
+  resolveBypassLadder,
   DEFAULT_BYPASS_LADDER,
 } from './effective-standing.js';
 import type { TaskOriginator } from '../contacts/types.js';
@@ -114,5 +115,36 @@ describe('computeEffectiveTaskMetadata', () => {
     const meta = { originator: principalOriginator(), wakeContext: makeWakeContext(false) };
     expect(role(computeEffectiveTaskMetadata(meta, 55, custom))).toBe('principal');
     expect(role(computeEffectiveTaskMetadata(meta, 45, custom))).toBe('agent');
+  });
+});
+
+describe('resolveBypassLadder', () => {
+  it('returns the defaults when no override is supplied', () => {
+    expect(resolveBypassLadder()).toEqual(DEFAULT_BYPASS_LADDER);
+    expect(resolveBypassLadder({})).toEqual(DEFAULT_BYPASS_LADDER);
+  });
+
+  it('applies a valid override', () => {
+    expect(resolveBypassLadder({ same_task: 65, derived_child: 95 })).toEqual({
+      sameTaskThreshold: 65,
+      derivedChildThreshold: 95,
+    });
+  });
+
+  it('fills only the supplied field from defaults', () => {
+    expect(resolveBypassLadder({ same_task: 80 })).toEqual({ sameTaskThreshold: 80, derivedChildThreshold: 90 });
+  });
+
+  it('throws when same_task drops below the restricted-mode floor (60)', () => {
+    expect(() => resolveBypassLadder({ same_task: 30 })).toThrow(/bypass_ladder/);
+  });
+
+  it('throws when the ladder is inverted (derived_child < same_task)', () => {
+    expect(() => resolveBypassLadder({ same_task: 90, derived_child: 70 })).toThrow(/bypass_ladder/);
+  });
+
+  it('throws on out-of-range or non-integer thresholds', () => {
+    expect(() => resolveBypassLadder({ derived_child: 120 })).toThrow();
+    expect(() => resolveBypassLadder({ same_task: 70.5 })).toThrow();
   });
 });
