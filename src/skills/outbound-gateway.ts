@@ -105,6 +105,17 @@ export interface OutboundSendResult {
   messageId?: string;
   /** Human-readable reason when success is false */
   blockedReason?: string;
+  /**
+   * Content-filter rule name(s) that triggered a block (e.g. `llm-judge-audience-leak`).
+   * Populated by `send()` when the content filter rejects the send, giving the agent's
+   * tool loop the specific rule category so it can address the root cause and retry (#1051).
+   * Rule names only — never the (potentially sensitive) finding detail.
+   *
+   * Note: the `sendEmailDraft()` block path does not yet populate this (or surface the
+   * reason summary); bringing it in line is tracked in #1158. Optional by design so that
+   * gap is forward-compatible — callers must treat absence as "no rule info available".
+   */
+  blockedRules?: string[];
   /** True when the autonomy gate blocked this send */
   gated?: boolean;
   /** Short reference for the action_log row (e.g. 'a3f7c12b'). Present when gated is true. */
@@ -733,9 +744,14 @@ export class OutboundGateway {
           {
             notificationType: 'blocked_content',
             ceoEmail: principalEmailForBlock,
-            subject: 'Action needed — blocked outbound reply',
+            // Softened from a call-to-action to informational (#1051): the agent now
+            // receives the block reason in the skill result and may self-correct and
+            // resend on its own. The audit log remains the ground truth; this alert is
+            // an FYI, not a task the principal must action.
+            subject: 'FYI — outbound message blocked',
             body: [
               'An outbound message was blocked by the content filter.',
+              'The agent received the reason and may rewrite the message and retry on its own.',
               '',
               `Reason: ${reasonSummary}`,
               // blockedEvent.timestamp is the audit row's own clock. No principal
@@ -771,7 +787,18 @@ export class OutboundGateway {
           'outbound-gateway: principal notification skipped — no principal email identity configured. Block recorded in audit log only.',
         );
       }
-      return { success: false, blockedReason: 'Content blocked by filter' };
+      // Surface the principal-safe reason summary and the rule name(s) to the
+      // caller (#1051). reasonSummary (computed above via buildBlockReasonSummary)
+      // obeys the same per-rule safety contract as the CEO notification — it only
+      // includes an LLM-judge finding's abstract detail, never a Stage-1 rule's
+      // matched fragment. Surfacing it here gives the agent's tool-use loop enough
+      // signal to rewrite the message and retry organically; blockedRules carries
+      // the specific rule category (rule names only) so it can fix the root cause.
+      return {
+        success: false,
+        blockedReason: reasonSummary,
+        blockedRules: filterFindings.map((f) => f.rule),
+      };
     }
 
     // ------------------------------------------------------------------
