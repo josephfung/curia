@@ -136,6 +136,10 @@ export class Scheduler {
   // In-memory only — resets on process restart (a missed check is not a security failure).
   private burstCounts = new Map<string, number>();
 
+  /** Timestamp of the most recent watchdog tick. Null until the first tick runs.
+   *  Read by HealthService to detect a stalled scheduler. */
+  public lastTickAt: Date | null = null;
+
   constructor(config: SchedulerConfig) {
     this.pool = config.pool;
     this.bus = config.bus;
@@ -191,6 +195,7 @@ export class Scheduler {
 
     // Watchdog: periodically recover jobs that got stuck in 'running' state.
     this.watchdogHandle = setInterval(() => {
+      this.lastTickAt = new Date();
       this.recoverStuckJobs().catch((err) => {
         this.logger.error({ err }, 'Unhandled error in recoverStuckJobs watchdog');
       });
