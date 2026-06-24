@@ -344,17 +344,21 @@ export class HealthService {
 
   /**
    * Derive canary status from the in-memory outcome tracker.
-   * Fails if the most recent recorded outcome is an error (lastErrorAt > lastSuccessAt).
+   * Fails if the most recent recorded outcome (tracker.lastOutcome) was an error.
    */
   private canaryOutcome(key: TrackerKey, label: string): CanaryResult {
-    const { lastSuccessAt, lastErrorAt } = this.tracker.getOutcome(key);
+    const { lastErrorAt, lastOutcome } = this.tracker.getOutcome(key);
 
-    // Report fail only when there is a recorded error more recent than the last success.
-    if (lastErrorAt !== null && (lastSuccessAt === null || lastErrorAt > lastSuccessAt)) {
-      return { name: label, status: 'fail', detail: `last call errored at ${lastErrorAt.toISOString()}` };
+    // Report fail only when the most recent recorded outcome was an error. Use the explicit
+    // lastOutcome discriminator rather than `lastErrorAt > lastSuccessAt`: the timestamp
+    // comparison ties when both land in the same millisecond (Date is 1ms-granular), which
+    // would silently report a same-ms error as healthy. lastErrorAt is non-null whenever
+    // lastOutcome === 'error', so the detail timestamp is always available here.
+    if (lastOutcome === 'error') {
+      return { name: label, status: 'fail', detail: `last call errored at ${lastErrorAt!.toISOString()}` };
     }
 
-    // No errors recorded, or last success is more recent — healthy.
+    // No calls recorded yet, or the most recent outcome was a success — healthy.
     return { name: label, status: 'ok' };
   }
 

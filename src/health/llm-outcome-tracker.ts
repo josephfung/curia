@@ -10,16 +10,16 @@ export class LlmOutcomeTracker {
   private readonly outcomes = new Map<TrackerKey, TierOutcome>();
 
   recordSuccess(key: TrackerKey): void {
-    const existing = this.outcomes.get(key) ?? { lastSuccessAt: null, lastErrorAt: null };
-    this.outcomes.set(key, { ...existing, lastSuccessAt: new Date() });
+    const existing = this.outcomes.get(key) ?? { lastSuccessAt: null, lastErrorAt: null, lastOutcome: null };
+    this.outcomes.set(key, { ...existing, lastSuccessAt: new Date(), lastOutcome: 'success' });
   }
 
   recordError(key: TrackerKey): void {
-    const existing = this.outcomes.get(key) ?? { lastSuccessAt: null, lastErrorAt: null };
-    this.outcomes.set(key, { ...existing, lastErrorAt: new Date() });
+    const existing = this.outcomes.get(key) ?? { lastSuccessAt: null, lastErrorAt: null, lastOutcome: null };
+    this.outcomes.set(key, { ...existing, lastErrorAt: new Date(), lastOutcome: 'error' });
   }
 
   getOutcome(key: TrackerKey): TierOutcome {
-    return this.outcomes.get(key) ?? { lastSuccessAt: null, lastErrorAt: null };
+    return this.outcomes.get(key) ?? { lastSuccessAt: null, lastErrorAt: null, lastOutcome: null };
   }
 }

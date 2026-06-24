@@ -32,4 +32,8 @@ export type TrackerKey = 'fast' | 'standard' | 'powerful' | 'embeddings' | 'imag
 export interface TierOutcome {
   lastSuccessAt: Date | null;
   lastErrorAt: Date | null;
+  /** Which kind of call was recorded most recently. Authoritative for health derivation —
+   *  comparing lastErrorAt > lastSuccessAt is unreliable when both land in the same
+   *  millisecond (Date has 1ms granularity), which would silently mask a same-ms error. */
+  lastOutcome: 'success' | 'error' | null;
 }
