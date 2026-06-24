@@ -107,9 +107,13 @@ export interface OutboundSendResult {
   blockedReason?: string;
   /**
    * Content-filter rule name(s) that triggered a block (e.g. `llm-judge-audience-leak`).
-   * Present only when the content filter rejected the send. Gives the agent's tool
-   * loop the specific rule category so it can address the root cause and retry (#1051).
+   * Populated by `send()` when the content filter rejects the send, giving the agent's
+   * tool loop the specific rule category so it can address the root cause and retry (#1051).
    * Rule names only — never the (potentially sensitive) finding detail.
+   *
+   * Note: the `sendEmailDraft()` block path does not yet populate this (or surface the
+   * reason summary); bringing it in line is tracked in #1158. Optional by design so that
+   * gap is forward-compatible — callers must treat absence as "no rule info available".
    */
   blockedRules?: string[];
   /** True when the autonomy gate blocked this send */
