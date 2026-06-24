@@ -9,6 +9,7 @@ import { ContactValidationError } from '../../../contacts/contact-service.js';
 import type { ChannelIdentity, Contact, ContactCanonicalFields, ContactKind, ContactTier } from '../../../contacts/types.js';
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
+import { resolveConsoleOriginator } from '../console-originator.js';
 import { markdownToHtml } from '../../../utils/markdown-to-html.js';
 import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
 
@@ -463,14 +464,21 @@ export async function knowledgeGraphRoutes(
       ? body.waitingOnText.trim()
       : null;
 
+    // Stamp principal lineage (#1127). The console is a principal-only surface, so a task
+    // created here must carry principal originator — otherwise, when the heartbeat later wakes
+    // it, the woken-task-authorization model would floor it to agent / no-bypass. This is a
+    // top-level task (no parent_task_id on this path), so capOriginatorToParent is a no-op and
+    // a direct stamp is correct. Lineage only — never the live-turn signal (persisted row).
+    const originator = await resolveConsoleOriginator(contactService, logger);
+
     try {
       const inserted = await pool.query(
         `INSERT INTO tasks (
            agent_id, title, intent_anchor, description, status, owner, priority,
            due_at, source, source_agent_id, tags, waiting_on_text,
-           progress, error_budget, conversation_id, updated_at
+           progress, error_budget, conversation_id, originator, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16::jsonb, now())
          RETURNING ${TASK_SELECT}`,
         [
           body.agentId.trim(),
@@ -488,6 +496,8 @@ export async function knowledgeGraphRoutes(
           JSON.stringify((body.progress as Record<string, unknown> | undefined) ?? {}),
           JSON.stringify((body.errorBudget as Record<string, unknown> | undefined) ?? {}),
           conversationId,
+          // Serialize as JSON string for pg JSONB — null when no principal could be resolved.
+          originator ? JSON.stringify(originator) : null,
         ],
       );
       if (!inserted.rowCount) {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, isLivePrincipalTurn, makeSystemOriginator, capOriginatorToParent } from '../../../src/contacts/principal.js';
+import { isPrincipalOriginated, isAgentOriginated, isSystemOriginated, isLivePrincipalTurn, makeSystemOriginator, makePrincipalOriginator, capOriginatorToParent } from '../../../src/contacts/principal.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 
 describe('isPrincipalOriginated', () => {
@@ -162,6 +162,33 @@ describe('makeSystemOriginator', () => {
 
     expect(new Date(a.initiatedAt).getTime()).not.toBeNaN();
     expect(new Date(b.initiatedAt).getTime()).not.toBeNaN();
+    expect(a.initiatedAt).not.toBe(b.initiatedAt);
+  });
+});
+
+describe('makePrincipalOriginator (#1127 — console / principal surface)', () => {
+  it('returns a principal-lineage TaskOriginator stamped with the given contactId and channel', () => {
+    const originator = makePrincipalOriginator('contact-principal', 'console');
+    expect(originator.contactId).toBe('contact-principal');
+    expect(originator.systemRole).toBe('principal');
+    expect(originator.channel).toBe('console');
+    expect(originator.tier).toBe('principal');
+    expect(originator.initiatedAt).toBeTruthy();
+  });
+
+  it('reads as principal-originated but never as a live turn (lineage only)', () => {
+    const metadata = { originator: makePrincipalOriginator('contact-principal', 'console') };
+    expect(isPrincipalOriginated(metadata)).toBe(true);
+    // Lineage alone must not satisfy the live-principal (elevated) gate — no liveTurn signal.
+    expect(isLivePrincipalTurn(false, metadata)).toBe(false);
+  });
+
+  it('generates a fresh initiatedAt timestamp on each call', () => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z') });
+    const a = makePrincipalOriginator('c', 'console');
+    vi.advanceTimersByTime(1000);
+    const b = makePrincipalOriginator('c', 'console');
+    vi.useRealTimers();
     expect(a.initiatedAt).not.toBe(b.initiatedAt);
   });
 });

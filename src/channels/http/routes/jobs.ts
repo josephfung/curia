@@ -12,7 +12,10 @@
 
 import type { FastifyInstance } from 'fastify';
 import type { SchedulerService } from '../../../scheduler/scheduler-service.js';
+import type { ContactService } from '../../../contacts/contact-service.js';
+import type { Logger } from '../../../logger.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
+import { resolveConsoleOriginator } from '../console-originator.js';
 
 export interface JobRouteOptions {
   schedulerService: SchedulerService;
@@ -21,13 +24,18 @@ export interface JobRouteOptions {
   // can access job endpoints.
   webAppBootstrapSecret: string | undefined;
   sessions: SessionStore;
+  // Used to resolve the principal contact so console-created jobs carry principal lineage
+  // (#1127). The console is a CEO-only surface; a job created here must be stamped principal-
+  // originated, consistent with scheduler-create's principal path.
+  contactService: ContactService;
+  logger: Logger;
 }
 
 export async function jobRoutes(
   app: FastifyInstance,
   options: JobRouteOptions,
 ): Promise<void> {
-  const { schedulerService, webAppBootstrapSecret, sessions } = options;
+  const { schedulerService, webAppBootstrapSecret, sessions, contactService, logger } = options;
 
   // -- GET /api/jobs — list jobs with optional filters --
 
@@ -95,6 +103,11 @@ export async function jobRoutes(
       return reply.status(400).send({ error: 'Either cron_expr or run_at must be provided' });
     }
 
+    // Stamp principal lineage (#1127) — the console is a CEO-only surface, so a job created
+    // here is principal-originated, consistent with scheduler-create's principal path. Lineage
+    // only: the scheduled_jobs row is a persisted, async-fired artifact, never a live turn.
+    const originator = await resolveConsoleOriginator(contactService, logger);
+
     try {
       const result = await schedulerService.createJob({
         agentId,
@@ -104,6 +117,8 @@ export async function jobRoutes(
         createdBy: 'api',
         intentAnchor: body.intent_anchor,
         errorBudget: body.error_budget,
+        // createJob takes TaskOriginator | undefined; coalesce the null fallback.
+        originator: originator ?? undefined,
       });
 
       // Fetch the full job row so the caller can render it immediately without

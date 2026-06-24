@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Console task lineage** — tasks and scheduled jobs created from the console now carry a principal `TaskOriginator` (`channel: 'console'`), so console-originated work is no longer stranded propose-only when later woken. (#1127)
 - **Health observability** — `GET /api/health` returns `ok` / `degraded` / `down` with per-check status for seven services; `down` (503) only when db or bus fails. (#434)
 - **Daily canary job** — scheduler job validates LLM tiers, credentials, and external deps on a cron schedule; pings configured heartbeat URLs on success. (#434)
 - **LLM error telemetry** — `llm.error` bus events on failed provider calls let the health layer track per-tier outcomes without billed probes. (#434)

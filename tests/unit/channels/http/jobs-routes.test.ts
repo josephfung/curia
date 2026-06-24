@@ -5,11 +5,15 @@ import { jobRoutes } from '../../../../src/channels/http/routes/jobs.js';
 import type { SchedulerService } from '../../../../src/scheduler/scheduler-service.js';
 import type { JobRow } from '../../../../src/scheduler/scheduler-service.js';
 import type { SessionStore } from '../../../../src/channels/http/session-auth.js';
+import type { ContactService } from '../../../../src/contacts/contact-service.js';
+import type { Logger } from '../../../../src/logger.js';
 
 // Shared bootstrap secret used across all tests.
 const TEST_SECRET = 'test-bootstrap-secret';
 // Auth header included in every inject call so assertSecret passes.
 const AUTH = { 'x-web-bootstrap-secret': TEST_SECRET };
+// The principal contact resolveConsoleOriginator() looks up to stamp lineage (#1127).
+const PRINCIPAL_CONTACT_ID = 'contact-principal';
 
 /** Build a mock SchedulerService with vi.fn() stubs for every method the routes call. */
 function mockSchedulerService(): SchedulerService {
@@ -23,8 +27,23 @@ function mockSchedulerService(): SchedulerService {
   } as unknown as SchedulerService;
 }
 
+/** Minimal ContactService stub: resolves the principal so jobs get principal lineage. */
+function mockContactService(): ContactService {
+  return {
+    findContactBySystemRole: vi.fn().mockResolvedValue({ id: PRINCIPAL_CONTACT_ID }),
+  } as unknown as ContactService;
+}
+
+const mockLogger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+} as unknown as Logger;
+
 describe('Job routes', () => {
   const scheduler = mockSchedulerService();
+  const contactService = mockContactService();
   const sessions: SessionStore = new Map();
   const app = Fastify();
 
@@ -35,6 +54,8 @@ describe('Job routes', () => {
       schedulerService: scheduler,
       webAppBootstrapSecret: TEST_SECRET,
       sessions,
+      contactService,
+      logger: mockLogger,
     });
     await app.ready();
   });
@@ -160,6 +181,62 @@ describe('Job routes', () => {
         cronExpr: '0 9 * * *',
         createdBy: 'api',
       }),
+    );
+  });
+
+  it('POST /api/jobs stamps a principal TaskOriginator (#1127)', async () => {
+    const createdJob = {
+      id: 'job-2',
+      agentId: 'agent-a',
+      originator: null,
+    } as unknown as JobRow;
+    vi.mocked(scheduler.getJob).mockResolvedValueOnce(createdJob);
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/jobs',
+      headers: AUTH,
+      payload: {
+        agent_id: 'agent-a',
+        cron_expr: '0 9 * * *',
+        task_payload: { task: 'daily-report' },
+      },
+    });
+
+    // The console is a CEO-only surface, so the job must carry principal lineage.
+    expect(contactService.findContactBySystemRole).toHaveBeenCalledWith('principal');
+    expect(scheduler.createJob).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        originator: expect.objectContaining({
+          contactId: PRINCIPAL_CONTACT_ID,
+          systemRole: 'principal',
+          channel: 'console',
+          tier: 'principal',
+        }),
+      }),
+    );
+  });
+
+  it('POST /api/jobs falls back to no originator when no principal exists (#1127)', async () => {
+    // Fresh-install case: no principal contact yet → conservative null lineage, no failure.
+    vi.mocked(contactService.findContactBySystemRole).mockResolvedValueOnce(null);
+    const createdJob = { id: 'job-3', agentId: 'agent-a', originator: null } as unknown as JobRow;
+    vi.mocked(scheduler.getJob).mockResolvedValueOnce(createdJob);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/jobs',
+      headers: AUTH,
+      payload: {
+        agent_id: 'agent-a',
+        cron_expr: '0 9 * * *',
+        task_payload: { task: 'daily-report' },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(scheduler.createJob).toHaveBeenLastCalledWith(
+      expect.objectContaining({ originator: undefined }),
     );
   });
 
