@@ -358,6 +358,25 @@
           }
         }
       }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "liveness": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "email_stall_factor": { "type": "integer", "minimum": 1 },
+            "scheduler_max_tick_s": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "canary_schedule": { "type": "string", "minLength": 1 },
+        "heartbeats": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
     }
   },
   "definitions": {
