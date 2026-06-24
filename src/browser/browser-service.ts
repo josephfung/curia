@@ -378,6 +378,15 @@ export class BrowserService {
     return this.channelFallbackActive;
   }
 
+  /**
+   * Expose the persistent browser context for liveness probes. Null when the service
+   * has not been started or has been stopped. The probe calls isConnected() to confirm
+   * the browser process is still alive.
+   */
+  get browserContext(): BrowserContext | null {
+    return this.context;
+  }
+
   // --- Private helpers ---
 
   /**

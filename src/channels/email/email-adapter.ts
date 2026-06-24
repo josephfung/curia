@@ -122,7 +122,7 @@ export class EmailAdapter implements Channel {
   /** Epoch ms when the adapter was started — used to compute initial stall window. */
   private startedAt: number | null = null;
   /** Epoch ms of the most recent poll cycle that reached completion (no throw). */
-  private lastSuccessfulPollAt: number | null = null;
+  private _lastSuccessfulPollAt: number | null = null;
   /** True once channel.stalled has been successfully published this lifecycle. */
   private stalledEmitted = false;
   /** Number of channel.stalled publish attempts this lifecycle (bounds retries on bus failure). */
@@ -162,6 +162,24 @@ export class EmailAdapter implements Channel {
 
   constructor(config: EmailAdapterConfig) {
     this.config = config;
+  }
+
+  // ── Public health-probe getters ──────────────────────────────────────────
+  // The watchdog state fields are private to prevent external mutation, but the
+  // health module needs to read them without resorting to `any` casts. These
+  // getters expose just enough surface for the liveness probe.
+
+  /**
+   * Epoch ms of the most recent successful poll, converted to Date for the
+   * health probe. Null means no successful poll since start() was last called.
+   */
+  get lastSuccessfulPollAt(): Date | null {
+    return this._lastSuccessfulPollAt != null ? new Date(this._lastSuccessfulPollAt) : null;
+  }
+
+  /** Polling interval in ms — used by the health probe to compute the stall threshold. */
+  get pollingIntervalMs(): number {
+    return this.config.pollingIntervalMs;
   }
 
   async start(): Promise<void> {
@@ -284,7 +302,7 @@ export class EmailAdapter implements Channel {
     }
 
     this.startedAt = Date.now();
-    this.lastSuccessfulPollAt = null;
+    this._lastSuccessfulPollAt = null;
     this.stalledEmitted = false;
     this.stalledEmitAttempts = 0;
 
@@ -494,7 +512,7 @@ export class EmailAdapter implements Channel {
 
     // ── Post-poll accounting (only reached when listEmailMessages succeeded) ──
 
-    this.lastSuccessfulPollAt = Date.now();
+    this._lastSuccessfulPollAt = Date.now();
 
     // Emit one channel.poll audit event per cycle so operators can verify the
     // adapter is alive and measure throughput over time.
@@ -548,14 +566,14 @@ export class EmailAdapter implements Channel {
 
     // Use the last successful poll time when available; fall back to startedAt
     // so a never-successful adapter (first poll already failing) is also detected.
-    const reference = this.lastSuccessfulPollAt ?? this.startedAt;
+    const reference = this._lastSuccessfulPollAt ?? this.startedAt;
     if (now - reference <= threshold) return;
 
     this.stalledEmitAttempts++;
     this.config.logger.error(
       {
         accountId: this.config.accountId,
-        lastSuccessfulPollAt: this.lastSuccessfulPollAt,
+        lastSuccessfulPollAt: this._lastSuccessfulPollAt,
         stallThresholdMs: threshold,
       },
       'Email adapter stall detected — no successful poll within threshold',
@@ -565,7 +583,7 @@ export class EmailAdapter implements Channel {
       await this.config.bus.publish('channel', createChannelStalled({
         accountId: this.config.accountId,
         channel: 'email',
-        lastSuccessfulPollAt: this.lastSuccessfulPollAt,
+        lastSuccessfulPollAt: this._lastSuccessfulPollAt,
         stallThresholdMs: threshold,
       }));
       // Set stalledEmitted only after confirmed publish — if publish fails we retry
