@@ -1094,13 +1094,14 @@ export class ContactService {
     const contact = await this.backend.getContact(rec.contactId);
     if (!contact) throw new Error(`Contact not found: ${rec.contactId}`);
 
-    return this.backend.withTransaction(async (client) => {
+    const approved = await this.backend.withTransaction(async (client) => {
       // Claim the recommendation inside the transaction. For Postgres, the UPDATE holds
       // a row-level lock until the transaction commits — a concurrent decline blocks
       // until we commit or roll back, then finds status ≠ 'pending' and returns false.
       const claimed = await this.backend.resolveGrantRecommendation(id, 'approved', actorId, client);
       if (!claimed) {
         // A concurrent call already resolved this recommendation; produce no side effects.
+        this.logger?.debug({ id, actorId }, 'contacts: approveGrantRecommendation lost concurrent race — recommendation already resolved');
         return false;
       }
 
@@ -1116,10 +1117,14 @@ export class ContactService {
         revokedAt: null,
       };
       await this.backend.createAuthOverride(override, client);
-
-      this.logger?.info({ id, contactId: rec.contactId, permission: rec.permission, actorId }, 'contacts: grant recommendation approved');
       return true;
     });
+
+    // Log AFTER withTransaction resolves so the audit entry only fires on committed state.
+    if (approved) {
+      this.logger?.info({ id, contactId: rec.contactId, permission: rec.permission, actorId }, 'contacts: grant recommendation approved');
+    }
+    return approved;
   }
 
   /**
@@ -1936,7 +1941,14 @@ class PostgresContactBackend implements ContactServiceBackend {
       await client.query('COMMIT');
       return result;
     } catch (err) {
-      await client.query('ROLLBACK');
+      // Wrap ROLLBACK in its own try/catch: if ROLLBACK throws (e.g. connection severed),
+      // log and swallow that secondary error so the original err — the real root cause —
+      // is what propagates to the caller.
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        this.logger.error({ rollbackErr }, 'contacts: withTransaction ROLLBACK failed');
+      }
       throw err;
     } finally {
       client.release();
