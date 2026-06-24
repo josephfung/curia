@@ -1,6 +1,7 @@
 # Woken & derived task authorization (#1060)
 
-Investigation issue: #1060. Implementation: #1125 (step 1), #1126 (step 2), #1127 (step 3).
+Investigation issue: #1060. Implementation: #1125 (step 1), #1126 (step 2), #1127 (step 3);
+follow-up: #1153 (`wake_at` lineage).
 
 ## Problem
 
@@ -80,9 +81,43 @@ woken task bypass the very block restricted mode exists to enforce.
 
 A pre-authorized **specific** deferred action ("email X tomorrow at 10am") belongs on the
 **scheduler** path, which already preserves the principal originator at fire time
-([`scheduler.ts:419`](../../src/scheduler/scheduler.ts)) because the principal specified
+([`scheduler.ts` `fireJob`](../../src/scheduler/scheduler.ts)) because the principal specified
 the action *and* the time. Open-ended backlog that the *heartbeat* nudges is subject to
 the ladder. This resolves issue #1060 case (b) without special-casing.
+
+### 3a. How the runtime distinguishes the three job types (implementation, #1125)
+
+The "heartbeat = laddered / scheduler = preserve principal" split above is realized by a
+`standing` envelope on the wake job, **not** by inspecting the originator:
+
+- `enqueueTaskWake` (the BacklogHeartbeat path) writes `task_payload.standing = { derived }`
+  onto the `scheduled_jobs` row, alongside the `originator` column.
+- `Scheduler.fireJob` stamps a `wakeContext` marker on the fired `agent.task` metadata
+  **only when that envelope is present**; `computeEffectiveTaskMetadata` applies the ladder
+  **only when** `wakeContext` is present.
+
+That cleanly separates the three cases:
+
+| Job kind | originator | `standing` envelope | At fire time |
+|---|---|---|---|
+| BacklogHeartbeat wake | yes | yes | laddered (may downgrade) |
+| `scheduler-create` job | yes | no | keeps originator, no ladder (pre-authorized) |
+| task `wake_at` self-defer | see §3b | no | keeps originator, no ladder (pre-authorized) |
+
+The marker is keyed on the envelope, not on `job.originator`, so a heartbeat wake of a
+pre-065 / unstamped task (null originator) still gets a `wakeContext` — the ladder is a
+no-op on null lineage, but the path stays uniform. **"Derived" is structural:**
+`source = 'agent' OR parent_task_id IS NOT NULL`, computed in `selectHeartbeatCandidates`.
+
+### 3b. Known gap: task `wake_at` self-deferral drops lineage
+
+A task that defers itself via its own `wake_at` column currently mints a one-shot wake job
+with **no** originator and no `standing` envelope (see the `@TODO(#1125/#1127)` in
+[`task-repo.ts`](../../src/db/task-repo.ts)), so it fires with `metadata: undefined` and
+floors to agent / no-bypass. But a `wake_at` time is *pre-chosen*, so it should be treated
+like `scheduler-create` — **keep** the originator at fire time, **not** laddered, **not**
+floored. As shipped it under-authorizes a principal-lineage task that self-defers. Out of
+#1125's scope (heartbeat path only); tracked as #1153.
 
 ### 4. `elevated` means a **live** principal turn
 
@@ -93,17 +128,25 @@ stamped only when the dispatcher processes a real principal message; wakes, deri
 and scheduler fires never carry it.
 
 This is enforced **only at the execution-layer gate**
-([`execution.ts:553`](../../src/skills/execution.ts)). All handler-level
+([`execution.ts:591`](../../src/skills/execution.ts)). All handler-level
 `isPrincipalOriginated` re-checks are abolished — they froze the *old* "principal only"
 definition, drifted out of sync when the gate widened to "principal or system" in
 `3bd3d224`, and are exactly the whack-a-mole hazard a single definition removes.
+
+> **Status after #1125:** the handler re-checks are *not yet* abolished — #1126 does that.
+> In the interim #1125 made them safe rather than removing them: the execution layer forwards
+> **effective** (post-ladder) standing to handlers (`ctx.taskMetadata = effectiveTaskMetadata`,
+> `execution.ts:969`), so a re-check on a woken principal-lineage task now sees the downgraded
+> standing instead of raw lineage. These re-checks are therefore load-bearing until #1126
+> replaces them — confirm the gate (or an `action_risk` + autonomy gate) covers each one
+> before deleting it. See the caveat posted on #1126.
 
 "Live principal" closes the **self-approval hole** with zero per-skill exceptions: a
 woken principal-*lineage* task can never approve its own pending action, because lineage
 is not a live turn.
 
 Note: the principal-bypass of the autonomy *score* gate
-([`execution.ts:641`](../../src/skills/execution.ts)) and the `elevated` gate use two
+([`execution.ts:669`](../../src/skills/execution.ts)) and the `elevated` gate use two
 different notions of "principal" — and they should. Exercising authority (approve an
 action) needs the human *now*; acting *within* work the CEO authorized (a normal skill)
 can reasonably be inherited at high trust via the ladder.
@@ -189,6 +232,9 @@ Three issues, completed in order:
 - **#1127 (step 3, depends on #1125; parallel to #1126):** stamp `TaskOriginator` on
   console-created tasks/scheduled jobs (a principal surface — must not default to
   propose-only).
+- **#1153 (follow-up, depends on #1125):** thread `TaskOriginator` onto task `wake_at`
+  self-deferral wake jobs so a pre-chosen deferral keeps its originator at fire time
+  (no ladder) instead of flooring to agent — see §3b.
 
 Doc-sync lands with the implementation PRs (specs describe shipped behaviour): ADR-011,
 ADR-017 (+ ADR-018 cross-ref), spec 03 (Skills & Execution), spec 14 (Autonomy Engine),
