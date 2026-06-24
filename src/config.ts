@@ -71,6 +71,102 @@ export function resolveTasksConfig(yaml: YamlConfig['tasks']): TasksConfig {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Health observability config types
+// ---------------------------------------------------------------------------
+
+export interface HealthLivenessConfig {
+  /** Fail email check if last poll is older than N × pollingIntervalMs. */
+  emailStallFactor: number;
+  /** Fail scheduler check if watchdog last ticked more than N seconds ago. */
+  schedulerMaxTickS: number;
+}
+
+export interface HealthHeartbeats {
+  llm_fast: string | null;
+  llm_standard: string | null;
+  llm_powerful: string | null;
+  embeddings: string | null;
+  image_gen: string | null;
+  nylas: string | null;
+  signal: string | null;
+  google_workspace: string | null;
+  tavily: string | null;
+}
+
+export interface HealthConfig {
+  liveness: HealthLivenessConfig;
+  canarySchedule: string;
+  heartbeats: HealthHeartbeats;
+}
+
+export const DEFAULT_HEALTH_CONFIG: HealthConfig = {
+  liveness: {
+    emailStallFactor: 3,
+    schedulerMaxTickS: 120,
+  },
+  canarySchedule: '0 6 * * *',
+  heartbeats: {
+    llm_fast: null,
+    llm_standard: null,
+    llm_powerful: null,
+    embeddings: null,
+    image_gen: null,
+    nylas: null,
+    signal: null,
+    google_workspace: null,
+    tavily: null,
+  },
+};
+
+/**
+ * Validate a heartbeat URL: must be https:// to be safe to ping.
+ * Returns null (without throwing) for empty, non-https, or malformed URLs.
+ * The `key` parameter is reserved for future caller-side logging — this
+ * function intentionally has no logger access.
+ */
+function validateHeartbeatUrl(raw: string | undefined | null, _key: string): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    // Non-https URLs are not safe to ping — discard them silently.
+    if (url.protocol !== 'https:') return null;
+    return raw;
+  } catch {
+    // Malformed URL — not parseable by the URL constructor.
+    return null;
+  }
+}
+
+/** Resolve the optional YAML health block to a fully-populated config with defaults. */
+export function resolveHealthConfig(
+  yamlHealth: YamlConfig['health'] | undefined,
+): HealthConfig {
+  const hb = yamlHealth?.heartbeats;
+  return {
+    liveness: {
+      emailStallFactor:
+        yamlHealth?.liveness?.email_stall_factor ??
+        DEFAULT_HEALTH_CONFIG.liveness.emailStallFactor,
+      schedulerMaxTickS:
+        yamlHealth?.liveness?.scheduler_max_tick_s ??
+        DEFAULT_HEALTH_CONFIG.liveness.schedulerMaxTickS,
+    },
+    canarySchedule: yamlHealth?.canary_schedule ?? DEFAULT_HEALTH_CONFIG.canarySchedule,
+    heartbeats: {
+      llm_fast: validateHeartbeatUrl(hb?.llm_fast, 'llm_fast'),
+      llm_standard: validateHeartbeatUrl(hb?.llm_standard, 'llm_standard'),
+      llm_powerful: validateHeartbeatUrl(hb?.llm_powerful, 'llm_powerful'),
+      embeddings: validateHeartbeatUrl(hb?.embeddings, 'embeddings'),
+      image_gen: validateHeartbeatUrl(hb?.image_gen, 'image_gen'),
+      nylas: validateHeartbeatUrl(hb?.nylas, 'nylas'),
+      signal: validateHeartbeatUrl(hb?.signal, 'signal'),
+      google_workspace: validateHeartbeatUrl(hb?.google_workspace, 'google_workspace'),
+      tavily: validateHeartbeatUrl(hb?.tavily, 'tavily'),
+    },
+  };
+}
+
 /**
  * Typed shape for config/default.yaml.
  *
@@ -323,6 +419,24 @@ export interface YamlConfig {
     /** Hours a waiting/blocked task with no pending wake may sit before the
      *  heartbeat surfaces it as an orphaned wait. Default 48. */
     staleWaitThresholdHours?: number;
+  };
+  health?: {
+    liveness?: {
+      email_stall_factor?: number;
+      scheduler_max_tick_s?: number;
+    };
+    canary_schedule?: string;
+    heartbeats?: {
+      llm_fast?: string;
+      llm_standard?: string;
+      llm_powerful?: string;
+      embeddings?: string;
+      image_gen?: string;
+      nylas?: string;
+      signal?: string;
+      google_workspace?: string;
+      tavily?: string;
+    };
   };
   autonomy?: {
     /**
