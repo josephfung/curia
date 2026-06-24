@@ -22,6 +22,7 @@ function makeResponse(
   status: number,
   body: unknown,
   headers: Record<string, string> = {},
+  opts: { cancelSpy?: ReturnType<typeof vi.fn> } = {},
 ): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -31,6 +32,9 @@ function makeResponse(
     },
     json: async () => body,
     text: async () => JSON.stringify(body),
+    // Real Response has a ReadableStream body; we stub cancel() so the
+    // optional-chaining call in requestWithCursor is exercised, not silently skipped.
+    body: { cancel: opts.cancelSpy ?? vi.fn() },
   } as unknown as Response;
 }
 
@@ -226,6 +230,31 @@ describe('CeoNylasClient — 429 retry / backoff', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('cancels the 429 response body before sleeping (releases the connection slot)', async () => {
+    const cancelSpy = vi.fn();
+    // Inject the cancelSpy into the first 429 response.
+    const rateLimitRes = makeResponse(
+      429,
+      { error: { type: 'rate_limit_error', message: 'Too many requests' } },
+      {},
+      { cancelSpy },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimitRes)
+      .mockResolvedValue(successResponse([{ id: 'f1', name: 'INBOX' }]));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = makeClient();
+    const promise = client.listFolders();
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('retries 5xx on GET methods (safe to retry idempotent reads)', async () => {
     const fetchMock = vi
       .fn()
@@ -303,6 +332,28 @@ describe('CeoNylasClient — list limit clamping (≤ 20)', () => {
 
     const client = makeClient();
     await client.listAllDrafts();
+
+    const calledUrl = new URL(fetchMock.mock.calls[0]![0] as string);
+    expect(calledUrl.searchParams.get('limit')).toBe('20');
+  });
+
+  it('sends limit=20 for listMessages when no limit is specified (Nylas default is 50 — too high)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(successResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = makeClient();
+    await client.listMessages();
+
+    const calledUrl = new URL(fetchMock.mock.calls[0]![0] as string);
+    expect(calledUrl.searchParams.get('limit')).toBe('20');
+  });
+
+  it('sends limit=20 for listDrafts when no limit is specified (Nylas default is 50 — too high)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(successResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = makeClient();
+    await client.listDrafts();
 
     const calledUrl = new URL(fetchMock.mock.calls[0]![0] as string);
     expect(calledUrl.searchParams.get('limit')).toBe('20');

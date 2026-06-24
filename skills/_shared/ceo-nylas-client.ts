@@ -170,9 +170,7 @@ export class CeoNylasClient {
 
   async listMessages(options: ListMessagesOptions = {}): Promise<NylasMessageSummary[]> {
     const params = new URLSearchParams();
-    if (options.limit !== undefined) {
-      params.set('limit', String(Math.min(options.limit, NYLAS_MAX_LIST_LIMIT)));
-    }
+    params.set('limit', String(Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT)));
     if (options.query) {
       // Nylas v3: search_query_native cannot be combined with any other filter
       // param except limit and page_token — sending in/unread/received_after
@@ -275,9 +273,7 @@ export class CeoNylasClient {
   // filter here — callers must not apply inbox watermarks to drafts.
   async listDrafts(options: { limit?: number } = {}): Promise<NylasDraftSummary[]> {
     const params = new URLSearchParams();
-    if (options.limit !== undefined) {
-      params.set('limit', String(Math.min(options.limit, NYLAS_MAX_LIST_LIMIT)));
-    }
+    params.set('limit', String(Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT)));
     const url = `${this.baseUrl}/drafts?${params}`;
     const data = await this.request<NylasApiDraftFull[]>('GET', url, 'listDrafts');
     return data.map(normalizeDraftSummary);

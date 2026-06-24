@@ -15,7 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`ceo-nylas-client`** — 429 rate-limit responses are now retried with exponential backoff and jitter (up to 3 attempts), honoring the `Retry-After` header; exhausted retries throw a typed `NylasApiError(429)` that cannot be misread as an auth/credential failure. List endpoints clamp `limit` to ≤ 20 per Nylas guidance. (#1058)
+- **`ceo-nylas-client`** — 429 responses retry with exponential backoff (up to 3 attempts), honoring `Retry-After`; exhaustion throws a typed `NylasApiError(429)` that cannot be misread as an auth failure. (#1058)
+- **`ceo-nylas-client` list endpoints** — `limit` is always sent and capped at ≤ 20; previously an unspecified limit caused Nylas to default to 50, exceeding the safety cap. (#1058)
 
 ### Added
 
