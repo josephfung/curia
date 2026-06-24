@@ -117,7 +117,7 @@ with **no** originator and no `standing` envelope (see the `@TODO(#1125/#1127)` 
 floors to agent / no-bypass. But a `wake_at` time is *pre-chosen*, so it should be treated
 like `scheduler-create` — **keep** the originator at fire time, **not** laddered, **not**
 floored. As shipped it under-authorizes a principal-lineage task that self-defers. Out of
-#1125's scope (heartbeat path only); tracked as #1153.
+scope for #1125 (heartbeat path only); tracked as #1153.
 
 > **Interaction with #1126.** Fixing #1153 restores only the *autonomy* principal-bypass
 > (for `normal` skills) — it carries no `standing` envelope, so it mints no `wakeContext` and
