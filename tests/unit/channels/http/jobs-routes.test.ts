@@ -185,6 +185,9 @@ describe('Job routes', () => {
   });
 
   it('POST /api/jobs stamps a principal TaskOriginator (#1127)', async () => {
+    // Stub createJob to return the SAME id the read-back resolves, so the test can't pass with a
+    // mismatched row id (CodeRabbit) — the route must read back / log the id createJob returned.
+    vi.mocked(scheduler.createJob).mockResolvedValueOnce({ jobId: 'job-2', agentTaskId: undefined });
     const createdJob = {
       id: 'job-2',
       agentId: 'agent-a',
@@ -215,11 +218,14 @@ describe('Job routes', () => {
         }),
       }),
     );
+    expect(scheduler.getJob).toHaveBeenCalledWith('job-2');
   });
 
   it('POST /api/jobs falls back to no originator when no principal exists (#1127)', async () => {
     // Fresh-install case: no principal contact yet → conservative null lineage, no failure.
     vi.mocked(contactService.findContactBySystemRole).mockResolvedValueOnce(null);
+    // createJob and getJob share the same id so the correlation assertion is meaningful.
+    vi.mocked(scheduler.createJob).mockResolvedValueOnce({ jobId: 'job-3', agentTaskId: undefined });
     const createdJob = { id: 'job-3', agentId: 'agent-a', originator: null } as unknown as JobRow;
     vi.mocked(scheduler.getJob).mockResolvedValueOnce(createdJob);
 
@@ -238,12 +244,13 @@ describe('Job routes', () => {
     expect(scheduler.createJob).toHaveBeenLastCalledWith(
       expect.objectContaining({ originator: undefined }),
     );
-    // The dropped lineage must be observable with the job id so the later propose-only
-    // consequence is correlatable back to creation (#1127 observability).
+    // The dropped lineage must be observable with the job id createJob returned, so the later
+    // propose-only consequence is correlatable back to creation (#1127 observability).
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: 'job-1', channel: 'console' }),
+      expect.objectContaining({ jobId: 'job-3', channel: 'console' }),
       expect.stringContaining('WITHOUT principal lineage'),
     );
+    expect(scheduler.getJob).toHaveBeenCalledWith('job-3');
   });
 
   it('POST /api/jobs returns 400 when agent_id is missing', async () => {

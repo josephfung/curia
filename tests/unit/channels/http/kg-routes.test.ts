@@ -754,6 +754,10 @@ describe('knowledgeGraphRoutes', () => {
         channel: 'console',
         tier: 'principal',
       });
+      // Omitted source defaults to 'ceo' (non-derived), not 'agent' (#1127) — otherwise the
+      // heartbeat would mark the task derived and the ladder would downgrade the lineage we
+      // just stamped. source is the 9th INSERT param ($9).
+      expect(params[8]).toBe('ceo');
       await app.close();
     });
 

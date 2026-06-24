@@ -417,7 +417,13 @@ export async function knowledgeGraphRoutes(
     }
     // Resolve with defaults first, then validate — avoids dual-layer guard maintenance trap.
     const owner = typeof body.owner === 'string' ? body.owner : 'curia';
-    const source = typeof body.source === 'string' ? body.source : 'agent';
+    // Default source to 'ceo', not 'agent' (#1127). The console is a principal surface, so a task
+    // created here with no explicit source is the original unit of CEO-authorized work — NOT an
+    // agent-spawned side-effect. selectHeartbeatCandidates derives `derived = source='agent' OR
+    // parent_task_id IS NOT NULL`; a default of 'agent' would mark the task derived and the bypass
+    // ladder would downgrade its principal lineage at posture B (70-89), stranding it propose-only
+    // — defeating the originator stamp below. An explicit source from the client is still honoured.
+    const source = typeof body.source === 'string' ? body.source : 'ceo';
     if (!validOwners.includes(owner)) {
       return reply.status(400).send({ error: 'Invalid owner. Must be curia, ceo, or external.' });
     }
