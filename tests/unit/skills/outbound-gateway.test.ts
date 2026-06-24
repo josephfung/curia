@@ -1789,7 +1789,74 @@ describe('OutboundGateway.sendEmailDraft', () => {
     const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
 
     expect(result.success).toBe(false);
-    expect(result.blockedReason).toBe('Content blocked by filter');
+    // #1158: the draft block path now mirrors send() — it returns the principal-safe
+    // reason summary and the rule name(s) so the agent's tool loop can self-correct
+    // and retry. For a Stage-1 deterministic rule, the summary is the rule name only.
+    expect(result.blockedReason).toBe('secret-pattern');
+    expect(result.blockedRules).toEqual(['secret-pattern']);
+    expect(nylasClient.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('returns the judge\'s abstract reason and rule name on a draft LLM-judge block (#1158)', async () => {
+    // Mirror of the send() LLM-judge test: a Stage-2 judge block on the draft path
+    // must surface the judge's abstract reason (safe — it never quotes the offending
+    // value) plus the rule name, giving the agent enough signal to rewrite and retry.
+    const judgeReason = 'internal fallback reasoning leaked into the reply body';
+    const { gateway, nylasClient, contentFilter } = makeGateway();
+    (contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+      passed: false,
+      findings: [{ rule: 'llm-judge-audience-leak', detail: judgeReason }],
+    });
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toContain(judgeReason);
+    expect(result.blockedReason).toContain('llm-judge-audience-leak');
+    expect(result.blockedRules).toEqual(['llm-judge-audience-leak']);
+    expect(nylasClient.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('never leaks a Stage-1 deterministic finding\'s detail into the draft block result (#1158)', async () => {
+    // #1158 safety contract: the draft block result is LLM-facing, so it must obey
+    // the same per-rule policy as send() — a deterministic rule's detail can embed
+    // the matched secret, so only its rule NAME may appear in the result.
+    const secretFragment = 'sk-ant-zzzzzzzzzzzzzzzzzzzz0987654321ZZ';
+    const { gateway, nylasClient, contentFilter } = makeGateway();
+    (contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+      passed: false,
+      findings: [{ rule: 'secret-pattern', detail: `API key: ${secretFragment}` }],
+    });
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    expect(result.success).toBe(false);
+    // The matched secret must never reach the LLM-facing result...
+    expect(result.blockedReason).not.toContain(secretFragment);
+    // ...but the rule name is safe and tells the agent which class of rule fired.
+    expect(result.blockedReason).toBe('secret-pattern');
+    expect(result.blockedRules).toEqual(['secret-pattern']);
+    expect(nylasClient.sendDraft).not.toHaveBeenCalled();
+  });
+
+  it('with mixed findings on a draft block, surfaces only the judge detail but all rule names (#1158)', async () => {
+    // When a draft trips both a Stage-1 deterministic rule (whose detail embeds a
+    // secret) and a Stage-2 judge rule (abstract detail), the LLM-facing reason must
+    // surface ONLY the judge's detail, while blockedRules lists every rule, in order.
+    const secretFragment = 'sk-ant-yyyyyyyyyyyyyyyyyyyy1122334455YY';
+    const judgeReason = 'reply mixes confidential and external content';
+    const { gateway, nylasClient, contentFilter } = makeGateway();
+    (contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+      passed: false,
+      findings: [
+        { rule: 'secret-pattern', detail: `API key: ${secretFragment}` },
+        { rule: 'llm-judge-audience-leak', detail: judgeReason },
+      ],
+    });
+    const result = await gateway.sendEmailDraft(DRAFT_ID, 'joseph', DRAFT_META);
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).not.toContain(secretFragment);
+    expect(result.blockedReason).toContain(judgeReason);
+    expect(result.blockedRules).toEqual(['secret-pattern', 'llm-judge-audience-leak']);
     expect(nylasClient.sendDraft).not.toHaveBeenCalled();
   });
 
