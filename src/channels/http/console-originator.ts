@@ -26,6 +26,13 @@ export const CONSOLE_CHANNEL = 'console';
  * install before seeding) or the lookup fails. A null degrades gracefully to the
  * pre-#1127 behaviour (conservative agent / no-bypass standing); it does not fail the
  * request, because creating the task/job is more important than stamping its lineage.
+ *
+ * Contract: this NEVER throws — callers invoke it outside their DB try/catch and rely on
+ * that. The catch fails closed (toward LESS privilege) for any error, including infra-level
+ * faults (e.g. a transient DB outage), which means such a fault silently produces a
+ * conservatively-under-authorized row. That is the safe direction for an authorization gate,
+ * but callers should re-log with the created row id (the id isn't known here yet) so the
+ * later propose-only consequence is correlatable back to this drop.
  */
 export async function resolveConsoleOriginator(
   contactService: ContactService,

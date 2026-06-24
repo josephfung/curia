@@ -707,9 +707,10 @@ describe('knowledgeGraphRoutes', () => {
     // inspect findContactBySystemRole and the INSERT params.
     async function setupTasksApp(contactService: ContactService) {
       const app = Fastify();
+      const logger = createLogger();
       await app.register(knowledgeGraphRoutes, {
         pool,
-        logger: createLogger(),
+        logger,
         webAppBootstrapSecret: 'secret-1',
         secureCookies: false,
         sessions: new Map(),
@@ -717,7 +718,7 @@ describe('knowledgeGraphRoutes', () => {
         bus: createMockBus(),
         eventRouter: createMockEventRouter(),
       });
-      return app;
+      return { app, logger };
     }
 
     const validPayload = { agentId: 'coordinator', intentAnchor: 'follow up with vendor' };
@@ -729,7 +730,7 @@ describe('knowledgeGraphRoutes', () => {
         rowCount: 1,
         rows: [{ id: 'task-1', agent_id: 'coordinator', title: 'follow up with vendor' }],
       });
-      const app = await setupTasksApp(contactService);
+      const { app } = await setupTasksApp(contactService);
 
       const res = await app.inject({
         method: 'POST',
@@ -763,7 +764,7 @@ describe('knowledgeGraphRoutes', () => {
         rowCount: 1,
         rows: [{ id: 'task-2', agent_id: 'coordinator', title: 'follow up with vendor' }],
       });
-      const app = await setupTasksApp(contactService);
+      const { app, logger } = await setupTasksApp(contactService);
 
       const res = await app.inject({
         method: 'POST',
@@ -777,6 +778,11 @@ describe('knowledgeGraphRoutes', () => {
       const params = insertCall[1] as unknown[];
       // Conservative default: no lineage stamped, but the task is still created.
       expect(params[params.length - 1]).toBeNull();
+      // The drop must be observable with the created task id for later correlation (#1127).
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: 'task-2', channel: 'console' }),
+        expect.stringContaining('WITHOUT principal lineage'),
+      );
       await app.close();
     });
   });

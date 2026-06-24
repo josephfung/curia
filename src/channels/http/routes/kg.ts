@@ -504,6 +504,17 @@ export async function knowledgeGraphRoutes(
         logger.error('kg: INSERT tasks returned no rows');
         return reply.status(500).send({ error: 'Failed to create task.' });
       }
+      // Correlatable breadcrumb (#1127): the lineage-resolution warning (in resolveConsoleOriginator)
+      // fires before the row exists, so it can't carry an id. Re-log here with the task id when
+      // lineage was dropped — otherwise the consequence (this task stranded propose-only when the
+      // heartbeat later wakes it) surfaces as a generic autonomy-gate block with no link back here.
+      if (!originator) {
+        const createdId = (inserted.rows[0] as { id?: string } | undefined)?.id;
+        logger.warn(
+          { taskId: createdId, channel: 'console' },
+          'kg: console task created WITHOUT principal lineage — it will be propose-only if woken (no principal contact resolved)',
+        );
+      }
       return reply.status(201).send({
         task: serializeTask(inserted.rows[0]! as DbTaskRow),
       });

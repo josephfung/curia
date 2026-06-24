@@ -121,6 +121,16 @@ export async function jobRoutes(
         originator: originator ?? undefined,
       });
 
+      // Correlatable breadcrumb (#1127): resolveConsoleOriginator's warning fires before the job
+      // exists, so re-log here with the job id when lineage was dropped — otherwise this job
+      // firing propose-only surfaces later with no link back to the missing-lineage root cause.
+      if (!originator) {
+        logger.warn(
+          { jobId: result.jobId, channel: 'console' },
+          'jobs: console job created WITHOUT principal lineage — it will be propose-only when fired (no principal contact resolved)',
+        );
+      }
+
       // Fetch the full job row so the caller can render it immediately without
       // a separate GET request.
       const job = await schedulerService.getJob(result.jobId);

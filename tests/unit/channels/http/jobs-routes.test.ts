@@ -238,6 +238,12 @@ describe('Job routes', () => {
     expect(scheduler.createJob).toHaveBeenLastCalledWith(
       expect.objectContaining({ originator: undefined }),
     );
+    // The dropped lineage must be observable with the job id so the later propose-only
+    // consequence is correlatable back to creation (#1127 observability).
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: 'job-1', channel: 'console' }),
+      expect.stringContaining('WITHOUT principal lineage'),
+    );
   });
 
   it('POST /api/jobs returns 400 when agent_id is missing', async () => {
