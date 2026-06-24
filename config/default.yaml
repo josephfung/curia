@@ -378,3 +378,15 @@ tasks:
   heartbeatMaxWakesPerTick: 5
   idleThresholdHours: 4
   staleWaitThresholdHours: 48
+
+# Autonomy authorization (#1125). The bypass ladder governs how much LINEAGE standing a
+# heartbeat-woken/derived task inherits at the live autonomy score. The score can only ever
+# DOWNGRADE inherited standing (woken/derived → propose-only at low trust), never grant it.
+#   < same_task        : woken & derived → downgrade to agent (propose-only)
+#   same_task–derived  : same-task heartbeat wake keeps lineage; derived child → agent
+#   >= derived_child   : same-task wake AND derived child keep lineage standing
+# See docs/wip/2026-06-22-woken-task-authorization-design.md (spec 14).
+autonomy:
+  bypass_ladder:
+    same_task: 70      # posture B floor — must not drop below 60
+    derived_child: 90  # posture D floor

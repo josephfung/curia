@@ -14,6 +14,8 @@ import {
 } from '../bus/events.js';
 import type { DbTaskRow, TaskRow } from './queries/tasks.js';
 import { mapTaskRow } from './queries/tasks.js';
+import type { TaskOriginator } from '../contacts/types.js';
+import { capOriginatorToParent } from '../contacts/principal.js';
 
 // All SELECT / RETURNING clauses use this column list. Centralised so a schema
 // change only needs updating in one place.
@@ -21,7 +23,7 @@ const TASK_COLUMNS = `
   id, agent_id, intent_anchor, title, description, status, progress, error_budget,
   conversation_id, created_at, updated_at, owner, waiting_on_contact_id,
   waiting_on_text, parent_task_id, blocked_by_task_id, priority, due_at,
-  source, source_agent_id, created_by, tags
+  source, source_agent_id, created_by, tags, originator
 `;
 
 // -- Public types --
@@ -44,6 +46,10 @@ export interface CreateTaskParams {
   createdBy?: string;
   /** When set, creates a linked one-shot scheduled_jobs row in the same transaction. */
   wakeAt?: Date;
+  /** Lineage to stamp on the task (#1125) — copied from the creating event's originator
+   *  (ctx.taskMetadata.originator). For child tasks (parentTaskId set) it is capped to the
+   *  parent's lineage, never above it. Absent/null → no lineage (agent / no-bypass). */
+  originator?: TaskOriginator | null;
 }
 
 export interface UpdateTaskParams {
@@ -105,20 +111,31 @@ export class TaskRepo {
       sourceAgentId,
       createdBy,
       wakeAt,
+      originator,
     } = params;
 
     const resolvedCreatedBy = createdBy ?? agentId;
     const resolvedIntentAnchor = intentAnchor ?? title;
+
+    // Resolve the lineage to stamp (#1125). For a child task, cap the creating event's
+    // originator to the parent's lineage so a child can never carry standing above its parent.
+    // The parent fetch is an extra round-trip on the child-creation path only (rare).
+    let resolvedOriginator: TaskOriginator | null = originator ?? null;
+    if (parentTaskId) {
+      const parent = await this.getTask(parentTaskId);
+      resolvedOriginator = capOriginatorToParent(resolvedOriginator, parent?.originator ?? null);
+    }
+    const originatorJson = resolvedOriginator ? JSON.stringify(resolvedOriginator) : null;
 
     // Always insert with 'open' status for skill-created tasks.
     const taskInsertSql = `
       INSERT INTO tasks (
         agent_id, title, intent_anchor, description, status, progress, error_budget,
         owner, parent_task_id, blocked_by_task_id, priority, due_at, tags,
-        waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by
+        waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by, originator
       )
       VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, '{}'::jsonb,
-              $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+              $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
       RETURNING ${TASK_COLUMNS}
     `;
     const taskParams: unknown[] = [
@@ -137,6 +154,7 @@ export class TaskRepo {
       source,
       sourceAgentId ?? null,
       resolvedCreatedBy,
+      originatorJson,
     ];
 
     let row: DbTaskRow;
@@ -145,30 +163,37 @@ export class TaskRepo {
       // Atomic CTE: insert task + insert linked one-shot wake-up job in one round-trip.
       // The task_payload carries minimal context; the dispatcher (issue 4) loads the full
       // task from tasks.id via the scheduled_jobs.task_id FK.
+      //
+      // @TODO(#1125/#1127): this specific-`wake_at` wake job does NOT carry the originator on its
+      // scheduled_jobs row (and stamps no `standing`), so fireJob fires it with metadata: undefined
+      // — the woken task gets no lineage, no wakeContext, and therefore no bypass. That is the
+      // conservative/safe direction (propose-only), and deliberately out of #1125's scope, which
+      // covers only the open-ended BacklogHeartbeat path. Threading lineage onto specific wakes is
+      // a follow-up (it must NOT be subject to the heartbeat ladder — the time was pre-chosen).
       const cteSql = `
         WITH new_task AS (
           INSERT INTO tasks (
             agent_id, title, intent_anchor, description, status, progress, error_budget,
             owner, parent_task_id, blocked_by_task_id, priority, due_at, tags,
-            waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by
+            waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by, originator
           )
           VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, '{}'::jsonb,
-                  $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                  $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
           RETURNING ${TASK_COLUMNS}
         ),
         _wake_job AS (
           INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id)
-          SELECT $16, $17, '{"type":"task-wake"}'::jsonb, 'pending', $17, $18, $19, new_task.id
+          SELECT $17, $18, '{"type":"task-wake"}'::jsonb, 'pending', $18, $19, $20, new_task.id
           FROM new_task
         )
         SELECT * FROM new_task
       `;
       const { rows } = await this.pool.query(cteSql, [
         ...taskParams,
-        agentId,           // $16 — scheduled_jobs.agent_id
-        wakeAt,            // $17 — run_at / next_run_at
-        resolvedCreatedBy, // $18 — created_by
-        this.timezone,     // $19 — timezone
+        agentId,           // $17 — scheduled_jobs.agent_id
+        wakeAt,            // $18 — run_at / next_run_at
+        resolvedCreatedBy, // $19 — created_by
+        this.timezone,     // $20 — timezone
       ]);
       row = rows[0] as DbTaskRow | undefined
         ?? (() => { throw new Error('task-repo: createTask CTE returned no row'); })();
@@ -253,7 +278,7 @@ export class TaskRepo {
         t.id, t.agent_id, t.intent_anchor, t.title, t.description, t.status, t.progress,
         t.error_budget, t.conversation_id, t.created_at, t.updated_at, t.owner,
         t.waiting_on_contact_id, t.waiting_on_text, t.parent_task_id, t.blocked_by_task_id,
-        t.priority, t.due_at, t.source, t.source_agent_id, t.created_by, t.tags,
+        t.priority, t.due_at, t.source, t.source_agent_id, t.created_by, t.tags, t.originator,
         (
           SELECT sj.run_at FROM scheduled_jobs sj
           WHERE sj.task_id = t.id AND sj.status = 'pending'

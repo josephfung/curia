@@ -51,6 +51,7 @@ function makeTaskRow(overrides: Partial<TaskRow> = {}): TaskRow {
     sourceAgentId: 'coordinator',
     createdBy: 'coordinator',
     tags: [],
+    originator: null,
     ...overrides,
   };
 }

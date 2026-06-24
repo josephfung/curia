@@ -11,7 +11,7 @@
 // duplicate tasks.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import type { DuplicatePair } from '../../src/contacts/types.js';
+import type { DuplicatePair, TaskOriginator } from '../../src/contacts/types.js';
 import type { KgNode } from '../../src/memory/types.js';
 import { hasExclusion } from '../../src/contacts/dedup-exclusions.js';
 
@@ -225,6 +225,11 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
           source: 'agent',
           sourceAgentId: 'contacts',
           tags: ['dedup', 'contacts'],
+          // Copy the cron run's lineage (system) onto the review task (#1125). As a source='agent'
+          // task it is a DERIVED child, so when the heartbeat wakes it the bypass ladder requires
+          // posture D (score >= 90) to retain system standing — below that it is propose-only and
+          // surfaces an approval request instead of auto-executing.
+          originator: (ctx.taskMetadata?.originator as TaskOriginator | undefined) ?? null,
         });
 
         ctx.log.debug(

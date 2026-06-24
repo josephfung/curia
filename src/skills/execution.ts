@@ -40,6 +40,8 @@ import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-cl
 import type { EntityContextAssembler } from '../entity-context/assembler.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { AutonomyConfig } from '../autonomy/autonomy-service.js';
+import { computeEffectiveTaskMetadata, DEFAULT_BYPASS_LADDER } from '../autonomy/effective-standing.js';
+import type { BypassLadderConfig } from '../autonomy/effective-standing.js';
 import type { BrowserService } from '../browser/browser-service.js';
 import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import { TempFileStore } from './temp-file-store.js';
@@ -161,6 +163,9 @@ export class ExecutionLayer {
    *  the magic-link URL (appOrigin in prod, http://localhost:{httpPort} in dev). */
   private appOrigin?: string;
   private httpPort?: number;
+  /** Bypass-ladder thresholds (#1125) governing how much lineage standing a woken/derived task
+   *  inherits at the live autonomy score. Defaults to 70 (same-task) / 90 (derived child). */
+  private bypassLadder: BypassLadderConfig;
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -195,6 +200,7 @@ export class ExecutionLayer {
     defaultDelegateTimeoutMs?: number;
     appOrigin?: string;
     httpPort?: number;
+    bypassLadder?: BypassLadderConfig;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -228,6 +234,7 @@ export class ExecutionLayer {
     this.defaultDelegateTimeoutMs = options?.defaultDelegateTimeoutMs;
     this.appOrigin = options?.appOrigin;
     this.httpPort = options?.httpPort;
+    this.bypassLadder = options?.bypassLadder ?? DEFAULT_BYPASS_LADDER;
   }
 
   /**
@@ -538,6 +545,31 @@ export class ExecutionLayer {
       }
     }
 
+    // Read the live autonomy score ONCE per invocation (#1125). Used by both the
+    // effective-standing ladder (immediately below) and the autonomy gates further down.
+    // Hoisted above the elevated gate because that gate's INPUT is now effective standing,
+    // which needs the live score for a woken task. Fail-open to null on any error / unwired
+    // service — a transient DB issue must not silently disable the agent.
+    let autonomyConfig: AutonomyConfig | null = null;
+    if (this.autonomyService) {
+      try {
+        autonomyConfig = await this.autonomyService.getConfig();
+      } catch (err) {
+        skillLogger.warn({ err, skillName }, 'autonomy gate: failed to read autonomy_config — skipping gate (fail-open)');
+      }
+    }
+
+    // Effective standing (#1125): for a live turn this is the raw task metadata (lineage IS the
+    // standing); for a heartbeat wake the bypass ladder lets the live score only DOWNGRADE the
+    // lineage's standing to agent (propose-only), never grant it. The execution-layer gates read
+    // EFFECTIVE standing; audit logs below keep the raw lineage. Computed from the LIVE score, so
+    // lowering the score mid-flight removes inherited bypass on the very next action.
+    const effectiveTaskMetadata = computeEffectiveTaskMetadata(
+      options?.taskMetadata,
+      autonomyConfig?.score ?? null,
+      this.bypassLadder,
+    );
+
     // Elevated-skill gate: require principal or system origination.
     // Principal = CEO in an active conversation. System = operator-declared YAML job,
     // version-controlled and reviewed — more trustworthy than agent-self-scheduled.
@@ -545,20 +577,27 @@ export class ExecutionLayer {
     // are autonomously invented by the LLM and must not have standing access to the
     // approval queue.
     //
+    // The gate's REQUIREMENT stays principal-or-system in this issue; its INPUT is now
+    // effective standing — a woken task whose lineage the ladder has downgraded to agent
+    // (e.g. a heartbeat-woken review task below the posture threshold) no longer satisfies it.
+    // (#1126 redefines the requirement to a live principal turn and abolishes the handler
+    // re-checks below.)
+    //
     // Handler-level defense-in-depth: skills that must never accept system origination
     // (approve/deny/dismiss — require active CEO authorization) retain their own
     // isPrincipalOriginated() checks. Read-only elevated skills (list-pending-actions)
     // mirror this gate's logic. When changing this gate, audit elevated handler.ts files.
-    // See docs/wip/2026-05-10-principal-identity-design.md
+    // See docs/wip/2026-05-10-principal-identity-design.md, docs/wip/2026-06-22-woken-task-authorization-design.md
     if (manifest.sensitivity === 'elevated') {
-      if (!isPrincipalOriginated(options?.taskMetadata) && !isSystemOriginated(options?.taskMetadata)) {
+      if (!isPrincipalOriginated(effectiveTaskMetadata) && !isSystemOriginated(effectiveTaskMetadata)) {
         this.logger.warn(
           {
             skillName,
             caller: caller ? { role: caller.role, channel: caller.channel } : null,
+            // Log the raw LINEAGE (audit), not the downgraded effective standing.
             originator: (options?.taskMetadata as Record<string, unknown> | undefined)?.originator ?? null,
           },
-          'Elevated skill blocked: task not originated by principal or system',
+          'Elevated skill blocked: task not originated by principal or system (effective standing)',
         );
         return {
           success: false,
@@ -619,26 +658,24 @@ export class ExecutionLayer {
     // via CallerContext (sensitivity: 'elevated' gate above). Gating them on
     // autonomy score would create a deadlock: set-autonomy requires score 80
     // but is the only way to raise the score.
-    // Read the live score once per invocation. Fail-open if the service is not
-    // wired or the config table doesn't exist yet (getConfig returns null).
+    // autonomyConfig was read once above (hoisted for the effective-standing ladder). Fail-open
+    // when the service is not wired or the config table doesn't exist yet (getConfig → null).
     // humanApproved bypasses gates A and B — the skill runs as CEO-authorized.
-    if (this.autonomyService && manifest.sensitivity !== 'elevated' && !options?.humanApproved) {
-      let autonomyConfig: AutonomyConfig | null = null;
-      try {
-        autonomyConfig = await this.autonomyService.getConfig();
-      } catch (err) {
-        // DB error reading autonomy_config — fail-open with a warn log.
-        // A transient DB issue should not silently disable the agent.
-        skillLogger.warn({ err, skillName }, 'autonomy gate: failed to read autonomy_config — skipping gate (fail-open)');
-      }
-
-      if (autonomyConfig !== null) {
+    //
+    // The outer condition is NOT gated on `this.autonomyService`: the no-score branch below must
+    // be reachable even when the service is absent, so a woken task fails closed regardless of WHY
+    // the score is unavailable (unwired service vs. null config) — otherwise the metadata downgrade
+    // would be decorative for an autonomous execution with no human in the loop (#1125).
+    if (manifest.sensitivity !== 'elevated' && !options?.humanApproved) {
+      if (this.autonomyService && autonomyConfig !== null) {
         const currentScore = autonomyConfig.score;
 
-        // Principal bypass — if the task was originated by the principal (CEO), skip gates A and B.
-        // The autonomy gate governs *autonomous* behavior; a direct CEO instruction overrides it
-        // by intent. Log at info so bypasses are visible in production.
-        if (isPrincipalOriginated(options?.taskMetadata)) {
+        // Principal bypass — if the task's EFFECTIVE standing is principal, skip gates A and B.
+        // For a live CEO turn this is the raw principal lineage; for a heartbeat wake it is the
+        // post-ladder standing, so a woken task only bypasses when the live score clears the
+        // posture threshold (#1125). The autonomy gate governs *autonomous* behavior; a direct
+        // CEO instruction overrides it by intent. Log at info so bypasses are visible in prod.
+        if (isPrincipalOriginated(effectiveTaskMetadata)) {
           skillLogger.info(
             { skillName, currentScore, agentId: options?.agentId, taskEventId: options?.taskEventId },
             'autonomy gate: skipped — task originated by principal',
@@ -713,7 +750,11 @@ export class ExecutionLayer {
           // checkpoint processor invoking extract-facts with no task metadata). An EXTERNAL
           // originator that carries no resolved tier instead FAILS CLOSED (#1059) — see the
           // else-if below — because we cannot establish the tier the gate needs.
-          const initiatingTier = getInitiatingTier(options?.taskMetadata);
+          // Gate C reads EFFECTIVE standing too (#1125): a wake the ladder downgraded to agent
+          // reads as a non-external originator → skips the tier gate (gates A/B already enforced).
+          // The ladder never downgrades an EXTERNAL lineage (only principal/system), so an
+          // external-originated woken task still has its tier enforced here.
+          const initiatingTier = getInitiatingTier(effectiveTaskMetadata);
           if (initiatingTier !== null && manifest.action_risk !== 'none') {
             const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
             const tierDecision = await this.resolveTierGateDecision(
@@ -734,7 +775,7 @@ export class ExecutionLayer {
             }
           } else if (
             manifest.action_risk !== 'none' &&
-            isExternalOriginatorMissingTier(options?.taskMetadata)
+            isExternalOriginatorMissingTier(effectiveTaskMetadata)
           ) {
             // Fail-closed (#1059): an external contact (systemRole not system/agent) drove a
             // consequential action but carries no resolved tier — a pre-#950 task in flight
@@ -771,8 +812,30 @@ export class ExecutionLayer {
           }
         }
       } else {
-        // autonomyConfig is null — pre-migration or empty table. Fail-open.
-        skillLogger.warn({ skillName }, 'autonomy gate: autonomy_config not found — skipping gate (fail-open, pre-migration?)');
+        // No score available — autonomyService unwired, or autonomyConfig null (pre-migration /
+        // empty table / transient DB error).
+        //
+        // Fail-OPEN is correct for a live turn: a transient DB issue must not silently disable an
+        // agent acting under a human's direction. But a WOKEN task has no human in the loop, and
+        // with no score the bypass ladder cannot compute effective standing — so the same null
+        // that downgrades its inherited standing (effective-standing.ts) would otherwise let it run
+        // every non-read skill ungated, making the downgrade cosmetic. For a woken task we fail
+        // CLOSED on non-read actions instead (#1125): no score → no autonomous consequential action.
+        const isWoken = (options?.taskMetadata as Record<string, unknown> | undefined)?.['wakeContext'] !== undefined;
+        if (isWoken && manifest.action_risk !== 'none') {
+          skillLogger.warn(
+            { skillName, actionRisk: manifest.action_risk, agentId: options?.agentId, taskEventId: options?.taskEventId },
+            'autonomy gate: score unavailable on a woken task — failing closed (no human in the loop)',
+          );
+          return {
+            success: false,
+            error: this.wrapSkillError(
+              `Skill '${skillName}' blocked — the autonomy score is temporarily unavailable and this is an autonomous (woken) task. ` +
+              `It will be retried once the score can be read.`,
+            ),
+          };
+        }
+        skillLogger.warn({ skillName }, 'autonomy gate: score unavailable — skipping gate (fail-open; service unwired or pre-migration?)');
       }
     }
 
@@ -893,7 +956,17 @@ export class ExecutionLayer {
         ? buildRateLimitSourceKey(options.agentId ?? 'human-approved', options.taskEventId, options.channelId)
         : undefined,
       // Forward task-level metadata so skills can inspect task-wide signals.
-      taskMetadata: options?.taskMetadata,
+      // EFFECTIVE standing (#1125), not raw lineage: handlers that still self-check
+      // isPrincipalOriginated(ctx.taskMetadata) (e.g. send-draft, contact-set-tier — normal-
+      // sensitivity skills the execution-layer gates don't cover) must see the post-ladder
+      // standing, or a heartbeat-woken principal-lineage task would ride borrowed standing the
+      // ladder downgraded. It also keeps lineage-forwarding handlers (delegate, scheduler-create,
+      // bullpen) from minting a fresh sub-task with standing the woken task no longer holds — a
+      // derived sub-turn carries no wakeContext and would otherwise escape the ladder entirely.
+      // For a live turn this is referentially identical to the raw metadata. Audit logs above
+      // read the raw lineage directly from options.taskMetadata, not from here. (#1126 abolishes
+      // these handler re-checks; until then, effective standing is the safe input.)
+      taskMetadata: effectiveTaskMetadata,
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.
       timezone: this.timezone,

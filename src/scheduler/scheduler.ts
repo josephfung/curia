@@ -12,6 +12,7 @@ import {
   createAgentTask,
 } from '../bus/events.js';
 import type { AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
+import { makeWakeContext } from '../autonomy/effective-standing.js';
 import type { DriftDetector } from './drift-detector.js';
 import type { DreamEngine } from '../memory/dream-engine.js';
 import type { JobRow } from './scheduler-service.js';
@@ -467,11 +468,32 @@ export class Scheduler {
     // runs bleed into the same conversation history.
     const runId = randomUUID();
 
+    // Restore the TaskOriginator stored at schedule-creation / wake-enqueue time so the autonomy
+    // gate can identify principal-authorized scheduled actions (e.g. "email my mother tomorrow at
+    // 10am"). Without this, the task fires with no originator and isPrincipalOriginated() returns
+    // false, blocking elevated skills.
+    //
+    // For BacklogHeartbeat wakes (#1125) also stamp a wakeContext so the execution layer applies
+    // the bypass ladder + woken fail-closed path: for an open-ended backlog wake the live autonomy
+    // score can only DOWNGRADE the lineage's standing, never grant it.
+    //
+    // The woken marker is keyed on the `standing` envelope that `enqueueTaskWake` always writes —
+    // NOT on `job.originator`. A heartbeat wake of a pre-065 / unstamped task has a null originator
+    // but is still a woken autonomous execution that must be marked (the ladder is then a safe
+    // no-op — a null lineage has no standing to downgrade). A specific scheduler-create job
+    // (different payload) and a `wake_at` job (task-wake payload but no `standing`) carry no
+    // wakeContext and keep their originator at fire time — already pre-authorized, not laddered.
+    const taskWakeStanding = isTaskWakePayload(job.taskPayload)
+      ? (job.taskPayload as { standing?: { derived?: boolean } }).standing
+      : undefined;
+    let metadata: Record<string, unknown> | undefined;
+    if (job.originator || taskWakeStanding) {
+      metadata = {};
+      if (job.originator) metadata.originator = job.originator;
+      if (taskWakeStanding) metadata.wakeContext = makeWakeContext(taskWakeStanding.derived === true);
+    }
+
     // Publish agent.task so the coordinator picks up the work.
-    // Restore the TaskOriginator stored at schedule-creation time so the autonomy gate
-    // can correctly identify principal-authorized scheduled actions (e.g. "email my
-    // mother tomorrow at 10am"). Without this, the scheduler task fires with no originator
-    // and isPrincipalOriginated() returns false, blocking elevated skills.
     const taskEvent = createAgentTask({
       agentId: job.agentId,
       conversationId: `scheduler:${job.id}:${runId}`,
@@ -484,8 +506,8 @@ export class Scheduler {
       // Pass the duration hint so the runtime can widen the delegate timeout for
       // long-running scheduled tasks. null (no explicit duration) becomes undefined.
       expectedDurationSeconds: job.expectedDurationSeconds ?? undefined,
-      // Thread the stored originator through — null (pre-040 jobs) becomes undefined.
-      metadata: job.originator ? { originator: job.originator } : undefined,
+      // Thread the stored originator (+ wakeContext for heartbeat wakes) through.
+      metadata,
       parentEventId: firedEvent.id,
     });
     // Track the mapping BEFORE publishing — bus.publish() awaits all handlers

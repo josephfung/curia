@@ -20,6 +20,7 @@
 // if a compromised-agent threat model warrants restricting who can schedule into whom.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { TaskOriginator } from '../../src/contacts/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
@@ -168,6 +169,9 @@ export class TaskCreateHandler implements SkillHandler {
         // TaskRepo.updateTask); created_by always records the actual creator.
         sourceAgentId: owningAgentId,
         createdBy: creatorAgentId,
+        // Copy the creating turn's lineage onto the task (#1125). TaskRepo caps it to the
+        // parent's lineage when parent_task_id is set, so a child never exceeds its parent.
+        originator: (ctx.taskMetadata?.originator as TaskOriginator | undefined) ?? null,
       });
 
       const tz = ctx.timezone;

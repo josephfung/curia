@@ -29,4 +29,55 @@ describe('SchedulerService.enqueueTaskWake', () => {
     expect(params).toContain('ceo-inbox');
     expect(params).toContain(runAt);
   });
+
+  it('persists the lineage originator and the derived flag onto the wake (#1125)', async () => {
+    const pool = { query: vi.fn().mockResolvedValue({ rows: [{ id: 'job-1' }] }) };
+    const bus = { publish: vi.fn(), subscribe: vi.fn() };
+    const svc = new SchedulerService(
+      pool as unknown as import('pg').Pool,
+      bus as never,
+      mockLogger() as never,
+      'America/Toronto',
+    );
+
+    const originator = {
+      contactId: 'ceo', systemRole: 'principal' as const, channel: 'email',
+      initiatedAt: '2026-06-23T00:00:00.000Z', tier: 'principal' as const,
+    };
+    await svc.enqueueTaskWake({
+      taskId: 'task-7', agentId: 'coordinator', runAt: new Date('2026-06-04T12:00:00Z'),
+      originator, derived: true,
+    });
+
+    const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+    // originator column is written...
+    expect(sql).toMatch(/originator/);
+    expect(params).toContain(JSON.stringify(originator));
+    // ...and the derived flag rides in the task_payload.standing envelope.
+    const payload = params.find(
+      (p): p is string => typeof p === 'string' && p.includes('task-wake'),
+    );
+    expect(payload).toBeDefined();
+    expect(JSON.parse(payload!)).toMatchObject({ type: 'task-wake', task_id: 'task-7', standing: { derived: true } });
+  });
+
+  it('defaults to null originator and derived=false when not supplied (conservative)', async () => {
+    const pool = { query: vi.fn().mockResolvedValue({ rows: [{ id: 'job-2' }] }) };
+    const bus = { publish: vi.fn(), subscribe: vi.fn() };
+    const svc = new SchedulerService(
+      pool as unknown as import('pg').Pool,
+      bus as never,
+      mockLogger() as never,
+      'America/Toronto',
+    );
+
+    await svc.enqueueTaskWake({ taskId: 'task-7', agentId: 'coordinator', runAt: new Date('2026-06-04T12:00:00Z') });
+
+    const [, params] = pool.query.mock.calls[0] as [string, unknown[]];
+    expect(params).toContain(null); // originator param is null
+    const payload = params.find(
+      (p): p is string => typeof p === 'string' && p.includes('task-wake'),
+    );
+    expect(JSON.parse(payload!)).toMatchObject({ standing: { derived: false } });
+  });
 });

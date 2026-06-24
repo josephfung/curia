@@ -21,10 +21,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Model-tier fallback resilience** — reroutes `NOT_FOUND` across fixed tier rules and emits a `model.fallback` audit event (spec 05, #813).
+- **Woken-task authorization — lineage + bypass ladder** — tasks now persist their `TaskOriginator` lineage (migration 065), threaded through the heartbeat wake path so a woken task fires with provenance instead of `metadata: undefined`. A score-keyed *bypass ladder* computes effective standing at skill-invocation time: the live autonomy score can only ever downgrade a woken/derived task's inherited standing to agent (propose-only), never grant it (same-task wake keeps lineage at score ≥70, derived child at ≥90; thresholds configurable under `autonomy.bypass_ladder`). Foundation for #1060; spec 14, spec 19. (#1125)
 
 ### Changed
 
 - **`ceo-inbox` batch triage** — drains the inbox in fixed-size, self-continuing batches keyed on read/archive status; replaces the >10-unread overflow mode and its `inbox-overflow` to-do noise. (#1123)
+- **Elevated-skill gate, autonomy principal-bypass, and handler `ctx.taskMetadata`** — all now consume *effective* (post-ladder) standing rather than raw lineage, so a heartbeat-woken task below its posture threshold no longer rides borrowed principal/system standing — including normal-sensitivity handler self-checks (`send-draft`, `contact-set-tier`) and lineage-forwarding skills (`delegate`, `scheduler-create`, `bullpen`). The gate's requirement is unchanged in this step (principal-or-system); only its input changed. A woken task whose autonomy score is momentarily unreadable now fails *closed* on non-read actions (live turns still fail open). (#1125)
 - **TypeScript test coverage** — `tests/**/*.ts` is now covered by typecheck (`tsconfig.tests.json`, third pass in the `typecheck` script); type drift between shared types and test fixtures is now caught by CI. (#1105)
 - **`web-browser` skill** — replaced the `playwright-extra` + stealth-plugin stack with Patchright and added a human-behavior layer (curved mouse, paced typing, post-load dwell + presence) plus one soft-block reload-retry, to reduce Cloudflare/DataDome-style blocking. (#1053)
 

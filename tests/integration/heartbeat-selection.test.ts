@@ -18,13 +18,17 @@ async function seedTask(
     sourceAgentId?: string | null;
     blockedBy?: string | null;
     updatedAt: Date;
+    /** Task source — drives the `derived` computation (source='agent' → derived). Default 'agent'. */
+    source?: 'ceo' | 'agent' | 'scheduler' | 'coordinator';
+    /** Lineage to stamp on tasks.originator (#1125). */
+    originator?: Record<string, unknown> | null;
   },
 ): Promise<string> {
   const { rows } = await pool.query(
     `INSERT INTO tasks
        (agent_id, title, intent_anchor, status, progress, error_budget, owner,
-        blocked_by_task_id, priority, source, source_agent_id, created_by, tags, updated_at)
-     VALUES ($1,$2,$3,$4,'{}'::jsonb,'{}'::jsonb,$5,$6,50,'agent',$7,'test','{}',$8)
+        blocked_by_task_id, priority, source, source_agent_id, created_by, tags, updated_at, originator)
+     VALUES ($1,$2,$3,$4,'{}'::jsonb,'{}'::jsonb,$5,$6,50,$9,$7,'test','{}',$8,$10::jsonb)
      RETURNING id`,
     [
       opts.sourceAgentId ?? 'coordinator',
@@ -35,6 +39,8 @@ async function seedTask(
       opts.blockedBy ?? null,
       opts.sourceAgentId ?? null,
       opts.updatedAt,
+      opts.source ?? 'agent',
+      opts.originator ? JSON.stringify(opts.originator) : null,
     ],
   );
   const [row] = rows as Array<{ id: string }>;
@@ -157,5 +163,37 @@ describeIf('selectHeartbeatCandidates', () => {
     await pool.query(`UPDATE tasks SET waiting_on_contact_id = $1 WHERE id = $2`, [contactId, id]);
     const got = await selectHeartbeatCandidates(pool, opts);
     expect(got.map((c) => c.id)).not.toContain(id);
+  });
+
+  // -- lineage + derived threading (#1125) --
+
+  it('returns the task lineage and marks an agent-sourced task as derived', async () => {
+    const lineage = { contactId: 'system', systemRole: 'system', channel: 'declarative', initiatedAt: '2026-06-23T00:00:00.000Z', tier: null };
+    const id = await seedTask(pool, {
+      status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10),
+      source: 'agent', originator: lineage,
+    });
+    const got = await selectHeartbeatCandidates(pool, opts);
+    const row = got.find((c) => c.id === id);
+    expect(row?.originator).toEqual(lineage);
+    expect(row?.derived).toBe(true); // source='agent' → derived
+  });
+
+  it('marks a coordinator-sourced task with no parent as NOT derived (same-task)', async () => {
+    const lineage = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: '2026-06-23T00:00:00.000Z', tier: 'principal' };
+    const id = await seedTask(pool, {
+      status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10),
+      source: 'coordinator', originator: lineage,
+    });
+    const got = await selectHeartbeatCandidates(pool, opts);
+    const row = got.find((c) => c.id === id);
+    expect(row?.originator).toEqual(lineage);
+    expect(row?.derived).toBe(false);
+  });
+
+  it('returns null lineage for a pre-065 / unstamped task', async () => {
+    const id = await seedTask(pool, { status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10), source: 'coordinator' });
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got.find((c) => c.id === id)?.originator).toBeNull();
   });
 });

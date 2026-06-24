@@ -652,6 +652,60 @@ describe('Scheduler', () => {
       const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
       expect(taskEvent.payload.metadata).toBeUndefined();
     });
+
+    it('stamps a wakeContext for a heartbeat wake (task-wake payload) so the ladder applies (#1125)', async () => {
+      const originator = { contactId: 'system', systemRole: 'system', channel: 'declarative', initiatedAt: '2026-06-23T00:00:00.000Z' };
+      const row = fakeDbRow({ originator, task_payload: { type: 'task-wake', task_id: 't9', standing: { derived: true } } });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.originator).toEqual(originator);
+      expect(taskEvent.payload.metadata?.wakeContext).toEqual({ derived: true });
+    });
+
+    it('stamps a wakeContext for a heartbeat wake even when the originator is null (pre-065 task)', async () => {
+      // A heartbeat wake of an unstamped task carries a `standing` envelope but no originator —
+      // it must still be marked woken so the execution layer applies the ladder / fail-closed path.
+      const row = fakeDbRow({ originator: null, task_payload: { type: 'task-wake', task_id: 't0', standing: { derived: false } } });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.wakeContext).toEqual({ derived: false });
+      expect(taskEvent.payload.metadata?.originator).toBeUndefined();
+    });
+
+    it('does NOT stamp a wakeContext for a wake_at job (task-wake payload but no standing envelope)', async () => {
+      // The CTE-created wake_at path writes { type: 'task-wake' } with no standing and no originator
+      // — intentionally out of scope for the ladder, so it must NOT be marked woken.
+      const row = fakeDbRow({ originator: null, task_payload: { type: 'task-wake', task_id: 't1' } });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata).toBeUndefined();
+    });
+
+    it('does NOT stamp a wakeContext for a non-wake (scheduler-create) job — it keeps originator at fire time', async () => {
+      const originator = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: '2026-06-23T00:00:00.000Z' };
+      // Default fakeDbRow task_payload is { skill: 'morning-brief' } — a specific scheduled action, not a heartbeat wake.
+      const row = fakeDbRow({ originator });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.originator).toEqual(originator);
+      expect(taskEvent.payload.metadata?.wakeContext).toBeUndefined();
+    });
   });
 
   // -- completion tracking --
