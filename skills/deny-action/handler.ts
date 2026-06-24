@@ -41,8 +41,9 @@ export class DenyActionHandler implements SkillHandler {
       // Publish human.decision audit event (best-effort).
       //
       // originator is stamped by the dispatcher on every task and carries the contactId
-      // and channel of whoever initiated the task chain. Must be present if we passed the
-      // principal-origin check above — if missing, that indicates a dispatch-layer bug.
+      // and channel of whoever initiated the task chain. For this elevated skill the
+      // execution-layer live-principal gate (#1126) already guaranteed a principal originator —
+      // if it is missing here, that indicates a dispatch-layer bug.
       // Log loudly but don't publish a fake audit row with placeholder IDs, as a
       // counterfeit audit trail is worse than a missing one. See ADR-017.
       const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;

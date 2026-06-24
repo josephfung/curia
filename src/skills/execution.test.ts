@@ -746,7 +746,27 @@ describe('autonomy gates', () => {
       const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(95) });
 
       const result = await layer.invoke('approve-grant-recommendation', {}, undefined, {
-        // principal LINEAGE on a wake — but no livePrincipal signal → not a live turn.
+        // principal LINEAGE on a wake — but no liveTurn signal → not a live turn.
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('live principal turn');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    // Defence in depth: even if the liveTurn flag somehow leaks onto a wake (it shouldn't — it is a
+    // distinct off-bag field the wake path never sets), the gate must still reject because the task
+    // carries wakeContext. This pins the self-approval-hole closure to the gate itself rather than to
+    // the dispatcher/scheduler behaving perfectly. (#1126)
+    it('elevated gate rejects a principal same-task wake even if liveTurn leaks in', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(elevatedManifest('approve-grant-recommendation'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(95) });
+
+      const result = await layer.invoke('approve-grant-recommendation', {}, undefined, {
+        liveTurn: true, // leaked — must NOT be enough to satisfy the gate on a wake
         taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
       });
 
@@ -1433,6 +1453,7 @@ describe('humanApproved on InvokeOptions', () => {
     });
 
     expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('live principal turn');
     expect(handler.execute).not.toHaveBeenCalled();
   });
 

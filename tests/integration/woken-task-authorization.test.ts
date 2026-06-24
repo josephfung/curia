@@ -124,7 +124,10 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
     const taskId = await seedReviewTask();
     const candidate = (await selectHeartbeatCandidates(pool, {
       eligibleAgents: ['contacts'], idleThresholdHours: 4, staleWaitThresholdHours: 48, maxWakes: 5,
-    })).find((c) => c.id === taskId)!;
+    })).find((c) => c.id === taskId);
+    // Guard the lookup explicitly (CodeAnt, #1156): a missing candidate means the seed/selection
+    // path regressed — fail with a clear message rather than a bare non-null-assertion crash.
+    if (!candidate) throw new Error(`heartbeat candidate not found for seeded task ${taskId}`);
     const { jobId } = await scheduler.enqueueTaskWake({
       taskId, agentId: candidate.agentId, runAt: new Date(),
       originator: candidate.originator, derived: candidate.derived,
@@ -133,6 +136,7 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
       `SELECT originator, task_payload FROM scheduled_jobs WHERE id = $1`,
       [jobId],
     );
+    expect(rows).toHaveLength(1); // guard before indexing (CodeAnt, #1156): no row → clear assertion failure
     const taskMetadata = metadataFromWakeRow(rows[0]!);
 
     const handler: SkillHandler = { execute: async () => ({ success: true, data: 'merged' }) };
@@ -157,7 +161,10 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
     const taskId = await seedReviewTask();
     const candidate = (await selectHeartbeatCandidates(pool, {
       eligibleAgents: ['contacts'], idleThresholdHours: 4, staleWaitThresholdHours: 48, maxWakes: 5,
-    })).find((c) => c.id === taskId)!;
+    })).find((c) => c.id === taskId);
+    // Guard the lookup explicitly (CodeAnt, #1156): a missing candidate means the seed/selection
+    // path regressed — fail with a clear message rather than a bare non-null-assertion crash.
+    if (!candidate) throw new Error(`heartbeat candidate not found for seeded task ${taskId}`);
     const { jobId } = await scheduler.enqueueTaskWake({
       taskId, agentId: candidate.agentId, runAt: new Date(),
       originator: candidate.originator, derived: candidate.derived,
@@ -166,6 +173,7 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
       `SELECT originator, task_payload FROM scheduled_jobs WHERE id = $1`,
       [jobId],
     );
+    expect(rows).toHaveLength(1); // guard before indexing (CodeAnt, #1156): no row → clear assertion failure
     const taskMetadata = metadataFromWakeRow(rows[0]!);
     const handler: SkillHandler = { execute: async () => ({ success: true, data: 'should not run' }) };
 

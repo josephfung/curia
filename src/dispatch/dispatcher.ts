@@ -39,7 +39,8 @@ function mergeTaskMetadata(
     ...(injectionMetadata ?? {}),
     ceoInitiated: undefined,          // strip legacy untrusted channel value (after all untrusted spreads)
     originator: undefined,            // strip untrusted channel value (after all untrusted spreads)
-    livePrincipal: undefined,         // defensive scrub — the real signal is the distinct payload field (#1126)
+    livePrincipal: undefined,         // defensive scrub — legacy alias; the real signal is the distinct payload field (#1126)
+    liveTurn: undefined,              // defensive scrub — keep the real signal OFF the metadata bag so it can never be persisted (#1126)
     ...(originatorMeta ?? {}),        // trusted stamp wins last
   };
 }

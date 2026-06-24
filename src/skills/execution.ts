@@ -597,7 +597,13 @@ export class ExecutionLayer {
     // for defence in depth. A live turn carries no wakeContext, so its effective standing equals
     // its raw lineage. See docs/wip/2026-06-22-woken-task-authorization-design.md §4, ADR-017.
     if (manifest.sensitivity === 'elevated') {
-      if (!isLivePrincipalTurn(options?.liveTurn, effectiveTaskMetadata)) {
+      // Defence in depth (#1126): a heartbeat-woken / scheduled task is NEVER a live principal turn.
+      // The live signal is a distinct off-bag field the wake path never sets, so a woken task should
+      // never carry `liveTurn` in the first place — but we reject on `wakeContext` explicitly so the
+      // self-approval-hole closure does not lean solely on the dispatcher/scheduler keeping `liveTurn`
+      // off a wake. If the flag ever leaks onto a wake, this still fails closed.
+      const isWokenTurn = (options?.taskMetadata as Record<string, unknown> | undefined)?.['wakeContext'] !== undefined;
+      if (isWokenTurn || !isLivePrincipalTurn(options?.liveTurn, effectiveTaskMetadata)) {
         this.logger.warn(
           {
             skillName,

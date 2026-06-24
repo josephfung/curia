@@ -313,7 +313,7 @@ send mechanism.
 
 ## Update (#1126): the approval loop gains its consequential actors, and `elevated` is sharpened
 
-#1126 makes this flow do more work. Consequential *mutations* that previously hid behind the
+PR #1126 makes this flow do more work. Consequential *mutations* that previously hid behind the
 overloaded `elevated` gate (`contact-merge`, `contact-update`, `contact-rename`,
 `behavioral-preferences-update`, `executive-profile-update`, `scheduler-create`/`-cancel`) moved
 to `normal` + `action_risk`, so a woken/autonomous attempt that lacks the score now **blocks →

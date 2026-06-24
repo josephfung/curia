@@ -168,11 +168,12 @@ describe('ExecutionLayer', () => {
 
   describe('elevated skill caller verification', () => {
     // #1126: the elevated-skill gate requires a LIVE PRINCIPAL TURN — the metadata must carry
-    // both the dispatcher-stamped `livePrincipal` signal AND a principal originator. The immediate
-    // caller.role is not consulted. System/agent lineage and woken principal-lineage all fail.
+    // a principal originator, and the invoke options must carry the dispatcher-stamped `liveTurn`
+    // signal (a distinct off-bag field). The immediate caller.role is not consulted. System/agent
+    // lineage and woken principal-lineage all fail.
     // See docs/wip/2026-06-22-woken-task-authorization-design.md §4, ADR-017.
 
-    it('allows elevated skill on a live principal turn (livePrincipal + principal originator)', async () => {
+    it('allows elevated skill on a live principal turn (liveTurn + principal originator)', async () => {
       const handler: SkillHandler = {
         execute: async () => ({ success: true, data: 'ok' }),
       };
