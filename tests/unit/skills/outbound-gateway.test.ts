@@ -357,7 +357,107 @@ describe('OutboundGateway', () => {
       expect(result.success).toBe(false);
       // The original blocked message must not be sent via nylasClient. The CEO
       // notification now routes through the bus as outbound.notification (#206).
-      expect(result.blockedReason).toBe('Content blocked by filter');
+      // The blocked result now carries the principal-safe reason summary and the
+      // rule name(s) so the agent's tool loop can self-correct and retry (#1051).
+      // For a Stage-1 deterministic rule, the summary is the rule name only.
+      expect(result.blockedReason).toBe('secret-pattern');
+      expect(result.blockedRules).toEqual(['secret-pattern']);
+    });
+
+    it('returns the judge\'s abstract reason and rule name so the agent can self-correct (LLM-judge block)', async () => {
+      // #1051: when a Stage-2 LLM judge blocks the send, the skill result must
+      // carry the judge's abstract reason (safe to surface — it never quotes the
+      // offending value) plus the rule name, giving the agent's tool loop enough
+      // signal to rewrite the message and retry organically.
+      const judgeReason = 'internal fallback reasoning leaked into the reply body';
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'llm-judge-audience-leak', detail: judgeReason }],
+        stage: 'llm',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+
+      const result = await gateway.send(baseRequest);
+
+      expect(result.success).toBe(false);
+      // The judge's reason IS surfaced — it's what lets the agent address the root cause.
+      expect(result.blockedReason).toContain(judgeReason);
+      expect(result.blockedReason).toContain('llm-judge-audience-leak');
+      expect(result.blockedRules).toEqual(['llm-judge-audience-leak']);
+    });
+
+    it('never leaks a Stage-1 deterministic finding\'s detail into the blocked result', async () => {
+      // #1051 safety contract: the blocked result is LLM-facing, so it must obey
+      // the same per-rule policy as the CEO notification — a deterministic rule's
+      // detail can embed the matched secret, so only its rule NAME may appear.
+      const secretFragment = 'sk-ant-zzzzzzzzzzzzzzzzzzzz0987654321ZZ';
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'secret-pattern', detail: `API key: ${secretFragment}` }],
+        stage: 'deterministic',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+
+      const result = await gateway.send(baseRequest);
+
+      expect(result.success).toBe(false);
+      // The matched secret must never reach the LLM-facing result...
+      expect(result.blockedReason).not.toContain(secretFragment);
+      // ...but the rule name is safe and tells the agent which class of rule fired.
+      expect(result.blockedReason).toBe('secret-pattern');
+      expect(result.blockedRules).toEqual(['secret-pattern']);
+    });
+
+    it('with mixed findings, surfaces only the judge detail but all rule names (#1051 safety contract)', async () => {
+      // When a send trips both a Stage-1 deterministic rule (whose detail embeds a
+      // secret) and a Stage-2 judge rule (whose detail is abstract), the LLM-facing
+      // reason must surface ONLY the judge's detail — the secret stays hidden — while
+      // blockedRules lists every rule so the agent knows the full set it tripped.
+      const secretFragment = 'sk-ant-yyyyyyyyyyyyyyyyyyyy1122334455YY';
+      const judgeReason = 'reply mixes confidential and external content';
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [
+          { rule: 'secret-pattern', detail: `API key: ${secretFragment}` },
+          { rule: 'llm-judge-audience-leak', detail: judgeReason },
+        ],
+        stage: 'llm',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+
+      const result = await gateway.send(baseRequest);
+
+      expect(result.success).toBe(false);
+      // The Stage-1 secret must never appear, even alongside a judge finding.
+      expect(result.blockedReason).not.toContain(secretFragment);
+      // The judge's abstract reason is surfaced.
+      expect(result.blockedReason).toContain(judgeReason);
+      // Both rule names land in the structured rules list, order preserved.
+      expect(result.blockedRules).toEqual(['secret-pattern', 'llm-judge-audience-leak']);
     });
 
     it('publishes outbound.blocked event to the bus when filter rejects', async () => {
@@ -1918,7 +2018,9 @@ describe('humanApproved option on send()', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.blockedReason).toBe('Content blocked by filter');
+    // The blocked result now surfaces the rule name as the reason (#1051).
+    expect(result.blockedReason).toBe('test-rule');
+    expect(result.blockedRules).toEqual(['test-rule']);
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 });
@@ -2377,7 +2479,9 @@ describe('isSystemNotification option on send()', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.blockedReason).toBe('Content blocked by filter');
+    // The blocked result now surfaces the rule name as the reason (#1051).
+    expect(result.blockedReason).toBe('test-rule');
+    expect(result.blockedRules).toEqual(['test-rule']);
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 });
@@ -2613,7 +2717,9 @@ describe('CEO recipient bypass on send()', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.blockedReason).toBe('Content blocked by filter');
+    // The blocked result now surfaces the rule name as the reason (#1051).
+    expect(result.blockedReason).toBe('test-rule');
+    expect(result.blockedRules).toEqual(['test-rule']);
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 

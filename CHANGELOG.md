@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`outbound-gateway`** — a content-filter block now returns the principal-safe reason summary and the triggering rule name(s) in the skill result instead of a generic string, so the agent's tool loop can self-correct and retry; the CEO alert softens to an FYI. (#1051)
 - **`approveGrantRecommendation` / `declineGrantRecommendation`** — concurrent calls on the same pending recommendation no longer produce an auth-state contradiction; both operations now run inside a single transaction so approve's permission override and status transition are atomic. (#1068)
 - **`ceo-nylas-client`** — 429 responses retry with exponential backoff (up to 3 attempts), honoring `Retry-After`; exhaustion throws a typed `NylasApiError(429)` that cannot be misread as an auth failure. (#1058)
 - **`ceo-nylas-client` list endpoints** — `limit` is always sent and capped at ≤ 20; previously an unspecified limit caused Nylas to default to 50, exceeding the safety cap. (#1058)
