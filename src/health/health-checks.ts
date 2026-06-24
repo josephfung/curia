@@ -28,8 +28,12 @@ export interface SignalRpcClientHealth {
 }
 
 export interface BrowserServiceHealth {
-  /** The persistent browser context, or null when the service is stopped. */
-  browserContext: { isConnected(): boolean } | null;
+  /**
+   * The persistent browser context, or null when the service is stopped.
+   * Playwright's BrowserContext does not have isConnected() — that method is on Browser.
+   * Liveness is probed via context.browser()?.isConnected() in checkBrowser().
+   */
+  browserContext: { browser(): { isConnected(): boolean } | null } | null;
 }
 
 export interface McpSessionHealth {
@@ -144,7 +148,12 @@ export async function checkSignal(
 export function checkBrowser(service: BrowserServiceHealth | undefined): CheckResult {
   if (!service) return 'skipped';
   if (!service.browserContext) return 'fail';
-  return service.browserContext.isConnected() ? 'ok' : 'fail';
+  // isConnected() is on Browser, not BrowserContext. Reach the Browser via
+  // context.browser() — returns null for persistent contexts launched with
+  // launchPersistentContext, which means connected (the browser IS the context).
+  const browser = service.browserContext.browser();
+  if (browser === null) return 'ok'; // persistent context: no separate Browser object
+  return browser.isConnected() ? 'ok' : 'fail';
 }
 
 /**
