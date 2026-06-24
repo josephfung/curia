@@ -374,7 +374,18 @@
         "canary_schedule": { "type": "string", "minLength": 1 },
         "heartbeats": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": false,
+          "properties": {
+            "llm_fast":         { "type": "string" },
+            "llm_standard":     { "type": "string" },
+            "llm_powerful":     { "type": "string" },
+            "embeddings":       { "type": "string" },
+            "image_gen":        { "type": "string" },
+            "nylas":            { "type": "string" },
+            "signal":           { "type": "string" },
+            "google_workspace": { "type": "string" },
+            "tavily":           { "type": "string" }
+          }
         }
       }
     }

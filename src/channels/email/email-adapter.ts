@@ -174,7 +174,7 @@ export class EmailAdapter implements Channel {
    * health probe. Null means no successful poll since start() was last called.
    */
   get lastSuccessfulPollAt(): Date | null {
-    return this._lastSuccessfulPollAt != null ? new Date(this._lastSuccessfulPollAt) : null;
+    return this._lastSuccessfulPollAt !== null ? new Date(this._lastSuccessfulPollAt) : null;
   }
 
   /** Polling interval in ms — used by the health probe to compute the stall threshold. */

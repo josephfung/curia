@@ -196,6 +196,10 @@ export class BrowserService {
         this.attachDisconnectedHandler(ctx);
       }).catch(err => {
         this.logger.error({ err }, 'Browser restart failed');
+        // Clear the stale crashed context so checkBrowser() returns 'fail' during
+        // crash recovery. Without this, browserContext remains the dead reference
+        // and the health check would falsely report 'ok'.
+        this.context = null;
       });
     });
   }

@@ -1440,6 +1440,21 @@ export class AgentRuntime {
             { agentId, err, fallbackModel: this.config.fallbackModel },
             'Fallback provider threw an unexpected exception',
           );
+          // Publish llm.error so HealthService tracks this fallback tier failure.
+          // Fire-and-forget like publishLlmErrorEvent — telemetry must not abort the task.
+          try {
+            const event = createLlmError({
+              agentId,
+              conversationId: taskEvent.payload.conversationId,
+              requestedModel: this.config.fallbackModel ?? 'unknown',
+              provider: this.config.fallbackProvider.id,
+              errorType: thrownErr.type,
+              parentEventId: taskEvent.id,
+            });
+            await bus.publish('agent', event);
+          } catch (telemetryErr) {
+            logger.error({ err: telemetryErr, agentId }, 'Failed to publish llm.error for fallback exception');
+          }
           await this.publishAgentError(thrownErr, taskEvent);
           await this.sendErrorResponse(taskEvent);
           return null;

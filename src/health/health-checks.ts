@@ -80,9 +80,9 @@ export async function checkDb(pool: Pool, logger: Logger): Promise<CheckResult> 
  * non-null in a healthy process).
  */
 export function checkBus(bus: EventBus): CheckResult {
-  // Null guard first — if bus is null (e.g. fallback HealthService in tests),
+  // Null guard first — if bus is null/undefined (e.g. fallback HealthService in tests),
   // dereferencing it below would throw a TypeError before we can return 'fail'.
-  if (bus == null) return 'fail';
+  if (bus === null || bus === undefined) return 'fail';
   // Try the duck-typed listenerCount path first (test mocks and possible future
   // EventBus refactors that expose it). If absent, a non-null bus is our signal.
   const lc = (bus as unknown as { listenerCount?: (event: string) => number }).listenerCount;

@@ -310,6 +310,7 @@ export class HttpAdapter implements Channel {
     // Register routes — message routes receive the eventRouter, not raw bus
     await this.app.register(healthRoutes, {
       healthService: this.config.healthService ?? createFallbackHealthService(pool, logger),
+      logger,
     });
     await this.app.register(agentRoutes, { agentRegistry });
     await this.app.register(messageRoutes, { bus, logger, eventRouter: this.eventRouter });

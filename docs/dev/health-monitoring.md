@@ -74,13 +74,13 @@ The heartbeat key identifies the capability tier, not the vendor. If you remap `
 
 | Key | Probe | Skipped when |
 |---|---|---|
-| `llm_fast/standard/powerful` | Last recorded call outcome for that tier (no billed probe call) | Provider key for the tier's resolved model is missing |
+| `llm_fast/standard/powerful` | Last recorded call outcome for that tier (no billed probe call) | No model configured for that tier in `modelRoutingConfig.tiers` |
 | `embeddings` | Last recorded embedding call outcome | No `OPENAI_API_KEY` |
 | `image_gen` | Last `image-generate` skill outcome | No `OPENAI_API_KEY` |
-| `nylas` | `listMessages(limit=1)` for each configured grant | Email not configured |
+| `nylas` | `listMessages(limit=1)` via the injected Nylas client | Email not configured (no `NylasClient` provided) |
 | `signal` | Signal-cli socket ping | Signal not configured |
 | `google_workspace` | Credential file readable + refresh token not expired | MCP server not registered |
-| `tavily` | `tavily_api_key` present in config | Key not set |
+| `tavily` | `TAVILY_API_KEY` present in environment | Key not injected into `HealthService` (not yet wired from vault; always skipped in current build) |
 
 ### LLM canaries make no billed calls
 

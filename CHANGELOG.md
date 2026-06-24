@@ -21,10 +21,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Health observability**: `GET /api/health` now returns a three-state `ok / degraded / down` response with per-check status for db, bus, signal, email, browser, MCP (google_workspace), and scheduler. `down` (503) only fires when db or bus is unreachable; non-critical failures surface as `degraded` (200). (#434)
-- **Daily canary job**: a scheduler job (default 06:00) validates credentials and external dependencies (LLM tiers, embeddings, image-gen, Nylas, Signal, Google Workspace, Tavily), pings configured heartbeat URLs on success. (#434)
-- **LLM error telemetry**: `TelemetryLlmProvider` and `AgentRuntime` now publish `llm.error` bus events on failed calls, enabling the health layer to track per-tier outcomes without making billed probe calls. (#434)
-- **Embedding error telemetry**: `EmbeddingService` now publishes `embedding.error` bus events on OpenAI backend failures. (#434)
+- **Health observability** — `GET /api/health` returns `ok` / `degraded` / `down` with per-check status for seven services; `down` (503) only when db or bus fails. (#434)
+- **Daily canary job** — scheduler job validates LLM tiers, credentials, and external deps on a cron schedule; pings configured heartbeat URLs on success. (#434)
+- **LLM error telemetry** — `llm.error` bus events on failed provider calls let the health layer track per-tier outcomes without billed probes. (#434)
+- **Embedding error telemetry** — `embedding.error` bus events on OpenAI backend failures feed the health layer's embedding canary. (#434)
 - **Model-tier fallback resilience**: reroutes `NOT_FOUND` across fixed tier rules and emits a `model.fallback` audit event (spec 05, #813).
 - **Woken-task authorization: lineage + bypass ladder**: tasks now persist their `TaskOriginator` lineage (migration 065), threaded through the heartbeat wake path so a woken task fires with provenance instead of `metadata: undefined`. A score-keyed *bypass ladder* computes effective standing at skill-invocation time: the live autonomy score can only ever downgrade a woken/derived task's inherited standing to agent (propose-only), never grant it (same-task wake keeps lineage at score ≥70, derived child at ≥90; thresholds configurable under `autonomy.bypass_ladder`). Foundation for #1060; spec 14, spec 19. (#1125)
 

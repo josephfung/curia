@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { HealthService } from '../../../src/health/health-service.js';
 import { DEFAULT_HEALTH_CONFIG } from '../../../src/config.js';
 
@@ -66,12 +66,28 @@ describe('HealthService.getStatus()', () => {
 });
 
 describe('HealthService LLM outcome tracking', () => {
-  it('records llm.call events as tier success', () => {
-    const svc = new HealthService(makeDeps() as never);
-    // Simulate bus event subscription firing
-    const subscribeCalls = (makeDeps().bus.subscribe as ReturnType<typeof vi.fn>).mock.calls;
-    // start() must be called to subscribe; test via tracker directly
-    const tracker = (svc as unknown as { tracker: { getOutcome: (k: string) => { lastSuccessAt: Date | null } } }).tracker;
-    expect(tracker).toBeDefined();
+  it('records a successful llm.call event for the matching tier after start()', async () => {
+    const deps = makeDeps();
+    const svc = new HealthService(deps as never);
+    await svc.start();
+
+    // Retrieve the llm.call subscriber that start() registered on the mock bus.
+    const subscribeMock = deps.bus.subscribe as ReturnType<typeof vi.fn>;
+    const llmCallArgs = subscribeMock.mock.calls.find((args: unknown[]) => args[0] === 'llm.call');
+    expect(llmCallArgs).toBeDefined();
+    const handler = llmCallArgs![2] as (event: unknown) => void;
+
+    // Fire a synthetic llm.call event for the 'fast' tier model (claude-haiku-4-5).
+    // The model string must match modelRoutingConfig.tiers.fast.model for the tier
+    // reverse-map lookup in HealthService to succeed.
+    handler({ payload: { requestedModel: 'claude-haiku-4-5' } });
+
+    // The LlmOutcomeTracker should now record a success — no billed probe calls.
+    const tracker = (svc as unknown as {
+      tracker: { getOutcome: (key: string) => { lastSuccessAt: Date | null; lastErrorAt: Date | null } }
+    }).tracker;
+    const outcome = tracker.getOutcome('fast');
+    expect(outcome.lastSuccessAt).not.toBeNull();
+    expect(outcome.lastErrorAt).toBeNull();
   });
 });

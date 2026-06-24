@@ -154,6 +154,15 @@ class OpenAIBackend implements EmbeddingBackend {
         { expected: EMBEDDING_DIMENSIONS, actual: embedding?.length },
         'OpenAI embedding dimension mismatch',
       );
+      // Publish embedding.error so HealthService counts malformed responses as failures.
+      if (this.bus) {
+        this.bus.publish('system', createEmbeddingError({
+          model: 'text-embedding-3-small',
+          errorType: 'PARSE_ERROR',
+        })).catch((publishErr: unknown) => {
+          this.logger.warn({ publishErr }, 'Failed to publish embedding.error event');
+        });
+      }
       throw new Error(`Unexpected embedding dimensions: ${embedding?.length}`);
     }
     // Telemetry — fire-and-forget; must not block or break the caller.
