@@ -44,6 +44,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [020](020-secrets-vault.md) | Application-layer AES-256-GCM secrets vault in PostgreSQL — structural typing, per-invocation pre-warm cache, env-var fallback for incremental migration | Accepted |
 | [021](021-vault-only-secret-resolution.md) | Vault-only secret resolution — remove the env fallback; only the four vault-bootstrap values stay in `.env`, everything else seeds via `seed-vault` | Accepted |
 | [022](022-skill-agent-registry.md) | DB-gated skill/agent registry — install/enable lifecycle with startup reconciliation and restart-based enforcement | Accepted |
+| [023](023-bullpen-consult-and-resume.md) | Async bullpen consult-and-resume convention — tap/park/resume over existing bullpen primitives, no new event types | Accepted |
 
 ## Adding new ADRs
 
