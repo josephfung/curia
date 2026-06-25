@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`calendar-holds-sweep`** — new maintenance skill that deletes stale curia-hold events (slot already past, or created-at older than `maxAgeDays`, default 7). Per-event and per-calendar try/catch ensures one failure never aborts the sweep. Intended for daily scheduled invocation. (#1137)
+
 ### Security
 
 - **Setup wizard email ReDoS** — added a 254-char length cap before `EMAIL_RE.test()` in the principal profile route, preventing quadratic backtracking on crafted inputs (CodeQL #185).
