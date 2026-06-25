@@ -45,6 +45,11 @@ export class CalendarFindFreeTimeHandler implements SkillHandler {
       const allBusy: Array<{ start: number; end: number }> = [];
       for (const result of freeBusyResults) {
         for (const slot of result.timeSlots) {
+          // A free/busy slot blocks the window unless it is explicitly `free`. Tentative
+          // holds (busy=true, status=tentative) and any non-free status still block,
+          // which prevents re-offering a held slot. Only `free` is non-blocking (overlap
+          // with free events is allowed). See #1137.
+          if (slot.status === 'free') continue;
           allBusy.push({ start: slot.startTime, end: slot.endTime });
         }
       }

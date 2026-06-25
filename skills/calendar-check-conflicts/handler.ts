@@ -57,6 +57,8 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         }
 
         for (const slot of result.timeSlots) {
+          // Free events do not conflict; only non-free (busy/tentative) slots are conflicts. See #1137.
+          if (slot.status === 'free') continue;
           // Check overlap: busy slot overlaps the proposed range
           if (slot.startTime < proposedEndTs && slot.endTime > proposedStartTs) {
             const startTime = toLocalIso(slot.startTime, tz);
