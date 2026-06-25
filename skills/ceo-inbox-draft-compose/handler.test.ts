@@ -194,7 +194,7 @@ describe('CeoInboxDraftComposeHandler', () => {
     expect((result as { error: string }).error).toBeTruthy();
   });
 
-  it('Case 9: Body converted from markdown to HTML', async () => {
+  it('Case 9: Body converted from markdown to HTML with clickable links', async () => {
     mockFetch.mockResolvedValue(
       new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 }),
     );
@@ -202,7 +202,7 @@ describe('CeoInboxDraftComposeHandler', () => {
     const ctx = buildCtx({
       to: ['alice@example.com'],
       subject: 'Hello',
-      body: '**Bold text** and _italic_',
+      body: '**Bold text** and [profile](https://example.com/profile)',
     });
     await handler.execute(ctx);
 
@@ -210,6 +210,8 @@ describe('CeoInboxDraftComposeHandler', () => {
     const body = JSON.parse((init as RequestInit).body as string);
     // markdownToHtml should produce HTML tags from the markdown input
     expect(body.body).toContain('<strong>Bold text</strong>');
+    expect(body.body).toContain('<a href="https://example.com/profile"');
+    expect(body.body).toContain('>profile</a>');
   });
 
   it('Case 10: No CC field in payload when cc is empty', async () => {

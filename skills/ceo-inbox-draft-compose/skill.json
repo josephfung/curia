@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-draft-compose",
   "description": "Compose a brand-new draft email in the CEO's personal inbox for cold outreach (no existing thread). The draft is saved to Gmail Drafts — the CEO reviews and sends it from their email client. Use when the CEO wants to initiate a new email to someone, not reply to an existing message. Intended for use by the ceo-inbox agent — accesses the CEO's personal email via dedicated secrets, do not call from other agents.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

@@ -34,7 +34,7 @@ import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import { generateShortRef } from '../autonomy/approval-trigger.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
-import { markdownToHtml } from '../channels/email/markdown-to-html.js';
+import { markdownToHtml } from '../format/markdown-to-html.js';
 import { scrubPii } from '../pii/scrubber.js';
 
 // ---------------------------------------------------------------------------
@@ -54,9 +54,9 @@ export interface EmailSendRequest {
   cc?: string[];
   /** When set, Nylas threads the outbound message as a reply */
   replyToMessageId?: string;
-  /** Pre-formed HTML fragment appended verbatim after markdownToHtml(body).
-   *  Used for the quoted original message block: the HTML quote must not pass
-   *  through markdownToHtml because that converter escapes < and > characters. */
+  /** Pre-formed HTML fragment appended verbatim after markdownToHtml(body, { wrap: true }).
+   *  Used for the quoted original message block: the quote is already sanitized
+   *  HTML and must remain outside the generated-body wrapper. */
   htmlQuote?: string;
   /** File attachments to include. Each entry must have a file:// URL pointing
    *  to a temp file (from email-download-attachment or similar). The gateway
@@ -1831,7 +1831,7 @@ export class OutboundGateway {
     }
 
     // htmlQuote is appended after conversion so it is not re-escaped by markdownToHtml.
-    const htmlBody = markdownToHtml(request.body) + (request.htmlQuote ?? '');
+    const htmlBody = markdownToHtml(request.body, { wrap: true }) + (request.htmlQuote ?? '');
 
     let attachments: AttachmentContent[] | undefined;
     if (request.attachments && request.attachments.length > 0) {
@@ -1885,7 +1885,7 @@ export class OutboundGateway {
     // Called outside the Nylas try-catch so that any future regression in the
     // converter is not silently misattributed as "Nylas send failed" in logs.
     // htmlQuote is appended after conversion so it is not re-escaped by markdownToHtml.
-    const htmlBody = markdownToHtml(request.body) + (request.htmlQuote ?? '');
+    const htmlBody = markdownToHtml(request.body, { wrap: true }) + (request.htmlQuote ?? '');
 
     let attachments: AttachmentContent[] | undefined;
     if (request.attachments && request.attachments.length > 0) {

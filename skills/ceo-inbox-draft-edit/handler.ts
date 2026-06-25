@@ -1,6 +1,6 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { CeoNylasClient, type NylasParticipant, type UpdateDraftOptions } from '../_shared/ceo-nylas-client.js';
-import { markdownToHtml, looksLikeHtml } from '../../src/channels/email/markdown-to-html.js';
+import { markdownToHtml } from '../../src/format/markdown-to-html.js';
 
 const MAX_BODY_LENGTH = 50_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -128,14 +128,8 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
       if (body.length > MAX_BODY_LENGTH) {
         return { success: false, error: `body must be ${MAX_BODY_LENGTH} characters or fewer` };
       }
-      // Guard: if the LLM wrote HTML directly, pass it through unchanged — running HTML
-      // through markdownToHtml() would escape the tags, making them visible as literal text.
       try {
-        const isHtml = looksLikeHtml(body);
-        if (isHtml) {
-          ctx.log.debug({ bodyLength: body.length, draftId }, 'ceo-inbox-draft-edit: LLM wrote HTML body — passing through unchanged');
-        }
-        updates.body = isHtml ? body : markdownToHtml(body);
+        updates.body = markdownToHtml(body, { wrap: true });
       } catch (err) {
         ctx.log.error({ err, draftId }, 'ceo-inbox-draft-edit: failed to convert body to HTML');
         return { success: false, error: 'Failed to convert email body to HTML' };

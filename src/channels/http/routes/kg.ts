@@ -10,7 +10,7 @@ import type { ChannelIdentity, Contact, ContactCanonicalFields, ContactKind, Con
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { resolveConsoleOriginator } from '../console-originator.js';
-import { markdownToHtml } from '../../../utils/markdown-to-html.js';
+import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
 
 export interface KnowledgeGraphRouteOptions {
