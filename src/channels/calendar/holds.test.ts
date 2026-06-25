@@ -7,7 +7,11 @@ import { describe, it, expect } from 'vitest';
 import {
   CURIA_HOLD_KEY,
   buildHoldMetadata,
+  findMatchingHolds,
   isHoldEvent,
+  matchHoldCandidate,
+  normalizeContactDomain,
+  normalizeSchedulingSubject,
   eventsOverlap,
   isHoldStale,
 } from './holds.js';
@@ -47,6 +51,89 @@ describe('buildHoldMetadata', () => {
       sourceRef: 'task-7',
     });
     expect(Object.keys(meta).sort()).toEqual(['created-at', 'curia-hold', 'source-ref']);
+  });
+
+  it('includes optional subject and contact-domain metadata for later invite matching', () => {
+    const meta = buildHoldMetadata({
+      createdAtIso: '2026-06-24T12:00:00.000Z',
+      subject: 'Quick sync — Xiaopu / Joseph',
+      contactDomain: 'assistant@xiaopu.ca',
+      contactId: 'contact-1',
+      threadRef: 'thread-1',
+    });
+
+    expect(meta.subject).toBe('Quick sync — Xiaopu / Joseph');
+    expect(meta['contact-domain']).toBe('xiaopu.ca');
+    expect(meta['contact-id']).toBe('contact-1');
+    expect(meta['thread-ref']).toBe('thread-1');
+  });
+});
+
+describe('hold invite matching helpers', () => {
+  const hold = {
+    id: 'hold-1',
+    title: 'HOLD (TBC): Catch-up with Xiaopu',
+    startTime: 1_780_000_000,
+    endTime: 1_780_003_600,
+    metadata: buildHoldMetadata({
+      createdAtIso: '2026-06-24T12:00:00.000Z',
+      subject: 'Catch-up with Xiaopu',
+      contactDomain: 'xiaopu.ca',
+      sourceRef: 'msg-1',
+    }),
+  };
+
+  it('normalizes reply prefixes and HOLD titles out of scheduling subjects', () => {
+    expect(normalizeSchedulingSubject('Re: HOLD (TBC): Quick sync — Xiaopu / Joseph')).toBe('quick sync xiaopu joseph');
+  });
+
+  it('normalizes email addresses to organization domains', () => {
+    expect(normalizeContactDomain('assistant@xiaopu.ca')).toBe('xiaopu.ca');
+  });
+
+  it('matches a hold by organization domain plus similar subject, not exact sender email', () => {
+    const match = matchHoldCandidate(hold, {
+      subject: 'Quick catch up with Xiaopu',
+      contactDomain: 'scheduler@xiaopu.ca',
+      startTime: 1_780_000_000,
+      endTime: 1_780_003_600,
+    });
+
+    expect(match).not.toBeNull();
+    expect(match!.score).toBeGreaterThanOrEqual(75);
+    expect(match!.reasons).toContain('contact-domain');
+  });
+
+  it('does not match a same-subject hold from a different organization domain', () => {
+    const match = matchHoldCandidate(hold, {
+      subject: 'Catch-up with Xiaopu',
+      contactDomain: 'other.example',
+      startTime: 1_780_000_000,
+      endTime: 1_780_003_600,
+    });
+
+    expect(match).toBeNull();
+  });
+
+  it('returns all associated holds sorted by score', () => {
+    const secondHold = {
+      ...hold,
+      id: 'hold-2',
+      startTime: 1_780_086_400,
+      endTime: 1_780_090_000,
+      metadata: buildHoldMetadata({
+        createdAtIso: '2026-06-24T12:00:00.000Z',
+        subject: 'Catch-up with Xiaopu',
+        contactDomain: 'xiaopu.ca',
+      }),
+    };
+
+    const matches = findMatchingHolds([secondHold, hold], {
+      subject: 'Catch-up with Xiaopu',
+      contactDomain: 'xiaopu.ca',
+    });
+
+    expect(matches.map((match) => match.hold.id)).toEqual(['hold-2', 'hold-1']);
   });
 });
 

@@ -5,6 +5,7 @@
 // - Image: InfraLlm vision (passes base64 image blocks)
 // - PDF: pdf-parse text extraction, then optional LLM structuring
 // - HTML: tag stripping, then optional LLM structuring
+// - ICS: deterministic calendar invite field extraction
 //
 // All LLM calls go through the constrained InfraLlm service (classify + extract
 // only) so costs and latency are tracked by the telemetry infrastructure.
@@ -25,7 +26,7 @@ import { parseCsv } from './csv.js';
 import { getExtractionPrompt, type ExtractAs } from './prompts.js';
 
 // MIME types we support, mapped to our internal content categories.
-const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html'> = {
+const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html' | 'ics'> = {
   'text/csv': 'csv',
   'application/pdf': 'pdf',
   'image/jpeg': 'image',
@@ -34,6 +35,9 @@ const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html'> = {
   'image/webp': 'image',
   'image/gif': 'image',
   'text/html': 'html',
+  'text/calendar': 'ics',
+  'application/ics': 'ics',
+  'text/x-vcalendar': 'ics',
 };
 
 // extract_as is open-ended: 'receipt', 'bank_statement', 'invoice' have tailored prompts;
@@ -54,7 +58,7 @@ export class FileParseHandler implements SkillHandler {
     const tempFileUrl = typeof ctx.input.temp_file_url === 'string'
       ? ctx.input.temp_file_url.trim() : '';
     const mimeType = typeof ctx.input.mime_type === 'string'
-      ? ctx.input.mime_type.trim().toLowerCase() : '';
+      ? ctx.input.mime_type.trim().toLowerCase().split(';')[0]!.trim() : '';
     const extractAs = typeof ctx.input.extract_as === 'string'
       ? ctx.input.extract_as.trim().toLowerCase() as ExtractAs : 'raw';
 
@@ -117,6 +121,8 @@ export class FileParseHandler implements SkillHandler {
           return await this.handlePdf(ctx, infraLlm, buffer, extractAs);
         case 'html':
           return await this.handleHtml(ctx, infraLlm, buffer, extractAs);
+        case 'ics':
+          return this.handleIcs(buffer, extractAs);
       }
     } catch (err) {
       ctx.log.error({ err, mimeType }, 'file-parse: unexpected error');
@@ -135,6 +141,22 @@ export class FileParseHandler implements SkillHandler {
         type: 'csv',
         raw_text: text,
         structured: rows,
+        confidence: 1.0,
+      },
+    };
+  }
+
+  // --- ICS: deterministic calendar invite parsing ---
+
+  private handleIcs(buffer: Buffer, extractAs: ExtractAs): SkillResult {
+    const text = buffer.toString('utf-8');
+    const structured = extractAs === 'raw' ? null : parseIcsInvite(text);
+    return {
+      success: true,
+      data: {
+        type: 'calendar_invite',
+        raw_text: text,
+        structured,
         confidence: 1.0,
       },
     };
@@ -397,6 +419,123 @@ export class FileParseHandler implements SkillHandler {
 
     return realPath;
   }
+}
+
+interface IcsProperty {
+  name: string;
+  params: Record<string, string>;
+  value: string;
+}
+
+function parseIcsInvite(text: string): Record<string, unknown> {
+  const properties = unfoldIcsLines(text).map(parseIcsProperty).filter((prop): prop is IcsProperty => prop !== null);
+  const method = firstValue(properties, 'METHOD');
+  const eventProperties = firstEventProperties(properties);
+  const uid = firstValue(eventProperties, 'UID');
+  const summary = firstValue(eventProperties, 'SUMMARY');
+  const status = firstValue(eventProperties, 'STATUS');
+  const sequence = firstValue(eventProperties, 'SEQUENCE');
+  const startProp = firstProperty(eventProperties, 'DTSTART');
+  const endProp = firstProperty(eventProperties, 'DTEND');
+  const organizerProp = firstProperty(eventProperties, 'ORGANIZER');
+  const attendees = eventProperties
+    .filter((prop) => prop.name === 'ATTENDEE')
+    .map((prop) => ({
+      email: mailtoValue(prop.value),
+      name: prop.params.CN ?? null,
+      participationStatus: prop.params.PARTSTAT ?? null,
+      role: prop.params.ROLE ?? null,
+    }));
+
+  return {
+    method: method ?? null,
+    uid: uid ?? null,
+    summary: summary ?? null,
+    status: status ?? null,
+    sequence: sequence ?? null,
+    start: startProp ? parseIcsDate(startProp.value) : null,
+    end: endProp ? parseIcsDate(endProp.value) : null,
+    startTimezone: startProp?.params.TZID ?? null,
+    endTimezone: endProp?.params.TZID ?? null,
+    organizer: organizerProp
+      ? {
+          email: mailtoValue(organizerProp.value),
+          name: organizerProp.params.CN ?? null,
+        }
+      : null,
+    attendees,
+  };
+}
+
+function unfoldIcsLines(text: string): string[] {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const unfolded: string[] = [];
+  for (const line of lines) {
+    if ((line.startsWith(' ') || line.startsWith('\t')) && unfolded.length > 0) {
+      const previous = unfolded[unfolded.length - 1]!;
+      unfolded[unfolded.length - 1] = previous + line.slice(1);
+    } else if (line.trim()) {
+      unfolded.push(line);
+    }
+  }
+  return unfolded;
+}
+
+function parseIcsProperty(line: string): IcsProperty | null {
+  const colon = line.indexOf(':');
+  if (colon === -1) return null;
+  const head = line.slice(0, colon);
+  const value = unescapeIcsText(line.slice(colon + 1));
+  const [rawName, ...rawParams] = head.split(';');
+  if (!rawName) return null;
+  const params: Record<string, string> = {};
+  for (const rawParam of rawParams) {
+    const eq = rawParam.indexOf('=');
+    if (eq === -1) continue;
+    const key = rawParam.slice(0, eq).toUpperCase();
+    const paramValue = rawParam.slice(eq + 1).replace(/^"|"$/g, '');
+    params[key] = unescapeIcsText(paramValue);
+  }
+  return { name: rawName.toUpperCase(), params, value };
+}
+
+function firstEventProperties(properties: IcsProperty[]): IcsProperty[] {
+  const begin = properties.findIndex((prop) => prop.name === 'BEGIN' && prop.value.toUpperCase() === 'VEVENT');
+  if (begin === -1) return properties;
+  const end = properties.findIndex((prop, index) => index > begin && prop.name === 'END' && prop.value.toUpperCase() === 'VEVENT');
+  return properties.slice(begin + 1, end === -1 ? undefined : end);
+}
+
+function firstProperty(properties: IcsProperty[], name: string): IcsProperty | null {
+  return properties.find((prop) => prop.name === name) ?? null;
+}
+
+function firstValue(properties: IcsProperty[], name: string): string | null {
+  return firstProperty(properties, name)?.value ?? null;
+}
+
+function parseIcsDate(value: string): string {
+  const dateMatch = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+  if (dateMatch) {
+    return `${dateMatch[1]!}-${dateMatch[2]!}-${dateMatch[3]!}`;
+  }
+  const dateTimeMatch = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/.exec(value);
+  if (!dateTimeMatch) return value;
+  const hasUtcSuffix = dateTimeMatch[7] === 'Z';
+  const iso = `${dateTimeMatch[1]!}-${dateTimeMatch[2]!}-${dateTimeMatch[3]!}T${dateTimeMatch[4]!}:${dateTimeMatch[5]!}:${dateTimeMatch[6]!}${hasUtcSuffix ? 'Z' : ''}`;
+  return hasUtcSuffix ? new Date(iso).toISOString() : iso;
+}
+
+function mailtoValue(value: string): string {
+  return value.replace(/^mailto:/i, '').trim();
+}
+
+function unescapeIcsText(value: string): string {
+  return value
+    .replace(/\\n/gi, '\n')
+    .replace(/\\,/g, ',')
+    .replace(/\\;/g, ';')
+    .replace(/\\\\/g, '\\');
 }
 
 const BLOCK_ELEMENTS = new Set([

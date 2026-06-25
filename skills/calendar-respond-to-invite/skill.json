@@ -1,0 +1,33 @@
+{
+  "name": "calendar-respond-to-invite",
+  "description": "Accept, decline, or tentatively accept an existing calendar invitation as the authenticated principal attendee. Uses Nylas sendRsvp so only the principal's own RSVP status changes and the organizer receives the provider-standard RSVP notification. On accept, optional holdMatchCriteria can release Curia HOLD (TBC) events for the same scheduling conversation.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "high",
+  "inputs": {
+    "calendarId": "string (Nylas calendar ID containing the invite)",
+    "eventId": "string (Nylas event ID to RSVP to)",
+    "response": "string (accept | decline | tentative)",
+    "account": "string? (named account hint; currently informational because the calendar client is bound to the configured principal grant)",
+    "comment": "string? (optional RSVP comment; currently returned as a warning if provided because Nylas sendRsvp only accepts status in this SDK)",
+    "holdMatchCriteria": "object? ({ subject?, contactDomain?, contactId?, sourceRef?, threadRef? } used only when response is accept to release matching Curia holds)",
+    "holdSearchStart": "timestamp? (start of hold cleanup search window; defaults around the invite time)",
+    "holdSearchEnd": "timestamp? (end of hold cleanup search window; defaults around the invite time)"
+  },
+  "outputs": {
+    "responded": "boolean",
+    "response": "string (accept | decline | tentative)",
+    "participantStatus": "string (Nylas RSVP status: yes | no | maybe)",
+    "event": "object|null (updated event when fetch succeeds)",
+    "rsvp": "object (Nylas RSVP request result, including sendIcsError if present)",
+    "releasedHolds": "array (hold event IDs released after accepting)",
+    "releaseWarnings": "array (non-fatal hold cleanup failures)",
+    "warnings": "array (non-fatal RSVP/fetch/comment warnings)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": [
+    "nylasCalendarClient"
+  ]
+}

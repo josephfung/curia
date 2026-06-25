@@ -100,8 +100,8 @@ describe('ceo-inbox Branch A prompt — memory-query contract', () => {
     const branchA = extractBranchASection(prompt);
     // Anchor on the no_slots header to avoid matching the Branch A intro sentence
     // which also mentions "no_slots" but is not the step body.
-    const noSlotsStart = posIn(branchA, '4. **Result: no_slots');
-    const escalateStart = posIn(branchA, '5. **Result: escalate');
+    const noSlotsStart = posIn(branchA, '7. **Result: no_slots');
+    const escalateStart = posIn(branchA, '8. **Result: escalate');
     expect(noSlotsStart).toBeGreaterThan(-1);
     expect(escalateStart).toBeGreaterThan(noSlotsStart);
     const noSlotsSection = branchA.slice(noSlotsStart, escalateStart);
@@ -111,7 +111,7 @@ describe('ceo-inbox Branch A prompt — memory-query contract', () => {
     expect(noSlotsSection).toContain('memory-query');
     // The cross-reference must enumerate steps 2a through at least 2c (which now
     // includes the memory-query step introduced by this fix).
-    expect(noSlotsSection).toContain('2a-c');
+    expect(noSlotsSection).toContain('5a-c');
   });
 
   it('memory-query failure in Branch A is non-blocking (proceed-normally instruction)', () => {
@@ -160,8 +160,8 @@ describe('ceo-inbox scheduling consult prompt — proposed-time protocol', () =>
   it('Branch A accepts confirmed proposed slots instead of counter-proposing', () => {
     const prompt = loadCeoInboxPrompt();
     const branchA = extractBranchASection(prompt);
-    const confirmedStart = posIn(branchA, '2. **Result: confirmed');
-    const okStart = posIn(branchA, '3. **Result: ok');
+    const confirmedStart = posIn(branchA, '5. **Result: confirmed');
+    const okStart = posIn(branchA, '6. **Result: ok');
     expect(confirmedStart).toBeGreaterThan(-1);
     expect(okStart).toBeGreaterThan(confirmedStart);
 
@@ -175,8 +175,8 @@ describe('ceo-inbox scheduling consult prompt — proposed-time protocol', () =>
   it('Branch A still counter-proposes for Result: ok alternatives', () => {
     const prompt = loadCeoInboxPrompt();
     const branchA = extractBranchASection(prompt);
-    const okStart = posIn(branchA, '3. **Result: ok');
-    const noSlotsStart = posIn(branchA, '4. **Result: no_slots');
+    const okStart = posIn(branchA, '6. **Result: ok');
+    const noSlotsStart = posIn(branchA, '7. **Result: no_slots');
     expect(okStart).toBeGreaterThan(-1);
     expect(noSlotsStart).toBeGreaterThan(okStart);
 
@@ -184,6 +184,42 @@ describe('ceo-inbox scheduling consult prompt — proposed-time protocol', () =>
     expect(okSection).toContain('counter-proposal');
     expect(okSection).toMatch(/new\s+alternatives/);
     expect(okSection).toContain('hold placed');
+  });
+});
+
+describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
+  it('detects formal meeting invites before generic scheduling classification', () => {
+    const prompt = loadCeoInboxPrompt();
+    const invitePos = posIn(prompt, '### 4d-invite. Formal meeting invitation path');
+    const schedulingPos = posIn(prompt, '### Scheduling-specific drafting rules');
+
+    expect(invitePos).toBeGreaterThan(-1);
+    expect(schedulingPos).toBeGreaterThan(invitePos);
+    expect(prompt).toContain('isCalendarInvite: true');
+    expect(prompt).toContain('extract_as: "calendar_invite"');
+  });
+
+  it('parks formal invites for calendar consults instead of archiving as handled', () => {
+    const prompt = loadCeoInboxPrompt();
+    const inviteStart = posIn(prompt, '### 4d-invite. Formal meeting invitation path');
+    const inviteEnd = posIn(prompt, '### 4e-pre. Automated sender check');
+    expect(inviteStart).toBeGreaterThan(-1);
+    expect(inviteEnd).toBeGreaterThan(inviteStart);
+    const inviteSection = prompt.slice(inviteStart, inviteEnd);
+
+    expect(inviteSection).toContain('Need: RSVP for formal calendar invite');
+    expect(inviteSection).toContain('Standing: <accept|decline|tentative instruction text, or none>');
+    expect(inviteSection).toContain('Do NOT archive');
+    expect(inviteSection).toContain('Do NOT classify it as ✅ Handled');
+  });
+
+  it('handles invite recommendation and pending approval replies without archiving', () => {
+    const prompt = loadCeoInboxPrompt();
+    const branchA = extractBranchASection(prompt);
+    expect(branchA).toContain('Result: invite_pending_approval');
+    expect(branchA).toContain('Result: invite_recommendation');
+    expect(branchA).toContain('Do NOT archive');
+    expect(branchA).toContain('pending approval');
   });
 });
 
@@ -248,5 +284,37 @@ describe('calendar consult prompt — proposed-time conflict checks', () => {
     expect(okPos).toBeGreaterThan(confirmedFieldPos);
     expect(consultSection).toContain('For `Result: confirmed`, never mark "hold');
     expect(consultSection).toContain('never call `calendar-create-hold`');
+  });
+});
+
+describe('calendar consult prompt — formal invite RSVP behavior', () => {
+  it('links formal invite consults to Nylas calendar events when needed', () => {
+    const prompt = loadCalendarPrompt();
+    const consultSection = extractCalendarConsultSection(prompt);
+
+    expect(consultSection).toContain('Need: RSVP for formal calendar invite');
+    expect(consultSection).toContain('calendar-list-events');
+    expect(consultSection).toContain('could not link invite to calendar event');
+  });
+
+  it('requires standing instructions before calling the RSVP skill', () => {
+    const prompt = loadCalendarPrompt();
+    const consultSection = extractCalendarConsultSection(prompt);
+    const noRulePos = posIn(consultSection, 'If there is no matching standing instruction');
+    const rsvpPos = posIn(consultSection, 'calendar-respond-to-invite');
+
+    expect(rsvpPos).toBeGreaterThan(-1);
+    expect(noRulePos).toBeGreaterThan(-1);
+    expect(consultSection).toContain('do not call the RSVP skill');
+    expect(consultSection).toContain('Result: invite_recommendation');
+    expect(consultSection).toContain('ignoreHoldCriteria');
+  });
+
+  it('documents pending approval when high-risk RSVP is autonomy-gated', () => {
+    const prompt = loadCalendarPrompt();
+    const consultSection = extractCalendarConsultSection(prompt);
+
+    expect(consultSection).toContain('Result: invite_pending_approval');
+    expect(consultSection).toContain('pending-approval/autonomy-gate error');
   });
 });

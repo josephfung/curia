@@ -401,6 +401,58 @@ describe('FileParseHandler', () => {
     });
   });
 
+  describe('ICS handling', () => {
+    const handler = new FileParseHandler();
+
+    it('extracts calendar invite fields without LLM calls', async () => {
+      const infraLlm = makeInfraLlm('{}');
+      const ics = [
+        'BEGIN:VCALENDAR',
+        'METHOD:REQUEST',
+        'BEGIN:VEVENT',
+        'UID:invite-123',
+        'SUMMARY:Catch-up with Xiaopu',
+        'DTSTART:20260625T140000Z',
+        'DTEND:20260625T143000Z',
+        'ORGANIZER;CN=Xiaopu:mailto:xiaopu@xiaopu.ca',
+        'ATTENDEE;CN=Joseph;PARTSTAT=NEEDS-ACTION:mailto:joseph@example.com',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ].join('\r\n');
+
+      const result = await handler.execute(makeCtx({
+        content_base64: Buffer.from(ics).toString('base64'),
+        mime_type: 'text/calendar; method=REQUEST',
+        extract_as: 'calendar_invite',
+      }, infraLlm));
+
+      expect(result.success).toBe(true);
+      expect(infraLlm.extract).not.toHaveBeenCalled();
+      if (result.success) {
+        const data = result.data as {
+          type: string;
+          structured: {
+            method: string;
+            uid: string;
+            summary: string;
+            start: string;
+            end: string;
+            organizer: { email: string; name: string };
+            attendees: Array<{ email: string; participationStatus: string }>;
+          };
+        };
+        expect(data.type).toBe('calendar_invite');
+        expect(data.structured.method).toBe('REQUEST');
+        expect(data.structured.uid).toBe('invite-123');
+        expect(data.structured.summary).toBe('Catch-up with Xiaopu');
+        expect(data.structured.start).toBe('2026-06-25T14:00:00.000Z');
+        expect(data.structured.end).toBe('2026-06-25T14:30:00.000Z');
+        expect(data.structured.organizer.email).toBe('xiaopu@xiaopu.ca');
+        expect(data.structured.attendees[0]!.participationStatus).toBe('NEEDS-ACTION');
+      }
+    });
+  });
+
   describe('PDF handling', () => {
     // A minimal, valid text-layer PDF with known content. Guards against the
     // pdf-parse v1→v2 API regression where the library was called as a function

@@ -96,6 +96,8 @@ export interface EmailAttachmentMeta {
   contentType: string;
   /** Size in bytes. */
   size: number;
+  /** True when the attachment is a calendar invite payload (ICS / text/calendar). */
+  isCalendarInvite?: boolean;
 }
 
 /**
@@ -692,7 +694,17 @@ function normalizeAttachments(raw?: NylasApiAttachment[]): EmailAttachmentMeta[]
       filename: a.filename ?? 'unnamed',
       contentType: a.content_type,
       size: a.size ?? 0,
+      ...(isCalendarInviteAttachment(a.filename, a.content_type) ? { isCalendarInvite: true } : {}),
     }));
+}
+
+function isCalendarInviteAttachment(filename: string | undefined, contentType: string | undefined): boolean {
+  const lowerType = contentType?.toLowerCase() ?? '';
+  const lowerName = filename?.toLowerCase() ?? '';
+  return lowerType === 'text/calendar' ||
+    lowerType === 'application/ics' ||
+    lowerType === 'text/x-vcalendar' ||
+    lowerName.endsWith('.ics');
 }
 
 function normalizeMessageSummary(msg: NylasApiMessage): NylasMessageSummary {

@@ -31,12 +31,15 @@ export class CalendarCreateHoldHandler implements SkillHandler {
     }
 
     // Extract and validate inputs.
-    const { calendarId, start, end, subject, sourceRef } = ctx.input as {
+    const { calendarId, start, end, subject, sourceRef, threadRef, contactId, contactDomain } = ctx.input as {
       calendarId?: string;
       start?: string;
       end?: string;
       subject?: string;
       sourceRef?: string;
+      threadRef?: string;
+      contactId?: string;
+      contactDomain?: string;
     };
 
     if (!calendarId || typeof calendarId !== 'string') {
@@ -122,6 +125,10 @@ export class CalendarCreateHoldHandler implements SkillHandler {
     const metadata = buildHoldMetadata({
       createdAtIso: new Date().toISOString(),
       sourceRef,
+      threadRef,
+      subject,
+      contactId,
+      contactDomain,
     });
 
     // Hold title: always prefixed with 'HOLD (TBC):' so it's visually obvious on

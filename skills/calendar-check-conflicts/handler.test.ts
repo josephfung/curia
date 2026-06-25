@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarCheckConflictsHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
+import { buildHoldMetadata } from '../../src/channels/calendar/holds.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -155,6 +156,70 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
       expect(data.conflicts).toHaveLength(2);
       const statuses = data.conflicts.map((c) => c.status).sort();
       expect(statuses).toEqual(['busy', 'tentative']);
+    }
+  });
+
+  it('ignores a matching Curia hold when ignoreHoldCriteria identifies the same scheduling conversation', async () => {
+    const handler = new CalendarCheckConflictsHandler();
+    const proposedStart = '2026-05-26T10:00:00Z';
+    const proposedEnd = '2026-05-26T11:00:00Z';
+    const proposedStartTs = Math.floor(new Date(proposedStart).getTime() / 1000);
+    const proposedEndTs = Math.floor(new Date(proposedEnd).getTime() / 1000);
+
+    const nylasCalendarClient = {
+      getFreeBusy: vi.fn().mockResolvedValue([
+        {
+          email: 'test@example.com',
+          timeSlots: [
+            {
+              startTime: proposedStartTs,
+              endTime: proposedEndTs,
+              status: 'tentative',
+            },
+          ],
+        },
+      ]),
+      listEvents: vi.fn().mockResolvedValue([
+        {
+          id: 'hold_1',
+          title: 'HOLD (TBC): Catch-up with Xiaopu',
+          description: '',
+          location: '',
+          startTime: proposedStartTs,
+          endTime: proposedEndTs,
+          startDate: null,
+          endDate: null,
+          participants: [],
+          conferencing: null,
+          status: 'tentative',
+          calendarId: 'test@example.com',
+          busy: true,
+          metadata: buildHoldMetadata({
+            createdAtIso: '2026-05-20T00:00:00Z',
+            subject: 'Catch-up with Xiaopu',
+            contactDomain: 'xiaopu.ca',
+          }),
+        },
+      ]),
+    } as unknown as SkillContext['nylasCalendarClient'];
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        calendarIds: ['test@example.com'],
+        proposedStart,
+        proposedEnd,
+        ignoreHoldCriteria: {
+          subject: 'Quick catch up with Xiaopu',
+          contactDomain: 'scheduler@xiaopu.ca',
+        },
+      },
+      nylasCalendarClient,
+    }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).clear).toBe(true);
+      expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).conflicts).toHaveLength(0);
     }
   });
 });

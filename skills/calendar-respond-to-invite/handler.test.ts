@@ -1,0 +1,178 @@
+import { describe, it, expect, vi } from 'vitest';
+import { CalendarRespondToInviteHandler } from './handler.js';
+import type { SkillContext } from '../../src/skills/types.js';
+import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
+import { createSilentLogger } from '../../src/logger.js';
+import { buildHoldMetadata } from '../../src/channels/calendar/holds.js';
+
+const START_UNIX = 1_780_000_000;
+const END_UNIX = 1_780_003_600;
+
+function makeEvent(overrides?: Partial<NylasCalendarEvent>): NylasCalendarEvent {
+  return {
+    id: 'evt_invite',
+    title: 'Catch-up with Xiaopu',
+    description: '',
+    location: '',
+    startTime: START_UNIX,
+    endTime: END_UNIX,
+    startDate: null,
+    endDate: null,
+    participants: [
+      { email: 'ceo@example.com', name: 'CEO', status: 'yes' },
+      { email: 'organizer@xiaopu.ca', name: 'Organizer', status: 'yes' },
+    ],
+    conferencing: null,
+    status: 'confirmed',
+    calendarId: 'cal_1',
+    busy: true,
+    metadata: null,
+    ...overrides,
+  };
+}
+
+function makeHold(id: string, startTime: number, endTime: number): NylasCalendarEvent {
+  return makeEvent({
+    id,
+    title: 'HOLD (TBC): Catch-up with Xiaopu',
+    startTime,
+    endTime,
+    participants: [],
+    status: 'tentative',
+    metadata: buildHoldMetadata({
+      createdAtIso: '2026-06-24T12:00:00.000Z',
+      subject: 'Catch-up with Xiaopu',
+      contactDomain: 'xiaopu.ca',
+    }),
+  });
+}
+
+function makeCtx(overrides?: Partial<SkillContext>, clientOverrides?: Record<string, unknown>): SkillContext {
+  const sendRsvp = vi.fn().mockResolvedValue({ requestId: 'req_1', sendIcsError: null });
+  const getEvent = vi.fn().mockResolvedValue(makeEvent());
+  const listEvents = vi.fn().mockResolvedValue([]);
+  const deleteEvent = vi.fn().mockResolvedValue(undefined);
+  return {
+    input: {
+      calendarId: 'cal_1',
+      eventId: 'evt_invite',
+      response: 'accept',
+    },
+    secret: () => { throw new Error('no secret in test'); },
+    log: createSilentLogger(),
+    timezone: 'UTC',
+    nylasCalendarClient: {
+      sendRsvp,
+      getEvent,
+      listEvents,
+      deleteEvent,
+      updateEvent: vi.fn(),
+      ...clientOverrides,
+    } as unknown as SkillContext['nylasCalendarClient'],
+    ...overrides,
+  } as SkillContext;
+}
+
+describe('CalendarRespondToInviteHandler', () => {
+  it.each([
+    ['accept', 'yes'],
+    ['decline', 'no'],
+    ['tentative', 'maybe'],
+  ])('maps %s to Nylas RSVP status %s', async (response, status) => {
+    const handler = new CalendarRespondToInviteHandler();
+    const ctx = makeCtx({
+      input: { calendarId: 'cal_1', eventId: 'evt_invite', response },
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(ctx.nylasCalendarClient!.sendRsvp).toHaveBeenCalledWith('cal_1', 'evt_invite', status);
+  });
+
+  it('uses sendRsvp only and never writes a participants array through updateEvent', async () => {
+    const handler = new CalendarRespondToInviteHandler();
+    const updateEvent = vi.fn();
+    const ctx = makeCtx(undefined, { updateEvent });
+
+    await handler.execute(ctx);
+
+    expect(ctx.nylasCalendarClient!.sendRsvp).toHaveBeenCalledOnce();
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it('releases all matching holds for the scheduling conversation when accepting', async () => {
+    const handler = new CalendarRespondToInviteHandler();
+    const holdOne = makeHold('hold_1', START_UNIX, END_UNIX);
+    const holdTwo = makeHold('hold_2', START_UNIX + 86_400, END_UNIX + 86_400);
+    const unrelatedHold = makeEvent({
+      id: 'hold_other',
+      title: 'HOLD (TBC): Other meeting',
+      startTime: START_UNIX,
+      endTime: END_UNIX,
+      status: 'tentative',
+      metadata: buildHoldMetadata({
+        createdAtIso: '2026-06-24T12:00:00.000Z',
+        subject: 'Other meeting',
+        contactDomain: 'other.example',
+      }),
+    });
+    const deleteEvent = vi.fn().mockResolvedValue(undefined);
+    const ctx = makeCtx({
+      input: {
+        calendarId: 'cal_1',
+        eventId: 'evt_invite',
+        response: 'accept',
+        holdMatchCriteria: {
+          subject: 'Quick catch up with Xiaopu',
+          contactDomain: 'scheduler@xiaopu.ca',
+        },
+        holdSearchStart: '2026-06-01T00:00:00Z',
+        holdSearchEnd: '2026-06-30T00:00:00Z',
+      },
+    }, {
+      listEvents: vi.fn().mockResolvedValue([holdOne, holdTwo, unrelatedHold]),
+      deleteEvent,
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(deleteEvent).toHaveBeenCalledTimes(2);
+    const deletedIds = deleteEvent.mock.calls.map((call: unknown[]) => call[1]);
+    expect(deletedIds).toEqual(['hold_1', 'hold_2']);
+    if (result.success) {
+      expect((result.data as { releasedHolds: string[] }).releasedHolds).toEqual(['hold_1', 'hold_2']);
+    }
+  });
+
+  it('does not release holds for decline responses', async () => {
+    const handler = new CalendarRespondToInviteHandler();
+    const deleteEvent = vi.fn();
+    const ctx = makeCtx({
+      input: {
+        calendarId: 'cal_1',
+        eventId: 'evt_invite',
+        response: 'decline',
+        holdMatchCriteria: { subject: 'Catch-up with Xiaopu', contactDomain: 'xiaopu.ca' },
+      },
+    }, { deleteEvent });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(deleteEvent).not.toHaveBeenCalled();
+  });
+
+  it('returns a validation error for unknown responses', async () => {
+    const handler = new CalendarRespondToInviteHandler();
+    const result = await handler.execute(makeCtx({
+      input: { calendarId: 'cal_1', eventId: 'evt_invite', response: 'join' },
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('accept, decline, or tentative');
+    }
+  });
+});

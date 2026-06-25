@@ -32,6 +32,12 @@ export interface NylasCalendarLike {
       queryParams?: Record<string, unknown>;
     }): Promise<{ data: NylasRawEvent[] }>;
 
+    find(params: {
+      identifier: string;
+      eventId: string;
+      queryParams?: Record<string, unknown>;
+    }): Promise<{ data: NylasRawEvent }>;
+
     create(params: {
       identifier: string;
       queryParams?: Record<string, unknown>;
@@ -44,6 +50,13 @@ export interface NylasCalendarLike {
       queryParams?: Record<string, unknown>;
       requestBody: Record<string, unknown>;
     }): Promise<{ data: NylasRawEvent }>;
+
+    sendRsvp(params: {
+      identifier: string;
+      eventId: string;
+      queryParams?: Record<string, unknown>;
+      requestBody: { status: NylasRsvpStatus };
+    }): Promise<NylasRawRsvpResponse>;
 
     destroy(params: {
       identifier: string;
@@ -115,6 +128,11 @@ interface NylasRawFreeBusy {
   }>;
 }
 
+interface NylasRawRsvpResponse {
+  requestId?: string;
+  sendIcsError?: unknown;
+}
+
 // -- Normalized types --
 
 export interface NylasCalendar {
@@ -152,6 +170,13 @@ export interface NylasFreeBusyResult {
     endTime: number;
     status: string;
   }>;
+}
+
+export type NylasRsvpStatus = 'yes' | 'no' | 'maybe';
+
+export interface NylasRsvpResult {
+  requestId: string | null;
+  sendIcsError: unknown | null;
 }
 
 export interface CreateEventInput {
@@ -248,6 +273,22 @@ export class NylasCalendarClient {
     }
   }
 
+  /** Fetch one event by ID from a calendar. */
+  async getEvent(calendarId: string, eventId: string): Promise<NylasCalendarEvent> {
+    this.log.debug({ calendarId, eventId }, 'Fetching event');
+    try {
+      const response = await this.nylas.events.find({
+        identifier: this.grantId,
+        eventId,
+        queryParams: { calendar_id: calendarId },
+      });
+      return this.normalizeEvent(response.data);
+    } catch (err) {
+      this.log.error({ err, calendarId, eventId }, 'Nylas getEvent failed');
+      throw err;
+    }
+  }
+
   /** Create a new event on a calendar. */
   async createEvent(calendarId: string, event: CreateEventInput): Promise<NylasCalendarEvent> {
     this.log.debug({ calendarId, title: event.title }, 'Creating event');
@@ -329,6 +370,26 @@ export class NylasCalendarClient {
       return this.normalizeEvent(response.data);
     } catch (err) {
       this.log.error({ err, calendarId, eventId }, 'Nylas updateEvent failed');
+      throw err;
+    }
+  }
+
+  /** Respond to an event invitation as the authenticated attendee. */
+  async sendRsvp(calendarId: string, eventId: string, status: NylasRsvpStatus): Promise<NylasRsvpResult> {
+    this.log.debug({ calendarId, eventId, status }, 'Sending event RSVP');
+    try {
+      const response = await this.nylas.events.sendRsvp({
+        identifier: this.grantId,
+        eventId,
+        queryParams: { calendar_id: calendarId },
+        requestBody: { status },
+      });
+      return {
+        requestId: typeof response.requestId === 'string' ? response.requestId : null,
+        sendIcsError: response.sendIcsError ?? null,
+      };
+    } catch (err) {
+      this.log.error({ err, calendarId, eventId, status }, 'Nylas sendRsvp failed');
       throw err;
     }
   }
