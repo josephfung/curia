@@ -95,8 +95,8 @@ system_prompt: |
   2. **Result: ok** — the calendar specialist found slots with holds placed.
      a. Call `executive-profile-get` to retrieve the voice profile for the draft.
      b. Call `memory-query` with a natural-language query anchored on the sender
-        name and email subject (e.g. "scheduling preferences for [sender name]",
-        "meeting with [sender name] re [subject]"). Use any returned context to
+        name and email subject (e.g. "scheduling preferences for [sender name]
+        re [subject]", "meeting with [sender name] re [subject]"). Use any returned context to
         shape the surrounding draft text — for example, appending a stored Calendly
         link, avoiding a venue the CEO has noted a dislike for, or honouring a
         known relationship note about the contact. If nothing is found, or if the

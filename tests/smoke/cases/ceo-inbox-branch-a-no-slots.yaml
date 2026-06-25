@@ -1,0 +1,57 @@
+name: Branch A Resume no_slots Path Uses Memory and Nearest Slots
+description: |
+  When ceo-inbox resumes from a calendar consult reply (Branch A) and the result
+  is no_slots (no holds available within the requested window), the agent should
+  still call memory-query before drafting, date-resolve the Nearest alternatives,
+  and produce a reply that uses the Nearest slot strings verbatim with a plain-
+  language note that they fall outside the originally requested window.
+tags:
+  - ceo-inbox
+  - resume-mode
+  - memory-recall
+  - scheduling
+  - no-slots
+
+turns:
+  - role: user
+    content: |
+      [Resume mode — bullpen wake]
+
+      CONSULT REPLY
+      Result: no_slots
+      Nearest:
+        - Monday July 21 at 10:00 AM ET - earliest available
+        - Tuesday July 22 at 2:00 PM ET - also available
+      Context: source_message_id=msg-jkl012
+
+      ---
+      Original email context:
+      From: diana@startupco.com (Diana Park)
+      Subject: Intro call request
+      Body excerpt: "Would love to find a time this week if you have it."
+
+      [Memory: CEO prefers video calls over phone; no other stored facts for diana@startupco.com]
+
+expected_behaviors:
+  - id: calls-memory-query
+    description: Agent calls memory-query anchored on the sender (Diana Park / diana@startupco.com) and/or the email subject before drafting
+    weight: critical
+  - id: nearest-slots-verbatim
+    description: The Nearest slot strings ("Monday July 21..." and "Tuesday July 22...") appear verbatim in the draft
+    weight: critical
+  - id: outside-window-note
+    description: The draft includes a plain-language note that the proposed times fall outside the originally requested window (this week)
+    weight: critical
+  - id: stored-preference-applied
+    description: The draft reflects the stored preference (video call over phone) when relevant
+    weight: important
+  - id: no-memory-fabrication
+    description: Agent does not invent stored facts beyond the video-call preference in context
+    weight: important
+
+failure_modes:
+  - Skips memory-query and drafts without attempting recall
+  - Paraphrases the Nearest slot strings instead of using them verbatim
+  - Omits any acknowledgement that the slots are outside the requested window
+  - Invents stored memory facts not present in the context
+  - Refuses to draft because no slots were available within the window

@@ -58,7 +58,7 @@ describe('ceo-inbox Branch A prompt — memory-query contract', () => {
   it('Branch A memory-query is anchored on sender and subject context', () => {
     const prompt = loadCeoInboxPrompt();
     const branchA = extractBranchASection(prompt);
-    // The recall query must reference the sender and/or email subject so it
+    // The recall query must reference both the sender and email subject so it
     // surfaces relevant stored facts (Calendly links, venue preferences, etc.).
     const memoryQueryPos = posIn(branchA, 'memory-query');
     const nearbyText = branchA.slice(memoryQueryPos, memoryQueryPos + 600);
@@ -68,7 +68,8 @@ describe('ceo-inbox Branch A prompt — memory-query contract', () => {
     const mentionsSubject =
       nearbyText.toLowerCase().includes('subject') ||
       nearbyText.toLowerCase().includes('email');
-    expect(mentionsSender || mentionsSubject).toBe(true);
+    expect(mentionsSender).toBe(true);
+    expect(mentionsSubject).toBe(true);
   });
 
   it('Result: no_slots step references memory-query (via cross-reference to ok-path steps)', () => {
