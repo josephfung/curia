@@ -15,8 +15,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`calendar-create-hold`** — new skill placing tentative `HOLD (TBC)` events (busy/tentative, no attendees, `curia-hold` metadata) so an offered slot is not re-offered to another contact; toggle-gated via `config-store` (default on), returns timezone-labelled display strings. (#1137)
 - **`calendar-holds-sweep`** — new maintenance skill that deletes stale curia-hold events (slot already past, or created-at older than `maxAgeDays`, default 7). Per-event and per-calendar try/catch ensures one failure never aborts the sweep. Intended for daily scheduled invocation. (#1137)
 - **Calendar specialist scheduling consult** — calendar specialist can now answer a structured `CONSULT REQUEST` from the bullpen: resolves free slots, places tentative holds (toggle-gated via `config-store`), and replies with timezone-labelled `CONSULT REPLY` strings verbatim from skills. (#1137)
+
+### Changed
+
+- **`calendar-find-free-time` / `calendar-check-conflicts`** — `free`-status events no longer block availability or count as conflicts; only busy/tentative events do. (#1137)
+- **`calendar-create-event`** — booking a real event now auto-releases any overlapping `curia-hold` events on the same calendar. (#1137)
+- **Nylas calendar client** — normalized events now surface event `metadata`; create/update pass through `metadata`/`status`/`busy`. (#1137)
 
 ### Security
 
