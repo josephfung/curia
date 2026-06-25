@@ -3,7 +3,7 @@
   "description": "Accept, decline, or tentatively accept an existing calendar invitation as the authenticated principal attendee. Uses Nylas sendRsvp so only the principal's own RSVP status changes and the organizer receives the provider-standard RSVP notification. On accept, optional holdMatchCriteria can release Curia HOLD (TBC) events for the same scheduling conversation.",
   "version": "0.1.0",
   "sensitivity": "normal",
-  "action_risk": "high",
+  "action_risk": "medium",
   "inputs": {
     "calendarId": "string (Nylas calendar ID containing the invite)",
     "eventId": "string (Nylas event ID to RSVP to)",

@@ -411,11 +411,11 @@ describe('FileParseHandler', () => {
         'METHOD:REQUEST',
         'BEGIN:VEVENT',
         'UID:invite-123',
-        'SUMMARY:Catch-up with Xiaopu',
+        'SUMMARY:Project Delta sync',
         'DTSTART:20260625T140000Z',
         'DTEND:20260625T143000Z',
-        'ORGANIZER;CN=Xiaopu:mailto:xiaopu@xiaopu.ca',
-        'ATTENDEE;CN=Joseph;PARTSTAT=NEEDS-ACTION:mailto:joseph@example.com',
+        'ORGANIZER;CN=Alex Example:mailto:alex@example.test',
+        'ATTENDEE;CN=Morgan Example;PARTSTAT=NEEDS-ACTION:mailto:morgan@example.test',
         'END:VEVENT',
         'END:VCALENDAR',
       ].join('\r\n');
@@ -444,10 +444,10 @@ describe('FileParseHandler', () => {
         expect(data.type).toBe('calendar_invite');
         expect(data.structured.method).toBe('REQUEST');
         expect(data.structured.uid).toBe('invite-123');
-        expect(data.structured.summary).toBe('Catch-up with Xiaopu');
+        expect(data.structured.summary).toBe('Project Delta sync');
         expect(data.structured.start).toBe('2026-06-25T14:00:00.000Z');
         expect(data.structured.end).toBe('2026-06-25T14:30:00.000Z');
-        expect(data.structured.organizer.email).toBe('xiaopu@xiaopu.ca');
+        expect(data.structured.organizer.email).toBe('alex@example.test');
         expect(data.structured.attendees[0]!.participationStatus).toBe('NEEDS-ACTION');
       }
     });

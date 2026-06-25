@@ -297,24 +297,27 @@ describe('calendar consult prompt — formal invite RSVP behavior', () => {
     expect(consultSection).toContain('could not link invite to calendar event');
   });
 
-  it('requires standing instructions before calling the RSVP skill', () => {
+  it('allows context-aware RSVP attempts and reserves recommendations for ambiguity', () => {
     const prompt = loadCalendarPrompt();
     const consultSection = extractCalendarConsultSection(prompt);
-    const noRulePos = posIn(consultSection, 'If there is no matching standing instruction');
+    const decidePos = posIn(consultSection, 'Decide the RSVP response from all available context');
     const rsvpPos = posIn(consultSection, 'calendar-respond-to-invite');
+    const ambiguousPos = posIn(consultSection, 'If the correct RSVP is genuinely ambiguous');
 
     expect(rsvpPos).toBeGreaterThan(-1);
-    expect(noRulePos).toBeGreaterThan(-1);
-    expect(consultSection).toContain('do not call the RSVP skill');
+    expect(decidePos).toBeGreaterThan(-1);
+    expect(ambiguousPos).toBeGreaterThan(rsvpPos);
+    expect(consultSection).toContain('relationship tier, sender kind');
     expect(consultSection).toContain('Result: invite_recommendation');
     expect(consultSection).toContain('ignoreHoldCriteria');
   });
 
-  it('documents pending approval when high-risk RSVP is autonomy-gated', () => {
+  it('documents pending approval when medium-risk RSVP is autonomy-gated', () => {
     const prompt = loadCalendarPrompt();
     const consultSection = extractCalendarConsultSection(prompt);
 
     expect(consultSection).toContain('Result: invite_pending_approval');
     expect(consultSection).toContain('pending-approval/autonomy-gate error');
+    expect(consultSection).toContain('action_risk: medium');
   });
 });

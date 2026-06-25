@@ -120,7 +120,7 @@ describe('NylasCalendarClient — RSVP plumbing', () => {
       data: {
         id: 'evt_1',
         title: 'Invite',
-        participants: [{ email: 'ceo@example.com', status: 'yes' }],
+        participants: [{ email: 'principal@example.test', status: 'yes' }],
         when: { startTime: 1_780_000_000, endTime: 1_780_003_600 },
         calendarId: 'cal_1',
       },

@@ -11,7 +11,7 @@ const END_UNIX = 1_780_003_600;
 function makeEvent(overrides?: Partial<NylasCalendarEvent>): NylasCalendarEvent {
   return {
     id: 'evt_invite',
-    title: 'Catch-up with Xiaopu',
+    title: 'Project Delta sync',
     description: '',
     location: '',
     startTime: START_UNIX,
@@ -19,8 +19,8 @@ function makeEvent(overrides?: Partial<NylasCalendarEvent>): NylasCalendarEvent 
     startDate: null,
     endDate: null,
     participants: [
-      { email: 'ceo@example.com', name: 'CEO', status: 'yes' },
-      { email: 'organizer@xiaopu.ca', name: 'Organizer', status: 'yes' },
+      { email: 'principal@example.test', name: 'Principal', status: 'yes' },
+      { email: 'organizer@example.test', name: 'Organizer', status: 'yes' },
     ],
     conferencing: null,
     status: 'confirmed',
@@ -34,15 +34,15 @@ function makeEvent(overrides?: Partial<NylasCalendarEvent>): NylasCalendarEvent 
 function makeHold(id: string, startTime: number, endTime: number): NylasCalendarEvent {
   return makeEvent({
     id,
-    title: 'HOLD (TBC): Catch-up with Xiaopu',
+    title: 'HOLD (TBC): Project Delta sync',
     startTime,
     endTime,
     participants: [],
     status: 'tentative',
     metadata: buildHoldMetadata({
       createdAtIso: '2026-06-24T12:00:00.000Z',
-      subject: 'Catch-up with Xiaopu',
-      contactDomain: 'xiaopu.ca',
+      subject: 'Project Delta sync',
+      contactDomain: 'example.test',
     }),
   });
 }
@@ -124,8 +124,8 @@ describe('CalendarRespondToInviteHandler', () => {
         eventId: 'evt_invite',
         response: 'accept',
         holdMatchCriteria: {
-          subject: 'Quick catch up with Xiaopu',
-          contactDomain: 'scheduler@xiaopu.ca',
+          subject: 'Quick Project Delta sync',
+          contactDomain: 'scheduler@example.test',
         },
         holdSearchStart: '2026-06-01T00:00:00Z',
         holdSearchEnd: '2026-06-30T00:00:00Z',
@@ -154,7 +154,7 @@ describe('CalendarRespondToInviteHandler', () => {
         calendarId: 'cal_1',
         eventId: 'evt_invite',
         response: 'decline',
-        holdMatchCriteria: { subject: 'Catch-up with Xiaopu', contactDomain: 'xiaopu.ca' },
+        holdMatchCriteria: { subject: 'Project Delta sync', contactDomain: 'example.test' },
       },
     }, { deleteEvent });
 

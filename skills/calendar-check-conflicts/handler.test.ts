@@ -182,7 +182,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
       listEvents: vi.fn().mockResolvedValue([
         {
           id: 'hold_1',
-          title: 'HOLD (TBC): Catch-up with Xiaopu',
+          title: 'HOLD (TBC): Project Delta sync',
           description: '',
           location: '',
           startTime: proposedStartTs,
@@ -196,8 +196,8 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           busy: true,
           metadata: buildHoldMetadata({
             createdAtIso: '2026-05-20T00:00:00Z',
-            subject: 'Catch-up with Xiaopu',
-            contactDomain: 'xiaopu.ca',
+            subject: 'Project Delta sync',
+            contactDomain: 'example.test',
           }),
         },
       ]),
@@ -209,8 +209,8 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
         proposedStart,
         proposedEnd,
         ignoreHoldCriteria: {
-          subject: 'Quick catch up with Xiaopu',
-          contactDomain: 'scheduler@xiaopu.ca',
+          subject: 'Quick Project Delta sync',
+          contactDomain: 'scheduler@example.test',
         },
       },
       nylasCalendarClient,

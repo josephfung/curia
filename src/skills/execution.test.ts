@@ -1520,16 +1520,16 @@ describe('approval trigger on gate block', () => {
     expect(trigger.request).toHaveBeenCalledOnce();
   });
 
-  it('calendar-respond-to-invite is high-risk and routes to pending approval below score 80', async () => {
+  it('calendar-respond-to-invite is medium-risk and routes to pending approval below score 70', async () => {
     const registry = new SkillRegistry();
     const handler = makeHandler('should not run');
-    registry.register(makeRiskyManifest('calendar-respond-to-invite', 'high'), handler);
+    registry.register(makeRiskyManifest('calendar-respond-to-invite', 'medium'), handler);
 
     const trigger = makeApprovalTrigger({ created: true, shortRef: 'rsvp-1', notificationSent: true });
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
 
     const layer = new ExecutionLayer(registry, logger, {
-      autonomyService: makeAutonomyService(79),
+      autonomyService: makeAutonomyService(69),
       bus: mockBus,
       approvalTrigger: trigger,
     });
@@ -1547,10 +1547,10 @@ describe('approval trigger on gate block', () => {
     expect(handler.execute).not.toHaveBeenCalled();
     expect(trigger.request).toHaveBeenCalledWith(expect.objectContaining({
       skillName: 'calendar-respond-to-invite',
-      actionRisk: 'high',
+      actionRisk: 'medium',
       input,
-      currentScore: 79,
-      requiredScore: 80,
+      currentScore: 69,
+      requiredScore: 70,
     }));
   });
 

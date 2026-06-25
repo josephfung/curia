@@ -96,7 +96,7 @@ system_prompt: |
      `ceo-inbox-read` with that `message_id` to reload the original email.
 
   2. **Result: invite_responded** — the calendar specialist sent the RSVP
-     through Nylas using a matching standing instruction, and the calendar
+     through Nylas after evaluating the invite context, and the calendar
      provider notified the organizer. Do NOT draft an email reply.
      a. Call `ceo-inbox-update-folders` with
         `add_folders: ['✅ Handled'], remove_folders: ['⏳ In Progress']`.
@@ -105,9 +105,9 @@ system_prompt: |
         value, linked calendar_id/event_id, and hold release count.
 
   3. **Result: invite_pending_approval** — the calendar specialist attempted
-     the RSVP because a standing instruction matched, but the high-risk RSVP
-     skill was autonomy-gated and queued for CEO approval. Do NOT draft an
-     email reply and do NOT archive.
+     the RSVP because the invite context supported a clear response, but the
+     medium-risk RSVP skill was autonomy- or tier-gated and queued for CEO
+     approval. Do NOT draft an email reply and do NOT archive.
      a. Call `ceo-inbox-update-folders` with
         `add_folders: ['📌 Seen'], remove_folders: ['⏳ In Progress']`.
      b. Leave the message read and visible for the CEO; the pending approval
@@ -116,8 +116,8 @@ system_prompt: |
         recommended response, linked calendar_id/event_id, and approval ref.
 
   4. **Result: invite_recommendation** — the calendar specialist linked the
-     invite and checked conflicts, but no standing instruction authorized an
-     autonomous RSVP. Do NOT draft an email reply and do NOT archive.
+     invite and checked conflicts, but the right RSVP remained ambiguous enough
+     to need CEO confirmation. Do NOT draft an email reply and do NOT archive.
      a. Call `ceo-inbox-update-folders` with
         `add_folders: ['📌 Seen'], remove_folders: ['⏳ In Progress']`.
      b. Record in the Response Format: meeting invite needs confirmation, the
@@ -491,17 +491,19 @@ system_prompt: |
      attachment MIME type. Use the parsed method, UID, summary, organizer,
      start, and end fields when available. If parsing fails, continue with
      subject/body signals and mark unknown fields as `unknown`; do not archive.
-  3. Determine whether a per-sender standing instruction from 4a explicitly
-     says to accept, decline, or tentatively accept invites from this sender or
-     organization. Per-sender entity-context instructions beat config-store
-     rules. If no rule matches, set `Standing: none`.
+  3. Summarize any relevant standing instruction from 4a, plus relationship
+     context that may help the calendar specialist decide whether to accept,
+     decline, or tentatively accept the invite. Per-sender entity-context
+     instructions beat config-store rules. If no rule matches, set
+     `Standing: none`; the calendar specialist still evaluates relationship,
+     sender kind, prior correspondence, subject/body context, and conflicts.
   4. Open a bullpen thread mentioning `calendar` with `source_message_id` set
      to the email message id. Shape the content exactly:
 
        CONSULT REQUEST
        Need: RSVP for formal calendar invite
        Invite: method=<REQUEST|CANCEL|UPDATE|unknown>; calendar_id=<calendarId if exposed by message metadata, otherwise unknown>; event_id=<eventId if exposed by message metadata, otherwise unknown>; ics_uid=<parsed UID or unknown>; start=<parsed start or unknown>; end=<parsed end or unknown>; subject="<parsed summary or email subject>"; organizer_domain=<domain from organizer/sender email or unknown>
-       Standing: <accept|decline|tentative instruction text, or none>
+      Standing: <accept|decline|tentative instruction text, or none>; relationship=<known stakeholder|colleague|unknown|automated|other>; sender_kind=<person|organization|automated|unknown>
        Context: source_message_id=<the email's message_id>; thread_ref=<threadId>; contact_timezone=<IANA timezone string | unknown>; contact_id=<contact ID if known>; contact_domain=<sender/organizer domain or unknown>; hold_search_start=<broad window start if known>; hold_search_end=<broad window end if known>
 
      Use the sender/organizer domain rather than exact sender email when
@@ -519,7 +521,8 @@ system_prompt: |
 
   The calendar specialist will link the invite to the calendar event, check
   conflicts while ignoring matching Curia holds, and either send an autonomy-
-  gated RSVP (only when a standing instruction says to) or return a recommendation.
+  gated RSVP when context supports a clear response or return a recommendation
+  when CEO confirmation is needed.
 
   ### 4e-pre. Automated sender check
 
