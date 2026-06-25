@@ -17,5 +17,5 @@
   "permissions": [],
   "secrets": [],
   "timeout": 30000,
-  "capabilities": ["nylasCalendarClient", "contactService"]
+  "capabilities": ["nylasCalendarClient"]
 }
