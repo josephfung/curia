@@ -153,6 +153,28 @@ describe('OutboundGateway', () => {
     expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
   });
 
+  it('converts markdown links to sanitized HTML before sending email', async () => {
+    (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+    });
+
+    await gateway.send({
+      ...baseRequest,
+      body: 'Please review [the profile](https://example.com/profile).',
+    });
+
+    const sendArgs = (mocks.nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { body: string };
+    expect(sendArgs.body).toContain('<a href="https://example.com/profile"');
+    expect(sendArgs.body).toContain('>the profile</a>');
+    expect(sendArgs.body).not.toContain('[the profile]');
+  });
+
   it('passes the structural recipient set (To + CC) to the content filter', async () => {
     // Unknown external recipient + the principal on CC. The filter must receive the
     // merged To+CC recipient set with isPrincipal computed structurally (via the

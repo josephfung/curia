@@ -13,7 +13,7 @@ import type { EventBus } from '../../bus/bus.js';
 import type { BusEvent } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
 import type { ServerResponse } from 'node:http';
-import { markdownToHtml } from '../../utils/markdown-to-html.js';
+import { markdownToHtml } from '../../format/markdown-to-html.js';
 
 /**
  * Thrown by the event router when the dispatcher rejects a message. Typed

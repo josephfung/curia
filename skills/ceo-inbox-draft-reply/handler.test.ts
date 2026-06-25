@@ -390,7 +390,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       throw new Error(`Unexpected fetch: ${urlStr}`);
     });
 
-    const ctx = buildCtx();
+    const ctx = buildCtx({ body: 'Thanks - see [details](https://example.com/details).' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
 
@@ -407,7 +407,9 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(draftBody.body).toContain('<b>world</b>');
     expect(draftBody.body).toContain('<blockquote');
     // Reply text (converted from markdown by markdownToHtml) precedes the HTML quote block
-    expect(draftBody.body.indexOf('Thanks for reaching out.')).toBeLessThan(
+    expect(draftBody.body).toContain('<a href="https://example.com/details"');
+    expect(draftBody.body).toContain('>details</a>');
+    expect(draftBody.body.indexOf('<a href="https://example.com/details"')).toBeLessThan(
       draftBody.body.indexOf('<blockquote'),
     );
   });
