@@ -275,6 +275,8 @@ pinned_skills:
   # Context
   - memory-query
   - memory-store
+  # Runtime config
+  - config-store
   # Tentative holds
   - calendar-create-hold
   - calendar-holds-sweep
