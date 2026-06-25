@@ -167,7 +167,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       throw new Error(`Unexpected fetch: ${urlStr}`);
     });
 
-    const ctx = buildCtx({ body: 'Thanks - see [details](https://example.com/details).' });
+    const ctx = buildCtx();
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
@@ -390,7 +390,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       throw new Error(`Unexpected fetch: ${urlStr}`);
     });
 
-    const ctx = buildCtx();
+    const ctx = buildCtx({ body: 'Thanks - see [details](https://example.com/details).' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
 
