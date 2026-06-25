@@ -1,5 +1,5 @@
 name: calendar
-version: "0.1.0"
+version: "0.2.0"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
@@ -182,5 +182,15 @@ pinned_skills:
   # Context
   - memory-query
   - memory-store
+  # Tentative holds
+  - calendar-create-hold
+  - calendar-holds-sweep
   # Cross-specialist consultation
   - bullpen
+
+schedule:
+  - cron: "0 1 * * *"   # daily 01:00 local — expire stale tentative holds
+    task: >
+      Run the calendar holds expiry sweep. Call calendar-holds-sweep with
+      contactId set to ${principal_contact_id}. Report the scanned/expired
+      counts and exit. Do not perform any other scheduling work on this wake.
