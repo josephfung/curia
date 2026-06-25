@@ -65,9 +65,19 @@ export class CalendarCreateHoldHandler implements SkillHandler {
     const tz = ctx.timezone;
     const startUnix = Math.floor(new Date(start).getTime() / 1000);
     const endUnix = Math.floor(new Date(end).getTime() / 1000);
-    const displayStart = toLocalIso(startUnix, tz) ?? start;
-    const displayEnd = toLocalIso(endUnix, tz) ?? end;
-    const tzLabel = tz ? formatDisplayTimezone(tz, new Date()) : 'UTC';
+    // toLocalIso / formatDisplayTimezone throw on a malformed timezone. Guard them
+    // so a bad ctx.timezone degrades to raw values rather than making the skill throw
+    // (skills must return a SkillResult, never reject).
+    let displayStart = start;
+    let displayEnd = end;
+    let tzLabel = 'UTC';
+    try {
+      displayStart = toLocalIso(startUnix, tz) ?? start;
+      displayEnd = toLocalIso(endUnix, tz) ?? end;
+      tzLabel = tz ? formatDisplayTimezone(tz, new Date()) : 'UTC';
+    } catch (err) {
+      ctx.log.warn({ err, tz }, 'calendar-create-hold: timezone formatting failed -- falling back to raw values');
+    }
     // Format: "2026-06-25T10:30:00-04:00 -- 11:30:00-04:00 (EDT (UTC-04:00))"
     // This gives the LLM enough context to describe the slot to the user in natural language.
     const display = `${displayStart} -- ${displayEnd} (${tzLabel})`;

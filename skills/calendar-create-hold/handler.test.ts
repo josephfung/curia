@@ -283,6 +283,29 @@ describe('CalendarCreateHoldHandler -- createEvent throws', () => {
   });
 });
 
+describe('CalendarCreateHoldHandler -- malformed timezone', () => {
+  let handler: CalendarCreateHoldHandler;
+  beforeEach(() => { handler = new CalendarCreateHoldHandler(); });
+
+  it('resolves with success:true even when ctx.timezone is invalid (never throws)', async () => {
+    // A malformed timezone like 'Not/AZone' causes toLocalIso / formatDisplayTimezone
+    // to throw internally. The handler must catch that and return a SkillResult rather
+    // than letting the rejection bubble up (skills must never throw).
+    const createEvent = vi.fn().mockResolvedValue(makeCreatedEvent());
+    const ctx = makeCtx({ toggleValue: null, createEvent });
+    // Override the timezone to an invalid value.
+    // Cast through unknown first — SkillContext has no index signature.
+    (ctx as unknown as Record<string, unknown>).timezone = 'Not/AZone';
+
+    const result = await expect(handler.execute(ctx)).resolves.toBeDefined();
+    void result; // assertion is on the promise settling (resolves), not the value shape
+
+    // Also verify the resolved value has success:true (the hold itself can succeed)
+    const actual = await handler.execute(ctx);
+    expect(actual.success).toBe(true);
+  });
+});
+
 describe('CalendarCreateHoldHandler -- input validation', () => {
   let handler: CalendarCreateHoldHandler;
   beforeEach(() => { handler = new CalendarCreateHoldHandler(); });

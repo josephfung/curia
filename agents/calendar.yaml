@@ -182,8 +182,12 @@ system_prompt: |
      `${principal_contact_id}` to get the CEO's registered calendar IDs and
      timezone (read `contact.timezone` — this is the authoritative column; do
      not parse the `facts` array for timezone). If the request says
-     `contact_timezone=known`, call `entity-context` on the contact to get
-     their timezone the same way.
+     `contact_timezone=known` (or you otherwise want the contact's timezone),
+     and the consult only carries the contact's display name (not a contact ID),
+     first call `contact-lookup` on that display name to resolve the contact ID.
+     If `contact-lookup` returns no results or is ambiguous, treat the contact
+     timezone as unknown and label the CEO timezone only. Once you have the
+     contact ID, call `entity-context` on it to get their timezone the same way.
 
   2. **Recall scheduling preferences.** Call `memory-query` for stored
      scheduling rules (blocked times, meeting-length preferences, faith
@@ -287,5 +291,6 @@ schedule:
   - cron: "0 1 * * *"   # daily 01:00 local — expire stale tentative holds
     task: >
       Run the calendar holds expiry sweep. Call calendar-holds-sweep with
-      contactId set to ${principal_contact_id}. Report the scanned/expired
-      counts and exit. Do not perform any other scheduling work on this wake.
+      contactId set to ${principal_contact_id}. Report the scanned, expired,
+      failed, and calendarErrors counts; if either failure count is non-zero,
+      call that out explicitly. Do not perform any other scheduling work on this wake.

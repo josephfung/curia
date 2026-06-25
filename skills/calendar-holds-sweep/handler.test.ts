@@ -14,8 +14,8 @@ import { createSilentLogger } from '../../src/logger.js';
 
 // All fixture timestamps are relative to this fixed "now".
 // nowMs: 2026-06-25T12:00:00Z as Unix milliseconds
-const NOW_MS = 1750852800000; // 2026-06-25T12:00:00Z
-const NOW_UNIX = NOW_MS / 1000; // 1750852800
+const NOW_MS = 1750852800000; // 2025-06-25T12:00:00Z
+const NOW_UNIX = NOW_MS / 1000; // 1750852800 (2025-06-25T12:00:00Z)
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
