@@ -32,9 +32,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Embedding error telemetry** — `embedding.error` bus events on OpenAI backend failures feed the health layer's embedding canary. (#434)
 - **Model-tier fallback resilience**: reroutes `NOT_FOUND` across fixed tier rules and emits a `model.fallback` audit event (spec 05, #813).
 - **Woken-task authorization: lineage + bypass ladder**: tasks now persist their `TaskOriginator` lineage (migration 065), threaded through the heartbeat wake path so a woken task fires with provenance instead of `metadata: undefined`. A score-keyed *bypass ladder* computes effective standing at skill-invocation time: the live autonomy score can only ever downgrade a woken/derived task's inherited standing to agent (propose-only), never grant it (same-task wake keeps lineage at score ≥70, derived child at ≥90; thresholds configurable under `autonomy.bypass_ladder`). Foundation for #1060; spec 14, spec 19. (#1125)
-- **`calendar-create-hold`** — new skill placing tentative `HOLD (TBC)` events (busy/tentative, no attendees, `curia-hold` metadata) so an offered slot is not re-offered to another contact; toggle-gated via `config-store` (default on), returns timezone-labelled display strings. (#1137)
-- **`calendar-holds-sweep`** — new maintenance skill that deletes stale curia-hold events (slot already past, or created-at older than `maxAgeDays`, default 7). Per-event and per-calendar try/catch ensures one failure never aborts the sweep. Intended for daily scheduled invocation. (#1137)
-- **Calendar specialist scheduling consult** — calendar specialist can now answer a structured `CONSULT REQUEST` from the bullpen: resolves free slots, places tentative holds (toggle-gated via `config-store`), and replies with timezone-labelled `CONSULT REPLY` strings verbatim from skills. (#1137)
+- **Calendar hold primitives** — `calendar-create-hold` places tentative `HOLD (TBC)` events on offered slots to prevent re-offers; `calendar-holds-sweep` removes expired holds daily. (#1137)
+- **Calendar specialist scheduling consult** — specialist handles bullpen `CONSULT REQUEST`s: resolves free slots, places holds, and replies with timezone-labelled strings. (#1137)
 
 ### Changed
 

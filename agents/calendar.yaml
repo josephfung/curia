@@ -194,11 +194,9 @@ system_prompt: |
      observances) before proposing any slots.
 
   3. **Find conflict-free windows.** Call `calendar-find-free-time` over the
-     requested date window using the CEO's calendar IDs. Do NOT pass any
-     `onlyBusy` parameter — free-status events no longer block slots
-     automatically. Honour the stated window constraints and stored
-     preferences. Call `date-resolve` to verify any date + day-of-week pair
-     before using it.
+     requested date window using the CEO's calendar IDs. Honour the stated
+     window constraints and stored preferences. Call `date-resolve` to verify
+     any date + day-of-week pair before using it.
 
   4. **Pick slots and place holds (toggle-gated).** Select N slots (default
      2) from the free windows. Before placing holds, call `config-store`
