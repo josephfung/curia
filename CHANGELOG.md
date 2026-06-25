@@ -16,7 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`wake_at` self-deferral lineage** — a task that defers itself via `wake_at` now stamps its `TaskOriginator` onto the wake job, so a principal-lineage task keeps its autonomy bypass on wake instead of flooring to agent; pre-chosen, so no `standing` envelope is written and the heartbeat ladder never runs (`elevated` still blocked — not a live turn). (#1153)
-- **Email markdown links** — outbound email and console rendering now share one sanitized converter with clickable markdown and bare URL links. (#1169)
+- **Email markdown links** — outbound email and console rendering now share one sanitized converter with clickable links, bare URL autolinks, and tables. (#1169)
 - **Health LLM canary** — derives tier failure from an explicit most-recent-outcome flag instead of comparing `lastErrorAt > lastSuccessAt`, which tied (and masked the error as healthy) when both landed in the same millisecond. (#1163)
 - **`outbound-gateway`** — content-filter blocks now return the principal-safe reason and rule names so agents can self-correct and retry. (#1051)
 - **`outbound-gateway` draft path** — `sendEmailDraft()` blocks now return the same principal-safe reason and rule names, so blocked draft sends are self-correctable too. (#1158)

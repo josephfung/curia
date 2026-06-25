@@ -32,10 +32,16 @@ const MARKDOWN_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: [
     'a', 'blockquote', 'br', 'code', 'div', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
     'hr', 'li', 'ol', 'p', 'pre', 'strong', 'ul',
+    'caption', 'col', 'colgroup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr',
   ],
   allowedAttributes: {
     a: ['href', 'rel', 'target', 'title'],
+    col: ['span', 'width'],
+    colgroup: ['span', 'width'],
     div: ['style'],
+    table: ['align', 'border', 'cellpadding', 'cellspacing', 'width'],
+    td: ['align', 'colspan', 'rowspan', 'style', 'valign', 'width'],
+    th: ['align', 'colspan', 'rowspan', 'scope', 'style', 'valign', 'width'],
   },
   allowedSchemes: ['http', 'https', 'mailto'],
   nonTextTags: ['script', 'style', 'head', 'noscript', 'template', 'xml'],

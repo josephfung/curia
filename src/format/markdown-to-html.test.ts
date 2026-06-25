@@ -65,6 +65,20 @@ describe('markdownToHtml', () => {
     expect(result).not.toContain('<a href="https://example.com"');
   });
 
+  it('preserves markdown tables', () => {
+    const result = markdownToHtml([
+      '| Name | Status |',
+      '| --- | --- |',
+      '| Curia | Ready |',
+    ].join('\n'));
+
+    expect(result).toContain('<table>');
+    expect(result).toContain('<th>Name</th>');
+    expect(result).toContain('<th>Status</th>');
+    expect(result).toContain('<td>Curia</td>');
+    expect(result).toContain('<td>Ready</td>');
+  });
+
   it('strips unsafe link schemes from markdown links', () => {
     const result = markdownToHtml('[x](javascript:alert(1)) [y](data:text/html,x)');
 
@@ -79,6 +93,17 @@ describe('markdownToHtml', () => {
     expect(result).not.toContain('&lt;p&gt;');
     expect(result).not.toContain('<script');
     expect(result).not.toContain('alert(1)');
+  });
+
+  it('preserves sanitized direct HTML tables', () => {
+    const result = markdownToHtml(
+      '<table onclick="alert(1)"><tr><th scope="col">Name</th><td style="text-align:center">Curia</td></tr></table>',
+    );
+
+    expect(result).toContain('<table>');
+    expect(result).toContain('<th scope="col">Name</th>');
+    expect(result).toContain('<td style="text-align:center">Curia</td>');
+    expect(result).not.toContain('onclick');
   });
 
   it('escapes raw HTML in markdown input', () => {
