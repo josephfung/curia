@@ -102,22 +102,24 @@ That cleanly separates the three cases:
 |---|---|---|---|
 | BacklogHeartbeat wake | yes | yes | laddered (may downgrade) |
 | `scheduler-create` job | yes | no | keeps originator, no ladder (pre-authorized) |
-| task `wake_at` self-defer | see §3b | no | keeps originator, no ladder (pre-authorized) |
+| task `wake_at` self-defer | yes (#1153) | no | keeps originator, no ladder (pre-authorized) |
 
 The marker is keyed on the envelope, not on `job.originator`, so a heartbeat wake of a
 pre-065 / unstamped task (null originator) still gets a `wakeContext` — the ladder is a
 no-op on null lineage, but the path stays uniform. **"Derived" is structural:**
 `source = 'agent' OR parent_task_id IS NOT NULL`, computed in `selectHeartbeatCandidates`.
 
-### 3b. Known gap: task `wake_at` self-deferral drops lineage
+### 3b. Resolved (#1153): task `wake_at` self-deferral keeps lineage
 
-A task that defers itself via its own `wake_at` column currently mints a one-shot wake job
-with **no** originator and no `standing` envelope (see the `@TODO(#1125/#1127)` in
-[`task-repo.ts`](../../src/db/task-repo.ts)), so it fires with `metadata: undefined` and
-floors to agent / no-bypass. But a `wake_at` time is *pre-chosen*, so it should be treated
-like `scheduler-create` — **keep** the originator at fire time, **not** laddered, **not**
-floored. As shipped it under-authorizes a principal-lineage task that self-defers. Out of
-scope for #1125 (heartbeat path only); tracked as #1153.
+**Status: shipped in #1153.** Previously a task that defers itself via its own `wake_at` column
+minted a one-shot wake job with **no** originator and no `standing` envelope, so it fired with
+`metadata: undefined` and floored to agent / no-bypass — under-authorizing a principal-lineage
+self-deferral. A `wake_at` time is *pre-chosen*, so it is now treated like `scheduler-create`:
+both `wake_at` mint sites in [`task-repo.ts`](../../src/db/task-repo.ts) (the `createTask` CTE and
+the `updateTask` `_new_wake` arm) now persist the task's `originator` onto the wake job's
+`scheduled_jobs` row, while still writing **no** `standing` envelope. `fireJob` therefore threads
+the originator with no `wakeContext` — the bypass ladder never runs (the time was already decided)
+and the originator is **kept** at fire time, not floored.
 
 > **Interaction with #1126.** Fixing #1153 restores only the *autonomy* principal-bypass
 > (for `normal` skills) — it carries no `standing` envelope, so it mints no `wakeContext` and
@@ -285,9 +287,10 @@ Three issues, completed in order:
   propose-only). Scope is durable **lineage** only; whether a *live* console interaction sets
   the `liveTurn` signal is a dispatch-path question now that #1126 has shipped the mechanism —
   see the note on the issue.
-- **#1153 (follow-up, depends on #1125):** thread `TaskOriginator` onto task `wake_at`
-  self-deferral wake jobs so a pre-chosen deferral keeps its originator at fire time
-  (no ladder) instead of flooring to agent — see §3b.
+- **#1153 (follow-up, depends on #1125) — SHIPPED.** Threaded `TaskOriginator` onto task
+  `wake_at` self-deferral wake jobs (both the `createTask` CTE and the `updateTask` `_new_wake`
+  arm) so a pre-chosen deferral keeps its originator at fire time (no ladder) instead of flooring
+  to agent — see §3b.
 
 Doc-sync lands with the implementation PRs (specs describe shipped behaviour): ADR-011,
 ADR-017 (+ ADR-018 cross-ref), spec 03 (Skills & Execution), spec 14 (Autonomy Engine),

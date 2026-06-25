@@ -164,12 +164,13 @@ export class TaskRepo {
       // The task_payload carries minimal context; the dispatcher (issue 4) loads the full
       // task from tasks.id via the scheduled_jobs.task_id FK.
       //
-      // @TODO(#1125/#1127): this specific-`wake_at` wake job does NOT carry the originator on its
-      // scheduled_jobs row (and stamps no `standing`), so fireJob fires it with metadata: undefined
-      // — the woken task gets no lineage, no wakeContext, and therefore no bypass. That is the
-      // conservative/safe direction (propose-only), and deliberately out of #1125's scope, which
-      // covers only the open-ended BacklogHeartbeat path. Threading lineage onto specific wakes is
-      // a follow-up (it must NOT be subject to the heartbeat ladder — the time was pre-chosen).
+      // The wake job carries the task's `originator` (selected straight from new_task, so it is
+      // definitionally the same, parent-capped lineage stamped on the task) but writes NO `standing`
+      // envelope (#1153). A `wake_at` time is pre-chosen, so this is a pre-authorized deferral, the
+      // same category as a `scheduler-create` job: fireJob threads `job.originator` onto the fired
+      // agent.task but mints no `wakeContext`, so it KEEPS its originator at fire time and is NOT
+      // subject to the heartbeat bypass ladder (the time was already decided). It is still not a live
+      // principal turn, so `elevated` authority primitives remain blocked on wake (see design §3b).
       const cteSql = `
         WITH new_task AS (
           INSERT INTO tasks (
@@ -182,8 +183,8 @@ export class TaskRepo {
           RETURNING ${TASK_COLUMNS}
         ),
         _wake_job AS (
-          INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id)
-          SELECT $17, $18, '{"type":"task-wake"}'::jsonb, 'pending', $18, $19, $20, new_task.id
+          INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
+          SELECT $17, $18, '{"type":"task-wake"}'::jsonb, 'pending', $18, $19, $20, new_task.id, new_task.originator
           FROM new_task
         )
         SELECT * FROM new_task
@@ -390,6 +391,7 @@ export class TaskRepo {
       const wakeRunAtIdx = updates.wakeAt ? whereIdx + 2 : null;
       const wakeCreatedByIdx = updates.wakeAt ? whereIdx + 3 : null;
       const wakeTzIdx = updates.wakeAt ? whereIdx + 4 : null;
+      const wakeOriginatorIdx = updates.wakeAt ? whereIdx + 5 : null;
 
       const cteSql = `
         WITH updated_task AS (
@@ -400,9 +402,9 @@ export class TaskRepo {
           WHERE task_id = $${whereIdx} AND status = 'pending'
         )${updates.wakeAt ? `,
         _new_wake AS (
-          INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id)
+          INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
           VALUES ($${wakeAgentIdx}, $${wakeRunAtIdx}, '{"type":"task-wake"}'::jsonb, 'pending',
-                  $${wakeRunAtIdx}, $${wakeCreatedByIdx}, $${wakeTzIdx}, $${whereIdx})
+                  $${wakeRunAtIdx}, $${wakeCreatedByIdx}, $${wakeTzIdx}, $${whereIdx}, $${wakeOriginatorIdx}::jsonb)
         )` : ''}
         SELECT * FROM updated_task
       `;
@@ -419,6 +421,10 @@ export class TaskRepo {
           updates.wakeAt,                                             // $wakeRunAtIdx
           callerAgentId ?? current.agentId,                          // $wakeCreatedByIdx
           this.timezone,                                             // $wakeTzIdx
+          // Carry the task's (immutable) lineage onto the new wake job so a self-deferral keeps its
+          // originator at fire time — no `standing` envelope, so fireJob mints no wakeContext and the
+          // bypass ladder never runs (a pre-chosen wake_at is pre-authorized, like scheduler-create) (#1153).
+          current.originator ? JSON.stringify(current.originator) : null, // $wakeOriginatorIdx
         );
       }
       const { rows } = await this.pool.query(cteSql, allParams);

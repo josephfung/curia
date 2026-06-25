@@ -18,6 +18,7 @@ import pg from 'pg';
 import pino from 'pino';
 import { selectHeartbeatCandidates } from '../../src/db/queries/tasks.js';
 import { SchedulerService } from '../../src/scheduler/scheduler-service.js';
+import { TaskRepo } from '../../src/db/task-repo.js';
 import { makePrincipalOriginator } from '../../src/contacts/principal.js';
 import { makeWakeContext } from '../../src/autonomy/effective-standing.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
@@ -55,14 +56,20 @@ function makeManifest(
   };
 }
 
-/** Rebuild the agent.task metadata exactly as Scheduler.fireJob does from a persisted wake row. */
+/** Rebuild the agent.task metadata exactly as Scheduler.fireJob does from a persisted wake row.
+ *  Mirrors fireJob precisely: the wakeContext marker is keyed on the `standing` envelope being
+ *  PRESENT, not merely on the task-wake payload type. A wake_at self-defer job (#1153) carries a
+ *  task-wake payload with NO standing, so it threads the originator but mints no wakeContext — i.e.
+ *  it keeps its originator like a scheduler-create fire and is not subject to the bypass ladder. */
 function metadataFromWakeRow(row: { originator: Record<string, unknown> | null; task_payload: Record<string, unknown> }) {
-  if (!row.originator) return undefined;
-  const meta: Record<string, unknown> = { originator: row.originator };
-  if (row.task_payload?.['type'] === 'task-wake') {
-    const standing = (row.task_payload as { standing?: { derived?: boolean } }).standing;
-    meta.wakeContext = makeWakeContext(standing?.derived === true);
-  }
+  const standing = row.task_payload?.['type'] === 'task-wake'
+    // Cast through `unknown` first per the repo's Record<string, unknown> narrowing rule (CLAUDE.md).
+    ? (row.task_payload as unknown as { standing?: { derived?: boolean } }).standing
+    : undefined;
+  if (!row.originator && !standing) return undefined;
+  const meta: Record<string, unknown> = {};
+  if (row.originator) meta.originator = row.originator;
+  if (standing) meta.wakeContext = makeWakeContext(standing.derived === true);
   return meta;
 }
 
@@ -256,5 +263,53 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toContain('live principal turn');
     }
+  });
+
+  it('a principal-lineage task self-deferring via wake_at keeps the autonomy bypass (no ladder), but elevated stays blocked (#1153)', async () => {
+    // The actual self-deferral path: TaskRepo mints the wake_at wake job. Unlike a heartbeat wake,
+    // it carries the task's originator but NO `standing` envelope — the time was pre-chosen, so the
+    // fire keeps the originator (like scheduler-create) and is not laddered.
+    const repo = new TaskRepo(
+      pool,
+      { publish: async () => {}, subscribe: () => {} } as unknown as EventBus,
+      logger as never,
+      'UTC',
+    );
+    const task = await repo.createTask({
+      agentId: 'coordinator', title: `${PREFIX} wake_at self-defer`, source: 'ceo',
+      originator: CONSOLE_PRINCIPAL_LINEAGE, wakeAt: new Date(Date.now() + 3_600_000),
+    });
+
+    const { rows } = await pool.query<{ originator: Record<string, unknown> | null; task_payload: Record<string, unknown> }>(
+      `SELECT originator, task_payload FROM scheduled_jobs WHERE task_id = $1`, [task.id],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.originator).toEqual(CONSOLE_PRINCIPAL_LINEAGE);
+    expect(rows[0]!.task_payload).toEqual({ type: 'task-wake' }); // no standing envelope
+
+    const taskMetadata = metadataFromWakeRow(rows[0]!);
+    // Originator threaded; no wakeContext (so computeEffectiveTaskMetadata applies no ladder).
+    expect(taskMetadata).toBeDefined();
+    expect(taskMetadata).not.toHaveProperty('wakeContext');
+
+    const handler: SkillHandler = { execute: async () => ({ success: true, data: 'acted as principal' }) };
+
+    // A `normal` + action_risk:'critical' skill (min score 90). At score 75 a non-principal task is
+    // blocked by Gate B; the wake's retained principal standing bypasses it — proof the bypass is
+    // intact on a self-deferral (the very asymmetry #1153 closes: heartbeat floors, wake_at keeps).
+    const registry = new SkillRegistry();
+    registry.register(makeManifest('commit-funds', 'normal', 'critical'), handler);
+    const allowed = await new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(75) })
+      .invoke('commit-funds', {}, undefined, { taskMetadata });
+    expect(allowed.success).toBe(true);
+
+    // But a wake_at fire is NOT a live principal turn, so an `elevated` authority primitive stays
+    // blocked at any score — a pre-chosen deferral resumes work, it must not exercise authority.
+    const elevatedRegistry = new SkillRegistry();
+    elevatedRegistry.register(makeManifest('exercise-authority', 'elevated', 'none'), handler);
+    const blocked = await new ExecutionLayer(elevatedRegistry, logger, { autonomyService: makeAutonomyService(90) })
+      .invoke('exercise-authority', {}, undefined, { taskMetadata });
+    expect(blocked.success).toBe(false);
+    if (!blocked.success) expect(blocked.error).toContain('live principal turn');
   });
 });
