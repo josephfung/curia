@@ -102,8 +102,10 @@ export class CalendarHoldsSweepHandler implements SkillHandler {
     }
 
     // Sweep counters.
-    let scanned = 0; // curia-hold events examined
-    let expired = 0; // holds successfully deleted
+    let scanned = 0;          // curia-hold events examined
+    let expired = 0;          // holds successfully deleted
+    let failed = 0;           // stale holds where deleteEvent threw (partial failure)
+    let calendarErrors = 0;   // calendars whose listEvents threw / were skipped
 
     // Process each calendar independently.
     // A failure on one calendar (revoked grant, temporary Nylas error) does not
@@ -115,8 +117,9 @@ export class CalendarHoldsSweepHandler implements SkillHandler {
       try {
         events = await ctx.nylasCalendarClient.listEvents(calId, windowStartIso, windowEndIso);
       } catch (err) {
-        // One calendar failed — log it and move on to the next.
+        // One calendar failed — log it, increment the counter, and move on to the next.
         ctx.log.error({ err, calId }, 'calendar-holds-sweep: failed to list events for calendar, skipping');
+        calendarErrors++;
         continue;
       }
 
@@ -146,6 +149,8 @@ export class CalendarHoldsSweepHandler implements SkillHandler {
           ctx.log.info({ calId, eventId: event.id }, 'calendar-holds-sweep: deleted stale hold');
         } catch (err) {
           // Log and continue — the hold stays on calendar but the sweep succeeds overall.
+          // Increment failed so callers can distinguish "nothing stale" from "deletes failed".
+          failed++;
           ctx.log.error(
             { err, calId, eventId: event.id },
             'calendar-holds-sweep: failed to delete stale hold, continuing sweep',
@@ -154,7 +159,7 @@ export class CalendarHoldsSweepHandler implements SkillHandler {
       }
     }
 
-    ctx.log.info({ contactId, scanned, expired }, 'calendar-holds-sweep: sweep complete');
-    return { success: true, data: { scanned, expired } };
+    ctx.log.info({ contactId, scanned, expired, failed, calendarErrors }, 'calendar-holds-sweep: sweep complete');
+    return { success: true, data: { scanned, expired, failed, calendarErrors } };
   }
 }

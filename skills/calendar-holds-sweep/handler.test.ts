@@ -110,10 +110,13 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: { scanned: number; expired: number } }).data;
+    const data = (result as { success: true; data: { scanned: number; expired: number; failed: number; calendarErrors: number } }).data;
     expect(data.expired).toBe(2);
     // scanned counts hold events only (not realMeeting)
     expect(data.scanned).toBe(3);
+    // Clean run — no partial failures
+    expect(data.failed).toBe(0);
+    expect(data.calendarErrors).toBe(0);
 
     // Guard: listEvents must be called with a timeMin EARLIER than now (lookback window).
     // This ensures past-slot holds are returned by Nylas (AC #6) and not silently missed
@@ -159,9 +162,11 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: { scanned: number; expired: number } }).data;
+    const data = (result as { success: true; data: { scanned: number; expired: number; failed: number; calendarErrors: number } }).data;
     expect(data.scanned).toBe(0);
     expect(data.expired).toBe(0);
+    expect(data.failed).toBe(0);
+    expect(data.calendarErrors).toBe(0);
   });
 
   it('honours custom maxAgeDays: a hold 6 days old is NOT stale when maxAgeDays=7', async () => {
@@ -183,7 +188,7 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: { scanned: number; expired: number } }).data;
+    const data = (result as { success: true; data: { scanned: number; expired: number; failed: number; calendarErrors: number } }).data;
     expect(data.scanned).toBe(1);
     expect(data.expired).toBe(0); // 6d < 7d threshold — not stale
     expect(ctx.nylasCalendarClient!.deleteEvent).not.toHaveBeenCalled();
@@ -203,7 +208,7 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
 
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: { scanned: number; expired: number } }).data;
+    const data = (result as { success: true; data: { scanned: number; expired: number; failed: number; calendarErrors: number } }).data;
     expect(data.expired).toBe(0); // exactly at boundary — not stale per isHoldStale semantics
   });
 });
@@ -233,10 +238,14 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
 
     // Sweep must succeed overall even though one delete failed
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: { scanned: number; expired: number } }).data;
+    const data = (result as { success: true; data: { scanned: number; expired: number; failed: number; calendarErrors: number } }).data;
     expect(data.scanned).toBe(3);
     // Only the successful delete is counted — the failed one is not
     expect(data.expired).toBe(1);
+    // The failed delete is surfaced in the failed counter
+    expect(data.failed).toBe(1);
+    // No calendar-level errors — listEvents succeeded
+    expect(data.calendarErrors).toBe(0);
     // Both stale holds were attempted
     expect(deleteEvent).toHaveBeenCalledTimes(2);
   });
@@ -264,7 +273,7 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: { scanned: number; expired: number } }).data;
+    const data = (result as { success: true; data: { scanned: number; expired: number; failed: number; calendarErrors: number } }).data;
     expect(data.scanned).toBe(0);
     expect(data.expired).toBe(0);
   });
@@ -321,9 +330,13 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
 
     // Should still succeed and count the events from the working calendar
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: { scanned: number; expired: number } }).data;
+    const data = (result as { success: true; data: { scanned: number; expired: number; failed: number; calendarErrors: number } }).data;
     expect(data.scanned).toBe(1);
     expect(data.expired).toBe(1);
+    // cal-work's listEvents threw — must be reflected in calendarErrors
+    expect(data.calendarErrors).toBe(1);
+    // No per-event delete failures
+    expect(data.failed).toBe(0);
     expect(ctx.nylasCalendarClient!.deleteEvent).toHaveBeenCalledWith('cal-personal', 'evt-past', false);
   });
 });

@@ -10,7 +10,9 @@
   },
   "outputs": {
     "scanned": "number (curia-hold events examined)",
-    "expired": "number (holds deleted)"
+    "expired": "number (holds successfully deleted)",
+    "failed": "number (stale holds where deleteEvent threw — e.g. revoked grant; 0 on a clean run)",
+    "calendarErrors": "number (calendars whose listEvents threw and were skipped; 0 on a clean run)"
   },
   "permissions": [],
   "secrets": [],

@@ -99,6 +99,16 @@ function makeCtx(opts: {
   } as unknown as SkillContext;
 }
 
+/** A second overlapping curia-hold — used in partial-failure tests. */
+const OVERLAPPING_HOLD_2 = makeEvent({
+  id: 'hold-event-id-2',
+  title: 'HOLD (TBC): team standup',
+  status: 'tentative',
+  startTime: START_UNIX,
+  endTime: END_UNIX,
+  metadata: { [CURIA_HOLD_KEY]: 'true', 'created-at': new Date().toISOString() },
+});
+
 // ---------------------------------------------------------------------------
 // Self-release tests
 // ---------------------------------------------------------------------------
@@ -147,6 +157,40 @@ describe('CalendarCreateEventHandler -- self-release holds', () => {
     // No deletion attempts because listEvents blew up before we could iterate
     expect(deleteEvent).not.toHaveBeenCalled();
     // Warn log should be emitted so we know self-release failed
+    expect((ctx.log.warn as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+  });
+
+  it('when the FIRST deleteEvent rejects, the SECOND hold is still deleted and booking returns success', async () => {
+    // HOLD_1 (hold-event-id) → first in iteration order; delete will reject
+    // HOLD_2 (hold-event-id-2) → second; delete must still be attempted and succeed
+    const deleteEvent = vi.fn().mockImplementation(
+      (_calId: string, eventId: string) => {
+        if (eventId === OVERLAPPING_HOLD.id) {
+          return Promise.reject(new Error('Nylas 500: transient error'));
+        }
+        return Promise.resolve();
+      },
+    );
+    const ctx = makeCtx({
+      listEvents: vi.fn().mockResolvedValue([
+        OVERLAPPING_HOLD,   // delete will fail
+        OVERLAPPING_HOLD_2, // delete must succeed despite previous failure
+      ]),
+      deleteEvent,
+    });
+
+    const result = await handler.execute(ctx);
+
+    // Booking still succeeds — self-release failure must never fail the booking
+    expect(result.success).toBe(true);
+
+    // deleteEvent was attempted for BOTH holds
+    expect(deleteEvent).toHaveBeenCalledTimes(2);
+    const deletedIds = deleteEvent.mock.calls.map((c: unknown[]) => c[1]);
+    expect(deletedIds).toContain(OVERLAPPING_HOLD.id);
+    expect(deletedIds).toContain(OVERLAPPING_HOLD_2.id);
+
+    // Warn log emitted for the per-event failure
     expect((ctx.log.warn as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
   });
 });

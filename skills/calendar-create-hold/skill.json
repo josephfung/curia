@@ -14,7 +14,7 @@
   "outputs": {
     "holdEventId": "string|null (Nylas event id of the placed hold, or null when not held)",
     "held": "boolean (true if a hold was placed)",
-    "display": "string (timezone-labelled slot, e.g. \"Thursday June 25 at 10:30 AM EDT\")",
+    "display": "string (ISO local start/end range with timezone label, e.g. \"2026-06-25T10:30:00-04:00 -- 2026-06-25T11:30:00-04:00 (EDT (UTC-04:00))\")",
     "reason": "string? (why no hold was placed: \"holds disabled\" or an error summary)"
   },
   "permissions": [],

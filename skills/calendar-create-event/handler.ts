@@ -78,6 +78,8 @@ export class CalendarCreateEventHandler implements SkillHandler {
       // Self-release: a real booking supersedes any tentative holds we placed on the
       // same slot. List overlapping events and delete only our own curia-hold events.
       // Failure here must never fail the booking — the event is already created.
+      // The outer try/catch guards listEvents; the inner per-event try/catch ensures
+      // one failing deleteEvent doesn't abort the rest of the loop.
       try {
         const startUnix = Math.floor(new Date(start).getTime() / 1000);
         const endUnix = Math.floor(new Date(end).getTime() / 1000);
@@ -87,8 +89,14 @@ export class CalendarCreateEventHandler implements SkillHandler {
           if (!isHoldEvent(e)) continue;             // skip real (non-hold) events
           if (e.startTime === null || e.endTime === null) continue;  // skip malformed holds
           if (!eventsOverlap(startUnix, endUnix, e.startTime, e.endTime)) continue; // skip non-overlapping
-          await ctx.nylasCalendarClient.deleteEvent(calendarId, e.id, false); // notifyAttendees=false — holds have no attendees
-          ctx.log.info({ releasedHoldId: e.id, bookedEventId: event.id }, 'calendar-create-event: released overlapping hold');
+          // Per-event try/catch: one failing delete must not abort the rest of the loop.
+          // A transient Nylas error on one hold should not prevent releasing the others.
+          try {
+            await ctx.nylasCalendarClient.deleteEvent(calendarId, e.id, false); // notifyAttendees=false — holds have no attendees
+            ctx.log.info({ releasedHoldId: e.id, bookedEventId: event.id }, 'calendar-create-event: released overlapping hold');
+          } catch (err) {
+            ctx.log.warn({ err, holdId: e.id, bookedEventId: event.id }, 'calendar-create-event: failed to release overlapping hold, continuing');
+          }
         }
       } catch (err) {
         ctx.log.warn({ err, bookedEventId: event.id }, 'calendar-create-event: hold self-release failed (booking unaffected)');
