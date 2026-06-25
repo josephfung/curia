@@ -101,6 +101,7 @@ export class CalendarCreateHoldHandler implements SkillHandler {
           held: false,
           holdEventId: null,
           display,
+          displayTimezone: tzLabel,
           reason: 'holds disabled',
         },
       };
@@ -154,6 +155,7 @@ export class CalendarCreateHoldHandler implements SkillHandler {
           held: false,
           holdEventId: null,
           display,
+          displayTimezone: tzLabel,
           reason,
         },
       };

@@ -169,17 +169,31 @@ describe('CalendarCreateHoldHandler -- toggle ON (null)', () => {
   });
 
   it('returns a non-empty display string labelled with the timezone', async () => {
+    // Context uses America/Toronto with a June start date (UTC-04:00 / EDT).
+    // formatDisplayTimezone returns "EDT (UTC-04:00)" for this combination,
+    // so the display string must contain the UTC offset and displayTimezone must match.
     const ctx = makeCtx({ toggleValue: null });
 
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const display = (result.data as Record<string, unknown>).display as string;
+      const data = result.data as Record<string, unknown>;
+      const display = data.display as string;
       expect(typeof display).toBe('string');
       expect(display.length).toBeGreaterThan(0);
-      // Display should include timezone info (EDT, EST, UTC, etc.)
-      expect(display).toMatch(/[A-Z]{2,5}/);
+      // Must contain the EDT UTC offset in the ISO timestamps (-04:00) or the abbreviation EDT.
+      // This verifies the timezone label is actually derived from America/Toronto in June,
+      // not just any uppercase sequence like "HOLD".
+      const hasOffset = display.includes('-04:00');
+      const hasAbbr = display.includes('EDT');
+      expect(hasOffset || hasAbbr).toBe(true);
+      // displayTimezone should also be present and contain the same timezone info
+      const displayTimezone = data.displayTimezone as string;
+      expect(typeof displayTimezone).toBe('string');
+      const tzHasOffset = displayTimezone.includes('-04:00');
+      const tzHasAbbr = displayTimezone.includes('EDT');
+      expect(tzHasOffset || tzHasAbbr).toBe(true);
     }
   });
 });
@@ -228,6 +242,9 @@ describe('CalendarCreateHoldHandler -- toggle OFF ("false")', () => {
       expect(data.reason).toBe('holds disabled');
       // Display should still be populated even when disabled
       expect(typeof data.display).toBe('string');
+      // displayTimezone must be present on held:false paths (Fix 1 coverage)
+      expect(typeof data.displayTimezone).toBe('string');
+      expect((data.displayTimezone as string).length).toBeGreaterThan(0);
     }
   });
 });
