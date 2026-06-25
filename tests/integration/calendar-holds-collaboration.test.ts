@@ -198,6 +198,11 @@ describeIf('calendar-holds — config-store toggle (real Postgres)', () => {
     // Overwrite the toggle to 'true'. ConfigStore.set is idempotent via dedup.
     const configStore = new ConfigStore(entityMemory, silentLog());
     await configStore.set('calendar_holds', 'enabled', 'true');
+    // Confirm the write actually landed before invoking the handler (mirrors the
+    // toggle-OFF test). Without this, a future change to the KG dedup strategy
+    // could leave the stored value at 'false' and make the held:true assertion
+    // fail with a confusing message instead of pointing at the real cause.
+    expect(await configStore.get('calendar_holds', 'enabled')).toBe('true');
 
     const holdEventId = `hold-${randomUUID()}`;
     const createdHold = makeHoldEvent(holdEventId);
