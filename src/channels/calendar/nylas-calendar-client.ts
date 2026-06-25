@@ -141,6 +141,8 @@ export interface NylasCalendarEvent {
   status: string;
   calendarId: string;
   busy: boolean;
+  /** Arbitrary string key/value pairs attached to the event by Curia (e.g. `{ "curia-hold": "true" }`). Null when absent. */
+  metadata: Record<string, string> | null;
 }
 
 export interface NylasFreeBusyResult {
@@ -160,6 +162,12 @@ export interface CreateEventInput {
   location?: string;
   attendees?: Array<{ email: string; name?: string }>;
   conferencing?: Record<string, unknown>;
+  /** Arbitrary string key/value pairs to attach to the event (e.g. `{ "curia-hold": "true" }`). Values must be strings (Nylas requirement). */
+  metadata?: Record<string, string>;
+  /** Event status (e.g. "tentative", "confirmed", "cancelled"). */
+  status?: string;
+  /** Whether the event should block calendar time. Defaults to true in Nylas. */
+  busy?: boolean;
 }
 
 // -- SDK constructor workaround (same as email NylasClient) --
@@ -265,6 +273,10 @@ export class NylasCalendarClient {
         }));
       }
       if (event.conferencing) requestBody.conferencing = event.conferencing;
+      // Conditionally include metadata/status/busy so existing create calls are byte-for-byte unchanged.
+      if (event.metadata) requestBody.metadata = event.metadata;
+      if (event.status) requestBody.status = event.status;
+      if (typeof event.busy === 'boolean') requestBody.busy = event.busy;
 
       const response = await this.nylas.events.create({
         identifier: this.grantId,
@@ -303,6 +315,10 @@ export class NylasCalendarClient {
         }));
       }
       if (changes.conferencing !== undefined) requestBody.conferencing = changes.conferencing;
+      // Conditionally include metadata/status/busy so existing update calls are byte-for-byte unchanged.
+      if (changes.metadata) requestBody.metadata = changes.metadata;
+      if (changes.status) requestBody.status = changes.status;
+      if (typeof changes.busy === 'boolean') requestBody.busy = changes.busy;
 
       const response = await this.nylas.events.update({
         identifier: this.grantId,
@@ -422,6 +438,7 @@ export class NylasCalendarClient {
       status: evt.status ?? 'confirmed',
       calendarId: evt.calendarId ?? '',
       busy: evt.busy ?? true,
+      metadata: evt.metadata ?? null,
     };
   }
 }
