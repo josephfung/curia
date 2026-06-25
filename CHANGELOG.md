@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Setup Node version gate** — `scripts/setup.sh` now rejects Node 22/23 to match the documented Node >=24 requirement. (#1139)
 - **Scheduling consults** — sender-proposed meeting times now flow through `ceo-inbox` to `calendar`, which checks them before counter-proposing alternatives. (#1186)
 - **`ceo-inbox` Branch A resume** — calendar consult replies now call `memory-query` anchored on sender and subject before drafting, so stored facts (Calendly links, venue preferences, relationship notes) shape the reply; no-match proceeds normally. (#1185)
 - **`wake_at` self-deferral lineage** — a task that defers itself via `wake_at` now stamps its `TaskOriginator` onto the wake job, so a principal-lineage task keeps its autonomy bypass on wake instead of flooring to agent; pre-chosen, so no `standing` envelope is written and the heartbeat ladder never runs (`elevated` still blocked — not a live turn). (#1153)

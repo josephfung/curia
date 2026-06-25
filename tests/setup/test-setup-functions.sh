@@ -60,8 +60,81 @@ assert_invalid_key() {
     fi
 }
 
+run_check_prerequisites_with_node() {
+    local node_version="$1"
+    local out_file="$2"
+    local tmp_bin
+    tmp_bin=$(mktemp -d)
+
+    cat > "$tmp_bin/docker" <<'DOCKER_EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "info" ]]; then
+    exit 0
+fi
+if [[ "${1:-}" == "compose" && "${2:-}" == "version" ]]; then
+    exit 0
+fi
+echo "unexpected docker invocation: $*" >&2
+exit 1
+DOCKER_EOF
+
+    cat > "$tmp_bin/node" <<NODE_EOF
+#!/usr/bin/env bash
+echo "v${node_version}"
+NODE_EOF
+
+    cat > "$tmp_bin/pnpm" <<'PNPM_EOF'
+#!/usr/bin/env bash
+exit 0
+PNPM_EOF
+
+    cat > "$tmp_bin/openssl" <<'OPENSSL_EOF'
+#!/usr/bin/env bash
+exit 0
+OPENSSL_EOF
+
+    chmod +x "$tmp_bin/docker" "$tmp_bin/node" "$tmp_bin/pnpm" "$tmp_bin/openssl"
+
+    local rc
+    set +e
+    (PATH="$tmp_bin:$PATH"; check_prerequisites) > "$out_file" 2>&1
+    rc=$?
+    set -e
+
+    rm -rf "$tmp_bin"
+    return "$rc"
+}
+
+# --- check_prerequisites tests ---
+
+echo "=== check_prerequisites ==="
+_node_out=$(mktemp)
+if run_check_prerequisites_with_node "22.19.0" "$_node_out"; then
+    echo "  ✗ rejects Node 22"
+    FAIL=$((FAIL + 1))
+else
+    assert_true "rejects Node 22 with >= 24 message" "$_node_out" ">= 24 is required"
+fi
+
+if run_check_prerequisites_with_node "23.11.0" "$_node_out"; then
+    echo "  ✗ rejects Node 23"
+    FAIL=$((FAIL + 1))
+else
+    assert_true "rejects Node 23 with >= 24 message" "$_node_out" ">= 24 is required"
+fi
+
+if run_check_prerequisites_with_node "24.0.0" "$_node_out"; then
+    echo "  ✓ accepts Node 24"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ accepts Node 24"
+    FAIL=$((FAIL + 1))
+fi
+rm -f "$_node_out"
+
 # --- validate_anthropic_key tests ---
 
+echo ""
 echo "=== validate_anthropic_key ==="
 assert_valid_key   "accepts sk-ant-api03-..." "sk-ant-api03-abc123XYZ"
 assert_valid_key   "accepts key with hyphens in suffix" "sk-ant-abc-def-123"
