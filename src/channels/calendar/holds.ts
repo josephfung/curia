@@ -117,10 +117,10 @@ export function normalizeContactDomain(value?: string): string | null {
 
 export function normalizeSchedulingSubject(subject?: string): string {
   let normalized = subject?.trim().toLowerCase() ?? '';
-  normalized = normalized.replace(HOLD_TITLE_PREFIX_RE, '');
   while (REPLY_PREFIX_RE.test(normalized)) {
     normalized = normalized.replace(REPLY_PREFIX_RE, '');
   }
+  normalized = normalized.replace(HOLD_TITLE_PREFIX_RE, '');
   return normalized
     .normalize('NFKD')
     .replace(/[^\p{Letter}\p{Number}\s]/gu, ' ')

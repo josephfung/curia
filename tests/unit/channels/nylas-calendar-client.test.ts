@@ -24,8 +24,10 @@ function makeMockSdk(): NylasCalendarLike {
     },
     events: {
       list: vi.fn().mockResolvedValue({ data: [] }),
+      find: vi.fn().mockResolvedValue({ data: { id: 'evt-1' } }),
       create: vi.fn().mockResolvedValue({ data: { id: 'evt-1' } }),
       update: vi.fn().mockResolvedValue({ data: { id: 'evt-1' } }),
+      sendRsvp: vi.fn().mockResolvedValue({ requestId: 'req-1' }),
       destroy: vi.fn().mockResolvedValue(undefined),
     },
     calendars_free_busy: {
