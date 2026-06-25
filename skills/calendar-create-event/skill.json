@@ -1,7 +1,7 @@
 {
   "name": "calendar-create-event",
   "description": "Create a new calendar event with title, time, attendees, and optional description/location/conferencing. Attendees will receive invitation emails automatically.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sensitivity": "normal",
   "action_risk": "high",
   "inputs": {

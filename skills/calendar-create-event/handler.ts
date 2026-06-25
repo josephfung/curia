@@ -3,10 +3,15 @@
 // Creates a new calendar event. Checks the read-only flag from the calendar
 // registry before attempting creation. If the calendar is unregistered,
 // proceeds anyway — the Nylas API will enforce its own permissions.
+//
+// After a successful booking, performs self-release: any curia-hold events that
+// overlap the new slot are deleted. This is a best-effort, fire-and-forget step
+// that MUST NOT fail the booking — if anything goes wrong here, we warn and continue.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { CreateEventInput } from '../../src/channels/calendar/nylas-calendar-client.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
+import { isHoldEvent, eventsOverlap } from '../../src/channels/calendar/holds.js';
 
 export class CalendarCreateEventHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -69,6 +74,26 @@ export class CalendarCreateEventHandler implements SkillHandler {
 
       const event = await ctx.nylasCalendarClient.createEvent(calendarId, eventData);
       ctx.log.info({ calendarId, eventId: event.id }, 'Created calendar event');
+
+      // Self-release: a real booking supersedes any tentative holds we placed on the
+      // same slot. List overlapping events and delete only our own curia-hold events.
+      // Failure here must never fail the booking — the event is already created.
+      try {
+        const startUnix = Math.floor(new Date(start).getTime() / 1000);
+        const endUnix = Math.floor(new Date(end).getTime() / 1000);
+        const overlapping = await ctx.nylasCalendarClient.listEvents(calendarId, start, end);
+        for (const e of overlapping) {
+          if (e.id === event.id) continue;           // skip the event we just created
+          if (!isHoldEvent(e)) continue;             // skip real (non-hold) events
+          if (e.startTime === null || e.endTime === null) continue;  // skip malformed holds
+          if (!eventsOverlap(startUnix, endUnix, e.startTime, e.endTime)) continue; // skip non-overlapping
+          await ctx.nylasCalendarClient.deleteEvent(calendarId, e.id, false); // notifyAttendees=false — holds have no attendees
+          ctx.log.info({ releasedHoldId: e.id, bookedEventId: event.id }, 'calendar-create-event: released overlapping hold');
+        }
+      } catch (err) {
+        ctx.log.warn({ err, bookedEventId: event.id }, 'calendar-create-event: hold self-release failed (booking unaffected)');
+      }
+
       // Format timestamps in the user's local timezone so the confirmation matches
       // what calendar-list-events returns. toLocalIso handles null/invalid values internally.
       const tz = ctx.timezone;
