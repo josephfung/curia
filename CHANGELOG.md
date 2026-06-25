@@ -34,6 +34,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Woken-task authorization: lineage + bypass ladder**: tasks now persist their `TaskOriginator` lineage (migration 065), threaded through the heartbeat wake path so a woken task fires with provenance instead of `metadata: undefined`. A score-keyed *bypass ladder* computes effective standing at skill-invocation time: the live autonomy score can only ever downgrade a woken/derived task's inherited standing to agent (propose-only), never grant it (same-task wake keeps lineage at score ≥70, derived child at ≥90; thresholds configurable under `autonomy.bypass_ladder`). Foundation for #1060; spec 14, spec 19. (#1125)
 - **Calendar hold primitives** — `calendar-create-hold` places tentative `HOLD (TBC)` events on offered slots to prevent re-offers; `calendar-holds-sweep` removes expired holds daily. (#1137)
 - **Calendar specialist scheduling consult** — specialist handles bullpen `CONSULT REQUEST`s: resolves free slots, places holds, and replies with timezone-labelled strings. (#1137)
+- **`ceo-inbox` consult-and-resume** — scheduling emails park pending a calendar consult and draft on reply instead of guessing blind; convention documented in ADR-023. (#1137)
 
 ### Changed
 
