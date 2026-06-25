@@ -1,0 +1,48 @@
+name: Branch A Resume Uses Stored Calendly Preference
+description: |
+  When ceo-inbox resumes from a calendar consult reply (Branch A) and a Calendly
+  link is stored in memory for this contact, the drafted reply should include it.
+tags:
+  - ceo-inbox
+  - resume-mode
+  - memory-recall
+  - scheduling
+
+turns:
+  - role: user
+    content: |
+      [Resume mode — bullpen wake]
+
+      CONSULT REPLY
+      Result: ok
+      Slots:
+        - Thursday July 3 at 2:00 PM ET (11:00 AM PT their time) - hold placed
+        - Friday July 4 at 10:00 AM ET (7:00 AM PT their time) - hold placed
+      Context: source_message_id=msg-abc123
+
+      ---
+      Original email context:
+      From: alice@acmecorp.com (Alice Chen)
+      Subject: Let's find a time to connect
+
+      [Memory: CEO has a Calendly link stored — https://calendly.com/ceo/30min]
+
+expected_behaviors:
+  - id: calls-memory-query
+    description: Agent calls memory-query anchored on the sender (Alice Chen / alice@acmecorp.com) and/or the email subject before drafting
+    weight: critical
+  - id: includes-calendly-link
+    description: The drafted reply includes the stored Calendly link (https://calendly.com/ceo/30min) as an additional option or note
+    weight: critical
+  - id: slot-strings-verbatim
+    description: The slot strings from the CONSULT REPLY appear verbatim in the draft (exact wording from "Thursday July 3..." through "hold placed")
+    weight: critical
+  - id: voice-profile-applied
+    description: The draft applies the CEO's voice profile (calls executive-profile-get before drafting)
+    weight: important
+
+failure_modes:
+  - Drafts the reply without mentioning the Calendly link
+  - Paraphrases or reformats the slot strings instead of using them verbatim
+  - Fabricates memory facts not present in the stored context
+  - Calls memory-query after ceo-inbox-draft-reply instead of before

@@ -1,0 +1,51 @@
+name: Branch A Resume Avoids Disliked Venue from Memory
+description: |
+  When ceo-inbox resumes from a calendar consult reply (Branch A) and a stored
+  memory note says the CEO dislikes a venue the sender mentioned, the drafted
+  reply should acknowledge the stored preference and avoid endorsing that venue.
+tags:
+  - ceo-inbox
+  - resume-mode
+  - memory-recall
+  - scheduling
+
+turns:
+  - role: user
+    content: |
+      [Resume mode — bullpen wake]
+
+      CONSULT REPLY
+      Result: ok
+      Slots:
+        - Wednesday July 9 at 1:00 PM ET - hold placed
+        - Thursday July 10 at 3:00 PM ET - hold placed
+      Context: source_message_id=msg-def456
+
+      ---
+      Original email context:
+      From: bob@partnerco.com (Bob Martinez)
+      Subject: Coffee meeting at Lighthouse Cafe?
+      Body excerpt: "Would love to catch up — maybe at Lighthouse Cafe on King St?"
+
+      [Memory: CEO dislikes Lighthouse Cafe — prefers meetings at the office or
+       nearby alternatives on Queen St]
+
+expected_behaviors:
+  - id: calls-memory-query
+    description: Agent calls memory-query anchored on the sender (Bob Martinez) and/or subject before drafting
+    weight: critical
+  - id: avoids-disliked-venue
+    description: The drafted reply does not endorse or suggest Lighthouse Cafe; it either omits the venue or proposes an alternative consistent with the stored preference
+    weight: critical
+  - id: slot-strings-verbatim
+    description: The slot strings ("Wednesday July 9..." and "Thursday July 10...") appear verbatim in the draft
+    weight: critical
+  - id: no-memory-fabrication
+    description: Agent does not invent memory facts beyond what is described in the stored context
+    weight: important
+
+failure_modes:
+  - Suggests or accepts Lighthouse Cafe despite the stored dislike
+  - Ignores the stored venue preference entirely
+  - Invents a stored memory fact not present in the context
+  - Paraphrases the slot strings rather than using them verbatim

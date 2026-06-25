@@ -1,0 +1,51 @@
+name: Branch A Resume Proceeds Normally with No Memory Match
+description: |
+  When ceo-inbox resumes from a calendar consult reply (Branch A) and memory-query
+  returns no results for the sender, the draft should still proceed correctly using
+  the slot strings verbatim. A missing memory match must not block or degrade the draft.
+tags:
+  - ceo-inbox
+  - resume-mode
+  - memory-recall
+  - scheduling
+  - non-blocking
+
+turns:
+  - role: user
+    content: |
+      [Resume mode — bullpen wake]
+
+      CONSULT REPLY
+      Result: ok
+      Slots:
+        - Monday July 14 at 11:00 AM ET (8:00 AM PT their time) - hold placed
+        - Tuesday July 15 at 2:00 PM ET (11:00 AM PT their time) - hold placed
+      Context: source_message_id=msg-ghi789
+
+      ---
+      Original email context:
+      From: carol@newco.com (Carol Singh)
+      Subject: Scheduling our intro call
+      Body excerpt: "Looking forward to connecting!"
+
+      [Memory: no stored facts found for carol@newco.com or "Scheduling our intro call"]
+
+expected_behaviors:
+  - id: draft-proceeds
+    description: Agent drafts a reply despite no memory match — the missing context does not block the draft or cause an error response
+    weight: critical
+  - id: slot-strings-verbatim
+    description: The slot strings ("Monday July 14..." and "Tuesday July 15...") appear verbatim in the draft
+    weight: critical
+  - id: no-fabricated-memory
+    description: Agent does not invent stored facts about Carol Singh; the draft is based only on the slot strings and voice profile
+    weight: critical
+  - id: professional-tone
+    description: The draft is well-formed, professional, and coherent despite having no memory context to enrich it
+    weight: important
+
+failure_modes:
+  - Refuses to draft or returns an error when memory-query finds nothing
+  - Invents stored preferences or relationship facts not present in context
+  - Paraphrases the slot strings rather than using them verbatim
+  - Omits the slot times from the draft entirely

@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.11.0"
+version: "0.11.1"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -94,28 +94,39 @@ system_prompt: |
 
   2. **Result: ok** — the calendar specialist found slots with holds placed.
      a. Call `executive-profile-get` to retrieve the voice profile for the draft.
-     b. For every date + day-of-week pair in the returned slot strings, call
+     b. Call `memory-query` with a natural-language query anchored on the sender
+        name and email subject (e.g. "scheduling preferences for [sender name]",
+        "meeting with [sender name] re [subject]"). Use any returned context to
+        shape the surrounding draft text — for example, appending a stored Calendly
+        link, avoiding a venue the CEO has noted a dislike for, or honouring a
+        known relationship note about the contact. If nothing is found, or if the
+        skill returns an error, treat it as no match and proceed normally — do not
+        fabricate stored facts.
+     c. For every date + day-of-week pair in the returned slot strings, call
         `date-resolve` to verify the pairing before using it in the draft.
-     c. Call `ceo-inbox-draft-reply` using the calendar specialist's returned
+     d. Call `ceo-inbox-draft-reply` using the calendar specialist's returned
         slot display strings VERBATIM (e.g. "Thursday June 25 at 10:30 AM ET
         (7:30 AM PT their time) - hold placed"). Do NOT rephrase or convert
         timezones yourself — use the strings exactly as the specialist provided
-        them. Apply the CEO voice profile when composing surrounding text. Do
-        NOT include any "pending your calendar" qualifier — holds are already
-        placed.
-     d. Call `ceo-inbox-update-folders` with
+        them. Apply the CEO voice profile and any recalled memory context when
+        composing surrounding text. Do NOT include any "pending your calendar"
+        qualifier — holds are already placed.
+     e. Call `ceo-inbox-update-folders` with
         `add_folders: ['✍️ Drafted'], remove_folders: ['⏳ In Progress']`.
         This records the ✍️ Drafted terminal classification and clears the
         in-progress park marker so the message no longer shows under ⏳ In Progress.
-     e. Call `ceo-inbox-archive` with the message_id. (The message was already
+     f. Call `ceo-inbox-archive` with the message_id. (The message was already
         marked read at park time — do not mark-read again.)
 
   3. **Result: no_slots** — no free time found in the requested window; the
      specialist returned nearest alternatives.
-     a. Follow steps 2a-b above (voice profile, date-resolve on alternatives).
+     a. Follow steps 2a-c above (voice profile, memory-query anchored on sender
+        and subject, date-resolve on the nearest-alternative slot strings).
      b. Draft using the nearest-alternative slot strings from the CONSULT REPLY
         `Nearest:` field VERBATIM. Add a brief note in the draft that times are
         outside the originally requested window (plain language, no em dashes).
+        Apply any recalled context from memory-query to shape the surrounding
+        draft text (e.g. a stored Calendly link or relationship note).
      c. Call `ceo-inbox-update-folders` with
         `add_folders: ['✍️ Drafted'], remove_folders: ['⏳ In Progress']`.
      d. Call `ceo-inbox-archive` with the message_id.
