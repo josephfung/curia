@@ -15,6 +15,11 @@ CodeAnt reads three files from this `.codeant/` folder (repo root, beside `.git`
 Each `instructions`/`rules` entry: `id`, `description`, `files` (glob array), `scope`
 (`["ide", "pr"]`). Docs: https://docs.codeant.ai/ide/review/code_review_instructions
 
+> **Update (2026-06-25):** all 256 dashboard "learnings" have been purged, so the dashboard
+> management discussed in *The six instructions* and *Precedence* below is now **historical** —
+> `instructions.json` is the sole suppression layer. See *Update (2026-06-25)* near the end for
+> what that means going forward.
+
 ## Why these instructions exist
 
 Across the contacts-cutover review (curia#1074), CodeAnt's style/error-handling
@@ -80,6 +85,41 @@ positives. Two consequences:
    merges: if the test / `!= null` / `AgentError` noise is gone, the six rules are working
    and the 158 are safe to bulk-delete. The 3 enforcement learnings (#37/#86/#22) *generate*
    findings and must be deleted in the dashboard directly — the repo file won't suppress them.
+
+## Update (2026-06-25): all dashboard learnings purged — `.codeant/` is now the sole layer
+
+Two things settled the precedence question above, in order:
+
+1. **Empirical confirmation (PR #1180).** On `feat/wakeat-originator-1153` (two integration test
+   files) the async/await-guard rule **re-fired 6×** on `tests/integration/*.test.ts` — flagging
+   awaited `pool.query` cleanup/`DELETE`s, read helpers, and `await repo.createTask(...)` /
+   `updateTask(...)` calls to the system under test — *despite* `tests-relax-production-rules`
+   already globbing those files and already saying "awaited calls need no try/catch." The findings
+   arrived under a **"PR Custom Suggestions"** section, distinct from the main review. So an
+   in-repo instruction does **not** suppress a dashboard-managed **enforcement learning**:
+   `instructions.json` *augments but does not override* — the inference above, confirmed.
+
+2. **The dashboard was purged wholesale.** All **256** learnings were deleted (2026-06-25) — the
+   ~158 noise duplicates **and** the ~30 "specific" architectural ones the plan above meant to
+   keep. So the dashboard now carries **no** learnings.
+
+**Net effect:** the precedence problem is moot — there is nothing left in the dashboard to override
+or augment, so **these six instructions are the sole suppression layer.** The async-guard learning
+that caused the PR #1180 re-fire is gone, so it should stop firing; **re-confirm on the next code PR
+that touches tests** (if test-async noise is truly gone, the in-repo file is doing the whole job).
+
+**Consequence to watch:** the ~30 *specific* architectural suppressions (e.g. dispatch
+outbound-context design, system-origin skill bypass, Gate C semantics) were purged too. They are
+**not** encoded here. If any was load-bearing and its base rule starts re-firing, re-add it as a
+scoped entry in `instructions.json` (or `review.json`) — **not** as a new dashboard learning, so it
+stays versioned and in-repo. The sections *The six instructions* and *Precedence* above are now
+**historical** (they describe the pre-purge dashboard); this section supersedes their "delete the
+duplicates / keep the specifics / then bulk-delete" plan.
+
+The defense-in-depth hardening that shipped alongside this note — sharpening
+`tests-relax-production-rules` to name the integration-test DB-await pattern, and adding the bare
+top-level glob forms (`*.test.ts`, `tests/**`, …) — is still worth keeping now that the in-repo file
+is the only layer, even though the purge (not the glob hedge) is what removes the re-fire cause.
 
 ## Open questions / caveats (verify before relying on this)
 
