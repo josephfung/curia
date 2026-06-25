@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **`calendar-holds-sweep`** — new maintenance skill that deletes stale curia-hold events (slot already past, or created-at older than `maxAgeDays`, default 7). Per-event and per-calendar try/catch ensures one failure never aborts the sweep. Intended for daily scheduled invocation. (#1137)
+- **Calendar specialist scheduling consult** — calendar specialist can now answer a structured `CONSULT REQUEST` from the bullpen: resolves free slots, places tentative holds (toggle-gated via `config-store`), and replies with timezone-labelled `CONSULT REPLY` strings verbatim from skills. (#1137)
 
 ### Security
 
