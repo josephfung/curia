@@ -1,0 +1,32 @@
+{
+  // Type-check the tests/ tree, which sits outside both the main tsconfig's `src/**`
+  // rootDir and the tsconfig.skills.json `skills/**` scope, and was therefore never
+  // covered by `pnpm run typecheck`. Test files import from ../../src (or ../src),
+  // so tsc follows those references; we set rootDir to the repo root and emit nothing.
+  // Run via the `typecheck` script alongside the base project and skills checks.
+  // This is phase 3 of #1075 / #1105.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // declaration/declarationMap/outDir are meaningless for a noEmit check and the
+    // base values (rootDir: src) conflict with this wider rootDir — null them out.
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "composite": false,
+    // noUncheckedIndexedAccess is intentionally relaxed for test files. Test code
+    // accesses mock.calls[0], result.rows[0], etc. constantly, and requiring guards
+    // or `!` on every indexed access adds noise without improving coverage signal.
+    // The rule is preserved in the main and skills tsconfigs where it catches real bugs.
+    "noUncheckedIndexedAccess": false,
+    // noUnusedLocals/noUnusedParameters produce false positives in test files where
+    // variables are declared for test setup but only implicitly used via spies.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  // Covers all test source files. Test handlers import from ../../src (or ../src),
+  // so tsc follows those references automatically.
+  "include": ["tests/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

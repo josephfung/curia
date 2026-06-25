@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ToolResult } from './provider.js';
 import type { EventBus } from '../../bus/bus.js';
 import type { ModelRegistry } from './model-registry.js';
-import { createLlmCall } from '../../bus/events.js';
+import { createLlmCall, createLlmError } from '../../bus/events.js';
 import { createEstimateCostUsd } from './pricing.js';
 import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';
@@ -50,6 +50,28 @@ export class TelemetryLlmProvider implements LLMProvider {
         { err, serviceId: this.serviceId },
         'TelemetryLlmProvider: inner.chat() threw unexpectedly',
       );
+      // Publish llm.error before returning so HealthService tracks this transport
+      // failure. The try-catch below is fire-and-forget: telemetry failure must not
+      // propagate. Note: this path bypasses the response.type === 'error' block below
+      // via early return, so we publish here explicitly.
+      try {
+        await this.bus.publish('agent', createLlmError({
+          agentId: `system:${this.serviceId}`,
+          conversationId: 'system',
+          // params.model identifies the tier model; fall back to this.inner.id (provider
+          // slug) when absent. System services always pass params.model, so the fallback
+          // is a don't-care in practice, but the health tracker will miss it if reached.
+          requestedModel: params.model ?? this.inner.id,
+          provider: this.inner.id,
+          errorType: 'UNKNOWN',
+          parentEventId: 'system',
+        }));
+      } catch (publishErr) {
+        this.logger.warn(
+          { err: publishErr, serviceId: this.serviceId },
+          'TelemetryLlmProvider: failed to publish llm.error for thrown exception',
+        );
+      }
       return { type: 'error', error: classifyError(err, this.inner.id) };
     }
     const latencyMs = Date.now() - start;
@@ -94,6 +116,30 @@ export class TelemetryLlmProvider implements LLMProvider {
         this.logger.warn(
           { err, serviceId: this.serviceId },
           'TelemetryLlmProvider: failed to publish llm.call event',
+        );
+      }
+    }
+
+    // Publish llm.error on failed responses so HealthService can track tier health
+    // without billed probe calls. Fire-and-forget inside try-catch — telemetry
+    // failure must never propagate to the system service.
+    if (response.type === 'error') {
+      try {
+        const event = createLlmError({
+          agentId: `system:${this.serviceId}`,
+          conversationId: 'system',
+          // Fall back to the inner provider's id when params.model is absent —
+          // 'unknown' would break the HealthService tier reverse-map lookup.
+          requestedModel: params.model ?? this.inner.id,
+          provider: this.inner.id,
+          errorType: response.error.type,
+          parentEventId: 'system',
+        });
+        await this.bus.publish('agent', event);
+      } catch (err) {
+        this.logger.warn(
+          { err, serviceId: this.serviceId },
+          'TelemetryLlmProvider: failed to publish llm.error event',
         );
       }
     }

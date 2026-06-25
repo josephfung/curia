@@ -113,6 +113,8 @@ describe('Bus Layer Enforcement (integration)', () => {
       provider: 'anthropic',
       inputTokens: 150,
       outputTokens: 75,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
       estimatedCostUsd: 0.0015,
       latencyMs: 1200,
       providerRequestId: 'req-xyz789',

@@ -105,6 +105,18 @@ export interface OutboundSendResult {
   messageId?: string;
   /** Human-readable reason when success is false */
   blockedReason?: string;
+  /**
+   * Content-filter rule name(s) that triggered a block (e.g. `llm-judge-audience-leak`).
+   * Populated by both `send()` (#1051) and `sendEmailDraft()` (#1158) when the content
+   * filter rejects the send, giving the agent's tool loop the specific rule category so
+   * it can address the root cause and retry. Rule names only — never the (potentially
+   * sensitive) finding detail.
+   *
+   * Optional because non-filter block paths (blocked recipient, autonomy gate, client
+   * misconfiguration) set `blockedReason` without a rule set — callers must treat absence
+   * as "no rule info available".
+   */
+  blockedRules?: string[];
   /** True when the autonomy gate blocked this send */
   gated?: boolean;
   /** Short reference for the action_log row (e.g. 'a3f7c12b'). Present when gated is true. */
@@ -733,9 +745,14 @@ export class OutboundGateway {
           {
             notificationType: 'blocked_content',
             ceoEmail: principalEmailForBlock,
-            subject: 'Action needed — blocked outbound reply',
+            // Softened from a call-to-action to informational (#1051): the agent now
+            // receives the block reason in the skill result and may self-correct and
+            // resend on its own. The audit log remains the ground truth; this alert is
+            // an FYI, not a task the principal must action.
+            subject: 'FYI — outbound message blocked',
             body: [
               'An outbound message was blocked by the content filter.',
+              'The agent received the reason and may rewrite the message and retry on its own.',
               '',
               `Reason: ${reasonSummary}`,
               // blockedEvent.timestamp is the audit row's own clock. No principal
@@ -771,7 +788,18 @@ export class OutboundGateway {
           'outbound-gateway: principal notification skipped — no principal email identity configured. Block recorded in audit log only.',
         );
       }
-      return { success: false, blockedReason: 'Content blocked by filter' };
+      // Surface the principal-safe reason summary and the rule name(s) to the
+      // caller (#1051). reasonSummary (computed above via buildBlockReasonSummary)
+      // obeys the same per-rule safety contract as the CEO notification — it only
+      // includes an LLM-judge finding's abstract detail, never a Stage-1 rule's
+      // matched fragment. Surfacing it here gives the agent's tool-use loop enough
+      // signal to rewrite the message and retry organically; blockedRules carries
+      // the specific rule category (rule names only) so it can fix the root cause.
+      return {
+        success: false,
+        blockedReason: reasonSummary,
+        blockedRules: filterFindings.map((f) => f.rule),
+      };
     }
 
     // ------------------------------------------------------------------
@@ -1410,7 +1438,13 @@ export class OutboundGateway {
       );
 
       const blockId = `block_${randomUUID()}`;
+      // Full reason string (with detail) goes into the bus event for forensics/audit,
+      // NOT into any user-facing or notification surface.
       const fullReason = filterFindings.map((f) => `${f.rule}: ${f.detail}`).join('; ');
+      // Principal-safe reason: surfaces the judge's abstract reason but never a
+      // Stage-1 finding's (potentially sensitive) detail. See buildBlockReasonSummary
+      // for the per-rule policy. Mirrors the send() block path (#1051/#1158).
+      const reasonSummary = buildBlockReasonSummary(filterFindings);
 
       const blockedEvent = createOutboundBlocked({
         blockId,
@@ -1437,15 +1471,24 @@ export class OutboundGateway {
           {
             notificationType: 'blocked_content',
             ceoEmail: principalEmailForDraftBlock,
-            subject: 'Action needed — blocked draft send',
+            // Softened from a call-to-action to informational (#1158, matching #1051):
+            // the agent now receives the block reason in the skill result and may
+            // self-correct and resend on its own. This alert is an FYI, not a task.
+            subject: 'FYI — outbound draft blocked',
             body: [
               'A draft send was blocked by the content filter.',
+              'The agent received the reason and may rewrite the draft and retry on its own.',
               '',
-              `Block ID: ${blockId}`,
-              `Draft ID: ${draftId}`,
+              `Reason: ${reasonSummary}`,
+              `Time: ${blockedEvent.timestamp.toISOString()} (UTC)`,
+              'Channel: email (draft)',
               `Intended recipient: ${recipientEmail}`,
               '',
-              'Please review the audit log for details.',
+              `Draft ID: ${draftId}`,
+              `Block ID: ${blockId}`,
+              `Audit event ID: ${blockedEvent.id}`,
+              '',
+              'Search the audit log by the audit event ID above for the full record.',
             ].join('\n'),
             blockId,
             originalChannel: 'email',
@@ -1459,7 +1502,16 @@ export class OutboundGateway {
           'outbound-gateway: principal notification skipped for blocked draft — no principal email identity configured',
         );
       }
-      return { success: false, blockedReason: 'Content blocked by filter' };
+      // Surface the principal-safe reason summary and rule name(s) to the caller so
+      // the agent's tool loop can address the root cause and retry (#1158). reasonSummary
+      // obeys buildBlockReasonSummary's per-rule contract — only an LLM-judge finding's
+      // abstract detail is included, never a Stage-1 rule's matched fragment; blockedRules
+      // carries rule names only. Mirrors the send() block path (#1051).
+      return {
+        success: false,
+        blockedReason: reasonSummary,
+        blockedRules: filterFindings.map((f) => f.rule),
+      };
     }
 
     // ------------------------------------------------------------------

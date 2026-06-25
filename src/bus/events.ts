@@ -43,6 +43,14 @@ interface AgentTaskPayload {
   senderId: string;
   content: string;
   metadata?: Record<string, unknown>;
+  /** Live-principal-turn signal (#1126). A DISTINCT top-level field — deliberately NOT part of
+   *  `metadata` — so it can never be swept into a persisted row by a skill that forwards the
+   *  metadata bag (jobs/tasks/bullpen copy `originator` by name; they don't see this field).
+   *  Stamped `true` ONLY by the dispatcher on a fresh principal inbound, and forwarded by the
+   *  `delegate` skill across a SYNCHRONOUS delegation (so a specialist acting inside the CEO's
+   *  live turn inherits it). Structurally absent from every wake, scheduler fire, and persisted
+   *  task — those construct their own agent.task without it. The elevated-skill gate requires it. */
+  liveTurn?: boolean;
   /** Resolved sender context from the contact resolver. Undefined if contacts not configured. */
   senderContext?: import('../contacts/types.js').InboundSenderContext;
   /** Original task intent for persistent scheduler tasks. Undefined for one-shot and direct tasks.
@@ -425,6 +433,23 @@ interface LlmCallPayload {
   responseHash: string;
 }
 
+// ModelFallbackEngagedPayload — emitted by the agent runtime when the primary
+// model for a tier returns NOT_FOUND and execution is re-routed to the fallback
+// tier's model (#813). Visible in audit_log for operator alerting and post-incident
+// analysis without requiring a grep across pino logs.
+interface ModelFallbackEngagedPayload {
+  agentId: string;
+  conversationId: string;
+  /** Capability tier whose primary model failed. 'unknown' only when tier was not configured. */
+  tier: 'fast' | 'standard' | 'powerful' | 'unknown';
+  /** Primary model that returned NOT_FOUND. */
+  failedModel: string;
+  /** Fallback model being attempted. */
+  fallbackModel: string;
+  /** Error type that triggered the fallback — currently always NOT_FOUND. */
+  reason: 'NOT_FOUND';
+}
+
 // ContextBudgetPayload — emitted by the agent runtime after assembling context
 // for each LLM call. Reports per-tier token estimates, budget utilization, and
 // which tiers were dropped. Co-located with llm.call events in audit_log for
@@ -792,6 +817,46 @@ export interface LlmCallEvent extends BaseEvent {
   payload: LlmCallPayload;
 }
 
+// LlmErrorEvent — published by TelemetryLlmProvider and AgentRuntime on every
+// failed LLM call (response.type === 'error'). Used by HealthService to maintain
+// the per-tier outcome tracker without making billed probe calls.
+interface LlmErrorPayload {
+  agentId: string;
+  conversationId: string;
+  /** Model that was requested — used by HealthService to reverse-map to a tier. */
+  requestedModel: string;
+  provider: string;
+  errorType: string;
+  parentEventId: string;
+}
+
+export interface LlmErrorEvent extends BaseEvent {
+  type: 'llm.error';
+  sourceLayer: 'agent';
+  payload: LlmErrorPayload;
+}
+
+export function createLlmError(
+  payload: LlmErrorPayload,
+): LlmErrorEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'llm.error',
+    sourceLayer: 'agent',
+    payload,
+    parentEventId: payload.parentEventId,
+  };
+}
+
+// ModelFallbackEngagedEvent — published when the primary tier model is unavailable
+// and execution falls through to the fallback tier's model (#813).
+export interface ModelFallbackEngagedEvent extends BaseEvent {
+  type: 'model.fallback';
+  sourceLayer: 'agent';
+  payload: ModelFallbackEngagedPayload;
+}
+
 // EmbeddingCallPayload — emitted by EmbeddingService (OpenAI backend) after each
 // successful embedding API call. Tracks model, token consumption, estimated cost,
 // and latency. Allows embedding costs to appear in the same audit log as llm.call.
@@ -815,6 +880,35 @@ export interface EmbeddingCallEvent extends BaseEvent {
   type: 'embedding.call';
   sourceLayer: 'system';
   payload: EmbeddingCallPayload;
+}
+
+// EmbeddingErrorEvent — published by the OpenAI embedding backend on failure.
+// Used by HealthService to track embedding service health.
+// No parentEventId — embedding calls fire from KG/validator paths that
+// don't always have an agent.task event ID in scope.
+interface EmbeddingErrorPayload {
+  model: string;
+  errorType: string;
+}
+
+export interface EmbeddingErrorEvent extends BaseEvent {
+  type: 'embedding.error';
+  // sourceLayer 'system' because embedding errors fire from infrastructure paths
+  // (same as EmbeddingCallEvent) — not from agent tasks.
+  sourceLayer: 'system';
+  payload: EmbeddingErrorPayload;
+}
+
+export function createEmbeddingError(
+  payload: EmbeddingErrorPayload,
+): EmbeddingErrorEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'embedding.error',
+    sourceLayer: 'system',
+    payload,
+  };
 }
 
 // ContextBudgetEvent — published by the agent layer after assembling context for each LLM call.
@@ -989,6 +1083,8 @@ export type BusEvent =
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
   | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
+  | LlmErrorEvent            // #434: failed LLM call — used by HealthService for tier health tracking
+  | ModelFallbackEngagedEvent  // #813: primary tier model unavailable, routing to fallback tier
   | ContextBudgetEvent        // #24: context budget utilization per LLM call
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
@@ -996,6 +1092,7 @@ export type BusEvent =
   | AutonomySkillBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
+  | EmbeddingErrorEvent        // #434: failed embedding call — used by HealthService for health tracking
   | TaskCreatedEvent           // Tasks v1: task created via task-create skill (#835)
   | TaskUpdatedEvent           // Tasks v1: task fields updated via task-update skill (#835)
   | TaskCompletedEvent         // Tasks v1: task set to done via task-complete skill (#835)
@@ -1445,6 +1542,20 @@ export function createLlmCall(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'llm.call',
+    sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createModelFallbackEngaged(
+  payload: ModelFallbackEngagedPayload & { parentEventId: string },
+): ModelFallbackEngagedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'model.fallback',
     sourceLayer: 'agent',
     payload: rest,
     parentEventId,

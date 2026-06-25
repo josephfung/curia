@@ -548,13 +548,14 @@ describe('autonomy gates', () => {
       autonomyService: makeAutonomyService(65), // well below 80
     });
 
-    // Must provide principal-originated taskMetadata for elevated skills —
-    // the gate now checks originator.systemRole, not caller.role.
+    // Must provide a LIVE PRINCIPAL TURN for elevated skills (#1126): principal originator
+    // PLUS the distinct liveTurn flag the dispatcher stamps on fresh principal inbounds.
     const result = await layer.invoke('set-autonomy', { score: 90 }, {
       contactId: 'primary-user',
       role: 'ceo',
       channel: 'cli',
     }, {
+      liveTurn: true,
       taskMetadata: {
         originator: {
           contactId: 'primary-user',
@@ -684,6 +685,239 @@ describe('autonomy gates', () => {
       expect(result.error).toContain('80');
     }
     expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Bypass ladder (#1125): a heartbeat wake carries a `wakeContext` marker, so the
+  // live score can only DOWNGRADE inherited lineage standing — never grant it.
+  // ---------------------------------------------------------------------------
+
+  describe('bypass ladder — woken/derived tasks', () => {
+    const principalLineage = {
+      contactId: 'ceo-id', systemRole: 'principal' as const, channel: 'email',
+      initiatedAt: '2026-06-23T00:00:00.000Z', tier: 'principal' as const,
+    };
+    const systemLineage = {
+      contactId: 'system', systemRole: 'system' as const, channel: 'declarative',
+      initiatedAt: '2026-06-23T00:00:00.000Z', tier: null,
+    };
+
+    function elevatedManifest(name: string): SkillManifest {
+      return { ...makeRiskyManifest(name, 'none'), sensitivity: 'elevated' };
+    }
+
+    it('same-task wake of a principal task KEEPS the principal-bypass at score >= 70', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('ok');
+      // high-risk needs 80; only the principal-bypass lets it run at 70.
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(70) });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('same-task wake of a principal task LOSES the bypass at score < 70 (propose-only)', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // needs 80
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(69) });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false); // downgraded to agent → Gate B blocks (69 < 80)
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    // #1126: the elevated gate now requires a LIVE principal turn — a wake is NEVER live,
+    // so a woken principal-LINEAGE task fails the gate at ANY score (this is the self-approval
+    // hole closure). The ladder still governs the *autonomy* principal-bypass for normal skills
+    // (tested above with calendar-create-event), but it can no longer satisfy the elevated gate.
+    it('elevated gate rejects a principal same-task wake even when the score clears posture B (>= 70)', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(elevatedManifest('approve-grant-recommendation'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(95) });
+
+      const result = await layer.invoke('approve-grant-recommendation', {}, undefined, {
+        // principal LINEAGE on a wake — but no liveTurn signal → not a live turn.
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('live principal turn');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    // Defence in depth: even if the liveTurn flag somehow leaks onto a wake (it shouldn't — it is a
+    // distinct off-bag field the wake path never sets), the gate must still reject because the task
+    // carries wakeContext. This pins the self-approval-hole closure to the gate itself rather than to
+    // the dispatcher/scheduler behaving perfectly. (#1126)
+    it('elevated gate rejects a principal same-task wake even if liveTurn leaks in', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(elevatedManifest('approve-grant-recommendation'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(95) });
+
+      const result = await layer.invoke('approve-grant-recommendation', {}, undefined, {
+        liveTurn: true, // leaked — must NOT be enough to satisfy the gate on a wake
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('live principal turn');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('elevated gate rejects a principal same-task wake below posture B too (blocked at any score)', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(elevatedManifest('approve-grant-recommendation'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(69) });
+
+      const result = await layer.invoke('approve-grant-recommendation', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('elevated gate rejects a derived child of a system task even at posture D (>= 90) — system never satisfies it', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(elevatedManifest('approve-grant-recommendation'), handler);
+      // 90 clears posture D (lineage retained as system) — but the elevated gate is no longer
+      // satisfiable by system origination at all under the live-principal redefinition (#1126).
+      const result = await new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(90) })
+        .invoke('approve-grant-recommendation', {}, undefined, {
+          taskMetadata: { originator: systemLineage, wakeContext: { derived: true } },
+        });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('live principal turn');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('a LIVE principal turn (no wakeContext) keeps the bypass regardless of score', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // needs 80
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(10) });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskMetadata: { originator: principalLineage }, // no wakeContext → live turn
+      });
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('exposes EFFECTIVE standing to the handler via ctx.taskMetadata (closes the send-draft self-check hole)', async () => {
+      // A normal/none skill whose only gate is a handler self-check on ctx.taskMetadata must see
+      // the downgraded standing for a woken principal-lineage task, not the raw lineage.
+      const registry = new SkillRegistry();
+      let seenRole: unknown;
+      const handler: SkillHandler = {
+        execute: async (ctx) => {
+          seenRole = (ctx.taskMetadata?.originator as { systemRole?: string } | undefined)?.systemRole;
+          return { success: true, data: 'ok' };
+        },
+      };
+      registry.register(makeRiskyManifest('reads-meta', 'none'), handler);
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(50) });
+
+      await layer.invoke('reads-meta', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+      expect(seenRole).toBe('agent'); // downgraded — a self-check would correctly reject
+
+      // The contactId (audit field) is preserved through the downgrade.
+      let seenContactId: unknown;
+      const handler2: SkillHandler = {
+        execute: async (ctx) => {
+          seenContactId = (ctx.taskMetadata?.originator as { contactId?: string } | undefined)?.contactId;
+          return { success: true, data: 'ok' };
+        },
+      };
+      const registry2 = new SkillRegistry();
+      registry2.register(makeRiskyManifest('reads-meta-2', 'none'), handler2);
+      await new ExecutionLayer(registry2, logger, { autonomyService: makeAutonomyService(50) })
+        .invoke('reads-meta-2', {}, undefined, {
+          taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+        });
+      expect(seenContactId).toBe('ceo-id');
+    });
+
+    it('fails CLOSED on a woken task when the autonomy score is unavailable', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+      // getConfig returns null (pre-migration / DB blip) — fail-open for live turns, fail-closed for wakes.
+      const nullService = { getConfig: async () => null } as unknown as import('../autonomy/autonomy-service.js').AutonomyService;
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: nullService });
+
+      const result = await layer.invoke('send-email', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('temporarily unavailable');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('fails CLOSED on a woken task even when no autonomy service is wired', async () => {
+      // Defense-in-depth: with no service the gates are skipped entirely, so the metadata downgrade
+      // would be decorative for an autonomous execution — the woken brake must still apply.
+      const registry = new SkillRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+      const layer = new ExecutionLayer(registry, logger); // no autonomyService
+
+      const result = await layer.invoke('send-email', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('temporarily unavailable');
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('still fails OPEN on a LIVE turn when the score is unavailable (no regression)', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('send-email', 'medium'), handler);
+      const nullService = { getConfig: async () => null } as unknown as import('../autonomy/autonomy-service.js').AutonomyService;
+      const layer = new ExecutionLayer(registry, logger, { autonomyService: nullService });
+
+      // No wakeContext → live turn → existing fail-open behaviour preserved.
+      const result = await layer.invoke('send-email', {}, undefined, {
+        taskMetadata: { originator: principalLineage },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('honours custom ladder thresholds passed to the constructor', async () => {
+      const registry = new SkillRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // needs 80
+      // sameTask threshold lowered to 50 → a wake at 55 keeps the principal bypass.
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(55),
+        bypassLadder: { sameTaskThreshold: 50, derivedChildThreshold: 80 },
+      });
+
+      const result = await layer.invoke('calendar-create-event', {}, undefined, {
+        taskMetadata: { originator: principalLineage, wakeContext: { derived: false } },
+      });
+
+      expect(result.success).toBe(true);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -1134,18 +1368,21 @@ describe('humanApproved on InvokeOptions', () => {
     expect(handler.execute).not.toHaveBeenCalled();
   });
 
-  it('allows elevated skills when task is system-originated (YAML-declared job)', async () => {
+  it('blocks elevated skills when task is system-originated (#1126: system no longer satisfies the gate)', async () => {
+    // Pre-#1126 a system-declared job (e.g. the 8am digest) was let through the elevated gate
+    // (commit 3bd3d224). The live-principal redefinition removes that allowance; the one read that
+    // needed it (list-pending-actions) is now `normal` + allowed_callers instead.
     const registry = new SkillRegistry();
-    const handler = makeHandler('ok');
+    const handler = makeHandler('should not run');
     const manifest: SkillManifest = {
-      ...makeRiskyManifest('list-pending-actions', 'none'),
+      ...makeRiskyManifest('elevated-thing', 'none'),
       sensitivity: 'elevated',
     };
     registry.register(manifest, handler);
 
     const layer = new ExecutionLayer(registry, logger);
 
-    const result = await layer.invoke('list-pending-actions', {}, undefined, {
+    const result = await layer.invoke('elevated-thing', {}, undefined, {
       taskMetadata: {
         originator: {
           contactId: 'system',
@@ -1156,8 +1393,68 @@ describe('humanApproved on InvokeOptions', () => {
       },
     });
 
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('live principal turn');
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+
+  it('allows elevated skills on a LIVE principal turn (#1126)', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('ok');
+    const manifest: SkillManifest = {
+      ...makeRiskyManifest('elevated-thing', 'none'),
+      sensitivity: 'elevated',
+    };
+    registry.register(manifest, handler);
+
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('elevated-thing', {}, undefined, {
+      // The distinct liveTurn flag the dispatcher stamps on a fresh principal inbound, alongside
+      // the principal originator. Both are required (isLivePrincipalTurn).
+      liveTurn: true,
+      taskMetadata: {
+        originator: {
+          contactId: 'primary-user',
+          systemRole: 'principal' as const,
+          channel: 'cli',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
     expect(result.success).toBe(true);
     expect(handler.execute).toHaveBeenCalledOnce();
+  });
+
+  it('blocks elevated skills when liveTurn is set but lineage is not principal (forgery defence)', async () => {
+    // isLivePrincipalTurn requires BOTH the liveTurn flag AND principal originator, so a stray
+    // liveTurn without principal standing fails closed.
+    const registry = new SkillRegistry();
+    const handler = makeHandler('should not run');
+    const manifest: SkillManifest = {
+      ...makeRiskyManifest('elevated-thing', 'none'),
+      sensitivity: 'elevated',
+    };
+    registry.register(manifest, handler);
+
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('elevated-thing', {}, undefined, {
+      liveTurn: true,
+      taskMetadata: {
+        originator: {
+          contactId: 'someone',
+          systemRole: 'agent' as const,
+          channel: 'internal',
+          initiatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('live principal turn');
+    expect(handler.execute).not.toHaveBeenCalled();
   });
 
   it('blocks elevated skills when task is agent-originated', async () => {

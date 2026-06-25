@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DriftDetector } from '../../../src/scheduler/drift-detector.js';
 import type { DriftConfig } from '../../../src/scheduler/drift-detector.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
+import type { Logger } from '../../../src/logger.js';
 
 function mockProvider(): LLMProvider {
   return {
@@ -24,6 +25,7 @@ const defaultConfig: DriftConfig = {
   enabled: true,
   checkEveryNBursts: 1,
   minConfidenceToPause: 'high',
+  model: 'claude-3-5-haiku-20241022',
 };
 
 const params = {
@@ -43,18 +45,19 @@ describe('DriftDetector', () => {
 
   describe('check()', () => {
     it('returns null when enabled is false', async () => {
-      const detector = new DriftDetector(provider, { ...defaultConfig, enabled: false }, logger);
+      const detector = new DriftDetector(provider, { ...defaultConfig, enabled: false }, logger as unknown as Logger);
       const result = await detector.check(params);
       expect(result).toBeNull();
       expect(provider.chat).not.toHaveBeenCalled();
     });
 
     it('returns the verdict when LLM says no drift', async () => {
-      const detector = new DriftDetector(provider, defaultConfig, logger);
+      const detector = new DriftDetector(provider, defaultConfig, logger as unknown as Logger);
       vi.mocked(provider.chat).mockResolvedValueOnce({
         type: 'text',
         content: '{"drifted":false,"reason":"Task is aligned with original intent.","confidence":"high"}',
-        usage: { inputTokens: 100, outputTokens: 20 },
+        usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'test', actualModel: 'test', providerRequestId: 'test' },
       });
 
       const result = await detector.check(params);
@@ -63,11 +66,12 @@ describe('DriftDetector', () => {
     });
 
     it('returns the verdict when LLM says drift detected', async () => {
-      const detector = new DriftDetector(provider, defaultConfig, logger);
+      const detector = new DriftDetector(provider, defaultConfig, logger as unknown as Logger);
       vi.mocked(provider.chat).mockResolvedValueOnce({
         type: 'text',
         content: '{"drifted":true,"reason":"Task shifted from research to writing marketing copy.","confidence":"high"}',
-        usage: { inputTokens: 100, outputTokens: 20 },
+        usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'test', actualModel: 'test', providerRequestId: 'test' },
       });
 
       const result = await detector.check(params);
@@ -80,11 +84,12 @@ describe('DriftDetector', () => {
     });
 
     it('includes lastRunSummary in the prompt when provided', async () => {
-      const detector = new DriftDetector(provider, defaultConfig, logger);
+      const detector = new DriftDetector(provider, defaultConfig, logger as unknown as Logger);
       vi.mocked(provider.chat).mockResolvedValueOnce({
         type: 'text',
         content: '{"drifted":false,"reason":"Aligned.","confidence":"high"}',
-        usage: { inputTokens: 150, outputTokens: 20 },
+        usage: { inputTokens: 150, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'test', actualModel: 'test', providerRequestId: 'test' },
       });
 
       await detector.check({ ...params, lastRunSummary: 'Searched for AI safety papers, found 5 results.' });
@@ -96,11 +101,12 @@ describe('DriftDetector', () => {
     });
 
     it('omits lastRunSummary section when null', async () => {
-      const detector = new DriftDetector(provider, defaultConfig, logger);
+      const detector = new DriftDetector(provider, defaultConfig, logger as unknown as Logger);
       vi.mocked(provider.chat).mockResolvedValueOnce({
         type: 'text',
         content: '{"drifted":false,"reason":"Aligned.","confidence":"high"}',
-        usage: { inputTokens: 100, outputTokens: 20 },
+        usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'test', actualModel: 'test', providerRequestId: 'test' },
       });
 
       await detector.check({ ...params, lastRunSummary: null });
@@ -111,11 +117,12 @@ describe('DriftDetector', () => {
     });
 
     it('returns null and logs warning when LLM returns malformed JSON', async () => {
-      const detector = new DriftDetector(provider, defaultConfig, logger);
+      const detector = new DriftDetector(provider, defaultConfig, logger as unknown as Logger);
       vi.mocked(provider.chat).mockResolvedValueOnce({
         type: 'text',
         content: 'Sorry, I cannot evaluate this.',
-        usage: { inputTokens: 100, outputTokens: 10 },
+        usage: { inputTokens: 100, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'test', actualModel: 'test', providerRequestId: 'test' },
       });
 
       const result = await detector.check(params);
@@ -128,7 +135,7 @@ describe('DriftDetector', () => {
     });
 
     it('returns null and logs warning when LLM call throws', async () => {
-      const detector = new DriftDetector(provider, defaultConfig, logger);
+      const detector = new DriftDetector(provider, defaultConfig, logger as unknown as Logger);
       vi.mocked(provider.chat).mockRejectedValueOnce(new Error('API timeout'));
 
       const result = await detector.check(params);
@@ -141,10 +148,10 @@ describe('DriftDetector', () => {
     });
 
     it('returns null and logs warning when LLM returns an error response', async () => {
-      const detector = new DriftDetector(provider, defaultConfig, logger);
+      const detector = new DriftDetector(provider, defaultConfig, logger as unknown as Logger);
       vi.mocked(provider.chat).mockResolvedValueOnce({
         type: 'error',
-        error: { type: 'provider_error', message: 'rate limited', retryable: true, source: 'llm', context: {} },
+        error: { type: 'PROVIDER_ERROR', message: 'rate limited', retryable: true, source: 'llm', context: {}, timestamp: new Date() },
       });
 
       const result = await detector.check(params);
@@ -156,37 +163,37 @@ describe('DriftDetector', () => {
 
   describe('shouldPause()', () => {
     it('returns true when drifted=true and confidence matches minConfidenceToPause', () => {
-      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'high' }, logger);
+      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'high' }, logger as unknown as Logger);
       expect(detector.shouldPause({ drifted: true, reason: 'x', confidence: 'high' })).toBe(true);
     });
 
     it('returns false when drifted=false regardless of confidence', () => {
-      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'low' }, logger);
+      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'low' }, logger as unknown as Logger);
       expect(detector.shouldPause({ drifted: false, reason: 'x', confidence: 'high' })).toBe(false);
     });
 
     it('returns false when confidence is below minConfidenceToPause (high threshold, medium confidence)', () => {
-      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'high' }, logger);
+      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'high' }, logger as unknown as Logger);
       expect(detector.shouldPause({ drifted: true, reason: 'x', confidence: 'medium' })).toBe(false);
     });
 
     it('returns false when confidence is below minConfidenceToPause (medium threshold, low confidence)', () => {
-      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'medium' }, logger);
+      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'medium' }, logger as unknown as Logger);
       expect(detector.shouldPause({ drifted: true, reason: 'x', confidence: 'low' })).toBe(false);
     });
 
     it('returns true when confidence meets minConfidenceToPause (medium threshold, medium confidence)', () => {
-      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'medium' }, logger);
+      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'medium' }, logger as unknown as Logger);
       expect(detector.shouldPause({ drifted: true, reason: 'x', confidence: 'medium' })).toBe(true);
     });
 
     it('returns true when confidence exceeds minConfidenceToPause (medium threshold, high confidence)', () => {
-      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'medium' }, logger);
+      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'medium' }, logger as unknown as Logger);
       expect(detector.shouldPause({ drifted: true, reason: 'x', confidence: 'high' })).toBe(true);
     });
 
     it('returns true for any drift when minConfidenceToPause is low', () => {
-      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'low' }, logger);
+      const detector = new DriftDetector(provider, { ...defaultConfig, minConfidenceToPause: 'low' }, logger as unknown as Logger);
       expect(detector.shouldPause({ drifted: true, reason: 'x', confidence: 'low' })).toBe(true);
     });
   });

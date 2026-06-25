@@ -1,7 +1,7 @@
 {
   "name": "deny-action",
   "description": "Deny a pending approval request. The blocked action will not be executed. Specify short_ref to target a specific request, or omit when only one is pending.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sensitivity": "elevated",
   "action_risk": "none",
   "inputs": {

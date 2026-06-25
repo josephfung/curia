@@ -41,6 +41,7 @@ function makeListRow(overrides: Partial<TaskListRow> = {}): TaskListRow {
     sourceAgentId: 'coordinator',
     createdBy: 'coordinator',
     tags: ['board-prep'],
+    originator: null,
     nextWakeAt: null,
     ...overrides,
   };

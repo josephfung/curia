@@ -130,16 +130,48 @@ describe('BullpenService (in-memory)', () => {
     expect(pending).toHaveLength(0);
   });
 
-  it('getPendingThreadsForAgent includes up to 5 recent messages per thread', async () => {
+  it('getPendingThreadsForAgent shows all messages when thread is within the window limit', async () => {
     const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Msg 1', []);
     for (let i = 2; i <= 8; i++) {
       await service.postMessage(thread.id, 'coordinator', `Msg ${i}`, []);
     }
     const pending = await service.getPendingThreadsForAgent('agent-b', 60);
+    // 8 messages is below RECENT_MSG_LIMIT (15), so all are shown
     expect(pending[0]?.totalMessages).toBe(8);
-    expect(pending[0]?.recentMessages).toHaveLength(5);
-    // Should be the last 5 messages
-    expect(pending[0]?.recentMessages[4]?.content).toBe('Msg 8');
+    expect(pending[0]?.recentMessages).toHaveLength(8);
+    expect(pending[0]?.recentMessages[7]?.content).toBe('Msg 8');
+  });
+
+  it('getPendingThreadsForAgent shows all messages without duplication at exactly the window limit', async () => {
+    // 15 messages == RECENT_MSG_LIMIT: should take the "show all" path, not the pin path.
+    const { thread } = await service.openThread('Boundary', 'coordinator', ['coordinator', 'agent-b'], 'Msg 1', []);
+    for (let i = 2; i <= 15; i++) {
+      await service.postMessage(thread.id, 'coordinator', `Msg ${i}`, []);
+    }
+    const pending = await service.getPendingThreadsForAgent('agent-b', 60);
+    expect(pending[0]?.recentMessages).toHaveLength(15);
+    // First message must appear exactly once (no duplication from the pin logic)
+    expect(pending[0]?.recentMessages.filter(m => m.content === 'Msg 1')).toHaveLength(1);
+    // totalMessages equals recentMessages.length — no truncation indicator needed
+    expect(pending[0]?.totalMessages).toBe(pending[0]?.recentMessages.length);
+  });
+
+  it('getPendingThreadsForAgent pins the first message when a thread exceeds the window limit (#1090)', async () => {
+    // Build a thread with 17 messages (> RECENT_MSG_LIMIT of 15).
+    const { thread } = await service.openThread('Long thread', 'coordinator', ['coordinator', 'agent-b'], 'Msg 1', ['agent-b']);
+    for (let i = 2; i <= 17; i++) {
+      await service.postMessage(thread.id, 'coordinator', `Msg ${i}`, []);
+    }
+    const pending = await service.getPendingThreadsForAgent('agent-b', 60);
+    expect(pending[0]?.totalMessages).toBe(17);
+    // Exactly RECENT_MSG_LIMIT messages shown: first + last 14
+    expect(pending[0]?.recentMessages).toHaveLength(15);
+    // First message (original request) is always pinned
+    expect(pending[0]?.recentMessages[0]?.content).toBe('Msg 1');
+    // Followed by the last 14 messages (Msg 4 through Msg 17)
+    expect(pending[0]?.recentMessages[1]?.content).toBe('Msg 4');
+    // Last message is present
+    expect(pending[0]?.recentMessages[14]?.content).toBe('Msg 17');
   });
 
   // Read watermark (#1065): a thread the agent has been shown stops re-surfacing until
@@ -241,5 +273,28 @@ describe('formatBullpenContext', () => {
   it('includes the close_after convention note when threads are present', () => {
     const out = formatBullpenContext([makePending()]);
     expect(out).toContain('close_after');
+  });
+
+  it('shows "first + last N" header and middle-omitted hint when thread is truncated (#1090)', () => {
+    // Simulate a thread where recentMessages holds first + last N (14 recent) of 20 total.
+    const msgs = Array.from({ length: 15 }, (_, i) => ({
+      senderAgentId: 'coordinator',
+      content: `Msg ${i + 1}`,
+      mentionedAgentIds: [] as string[],
+      createdAt: new Date(i * 1000),
+    }));
+    const truncated: PendingThreadContext = {
+      threadId: 'thread-2',
+      topic: 'Long discussion',
+      totalMessages: 20,
+      recentMessages: msgs,
+    };
+    const out = formatBullpenContext([truncated]);
+    // Header must name the composition, not just "showing last N"
+    expect(out).toContain('first + last 14 of 20');
+    // Middle-omission hint must be present
+    expect(out).toContain('Middle messages omitted');
+    // get_thread hint still present
+    expect(out).toContain('get_thread');
   });
 });

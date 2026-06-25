@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { TaskOriginator } from '../../contacts/types.js';
 
 // -- DB row shape (snake_case, mirrors Postgres column names) --
 
@@ -26,6 +27,8 @@ export interface DbTaskRow {
   source_agent_id: string | null;
   created_by: string;
   tags: string[];
+  // TaskOriginator lineage (migration 065). JSONB → object; null on pre-065 rows.
+  originator: Record<string, unknown> | null;
 }
 
 // -- Public camelCase shape --
@@ -53,6 +56,9 @@ export interface TaskRow {
   sourceAgentId: string | null;
   createdBy: string;
   tags: string[];
+  /** Immutable lineage stamped at creation (migration 065). Null = no lineage (pre-065 or
+   *  unstamped) → treated as agent / no-bypass by the effective-standing ladder. */
+  originator: TaskOriginator | null;
 }
 
 export function mapTaskRow(row: DbTaskRow): TaskRow {
@@ -79,6 +85,8 @@ export function mapTaskRow(row: DbTaskRow): TaskRow {
     sourceAgentId: row.source_agent_id,
     createdBy: row.created_by,
     tags: row.tags,
+    // JSONB round-trips to a plain object; runtime shape is validated by callers that act on it.
+    originator: (row.originator as unknown as TaskOriginator | null) ?? null,
   };
 }
 
@@ -90,6 +98,13 @@ export interface HeartbeatCandidate {
   /** The agent that will receive the wake — the task's source_agent_id, or the
    *  fallback agent when source_agent_id is null or not heartbeat-eligible. */
   agentId: string;
+  /** The task's lineage (migration 065). Threaded onto the wake job so the woken task fires
+   *  with provenance; null on pre-065 / unstamped tasks → no bypass. */
+  originator: TaskOriginator | null;
+  /** True when the task is an agent-spawned child / side-effect (source='agent' or
+   *  parent_task_id set) rather than the original unit of authorized work. Selects the
+   *  bypass-ladder column (posture D vs B) at execution time. */
+  derived: boolean;
 }
 
 export interface SelectHeartbeatOptions {
@@ -131,7 +146,11 @@ export async function selectHeartbeatCandidates(
        SELECT
          t.id,
          CASE WHEN t.source_agent_id = ANY($1::text[]) THEN t.source_agent_id ELSE $4 END AS effective_agent,
-         t.updated_at
+         t.updated_at,
+         t.originator,
+         -- A task is "derived" (agent-spawned side-effect / sub-task) when source='agent' or it
+         -- has a parent. This selects the conservative posture-D ladder column at wake time (#1125).
+         (t.source = 'agent' OR t.parent_task_id IS NOT NULL) AS derived
        FROM tasks t
        WHERE t.status IN ('open','in_progress','waiting','blocked')
          AND (t.blocked_by_task_id IS NULL OR EXISTS (
@@ -149,19 +168,29 @@ export async function selectHeartbeatCandidates(
              )
      ),
      per_agent AS (
-       SELECT DISTINCT ON (effective_agent) id, effective_agent, updated_at
+       SELECT DISTINCT ON (effective_agent) id, effective_agent, updated_at, originator, derived
        FROM candidates
        ORDER BY effective_agent, updated_at ASC
      )
-     SELECT id, effective_agent
+     SELECT id, effective_agent, originator, derived
      FROM per_agent
      ORDER BY updated_at ASC
      LIMIT $5`,
     [opts.eligibleAgents, opts.idleThresholdHours, opts.staleWaitThresholdHours, fallback, opts.maxWakes],
   );
   return rows.map((r) => {
-    const row = r as unknown as { id: string; effective_agent: string };
-    return { id: row.id, agentId: row.effective_agent };
+    const row = r as unknown as {
+      id: string;
+      effective_agent: string;
+      originator: Record<string, unknown> | null;
+      derived: boolean;
+    };
+    return {
+      id: row.id,
+      agentId: row.effective_agent,
+      originator: (row.originator as unknown as TaskOriginator | null) ?? null,
+      derived: row.derived,
+    };
   });
 }
 
@@ -171,7 +200,7 @@ export async function getTaskById(pool: Pool, taskId: string): Promise<TaskRow |
     `SELECT id, agent_id, intent_anchor, status, progress, error_budget, conversation_id,
             created_at, updated_at, title, description, owner, waiting_on_contact_id,
             waiting_on_text, parent_task_id, blocked_by_task_id, priority, due_at,
-            source, source_agent_id, created_by, tags
+            source, source_agent_id, created_by, tags, originator
        FROM tasks WHERE id = $1`,
     [taskId],
   );

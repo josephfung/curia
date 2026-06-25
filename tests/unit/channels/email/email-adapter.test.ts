@@ -95,7 +95,7 @@ function captureHandler(
   eventType: string,
   mocks: ReturnType<typeof createMocks>,
 ): (event: BusEvent) => Promise<void> {
-  const handlers = ((mocks.bus.subscribe as ReturnType<typeof vi.fn>).__handlerMap ??= {}) as
+  const handlers = ((mocks.bus.subscribe as unknown as { __handlerMap?: Record<string, (event: BusEvent) => Promise<void>> }).__handlerMap ??= {}) as
     Record<string, (event: BusEvent) => Promise<void>>;
   (mocks.bus.subscribe as ReturnType<typeof vi.fn>).mockImplementation(
     (et: string, _layer: string, cb: (event: BusEvent) => Promise<void>) => {

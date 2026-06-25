@@ -311,6 +311,156 @@ describe('Scheduler', () => {
       expect(claimParams).toContain('job-1');
     });
 
+    // Regression: scheduler fired same cron job 3x in 80s (#1124). The atomic claim UPDATE
+    // uses rowCount to detect concurrent claims — rowCount=0 means another poller claimed
+    // first, so this poller must skip. pg types rowCount as number|null; both 0 and null
+    // must abort, otherwise a null rowCount bypasses the guard and fires a duplicate.
+    it('skips firing when claim UPDATE returns rowCount=0 (concurrent claim)', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 0, rows: [] }); // already claimed
+
+      await scheduler.pollDueJobs();
+
+      expect(bus.publish).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1' }),
+        expect.stringContaining('skipping fire'),
+      );
+    });
+
+    it('skips firing when claim UPDATE returns rowCount=null (pg null-safety)', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: null, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      expect(bus.publish).not.toHaveBeenCalled();
+      // null rowCount is anomalous — should be visible in prod logs, not silently swallowed at debug
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1' }),
+        expect.stringContaining('null rowCount'),
+      );
+    });
+
+    it('skips firing when cron expression changed between poll and claim (optimistic-concurrency guard)', async () => {
+      // Scenario: updateJob() changes cron_expr after the poll SELECT but before the
+      // claim UPDATE. The WHERE includes cron_expr/timezone so the UPDATE matches 0 rows,
+      // and the job is skipped. The next poll fires it with the corrected expression.
+      const row = fakeDbRow(); // cron_expr: '0 9 * * *', timezone: 'UTC'
+      const nextRun = new Date('2026-06-24T09:00:00.000Z');
+      schedulerService.nextRunFromCron.mockReturnValueOnce(nextRun);
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 0, rows: [] }); // cron changed, WHERE didn't match
+
+      await scheduler.pollDueJobs();
+
+      expect(bus.publish).not.toHaveBeenCalled();
+      const [claimSql, claimParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('cron_expr = $4');
+      expect(claimSql).toContain('timezone = $5');
+      expect(claimParams[3]).toBe('0 9 * * *');
+      expect(claimParams[4]).toBe('UTC');
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1' }),
+        expect.stringContaining('skipping fire'),
+      );
+    });
+
+    it('marks cron job failed (not pending) when nextRunFromCron throws, preventing retry storm', async () => {
+      // If nextRunFromCron throws (e.g. corrupt cron_expr inserted directly into DB),
+      // the outer pollDueJobs error handler would try to revert status='running' — but
+      // the job was never claimed, so the revert is a silent no-op. The job stays 'pending'
+      // with next_run_at in the past and the scheduler loops forever. Guard: mark failed.
+      const row = fakeDbRow({ cron_expr: 'bad-expr' });
+      const badExprError = new Error('Invalid cron expression');
+      schedulerService.nextRunFromCron.mockImplementationOnce(() => { throw badExprError; });
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rows: [] }); // mark-failed UPDATE
+
+      await scheduler.pollDueJobs();
+
+      expect(bus.publish).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1', cronExpr: 'bad-expr' }),
+        'Invalid cron expression — marking job failed to prevent retry storm',
+      );
+      // Confirm the mark-failed UPDATE was issued (not the standard claim UPDATE)
+      const [failSql, failParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(failSql).toContain("status = 'failed'");
+      expect(failSql).toContain('last_error');
+      // next_run_at = NULL prevents the poll SELECT from re-selecting this job on every tick
+      expect(failSql).toContain('next_run_at = NULL');
+      // Status guard prevents clobbering a concurrent cancellation
+      expect(failSql).toContain("status IN ('pending', 'failed')");
+      // Optimistic-concurrency guard: if updateJob() fixed the cron between poll and here,
+      // this WHERE won't match and the job stays 'pending' with the corrected expression
+      expect(failSql).toContain('cron_expr = $3');
+      expect(failSql).toContain('timezone = $4');
+      expect(failParams[0]).toBe('job-1');
+      expect(failParams[2]).toBe('bad-expr');
+      expect(failParams[3]).toBe('UTC');
+    });
+
+    it('advances next_run_at in claim UPDATE for cron jobs', async () => {
+      const row = fakeDbRow(); // cron_expr: '0 9 * * *', timezone: 'UTC'
+      const nextRun = new Date('2026-06-24T09:00:00.000Z');
+      schedulerService.nextRunFromCron.mockReturnValueOnce(nextRun);
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [claimSql, claimParams] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('next_run_at');
+      expect(claimParams).toContain(nextRun);
+      expect(schedulerService.nextRunFromCron).toHaveBeenCalledWith('0 9 * * *', 'UTC');
+      // Optimistic-concurrency guard: cron_expr/timezone in WHERE prevents overwriting a
+      // next_run_at that updateJob() just set with a concurrent cron-expression change
+      expect(claimSql).toContain('cron_expr = $4');
+      expect(claimSql).toContain('timezone = $5');
+      expect(claimParams[3]).toBe('0 9 * * *');
+      expect(claimParams[4]).toBe('UTC');
+    });
+
+    // Regression (duplicate daily digest, 2026-06-24): two overlapping pollDueJobs cycles
+    // each captured the same still-pending cron job in their in-memory list. Poll A claimed
+    // and fired it; completeJobRun reset the recurring job to status='pending'; Poll B then
+    // re-claimed it because the claim UPDATE gated only on status — NOT on next_run_at. The
+    // claim must re-check next_run_at <= now() (the same predicate the SELECT used) so that a
+    // stale concurrent claim, whose row's next_run_at was already advanced to the future by
+    // the first claim, matches 0 rows and skips. (#1124 advanced next_run_at but only protected
+    // the NEXT poll's SELECT, not a concurrent poll already holding the row.)
+    it('gates the cron claim UPDATE on next_run_at <= now() to block stale concurrent re-claims', async () => {
+      const row = fakeDbRow();
+      schedulerService.nextRunFromCron.mockReturnValueOnce(new Date('2026-06-25T09:00:00.000Z'));
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [claimSql] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('next_run_at <= now()');
+    });
+
+    it('does not include next_run_at in claim UPDATE for one-shot jobs', async () => {
+      const row = fakeDbRow({ cron_expr: null, run_at: new Date('2026-06-24T09:00:00.000Z').toISOString() });
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      expect(schedulerService.nextRunFromCron).not.toHaveBeenCalled();
+      const [claimSql] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).not.toContain('next_run_at');
+    });
+
     it('uses a unique conversationId per run (not job ID)', async () => {
       const jobId = 'job-unique-conv';
       const firedEvent = { id: 'fired-evt-1' };
@@ -522,6 +672,60 @@ describe('Scheduler', () => {
 
       const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
       expect(taskEvent.payload.metadata).toBeUndefined();
+    });
+
+    it('stamps a wakeContext for a heartbeat wake (task-wake payload) so the ladder applies (#1125)', async () => {
+      const originator = { contactId: 'system', systemRole: 'system', channel: 'declarative', initiatedAt: '2026-06-23T00:00:00.000Z' };
+      const row = fakeDbRow({ originator, task_payload: { type: 'task-wake', task_id: 't9', standing: { derived: true } } });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.originator).toEqual(originator);
+      expect(taskEvent.payload.metadata?.wakeContext).toEqual({ derived: true });
+    });
+
+    it('stamps a wakeContext for a heartbeat wake even when the originator is null (pre-065 task)', async () => {
+      // A heartbeat wake of an unstamped task carries a `standing` envelope but no originator —
+      // it must still be marked woken so the execution layer applies the ladder / fail-closed path.
+      const row = fakeDbRow({ originator: null, task_payload: { type: 'task-wake', task_id: 't0', standing: { derived: false } } });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.wakeContext).toEqual({ derived: false });
+      expect(taskEvent.payload.metadata?.originator).toBeUndefined();
+    });
+
+    it('does NOT stamp a wakeContext for a wake_at job (task-wake payload but no standing envelope)', async () => {
+      // The CTE-created wake_at path writes { type: 'task-wake' } with no standing and no originator
+      // — intentionally out of scope for the ladder, so it must NOT be marked woken.
+      const row = fakeDbRow({ originator: null, task_payload: { type: 'task-wake', task_id: 't1' } });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata).toBeUndefined();
+    });
+
+    it('does NOT stamp a wakeContext for a non-wake (scheduler-create) job — it keeps originator at fire time', async () => {
+      const originator = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: '2026-06-23T00:00:00.000Z' };
+      // Default fakeDbRow task_payload is { skill: 'morning-brief' } — a specific scheduled action, not a heartbeat wake.
+      const row = fakeDbRow({ originator });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.originator).toEqual(originator);
+      expect(taskEvent.payload.metadata?.wakeContext).toBeUndefined();
     });
   });
 
@@ -1100,7 +1304,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'You are the coordinator.',
           schedule: [
             { cron: '0 9 * * 1', task: 'weekly-standup' },
@@ -1109,7 +1313,7 @@ describe('Scheduler', () => {
         },
         {
           name: 'researcher',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'You research things.',
           // No schedule block — should be skipped.
         },
@@ -1135,7 +1339,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'no-schedule',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'No schedule.',
         },
       ];
@@ -1149,7 +1353,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'empty-sched',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Empty schedule.',
           schedule: [],
         },
@@ -1166,7 +1370,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'writing-scout',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Scout.',
           schedule: [
             { cron: '30 8 * * 2', task: 'Run the writing scout', agent_id: 'coordinator' },
@@ -1175,7 +1379,7 @@ describe('Scheduler', () => {
         // coordinator must be in the config list so the unknown-agent guard allows the target
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
         },
       ];
@@ -1196,7 +1400,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'writing-scout',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Scout.',
           schedule: [
             { cron: '30 8 * * 2', task: 'Check the shared inbox', agent_id: 'coordinator' },
@@ -1204,7 +1408,7 @@ describe('Scheduler', () => {
         },
         {
           name: 'researcher',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Research.',
           schedule: [
             { cron: '30 8 * * 2', task: 'Check the shared inbox', agent_id: 'coordinator' },
@@ -1212,7 +1416,7 @@ describe('Scheduler', () => {
         },
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
         },
       ];
@@ -1237,7 +1441,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'my-agent',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Agent.',
           schedule: [
             { cron: '0 9 * * 1', task: 'weekly task' },
@@ -1260,13 +1464,13 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'agent-a',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'A.',
           schedule: [{ cron: '0 9 * * 1', task: 'task', agent_id: 'agent-b' }],
         },
         {
           name: 'agent-b',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'B.',
           schedule: [{ cron: '0 9 * * 1', task: 'task', agent_id: 'agent-a' }],
         },
@@ -1288,7 +1492,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [{ cron: '0 9 * * 1', task: 'task', agent_id: 'coordinator' }],
         },
@@ -1303,7 +1507,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'my-agent',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Agent.',
           schedule: [
             { cron: '0 9 * * 1', task: 'weekly task', agent_id: 'nonexistent-agent' },
@@ -1329,7 +1533,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'agent-x',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'test',
           schedule: [
             { cron: '0 1 * * *', task: 'fail-task' },
@@ -1354,7 +1558,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [
             {
@@ -1386,7 +1590,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [
             { cron: '0 9 * * 1', task: 'weekly-standup' },
@@ -1428,7 +1632,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'agent-x',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'test',
           schedule: [
             { cron: '0 1 * * *', task: 'fail-task' },
@@ -1465,7 +1669,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'writing-scout',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Scout.',
           schedule: [
             { cron: '30 8 * * 2', task: 'Run the writing scout', agent_id: 'coordinator' },
@@ -1473,7 +1677,7 @@ describe('Scheduler', () => {
         },
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
         },
       ];
@@ -1499,7 +1703,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'no-schedule',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'No schedule.',
         },
       ];
@@ -1516,7 +1720,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [{ cron: '0 9 * * *', task: 'brief' }],
         },
@@ -1537,7 +1741,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [{ cron: '0 9 * * *', task: 'brief' }],
         },
@@ -1560,7 +1764,7 @@ describe('Scheduler', () => {
       const configs: AgentYamlConfig[] = [
         {
           name: 'coordinator',
-          model: { provider: 'anthropic', model: 'claude-3' },
+          model: { tier: 'standard' },
           system_prompt: 'Coord.',
           schedule: [{ cron: '0 9 * * *', task: 'brief' }],
         },

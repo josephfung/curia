@@ -77,7 +77,15 @@ export class BacklogHeartbeat {
     let enqueued = 0;
     for (const c of candidates) {
       try {
-        const { jobId } = await this.opts.schedulerService.enqueueTaskWake({ taskId: c.id, agentId: c.agentId, runAt });
+        const { jobId } = await this.opts.schedulerService.enqueueTaskWake({
+          taskId: c.id,
+          agentId: c.agentId,
+          runAt,
+          // Thread the task's lineage + derived flag (#1125) so the woken task fires with
+          // provenance and the bypass ladder can compute effective standing at invocation.
+          originator: c.originator,
+          derived: c.derived,
+        });
         this.opts.logger.debug({ taskId: c.id, agentId: c.agentId, jobId }, 'BacklogHeartbeat: wake enqueued');
         enqueued += 1;
       } catch (err) {

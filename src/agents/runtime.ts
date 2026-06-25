@@ -1,6 +1,7 @@
 import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createContextBudget, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, type AgentTaskEvent } from '../bus/events.js';
+import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
 import type { ModelRegistry } from './llm/model-registry.js';
@@ -34,6 +35,16 @@ export interface AgentConfig {
    *  Optional for unit-test convenience; when omitted alongside modelName, the runtime
    *  skips context-window lookup and uses a 200k-token default. */
   resolvedModel?: string;
+  /** The capability tier this agent is routed to (fast | standard | powerful).
+   *  Used to populate model.fallback events when the primary model is unavailable (#813). */
+  tier?: Tier;
+  /** Fallback model to try when the primary model returns NOT_FOUND.
+   *  Pre-resolved from the fixed fallback tier rules at bootstrap (#813).
+   *  When absent, NOT_FOUND errors are handled the same as other non-retryable errors. */
+  fallbackModel?: string;
+  /** Provider instance for the fallback model. May differ from the primary provider
+   *  when the primary and fallback tiers are served by different providers. */
+  fallbackProvider?: LLMProvider;
   bus: EventBus;
   logger: Logger;
   /** Optional working memory for conversation persistence across turns. */
@@ -881,6 +892,9 @@ export class AgentRuntime {
           // Pass task-level metadata so skill handlers can inspect task-wide signals
           // without bus or dispatcher access.
           taskMetadata: taskEvent.payload.metadata,
+          // Live-principal-turn signal (#1126) — a distinct payload field (never in metadata), so
+          // it can't be persisted. Drives the elevated-skill gate; `delegate` forwards it onward.
+          liveTurn: taskEvent.payload.liveTurn,
         });
         const durationMs = Date.now() - startTime;
 
@@ -1305,6 +1319,9 @@ export class AgentRuntime {
     const publishLlmCallEvent = async (
       response: LLMResponse,
       callLatencyMs: number,
+      // Override the provider ID when the call was made with a different provider
+      // than the one captured in the outer closure (e.g. fallback tier provider, #813).
+      providerIdOverride?: string,
     ): Promise<void> => {
       if (response.type === 'error') return;
       try {
@@ -1324,7 +1341,7 @@ export class AgentRuntime {
           conversationId: taskEvent.payload.conversationId,
           requestedModel: response.provenance.requestedModel,
           actualModel: response.provenance.actualModel,
-          provider: provider.id,
+          provider: providerIdOverride ?? provider.id,
           providerRequestId: response.provenance.providerRequestId,
           inputTokens: response.usage.inputTokens,
           outputTokens: response.usage.outputTokens,
@@ -1345,6 +1362,29 @@ export class AgentRuntime {
       }
     };
 
+    // Publish llm.error for failed provider calls — used by HealthService to track
+    // tier health without making billed probes. Fire-and-forget with try-catch like
+    // publishLlmCallEvent: telemetry failure must never abort an agent task.
+    const publishLlmErrorEvent = async (
+      response: LLMResponse & { type: 'error' },
+      requestedModel: string | undefined,
+      providerIdOverride?: string,
+    ): Promise<void> => {
+      try {
+        const event = createLlmError({
+          agentId,
+          conversationId: taskEvent.payload.conversationId,
+          requestedModel: requestedModel ?? 'unknown',
+          provider: providerIdOverride ?? provider.id,
+          errorType: response.error.type,
+          parentEventId: taskEvent.id,
+        });
+        await bus.publish('agent', event);
+      } catch (err) {
+        logger.error({ err, agentId }, 'Failed to publish llm.error telemetry event');
+      }
+    };
+
     // Prefer the explicitly resolved model; fall back to modelName so callers that
     // set only modelName (e.g. unit tests) still reach the provider without error.
     const modelForCall = this.config.resolvedModel ?? this.config.modelName;
@@ -1360,9 +1400,95 @@ export class AgentRuntime {
 
     const agentErr = response.error;
 
-    // Non-retryable errors: count against budget then bail immediately.
-    // AUTH_FAILURE counts double — it's a strong signal something is misconfigured.
+    // Publish llm.error before any retry/fallback so the tracker records the raw
+    // failure on each attempt, not just the final one.
+    await publishLlmErrorEvent(response, modelForCall);
+
+    // Non-retryable errors: check for model fallback first, then bail.
     if (!agentErr.retryable) {
+      // NOT_FOUND means the provider removed a model from its catalog. Before surfacing
+      // the error, try the fallback tier's model (#813). Only NOT_FOUND triggers this —
+      // AUTH_FAILURE and VALIDATION_ERROR indicate caller or config problems, not model
+      // availability, so they go straight to the hard-fail path below.
+      if (agentErr.type === 'NOT_FOUND' && this.config.fallbackModel && this.config.fallbackProvider) {
+        logger.warn(
+          { agentId, failedModel: modelForCall, fallbackModel: this.config.fallbackModel, tier: this.config.tier },
+          'Primary model NOT_FOUND — attempting fallback tier model',
+        );
+        await this.publishModelFallbackEngaged(taskEvent, modelForCall ?? 'unknown');
+
+        // @TODO: params.messages were assembled against the primary model's context window.
+        // For powerful→standard downgrades the fallback may have a smaller window,
+        // causing the fallback call to fail with a context-overflow error. Re-budgeting
+        // mid-flight is non-trivial; for now the common cases (fast→standard,
+        // standard→powerful) are larger-or-equal so this is safe. (#813)
+        let fallbackResponse: LLMResponse;
+        const fallbackStartMs = Date.now();
+        try {
+          fallbackResponse = await this.config.fallbackProvider.chat({ ...params, model: this.config.fallbackModel });
+        } catch (err) {
+          // Provider threw synchronously (network failure, misconfiguration, etc.) —
+          // normalize into AgentError so the audit trail stays complete.
+          const thrownErr: AgentError = {
+            type: 'UNKNOWN',
+            source: this.config.fallbackProvider.id,
+            message: err instanceof Error ? err.message : String(err),
+            retryable: false,
+            context: { raw: String(err) },
+            timestamp: new Date(),
+          };
+          budget.consecutiveErrors += 1;
+          budget.turnsUsed += 1;
+          logger.error(
+            { agentId, err, fallbackModel: this.config.fallbackModel },
+            'Fallback provider threw an unexpected exception',
+          );
+          // Publish llm.error so HealthService tracks this fallback tier failure.
+          // Fire-and-forget like publishLlmErrorEvent — telemetry must not abort the task.
+          try {
+            const event = createLlmError({
+              agentId,
+              conversationId: taskEvent.payload.conversationId,
+              requestedModel: this.config.fallbackModel ?? 'unknown',
+              provider: this.config.fallbackProvider.id,
+              errorType: thrownErr.type,
+              parentEventId: taskEvent.id,
+            });
+            await bus.publish('agent', event);
+          } catch (telemetryErr) {
+            logger.error({ err: telemetryErr, agentId }, 'Failed to publish llm.error for fallback exception');
+          }
+          await this.publishAgentError(thrownErr, taskEvent);
+          await this.sendErrorResponse(taskEvent);
+          return null;
+        }
+        const fallbackLatencyMs = Date.now() - fallbackStartMs;
+
+        if (fallbackResponse.type !== 'error') {
+          // Fallback succeeded — behave as if the primary call succeeded.
+          budget.consecutiveErrors = 0;
+          await publishLlmCallEvent(fallbackResponse, fallbackLatencyMs, this.config.fallbackProvider.id);
+          return fallbackResponse;
+        }
+
+        // Fallback also failed — count against budget and surface the fallback error.
+        const fallbackErr = fallbackResponse.error;
+        const fallbackIncrement = fallbackErr.type === 'AUTH_FAILURE' ? 2 : 1;
+        budget.consecutiveErrors += fallbackIncrement;
+        budget.turnsUsed += fallbackIncrement;
+        logger.error(
+          { agentId, errorType: fallbackErr.type, fallbackModel: this.config.fallbackModel },
+          'Fallback model also failed',
+        );
+        await publishLlmErrorEvent(fallbackResponse, this.config.fallbackModel, this.config.fallbackProvider.id);
+        await this.publishAgentError(fallbackErr, taskEvent);
+        await this.sendErrorResponse(taskEvent);
+        return null;
+      }
+
+      // All other non-retryable errors (AUTH_FAILURE, VALIDATION_ERROR, etc.), or
+      // NOT_FOUND with no fallback configured — fail immediately.
+      // AUTH_FAILURE counts double — it's a strong signal something is misconfigured.
       const increment = agentErr.type === 'AUTH_FAILURE' ? 2 : 1;
       budget.consecutiveErrors += increment;
       budget.turnsUsed += increment;
@@ -1401,6 +1527,9 @@ export class AgentRuntime {
       }
 
       latestErr = retryResponse.error;
+
+      // Publish llm.error on every retry failure so the tracker records each raw attempt.
+      await publishLlmErrorEvent(retryResponse, modelForCall);
 
       // If the retry returned a non-retryable error, stop retrying immediately
       if (!latestErr.retryable) {
@@ -1454,6 +1583,32 @@ export class AgentRuntime {
   /**
    * Publish a structured agent.error event to the bus for audit and monitoring.
    */
+  /**
+   * Publish a model.fallback event when the primary tier model returns NOT_FOUND
+   * and the runtime is re-routing to the fallback tier's model (#813).
+   */
+  private async publishModelFallbackEngaged(
+    taskEvent: AgentTaskEvent,
+    failedModel: string,
+  ): Promise<void> {
+    const { agentId, bus, logger } = this.config;
+    try {
+      const event = createModelFallbackEngaged({
+        agentId,
+        conversationId: taskEvent.payload.conversationId,
+        tier: this.config.tier ?? 'unknown',
+        failedModel,
+        fallbackModel: this.config.fallbackModel ?? 'unknown',
+        reason: 'NOT_FOUND',
+        parentEventId: taskEvent.id,
+      });
+      await bus.publish('agent', event);
+    } catch (err) {
+      // Telemetry failure must not abort the fallback attempt.
+      logger.error({ err, agentId }, 'Failed to publish model.fallback event');
+    }
+  }
+
   private async publishAgentError(agentErr: AgentError, taskEvent: AgentTaskEvent): Promise<void> {
     const { agentId, bus } = this.config;
     const { conversationId } = taskEvent.payload;

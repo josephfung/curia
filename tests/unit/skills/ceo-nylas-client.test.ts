@@ -176,12 +176,13 @@ describe('CeoNylasClient — drafts (issue #1000)', () => {
     it('hits the /drafts collection — NOT /messages', async () => {
       const fetchSpy = mockFetchSuccess([RAW_DRAFT_SUMMARY]);
       const client = new CeoNylasClient('key', 'grant', logger);
+      // limit: 25 exceeds the Nylas cap (20) and is silently clamped.
       await client.listDrafts({ limit: 25 });
 
       const url = new URL(fetchSpy.mock.calls[0]![0] as string);
       expect(url.pathname.endsWith('/drafts')).toBe(true);
       expect(url.pathname).not.toContain('/messages');
-      expect(url.searchParams.get('limit')).toBe('25');
+      expect(url.searchParams.get('limit')).toBe('20');
     });
 
     it('never sends a received_after / watermark param', async () => {

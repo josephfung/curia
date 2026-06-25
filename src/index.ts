@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
@@ -48,6 +48,7 @@ import { EntityMemory } from './memory/entity-memory.js';
 import { ConfigStore } from './memory/config-store.js';
 import { SkillRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
+import { resolveBypassLadder } from './autonomy/effective-standing.js';
 import { loadSkillsFromDirectory, discoverSkillManifests, validateAllowedCallers } from './skills/loader.js';
 import type { SkillDiscovery } from './skills/loader.js';
 import { loadMcpServers, loadSkillsConfig } from './skills/mcp-loader.js';
@@ -136,6 +137,7 @@ import { reconcileChannelRegistry } from './registry/channel-reconcile.js';
 import { McpRegistryRepo } from './registry/mcp-registry-repo.js';
 import { McpRegistryService } from './registry/mcp-registry-service.js';
 import { reconcileMcpRegistry } from './registry/mcp-reconcile.js';
+import { HealthService } from './health/health-service.js';
 
 async function main(): Promise<void> {
   // Captured at the very start of main() so the wizard's post-setup polling
@@ -1584,6 +1586,32 @@ async function main(): Promise<void> {
     );
   }
 
+  // HealthService — observability layer for liveness probes and canary jobs (#434).
+  // Requires: pool, bus, logger (always available), scheduler (just constructed),
+  // mcpSessions (loaded at line 926), and modelRoutingConfig (from line 393).
+  // Tavily is configured as a vault secret (not a config field) — pass undefined;
+  // canary is skipped. Google Workspace MCP uses OAuth env vars (no credential file)
+  // — pass undefined; check falls back to a session ping if path is null.
+  const healthConfig = resolveHealthConfig(yamlConfig.health);
+  const healthService = new HealthService({
+    db: pool,
+    bus,
+    logger,
+    scheduler,
+    schedulerService,
+    emailAdapter: emailAdapters[0],
+    nylasClient: primaryNylasClient,
+    signalRpcClient,
+    browserService,
+    mcpSessions,
+    modelRoutingConfig,
+    config: healthConfig,
+    openaiApiKey: config.openaiApiKey,
+    tavilyApiKey: undefined,             // vault secret, not in config — canary skipped
+    googleWorkspaceConfigPath: undefined, // OAuth env vars, no credential file — canary skipped
+  });
+  await healthService.start();
+
   // Approval trigger — creates pending_approval rows and notifies CEO
   // when autonomy gates block a skill. See ADR-018 and issue #427.
   // Constructed unconditionally — row creation does not depend on the outbound stack.
@@ -1634,7 +1662,12 @@ async function main(): Promise<void> {
   // entityContextAssembler enables entity_enrichment pre-enrichment and the
   // entity-context skill. agentContactId enables entity_enrichment default='agent'.
   // infraLlmService provides constrained LLM access (classify/extract) with telemetry.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort });
+  // Bypass-ladder thresholds (#1125) — how much lineage standing a woken/derived task inherits
+  // at the live autonomy score. Falls back to the module defaults (70 / 90) per field and is
+  // validated here (the JSON-schema startup check only covers default.yaml, not local overrides,
+  // and cannot express the derived_child >= same_task invariant). Throws → boot fails loudly.
+  const bypassLadder = resolveBypassLadder(yamlConfig.autonomy?.bypass_ladder);
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -1815,11 +1848,38 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
+    // Pre-resolve the fallback tier model and provider (#813).
+    // The fallback tier rules are fixed: fast→standard, standard→powerful, powerful→standard.
+    // All three tiers are already validated above, so these lookups always succeed.
+    const fallbackTier = modelRouter.getFallbackTier(resolved.tier);
+    const fallbackResolved = modelRouter.resolve(fallbackTier);
+    const fallbackProviderName = modelRegistry.getProvider(fallbackResolved.model);
+    if (!fallbackProviderName) {
+      // All tier models are validated at construction, so a missing provider name here
+      // means the model-registry is inconsistent with the provider-registry — fail fast.
+      logger.error(
+        { agentId: agentConfig.name, fallbackModel: fallbackResolved.model },
+        'Fallback model has no registered provider — check model-registry.ts',
+      );
+      process.exit(1);
+    }
+    const agentFallbackProvider = providerRegistry.get(fallbackProviderName);
+    if (!agentFallbackProvider) {
+      logger.error(
+        { agentId: agentConfig.name, fallbackModel: fallbackResolved.model, fallbackProviderName },
+        'Fallback provider not found in provider registry — check provider setup',
+      );
+      process.exit(1);
+    }
+
     const agent = new AgentRuntime({
       agentId: agentConfig.name,
       systemPrompt,
       provider: agentProvider,
       resolvedModel: resolved.model,
+      tier: resolved.tier,
+      fallbackModel: fallbackResolved.model,
+      fallbackProvider: agentFallbackProvider,
       bus,
       logger,
       memory,
@@ -2070,6 +2130,8 @@ async function main(): Promise<void> {
     // OPENAI_API_KEY is not set (entity memory requires embeddings); individual
     // endpoints handle the absent case in Tasks 3–5.
     entityMemory,
+    // Powers GET /api/health with real probes and canary state (#434).
+    healthService,
   });
 
   try {

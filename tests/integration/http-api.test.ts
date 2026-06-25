@@ -14,8 +14,25 @@ const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
 import type { AgentTaskEvent } from '../../src/bus/events.js';
-import type { Pool } from 'pg';
 import pino from 'pino';
+import type { HealthService } from '../../src/health/health-service.js';
+
+// Minimal HealthService stub for integration tests that don't test health behavior.
+// Returns a minimal ok response so GET /api/health stays up without a real DB.
+function makeHealthServiceStub(): HealthService {
+  return {
+    getStatus: vi.fn().mockResolvedValue({
+      status: 'ok',
+      uptime_s: 0,
+      checks: {
+        db: 'ok', bus: 'ok', signal: 'skipped',
+        email: 'skipped', browser: 'skipped',
+        mcp: { google_workspace: 'skipped' },
+        scheduler: 'ok',
+      },
+    }),
+  } as unknown as HealthService;
+}
 
 const logger = pino({ level: 'silent' });
 
@@ -24,10 +41,6 @@ describe('HTTP API integration', () => {
   const bus = new EventBus(logger);
   const agentRegistry = new AgentRegistry();
   agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
-
-  const mockPool = {
-    query: async () => ({ rows: [{ '?column?': 1 }] }),
-  } as unknown as Pool;
 
   const eventRouter = new EventRouter(logger);
 
@@ -57,7 +70,7 @@ describe('HTTP API integration', () => {
     dispatcher.register();
 
     app.register(messageRoutes, { bus, logger, eventRouter });
-    app.register(healthRoutes, { pool: mockPool, logger, agentNames: ['coordinator'], skillNames: ['web-fetch'] });
+    app.register(healthRoutes, { healthService: makeHealthServiceStub() });
     app.register(agentRoutes, { agentRegistry });
 
     await app.ready();
@@ -104,8 +117,7 @@ describe('HTTP API integration', () => {
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.body);
     expect(body.status).toBe('ok');
-    expect(body.agents).toContain('coordinator');
-    expect(body.skills).toContain('web-fetch');
+    expect(body.checks.db).toBe('ok');
   });
 
   it('GET /api/agents/status returns agent list', async () => {
@@ -130,10 +142,6 @@ describe('HTTP API — unknown_sender: ignore policy', () => {
   const bus = new EventBus(logger);
   const eventRouter = new EventRouter(logger);
 
-  const mockPool = {
-    query: async () => ({ rows: [{ '?column?': 1 }] }),
-  } as unknown as Pool;
-
   beforeAll(async () => {
     eventRouter.setupSubscriptions(bus);
 
@@ -156,7 +164,7 @@ describe('HTTP API — unknown_sender: ignore policy', () => {
     dispatcher.register();
 
     app.register(messageRoutes, { bus, logger, eventRouter });
-    app.register(healthRoutes, { pool: mockPool, logger, agentNames: [], skillNames: [] });
+    app.register(healthRoutes, { healthService: makeHealthServiceStub() });
 
     await app.ready();
   });
@@ -196,9 +204,6 @@ describe('HTTP API — bearer token authentication', () => {
     const app = Fastify();
     const bus = new EventBus(logger);
     const eventRouter = new EventRouter(logger);
-    const mockPool = {
-      query: async () => ({ rows: [{ '?column?': 1 }] }),
-    } as unknown as Pool;
 
     eventRouter.setupSubscriptions(bus);
 
@@ -246,7 +251,7 @@ describe('HTTP API — bearer token authentication', () => {
     });
 
     app.register(messageRoutes, { bus, logger, eventRouter });
-    app.register(healthRoutes, { pool: mockPool, logger, agentNames: ['coordinator'], skillNames: [] });
+    app.register(healthRoutes, { healthService: makeHealthServiceStub() });
 
     await app.ready();
     return app;

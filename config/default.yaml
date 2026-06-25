@@ -103,6 +103,29 @@ scheduler:
   # Raise this if you run long-running scheduled jobs without explicit duration hints.
   defaultExpectedDurationSeconds: 600  # 10 minutes
 
+health:
+  # Thresholds for time-based liveness checks
+  liveness:
+    email_stall_factor: 3      # fail if last poll older than N × pollingIntervalMs
+    scheduler_max_tick_s: 120  # fail if scheduler watchdog last ticked > N seconds ago
+
+  # Cron schedule for the daily credential/dependency canary job (server local time)
+  canary_schedule: "0 6 * * *"
+
+  # Heartbeat URLs — GET on successful canary (Better Stack, Healthchecks.io, Cronitor, etc.)
+  # LLM keys are tier-named so they survive a model_routing provider swap.
+  # Leave empty to skip the ping (canary still runs and logs).
+  heartbeats:
+    llm_fast: ""
+    llm_standard: ""
+    llm_powerful: ""
+    embeddings: ""
+    image_gen: ""
+    nylas: ""
+    signal: ""
+    google_workspace: ""
+    tavily: ""
+
 # Context bridge TTL configuration.
 # Controls how long outbound context entries remain active before automatic expiry.
 # Auto-registered entries (when the caller doesn't pass explicit context_bridge metadata)
@@ -378,3 +401,15 @@ tasks:
   heartbeatMaxWakesPerTick: 5
   idleThresholdHours: 4
   staleWaitThresholdHours: 48
+
+# Autonomy authorization (#1125). The bypass ladder governs how much LINEAGE standing a
+# heartbeat-woken/derived task inherits at the live autonomy score. The score can only ever
+# DOWNGRADE inherited standing (woken/derived → propose-only at low trust), never grant it.
+#   < same_task        : woken & derived → downgrade to agent (propose-only)
+#   same_task–derived  : same-task heartbeat wake keeps lineage; derived child → agent
+#   >= derived_child   : same-task wake AND derived child keep lineage standing
+# See docs/wip/2026-06-22-woken-task-authorization-design.md (spec 14).
+autonomy:
+  bypass_ladder:
+    same_task: 70      # posture B floor — must not drop below 60
+    derived_child: 90  # posture D floor

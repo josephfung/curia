@@ -1,40 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CeoInboxListHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
-import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import type { Logger } from '../../src/logger.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/** Build a minimal SkillContext. The Nylas client is mocked at the fetch
- *  level so we can inspect the `receivedAfter` query param. */
+/** Build a minimal SkillContext. The Nylas client is mocked at the fetch level
+ *  so we can inspect the outgoing query params. There is no watermark anymore,
+ *  so no entityMemory wiring is needed. */
 function makeCtx(
   input: Record<string, unknown>,
-  opts: { selfEmail?: string; storedWatermark?: string | null } = {},
+  opts: { selfEmail?: string } = {},
 ): SkillContext {
-  // Build a minimal EntityMemory mock that returns the desired stored watermark.
-  let entityMemory: EntityMemory | undefined;
-  if (opts.storedWatermark !== undefined) {
-    const storedValue = opts.storedWatermark;
-    // ConfigStore.get() calls findEntities then getFacts.
-    const anchorNode = { id: 'anchor-1', label: 'config:ceo_inbox', type: 'concept', properties: {} };
-    const factNode =
-      storedValue !== null
-        ? {
-            id: 'fact-1',
-            label: 'last_processed_at',
-            properties: { key: 'last_processed_at', value: storedValue, namespace: 'ceo_inbox' },
-            temporal: { lastConfirmedAt: new Date() },
-          }
-        : undefined;
-
-    entityMemory = {
-      findEntities: vi.fn().mockResolvedValue([anchorNode]),
-      getFacts: vi.fn().mockResolvedValue(factNode ? [factNode] : []),
-      storeFact: vi.fn().mockResolvedValue({ stored: true, action: 'updated' }),
-    } as unknown as EntityMemory;
-  }
-
   return {
     input,
     secret(name: string) {
@@ -46,15 +23,13 @@ function makeCtx(
       }
       throw new Error(`unknown secret: ${name}`);
     },
-    // Partial logger mock; cast through unknown to the real Logger type.
     log: {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
     } as unknown as Logger,
-    entityMemory,
-  };
+  } as unknown as SkillContext;
 }
 
 function mockFetchReturning(messages: unknown[] = []) {
@@ -64,97 +39,98 @@ function mockFetchReturning(messages: unknown[] = []) {
   } as unknown as Response);
 }
 
-function extractReceivedAfter(fetchMock: ReturnType<typeof vi.fn>): string | null {
-  const url = new URL(fetchMock.mock.calls[0]![0] as string);
-  return url.searchParams.get('received_after');
+function fetchedUrl(fetchMock: ReturnType<typeof vi.fn>): URL {
+  return new URL(fetchMock.mock.calls[0]![0] as string);
+}
+
+/** Build N unread INBOX message summaries from distinct senders. */
+function unreadMessages(n: number): unknown[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `m${i}`,
+    threadId: `t${i}`,
+    date: i + 1,
+    subject: `subject ${i}`,
+    from: [{ email: `s${i}@x.com`, name: `Sender ${i}` }],
+    to: [],
+    cc: [],
+    snippet: '',
+    unread: true,
+    folders: ['INBOX'],
+    attachments: [],
+  }));
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-describe('CeoInboxListHandler — watermark handling (#866)', () => {
+describe('CeoInboxListHandler — batch listing (no watermark)', () => {
   let handler: CeoInboxListHandler;
 
   beforeEach(() => {
     handler = new CeoInboxListHandler();
   });
 
-  it('uses ConfigStore watermark + 1 as receivedAfter when entityMemory is wired', async () => {
-    const storedTs = 1_700_000_000;
-    const ctx = makeCtx({}, { storedWatermark: String(storedTs) });
-    const fetchSpy = mockFetchReturning();
+  it('never sends a received_after param (the watermark is gone)', async () => {
+    const ctx = makeCtx({ unread_only: true, limit: 5 });
+    const fetchSpy = mockFetchReturning(unreadMessages(3));
     vi.stubGlobal('fetch', fetchSpy);
 
     await handler.execute(ctx);
 
-    expect(extractReceivedAfter(fetchSpy)).toBe(String(storedTs + 1));
+    expect(fetchedUrl(fetchSpy).searchParams.get('received_after')).toBeNull();
   });
 
-  it('falls back to received_after_hours when no watermark is stored', async () => {
-    // entityMemory returns null (no stored fact) → handler uses hours fallback
-    const ctx = makeCtx({ received_after_hours: 24 }, { storedWatermark: null });
-    const fetchSpy = mockFetchReturning();
-    vi.stubGlobal('fetch', fetchSpy);
-
-    const before = Math.floor(Date.now() / 1_000) - 24 * 3600;
-    await handler.execute(ctx);
-    const after = Math.floor(Date.now() / 1_000) - 24 * 3600;
-
-    const param = Number(extractReceivedAfter(fetchSpy));
-    expect(param).toBeGreaterThanOrEqual(before);
-    expect(param).toBeLessThanOrEqual(after + 1);
-  });
-
-  it('applies the 24h hard default when entityMemory is absent and no hours supplied', async () => {
-    // No entityMemory, no received_after_hours
-    const ctx = makeCtx({});
-    const fetchSpy = mockFetchReturning();
-    vi.stubGlobal('fetch', fetchSpy);
-
-    const before = Math.floor(Date.now() / 1_000) - 24 * 3600;
-    await handler.execute(ctx);
-    const after = Math.floor(Date.now() / 1_000) - 24 * 3600;
-
-    const param = Number(extractReceivedAfter(fetchSpy));
-    expect(param).toBeGreaterThanOrEqual(before);
-    expect(param).toBeLessThanOrEqual(after + 1);
-  });
-
-  it('falls back to default lookback on a future watermark and emits a warn log', async () => {
-    const futureTs = Math.floor(Date.now() / 1_000) + 29 * 24 * 3600; // 29 days in future
-    const ctx = makeCtx({}, { storedWatermark: String(futureTs) });
-    const fetchSpy = mockFetchReturning();
-    vi.stubGlobal('fetch', fetchSpy);
-
-    const before = Math.floor(Date.now() / 1_000) - 24 * 3600;
-    await handler.execute(ctx);
-    const after = Math.floor(Date.now() / 1_000) - 24 * 3600;
-
-    // Must have warned about the future watermark
-    const warnCalls = (ctx.log.warn as ReturnType<typeof vi.fn>).mock.calls;
-    expect(
-      warnCalls.some((call: unknown[]) => typeof call[1] === 'string' && call[1].includes('future')),
-    ).toBe(true);
-
-    // receivedAfter must be the 24h default (not the future timestamp + 1, which would return nothing)
-    const param = Number(extractReceivedAfter(fetchSpy));
-    expect(param).toBeGreaterThanOrEqual(before);
-    expect(param).toBeLessThanOrEqual(after + 1);
-  });
-
-  it('coerces a float string watermark from ConfigStore correctly', async () => {
-    const ctx = makeCtx({}, { storedWatermark: '1700000000.789' });
-    const fetchSpy = mockFetchReturning();
+  it('requests limit+1 from Nylas so it can compute has_more in one round-trip', async () => {
+    const ctx = makeCtx({ unread_only: true, limit: 5 });
+    const fetchSpy = mockFetchReturning(unreadMessages(3));
     vi.stubGlobal('fetch', fetchSpy);
 
     await handler.execute(ctx);
 
-    // Should floor the float and add +1
-    expect(extractReceivedAfter(fetchSpy)).toBe(String(1_700_000_000 + 1));
+    expect(fetchedUrl(fetchSpy).searchParams.get('limit')).toBe('6');
+    expect(fetchedUrl(fetchSpy).searchParams.get('unread')).toBe('true');
   });
 
-  it('filters out messages sent from curiaEmail', async () => {
+  it('returns the full batch and has_more=true when more unread remain', async () => {
+    // limit 5 → fetch 6 → Nylas returns 6 → there is a 6th beyond the batch.
+    const ctx = makeCtx({ unread_only: true, limit: 5 });
+    const fetchSpy = mockFetchReturning(unreadMessages(6));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean };
+    expect(data.count).toBe(5);
+    expect(data.has_more).toBe(true);
+  });
+
+  it('returns has_more=false when the batch is not full', async () => {
+    const ctx = makeCtx({ unread_only: true, limit: 5 });
+    const fetchSpy = mockFetchReturning(unreadMessages(3));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean };
+    expect(data.count).toBe(3);
+    expect(data.has_more).toBe(false);
+  });
+
+  it('returns has_more=false when exactly `limit` unread exist (the +1 probe came back short)', async () => {
+    const ctx = makeCtx({ unread_only: true, limit: 5 });
+    const fetchSpy = mockFetchReturning(unreadMessages(5));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean };
+    expect(data.count).toBe(5);
+    expect(data.has_more).toBe(false);
+  });
+
+  it('filters out messages sent from curiaEmail before computing the batch', async () => {
     const self = 'curia@example.com';
-    const ctx = makeCtx({}, { selfEmail: self, storedWatermark: null });
+    const ctx = makeCtx({ unread_only: true, limit: 5 }, { selfEmail: self });
     const fetchSpy = mockFetchReturning([
       { id: 'm1', threadId: 't1', date: 1, subject: 'a', from: [{ email: self, name: 'Curia' }], to: [], cc: [], snippet: '', unread: true, folders: ['INBOX'], attachments: [] },
       { id: 'm2', threadId: 't2', date: 2, subject: 'b', from: [{ email: 'other@x.com', name: 'Other' }], to: [], cc: [], snippet: '', unread: true, folders: ['INBOX'], attachments: [] },
@@ -162,11 +138,27 @@ describe('CeoInboxListHandler — watermark handling (#866)', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     const result = await handler.execute(ctx);
-
-    expect(result.success).toBe(true);
-    if (!result.success) throw new Error(`expected success: ${result.error}`);
-    const data = result.data as { count: number };
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean };
     expect(data.count).toBe(1);
+    expect(data.has_more).toBe(false);
+  });
+
+  it('keeps has_more=true (probe-based) even when a Curia-self message is in a full window', async () => {
+    // limit 5 → fetch 6. One of the 6 is Curia-self (filtered out), but the raw
+    // probe still had > limit results, so real backlog must not be under-reported.
+    const self = 'curia@example.com';
+    const ctx = makeCtx({ unread_only: true, limit: 5 }, { selfEmail: self });
+    const real = unreadMessages(5) as Array<{ from: Array<{ email: string; name: string }> }>;
+    const curia = { id: 'mc', threadId: 'tc', date: 99, subject: 'self', from: [{ email: self, name: 'Curia' }], to: [], cc: [], snippet: '', unread: true, folders: ['INBOX'], attachments: [] };
+    const fetchSpy = mockFetchReturning([curia, ...real]); // 6 raw, 1 filtered
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean };
+    expect(data.count).toBe(5); // 5 real returned
+    expect(data.has_more).toBe(true); // raw.length (6) > limit (5)
   });
 });
 
@@ -177,12 +169,8 @@ describe('CeoInboxListHandler — drafts routing (#1000)', () => {
     handler = new CeoInboxListHandler();
   });
 
-  function fetchedUrl(fetchMock: ReturnType<typeof vi.fn>): URL {
-    return new URL(fetchMock.mock.calls[0]![0] as string);
-  }
-
   it('routes folder DRAFTS to the /drafts resource, not /messages', async () => {
-    const ctx = makeCtx({ folder: 'DRAFTS' }, { storedWatermark: '1700000000' });
+    const ctx = makeCtx({ folder: 'DRAFTS' });
     const fetchSpy = mockFetchReturning([]);
     vi.stubGlobal('fetch', fetchSpy);
 
@@ -194,7 +182,7 @@ describe('CeoInboxListHandler — drafts routing (#1000)', () => {
   });
 
   it('also routes the DRAFT alias to /drafts', async () => {
-    const ctx = makeCtx({ folder: 'DRAFT' }, { storedWatermark: null });
+    const ctx = makeCtx({ folder: 'DRAFT' });
     const fetchSpy = mockFetchReturning([]);
     vi.stubGlobal('fetch', fetchSpy);
 
@@ -203,21 +191,11 @@ describe('CeoInboxListHandler — drafts routing (#1000)', () => {
     expect(fetchedUrl(fetchSpy).pathname.endsWith('/drafts')).toBe(true);
   });
 
-  it('does NOT apply received_after / watermark when listing drafts', async () => {
-    const ctx = makeCtx({ folder: 'DRAFTS' }, { storedWatermark: '1700000000' });
-    const fetchSpy = mockFetchReturning([]);
-    vi.stubGlobal('fetch', fetchSpy);
-
-    await handler.execute(ctx);
-
-    expect(extractReceivedAfter(fetchSpy)).toBeNull();
-  });
-
   it('returns drafts under a `drafts` key, distinguishable from the messages path', async () => {
     const raw = [
       { id: 'd1', thread_id: 't1', subject: 'Hi', to: [{ email: 'a@b.com' }], cc: [], snippet: 's', date: 5 },
     ];
-    const ctx = makeCtx({ folder: 'DRAFTS' }, { storedWatermark: null });
+    const ctx = makeCtx({ folder: 'DRAFTS' });
     const fetchSpy = mockFetchReturning(raw);
     vi.stubGlobal('fetch', fetchSpy);
 
@@ -230,19 +208,5 @@ describe('CeoInboxListHandler — drafts routing (#1000)', () => {
     expect(data.count).toBe(1);
     expect(data.drafts).toHaveLength(1);
     expect(data.drafts[0]).toMatchObject({ id: 'd1', subject: 'Hi' });
-  });
-
-  it('does not advance the inbox watermark when listing drafts', async () => {
-    // Drafts have no meaningful received date; the inbox triage watermark must
-    // stay untouched even if a draft carries a large `date` value.
-    const ctx = makeCtx({ folder: 'DRAFTS' }, { storedWatermark: '1700000000' });
-    const fetchSpy = mockFetchReturning([
-      { id: 'd1', thread_id: 't1', subject: 'x', to: [], cc: [], snippet: '', date: 9_999_999_999 },
-    ]);
-    vi.stubGlobal('fetch', fetchSpy);
-
-    await handler.execute(ctx);
-
-    expect(ctx.entityMemory!.storeFact as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 });

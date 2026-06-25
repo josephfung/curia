@@ -28,16 +28,21 @@ describe('BacklogHeartbeat.tick', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('enqueues one wake per selected candidate and returns the count', async () => {
+    const principalLineage = {
+      contactId: 'ceo', systemRole: 'principal' as const, channel: 'email',
+      initiatedAt: '2026-06-23T00:00:00.000Z', tier: 'principal' as const,
+    };
     vi.spyOn(tasksQueries, 'selectHeartbeatCandidates').mockResolvedValue([
-      { id: 't1', agentId: 'ceo-inbox' },
-      { id: 't2', agentId: 'coordinator' },
+      { id: 't1', agentId: 'ceo-inbox', originator: principalLineage, derived: false },
+      { id: 't2', agentId: 'coordinator', originator: null, derived: true },
     ]);
     const { hb, enqueueTaskWake } = makeHeartbeat();
     const count = await hb.tick();
     expect(count).toBe(2);
     expect(enqueueTaskWake).toHaveBeenCalledTimes(2);
-    expect(enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 't1', agentId: 'ceo-inbox' }));
-    expect(enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 't2', agentId: 'coordinator' }));
+    // The candidate's lineage + derived flag must flow through to the wake (#1125).
+    expect(enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 't1', agentId: 'ceo-inbox', originator: principalLineage, derived: false }));
+    expect(enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({ taskId: 't2', agentId: 'coordinator', originator: null, derived: true }));
   });
 
   it('passes config thresholds and the eligible-agents list to the selector', async () => {
@@ -57,8 +62,8 @@ describe('BacklogHeartbeat.tick', () => {
 
   it('continues after a single enqueue failure', async () => {
     vi.spyOn(tasksQueries, 'selectHeartbeatCandidates').mockResolvedValue([
-      { id: 't1', agentId: 'ceo-inbox' },
-      { id: 't2', agentId: 'coordinator' },
+      { id: 't1', agentId: 'ceo-inbox', originator: null, derived: false },
+      { id: 't2', agentId: 'coordinator', originator: null, derived: false },
     ]);
     const { hb, enqueueTaskWake } = makeHeartbeat();
     enqueueTaskWake.mockRejectedValueOnce(new Error('db blip'));

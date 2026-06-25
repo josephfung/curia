@@ -27,6 +27,8 @@ import { validateBearerToken } from './auth.js';
 import { registerSecurityHeaders } from './security-headers.js';
 import { EventRouter } from './event-router.js';
 import type { SchedulerService } from '../../scheduler/scheduler-service.js';
+import { HealthService } from '../../health/health-service.js';
+import { DEFAULT_HEALTH_CONFIG } from '../../config.js';
 import { healthRoutes } from './routes/health.js';
 import { agentRoutes } from './routes/agents.js';
 import { jobRoutes } from './routes/jobs.js';
@@ -50,6 +52,26 @@ import type { AutonomyService } from '../../autonomy/autonomy-service.js';
 import { type SessionStore } from './session-auth.js';
 import type { Channel } from '../channel.js';
 
+/**
+ * Minimal HealthService for boot paths where a full HealthService wasn't provided
+ * (e.g. test startup or degraded initialization). Only the db probe works;
+ * all others are skipped because the optional adapter deps are absent.
+ */
+function createFallbackHealthService(pool: Pool, logger: Logger): HealthService {
+  return new HealthService({
+    db: pool,
+    bus: null as never,    // bus not available here — bus check will report skipped/fail
+    logger,
+    scheduler: { lastTickAt: null },
+    mcpSessions: [],
+    modelRoutingConfig: {
+      tiers: { fast: { model: '' }, standard: { model: '' }, powerful: { model: '' } },
+      default_tier: 'standard',
+    },
+    config: DEFAULT_HEALTH_CONFIG,
+  } as never);
+}
+
 export interface HttpAdapterConfig {
   bus: EventBus;
   logger: Logger;
@@ -62,6 +84,7 @@ export interface HttpAdapterConfig {
   agentNames: string[];
   skillNames: string[];
   schedulerService?: SchedulerService;
+  healthService?: HealthService;
   identityService?: OfficeIdentityService;
   executiveProfileService?: ExecutiveProfileService;
   contactService: ContactService;
@@ -131,8 +154,6 @@ export class HttpAdapter implements Channel {
       agentRegistry,
       port,
       apiToken,
-      agentNames,
-      skillNames,
       webAppBootstrapSecret,
       appOrigin,
     } = this.config;
@@ -287,7 +308,10 @@ export class HttpAdapter implements Channel {
     pruneInterval.unref();
 
     // Register routes — message routes receive the eventRouter, not raw bus
-    await this.app.register(healthRoutes, { pool, logger, agentNames, skillNames });
+    await this.app.register(healthRoutes, {
+      healthService: this.config.healthService ?? createFallbackHealthService(pool, logger),
+      logger,
+    });
     await this.app.register(agentRoutes, { agentRegistry });
     await this.app.register(messageRoutes, { bus, logger, eventRouter: this.eventRouter });
 
@@ -299,6 +323,9 @@ export class HttpAdapter implements Channel {
         schedulerService: this.config.schedulerService,
         webAppBootstrapSecret,
         sessions,
+        // Needed so console-created jobs carry principal lineage (#1127).
+        contactService: this.config.contactService,
+        logger,
       });
     }
 

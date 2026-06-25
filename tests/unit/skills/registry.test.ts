@@ -108,7 +108,7 @@ describe('SkillRegistry', () => {
       },
     }), stubHandler);
     const tools = registry.toToolDefinitions(['template-skill']);
-    const props = tools[0].input_schema.properties;
+    const props = tools[0].input_schema.properties as Record<string, { type: string; description?: string }>;
 
     // Required field with parenthetical description
     expect(props.action.type).toBe('string');

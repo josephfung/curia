@@ -33,7 +33,7 @@ skills/
 }
 ```
 
-- `sensitivity`: `"normal"` (auto-approvable) or `"elevated"` — **target behaviour**: requires human approval on first use by that agent; **current behaviour**: not yet enforced — the execution layer applies role-gating instead (caller must have `role: ceo`); the persist-once-ask-once flow is deferred (see Safety Gate section below)
+- `sensitivity`: `"normal"` or `"elevated"`. **`elevated` means the skill requires a *live principal turn*** — the current turn must have originated from a fresh principal inbound. The signal is a **distinct `liveTurn` field** on the `agent.task` payload (not a metadata-bag key, so it can never be swept into a persisted/wakeable row): the dispatcher stamps it on principal inbounds, and the `delegate` skill forwards it across a **synchronous** delegation, so "the CEO is live" spans the whole synchronous call tree — a delegated specialist acting inside the CEO's turn qualifies, but a wake, scheduler fire, or persisted task never does. It is the live-principal authority primitive: only the CEO, acting now (directly or through a synchronous delegate), may invoke it. System, agent, and woken/inherited principal-*lineage* contexts all fail, with zero per-skill exceptions — this closes the self-approval hole (a woken principal-lineage task cannot approve its own pending action). Enforced **solely** at the execution-layer gate (`isLivePrincipalTurn`); elevated skills carry no handler-level origination re-check (#1126). The elevated set is the CEO-authority primitives: the approval-queue + autonomy controls, the grant-recommendation decisions, the authorization-altering contact skills (`contact-set-tier`/`contact-set-role`/`contact-grant-permission`/`contact-revoke-permission`), and `system-secret-capture-request`. Consequential *mutations* that are not authority primitives are `normal` + `action_risk` instead, governed by the autonomy engine and inheriting the ADR-018 approval flow. See ADR-017 and `docs/wip/2026-06-22-woken-task-authorization-design.md`.
 - `action_risk`: required on all manifests. Named labels — `none`, `low`, `medium`, `high`, `critical` — map to minimum autonomy score thresholds. Raw integers (0–100) are also accepted for precision. Enforced by the execution layer against the live autonomy score.
 - `secrets`: declares which vault secret keys the skill will request via `ctx.secret()` (vault-first, env fallback at bootstrap)
 - `permissions`: declared capabilities, validated at load time
@@ -57,7 +57,7 @@ interface SkillContext {
   secret(name: string): string;    // scoped secret access (resolves a vault secret key)
   log: Logger;                     // scoped pino child logger
   agentPersona?: AgentPersona;     // display name, title, email signature — available to all skills
-  caller?: CallerContext;          // caller identity (guaranteed for elevated skills)
+  caller?: CallerContext;          // caller identity (audit/context; not the elevated-gate signal — see sensitivity)
   contactService?: ContactService; // read-only contact lookups — available to all skills
   infraLlm?: InfraLlm;            // constrained LLM access (classify/extract only, no raw chat)
   secretCapture?: SecretCaptureMinter;            // capability-gated by `secretCapture` — mints one-time vault capture links
@@ -123,16 +123,16 @@ skill-registry({ query: "send email" })
 
 This returns a list of matching skill names and descriptions. **Discovered skills are immediately callable** — after `skill-registry` succeeds, `AgentRuntime` calls `ExecutionLayer.getToolDefinitions()` with the returned names and appends the full tool schemas to the per-task working tool list before the next LLM call. The LLM can then call any discovered skill natively, with its real input schema, in the same or subsequent turns.
 
-Tool-list expansion is **per-task**: each task gets a local copy of the startup tool list, so concurrent tasks never see each other's discoveries. Multiple `skill-registry` calls within one task accumulate — the runtime deduplicates by name. Discovered skills flow through the same `ExecutionLayer.invoke()` path as pinned skills, including the existing elevation gate (`sensitivity: elevated` skills still require `caller.role === 'ceo'`).
+Tool-list expansion is **per-task**: each task gets a local copy of the startup tool list, so concurrent tasks never see each other's discoveries. Multiple `skill-registry` calls within one task accumulate — the runtime deduplicates by name. Discovered skills flow through the same `ExecutionLayer.invoke()` path as pinned skills, including the elevation gate (`sensitivity: elevated` skills require a live principal turn — see Safety Gate below).
 
 `skill-registry` itself is excluded from its own search results to avoid circular self-discovery.
 
 ### Safety Gate for First-Time Use
 
-- Skills tagged `sensitivity: "normal"`: auto-approved if the agent allows discovery
-- Skills tagged `sensitivity: "elevated"` (e.g., payment, deletion, external communication): require human approval via the alert channel before first use by that agent — **not yet implemented** (per-agent-skill `skill_approvals` table with persist-once-ask-once flow is deferred)
-- The current elevation gate in the execution layer is role-based: the caller must have `role: ceo`
-- All discovery and first-use events will be audit-logged when the full gate is built
+- Skills tagged `sensitivity: "normal"`: auto-approvable; governed by the autonomy engine via `action_risk` (and `allowed_callers` where set)
+- Skills tagged `sensitivity: "elevated"` (CEO-authority primitives — approve/deny/dismiss actions, set-autonomy, grant-recommendation decisions): require a **live principal turn**, enforced at the execution-layer gate (`isLivePrincipalTurn`). Not a per-agent first-use approval — every invocation must be a fresh principal turn (#1126)
+- The deferred per-agent-skill `skill_approvals` "ask once on first use by that agent" flow is a separate, still-unbuilt concern (persist-once-ask-once); it would layer on top of, not replace, the elevation gate
+- Elevation rejections and autonomy-gate blocks are audit-logged
 
 ---
 
@@ -168,7 +168,7 @@ Invocation flow:
 
 1. **Resolve** — look up skill in registry by name (local or MCP)
 2. **Normalize inputs** — convert timestamp inputs to UTC-offset ISO strings using the configured local timezone
-3. **Validate elevation** — if `sensitivity: elevated`, reject if the task was not principal-originated
+3. **Validate elevation** — if `sensitivity: elevated`, reject unless this is a **live principal turn** (`isLivePrincipalTurn`: the distinct `options.liveTurn` flag — forwarded from `agent.task.payload.liveTurn` — plus principal lineage on the effective metadata). System, agent, scheduled, and woken/inherited principal-lineage contexts all fail — a wake is never a live turn; a synchronous delegation inside a live turn is (#1126). This is the sole enforcement point; no handler re-check duplicates it. (Distinct from the autonomy principal-bypass, which uses *lineage* via the ladder — see [14-autonomy-engine.md](14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks).)
 4. **Validate caller** — if `allowed_callers` is set on the manifest, reject unless the calling agent is in the list (CEO-approved re-executions bypass this gate)
 5. **Build context** — assemble `SkillContext` with scoped secrets, logger, and per-skill service grants
 6. **Execute** — call `handler.execute(ctx)` with a timeout wrapper (local), or `tools/call` (MCP)
@@ -287,7 +287,8 @@ These are not bundled but documented as recommended integrations:
 | Built-in skill: `skill-registry` (agent-invocable search) | Done |
 | Skill discovery — `allow_discovery: true` wired to runtime tool-list builder | Done |
 | Skill discovery — dynamic tool-list expansion for discovered skills | Done |
-| Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Partial — role-based elevation gate exists; persist-once-ask-once flow not yet built |
+| Elevated-skill gate — live-principal enforcement (#1126) | Done — `isLivePrincipalTurn` at the execution layer is the sole enforcement point |
+| Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Deferred — persist-once-ask-once flow not yet built (separate from the elevation gate above) |
 | Privilege scoping — per-skill `capabilities` array, load-time validation, frozen manifest | Done |
 | `allowed_callers` enforcement — restrict skill invocation to named agents, validated at startup | Done |
 | `infraLlm` capability — constrained LLM access (classify/extract) for infrastructure skills | Done |

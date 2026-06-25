@@ -1,7 +1,7 @@
 {
   "name": "set-autonomy",
   "description": "Update the agent's global autonomy score (0–100). Requires CEO authorization. Lower scores require more approvals before the agent acts; higher scores allow more independent action. Optionally provide a reason for the change.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sensitivity": "elevated",
   "inputs": {
     "score": "number",

@@ -12,6 +12,7 @@ import {
   createAgentTask,
 } from '../bus/events.js';
 import type { AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
+import { makeWakeContext } from '../autonomy/effective-standing.js';
 import type { DriftDetector } from './drift-detector.js';
 import type { DreamEngine } from '../memory/dream-engine.js';
 import type { JobRow } from './scheduler-service.js';
@@ -135,6 +136,10 @@ export class Scheduler {
   // In-memory only — resets on process restart (a missed check is not a security failure).
   private burstCounts = new Map<string, number>();
 
+  /** Timestamp of the most recent watchdog tick. Null until the first tick runs.
+   *  Read by HealthService to detect a stalled scheduler. */
+  public lastTickAt: Date | null = null;
+
   constructor(config: SchedulerConfig) {
     this.pool = config.pool;
     this.bus = config.bus;
@@ -190,6 +195,7 @@ export class Scheduler {
 
     // Watchdog: periodically recover jobs that got stuck in 'running' state.
     this.watchdogHandle = setInterval(() => {
+      this.lastTickAt = new Date();
       this.recoverStuckJobs().catch((err) => {
         this.logger.error({ err }, 'Unhandled error in recoverStuckJobs watchdog');
       });
@@ -351,12 +357,101 @@ export class Scheduler {
     // Atomically claim the job by setting status to 'running' only if it's still
     // in a claimable state. The rowCount check prevents double-firing if another
     // scheduler instance (or overlapping poll) claimed the same job.
-    const claimResult = await this.pool.query(
-      `UPDATE scheduled_jobs SET status = $1, run_started_at = now() WHERE id = $2 AND status IN ('pending', 'failed')`,
-      ['running', job.id],
-    );
+    //
+    // For cron jobs, also advance next_run_at to the next scheduled occurrence at
+    // claim time — not just at completion. This closes a second re-fire window:
+    // if the publish step throws and the error handler reverts status to 'pending',
+    // the row's next_run_at is already in the future so the next poll's SELECT
+    // (WHERE next_run_at <= now()) skips it instead of re-firing it. (#1124)
+    //
+    // rowCount is typed number|null by pg; null must be treated the same as 0 —
+    // both mean 0 rows updated, i.e. another poller already claimed the job.
+    let claimResult: { rowCount: number | null };
+    if (job.cronExpr) {
+      // Compute next_run_at before the claim UPDATE so it can be written atomically.
+      // nextRunFromCron() can throw on a corrupt cron expression (e.g. direct DB insert
+      // bypassing createJob validation). Guard it here so a throw does NOT cause the outer
+      // pollDueJobs error handler to attempt reverting status = 'running' when the job was
+      // never claimed — that revert would be a silent no-op, leaving next_run_at in the past
+      // and causing an infinite tight-loop re-fire on every poll. Transition to 'failed'
+      // instead so the job stops being selected.
+      let nextRunAt: Date;
+      try {
+        nextRunAt = this.schedulerService.nextRunFromCron(job.cronExpr, job.timezone);
+      } catch (err: unknown) {
+        const agentErr = classifyError(err, 'scheduler-fire-job');
+        this.logger.error(
+          { err: agentErr, jobId: job.id, cronExpr: job.cronExpr, timezone: job.timezone },
+          'Invalid cron expression — marking job failed to prevent retry storm',
+        );
+        // Set next_run_at = NULL so the poll SELECT (WHERE next_run_at <= now()) never
+        // re-selects this job. Without it, the job stays 'failed' with a past next_run_at
+        // and fires again on every poll. Guard with status IN (...) to avoid clobbering
+        // a concurrent cancellation that could have occurred after the SELECT.
+        // Guard on cron_expr/timezone: if updateJob() changed the cron between poll and
+        // here, this UPDATE won't match (rowCount=0) and the job stays 'pending' with the
+        // new (now-valid) expression — correctly deferring until the next poll.
+        await this.pool.query(
+          `UPDATE scheduled_jobs
+              SET status = 'failed',
+                  last_error = $2,
+                  next_run_at = NULL
+            WHERE id = $1
+              AND status IN ('pending', 'failed')
+              AND cron_expr = $3
+              AND timezone = $4`,
+          [job.id, agentErr.message, job.cronExpr, job.timezone],
+        );
+        return;
+      }
+      // Optimistic-concurrency guard on cron_expr/timezone: if updateJob() changes
+      // the expression between the poll SELECT and this claim UPDATE, the WHERE won't
+      // match (rowCount=0), the job skips as "already claimed", and the next poll fires
+      // it with the correct (updated) expression and next_run_at.
+      //
+      // next_run_at <= now() re-checks the SAME predicate the poll SELECT used, so the
+      // claim is idempotent against overlapping poll cycles. The agent runs synchronously
+      // inside fireJob (bus.publish awaits handlers), so a single poll can take minutes to
+      // drain while the 30s interval keeps launching new polls. A job still 'pending' when
+      // poll B's SELECT runs gets captured into poll B's in-memory list; poll A then claims
+      // and fires it, and completeJobRun resets the recurring job to 'pending'. Without this
+      // guard, poll B's later claim would succeed (status is 'pending' again) and fire a
+      // duplicate — e.g. two daily digests on 2026-06-24. With it, the first claim advances
+      // next_run_at to the future, so any stale concurrent claim matches 0 rows and skips.
+      // (#1124 advanced next_run_at but only shielded the NEXT poll's SELECT, not a
+      // concurrent poll already holding the row.)
+      claimResult = await this.pool.query(
+        `UPDATE scheduled_jobs
+            SET status = $1, run_started_at = now(), next_run_at = $3
+          WHERE id = $2
+            AND status IN ('pending', 'failed')
+            AND cron_expr = $4
+            AND timezone = $5
+            AND next_run_at <= now()`,
+        ['running', job.id, nextRunAt, job.cronExpr, job.timezone],
+      );
+    } else {
+      claimResult = await this.pool.query(
+        `UPDATE scheduled_jobs SET status = $1, run_started_at = now() WHERE id = $2 AND status IN ('pending', 'failed')`,
+        ['running', job.id],
+      );
+    }
     if (claimResult.rowCount === 0) {
-      this.logger.debug({ jobId: job.id }, 'Job already claimed; skipping fire');
+      // 0 rows now has three distinct causes, all benign: another poller/instance
+      // claimed the row first, cron_expr/timezone drifted between SELECT and claim, or
+      // (cron jobs) next_run_at was already advanced into the future by a prior poll's
+      // claim — the overlapping-poll de-dup this guard exists for. Word the message so a
+      // missed-fire investigation isn't misled into thinking a real claim happened.
+      this.logger.debug(
+        { jobId: job.id, cronExpr: job.cronExpr },
+        'Claim matched 0 rows; skipping fire (already claimed, cron/timezone drift, or next_run_at already advanced by a prior poll)',
+      );
+      return;
+    }
+    // rowCount === null is an anomalous pg driver state (UPDATE always returns a count).
+    // Treat it as 0 but log at warn so it's visible in production.
+    if (claimResult.rowCount === null) {
+      this.logger.warn({ jobId: job.id }, 'Claim UPDATE returned null rowCount — treating as already claimed, skipping fire');
       return;
     }
 
@@ -399,11 +494,32 @@ export class Scheduler {
     // runs bleed into the same conversation history.
     const runId = randomUUID();
 
+    // Restore the TaskOriginator stored at schedule-creation / wake-enqueue time so the autonomy
+    // gate can identify principal-authorized scheduled actions (e.g. "email my mother tomorrow at
+    // 10am"). Without this, the task fires with no originator and isPrincipalOriginated() returns
+    // false, blocking elevated skills.
+    //
+    // For BacklogHeartbeat wakes (#1125) also stamp a wakeContext so the execution layer applies
+    // the bypass ladder + woken fail-closed path: for an open-ended backlog wake the live autonomy
+    // score can only DOWNGRADE the lineage's standing, never grant it.
+    //
+    // The woken marker is keyed on the `standing` envelope that `enqueueTaskWake` always writes —
+    // NOT on `job.originator`. A heartbeat wake of a pre-065 / unstamped task has a null originator
+    // but is still a woken autonomous execution that must be marked (the ladder is then a safe
+    // no-op — a null lineage has no standing to downgrade). A specific scheduler-create job
+    // (different payload) and a `wake_at` job (task-wake payload but no `standing`) carry no
+    // wakeContext and keep their originator at fire time — already pre-authorized, not laddered.
+    const taskWakeStanding = isTaskWakePayload(job.taskPayload)
+      ? (job.taskPayload as { standing?: { derived?: boolean } }).standing
+      : undefined;
+    let metadata: Record<string, unknown> | undefined;
+    if (job.originator || taskWakeStanding) {
+      metadata = {};
+      if (job.originator) metadata.originator = job.originator;
+      if (taskWakeStanding) metadata.wakeContext = makeWakeContext(taskWakeStanding.derived === true);
+    }
+
     // Publish agent.task so the coordinator picks up the work.
-    // Restore the TaskOriginator stored at schedule-creation time so the autonomy gate
-    // can correctly identify principal-authorized scheduled actions (e.g. "email my
-    // mother tomorrow at 10am"). Without this, the scheduler task fires with no originator
-    // and isPrincipalOriginated() returns false, blocking elevated skills.
     const taskEvent = createAgentTask({
       agentId: job.agentId,
       conversationId: `scheduler:${job.id}:${runId}`,
@@ -416,8 +532,8 @@ export class Scheduler {
       // Pass the duration hint so the runtime can widen the delegate timeout for
       // long-running scheduled tasks. null (no explicit duration) becomes undefined.
       expectedDurationSeconds: job.expectedDurationSeconds ?? undefined,
-      // Thread the stored originator through — null (pre-040 jobs) becomes undefined.
-      metadata: job.originator ? { originator: job.originator } : undefined,
+      // Thread the stored originator (+ wakeContext for heartbeat wakes) through.
+      metadata,
       parentEventId: firedEvent.id,
     });
     // Track the mapping BEFORE publishing — bus.publish() awaits all handlers

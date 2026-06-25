@@ -14,6 +14,7 @@ import type { Page, Frame, Locator } from 'playwright';
 // its own module so the DOM lib it needs is scoped there, not leaked into this
 // server-side handler. See dom-extract.ts.
 import { extractFrameContent } from './dom-extract.js';
+import { jitteredDelay, simulateHumanPresence, humanClick, humanType } from '../../src/browser/human-behavior.js';
 
 // Maximum cleaned DOM content length before truncation.
 // Prevents token blowout on content-heavy pages.
@@ -119,6 +120,12 @@ export class WebBrowserHandler implements SkillHandler {
     let injectedSecretThisAction = false;
 
     try {
+      // GUIDANCE (#1053): on bot-protected sites, prefer real UI interaction (click/type/
+      // select via these actions) over issuing fetch() inside page.evaluate(). A fetch() from
+      // page context is blocked at the TLS/fingerprint layer even with valid cookies, because
+      // it doesn't carry the browser's network fingerprint — whereas driving the real UI lets
+      // the site's own JS make requests through Chromium's genuine network stack.
+
       // --- Dispatch action ---
       switch (action as BrowserAction) {
         case 'navigate': {
@@ -143,31 +150,59 @@ export class WebBrowserHandler implements SkillHandler {
             return { success: false, error: `Blocked: navigation to private/internal addresses is not allowed (${hostname})` };
           }
           const response = await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
-          // Give heavy SPAs a moment to finish hydrating so widgets (date pickers, etc.)
-          // are present before the LLM reads the page. Best-effort: a timeout is expected
-          // on sites that never go idle and must not fail navigation.
           await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
             ctx.log.debug({ err, sessionId }, 'networkidle not reached after navigate — proceeding with current DOM');
           });
 
-          // Fail fast on hard edge blocks (Akamai/Cloudflare-style "Access Denied").
-          // These are IP/edge-level (the server's datacenter IP) — retrying or re-driving
-          // the page won't help, so surface a distinct, actionable error instead of
-          // returning an empty page the LLM will keep poking at for many turns.
-          const status = response?.status();
-          let pageTitle = '';
-          try {
-            pageTitle = await page.title();
-          } catch (err) {
-            ctx.log.debug({ err, sessionId }, 'Could not read page title for hard-block check');
+          const readTitle = async (): Promise<string> => {
+            try {
+              return await page.title();
+            } catch (err) {
+              ctx.log.debug({ err, sessionId }, 'Could not read page title for block check');
+              return '';
+            }
+          };
+
+          // Soft-block recovery: a CF/DataDome soft block often clears on a second,
+          // human-paced load. Before declaring the site undrivable, dwell like a human and
+          // reload ONCE if the page looks blocked or served a near-empty stub. One retry,
+          // not a loop. (#1053)
+          let pageTitle = await readTitle();
+          // Capture the reload response separately so any subsequent hard-block error can
+          // report the post-reload HTTP status (the status from the initial `goto` may no
+          // longer be representative after the recovery attempt). (#1053)
+          let reloadResponse: Awaited<ReturnType<typeof page.reload>> | undefined;
+          if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
+            ctx.log.info({ sessionId, url: parsedUrl.toString(), pageTitle }, 'Soft block suspected — dwelling and reloading once');
+            await jitteredDelay(1500, 3000);
+            reloadResponse = await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch((err) => {
+              ctx.log.debug({ err, sessionId }, 'Reload during soft-block recovery failed — proceeding with current DOM');
+              return undefined;
+            });
+            await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
+              ctx.log.debug({ err, sessionId }, 'networkidle not reached after soft-block reload — proceeding with current DOM');
+            });
+            pageTitle = await readTitle();
           }
-          if (isHardBlock(pageTitle)) {
+
+          // Fail fast on a hard edge block that survived the reload (IP/edge-level — retrying
+          // won't help). Surface a distinct, actionable error rather than an empty page.
+          // Re-check isLikelyEmpty here too: if the page was near-empty before the reload
+          // AND still near-empty after, it's a persistent soft block — not a transient stub.
+          // Use the reload response status when available — it reflects the post-recovery state.
+          const status = reloadResponse?.status() ?? response?.status();
+          if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
             ctx.log.warn({ sessionId, url: parsedUrl.toString(), status, pageTitle }, 'Navigation hit a hard edge block');
             return {
               success: false,
               error: `Site blocked automated access (HTTP ${status ?? '?'}${pageTitle ? `, "${pageTitle}"` : ''}). This site can't be driven from the server — hand off to the principal or draft the request instead.`,
             };
           }
+
+          // Clean (or recovered) navigation: dwell + simulate human presence so behavioral
+          // challenge JS can score human-like telemetry before the first interaction. (#1053)
+          await jitteredDelay(2000, 4000);
+          await simulateHumanPresence(page, { log: ctx.log });
           break;
         }
 
@@ -176,7 +211,9 @@ export class WebBrowserHandler implements SkillHandler {
             return { success: false, error: 'click requires selector (string — describe the element in natural language)' };
           }
           const clickTarget = await resolveLocator(page, selector, ctx.log);
-          await clickTarget.click();
+          // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
+          // scores natural pointer paths as more human-like than direct .click(). (#1053)
+          await humanClick(page, clickTarget, { log: ctx.log });
           // Adaptive settle: a click may trigger navigation or an in-page update. Wait
           // briefly for the DOM to settle, but don't fail the action if nothing navigates.
           await settleAfterInteraction(page, ctx, sessionId);
@@ -265,7 +302,15 @@ export class WebBrowserHandler implements SkillHandler {
           }
 
           const typeTarget = await resolveLocator(page, selector, ctx.log);
-          await typeTarget.fill(fillValue);
+          // Focus the field with a human cursor approach, clear any existing content
+          // (humanType appends; we want replace semantics), then type with human cadence.
+          // The same for both the visible-text and secret_ref paths — registering the secret
+          // above already gates the #973 redaction; scrubbing covers reflected content/URL,
+          // not keystrokes. ControlOrMeta = Cmd on macOS (dev), Ctrl on Linux (prod). (#1053)
+          await humanClick(page, typeTarget, { log: ctx.log });
+          await page.keyboard.press('ControlOrMeta+a');
+          await page.keyboard.press('Delete');
+          await humanType(page, fillValue, { log: ctx.log });
           break;
         }
 
@@ -362,6 +407,29 @@ async function settleAfterInteraction(page: Page, ctx: SkillContext, sessionId: 
  */
 function isHardBlock(title: string): boolean {
   return /access denied|attention required|verify you are (?:a )?human|are you a robot|pardon our interruption/i.test(title);
+}
+
+// A near-empty body after load is a soft-block tell (CF/JS challenge serving a stub page),
+// distinct from isHardBlock's title match. Three signals are required to reduce false
+// positives on minimal-but-legitimate pages (e.g. a login form that has only icon buttons
+// and placeholder text). Best-effort: an evaluate failure is treated as "not empty" so we
+// never trigger a reload on a transient read error. (#1053)
+async function isLikelyEmpty(page: Page, log: SkillContext['log']): Promise<boolean> {
+  try {
+    const metrics = await page.evaluate(() => ({
+      textLength: (document.body?.innerText ?? '').trim().length,
+      htmlLength: document.body?.innerHTML.length ?? 0,
+      interactiveCount: document.querySelectorAll(
+        'input, textarea, select, button, a[href], [role="button"], [contenteditable="true"]',
+      ).length,
+    }));
+    // Only call a page empty if it has very little text, very little HTML,
+    // AND no interactive elements — a login form with placeholders/icons won't match. (#1053)
+    return metrics.textLength < 50 && metrics.htmlLength < 1_000 && metrics.interactiveCount === 0;
+  } catch (err) {
+    log.debug({ err }, 'isLikelyEmpty: page.evaluate failed — treating as non-empty (best-effort)');
+    return false;
+  }
 }
 
 /**

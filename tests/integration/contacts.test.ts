@@ -152,7 +152,7 @@ describeIf('Contacts Integration', () => {
       });
       const secondary = await contactService.createContact({
         displayName: 'J. Torres',
-        role: null,
+        role: undefined,
         source: 'email_participant',
         tier: 'unknown',
       });
@@ -202,7 +202,7 @@ describeIf('Contacts Integration', () => {
       });
       const secondary = await contactService.createContact({
         displayName: 'Alice Smith',
-        role: null,
+        role: undefined,
         source: 'email_participant',
         tier: 'known',
       });

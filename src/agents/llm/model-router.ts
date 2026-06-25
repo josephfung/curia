@@ -8,6 +8,13 @@
 // Capability needs (vision, large_context, etc.) are accepted but not
 // validated in this version — they are documentary-only, logged at debug
 // level for observability. Validation deferred to #379.
+//
+// Fallback tier rules (#813): when a tier's primary model is unavailable
+// (NOT_FOUND from the provider), the runtime re-routes to the fallback tier.
+// Rules are fixed — no config knob needed:
+//   fast     → standard  (lateral upgrade to a capable model)
+//   standard → powerful  (upgrade to strongest model)
+//   powerful → standard  (degrade gracefully rather than fail)
 
 import type { Logger } from '../../logger.js';
 import type { ModelRegistry } from './model-registry.js';
@@ -29,6 +36,14 @@ export interface ResolvedModel {
 }
 
 const VALID_TIERS: ReadonlySet<string> = new Set<string>(['fast', 'standard', 'powerful']);
+
+// Fixed fallback tier for each tier (#813). No config needed — these rules are intentional:
+// fast→standard (upgrade), standard→powerful (upgrade), powerful→standard (graceful degrade).
+const FALLBACK_TIER: Record<Tier, Tier> = {
+  fast: 'standard',
+  standard: 'powerful',
+  powerful: 'standard',
+};
 
 export class ModelRouter {
   private readonly config: ModelRoutingConfig;
@@ -87,5 +102,13 @@ export class ModelRouter {
       model: tierConfig.model,
       tier: effectiveTier as Tier,
     };
+  }
+
+  /**
+   * Return the fallback tier to use when this tier's primary model is unavailable.
+   * Rules are fixed (#813): fast→standard, standard→powerful, powerful→standard.
+   */
+  getFallbackTier(tier: Tier): Tier {
+    return FALLBACK_TIER[tier];
   }
 }

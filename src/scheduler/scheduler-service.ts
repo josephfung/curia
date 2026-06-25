@@ -976,26 +976,36 @@ export class SchedulerService {
 
   /** Enqueue a one-shot wake for an EXISTING task. Inserts a pending scheduled_jobs
    *  row with task_id preset so the dispatcher routes it to `agentId` with full task
-   *  context. Used by the BacklogHeartbeat. Does not create a new task. */
+   *  context. Used by the BacklogHeartbeat. Does not create a new task.
+   *
+   *  `originator` (the task's lineage, #1125) is persisted on the wake row so the woken task
+   *  fires with provenance — previously it fired with metadata: undefined and lost all
+   *  authorization standing. `derived` is carried in task_payload.standing and replayed by
+   *  fireJob into the agent.task `wakeContext`, which drives the bypass ladder: the score can
+   *  only ever DOWNGRADE the lineage's standing for this open-ended backlog wake, never grant it. */
   async enqueueTaskWake(params: {
     taskId: string;
     agentId: string;
     runAt: Date;
     createdBy?: string;
+    originator?: TaskOriginator | null;
+    /** True when the woken task is an agent-spawned child / side-effect (posture-D ladder column). */
+    derived?: boolean;
   }): Promise<{ jobId: string }> {
-    const { taskId, agentId, runAt, createdBy = 'heartbeat' } = params;
+    const { taskId, agentId, runAt, createdBy = 'heartbeat', originator = null, derived = false } = params;
     const { rows } = await this.pool.query(
       `INSERT INTO scheduled_jobs
-         (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone, task_id)
-       VALUES ($1, NULL, $2, $3, 'pending', $2, $4, $5, $6)
+         (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
+       VALUES ($1, NULL, $2, $3, 'pending', $2, $4, $5, $6, $7::jsonb)
        RETURNING id`,
       [
         agentId,
         runAt,
-        JSON.stringify({ type: 'task-wake', task_id: taskId }),
+        JSON.stringify({ type: 'task-wake', task_id: taskId, standing: { derived } }),
         createdBy,
         this.timezone,
         taskId,
+        originator ? JSON.stringify(originator) : null,
       ],
     );
     return { jobId: (rows[0] as { id: string }).id };

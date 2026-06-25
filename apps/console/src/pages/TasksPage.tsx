@@ -175,7 +175,10 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
   const [owner, setOwner] = useState<TaskOwner>(task?.owner ?? 'curia');
   const [priority, setPriority] = useState(String(task?.priority ?? 50));
   const [dueAt, setDueAt] = useState(task?.dueAt ? task.dueAt.slice(0, 10) : '');
-  const [source, setSource] = useState<TaskSource>(task?.source ?? 'agent');
+  // New console tasks default to 'ceo' (#1127): the console is a principal surface, so a task
+  // created here is CEO-authorized work, not an agent-spawned side-effect. A 'ceo' source keeps
+  // it non-derived so its principal lineage survives the woken-task bypass ladder.
+  const [source, setSource] = useState<TaskSource>(task?.source ?? 'ceo');
   const [tags, setTags] = useState((task?.tags ?? []).join(', '));
   const [conversationId, setConversationId] = useState(task?.conversationId ?? '');
   const [waitingOnText, setWaitingOnText] = useState(task?.waitingOnText ?? '');

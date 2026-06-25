@@ -71,9 +71,9 @@ function extractResumeTokenFromMessages(messages: Message[]): string {
     const msg = messages[i]!;
     if (msg.role === 'user' && Array.isArray(msg.content)) {
       for (const block of msg.content as ContentBlock[]) {
-        if (block.type === 'tool_result' && typeof (block as Record<string, unknown>).content === 'string') {
+        if (block.type === 'tool_result' && typeof (block as unknown as Record<string, unknown>).content === 'string') {
           try {
-            const parsed = JSON.parse((block as Record<string, unknown>).content as string) as Record<string, unknown>;
+            const parsed = JSON.parse((block as unknown as Record<string, unknown>).content as string) as Record<string, unknown>;
             if (parsed.needs_clarification === true && typeof parsed.resume_token === 'string') {
               return parsed.resume_token as string;
             }

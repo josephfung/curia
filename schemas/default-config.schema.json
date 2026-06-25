@@ -344,6 +344,50 @@
         "idleThresholdHours": { "type": "number", "minimum": 0 },
         "staleWaitThresholdHours": { "type": "number", "minimum": 0 }
       }
+    },
+    "autonomy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bypass_ladder": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "same_task": { "type": "integer", "minimum": 60, "maximum": 100 },
+            "derived_child": { "type": "integer", "minimum": 0, "maximum": 100 }
+          }
+        }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "liveness": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "email_stall_factor": { "type": "integer", "minimum": 1 },
+            "scheduler_max_tick_s": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "canary_schedule": { "type": "string", "minLength": 1 },
+        "heartbeats": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "llm_fast":         { "type": "string" },
+            "llm_standard":     { "type": "string" },
+            "llm_powerful":     { "type": "string" },
+            "embeddings":       { "type": "string" },
+            "image_gen":        { "type": "string" },
+            "nylas":            { "type": "string" },
+            "signal":           { "type": "string" },
+            "google_workspace": { "type": "string" },
+            "tavily":           { "type": "string" }
+          }
+        }
+      }
     }
   },
   "definitions": {

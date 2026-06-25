@@ -1,8 +1,8 @@
 {
   "name": "contact-update",
   "description": "Update canonical profile attributes (job title, organization, timezone, phone, LinkedIn, etc.) on an existing contact. contact_id must be a UUID from contact-lookup or entity-context — do not invent IDs. For a new email or phone not yet associated with the contact, use contact-link-identity first; setting primaryEmail or primaryPhone requires the address to already be registered as a contact identity.",
-  "version": "0.1.0",
-  "sensitivity": "elevated",
+  "version": "0.2.0",
+  "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
     "contact_id": "string (UUID from contact-lookup or entity-context)",

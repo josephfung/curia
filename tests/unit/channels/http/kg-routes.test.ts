@@ -6,6 +6,8 @@ import type { Logger } from '../../../../src/logger.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { knowledgeGraphRoutes } from '../../../../src/channels/http/routes/kg.js';
+import type { EventBus } from '../../../../src/bus/bus.js';
+import type { EventRouter } from '../../../../src/channels/http/event-router.js';
 
 function createLogger(): Logger {
   return {
@@ -32,8 +34,13 @@ function createContactService(): ContactService {
     setRole: vi.fn(),
     updateContactFields: vi.fn(),
     validatePrimaryEmail: vi.fn(),
+    // Resolves the principal so console-created tasks carry principal lineage (#1127).
+    findContactBySystemRole: vi.fn().mockResolvedValue({ id: PRINCIPAL_CONTACT_ID }),
   } as unknown as ContactService;
 }
+
+// The principal contact id resolveConsoleOriginator() stamps on console-created tasks (#1127).
+const PRINCIPAL_CONTACT_ID = 'contact-principal';
 
 // Creates a pool mock that also supports pool.connect() for transaction tests.
 function createTransactionalPool(client: Partial<PoolClient>): Pick<Pool, 'query' | 'connect'> {
@@ -41,6 +48,25 @@ function createTransactionalPool(client: Partial<PoolClient>): Pick<Pool, 'query
     query: vi.fn(),
     connect: vi.fn().mockResolvedValue(client),
   } as unknown as Pick<Pool, 'query' | 'connect'>;
+}
+
+// Minimal EventBus stub — KG non-chat routes never touch the bus directly,
+// but KnowledgeGraphRouteOptions now requires bus + eventRouter for chat endpoints.
+function createMockBus(): EventBus {
+  return {
+    publish: vi.fn().mockResolvedValue(undefined),
+    subscribe: vi.fn(),
+  } as unknown as EventBus;
+}
+
+// Minimal EventRouter stub for the same reason.
+function createMockEventRouter(): EventRouter {
+  return {
+    waitForResponse: vi.fn(),
+    cancelPending: vi.fn(),
+    addSseClient: vi.fn().mockReturnValue(() => { /* cleanup noop */ }),
+    setupSubscriptions: vi.fn(),
+  } as unknown as EventRouter;
 }
 
 // A minimal valid Contact shape returned by contactService.getContact() stubs.
@@ -79,7 +105,7 @@ function makeContact(overrides: Record<string, unknown> = {}) {
 describe('knowledgeGraphRoutes', () => {
   const pool = {
     query: vi.fn(),
-  } as unknown as Pick<Pool, 'query'>;
+  } as unknown as Pool;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -93,6 +119,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({ method: 'GET', url: '/api/kg/nodes' });
@@ -102,7 +131,7 @@ describe('knowledgeGraphRoutes', () => {
   });
 
   it('returns node results when authenticated', async () => {
-    pool.query.mockResolvedValueOnce({
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       rows: [
         {
           id: '11111111-1111-1111-1111-111111111111',
@@ -125,6 +154,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({
@@ -149,6 +181,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({ method: 'GET', url: '/' });
@@ -165,6 +200,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({
@@ -192,6 +230,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: undefined,
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({ method: 'GET', url: '/api/kg/nodes' });
@@ -216,6 +257,8 @@ describe('knowledgeGraphRoutes', () => {
       secureCookies: false,
       sessions: new Map(),
       contactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     // Trailing '@' makes the address invalid, forcing the matcher to explore
@@ -250,6 +293,8 @@ describe('knowledgeGraphRoutes', () => {
       secureCookies: false,
       sessions: new Map(),
       contactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     const response = await app.inject({
@@ -288,6 +333,9 @@ describe('knowledgeGraphRoutes', () => {
       webAppBootstrapSecret: 'secret-1',
       secureCookies: false,
       sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
     });
 
     // The rate-limit onRequest hook runs before the handler's assertSecret check,
@@ -333,6 +381,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -365,6 +415,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -397,6 +449,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -429,6 +483,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -463,6 +519,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -496,6 +554,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -534,6 +594,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -568,6 +630,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -594,6 +658,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -619,6 +685,8 @@ describe('knowledgeGraphRoutes', () => {
         secureCookies: false,
         sessions: new Map(),
         contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
       });
 
       const res = await app.inject({
@@ -630,6 +698,95 @@ describe('knowledgeGraphRoutes', () => {
 
       expect(res.statusCode).toBe(400);
       expect(contactService.createContact).not.toHaveBeenCalled();
+      await app.close();
+    });
+  });
+
+  describe('POST /api/kg/tasks — principal lineage (#1127)', () => {
+    // Helper: register the routes with a contactService stub and return both so tests can
+    // inspect findContactBySystemRole and the INSERT params.
+    async function setupTasksApp(contactService: ContactService) {
+      const app = Fastify();
+      const logger = createLogger();
+      await app.register(knowledgeGraphRoutes, {
+        pool,
+        logger,
+        webAppBootstrapSecret: 'secret-1',
+        secureCookies: false,
+        sessions: new Map(),
+        contactService,
+        bus: createMockBus(),
+        eventRouter: createMockEventRouter(),
+      });
+      return { app, logger };
+    }
+
+    const validPayload = { agentId: 'coordinator', intentAnchor: 'follow up with vendor' };
+
+    it('stamps a principal TaskOriginator on the inserted task row', async () => {
+      const contactService = createContactService();
+      // INSERT returns the created row.
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 'task-1', agent_id: 'coordinator', title: 'follow up with vendor' }],
+      });
+      const { app } = await setupTasksApp(contactService);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/kg/tasks',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: validPayload,
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(contactService.findContactBySystemRole).toHaveBeenCalledWith('principal');
+
+      // The INSERT is the single pool.query call; its last param is the originator JSON.
+      const insertCall = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const sql = insertCall[0] as string;
+      const params = insertCall[1] as unknown[];
+      expect(sql).toContain('originator');
+      const originatorJson = params[params.length - 1] as string;
+      expect(JSON.parse(originatorJson)).toMatchObject({
+        contactId: PRINCIPAL_CONTACT_ID,
+        systemRole: 'principal',
+        channel: 'console',
+        tier: 'principal',
+      });
+      // Omitted source defaults to 'ceo' (non-derived), not 'agent' (#1127) — otherwise the
+      // heartbeat would mark the task derived and the ladder would downgrade the lineage we
+      // just stamped. source is the 9th INSERT param ($9).
+      expect(params[8]).toBe('ceo');
+      await app.close();
+    });
+
+    it('falls back to null originator when no principal contact exists', async () => {
+      const contactService = createContactService();
+      vi.mocked(contactService.findContactBySystemRole).mockResolvedValueOnce(null);
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 'task-2', agent_id: 'coordinator', title: 'follow up with vendor' }],
+      });
+      const { app, logger } = await setupTasksApp(contactService);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/kg/tasks',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: validPayload,
+      });
+
+      expect(res.statusCode).toBe(201);
+      const insertCall = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const params = insertCall[1] as unknown[];
+      // Conservative default: no lineage stamped, but the task is still created.
+      expect(params[params.length - 1]).toBeNull();
+      // The drop must be observable with the created task id for later correlation (#1127).
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: 'task-2', channel: 'console' }),
+        expect.stringContaining('WITHOUT principal lineage'),
+      );
       await app.close();
     });
   });

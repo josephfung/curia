@@ -104,7 +104,7 @@ describe('AgentRuntime', () => {
     );
 
     // Verify turn budget block is wired into the system prompt.
-    const firstCall = provider.chat.mock.calls[0]![0] as {
+    const firstCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
       messages: Array<{ role: string; content: string }>;
     };
     expect(firstCall.messages[0]!.content).toContain('## Turn budget');
@@ -340,7 +340,7 @@ describe('AgentRuntime', () => {
 
     expect(mockAutonomyService.getConfig).toHaveBeenCalledOnce();
     // The system message sent to the LLM should contain both the base prompt and the autonomy block
-    const callArgs = provider.chat.mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> };
+    const callArgs = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> };
     const systemMsg = callArgs?.messages?.[0];
     expect(systemMsg?.role).toBe('system');
     expect(systemMsg?.content).toContain('Base prompt.');
@@ -375,7 +375,7 @@ describe('AgentRuntime', () => {
     });
     await bus.publish('dispatch', task);
 
-    const callArgs = provider.chat.mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> };
+    const callArgs = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { messages: Array<{ role: string; content: string }> };
     const systemMsg = callArgs?.messages?.[0];
     // When autonomyService returns null, the autonomy block must NOT be appended.
     // The turn budget block is unconditionally appended (expected behavior).
@@ -987,7 +987,7 @@ describe('AgentRuntime', () => {
           verified: true,
           verifiedAt: new Date(),
           status: 'active',
-          source: 'manual',
+          source: 'ceo_stated',
           createdAt: new Date(),
           updatedAt: new Date(),
         },
