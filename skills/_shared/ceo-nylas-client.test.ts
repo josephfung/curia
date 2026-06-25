@@ -348,6 +348,29 @@ describe('CeoNylasClient — list limit clamping (≤ 20)', () => {
     expect(calledUrl.searchParams.get('limit')).toBe('20');
   });
 
+  it('marks text/calendar attachments with MIME parameters as calendar invites', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(successResponse([{
+      id: 'msg-1',
+      subject: 'Invite',
+      from: [],
+      to: [],
+      cc: [],
+      date: 1,
+      attachments: [{
+        id: 'att-1',
+        filename: 'invite.ics',
+        content_type: 'text/calendar; method=REQUEST; charset=UTF-8',
+        size: 123,
+      }],
+    }]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = makeClient();
+    const messages = await client.listMessages();
+
+    expect(messages[0]!.attachments[0]!.isCalendarInvite).toBe(true);
+  });
+
   it('sends limit=20 for listDrafts when no limit is specified (Nylas default is 50 — too high)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(successResponse([]));
     vi.stubGlobal('fetch', fetchMock);

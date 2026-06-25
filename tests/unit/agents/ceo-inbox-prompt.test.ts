@@ -211,6 +211,8 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     expect(inviteSection).toContain('Standing: <accept|decline|tentative instruction text, or none>');
     expect(inviteSection).toContain('Do NOT archive');
     expect(inviteSection).toContain('Do NOT classify it as ✅ Handled');
+    expect(inviteSection).toContain('ceo-inbox-update-folders');
+    expect(inviteSection).not.toContain('ceo-inbox-label (⏳ In Progress)');
   });
 
   it('handles invite recommendation and pending approval replies without archiving', () => {
@@ -295,6 +297,8 @@ describe('calendar consult prompt — formal invite RSVP behavior', () => {
     expect(consultSection).toContain('Need: RSVP for formal calendar invite');
     expect(consultSection).toContain('calendar-list-events');
     expect(consultSection).toContain('could not link invite to calendar event');
+    expect(consultSection).toContain('start`, or `end`');
+    expect(consultSection).toContain('Only after concrete start/end are known');
   });
 
   it('allows context-aware RSVP attempts and reserves recommendations for ambiguity', () => {

@@ -699,7 +699,7 @@ function normalizeAttachments(raw?: NylasApiAttachment[]): EmailAttachmentMeta[]
 }
 
 function isCalendarInviteAttachment(filename: string | undefined, contentType: string | undefined): boolean {
-  const lowerType = contentType?.toLowerCase() ?? '';
+  const lowerType = (contentType?.split(';', 1)[0] ?? '').trim().toLowerCase();
   const lowerName = filename?.toLowerCase() ?? '';
   return lowerType === 'text/calendar' ||
     lowerType === 'application/ics' ||

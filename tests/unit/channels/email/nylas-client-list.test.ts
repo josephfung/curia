@@ -104,4 +104,26 @@ describe('NylasClient.listMessages — folder/search filters', () => {
     expect(callArg.queryParams).toHaveProperty('limit', 10);
     expect(callArg.queryParams).toHaveProperty('threadId', 'th-1');
   });
+
+  it('marks text/calendar attachments with MIME parameters as calendar invites', async () => {
+    mockMessages.list.mockResolvedValueOnce(emptyListResponse([{
+      id: 'msg-1',
+      subject: 'Invite',
+      from: [],
+      to: [],
+      cc: [],
+      bcc: [],
+      date: 1,
+      attachments: [{
+        id: 'att-1',
+        filename: 'invite.ics',
+        contentType: 'text/calendar; method=REQUEST; charset=UTF-8',
+        size: 123,
+      }],
+    }]));
+
+    const messages = await client.listMessages();
+
+    expect(messages[0]!.attachments[0]!.isCalendarInvite).toBe(true);
+  });
 });

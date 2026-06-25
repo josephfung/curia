@@ -54,7 +54,7 @@ export interface NylasCalendarLike {
     sendRsvp(params: {
       identifier: string;
       eventId: string;
-      queryParams?: Record<string, unknown>;
+      queryParams: Record<string, unknown>;
       requestBody: { status: NylasRsvpStatus };
     }): Promise<NylasRawRsvpResponse>;
 

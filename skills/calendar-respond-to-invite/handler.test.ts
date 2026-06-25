@@ -125,7 +125,7 @@ describe('CalendarRespondToInviteHandler', () => {
         response: 'accept',
         holdMatchCriteria: {
           subject: 'Quick Project Delta sync',
-          contactDomain: 'scheduler@example.test',
+          contactDomain: 'example.test',
         },
         holdSearchStart: '2026-06-01T00:00:00Z',
         holdSearchEnd: '2026-06-30T00:00:00Z',

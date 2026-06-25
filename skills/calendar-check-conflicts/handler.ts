@@ -73,7 +73,9 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         status: string;
       }> = [];
 
-      for (const result of freeBusyResults) {
+      for (let resultIndex = 0; resultIndex < freeBusyResults.length; resultIndex++) {
+        const result = freeBusyResults[resultIndex]!;
+        const queriedCalendarId = calendarIds[resultIndex] ?? result.email;
         // Resolve contact name once per calendar result, not once per busy slot — avoids N+1 DB calls.
         let contactName: string | null = null;
         if (ctx.contactService) {
@@ -87,7 +89,9 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         for (const slot of result.timeSlots) {
           // Free events do not conflict; only non-free (busy/tentative) slots are conflicts. See #1137.
           if (slot.status === 'free') continue;
-          const ignoredHoldWindows = ignoredHoldWindowsByCalendar.get(result.email);
+          const ignoredHoldWindows =
+            ignoredHoldWindowsByCalendar.get(result.email) ??
+            ignoredHoldWindowsByCalendar.get(queriedCalendarId);
           if (ignoredHoldWindows && ignoredHoldWindows.length > 0) {
             const overlapsIgnoredHold = ignoredHoldWindows.some((event) =>
               eventsOverlap(slot.startTime, slot.endTime, event.startTime, event.endTime),

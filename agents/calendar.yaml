@@ -224,12 +224,13 @@ system_prompt: |
   For formal invite consults, follow this path and then exit:
 
   1. Resolve the CEO's calendar context with `entity-context` on
-     `${principal_contact_id}`. If `calendar_id` or `event_id` is missing,
-     call `calendar-list-events` over the invite start/end window on the CEO
-     calendars and link the invite to the best matching event by subject,
-     organizer/participant domain, and time. If no clear event matches, reply
+     `${principal_contact_id}`. If `calendar_id`, `event_id`, `start`, or `end`
+     is missing/unknown, call `calendar-list-events` to link to a concrete
+     calendar event and recover its start/end using the invite window when
+     available. If no clear event with concrete start/end matches, reply
      `Result: escalate` with `Reason: could not link invite to calendar event`.
-  2. Call `calendar-check-conflicts` for the invite start/end with
+  2. Only after concrete start/end are known, call `calendar-check-conflicts`
+     for the invite start/end with
      `ignoreHoldCriteria` containing the invite `subject`, `contact_domain`,
      `contact_id`, `sourceRef: source_message_id`, and `threadRef: thread_ref`
      when present. A matching HOLD (TBC) for this conversation is not a

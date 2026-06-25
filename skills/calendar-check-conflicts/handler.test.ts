@@ -41,7 +41,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
     const nylasCalendarClient = {
       getFreeBusy: vi.fn().mockResolvedValue([
         {
-          email: 'test@example.com',
+          email: 'freebusy@example.test',
           timeSlots: [
             {
               startTime: proposedStartTs + 600, // overlaps proposed range
@@ -192,7 +192,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           participants: [],
           conferencing: null,
           status: 'tentative',
-          calendarId: 'test@example.com',
+          calendarId: 'cal_primary',
           busy: true,
           metadata: buildHoldMetadata({
             createdAtIso: '2026-05-20T00:00:00Z',
@@ -205,18 +205,19 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
 
     const result = await handler.execute(makeCtx({
       input: {
-        calendarIds: ['test@example.com'],
+        calendarIds: ['cal_primary'],
         proposedStart,
         proposedEnd,
         ignoreHoldCriteria: {
           subject: 'Quick Project Delta sync',
-          contactDomain: 'scheduler@example.test',
+          contactDomain: 'example.test',
         },
       },
       nylasCalendarClient,
     }));
 
     expect(result.success).toBe(true);
+    expect(nylasCalendarClient!.listEvents).toHaveBeenCalledWith('cal_primary', proposedStart, proposedEnd);
     if (result.success) {
       expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).clear).toBe(true);
       expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).conflicts).toHaveLength(0);
