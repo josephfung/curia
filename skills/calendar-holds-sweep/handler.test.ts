@@ -115,6 +115,13 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
     // scanned counts hold events only (not realMeeting)
     expect(data.scanned).toBe(3);
 
+    // Guard: listEvents must be called with a timeMin EARLIER than now (lookback window).
+    // This ensures past-slot holds are returned by Nylas (AC #6) and not silently missed
+    // by a forward-only window (timeMin=now). If this assertion fails, Fix 1 was regressed.
+    const listEvents = ctx.nylasCalendarClient!.listEvents as ReturnType<typeof vi.fn>;
+    const timeMinArg: string = (listEvents.mock.calls[0] as [string, string, string])[1];
+    expect(new Date(timeMinArg).getTime()).toBeLessThan(NOW_MS);
+
     const deleteEvent = ctx.nylasCalendarClient!.deleteEvent as ReturnType<typeof vi.fn>;
     // deleteEvent must have been called exactly for the two stale holds
     expect(deleteEvent).toHaveBeenCalledTimes(2);

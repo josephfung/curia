@@ -30,9 +30,12 @@ import { isHoldEvent, isHoldStale } from '../../src/channels/calendar/holds.js';
 // Default maximum hold age in days.
 const DEFAULT_MAX_AGE_DAYS = 7;
 
-// Sweep window: list events from now through this many days ahead.
-// Holds are placed for scheduling offers, which are typically within the next two weeks.
-// Using 14 days ahead ensures we catch recently-placed holds without scanning the full future.
+// Sweep window: list events from 14 days in the past through 14 days ahead (symmetric ±14d).
+// The lookback into the past is critical for AC #6: Nylas filters out events that have
+// already ended, so a forward-only window (timeMin=now) would never return holds whose
+// slot has already elapsed — the "slot end in the past" staleness branch would never fire
+// in production. By starting 14 days ago, we ensure past-slot holds are returned by
+// listEvents and can be detected and deleted by isHoldStale condition 1.
 const SWEEP_WINDOW_DAYS = 14;
 
 export class CalendarHoldsSweepHandler implements SkillHandler {
@@ -53,7 +56,9 @@ export class CalendarHoldsSweepHandler implements SkillHandler {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
-    // nowMs: injectable for tests; defaults to live wall clock.
+    // nowMs: UNDOCUMENTED test-only seam — not part of the skill's public contract and
+    // NOT listed in skill.json. Tests inject it via ctx.input.nowMs for deterministic
+    // staleness checks. In production this input is always absent; Date.now() is used.
     // nowUnix is seconds; isHoldStale takes seconds for the current time.
     const nowMs = typeof nowMsInput === 'number' ? nowMsInput : Date.now();
     const nowUnix = nowMs / 1000;
@@ -65,12 +70,13 @@ export class CalendarHoldsSweepHandler implements SkillHandler {
       : DEFAULT_MAX_AGE_DAYS;
     const maxAgeMs = maxAgeDays * 86_400_000; // days → ms
 
-    // Build the time window for listEvents.
-    // We look from "now" forward SWEEP_WINDOW_DAYS days, which covers any holds placed
-    // in the near term. Holds for slots already in the past will have endTime <= nowUnix
-    // and will be caught by isHoldStale condition 1.
-    const nowIso = new Date(nowMs).toISOString();
+    // Build the symmetric ±14d time window for listEvents.
+    // timeMin reaches 14 days into the past so that holds whose slot has already elapsed
+    // are included in the Nylas response (AC #6: "holds whose slot is past" must be swept).
+    // timeMax reaches 14 days into the future to catch recently-placed pending holds.
+    const windowStartMs = nowMs - SWEEP_WINDOW_DAYS * 86_400_000;
     const windowEndMs = nowMs + SWEEP_WINDOW_DAYS * 86_400_000;
+    const windowStartIso = new Date(windowStartMs).toISOString();
     const windowEndIso = new Date(windowEndMs).toISOString();
 
     // Resolve the contact's registered calendars.
@@ -107,7 +113,7 @@ export class CalendarHoldsSweepHandler implements SkillHandler {
 
       let events: Array<{ id: string; startTime: number | null; endTime: number | null; metadata: Record<string, string> | null }>;
       try {
-        events = await ctx.nylasCalendarClient.listEvents(calId, nowIso, windowEndIso);
+        events = await ctx.nylasCalendarClient.listEvents(calId, windowStartIso, windowEndIso);
       } catch (err) {
         // One calendar failed — log it and move on to the next.
         ctx.log.error({ err, calId }, 'calendar-holds-sweep: failed to list events for calendar, skipping');
