@@ -63,7 +63,8 @@ function makeManifest(
  *  it keeps its originator like a scheduler-create fire and is not subject to the bypass ladder. */
 function metadataFromWakeRow(row: { originator: Record<string, unknown> | null; task_payload: Record<string, unknown> }) {
   const standing = row.task_payload?.['type'] === 'task-wake'
-    ? (row.task_payload as { standing?: { derived?: boolean } }).standing
+    // Cast through `unknown` first per the repo's Record<string, unknown> narrowing rule (CLAUDE.md).
+    ? (row.task_payload as unknown as { standing?: { derived?: boolean } }).standing
     : undefined;
   if (!row.originator && !standing) return undefined;
   const meta: Record<string, unknown> = {};
