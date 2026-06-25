@@ -46,7 +46,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`calendar-find-free-time` / `calendar-check-conflicts`** — `free`-status events no longer block availability or count as conflicts; only busy/tentative events do. (#1137)
 - **`calendar-create-event`** — booking a real event now auto-releases any overlapping `curia-hold` events on the same calendar. (#1137)
 - **Nylas calendar client** — normalized events now surface event `metadata`; create/update pass through `metadata`/`status`/`busy`. (#1137)
-- **`ceo-inbox` scheduling replies** — now consults the calendar specialist via the bullpen before drafting, instead of drafting blind; offered slots are conflict-checked, held, and timezone-labelled by the specialist. (#1137)
+- **`ceo-inbox` scheduling replies** — consults the calendar specialist before drafting; slots are conflict-checked, held, and timezone-labelled. (#1137)
 
 ### Fixed
 
