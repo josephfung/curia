@@ -27,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`AGENTS.md`** — adds cloud-agent environment notes (Node 24 toolchain, Docker-based Postgres, vault-seeded secrets, dev-mode run/login caveats, and how to run lint/typecheck/test/build).
 - **Console task lineage** — tasks and scheduled jobs created from the console now carry a principal `TaskOriginator` (`channel: 'console'`), and console tasks default to a non-derived `source: 'ceo'`, so console-originated work is no longer stranded propose-only when later woken. (#1127)
 - **Health observability** — `GET /api/health` returns `ok` / `degraded` / `down` with per-check status for seven services; `down` (503) only when db or bus fails. (#434)
 - **Daily canary job** — scheduler job validates LLM tiers, credentials, and external deps on a cron schedule; pings configured heartbeat URLs on success. (#434)
