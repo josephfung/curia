@@ -181,13 +181,20 @@ system_prompt: |
   1. **Resolve calendars and timezones.** Call `entity-context` on
      `${principal_contact_id}` to get the CEO's registered calendar IDs and
      timezone (read `contact.timezone` — this is the authoritative column; do
-     not parse the `facts` array for timezone). If the request says
-     `contact_timezone=known` (or you otherwise want the contact's timezone),
-     and the consult only carries the contact's display name (not a contact ID),
-     first call `contact-lookup` on that display name to resolve the contact ID.
-     If `contact-lookup` returns no results or is ambiguous, treat the contact
-     timezone as unknown and label the CEO timezone only. Once you have the
-     contact ID, call `entity-context` on it to get their timezone the same way.
+     not parse the `facts` array for timezone). Then resolve the contact's
+     timezone using whichever path applies:
+     - If `contact_timezone` is an IANA timezone string (e.g.
+       `America/Los_Angeles`), use it directly — no lookup needed.
+     - If `contact_id` is also present, call `entity-context` on that ID for
+       any additional contact context, but the IANA timezone already in
+       `contact_timezone` takes precedence over the `entity-context` result.
+     - If `contact_timezone=unknown`, skip the contact timezone step — label
+       the CEO timezone only.
+     - If `contact_timezone=known` but no IANA string and no `contact_id`
+       (legacy consult format), call `contact-lookup` on the display name
+       from the `For:` line to resolve a contact ID, then call `entity-context`
+       on it. If `contact-lookup` returns no results or is ambiguous, treat the
+       contact timezone as unknown.
 
   2. **Recall scheduling preferences.** Call `memory-query` for stored
      scheduling rules (blocked times, meeting-length preferences, faith

@@ -156,6 +156,7 @@ describeIf('calendar-holds — config-store toggle (real Postgres)', () => {
   });
 
   afterAll(async () => {
+    if (!pool) return;
     // Remove all KG nodes we wrote during these tests.
     await pool.query("DELETE FROM kg_edges WHERE source = $1", [SOURCE]);
     await pool.query("DELETE FROM kg_nodes WHERE source = $1", [SOURCE]);
@@ -257,6 +258,7 @@ describeIf('calendar-holds — hold place → self-release (real Postgres)', () 
   });
 
   afterAll(async () => {
+    if (!pool) return;
     await pool.query("DELETE FROM kg_edges WHERE source = $1", [SOURCE]);
     await pool.query("DELETE FROM kg_nodes WHERE source = $1", [SOURCE]);
     await pool.end();
@@ -350,6 +352,7 @@ describeIf('calendar-holds — bullpen source_message_id dedup (real Postgres)',
   });
 
   afterAll(async () => {
+    if (!pool) return;
     // ON DELETE CASCADE removes bullpen_messages automatically.
     await pool.query('DELETE FROM bullpen_threads WHERE topic LIKE $1', [`${runId}%`]);
     await pool.end();

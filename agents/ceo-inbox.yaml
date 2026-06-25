@@ -536,17 +536,23 @@ system_prompt: |
          Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
          For:  reply to <contact display name> re "<subject>"
          By:   slots within <date window / stated constraints from the email>
-         Context: source_message_id=<the email's message_id>; contact_timezone=<known|unknown>
+         Context: source_message_id=<the email's message_id>; contact_timezone=<IANA timezone string | unknown>; contact_id=<contact ID if known>
 
        Set `source_message_id: <the email's message_id>` on the bullpen call
-       as the dedup key. Use `contact_timezone=known` when entity-context
-       returned a timezone for this contact; otherwise use `contact_timezone=unknown`.
+       as the dedup key. For `contact_timezone`, pass the actual IANA timezone
+       string (e.g. `America/Los_Angeles`) when entity-context returned one for
+       this contact; otherwise pass `unknown`. When you have a contact ID from
+       entity-context or contact-register, include it as `contact_id=<id>` so
+       the calendar specialist can skip the contact-lookup step entirely.
        Adjust duration in the `Need:` line when context implies otherwise
        (e.g. "quick call" = 15 min, "lunch" = 60 min).
 
        If `bullpen.post` returns `deduplicated: true`, a consult is already in
-       flight for this message — treat it as already parked and exit without
-       re-labelling or re-consulting.
+       flight for this message — do not post a second consult. Still run the
+       parking steps idempotently: call `ceo-inbox-label` with `⏳ In Progress`
+       and call `ceo-inbox-mark-read` with the message_id. Both are safe to
+       repeat (they are no-ops if already done). This recovers a run that died
+       after `bullpen.post` but before Step 2. Then exit without drafting.
 
     2. **Park — label + mark-read.** Call `ceo-inbox-label` to apply the label
        `⏳ In Progress` to the message. Then call `ceo-inbox-mark-read` with
