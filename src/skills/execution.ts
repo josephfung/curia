@@ -146,6 +146,7 @@ export class ExecutionLayer {
   private approvalTrigger?: ApprovalTriggerService;
   private escalationJudge?: EscalationJudge;
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+  private auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
   private taskRepo?: import('../db/task-repo.js').TaskRepo;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private tempFileStore?: TempFileStore;
@@ -193,6 +194,7 @@ export class ExecutionLayer {
      *  whether the action is third-party-facing (a runtime property the manifest can't encode). */
     escalationJudge?: EscalationJudge;
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
+    auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
     taskRepo?: import('../db/task-repo.js').TaskRepo;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     tempFileStore?: TempFileStore;
@@ -227,6 +229,7 @@ export class ExecutionLayer {
     this.approvalTrigger = options?.approvalTrigger;
     this.escalationJudge = options?.escalationJudge;
     this.actionLogRepo = options?.actionLogRepo;
+    this.auditLogRepo = options?.auditLogRepo;
     this.taskRepo = options?.taskRepo;
     this.confidencePipeline = options?.confidencePipeline;
     this.tempFileStore = options?.tempFileStore;
@@ -1022,6 +1025,7 @@ export class ExecutionLayer {
       executiveProfileService: this.executiveProfileService,
       officeIdentityService: this.officeIdentityService,
       actionLogRepo: this.actionLogRepo,
+      auditLogRepo: this.auditLogRepo,
       taskRepo: this.taskRepo,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).

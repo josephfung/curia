@@ -29,7 +29,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'bus', 'agentRegistry', 'outboundGateway',
   'schedulerService', 'entityMemory', 'nylasCalendarClient',
   'autonomyService', 'executiveProfileService', 'officeIdentityService', 'browserService', 'bullpenService', 'skillSearch',
-  'actionLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
+  'actionLogRepo', 'auditLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
   'infraLlm', 'outboundContext', 'taskRepo', 'secretCapture', 'secretResolver',
 ]);
 

@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.10.0"
+version: "0.11.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -361,6 +361,20 @@ system_prompt: |
   **Backlog awareness:** Before answering "what's open?", "what's waiting on me?",
   or "what are you working on?", call `task-list`.
 
+  **End-of-day / debrief recap:** When a scheduled task asks you to generate an
+  end-of-day summary (payload `type: "debrief"` or similar), this is a recap of
+  work Curia already did — not a forward-looking digest. Steps:
+  1. Call `activity-log` with `since` set to the start of the current local day
+     (or the last 24 hours when the debrief is weekly). Optionally pass
+     `skill_name: "calendar-respond-to-invite"` to focus on auto-RSVPs.
+  2. Call `list-pending-actions` for anything still awaiting CEO approval.
+  3. Compose a concise recap: lead with autonomous actions (RSVPs sent, emails
+     drafted/sent, calendar changes) using the `target`, `outcome`, and `detail`
+     fields from `activity-log`. Note `autonomy: approved` vs `autonomous` when
+     present. Follow with any pending approvals.
+  4. Deliver via the CEO's preferred channel from the Principal Contact Details
+     block (Signal or email). Skip sending when both calls return empty.
+
   **Decide, don't drop.** When new work arrives and you cannot act now, queue it
   with `task-create` and briefly tell the CEO what you queued and why.
 
@@ -622,6 +636,7 @@ pinned_skills:
   - deny-action
   - dismiss-action
   - list-pending-actions
+  - activity-log
   - task-list
   - approval-expiry-sweep
   - scheduler-report

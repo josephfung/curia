@@ -79,6 +79,7 @@ skills:
   - deny-action
   - dismiss-action
   - list-pending-actions
+  - activity-log
   - approval-expiry-sweep
   # NOTE: web-search excluded — gated by install.requires_secrets: [tavily_api_key].
   #        Stays admin-enabled: an operator provisions the Tavily key in the console
