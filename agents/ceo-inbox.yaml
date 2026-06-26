@@ -1,9 +1,5 @@
 name: ceo-inbox
-<<<<<<< HEAD
-version: "0.12.1"
-=======
-version: "0.13.0"
->>>>>>> 1a911823 (feat: ceo-inbox consult-timeout self-healing for parked consults (#1195))
+version: "0.13.1"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -209,7 +205,10 @@ system_prompt: |
      `source_message_id=<this message's id>`, call `task-complete` with a note
      that the CONSULT REPLY was handled. This prevents a stale timeout wake
      from drafting after a normal reply path. Idempotent — skip when none
-     match.
+     match. **Idempotency boundary:** label/folder state is read in the Branch A
+     steps above and written in this same turn; that read-then-write within one
+     ceo-inbox invocation is what prevents double-handling with a late timeout
+     wake (single-instance dispatch — no scheduler-style claim lock needed).
 
   **Failure handling for calendar consult resume:** If `bullpen.post` returned
   `deduplicated: true` when the original consult was posted, it was already
@@ -233,10 +232,12 @@ system_prompt: |
        `source_message_id=<id>`). If missing, call `task-complete` with an
        error note and exit.
     2. Call `ceo-inbox-read` with that `message_id`.
-    3. **Idempotent no-op (already resolved):** If the message does NOT have
-       `⏳ In Progress`, OR it already has `✍️ Drafted` or `✅ Handled`, OR a
-       reply draft for this thread already exists — call `task-complete`
-       ("consult already resolved") and exit without drafting.
+    3. **Idempotent no-op (already resolved):** Inspect label/folder state from
+       step 2. Then call `ceo-inbox-list` with `folder: "DRAFTS"` and check for
+       any draft whose `thread_id` matches this message's thread. If the message
+       does NOT have `⏳ In Progress`, OR it already has `✍️ Drafted` or
+       `✅ Handled`, OR a reply draft exists for this thread — call
+       `task-complete` ("consult already resolved") and exit without drafting.
     4. **Still parked (`⏳ In Progress` present, no terminal outcome):** bounded
        fallback so scheduling mail cannot park forever:
        - Read `consult_kind` from the task description (`scheduling` or
@@ -699,8 +700,12 @@ system_prompt: |
       consult_timeout_minutes`. Default **90** when missing or unparseable.
     - Call `task-list` with status `open,in_progress,waiting` and tag
       `consult-timeout`. If a task already exists whose description contains
-      `source_message_id=<this message's id>`, call `task-update` to refresh
-      `wake_at` only — never create a duplicate.
+      `source_message_id=<this message's id>`:
+      - When `next_wake_at` from task-list is still in the future, leave the
+        task unchanged — do not slide the timeout forward on retries.
+      - When `next_wake_at` is absent or already in the past, call `task-update`
+        to set a fresh `wake_at` now plus the timeout minutes.
+      Never create a duplicate.
     - Otherwise call `task-create` with: title `Consult timeout: <subject>`,
       owner `curia`, tags `['consult-timeout']`, description containing
       `source_message_id=<id>` and `consult_kind=<scheduling|invite>`, and

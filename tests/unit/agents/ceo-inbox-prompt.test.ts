@@ -100,6 +100,24 @@ describe('ceo-inbox consult-timeout self-healing', () => {
     expect(scheduledWake).toContain('Do NOT draft a blind email reply');
   });
 
+  it('runs idempotent no-op before timeout fallback and checks DRAFTS folder', () => {
+    const prompt = loadCeoInboxPrompt();
+    const scheduledWake = extractScheduledWakeSection(prompt);
+    const noopPos = posIn(scheduledWake, 'Idempotent no-op');
+    const fallbackPos = posIn(scheduledWake, 'Still parked');
+    expect(noopPos).toBeGreaterThan(-1);
+    expect(fallbackPos).toBeGreaterThan(noopPos);
+    expect(scheduledWake).toContain('ceo-inbox-list');
+    expect(scheduledWake).toContain('folder: "DRAFTS"');
+  });
+
+  it('does not slide consult-timeout wake_at forward while still pending', () => {
+    const prompt = loadCeoInboxPrompt();
+    const schedulingSection = extractSchedulingConsultSection(prompt);
+    expect(schedulingSection).toContain('next_wake_at');
+    expect(schedulingSection).toContain('still in the future');
+  });
+
   it('schedules consult-timeout on formal invite park', () => {
     const prompt = loadCeoInboxPrompt();
     const inviteStart = posIn(prompt, '### 4d-invite. Formal meeting invitation path');
