@@ -163,6 +163,12 @@ export class CalendarRespondToInviteHandler implements SkillHandler {
     }
 
     const matches = findHoldsForConversationRelease(events, enrichCriteriaWithEventWindow(criteria, event));
+    if (matches.length === 0) {
+      ctx.log.info(
+        { calendarId, criteria, eventWindow: window },
+        'calendar-respond-to-invite: no holds matched conversation ref for release; orphans left to sweep',
+      );
+    }
     const releasedHolds: string[] = [];
     const releaseWarnings: string[] = [];
     for (const hold of matches) {

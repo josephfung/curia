@@ -6,7 +6,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
-import { eventsOverlap, findHoldsForConversationRelease, type HoldMatchCriteria } from '../../src/channels/calendar/holds.js';
+import { eventsOverlap, findMatchingHolds, type HoldMatchCriteria } from '../../src/channels/calendar/holds.js';
 
 export class CalendarCheckConflictsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -41,19 +41,19 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         for (const calendarId of calendarIds) {
           try {
             const events = await ctx.nylasCalendarClient.listEvents(calendarId, proposedStart, proposedEnd);
-            const matchingHolds = findHoldsForConversationRelease(events, {
+            const matches = findMatchingHolds(events, {
               ...ignoreHoldCriteria,
               startTime: proposedStartTs,
               endTime: proposedEndTs,
             });
-            if (matchingHolds.length > 0) {
+            if (matches.length > 0) {
               ignoredHoldWindowsByCalendar.set(
                 calendarId,
-                matchingHolds
-                  .filter((hold) => hold.startTime !== null && hold.endTime !== null)
-                  .map((hold) => ({
-                    startTime: hold.startTime!,
-                    endTime: hold.endTime!,
+                matches
+                  .filter((match) => match.hold.startTime !== null && match.hold.endTime !== null)
+                  .map((match) => ({
+                    startTime: match.hold.startTime!,
+                    endTime: match.hold.endTime!,
                   })),
               );
             }
