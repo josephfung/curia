@@ -7,11 +7,16 @@ import { describe, it, expect } from 'vitest';
 import {
   CURIA_HOLD_KEY,
   buildHoldMetadata,
+  extractConversationRef,
+  findHoldsByConversationRef,
+  findHoldsForConversationRelease,
   findMatchingHolds,
+  holdSharesConversationRef,
   isHoldEvent,
   matchHoldCandidate,
   normalizeContactDomain,
   normalizeSchedulingSubject,
+  recoverConversationRef,
   eventsOverlap,
   isHoldStale,
 } from './holds.js';
@@ -69,6 +74,106 @@ describe('buildHoldMetadata', () => {
   });
 });
 
+describe('hold conversation ref release', () => {
+  const conversationRef = { sourceRef: 'msg-negotiation', threadRef: 'thread-negotiation' };
+
+  const holdA1 = {
+    id: 'hold-a1',
+    title: 'HOLD (TBC): Project Alpha sync',
+    startTime: 1_780_000_000,
+    endTime: 1_780_003_600,
+    metadata: buildHoldMetadata({
+      createdAtIso: '2026-06-24T12:00:00.000Z',
+      subject: 'Project Alpha sync',
+      contactDomain: 'example.test',
+      ...conversationRef,
+    }),
+  };
+
+  const holdA2 = {
+    ...holdA1,
+    id: 'hold-a2',
+    startTime: 1_780_086_400,
+    endTime: 1_780_090_000,
+  };
+
+  const holdB1 = {
+    id: 'hold-b1',
+    title: 'HOLD (TBC): Project Beta sync',
+    startTime: 1_780_000_000,
+    endTime: 1_780_003_600,
+    metadata: buildHoldMetadata({
+      createdAtIso: '2026-06-24T12:00:00.000Z',
+      subject: 'Project Beta sync',
+      contactDomain: 'example.test',
+      sourceRef: 'msg-other',
+      threadRef: 'thread-other',
+    }),
+  };
+
+  it('releases all holds sharing a recovered source-ref', () => {
+    const released = findHoldsForConversationRelease([holdA1, holdA2, holdB1], {
+      sourceRef: conversationRef.sourceRef,
+    });
+    expect(released.map((hold) => hold.id)).toEqual(['hold-a1', 'hold-a2']);
+  });
+
+  it('releases on an exact thread-ref match alone', () => {
+    const released = findHoldsForConversationRelease([holdA1, holdA2], {
+      threadRef: conversationRef.threadRef,
+    });
+    expect(released.map((hold) => hold.id)).toEqual(['hold-a1', 'hold-a2']);
+  });
+
+  it('anchors by accepted-slot time overlap when invite refs miss', () => {
+    const released = findHoldsForConversationRelease([holdA1, holdA2, holdB1], {
+      subject: 'Project Alpha sync',
+      contactDomain: 'example.test',
+      threadRef: 'invite-thread-only',
+      startTime: holdA1.startTime,
+      endTime: holdA1.endTime,
+    });
+    expect(released.map((hold) => hold.id)).toEqual(['hold-a1', 'hold-a2']);
+  });
+
+  it('does not release same-domain holds from a different conversation', () => {
+    const released = findHoldsForConversationRelease([holdA1, holdA2, holdB1], {
+      subject: 'Project Alpha sync',
+      contactDomain: 'example.test',
+      startTime: holdA1.startTime,
+      endTime: holdA1.endTime,
+    });
+    expect(released.map((hold) => hold.id)).toEqual(['hold-a1', 'hold-a2']);
+    expect(released.some((hold) => hold.id === 'hold-b1')).toBe(false);
+  });
+
+  it('releases nothing when no ref can be recovered and no time anchor matches', () => {
+    const orphanHold = {
+      ...holdA1,
+      id: 'hold-orphan',
+      metadata: buildHoldMetadata({
+        createdAtIso: '2026-06-24T12:00:00.000Z',
+        subject: 'Project Alpha sync',
+        contactDomain: 'example.test',
+      }),
+    };
+    const released = findHoldsForConversationRelease([orphanHold], {
+      subject: 'Project Alpha sync',
+      contactDomain: 'example.test',
+    });
+    expect(released).toEqual([]);
+  });
+
+  it('extracts conversation refs from hold metadata', () => {
+    expect(extractConversationRef(holdA1)).toEqual(conversationRef);
+    expect(holdSharesConversationRef(holdA2, conversationRef)).toBe(true);
+    expect(recoverConversationRef([holdA1], { threadRef: conversationRef.threadRef })).toEqual({
+      threadRef: conversationRef.threadRef,
+    });
+    expect(findHoldsByConversationRef([holdA1, holdB1], conversationRef).map((h) => h.id)).toEqual(['hold-a1']);
+  });
+});
+
 describe('hold invite matching helpers', () => {
   const hold = {
     id: 'hold-1',
@@ -91,7 +196,7 @@ describe('hold invite matching helpers', () => {
     expect(normalizeContactDomain('assistant@example.test')).toBe('example.test');
   });
 
-  it('matches a hold by organization domain plus similar subject, not exact sender email', () => {
+  it('scores fuzzy candidate matches for legacy scoring callers', () => {
     const match = matchHoldCandidate(hold, {
       subject: 'Quick Project Delta sync',
       contactDomain: 'scheduler@example.test',

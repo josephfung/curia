@@ -7,7 +7,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { NylasCalendarEvent, NylasRsvpStatus } from '../../src/channels/calendar/nylas-calendar-client.js';
 import {
-  findMatchingHolds,
+  findHoldsForConversationRelease,
   type HoldMatchCriteria,
 } from '../../src/channels/calendar/holds.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
@@ -162,21 +162,21 @@ export class CalendarRespondToInviteHandler implements SkillHandler {
       };
     }
 
-    const matches = findMatchingHolds(events, criteria);
+    const matches = findHoldsForConversationRelease(events, enrichCriteriaWithEventWindow(criteria, event));
     const releasedHolds: string[] = [];
     const releaseWarnings: string[] = [];
-    for (const match of matches) {
+    for (const hold of matches) {
       try {
-        await ctx.nylasCalendarClient.deleteEvent(calendarId, match.hold.id, false);
-        releasedHolds.push(match.hold.id);
+        await ctx.nylasCalendarClient.deleteEvent(calendarId, hold.id, false);
+        releasedHolds.push(hold.id);
         ctx.log.info(
-          { calendarId, holdId: match.hold.id, score: match.score, reasons: match.reasons },
-          'calendar-respond-to-invite: released matching hold',
+          { calendarId, holdId: hold.id },
+          'calendar-respond-to-invite: released conversation hold',
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        releaseWarnings.push(`Failed to release hold ${match.hold.id}: ${message}`);
-        ctx.log.warn({ err, calendarId, holdId: match.hold.id }, 'calendar-respond-to-invite: failed to release matching hold');
+        releaseWarnings.push(`Failed to release hold ${hold.id}: ${message}`);
+        ctx.log.warn({ err, calendarId, holdId: hold.id }, 'calendar-respond-to-invite: failed to release matching hold');
       }
     }
 
@@ -186,10 +186,6 @@ export class CalendarRespondToInviteHandler implements SkillHandler {
 
 function isInviteResponse(response: string): response is InviteResponse {
   return response === 'accept' || response === 'decline' || response === 'tentative';
-}
-
-function hasHoldMatchSignal(criteria: HoldMatchCriteria): boolean {
-  return Boolean(criteria.subject || criteria.contactDomain || criteria.contactId || criteria.sourceRef || criteria.threadRef);
 }
 
 function deriveHoldSearchWindow(
@@ -206,5 +202,23 @@ function deriveHoldSearchWindow(
   return {
     start: new Date(event.startTime * 1000 - HOLD_SEARCH_PADDING_MS).toISOString(),
     end: new Date(event.endTime * 1000 + HOLD_SEARCH_PADDING_MS).toISOString(),
+  };
+}
+
+function hasHoldMatchSignal(criteria: HoldMatchCriteria): boolean {
+  return Boolean(criteria.subject || criteria.contactDomain || criteria.contactId || criteria.sourceRef || criteria.threadRef);
+}
+
+function enrichCriteriaWithEventWindow(
+  criteria: HoldMatchCriteria,
+  event: NylasCalendarEvent | null,
+): HoldMatchCriteria {
+  if (event?.startTime === null || event?.startTime === undefined || event?.endTime === null || event?.endTime === undefined) {
+    return criteria;
+  }
+  return {
+    ...criteria,
+    startTime: event.startTime,
+    endTime: event.endTime,
   };
 }

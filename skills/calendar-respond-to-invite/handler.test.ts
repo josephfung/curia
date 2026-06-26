@@ -31,7 +31,7 @@ function makeEvent(overrides?: Partial<NylasCalendarEvent>): NylasCalendarEvent 
   };
 }
 
-function makeHold(id: string, startTime: number, endTime: number): NylasCalendarEvent {
+function makeHold(id: string, startTime: number, endTime: number, ref?: { sourceRef?: string; threadRef?: string }): NylasCalendarEvent {
   return makeEvent({
     id,
     title: 'HOLD (TBC): Project Delta sync',
@@ -43,6 +43,8 @@ function makeHold(id: string, startTime: number, endTime: number): NylasCalendar
       createdAtIso: '2026-06-24T12:00:00.000Z',
       subject: 'Project Delta sync',
       contactDomain: 'example.test',
+      sourceRef: ref?.sourceRef ?? 'msg-negotiation',
+      threadRef: ref?.threadRef ?? 'thread-negotiation',
     }),
   });
 }
@@ -115,6 +117,8 @@ describe('CalendarRespondToInviteHandler', () => {
         createdAtIso: '2026-06-24T12:00:00.000Z',
         subject: 'Other meeting',
         contactDomain: 'other.example',
+        sourceRef: 'msg-other',
+        threadRef: 'thread-other',
       }),
     });
     const deleteEvent = vi.fn().mockResolvedValue(undefined);
@@ -126,6 +130,7 @@ describe('CalendarRespondToInviteHandler', () => {
         holdMatchCriteria: {
           subject: 'Quick Project Delta sync',
           contactDomain: 'example.test',
+          threadRef: 'invite-thread-only',
         },
         holdSearchStart: '2026-06-01T00:00:00Z',
         holdSearchEnd: '2026-06-30T00:00:00Z',
@@ -144,6 +149,79 @@ describe('CalendarRespondToInviteHandler', () => {
     if (result.success) {
       expect((result.data as { releasedHolds: string[] }).releasedHolds).toEqual(['hold_1', 'hold_2']);
     }
+  });
+
+  it('does not release same-domain holds from a different conversation', async () => {
+    const handler = new CalendarRespondToInviteHandler();
+    const conversationHold = makeHold('hold_a', START_UNIX, END_UNIX);
+    const otherConversationHold = makeHold('hold_b', START_UNIX, END_UNIX, {
+      sourceRef: 'msg-other',
+      threadRef: 'thread-other',
+    });
+    const deleteEvent = vi.fn().mockResolvedValue(undefined);
+    const ctx = makeCtx({
+      input: {
+        calendarId: 'cal_1',
+        eventId: 'evt_invite',
+        response: 'accept',
+        holdMatchCriteria: {
+          subject: 'Project Delta sync',
+          contactDomain: 'example.test',
+        },
+        holdSearchStart: '2026-06-01T00:00:00Z',
+        holdSearchEnd: '2026-06-30T00:00:00Z',
+      },
+    }, {
+      listEvents: vi.fn().mockResolvedValue([conversationHold, otherConversationHold]),
+      deleteEvent,
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(deleteEvent).toHaveBeenCalledTimes(1);
+    expect(deleteEvent).toHaveBeenCalledWith('cal_1', 'hold_a', false);
+    if (result.success) {
+      expect((result.data as { releasedHolds: string[] }).releasedHolds).toEqual(['hold_a']);
+    }
+  });
+
+  it('releases nothing when no conversation ref can be recovered', async () => {
+    const handler = new CalendarRespondToInviteHandler();
+    const orphanHold = makeEvent({
+      id: 'hold_orphan',
+      title: 'HOLD (TBC): Project Delta sync',
+      startTime: START_UNIX,
+      endTime: END_UNIX,
+      status: 'tentative',
+      metadata: buildHoldMetadata({
+        createdAtIso: '2026-06-24T12:00:00.000Z',
+        subject: 'Project Delta sync',
+        contactDomain: 'example.test',
+      }),
+    });
+    const deleteEvent = vi.fn();
+    const ctx = makeCtx({
+      input: {
+        calendarId: 'cal_1',
+        eventId: 'evt_invite',
+        response: 'accept',
+        holdMatchCriteria: {
+          subject: 'Project Delta sync',
+          contactDomain: 'example.test',
+        },
+        holdSearchStart: '2026-06-01T00:00:00Z',
+        holdSearchEnd: '2026-06-30T00:00:00Z',
+      },
+    }, {
+      listEvents: vi.fn().mockResolvedValue([orphanHold]),
+      deleteEvent,
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(deleteEvent).not.toHaveBeenCalled();
   });
 
   it('does not release holds for decline responses', async () => {
