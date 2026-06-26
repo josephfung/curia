@@ -86,6 +86,8 @@ export interface IRegistryRepo {
   getRow(name: string): Promise<RegistryRow | null>;
   /** Insert enabled=false if absent; no-op + return existing row if present. */
   install(name: string, actor: string): Promise<RegistryRow>;
+  /** Insert enabled=true if absent; no-op if present. Returns the new row, or null on conflict. */
+  installAndEnable(name: string, actor: string): Promise<RegistryRow | null>;
   /** Set enabled=true (+ enabled_at/by). Throws if no row exists. */
   enable(name: string, actor: string): Promise<RegistryRow>;
   /** Set enabled=false (+ clear enabled_at/by). Throws if no row exists. */
