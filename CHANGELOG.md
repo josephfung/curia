@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Skill discovery** — `discoverSkillManifests` now warns at startup when a skill directory name diverges from `manifest.name`, surfacing registry/enrollment mismatches before they silently disable skills. (#938)
 - **Setup Node version gate** — `scripts/setup.sh` now rejects Node 22/23 to match the documented Node >=24 requirement. (#1139)
 - **Scheduling consults** — sender-proposed meeting times now flow through `ceo-inbox` to `calendar`, which checks them before counter-proposing alternatives. (#1186)
 - **`ceo-inbox` Branch A resume** — calendar consult replies now call `memory-query` anchored on sender and subject before drafting, so stored facts (Calendly links, venue preferences, relationship notes) shape the reply; no-match proceeds normally. (#1185)

@@ -51,7 +51,7 @@ export interface SkillDiscovery {
  * skill never crashes startup. Used by the registry UI, reconciliation, and as
  * the input to loadSkillsFromDirectory.
  */
-export function discoverSkillManifests(skillsDir: string): SkillDiscovery[] {
+export function discoverSkillManifests(skillsDir: string, logger?: Logger): SkillDiscovery[] {
   if (!fs.existsSync(skillsDir)) {
     throw new Error(`Skills directory not found: ${skillsDir}`);
   }
@@ -84,6 +84,12 @@ export function discoverSkillManifests(skillsDir: string): SkillDiscovery[] {
       const requiresSecrets = Array.isArray(rawRequires)
         ? rawRequires.filter((s): s is string => typeof s === 'string')
         : undefined;
+      if (entry.name !== manifest.name) {
+        logger?.warn(
+          { dir, manifestName: manifest.name },
+          'skill discovery: directory name does not match manifest.name',
+        );
+      }
       out.push({
         name: manifest.name,
         dir,

@@ -12,7 +12,7 @@
 //   8. Frozen manifests reject mutation attempts at runtime
 //   9. allowed_callers freeze and startup validation
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -82,6 +82,33 @@ describe('discoverSkillManifests', () => {
     const found = discoverSkillManifests(dir);
     expect(found[0]!.metadata).toBeNull();
     expect(found[0]!.error).toBeTruthy();
+  });
+
+  it('warns when directory name does not match manifest.name', () => {
+    const warnFn = vi.fn();
+    const mockLogger = { warn: warnFn } as never;
+    writeSkill(
+      dir,
+      'dir-name',
+      { name: 'manifest-name', description: 'd', version: '1.0.0', action_risk: 'none' },
+      'export default { async execute() { return { success: true, data: {} }; } };',
+    );
+    const found = discoverSkillManifests(dir, mockLogger);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.name).toBe('manifest-name');
+    expect(warnFn).toHaveBeenCalledOnce();
+    expect(warnFn.mock.calls[0]![0]).toMatchObject({
+      dir: path.join(dir, 'dir-name'),
+      manifestName: 'manifest-name',
+    });
+  });
+
+  it('does not warn when directory name matches manifest.name', () => {
+    const warnFn = vi.fn();
+    const mockLogger = { warn: warnFn } as never;
+    writeSkill(dir, 'good', { name: 'good', description: 'd', version: '1.0.0', action_risk: 'none' }, 'throw new Error("should not import");');
+    discoverSkillManifests(dir, mockLogger);
+    expect(warnFn).not.toHaveBeenCalled();
   });
 });
 
