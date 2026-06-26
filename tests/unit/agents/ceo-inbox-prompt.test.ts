@@ -38,6 +38,15 @@ function extractBranchASection(prompt: string): string {
   return prompt.slice(branchAStart, scheduledWakeStart);
 }
 
+function extractScheduledWakeSection(prompt: string): string {
+  const start = prompt.indexOf('**Scheduled-wake resume');
+  const end = prompt.indexOf('**Closing a multi-turn exchange');
+  if (start === -1) throw new Error('Scheduled-wake resume section not found');
+  if (end === -1 || end <= start)
+    throw new Error('Closing a multi-turn exchange not found after scheduled wake');
+  return prompt.slice(start, end);
+}
+
 function extractSchedulingConsultSection(prompt: string): string {
   const start = prompt.indexOf('### Scheduling-specific drafting rules');
   const end = prompt.indexOf('**📌 Seen**');
@@ -60,6 +69,64 @@ function extractCalendarConsultSection(prompt: string): string {
 function posIn(section: string, term: string): number {
   return section.indexOf(term);
 }
+
+describe('ceo-inbox consult-timeout self-healing', () => {
+  it('documents consult-timeout scheduled wake with configurable delay', () => {
+    const prompt = loadCeoInboxPrompt();
+    const schedulingSection = extractSchedulingConsultSection(prompt);
+    const scheduledWake = extractScheduledWakeSection(prompt);
+
+    expect(schedulingSection).toContain('consult-timeout');
+    expect(schedulingSection).toContain('consult_timeout_minutes');
+    expect(schedulingSection).toContain('consult_kind=scheduling');
+    expect(schedulingSection).toContain('source_message_id=<id>');
+    expect(scheduledWake).toContain('`consult-timeout` tag');
+    expect(scheduledWake).toContain('pending your calendar');
+    expect(scheduledWake).toContain('consult already resolved');
+  });
+
+  it('cancels consult-timeout tasks when Branch A handles a CONSULT REPLY', () => {
+    const prompt = loadCeoInboxPrompt();
+    const branchA = extractBranchASection(prompt);
+    expect(branchA).toContain('Cancel consult-timeout safety task');
+    expect(branchA).toContain('consult-timeout');
+    expect(branchA).toContain('task-complete');
+  });
+
+  it('escalates invite consult timeouts instead of blind-drafting', () => {
+    const prompt = loadCeoInboxPrompt();
+    const scheduledWake = extractScheduledWakeSection(prompt);
+    expect(scheduledWake).toContain('consult_kind=invite');
+    expect(scheduledWake).toContain('Do NOT draft a blind email reply');
+  });
+
+  it('runs idempotent no-op before timeout fallback and checks DRAFTS folder', () => {
+    const prompt = loadCeoInboxPrompt();
+    const scheduledWake = extractScheduledWakeSection(prompt);
+    const noopPos = posIn(scheduledWake, 'Idempotent no-op');
+    const fallbackPos = posIn(scheduledWake, 'Still parked');
+    expect(noopPos).toBeGreaterThan(-1);
+    expect(fallbackPos).toBeGreaterThan(noopPos);
+    expect(scheduledWake).toContain('ceo-inbox-list');
+    expect(scheduledWake).toContain('folder: "DRAFTS"');
+  });
+
+  it('does not slide consult-timeout wake_at forward while still pending', () => {
+    const prompt = loadCeoInboxPrompt();
+    const schedulingSection = extractSchedulingConsultSection(prompt);
+    expect(schedulingSection).toContain('next_wake_at');
+    expect(schedulingSection).toContain('still in the future');
+  });
+
+  it('schedules consult-timeout on formal invite park', () => {
+    const prompt = loadCeoInboxPrompt();
+    const inviteStart = posIn(prompt, '### 4d-invite. Formal meeting invitation path');
+    const inviteEnd = posIn(prompt, '### 4e-pre. Automated sender check');
+    const inviteSection = prompt.slice(inviteStart, inviteEnd);
+    expect(inviteSection).toContain('Schedule consult-timeout safety wake');
+    expect(inviteSection).toContain('consult_kind=invite');
+  });
+});
 
 describe('ceo-inbox Branch A prompt — memory-query contract', () => {
   it('Branch A section contains a memory-query call', () => {
@@ -155,9 +222,14 @@ describe('ceo-inbox scheduling consult prompt — proposed-time protocol', () =>
   it('requires date-resolve when posting relative proposed times', () => {
     const prompt = loadCeoInboxPrompt();
     const schedulingSection = extractSchedulingConsultSection(prompt);
-    const proposedPos = posIn(schedulingSection, 'Proposed:');
-    const dateResolvePos = posIn(schedulingSection, 'date-resolve');
-    const bullpenPostPos = posIn(schedulingSection, 'bullpen.post');
+    const tapStart = posIn(schedulingSection, '1. **Tap — post a CONSULT REQUEST');
+    const parkStart = posIn(schedulingSection, '2. **Park — label + mark-read');
+    expect(tapStart).toBeGreaterThan(-1);
+    expect(parkStart).toBeGreaterThan(tapStart);
+    const tapSection = schedulingSection.slice(tapStart, parkStart);
+    const proposedPos = posIn(tapSection, 'Proposed:');
+    const dateResolvePos = posIn(tapSection, 'date-resolve');
+    const bullpenPostPos = posIn(tapSection, 'bullpen.post');
 
     expect(proposedPos).toBeGreaterThan(-1);
     expect(dateResolvePos).toBeGreaterThan(proposedPos);
