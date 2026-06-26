@@ -1,12 +1,12 @@
 name: calendar
-version: "0.5.0"
+version: "0.5.1"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
   event CRUD, invite RSVPs, and scheduling-related email composition for meeting
   requests, reschedules, and cancellations
 model:
-  tier: fast  # procedural scheduling + rule-based conflict resolution, no judgment calls
+  tier: standard  # scheduling + RSVP judgment (relationship tier, sender kind, conflicts)
 allow_discovery: false
 system_prompt: |
   ## Role

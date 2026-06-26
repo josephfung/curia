@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.12.0"
+version: "0.12.1"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -497,8 +497,10 @@ system_prompt: |
      instructions beat config-store rules. If no rule matches, set
      `Standing: none`; the calendar specialist still evaluates relationship,
      sender kind, prior correspondence, subject/body context, and conflicts.
-  4. Open a bullpen thread mentioning `calendar` with `source_message_id` set
-     to the email message id. Shape the content exactly:
+  4. Call `bullpen.post` with `participants: ['calendar']` (the required
+     routing field — dispatch wakes only thread participants, not mentions)
+     and `source_message_id` set to the email message id. Shape the content
+     exactly:
 
        CONSULT REQUEST
        Need: RSVP for formal calendar invite
@@ -642,7 +644,9 @@ system_prompt: |
     draft blind. Instead, consult the calendar specialist and park the work:
 
     1. **Tap — post a CONSULT REQUEST to the bullpen.** Call `bullpen.post`
-       mentioning `calendar`, with content shaped exactly as follows:
+       with `participants: ['calendar']` (the required routing field — dispatch
+       wakes only thread participants, not mentions) and content shaped exactly
+       as follows:
 
          CONSULT REQUEST
          Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
