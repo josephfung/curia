@@ -13,68 +13,52 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Changed
+## [0.38.0] — 2026-06-26 — "Deckard"
 
-- **Scheduling consult agents** — `ceo-inbox` CONSULT REQUEST steps now require `participants: ['calendar']` on `bullpen.post`; `calendar` bumped to `standard` tier for RSVP judgment. (#1197)
-
-### Fixed
-
-- **Skill discovery** — `discoverSkillManifests` now warns at startup when a skill directory name diverges from `manifest.name`, surfacing registry/enrollment mismatches before they silently disable skills. (#938)
-- **Setup Node version gate** — `scripts/setup.sh` now rejects Node 22/23 to match the documented Node >=24 requirement. (#1139)
-- **`ceo-inbox` consult timeout** — parked scheduling consults now schedule a `consult-timeout` safety wake (default ~90 min); stale parks fall back to blind draft or escalation instead of waiting forever. (#1195)
-- **Scheduling consults** — sender-proposed meeting times now flow through `ceo-inbox` to `calendar`, which checks them before counter-proposing alternatives. (#1186)
-- **Calendar hold release** — RSVP accept now releases holds by recovered conversation ref (`source-ref` / `thread-ref`) or time-overlap anchor, not fuzzy contact-domain + subject scoring; prevents over-release across concurrent negotiations. (#1196)
-- **`activity-log`** — read-only skill queries `audit_log` for recent completed actions so the end-of-day debrief recap can surface autonomous RSVPs and other consequential work. (#1198)
-- **`ceo-inbox` Branch A resume** — calendar consult replies now call `memory-query` anchored on sender and subject before drafting, so stored facts (Calendly links, venue preferences, relationship notes) shape the reply; no-match proceeds normally. (#1185)
-- **`wake_at` self-deferral lineage** — a task that defers itself via `wake_at` now stamps its `TaskOriginator` onto the wake job, so a principal-lineage task keeps its autonomy bypass on wake instead of flooring to agent; pre-chosen, so no `standing` envelope is written and the heartbeat ladder never runs (`elevated` still blocked — not a live turn). (#1153)
-- **Email markdown links** — outbound email and console rendering now share one sanitized converter with clickable links, bare URL autolinks, and tables. (#1169)
-- **Health LLM canary** — derives tier failure from an explicit most-recent-outcome flag instead of comparing `lastErrorAt > lastSuccessAt`, which tied (and masked the error as healthy) when both landed in the same millisecond. (#1163)
-- **`outbound-gateway`** — content-filter blocks now return the principal-safe reason and rule names so agents can self-correct and retry. (#1051)
-- **`outbound-gateway` draft path** — `sendEmailDraft()` blocks now return the same principal-safe reason and rule names, so blocked draft sends are self-correctable too. (#1158)
-- **Scheduler double-fire** — the cron-branch claim UPDATE now re-checks `next_run_at <= now()`, so overlapping poll cycles can no longer re-claim a just-completed recurring job and send a duplicate (e.g. two daily digests). (#1159)
-- **Scheduler job creation** — `createJob()` and `upsertDeclarativeJob()` now wrap the `scheduled_jobs` write and tasks link CTE in a single DB transaction, so a partial failure rolls back instead of leaving an orphaned job with drift detection disabled. (#867)
-- **Registry reconciliation** — core default enrollment now uses a single atomic `installAndEnable` instead of separate install+enable calls, so a crash between them can no longer leave skills permanently installed-but-disabled. (#937)
-- **`approveGrantRecommendation` / `declineGrantRecommendation`** — concurrent calls on the same pending recommendation no longer produce an auth-state contradiction; both operations now run inside a single transaction so approve's permission override and status transition are atomic. (#1068)
-- **`ceo-nylas-client`** — 429 responses retry with exponential backoff (up to 3 attempts), honoring `Retry-After`; exhaustion throws a typed `NylasApiError(429)` that cannot be misread as an auth failure. (#1058)
-- **`ceo-nylas-client` list endpoints** — `limit` is always sent and capped at ≤ 20; previously an unspecified limit caused Nylas to default to 50, exceeding the safety cap. (#1058)
+> **Rick Deckard** *(Blade Runner, 1982, Ridley Scott — from Philip K. Dick's "Do Androids Dream of Electric Sheep?", 1968)* — a blade runner whose whole craft is telling a genuinely living person from a replicant that only wears the appearance of one. This release teaches Curia the same distinction: authority now answers solely to the principal who is actually, presently live — never to a woken task that merely carries their lineage.
 
 ### Added
 
-- **Calendar invite RSVPs** — formal invite triage now links to calendar events, can send medium-risk Nylas RSVPs, and releases matching holds. (#1165)
-- **`AGENTS.md`** — adds cloud-agent environment notes (Node 24 toolchain, Docker-based Postgres, vault-seeded secrets, dev-mode run/login caveats, and how to run lint/typecheck/test/build).
-- **Console task lineage** — tasks and scheduled jobs created from the console now carry a principal `TaskOriginator` (`channel: 'console'`), and console tasks default to a non-derived `source: 'ceo'`, so console-originated work is no longer stranded propose-only when later woken. (#1127)
-- **Health observability** — `GET /api/health` returns `ok` / `degraded` / `down` with per-check status for seven services; `down` (503) only when db or bus fails. (#434)
-- **Daily canary job** — scheduler job validates LLM tiers, credentials, and external deps on a cron schedule; pings configured heartbeat URLs on success. (#434)
-- **LLM error telemetry** — `llm.error` bus events on failed provider calls let the health layer track per-tier outcomes without billed probes. (#434)
-- **Embedding error telemetry** — `embedding.error` bus events on OpenAI backend failures feed the health layer's embedding canary. (#434)
-- **Model-tier fallback resilience**: reroutes `NOT_FOUND` across fixed tier rules and emits a `model.fallback` audit event (spec 05, #813).
-- **Woken-task authorization: lineage + bypass ladder**: tasks now persist their `TaskOriginator` lineage (migration 065), threaded through the heartbeat wake path so a woken task fires with provenance instead of `metadata: undefined`. A score-keyed *bypass ladder* computes effective standing at skill-invocation time: the live autonomy score can only ever downgrade a woken/derived task's inherited standing to agent (propose-only), never grant it (same-task wake keeps lineage at score ≥70, derived child at ≥90; thresholds configurable under `autonomy.bypass_ladder`). Foundation for #1060; spec 14, spec 19. (#1125)
-- **Calendar hold primitives** — `calendar-create-hold` places tentative `HOLD (TBC)` events on offered slots to prevent re-offers; `calendar-holds-sweep` removes expired holds daily. (#1137)
-- **Calendar specialist scheduling consult** — specialist handles bullpen `CONSULT REQUEST`s: resolves free slots, places holds, and replies with timezone-labelled strings. (#1137)
-- **`ceo-inbox` consult-and-resume** — scheduling emails park pending a calendar consult and draft on reply instead of guessing blind; convention documented in ADR-023. (#1137)
+- **Health observability** — a new `GET /api/health` endpoint reports `ok` / `degraded` / `down` with per-check status across seven services (`down`/503 only when db or bus fails). A daily canary validates LLM tiers, credentials, and external deps and pings heartbeat URLs; new `llm.error` / `embedding.error` telemetry feeds it without billed probes. (#434)
+- **Calendar holds & scheduling consults** — the calendar specialist places tentative `HOLD (TBC)` slots to stop double-offers (swept daily, auto-released on real bookings) and answers scheduling consults over the bullpen, so `ceo-inbox` parks a draft and resumes on reply instead of guessing times blind (ADR-023). (#1137)
+- **Calendar invite RSVPs** — formal invites are linked to calendar events and answered with accept / decline / tentative responses via Nylas, releasing any matching hold. (#1165)
+- **`activity-log`** — a read-only end-of-day recap that surfaces autonomous RSVPs and other consequential actions from the audit log. (#1198)
+- **Woken-task authorization** — tasks now persist `TaskOriginator` lineage (migration 065), and a score-keyed *bypass ladder* computes effective standing at invocation time: inherited authority on a woken/derived task can only be downgraded, never granted (thresholds under `autonomy.bypass_ladder`). (#1125)
+- **Model-tier fallback resilience** — `NOT_FOUND` reroutes across fixed tier rules and emits a `model.fallback` audit event (spec 05). (#813)
+- **Console task lineage** — tasks and jobs created from the console carry principal lineage, so console-originated work is no longer stranded propose-only when later woken. (#1127)
+- **`AGENTS.md`** — cloud-agent environment notes (Node 24 toolchain, Docker Postgres, vault secrets, and how to run lint/typecheck/test/build).
 
 ### Changed
 
-- **`ceo-inbox` batch triage** — drains the inbox in fixed-size, self-continuing batches keyed on read/archive status; replaces the >10-unread overflow mode and its `inbox-overflow` to-do noise. (#1123)
-- **Elevated-skill gate, autonomy principal-bypass, and handler `ctx.taskMetadata`** — all now consume *effective* (post-ladder) standing rather than raw lineage, so a heartbeat-woken task below its posture threshold no longer rides borrowed principal/system standing — including normal-sensitivity handler self-checks (`send-draft`, `contact-set-tier`) and lineage-forwarding skills (`delegate`, `scheduler-create`, `bullpen`). The gate's requirement is unchanged in this step (principal-or-system); only its input changed. A woken task whose autonomy score is momentarily unreadable now fails *closed* on non-read actions (live turns still fail open). (#1125)
-- **`elevated` redefined as a live principal turn + all elevated skills audited & reclassified** — `sensitivity: 'elevated'` now means "the current turn originated from a fresh principal inbound," carried by a **distinct `liveTurn` field** on the `agent.task` payload (deliberately *not* a metadata-bag key, so no persistence skill can ever sweep it into a wakeable row). The dispatcher stamps it only on principal inbounds; the `delegate` skill **forwards it across a synchronous delegation**, so "the CEO is live" spans the whole synchronous call tree — a delegated specialist (the contacts specialist, the setup-wizard) acting inside the CEO's turn inherits live-ness, while a woken/scheduled task never does. Enforced solely at the execution-layer gate (`isLivePrincipalTurn`); the duplicate handler-level origination re-checks on elevated skills were removed (the gate is the single enforcement point). CEO-authority primitives are `elevated`: `approve`/`deny`/`dismiss-action`, `set-autonomy`, `approve`/`decline-grant-recommendation`, **the authorization-altering contact skills** `contact-set-tier`/`contact-set-role`/`contact-grant-permission`/`contact-revoke-permission` (they alter who-can-do-what, so they require a live CEO and never run autonomously), **and `system-secret-capture-request`** (so a secret-capture link can never be minted by a schedule/job). Consequential *mutations* move to `normal` + `action_risk` (autonomy-governed, ADR-018 surface-and-confirm): `contact-merge` (medium), `contact-update`/`contact-rename`/`behavioral-preferences-update`/`executive-profile-update`/`scheduler-create`/`scheduler-cancel`; and `list-pending-actions`/`web-browser` are `normal` + `allowed_callers: [coordinator]`. The 8am digest still reads `list-pending-actions` because the coordinator is the caller. **Public API note:** `sensitivity: 'elevated'` semantics changed and the `agent.task` payload gains a `liveTurn` field (bus-event + manifest schema surfaces). ADR-011/017/018 updated; specs 03/14. (#1126)
-- **TypeScript test coverage** — `tests/**/*.ts` is now covered by typecheck (`tsconfig.tests.json`, third pass in the `typecheck` script); type drift between shared types and test fixtures is now caught by CI. (#1105)
-- **`web-browser` skill** — replaced the `playwright-extra` + stealth-plugin stack with Patchright and added a human-behavior layer (curved mouse, paced typing, post-load dwell + presence) plus one soft-block reload-retry, to reduce Cloudflare/DataDome-style blocking. (#1053)
-- **`calendar-find-free-time` / `calendar-check-conflicts`** — `free`-status events no longer block availability or count as conflicts; only busy/tentative events do. (#1137)
-- **`calendar-create-event`** — booking a real event now auto-releases any overlapping `curia-hold` events on the same calendar. (#1137)
-- **Nylas calendar client** — normalized events now surface event `metadata`; create/update pass through `metadata`/`status`/`busy`. (#1137)
-- **`ceo-inbox` scheduling replies** — consults the calendar specialist before drafting; slots are conflict-checked, held, and timezone-labelled. (#1137)
+- **`elevated` redefined as a live principal turn** — `sensitivity: 'elevated'` now means the current turn originated from a fresh CEO inbound, carried by a distinct `liveTurn` field that can never be persisted and is forwarded across synchronous delegation but never to a woken or scheduled task. Enforcement lives solely at the execution-layer gate. CEO-authority primitives (`approve`/`deny`/`dismiss-action`, `set-autonomy`, the grant-recommendation decisions, the authorization-altering `contact-set-tier`/`set-role`/`grant-permission`/`revoke-permission`, and `system-secret-capture-request`) are now `elevated`; consequential mutations move to `normal` + `action_risk`. **Public API note:** `elevated` semantics changed and `agent.task` gains a `liveTurn` field (ADR-011/017/018; specs 03/14). (#1126)
+- **`ceo-inbox` batch triage** — drains the inbox in fixed-size, self-continuing batches keyed on read/archive status, replacing the old >10-unread overflow mode. (#1123)
+- **`web-browser`** — swapped the stealth stack for Patchright and added a human-behavior layer (curved mouse, paced typing, post-load dwell) plus a soft-block reload-retry, reducing Cloudflare/DataDome blocking. (#1053)
+- **Email markdown** — outbound email and console rendering now share one sanitized converter with clickable links, bare-URL autolinks, and tables. (#1169)
+- **`free`-status calendar events** — no longer block availability or count as conflicts; booking a real event auto-releases overlapping holds, and the Nylas client now passes through event `metadata`/`status`/`busy`. (#1137)
+- **TypeScript test coverage** — `tests/**/*.ts` is now typechecked in CI, catching drift between shared types and fixtures. (#1105)
 
 ### Fixed
 
-- **Bullpen long-thread context** — agents woken by a new reply in a thread with more than 15 messages now always see the original request (first message) in their ambient context, alongside the 14 most recent messages; the first message no longer silently falls off the window. (#1090)
-- **Scheduler duplicate-fire race condition** — claim-time `next_run_at` advancement and null-safe `rowCount` guard prevent duplicate cron fires. (#1124)
+- **Scheduler double-fire** — the claim now re-checks `next_run_at` (with a null-safe rowcount guard), so overlapping poll cycles can't re-fire a just-completed recurring job (e.g. duplicate daily digests). (#1124, #1159)
+- **Scheduler job creation** — the job write and tasks link share one transaction, so a partial failure can't leave an orphaned job with drift detection disabled. (#867)
+- **Registry reconciliation** — default enrollment uses one atomic `installAndEnable`, so a crash can't leave skills installed-but-disabled. (#937)
+- **Grant-recommendation decisions** — approve/decline now run in a single transaction, preventing an auth-state contradiction under concurrent calls. (#1068)
+- **`ceo-nylas-client`** — 429s retry with backoff (honoring `Retry-After`) and throw a typed error instead of masquerading as auth failure; list `limit` is always sent and capped at ≤ 20. (#1058)
+- **`ceo-inbox` consult timeout** — parked consults schedule a ~90 min safety wake, so stale parks fall back to a blind draft or escalation instead of waiting forever. (#1195)
+- **`ceo-inbox` Branch A resume** — consult replies query memory (anchored on sender + subject) before drafting, so stored facts shape the reply. (#1185)
+- **`wake_at` self-deferral lineage** — a task that defers itself keeps its lineage (and autonomy bypass) on wake instead of flooring to agent. (#1153)
+- **Bullpen long-thread context** — woken agents always see the original request (first message) even in threads longer than 15 messages. (#1090)
+- **Health LLM canary** — derives tier failure from an explicit most-recent-outcome flag, no longer masking an error as healthy on a same-millisecond tie. (#1163)
+- **`outbound-gateway`** — content-filter blocks on both the send and draft paths return the principal-safe reason and rule names so agents can self-correct. (#1051, #1158)
+- **Scheduling consults** — sender-proposed times flow through `ceo-inbox` to the calendar specialist for conflict checks before counter-proposing; RSVP-accept releases holds by conversation ref or time overlap, not fuzzy scoring. (#1186, #1196, #1197)
+- **Skill discovery** — startup warns when a skill directory name diverges from its `manifest.name`, surfacing enrollment mismatches. (#938)
+- **Setup Node gate** — `setup.sh` rejects Node 22/23 to match the Node ≥24 requirement. (#1139)
 
 ### Security
 
-- **Self-approval hole closed** — redefining `elevated` as a *live* principal turn (#1126) means a woken/scheduled task carrying principal *lineage* can no longer approve, deny, or dismiss its own pending action, change autonomy, alter a contact's tier/role/permissions, or mint a secret-capture link — exercising CEO authority now requires the CEO acting in the moment, with zero per-skill exceptions. The over-broad `system`-origination allowance (commit `3bd3d224`) that the gate carried is also removed; the read it existed for (`list-pending-actions`) is now gated on `allowed_callers` instead. The live signal is a distinct `agent.task` field the dispatcher *computes* (never copies from inbound input) and forwards only across synchronous delegation, so it cannot be forged from a message and cannot reach a persisted/wakeable row. Defence in depth: the dispatcher also scrubs any inbound `liveTurn` from the metadata bag, and the elevated gate rejects any task carrying `wakeContext` outright — so a wake fails the gate even if the flag ever leaked onto it. (#1126)
-- **Setup wizard email ReDoS** — added a 254-char length cap before `EMAIL_RE.test()` in the principal profile route, preventing quadratic backtracking on crafted inputs (CodeQL #185).
-- **`web-browser` skill** — closed the CDP `Runtime.enable` protocol leak that the old stealth plugin left exposed, by moving to Patchright. (#1053)
+- **Self-approval hole closed** — because `elevated` is now a *live* principal turn (#1126), a woken or scheduled task carrying CEO lineage can no longer approve/deny/dismiss its own pending action, change autonomy, alter a contact's tier/role/permissions, or mint a secret-capture link. The over-broad `system`-origination allowance was removed; `list-pending-actions` is gated on `allowed_callers` instead. The live signal is dispatcher-computed (never copied from inbound), scrubbed from inbound metadata, and any task carrying `wakeContext` is rejected outright. (#1126)
+- **Setup-wizard email ReDoS** — a 254-char cap before the email regex prevents quadratic backtracking on crafted input (CodeQL #185).
+- **`web-browser`** — moving to Patchright closes the CDP `Runtime.enable` protocol leak the old stealth plugin exposed. (#1053)
 
 ## [0.37.0] — 2026-06-22 — "Jane"
 
