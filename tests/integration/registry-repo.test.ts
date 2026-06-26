@@ -33,6 +33,29 @@ describeIf('RegistryRepo (skill_registry)', () => {
     expect(second.installedBy).toBe(first.installedBy); // unchanged
   });
 
+  it('installAndEnable inserts an enabled row in one statement', async () => {
+    const row = await repo.installAndEnable('alpha', 'reconciliation');
+    expect(row?.enabled).toBe(true);
+    expect(row?.installedBy).toBe('reconciliation');
+    expect(row?.enabledBy).toBe('reconciliation');
+    expect(row?.enabledAt).not.toBeNull();
+  });
+
+  it('installAndEnable leaves a pre-existing row untouched (disabled)', async () => {
+    const before = await repo.install('alpha', 'admin');
+    const result = await repo.installAndEnable('alpha', 'reconciliation');
+    expect(result).toBeNull();
+    expect(await repo.getRow('alpha')).toEqual(before);
+  });
+
+  it('installAndEnable leaves a pre-existing row untouched (enabled)', async () => {
+    await repo.install('alpha', 'admin');
+    const before = await repo.enable('alpha', 'admin');
+    const result = await repo.installAndEnable('alpha', 'reconciliation');
+    expect(result).toBeNull();
+    expect(await repo.getRow('alpha')).toEqual(before);
+  });
+
   it('enable sets enabled + enabled_at/by', async () => {
     await repo.install('alpha', 'tester');
     const row = await repo.enable('alpha', 'enabler');

@@ -42,6 +42,7 @@ const SQL: Record<RegistryTable, {
   list: string;
   get: string;
   install: string;
+  installAndEnable: string;
   enable: string;
   disable: string;
   uninstall: string;
@@ -53,6 +54,10 @@ const SQL: Record<RegistryTable, {
               VALUES ($1, false, $2)
               ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
               RETURNING ${COLS}`,
+    installAndEnable: `INSERT INTO skill_registry (name, enabled, installed_by, enabled_at, enabled_by)
+                       VALUES ($1, true, $2, now(), $2)
+                       ON CONFLICT (name) DO NOTHING
+                       RETURNING ${COLS}`,
     enable: `UPDATE skill_registry
                SET enabled = true, enabled_at = now(), enabled_by = $2, updated_at = now()
              WHERE name = $1
@@ -70,6 +75,10 @@ const SQL: Record<RegistryTable, {
               VALUES ($1, false, $2)
               ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
               RETURNING ${COLS}`,
+    installAndEnable: `INSERT INTO agent_registry (name, enabled, installed_by, enabled_at, enabled_by)
+                       VALUES ($1, true, $2, now(), $2)
+                       ON CONFLICT (name) DO NOTHING
+                       RETURNING ${COLS}`,
     enable: `UPDATE agent_registry
                SET enabled = true, enabled_at = now(), enabled_by = $2, updated_at = now()
              WHERE name = $1
@@ -109,6 +118,12 @@ export class RegistryRepo implements IRegistryRepo {
     // (name = EXCLUDED.name) to trigger RETURNING without modifying any columns.
     const { rows } = await this.pool.query<DbRegistryRow>(this.sql.install, [name, actor]);
     return mapRow(rows[0]!);
+  }
+
+  async installAndEnable(name: string, actor: string): Promise<RegistryRow | null> {
+    const { rows } = await this.pool.query<DbRegistryRow>(this.sql.installAndEnable, [name, actor]);
+    const row = rows[0];
+    return row ? mapRow(row) : null;
   }
 
   async enable(name: string, actor: string): Promise<RegistryRow> {

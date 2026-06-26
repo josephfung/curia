@@ -22,6 +22,14 @@ class FakeRepo implements IRegistryRepo {
     };
     this.rows.set(name, row); return row;
   }
+  async installAndEnable(name: string, actor: string) {
+    if (this.rows.has(name)) return null;
+    const row: RegistryRow = {
+      name, enabled: true, installedAt: 't0', installedBy: actor,
+      enabledAt: 't0', enabledBy: actor, updatedAt: 't0',
+    };
+    this.rows.set(name, row); return row;
+  }
   async enable(name: string, actor: string) {
     const row = this.rows.get(name);
     if (!row) throw new Error(`no row ${name}`);

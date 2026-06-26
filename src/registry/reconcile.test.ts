@@ -12,6 +12,11 @@ class FakeRepo implements IRegistryRepo {
     const row: RegistryRow = { name, enabled: false, installedAt: 't0', installedBy: actor, enabledAt: null, enabledBy: null, updatedAt: 't0' };
     this.rows.set(name, row); return row;
   }
+  async installAndEnable(name: string, actor: string) {
+    if (this.rows.has(name)) return null;
+    const row: RegistryRow = { name, enabled: true, installedAt: 't0', installedBy: actor, enabledAt: 't0', enabledBy: actor, updatedAt: 't0' };
+    this.rows.set(name, row); return row;
+  }
   async enable(name: string, actor: string) {
     const r = this.rows.get(name)!; const n = { ...r, enabled: true, enabledAt: 't1', enabledBy: actor, updatedAt: 't1' };
     this.rows.set(name, n); return n;
@@ -61,6 +66,14 @@ describe('reconcileRegistries', () => {
     await skillRepo.install('core-skill', 'web-app'); // row exists, enabled=false
     await run({ skills: ['core-skill'], agents: [] }, { skills: ['core-skill'], agents: [] });
     expect((await skillRepo.getRow('core-skill'))?.enabled).toBe(false);
+  });
+
+  it('respects an admin-enabled core item (row present, enabled)', async () => {
+    await skillRepo.install('core-skill', 'web-app');
+    await skillRepo.enable('core-skill', 'web-app');
+    const before = await skillRepo.getRow('core-skill');
+    await run({ skills: ['core-skill'], agents: [] }, { skills: ['core-skill'], agents: [] });
+    expect(await skillRepo.getRow('core-skill')).toEqual(before);
   });
 
   it('warns (no throw) when a core default is not on disk', async () => {
