@@ -12,6 +12,10 @@
 // Stored as a string 'true' because Nylas metadata values must be strings.
 export const CURIA_HOLD_KEY = 'curia-hold';
 
+const HOLD_TITLE_PREFIX_RE = /^hold\s*\(tbc\)\s*:\s*/i;
+const REPLY_PREFIX_RE = /^(re|fw|fwd)\s*:\s*/i;
+const METADATA_VALUE_MAX = 1024;
+
 // ---------------------------------------------------------------------------
 // buildHoldMetadata
 // ---------------------------------------------------------------------------
@@ -31,6 +35,10 @@ export const CURIA_HOLD_KEY = 'curia-hold';
  */
 export function buildHoldMetadata(opts: {
   sourceRef?: string;
+  threadRef?: string;
+  subject?: string;
+  contactId?: string;
+  contactDomain?: string;
   createdAtIso: string;
 }): Record<string, string> {
   const base: Record<string, string> = {
@@ -39,7 +47,20 @@ export function buildHoldMetadata(opts: {
   };
   // Only include source-ref when provided -- keeps the metadata map minimal
   if (opts.sourceRef) {
-    base['source-ref'] = opts.sourceRef;
+    base['source-ref'] = sanitizeMetadataValue(opts.sourceRef);
+  }
+  if (opts.threadRef) {
+    base['thread-ref'] = sanitizeMetadataValue(opts.threadRef);
+  }
+  if (opts.subject) {
+    base.subject = sanitizeMetadataValue(opts.subject);
+  }
+  if (opts.contactId) {
+    base['contact-id'] = sanitizeMetadataValue(opts.contactId);
+  }
+  const contactDomain = normalizeContactDomain(opts.contactDomain);
+  if (contactDomain) {
+    base['contact-domain'] = contactDomain;
   }
   return base;
 }
@@ -60,6 +81,130 @@ export function buildHoldMetadata(opts: {
 export function isHoldEvent(e: { metadata?: Record<string, string> | null }): boolean {
   // Use optional chaining so null/undefined metadata both fall through to false.
   return e.metadata?.[CURIA_HOLD_KEY] === 'true';
+}
+
+export interface HoldMatchCriteria {
+  subject?: string;
+  contactDomain?: string;
+  contactId?: string;
+  sourceRef?: string;
+  threadRef?: string;
+  startTime?: number;
+  endTime?: number;
+}
+
+export interface HoldMatchResult<T> {
+  hold: T;
+  score: number;
+  reasons: string[];
+}
+
+export interface HoldLike {
+  title?: string;
+  startTime: number | null;
+  endTime: number | null;
+  metadata?: Record<string, string> | null;
+}
+
+export function normalizeContactDomain(value?: string): string | null {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) return null;
+  const domain = trimmed.includes('@') ? trimmed.split('@').pop() : trimmed;
+  if (!domain) return null;
+  const normalized = domain.replace(/^mailto:/, '').replace(/^[\s.]+|[\s.]+$/g, '');
+  return normalized.includes('.') ? normalized : null;
+}
+
+export function normalizeSchedulingSubject(subject?: string): string {
+  let normalized = subject?.trim().toLowerCase() ?? '';
+  while (REPLY_PREFIX_RE.test(normalized)) {
+    normalized = normalized.replace(REPLY_PREFIX_RE, '');
+  }
+  normalized = normalized.replace(HOLD_TITLE_PREFIX_RE, '');
+  return normalized
+    .normalize('NFKD')
+    .replace(/[^\p{Letter}\p{Number}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function matchHoldCandidate<T extends HoldLike>(
+  hold: T,
+  criteria: HoldMatchCriteria,
+): HoldMatchResult<T> | null {
+  if (!isHoldEvent(hold)) return null;
+
+  const reasons: string[] = [];
+  let score = 0;
+
+  const exactSourceRef = metadataEquals(hold, 'source-ref', criteria.sourceRef);
+  const exactThreadRef = metadataEquals(hold, 'thread-ref', criteria.threadRef);
+  if (exactSourceRef) {
+    score += 100;
+    reasons.push('source-ref');
+  }
+  if (exactThreadRef) {
+    score += 70;
+    reasons.push('thread-ref');
+  }
+
+  const requestedDomain = normalizeContactDomain(criteria.contactDomain);
+  const holdDomain = normalizeContactDomain(hold.metadata?.['contact-domain']);
+  if (requestedDomain && holdDomain) {
+    if (requestedDomain === holdDomain) {
+      score += 45;
+      reasons.push('contact-domain');
+    } else if (!exactSourceRef && !exactThreadRef) {
+      return null;
+    }
+  }
+
+  if (criteria.contactId && hold.metadata?.['contact-id'] === criteria.contactId) {
+    score += 40;
+    reasons.push('contact-id');
+  }
+
+  const requestedSubject = normalizeSchedulingSubject(criteria.subject);
+  const holdSubject = normalizeSchedulingSubject(hold.metadata?.subject ?? hold.title);
+  if (requestedSubject && holdSubject) {
+    if (requestedSubject === holdSubject) {
+      score += 45;
+      reasons.push('subject-exact');
+    } else if (requestedSubject.includes(holdSubject) || holdSubject.includes(requestedSubject)) {
+      score += 38;
+      reasons.push('subject-contained');
+    } else {
+      const similarity = tokenSimilarity(requestedSubject, holdSubject);
+      if (similarity >= 0.5) {
+        score += Math.round(similarity * 35);
+        reasons.push(`subject-similar:${similarity.toFixed(2)}`);
+      }
+    }
+  }
+
+  if (
+    typeof criteria.startTime === 'number' &&
+    typeof criteria.endTime === 'number' &&
+    hold.startTime !== null &&
+    hold.endTime !== null &&
+    eventsOverlap(criteria.startTime, criteria.endTime, hold.startTime, hold.endTime)
+  ) {
+    score += 20;
+    reasons.push('time-overlap');
+  }
+
+  return score > 0 ? { hold, score, reasons } : null;
+}
+
+export function findMatchingHolds<T extends HoldLike>(
+  events: T[],
+  criteria: HoldMatchCriteria,
+  minScore = 75,
+): Array<HoldMatchResult<T>> {
+  return events
+    .map((event) => matchHoldCandidate(event, criteria))
+    .filter((match): match is HoldMatchResult<T> => match !== null && match.score >= minScore)
+    .sort((a, b) => b.score - a.score);
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +236,26 @@ export function eventsOverlap(
   // Standard open-interval overlap test.
   // Equivalent to: NOT (A ends before B starts OR B ends before A starts).
   return aStart < bEnd && aEnd > bStart;
+}
+
+function metadataEquals(e: { metadata?: Record<string, string> | null }, key: string, value?: string): boolean {
+  return Boolean(value && e.metadata?.[key] === value);
+}
+
+function sanitizeMetadataValue(value: string): string {
+  return value.trim().slice(0, METADATA_VALUE_MAX);
+}
+
+function tokenSimilarity(left: string, right: string): number {
+  const leftTokens = new Set(left.split(' ').filter(Boolean));
+  const rightTokens = new Set(right.split(' ').filter(Boolean));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  let intersection = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) intersection++;
+  }
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return union === 0 ? 0 : intersection / union;
 }
 
 // ---------------------------------------------------------------------------

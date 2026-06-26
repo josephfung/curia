@@ -96,3 +96,45 @@ describe('NylasCalendarClient — metadata/status/busy plumbing', () => {
     expect(body).not.toHaveProperty('busy');
   });
 });
+
+describe('NylasCalendarClient — RSVP plumbing', () => {
+  it('sends RSVP status through the Nylas sendRsvp endpoint', async () => {
+    const sendRsvp = vi.fn().mockResolvedValue({
+      requestId: 'req_123',
+    });
+    const client = makeClientWith({ events: { sendRsvp } as unknown as NylasCalendarLike['events'] });
+
+    const result = await client.sendRsvp('cal_1', 'evt_1', 'yes');
+
+    expect(sendRsvp).toHaveBeenCalledWith({
+      identifier: 'grant_test',
+      eventId: 'evt_1',
+      queryParams: { calendar_id: 'cal_1' },
+      requestBody: { status: 'yes' },
+    });
+    expect(result).toEqual({ requestId: 'req_123', sendIcsError: null });
+  });
+
+  it('fetches and normalizes one event by id', async () => {
+    const find = vi.fn().mockResolvedValue({
+      data: {
+        id: 'evt_1',
+        title: 'Invite',
+        participants: [{ email: 'principal@example.test', status: 'yes' }],
+        when: { startTime: 1_780_000_000, endTime: 1_780_003_600 },
+        calendarId: 'cal_1',
+      },
+    });
+    const client = makeClientWith({ events: { find } as unknown as NylasCalendarLike['events'] });
+
+    const event = await client.getEvent('cal_1', 'evt_1');
+
+    expect(find).toHaveBeenCalledWith({
+      identifier: 'grant_test',
+      eventId: 'evt_1',
+      queryParams: { calendar_id: 'cal_1' },
+    });
+    expect(event.id).toBe('evt_1');
+    expect(event.participants[0]!.status).toBe('yes');
+  });
+});

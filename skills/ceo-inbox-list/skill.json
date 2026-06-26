@@ -10,7 +10,7 @@
     "unread_only": "boolean? (if true, only return unread messages, default true; ignored for DRAFTS)"
   },
   "outputs": {
-    "messages": "array of { id, threadId, from, to, cc, subject, date, snippet, unread, folders, attachments: [{ id, filename, contentType, size }] } (for non-draft folders)",
+    "messages": "array of { id, threadId, from, to, cc, subject, date, snippet, unread, folders, attachments: [{ id, filename, contentType, size, isCalendarInvite? }] } (for non-draft folders)",
     "drafts": "array of { id, threadId, subject, to, cc, snippet, date } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
     "count": "number of items returned",
     "has_more": "boolean — true when more unread messages remain beyond this batch (lets the caller drain the inbox in batches); absent for DRAFTS"

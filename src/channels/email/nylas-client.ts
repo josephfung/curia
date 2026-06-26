@@ -134,6 +134,8 @@ export interface EmailAttachment {
   contentType: string;
   /** Size in bytes. */
   size: number;
+  /** True when the attachment is a calendar invite payload (ICS / text/calendar). */
+  isCalendarInvite?: boolean;
 }
 
 /**
@@ -580,6 +582,7 @@ export class NylasClient {
             filename: a.filename ?? 'unnamed',
             contentType: a.contentType ?? 'application/octet-stream',
             size: a.size ?? 0,
+            ...(isCalendarInviteAttachment(a.filename, a.contentType) ? { isCalendarInvite: true } : {}),
           }));
         if (allAttachments.length > attachments.length) {
           this.log.debug(
@@ -611,4 +614,13 @@ export class NylasClient {
       throw err;
     }
   }
+}
+
+function isCalendarInviteAttachment(filename: string | undefined, contentType: string | undefined): boolean {
+  const lowerType = (contentType?.split(';', 1)[0] ?? '').trim().toLowerCase();
+  const lowerName = filename?.toLowerCase() ?? '';
+  return lowerType === 'text/calendar' ||
+    lowerType === 'application/ics' ||
+    lowerType === 'text/x-vcalendar' ||
+    lowerName.endsWith('.ics');
 }

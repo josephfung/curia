@@ -6,6 +6,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
+import { eventsOverlap, findMatchingHolds, type HoldMatchCriteria } from '../../src/channels/calendar/holds.js';
 
 export class CalendarCheckConflictsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -13,10 +14,11 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
 
-    const { calendarIds, proposedStart, proposedEnd } = ctx.input as {
+    const { calendarIds, proposedStart, proposedEnd, ignoreHoldCriteria } = ctx.input as {
       calendarIds?: string[];
       proposedStart?: string;
       proposedEnd?: string;
+      ignoreHoldCriteria?: HoldMatchCriteria;
     };
 
     if (!calendarIds || !Array.isArray(calendarIds) || calendarIds.length === 0) {
@@ -34,6 +36,32 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
 
       const proposedStartTs = Math.floor(new Date(proposedStart).getTime() / 1000);
       const proposedEndTs = Math.floor(new Date(proposedEnd).getTime() / 1000);
+      const ignoredHoldWindowsByCalendar = new Map<string, Array<{ startTime: number; endTime: number }>>();
+      if (ignoreHoldCriteria && hasHoldMatchSignal(ignoreHoldCriteria)) {
+        for (const calendarId of calendarIds) {
+          try {
+            const events = await ctx.nylasCalendarClient.listEvents(calendarId, proposedStart, proposedEnd);
+            const matches = findMatchingHolds(events, {
+              ...ignoreHoldCriteria,
+              startTime: proposedStartTs,
+              endTime: proposedEndTs,
+            });
+            if (matches.length > 0) {
+              ignoredHoldWindowsByCalendar.set(
+                calendarId,
+                matches
+                  .filter((match) => match.hold.startTime !== null && match.hold.endTime !== null)
+                  .map((match) => ({
+                    startTime: match.hold.startTime!,
+                    endTime: match.hold.endTime!,
+                  })),
+              );
+            }
+          } catch (err) {
+            ctx.log.warn({ err, calendarId }, 'calendar-check-conflicts: failed to inspect holds for ignore criteria');
+          }
+        }
+      }
 
       const tz = ctx.timezone;
 
@@ -45,7 +73,9 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         status: string;
       }> = [];
 
-      for (const result of freeBusyResults) {
+      for (let resultIndex = 0; resultIndex < freeBusyResults.length; resultIndex++) {
+        const result = freeBusyResults[resultIndex]!;
+        const queriedCalendarId = calendarIds[resultIndex] ?? result.email;
         // Resolve contact name once per calendar result, not once per busy slot — avoids N+1 DB calls.
         let contactName: string | null = null;
         if (ctx.contactService) {
@@ -59,6 +89,15 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
         for (const slot of result.timeSlots) {
           // Free events do not conflict; only non-free (busy/tentative) slots are conflicts. See #1137.
           if (slot.status === 'free') continue;
+          const ignoredHoldWindows =
+            ignoredHoldWindowsByCalendar.get(result.email) ??
+            ignoredHoldWindowsByCalendar.get(queriedCalendarId);
+          if (ignoredHoldWindows && ignoredHoldWindows.length > 0) {
+            const overlapsIgnoredHold = ignoredHoldWindows.some((event) =>
+              eventsOverlap(slot.startTime, slot.endTime, event.startTime, event.endTime),
+            );
+            if (overlapsIgnoredHold) continue;
+          }
           // Check overlap: busy slot overlaps the proposed range
           if (slot.startTime < proposedEndTs && slot.endTime > proposedStartTs) {
             const startTime = toLocalIso(slot.startTime, tz);
@@ -82,4 +121,8 @@ export class CalendarCheckConflictsHandler implements SkillHandler {
       return { success: false, error: `Failed to check conflicts: ${message}` };
     }
   }
+}
+
+function hasHoldMatchSignal(criteria: HoldMatchCriteria): boolean {
+  return Boolean(criteria.subject || criteria.contactDomain || criteria.contactId || criteria.sourceRef || criteria.threadRef);
 }

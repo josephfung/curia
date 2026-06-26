@@ -1,7 +1,7 @@
 {
   "name": "calendar-create-hold",
-  "description": "Place a tentative HOLD (TBC) on a calendar slot while an offer is outstanding, so the same time is not re-offered to another contact. The hold is a busy/tentative Nylas event with no attendees (no invitations sent), tagged with curia-hold metadata; it auto-releases when a real event books over it and expires via the holds sweep. Honours the calendar_holds toggle (default on) -- returns held:false when disabled. Returns a timezone-labelled display string for the slot.",
-  "version": "0.1.0",
+  "description": "Place a tentative HOLD (TBC) on a calendar slot while an offer is outstanding, so the same time is not re-offered to another contact. The hold is a busy/tentative Nylas event with no attendees (no invitations sent), tagged with curia-hold metadata including optional subject/domain/thread context for later invite matching; it auto-releases when a real event books over it and expires via the holds sweep. Honours the calendar_holds toggle (default on) -- returns held:false when disabled. Returns a timezone-labelled display string for the slot.",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
@@ -9,7 +9,10 @@
     "start": "timestamp (hold start)",
     "end": "timestamp (hold end)",
     "subject": "string? (the meeting subject, used in the hold title and for human readability)",
-    "sourceRef": "string? (originating message id / task ref, stored in metadata for traceability)"
+    "sourceRef": "string? (originating message id / task ref, stored in metadata for traceability)",
+    "threadRef": "string? (scheduling thread id or conversation id, stored in metadata for fuzzy release)",
+    "contactId": "string? (contact id for the scheduling counterpart, stored in metadata for matching)",
+    "contactDomain": "string? (email/domain for the scheduling counterpart's organization, stored normalized for matching assistant/tool-sent invites)"
   },
   "outputs": {
     "holdEventId": "string|null (Nylas event id of the placed hold, or null when not held)",

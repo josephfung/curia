@@ -1520,6 +1520,40 @@ describe('approval trigger on gate block', () => {
     expect(trigger.request).toHaveBeenCalledOnce();
   });
 
+  it('calendar-respond-to-invite is medium-risk and routes to pending approval below score 70', async () => {
+    const registry = new SkillRegistry();
+    const handler = makeHandler('should not run');
+    registry.register(makeRiskyManifest('calendar-respond-to-invite', 'medium'), handler);
+
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'rsvp-1', notificationSent: true });
+    const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(69),
+      bus: mockBus,
+      approvalTrigger: trigger,
+    });
+
+    const input = { calendarId: 'cal_1', eventId: 'evt_1', response: 'accept' };
+    const result = await layer.invoke('calendar-respond-to-invite', input, undefined, {
+      taskEventId: 'task-1',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('rsvp-1');
+      expect(result.error).toContain('approval request has been sent');
+    }
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect(trigger.request).toHaveBeenCalledWith(expect.objectContaining({
+      skillName: 'calendar-respond-to-invite',
+      actionRisk: 'medium',
+      input,
+      currentScore: 69,
+      requiredScore: 70,
+    }));
+  });
+
   it('Gate A calls trigger and enriches error with shortRef', async () => {
     const registry = new SkillRegistry();
     registry.register(makeRiskyManifest('store-fact', 'low'), makeHandler('no'));

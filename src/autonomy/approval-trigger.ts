@@ -46,6 +46,7 @@ const VERB_RULES: Array<{ test: (name: string) => boolean; verb: string }> = [
   { test: (n) => n === 'calendar-create-event', verb: 'Create calendar event' },
   { test: (n) => n === 'calendar-update-event', verb: 'Update calendar event' },
   { test: (n) => n === 'calendar-delete-event', verb: 'Delete calendar event' },
+  { test: (n) => n === 'calendar-respond-to-invite', verb: 'Respond to calendar invite' },
   { test: (n) => n === 'email-reply', verb: 'Send email reply' },
   { test: (n) => n === 'email-draft-save', verb: 'Save email draft' },
   { test: (n) => n === 'store-fact', verb: 'Store fact' },

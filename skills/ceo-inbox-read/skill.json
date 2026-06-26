@@ -20,7 +20,7 @@
     "body_html": "string (HTML body)",
     "date": "number (unix timestamp)",
     "labels": "array of strings (messages only)",
-    "attachments": "array of { id, filename, contentType, size } (messages only; non-inline file attachments; pass id + message id to ceo-inbox-download-attachment)",
+    "attachments": "array of { id, filename, contentType, size, isCalendarInvite? } (messages only; non-inline file attachments; pass id + message id to ceo-inbox-download-attachment; isCalendarInvite=true for ICS/text-calendar parts)",
     "is_draft": "boolean (true when a draft was read; absent for messages)"
   },
   "permissions": [],

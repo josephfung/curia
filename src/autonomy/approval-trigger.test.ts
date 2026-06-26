@@ -30,6 +30,12 @@ describe('buildDescription', () => {
     expect(desc).toContain('Lunch with Dana');
   });
 
+  it('formats calendar-respond-to-invite as an RSVP action', () => {
+    const desc = buildDescription('calendar-respond-to-invite', { subject: 'Board sync' });
+    expect(desc).toContain('Respond to calendar invite');
+    expect(desc).toContain('Board sync');
+  });
+
   it('formats email-reply with to and subject', () => {
     const desc = buildDescription('email-reply', { to: 'dana@example.com', subject: 'Re: Budget' });
     expect(desc).toContain('Send email reply');
