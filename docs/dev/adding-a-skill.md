@@ -86,12 +86,12 @@ Controls the elevated-skill gate in the execution layer:
 
 | Value | Meaning |
 |---|---|
-| `"normal"` | Runs for any caller; no approval gate. |
-| `"elevated"` | Fail-closed: only executes when the caller has `role: 'ceo'` or `channel: 'cli'`. All other callers are rejected with an authorization error. |
+| `"normal"` | No elevated gate. Governed by the autonomy engine via `action_risk` (and `allowed_callers` where set). |
+| `"elevated"` | Requires a **live principal turn** — the current turn must have originated from a fresh principal (CEO) inbound. System, agent, scheduled, and woken/inherited principal *lineage* contexts are all rejected. |
 
-Use `"elevated"` for skills with serious external effects: sending emails, making external API calls that could have irreversible consequences, or exposing sensitive data. Use `"normal"` for anything else.
+`"elevated"` is the **CEO-authority primitive** gate (redefined in #1126). The signal is a distinct `liveTurn` field on the `agent.task` payload — *not* a metadata-bag key, so it can never be swept onto a persisted/wakeable row. The dispatcher stamps it only on principal inbounds, and the `delegate` skill forwards it across a **synchronous** delegation, so "the CEO is live" spans the whole synchronous call tree (a specialist acting inside the CEO's turn qualifies) but a wake or scheduler fire never does. Enforcement lives solely at the execution-layer gate (`isLivePrincipalTurn`); elevated handlers carry no duplicate origination re-check.
 
-The elevated check is per-call, not per-agent-pair — there is no stored approval table. Every invocation of an elevated skill is checked against the caller context on the fly.
+Reserve `"elevated"` for skills that exercise CEO authority itself: the approval queue and autonomy controls (`approve`/`deny`/`dismiss-action`, `set-autonomy`), the grant-recommendation decisions, the authorization-altering contact skills (`contact-set-tier`/`contact-set-role`/`contact-grant-permission`/`contact-revoke-permission`), and `system-secret-capture-request`. **Do not** use `"elevated"` for consequential *mutations* that aren't authority primitives — sending email, calendar writes, and the like are `"normal"` + an appropriate `action_risk`, governed by the autonomy engine and the ADR-018 surface-and-confirm flow. See [03-skills-and-execution.md](../specs/03-skills-and-execution.md) and ADR-017.
 
 #### `action_risk` (required)
 
@@ -110,6 +110,15 @@ A raw integer (0–100) may be used for precision when the named levels are too 
 **Status:** `action_risk` is validated at load time and enforced at runtime. Skills whose action_risk exceeds the current autonomy score are blocked with an advisory failure.
 
 **How gating works:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an `autonomy.skill_blocked` audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
+
+#### Woken and derived tasks: the bypass ladder
+
+A skill can be invoked not only from a live turn but from a **woken** task (a scheduled job, a `wake_at` self-deferral, a heartbeat) or a **derived** child task. These carry a persisted `TaskOriginator` *lineage* — who or what ultimately caused them — but lineage is not the same as live presence:
+
+- The **elevated gate** ignores lineage entirely: only a live principal turn passes it (above). A woken task with CEO lineage can never invoke an elevated skill.
+- For `"normal"` + `action_risk` skills, autonomy's **principal-bypass** uses lineage, but only through a score-keyed *bypass ladder* that can downgrade inherited standing, never grant it. A woken/derived task's effective standing is floored to `agent` (propose-only) unless its live autonomy score clears the configured threshold (`autonomy.bypass_ladder`). A task whose score is momentarily unreadable fails **closed** on non-read actions.
+
+Don't design a skill assuming a woken task inherits the CEO's authority. If a skill must act on the CEO's behalf without a live turn, it goes through the normal autonomy + approval path. See [14-autonomy-engine.md](../specs/14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks) and `docs/wip/2026-06-22-woken-task-authorization-design.md`.
 
 #### `allowed_callers` (optional)
 
@@ -370,7 +379,8 @@ interface SkillContext {
 
   // --- Universal fields (available to all skills) ---
 
-  /** Caller identity (role, channel). Guaranteed non-null for elevated skills. */
+  /** Caller identity (role, channel) for audit/context — NOT the elevated-gate
+   *  signal (that is the dispatcher-computed `liveTurn` flag; see `sensitivity`). */
   caller?: CallerContext;
 
   /** Agent persona (display name, title, email signature) from coordinator config */
@@ -555,7 +565,7 @@ See [Adding an Agent — Using config-store](adding-an-agent.md#using-config-sto
 ## Checklist Before Opening a PR
 
 - [ ] `action_risk` is declared in `skill.json`
-- [ ] `sensitivity` matches whether the skill has external effects (remember: `"elevated"` = CEO-or-CLI-only gate)
+- [ ] `sensitivity` is `"elevated"` *only* if the skill is a CEO-authority primitive (requires a live principal turn); consequential mutations use `"normal"` + `action_risk` instead
 - [ ] `capabilities` declares only the privileged services actually used — omit if using only universal services
 - [ ] `allowed_callers` is set appropriately: for core skills, only for structural invariants (coordinator-only governance, system-only infrastructure); for custom/deploy skills, default to restricting to the intended agent(s)
 - [ ] All optional inputs are suffixed with `?` in the manifest
