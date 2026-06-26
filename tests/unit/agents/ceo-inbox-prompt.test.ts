@@ -131,6 +131,13 @@ describe('ceo-inbox Branch A prompt — memory-query contract', () => {
 });
 
 describe('ceo-inbox scheduling consult prompt — proposed-time protocol', () => {
+  it('CONSULT REQUEST bullpen.post sets participants to calendar', () => {
+    const prompt = loadCeoInboxPrompt();
+    const schedulingSection = extractSchedulingConsultSection(prompt);
+    expect(schedulingSection).toContain("participants: ['calendar']");
+    expect(schedulingSection).toContain('routing field');
+  });
+
   it('CONSULT REQUEST includes an optional Proposed block for sender-suggested times', () => {
     const prompt = loadCeoInboxPrompt();
     const schedulingSection = extractSchedulingConsultSection(prompt);
@@ -207,6 +214,8 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     expect(inviteEnd).toBeGreaterThan(inviteStart);
     const inviteSection = prompt.slice(inviteStart, inviteEnd);
 
+    expect(inviteSection).toContain("participants: ['calendar']");
+    expect(inviteSection).toContain('routing field');
     expect(inviteSection).toContain('Need: RSVP for formal calendar invite');
     expect(inviteSection).toContain('Standing: <accept|decline|tentative instruction text, or none>');
     expect(inviteSection).toContain('Do NOT archive');
@@ -290,6 +299,11 @@ describe('calendar consult prompt — proposed-time conflict checks', () => {
 });
 
 describe('calendar consult prompt — formal invite RSVP behavior', () => {
+  it('uses standard model tier for RSVP judgment', async () => {
+    const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
+    expect(config.model.tier).toBe('standard');
+  });
+
   it('links formal invite consults to Nylas calendar events when needed', () => {
     const prompt = loadCalendarPrompt();
     const consultSection = extractCalendarConsultSection(prompt);

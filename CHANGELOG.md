@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **Scheduling consult agents** — `ceo-inbox` CONSULT REQUEST steps now require `participants: ['calendar']` on `bullpen.post`; `calendar` bumped to `standard` tier for RSVP judgment. (#1197)
+
 ### Fixed
 
 - **Skill discovery** — `discoverSkillManifests` now warns at startup when a skill directory name diverges from `manifest.name`, surfacing registry/enrollment mismatches before they silently disable skills. (#938)
