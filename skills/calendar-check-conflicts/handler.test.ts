@@ -159,7 +159,71 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
     }
   });
 
-  it('ignores a matching Curia hold when ignoreHoldCriteria identifies the same scheduling conversation', async () => {
+  it('ignores a matching Curia hold when ignoreHoldCriteria uses subject and domain (fuzzy matcher)', async () => {
+    const handler = new CalendarCheckConflictsHandler();
+    const proposedStart = '2026-05-26T10:00:00Z';
+    const proposedEnd = '2026-05-26T11:00:00Z';
+    const proposedStartTs = Math.floor(new Date(proposedStart).getTime() / 1000);
+    const proposedEndTs = Math.floor(new Date(proposedEnd).getTime() / 1000);
+
+    const nylasCalendarClient = {
+      getFreeBusy: vi.fn().mockResolvedValue([
+        {
+          email: 'test@example.com',
+          timeSlots: [
+            {
+              startTime: proposedStartTs,
+              endTime: proposedEndTs,
+              status: 'tentative',
+            },
+          ],
+        },
+      ]),
+      listEvents: vi.fn().mockResolvedValue([
+        {
+          id: 'hold_1',
+          title: 'HOLD (TBC): Project Delta sync',
+          description: '',
+          location: '',
+          startTime: proposedStartTs,
+          endTime: proposedEndTs,
+          startDate: null,
+          endDate: null,
+          participants: [],
+          conferencing: null,
+          status: 'tentative',
+          calendarId: 'cal_primary',
+          busy: true,
+          metadata: buildHoldMetadata({
+            createdAtIso: '2026-05-20T00:00:00.000Z',
+            subject: 'Project Delta sync',
+            contactDomain: 'example.test',
+          }),
+        },
+      ]),
+    } as unknown as SkillContext['nylasCalendarClient'];
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        calendarIds: ['cal_primary'],
+        proposedStart,
+        proposedEnd,
+        ignoreHoldCriteria: {
+          subject: 'Quick Project Delta sync',
+          contactDomain: 'example.test',
+        },
+      },
+      nylasCalendarClient,
+    }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).clear).toBe(true);
+      expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).conflicts).toHaveLength(0);
+    }
+  });
+
+  it('ignores holds sharing the conversation ref when ignoreHoldCriteria includes source-ref or thread-ref', async () => {
     const handler = new CalendarCheckConflictsHandler();
     const proposedStart = '2026-05-26T10:00:00Z';
     const proposedEnd = '2026-05-26T11:00:00Z';
@@ -198,6 +262,8 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
             createdAtIso: '2026-05-20T00:00:00Z',
             subject: 'Project Delta sync',
             contactDomain: 'example.test',
+            sourceRef: 'msg-negotiation',
+            threadRef: 'thread-negotiation',
           }),
         },
       ]),
@@ -211,6 +277,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
         ignoreHoldCriteria: {
           subject: 'Quick Project Delta sync',
           contactDomain: 'example.test',
+          sourceRef: 'msg-negotiation',
         },
       },
       nylasCalendarClient,
@@ -218,6 +285,72 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
 
     expect(result.success).toBe(true);
     expect(nylasCalendarClient!.listEvents).toHaveBeenCalledWith('cal_primary', proposedStart, proposedEnd);
+    if (result.success) {
+      expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).clear).toBe(true);
+      expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).conflicts).toHaveLength(0);
+    }
+  });
+
+  it('ignores holds via time-anchor when invite refs miss but a hold overlaps the proposed slot', async () => {
+    const handler = new CalendarCheckConflictsHandler();
+    const proposedStart = '2026-05-26T10:00:00Z';
+    const proposedEnd = '2026-05-26T11:00:00Z';
+    const proposedStartTs = Math.floor(new Date(proposedStart).getTime() / 1000);
+    const proposedEndTs = Math.floor(new Date(proposedEnd).getTime() / 1000);
+
+    const nylasCalendarClient = {
+      getFreeBusy: vi.fn().mockResolvedValue([
+        {
+          email: 'test@example.com',
+          timeSlots: [
+            {
+              startTime: proposedStartTs,
+              endTime: proposedEndTs,
+              status: 'tentative',
+            },
+          ],
+        },
+      ]),
+      listEvents: vi.fn().mockResolvedValue([
+        {
+          id: 'hold_1',
+          title: 'HOLD (TBC): Project Delta sync',
+          description: '',
+          location: '',
+          startTime: proposedStartTs,
+          endTime: proposedEndTs,
+          startDate: null,
+          endDate: null,
+          participants: [],
+          conferencing: null,
+          status: 'tentative',
+          calendarId: 'cal_primary',
+          busy: true,
+          metadata: buildHoldMetadata({
+            createdAtIso: '2026-05-20T00:00:00Z',
+            subject: 'Project Delta sync',
+            contactDomain: 'example.test',
+            sourceRef: 'msg-negotiation',
+          }),
+        },
+      ]),
+    } as unknown as SkillContext['nylasCalendarClient'];
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        calendarIds: ['cal_primary'],
+        proposedStart,
+        proposedEnd,
+        ignoreHoldCriteria: {
+          subject: 'Quick Project Delta sync',
+          contactDomain: 'example.test',
+          threadRef: 'invite-thread-only',
+        },
+      },
+      nylasCalendarClient,
+    }));
+
+    expect(result.success).toBe(true);
     if (result.success) {
       expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).clear).toBe(true);
       expect((result.data as unknown as { conflicts: Array<unknown>; clear: boolean }).conflicts).toHaveLength(0);

@@ -106,6 +106,12 @@ export interface HoldLike {
   metadata?: Record<string, string> | null;
 }
 
+/** Conversation identity recovered from hold metadata or agent criteria. */
+export interface ConversationRef {
+  sourceRef?: string;
+  threadRef?: string;
+}
+
 export function normalizeContactDomain(value?: string): string | null {
   const trimmed = value?.trim().toLowerCase();
   if (!trimmed) return null;
@@ -194,6 +200,96 @@ export function matchHoldCandidate<T extends HoldLike>(
   }
 
   return score > 0 ? { hold, score, reasons } : null;
+}
+
+/**
+ * Return true when a hold shares the recovered conversation ref via an exact
+ * `source-ref` or `thread-ref` metadata match.
+ */
+export function holdSharesConversationRef(hold: HoldLike, ref: ConversationRef): boolean {
+  if (!isHoldEvent(hold)) return false;
+  if (ref.sourceRef && hold.metadata?.['source-ref'] === ref.sourceRef) return true;
+  if (ref.threadRef && hold.metadata?.['thread-ref'] === ref.threadRef) return true;
+  return false;
+}
+
+/**
+ * Read `source-ref` / `thread-ref` from a hold's metadata.
+ */
+export function extractConversationRef(hold: HoldLike): ConversationRef | null {
+  if (!isHoldEvent(hold)) return null;
+  const sourceRef = hold.metadata?.['source-ref'];
+  const threadRef = hold.metadata?.['thread-ref'];
+  if (!sourceRef && !threadRef) return null;
+  return { sourceRef, threadRef };
+}
+
+/**
+ * Recover the authoritative conversation ref for hold release.
+ *
+ * 1. Use `source-ref` / `thread-ref` from criteria when any hold shares them.
+ * 2. Otherwise anchor by time-overlap: find a hold overlapping the accepted slot
+ *    and read that hold's stored refs.
+ * 3. Return null when no ref can be recovered (no release).
+ */
+export function recoverConversationRef(
+  holds: HoldLike[],
+  criteria: HoldMatchCriteria,
+): ConversationRef | null {
+  const holdEvents = holds.filter(isHoldEvent);
+  const criteriaRef: ConversationRef = {
+    sourceRef: criteria.sourceRef,
+    threadRef: criteria.threadRef,
+  };
+
+  if (criteriaRef.sourceRef || criteriaRef.threadRef) {
+    const hasMatchingHold = holdEvents.some((hold) => holdSharesConversationRef(hold, criteriaRef));
+    if (hasMatchingHold) {
+      return criteriaRef;
+    }
+  }
+
+  if (
+    typeof criteria.startTime === 'number' &&
+    typeof criteria.endTime === 'number'
+  ) {
+    for (const hold of holdEvents) {
+      if (hold.startTime === null || hold.endTime === null) continue;
+      if (!eventsOverlap(criteria.startTime, criteria.endTime, hold.startTime, hold.endTime)) {
+        continue;
+      }
+      const anchoredRef = extractConversationRef(hold);
+      if (anchoredRef) return anchoredRef;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Return all holds belonging to the same scheduling conversation.
+ * Requires a recovered conversation ref — never matches on contact-domain or
+ * subject alone.
+ */
+export function findHoldsByConversationRef<T extends HoldLike>(
+  holds: T[],
+  ref: ConversationRef,
+): T[] {
+  return holds.filter((hold) => holdSharesConversationRef(hold, ref));
+}
+
+/**
+ * Find holds to release after accepting an invite. Recovers the conversation
+ * ref from criteria and/or time-overlap anchor, then returns all holds sharing
+ * that ref. Returns an empty array when no ref can be recovered.
+ */
+export function findHoldsForConversationRelease<T extends HoldLike>(
+  events: T[],
+  criteria: HoldMatchCriteria,
+): T[] {
+  const ref = recoverConversationRef(events, criteria);
+  if (!ref) return [];
+  return findHoldsByConversationRef(events, ref);
 }
 
 export function findMatchingHolds<T extends HoldLike>(
