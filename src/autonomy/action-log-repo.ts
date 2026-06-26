@@ -407,6 +407,20 @@ export class ActionLogRepo {
       pending: allPending,
     };
   }
+
+  /** Terminal autonomy rows in a half-open [since, until) window for activity recap enrichment. */
+  async findTerminalBetween(since: Date, until: Date, limit = 200): Promise<ActionLogRow[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE created_at >= $1
+         AND created_at < $2
+         AND outcome = ANY($3)
+       ORDER BY created_at ASC
+       LIMIT $4`,
+      [since, until, TERMINAL_OUTCOMES, limit],
+    );
+    return result.rows.map(mapRow);
+  }
 }
 
 /** Map a snake_case DB row to a camelCase ActionLogRow. */

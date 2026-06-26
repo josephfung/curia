@@ -25,6 +25,7 @@ import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
 import { EventBus } from './bus/bus.js';
 import { AuditLogger } from './audit/logger.js';
+import { AuditLogRepo } from './audit/audit-log-repo.js';
 import { AnthropicProvider } from './agents/llm/anthropic.js';
 import { OpenRouterProvider } from './agents/llm/openrouter.js';
 import { AgentRuntime } from './agents/runtime.js';
@@ -1199,6 +1200,7 @@ async function main(): Promise<void> {
   // later by ApprovalTriggerService and AutonomyScoringPass. Instantiated here so it
   // can be passed to the gateway at construction time.
   const actionLogRepo = new ActionLogRepo(pool, logger);
+  const auditLogRepo = new AuditLogRepo(pool, logger);
 
   // TaskRepo — used by task-create, task-list, task-update, task-complete skills.
   const taskRepo = new TaskRepo(pool, bus, logger, config.timezone);
@@ -1667,7 +1669,7 @@ async function main(): Promise<void> {
   // validated here (the JSON-schema startup check only covers default.yaml, not local overrides,
   // and cannot express the derived_child >= same_task invariant). Throws → boot fails loudly.
   const bypassLadder = resolveBypassLadder(yamlConfig.autonomy?.bypass_ladder);
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, auditLogRepo, taskRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
