@@ -138,7 +138,7 @@ services:
       NODE_ENV: ${NODE_ENV:-development}
     env_file: .env
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
 
 volumes:
@@ -151,28 +151,32 @@ volumes:
 
 ### Health Endpoint
 
-`GET /health` returns JSON:
+`GET /api/health` (unauthenticated, rate-limited to 60 req/min) returns a three-state status with per-check detail:
 
 ```json
 {
-  "status": "healthy",
-  "uptime_seconds": 86400,
-  "database": { "connected": true, "latency_ms": 2 },
-  "channels": {
-    "signal": "connected",
-    "email": "connected",
-    "cli": "disabled"
-  },
-  "scheduler": {
-    "active_jobs": 5,
-    "suspended_jobs": 0,
-    "next_due": "2026-03-25T09:00:00Z"
-  },
-  "last_audit_write": "2026-03-24T17:30:00Z"
+  "status": "ok",
+  "uptime_s": 3812,
+  "checks": {
+    "db": "ok",
+    "bus": "ok",
+    "signal": "ok",
+    "email": "ok",
+    "browser": "skipped",
+    "mcp": { "google_workspace": "ok" },
+    "scheduler": "ok"
+  }
 }
 ```
 
-Docker HEALTHCHECK uses this endpoint. Caddy can use it for upstream health.
+`status` is one of:
+- `ok` (HTTP 200) — all enabled checks pass.
+- `degraded` (HTTP 200) — a *non-critical* service is down (`signal`, `email`, `browser`, `mcp.*`, or `scheduler`). A dead Signal socket should not page as a full outage when email still works.
+- `down` (HTTP 503) — a *critical* service is unreachable (`db` or `bus`); Curia cannot function.
+
+A `skipped` check means its underlying service is not configured (e.g. Signal disabled) and never affects the overall status. Docker HEALTHCHECK and Caddy upstream health both use this endpoint.
+
+A daily credential **canary** job complements the endpoint: it validates each enabled LLM tier, credential, and external dependency, then pings configured heartbeat URLs on success (a missed ping pages the monitoring service). The LLM tier canaries read the most recent recorded call outcome rather than making a billed probe. See [../dev/health-monitoring.md](../dev/health-monitoring.md) for the full check list, status semantics, and uptime-monitor setup.
 
 ### Structured Logging
 
@@ -349,7 +353,8 @@ curia/
 | Layered YAML config — `default.yaml` / `local.yaml` / `production.yaml` with env var interpolation | Done |
 | `docker-compose.yml` — postgres (pgvector) + curia services with healthchecks | Done |
 | `Dockerfile` — multi-stage build, Node 24 (`node:24-slim`, digest-pinned), tsx at runtime; global npm install removed | Done |
-| `GET /health` endpoint — database, agents, skills, uptime | Done |
+| `GET /api/health` endpoint — three-state (`ok`/`degraded`/`down`) with per-check status for db, bus, channels, browser, MCP, and scheduler | Done |
+| Daily credential canary job — validates LLM tiers, credentials, and external deps; pings heartbeat URLs on success | Done |
 | Structured logging via pino — correct log levels, no `console.log` | Done |
 | No-`console.log` lint rule (ESLint `no-console: error`) | Done |
 | Graceful shutdown — SIGTERM/SIGINT handler with ordered cleanup sequence | Done |
