@@ -221,18 +221,12 @@ export class SchedulerService {
       insertParams.push(rawDuration);
     }
 
-    const { rows } = await this.pool.query(insertSql, insertParams);
-    const jobId = (rows[0] as { id: string }).id;
-
-    // If an intentAnchor is provided, create a linked task row and bind it to the job.
-    // The FK direction is scheduled_jobs.task_id → tasks.id, so we INSERT the task
-    // first and then UPDATE the job row with the new task's id.
-    //
-    // The CTE surfaces both the task id and the job id from the UPDATE so that a
-    // silent UPDATE failure (scheduled_jobs row disappeared in a race) is detectable —
-    // link_job with 0 matched rows returns job_id=null via the LEFT JOIN.
+    let jobId: string;
     let agentTaskId: string | undefined;
+
     if (intentAnchor) {
+      // Wrap scheduled_jobs INSERT + tasks link CTE in one transaction so a failure
+      // on the second step cannot leave an orphaned job row with drift detection disabled.
       const taskSql = `
         WITH new_task AS (
           INSERT INTO tasks (agent_id, title, intent_anchor, status, error_budget, source_agent_id)
@@ -256,23 +250,57 @@ export class SchedulerService {
         'active',
         JSON.stringify(errorBudget ?? {}),
         agentId,        // source_agent_id
-        jobId,
+        null as string | null, // placeholder — jobId substituted after INSERT
       ];
-      const taskResult = await this.pool.query(taskSql, taskParams);
-      const taskRow = taskResult.rows[0] as { task_id: string; job_id: string | null } | undefined;
-      if (!taskRow?.task_id) {
-        throw new Error(`createJob: INSERT into tasks returned no row for job ${jobId}`);
+
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        const { rows } = await client.query(insertSql, insertParams);
+        jobId = (rows[0] as { id: string }).id;
+        taskParams[6] = jobId;
+
+        const taskResult = await client.query(taskSql, taskParams);
+        const taskRow = taskResult.rows[0] as { task_id: string; job_id: string | null } | undefined;
+        if (!taskRow?.task_id) {
+          throw new Error(`createJob: INSERT into tasks returned no row for job ${jobId}`);
+        }
+        if (!taskRow.job_id) {
+          // The INSERT succeeded but the UPDATE found no scheduled_jobs row.
+          // This means a concurrent cancel removed the job between the INSERT above and this CTE.
+          this.logger.error(
+            { agentId, jobId, taskId: taskRow.task_id },
+            'createJob: task row created but scheduled_jobs.task_id link failed — orphaned task',
+          );
+          throw new Error(`createJob: scheduled_jobs row ${jobId} not found when linking task`);
+        }
+        agentTaskId = taskRow.task_id;
+
+        await client.query('COMMIT');
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackErr) {
+          this.logger.error(
+            { err: rollbackErr, agentId },
+            'createJob: ROLLBACK failed after transaction error — connection may be in bad state',
+          );
+        }
+        throw err;
+      } finally {
+        try {
+          client.release();
+        } catch (releaseErr) {
+          this.logger.error(
+            { err: releaseErr, agentId },
+            'createJob: pg client release failed — connection may leak from pool',
+          );
+        }
       }
-      if (!taskRow.job_id) {
-        // The INSERT succeeded but the UPDATE found no scheduled_jobs row.
-        // This means a concurrent cancel removed the job between the INSERT above and this CTE.
-        this.logger.error(
-          { agentId, jobId, taskId: taskRow.task_id },
-          'createJob: task row created but scheduled_jobs.task_id link failed — orphaned task',
-        );
-        throw new Error(`createJob: scheduled_jobs row ${jobId} not found when linking task`);
-      }
-      agentTaskId = taskRow.task_id;
+    } else {
+      const { rows } = await this.pool.query(insertSql, insertParams);
+      jobId = (rows[0] as { id: string }).id;
     }
 
     // Publish schedule.created event for audit trail.
@@ -602,78 +630,17 @@ export class SchedulerService {
       JSON.stringify(originator),
     ];
 
-    const { rows } = await this.pool.query(sql, params);
-    const resultRow = rows[0] as
-      | {
-          id: string;
-          prior_status?: string | null;
-          prior_failures?: number | null;
-          prior_error?: string | null;
-        }
-      | undefined;
-    // An INSERT ... ON CONFLICT DO UPDATE with no DO UPDATE WHERE always returns exactly
-    // one row (the inserted or the updated row), so an empty result means the statement or
-    // connection is fundamentally broken. Fail loudly rather than dereferencing undefined —
-    // loadDeclarativeJobs() catches this and logs it on the per-schedule error path.
-    if (!resultRow) {
-      throw new Error(
-        `upsertDeclarativeJob: upsert returned no row for ${sourceAgentId}/${agentId} (${schedule.cron})`,
-      );
-    }
-    const jobId = resultRow.id;
+    let jobId: string;
+    let upsertResultRow: {
+      id: string;
+      prior_status?: string | null;
+      prior_failures?: number | null;
+      prior_error?: string | null;
+    };
 
-    const revivedFromCancelled = resultRow.prior_status === 'cancelled';
-
-    // Reviving overrides a terminal 'cancelled' state, so surface it loudly — the
-    // symmetric cancellation path (cancelStaleDeclarativeJobs) logs per row, and a
-    // resurrection must be at least as visible. Include the failure bookkeeping the
-    // upsert just wiped so the prior context survives in the logs. warn (not info)
-    // because this silently undoes a deliberate cancelJob() if one was issued.
-    if (revivedFromCancelled) {
-      this.logger.warn(
-        {
-          jobId,
-          sourceAgentId,
-          agentId,
-          cron: schedule.cron,
-          priorConsecutiveFailures: resultRow.prior_failures ?? null,
-          priorLastError: resultRow.prior_error ?? null,
-        },
-        'Declarative job revived from cancelled — its YAML declaration still exists. ' +
-          'If this job was deliberately stopped, remove its schedule entry from the agent YAML instead of cancelling it.',
-      );
-
-      // cancelJob() cancels a job AND cascades 'cancelled' onto its linked task (see
-      // cancelJob above). Reviving only the job would leave an intent_anchor schedule
-      // pointing at a terminal 'cancelled' task, which the task-update guards
-      // (TERMINAL_STATUSES) then reject — an inconsistent, un-editable state. So when we
-      // revive, also reactivate the linked task. Scoped to status = 'cancelled' so a task
-      // left 'active' by the stale-cleanup path, or one legitimately 'done', is untouched.
-      // (No declarative schedule sets intent_anchor today, so this is a no-op in practice,
-      // but it keeps revival symmetric with cancelJob's cascade for when they do.)
-      await this.pool.query(
-        `UPDATE tasks
-            SET status = 'active', updated_at = now()
-           FROM scheduled_jobs sj
-          WHERE sj.id = $1
-            AND tasks.id = sj.task_id
-            AND tasks.status = 'cancelled'`,
-        [jobId],
-      );
-    }
-
-    // If intent_anchor is set, create a linked tasks row so the drift detector can
-    // fire for this job — same pattern as createJob(). The WHERE NOT EXISTS guard ensures
-    // this is a no-op on restart (preserving accumulated progress in the existing row).
-    //
-    // The CTE surfaces both outcomes via a SELECT at the end:
-    //   - rows = [] (empty): WHERE NOT EXISTS fired — existing task preserved (idempotent)
-    //   - rows = [{ task_id, job_id }]: new task created and job linked
-    //   - rows = [{ task_id, job_id: null }]: INSERT succeeded but link_job UPDATE returned
-    //     no rows — either the job was deleted concurrently, or a parallel startup already
-    //     set task_id (AND task_id IS NULL guard prevents overwriting). The cleanup_orphan
-    //     CTE deletes the just-inserted task so no orphan accumulates; treated as a hard error.
     if (schedule.intent_anchor) {
+      // Wrap scheduled_jobs UPSERT + tasks link CTE in one transaction so a failure
+      // on the link step cannot leave an orphaned job row with drift detection disabled.
       const taskSql = `
         WITH new_task AS (
           INSERT INTO tasks (agent_id, title, intent_anchor, status, error_budget, source_agent_id)
@@ -698,45 +665,132 @@ export class SchedulerService {
           FROM new_task
           LEFT JOIN link_job ON true
       `;
-      let taskResult: { rows: unknown[] };
+      const taskParams = [
+        agentId,
+        schedule.intent_anchor,   // title
+        schedule.intent_anchor,   // intent_anchor
+        'active',
+        JSON.stringify({}),
+        agentId,                  // source_agent_id
+        null as string | null,    // placeholder — jobId substituted after upsert
+      ];
+
+      const client = await this.pool.connect();
       try {
-        taskResult = await this.pool.query(taskSql, [
-          agentId,
-          schedule.intent_anchor,   // title
-          schedule.intent_anchor,   // intent_anchor
-          'active',
-          JSON.stringify({}),
-          agentId,                  // source_agent_id
-          jobId,
-        ]);
+        await client.query('BEGIN');
+
+        const { rows } = await client.query(sql, params);
+        const row = rows[0] as typeof upsertResultRow | undefined;
+        if (!row) {
+          throw new Error(
+            `upsertDeclarativeJob: upsert returned no row for ${sourceAgentId}/${agentId} (${schedule.cron})`,
+          );
+        }
+        upsertResultRow = row;
+        jobId = upsertResultRow.id;
+        taskParams[6] = jobId;
+
+        if (upsertResultRow.prior_status === 'cancelled') {
+          await client.query(
+            `UPDATE tasks
+                SET status = 'active', updated_at = now()
+               FROM scheduled_jobs sj
+              WHERE sj.id = $1
+                AND tasks.id = sj.task_id
+                AND tasks.status = 'cancelled'`,
+            [jobId],
+          );
+        }
+
+        const taskResult = await client.query(taskSql, taskParams);
+        const taskRow = taskResult.rows[0] as { task_id: string; job_id: string | null } | undefined;
+        if (taskRow && !taskRow.job_id) {
+          this.logger.error(
+            { agentId, jobId, intentAnchor: schedule.intent_anchor, taskId: taskRow.task_id },
+            'upsertDeclarativeJob: tasks row created but scheduled_jobs.task_id link failed — orphaned task',
+          );
+          throw new Error(`upsertDeclarativeJob: scheduled_jobs row ${jobId} not found when linking task`);
+        }
+
+        await client.query('COMMIT');
+
+        const anchorCreated = taskRow != null;
+        this.logger.info(
+          { agentId, jobId, intentAnchor: schedule.intent_anchor, anchorCreated },
+          anchorCreated
+            ? 'upsertDeclarativeJob: tasks row created for intent_anchor (drift detection enabled)'
+            : 'upsertDeclarativeJob: tasks row already exists — skipped (restart idempotency)',
+        );
       } catch (err) {
-        // Re-throw so loadDeclarativeJobs treats the whole upsert as failed.
-        // The scheduled_jobs row was already written, but without the tasks
-        // link the drift detector cannot fire — running silently in a degraded state
-        // is worse than a loud failure that prompts operator attention.
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackErr) {
+          this.logger.error(
+            { err: rollbackErr, agentId, sourceAgentId },
+            'upsertDeclarativeJob: ROLLBACK failed after transaction error — connection may be in bad state',
+          );
+        }
         this.logger.error(
-          { err, agentId, jobId, intentAnchor: schedule.intent_anchor },
-          'upsertDeclarativeJob: failed to create tasks row — job will run without drift detection until this is resolved',
+          { err, agentId, sourceAgentId, intentAnchor: schedule.intent_anchor },
+          'upsertDeclarativeJob: failed to upsert job or create tasks row — transaction rolled back',
         );
         throw err;
+      } finally {
+        try {
+          client.release();
+        } catch (releaseErr) {
+          this.logger.error(
+            { err: releaseErr, agentId, sourceAgentId },
+            'upsertDeclarativeJob: pg client release failed — connection may leak from pool',
+          );
+        }
       }
-      const resultRow = taskResult.rows[0] as { task_id: string; job_id: string | null } | undefined;
-      if (resultRow && !resultRow.job_id) {
-        // INSERT succeeded but the UPDATE found no scheduled_jobs row.
-        // This is a race: the job was cancelled between the upsert above and this CTE.
-        this.logger.error(
-          { agentId, jobId, intentAnchor: schedule.intent_anchor, taskId: resultRow.task_id },
-          'upsertDeclarativeJob: tasks row created but scheduled_jobs.task_id link failed — orphaned task',
+    } else {
+      const { rows } = await this.pool.query(sql, params);
+      const row = rows[0] as typeof upsertResultRow | undefined;
+      if (!row) {
+        throw new Error(
+          `upsertDeclarativeJob: upsert returned no row for ${sourceAgentId}/${agentId} (${schedule.cron})`,
         );
-        throw new Error(`upsertDeclarativeJob: scheduled_jobs row ${jobId} not found when linking task`);
       }
-      const anchorCreated = resultRow != null;
-      this.logger.info(
-        { agentId, jobId, intentAnchor: schedule.intent_anchor, anchorCreated },
-        anchorCreated
-          ? 'upsertDeclarativeJob: tasks row created for intent_anchor (drift detection enabled)'
-          : 'upsertDeclarativeJob: tasks row already exists — skipped (restart idempotency)',
+      upsertResultRow = row;
+      jobId = upsertResultRow.id;
+    }
+
+    const revivedFromCancelled = upsertResultRow.prior_status === 'cancelled';
+
+    // Reviving overrides a terminal 'cancelled' state, so surface it loudly — the
+    // symmetric cancellation path (cancelStaleDeclarativeJobs) logs per row, and a
+    // resurrection must be at least as visible. Include the failure bookkeeping the
+    // upsert just wiped so the prior context survives in the logs. warn (not info)
+    // because this silently undoes a deliberate cancelJob() if one was issued.
+    if (revivedFromCancelled) {
+      this.logger.warn(
+        {
+          jobId,
+          sourceAgentId,
+          agentId,
+          cron: schedule.cron,
+          priorConsecutiveFailures: upsertResultRow.prior_failures ?? null,
+          priorLastError: upsertResultRow.prior_error ?? null,
+        },
+        'Declarative job revived from cancelled — its YAML declaration still exists. ' +
+          'If this job was deliberately stopped, remove its schedule entry from the agent YAML instead of cancelling it.',
       );
+
+      // When intent_anchor is set, revival reactivation runs inside the transaction above.
+      // For schedules without intent_anchor, reactivate the linked task here.
+      if (!schedule.intent_anchor) {
+        await this.pool.query(
+          `UPDATE tasks
+              SET status = 'active', updated_at = now()
+             FROM scheduled_jobs sj
+            WHERE sj.id = $1
+              AND tasks.id = sj.task_id
+              AND tasks.status = 'cancelled'`,
+          [jobId],
+        );
+      }
     }
 
     return jobId;
