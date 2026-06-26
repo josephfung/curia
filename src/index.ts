@@ -812,7 +812,7 @@ async function main(): Promise<void> {
   let skillDiscovery: SkillDiscovery[];
   let agentDiscovery: AgentDiscovery[];
   try {
-    skillDiscovery = discoverSkillManifests(skillsDir);
+    skillDiscovery = discoverSkillManifests(skillsDir, logger);
     agentDiscovery = discoverAgentManifests(agentsDir);
   } catch (err) {
     logger.fatal({ err }, 'Failed to discover skills/agents on disk');
