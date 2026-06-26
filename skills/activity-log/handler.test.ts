@@ -61,6 +61,7 @@ describe('ActivityLogHandler', () => {
           id: 1,
           skillName: 'calendar-respond-to-invite',
           outcome: 'success',
+          conversationId: 'conv-1',
           createdAt: new Date('2026-06-25T18:00:00.000Z'),
         },
       ]),
@@ -122,5 +123,60 @@ describe('ActivityLogHandler', () => {
     expect(result.success).toBe(true);
     const data = (result as { success: true; data: { count: number } }).data;
     expect(data.count).toBe(0);
+  });
+
+  it('labels approved actions when autonomy log matches conversation_id', async () => {
+    const auditLogRepo = {
+      findSkillResults: vi.fn().mockResolvedValue([makeAuditRow()]),
+    } as unknown as AuditLogRepo;
+    const actionLogRepo = {
+      findTerminalBetween: vi.fn().mockResolvedValue([
+        {
+          id: 1,
+          skillName: 'calendar-respond-to-invite',
+          outcome: 'approved',
+          conversationId: 'conv-1',
+          createdAt: new Date('2026-06-25T18:00:01.000Z'),
+        },
+        {
+          id: 2,
+          skillName: 'calendar-respond-to-invite',
+          outcome: 'success',
+          conversationId: 'conv-other',
+          createdAt: new Date('2026-06-25T18:00:01.000Z'),
+        },
+      ]),
+    } as unknown as ActionLogRepo;
+
+    const handler = new ActivityLogHandler();
+    const result = await handler.execute(makeCtx({ auditLogRepo, actionLogRepo }));
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: { actions: Array<{ autonomy: string }> } }).data;
+    expect(data.actions[0]!.autonomy).toBe('approved');
+  });
+
+  it('returns unknown autonomy when conversation_id does not match', async () => {
+    const auditLogRepo = {
+      findSkillResults: vi.fn().mockResolvedValue([makeAuditRow({ conversationId: 'conv-1' })]),
+    } as unknown as AuditLogRepo;
+    const actionLogRepo = {
+      findTerminalBetween: vi.fn().mockResolvedValue([
+        {
+          id: 1,
+          skillName: 'calendar-respond-to-invite',
+          outcome: 'success',
+          conversationId: 'conv-other',
+          createdAt: new Date('2026-06-25T18:00:00.000Z'),
+        },
+      ]),
+    } as unknown as ActionLogRepo;
+
+    const handler = new ActivityLogHandler();
+    const result = await handler.execute(makeCtx({ auditLogRepo, actionLogRepo }));
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: { actions: Array<{ autonomy: string }> } }).data;
+    expect(data.actions[0]!.autonomy).toBe('unknown');
   });
 });

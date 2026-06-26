@@ -6,27 +6,10 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { AuditLogRow } from '../../src/audit/audit-log-repo.js';
 import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
+import { getRecapEligibleSkillNames } from '../../src/skills/recap-skills.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
-
-/** Skills whose completed executions belong in a CEO activity recap by default. */
-const DEFAULT_RECAP_SKILLS = new Set([
-  'calendar-respond-to-invite',
-  'calendar-create-event',
-  'calendar-update-event',
-  'calendar-delete-event',
-  'calendar-create-hold',
-  'email-send',
-  'email-reply',
-  'signal-send',
-  'send-draft',
-  'contact-create',
-  'contact-update',
-  'contact-merge',
-  'contact-register',
-  'approve-action',
-]);
 
 interface ActivityLogInput {
   since?: string;
@@ -77,10 +60,11 @@ export class ActivityLogHandler implements SkillHandler {
         : [];
 
       const tz = ctx.timezone;
+      const recapSkills = getRecapEligibleSkillNames();
       const actions = rows
         .map((row) => summarizeSkillResult(row, autonomyRows, tz))
         .filter((action): action is NonNullable<typeof action> => action !== null)
-        .filter((action) => skillNames ? true : DEFAULT_RECAP_SKILLS.has(action.skill));
+        .filter((action) => skillNames ? true : recapSkills.has(action.skill));
 
       return {
         success: true,
@@ -115,7 +99,7 @@ function summarizeSkillResult(
 
   const result = row.payload.result as { success?: boolean; data?: unknown; error?: string } | undefined;
   const success = result?.success === true;
-  const autonomy = matchAutonomyOutcome(skillName, row.timestamp, autonomyRows);
+  const autonomy = matchAutonomyOutcome(skillName, row.timestamp, row.conversationId, autonomyRows);
 
   return {
     timestamp: toLocalIso(Math.floor(row.timestamp.getTime() / 1000), tz) ?? row.timestamp.toISOString(),
@@ -131,14 +115,19 @@ function summarizeSkillResult(
 function matchAutonomyOutcome(
   skillName: string,
   timestamp: Date,
+  conversationId: string | null,
   autonomyRows: ActionLogRow[],
 ): 'autonomous' | 'approved' | 'unknown' {
   const windowMs = 5 * 60 * 1000;
-  const match = autonomyRows.find((row) =>
-    row.skillName === skillName
-    && Math.abs(row.createdAt.getTime() - timestamp.getTime()) <= windowMs,
-  );
-  if (!match) return 'unknown';
+  const candidates = autonomyRows.filter((row) => {
+    if (row.skillName !== skillName) return false;
+    if (conversationId && row.conversationId && row.conversationId !== conversationId) return false;
+    return Math.abs(row.createdAt.getTime() - timestamp.getTime()) <= windowMs;
+  });
+  if (candidates.length === 0) return 'unknown';
+  const match = candidates.find((row) => row.outcome === 'approved')
+    ?? candidates.find((row) => row.outcome === 'success')
+    ?? candidates[0]!;
   if (match.outcome === 'approved') return 'approved';
   if (match.outcome === 'success') return 'autonomous';
   return 'unknown';
