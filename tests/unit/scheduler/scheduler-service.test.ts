@@ -5,7 +5,20 @@ import type { CreateJobParams } from '../../../src/scheduler/scheduler-service.j
 // -- Mock helpers --
 
 function mockPool() {
-  return { query: vi.fn() };
+  return { query: vi.fn(), connect: vi.fn() };
+}
+
+/** Pool mock that routes transactional work through pool.connect() → client.query(). */
+function mockTransactionalPool() {
+  const client = {
+    query: vi.fn(),
+    release: vi.fn(),
+  };
+  const pool = {
+    query: vi.fn(),
+    connect: vi.fn().mockResolvedValue(client),
+  };
+  return { pool, client };
 }
 
 function mockBus() {
@@ -100,12 +113,17 @@ describe('SchedulerService', () => {
     });
 
     it('creates a persistent task when intentAnchor is provided', async () => {
+      const { pool, client } = mockTransactionalPool();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      svc = new SchedulerService(pool as any, bus as any, logger as any);
+
       const jobId = 'job-333';
       const taskId = 'task-aaa';
-      // First call: INSERT into scheduled_jobs
-      pool.query.mockResolvedValueOnce({ rows: [{ id: jobId }] });
-      // Second call: CTE returns { task_id, job_id } confirming both INSERT and UPDATE succeeded
-      pool.query.mockResolvedValueOnce({ rows: [{ task_id: taskId, job_id: jobId }] });
+      client.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: jobId }] }) // INSERT scheduled_jobs
+        .mockResolvedValueOnce({ rows: [{ task_id: taskId, job_id: jobId }] }) // task CTE
+        .mockResolvedValueOnce({ rows: [] }); // COMMIT
 
       const params: CreateJobParams = {
         agentId: 'agent-3',
@@ -120,10 +138,44 @@ describe('SchedulerService', () => {
       expect(result.jobId).toBe(jobId);
       expect(result.agentTaskId).toBe(taskId);
 
-      // Two queries: job insert + task CTE (INSERT tasks + UPDATE scheduled_jobs.task_id)
-      expect(pool.query).toHaveBeenCalledTimes(2);
-      const taskSql = pool.query.mock.calls[1]?.[0] as string;
-      expect(taskSql).toContain('INSERT INTO tasks');
+      expect(pool.connect).toHaveBeenCalledOnce();
+      const clientCalls = client.query.mock.calls.map(([sql]) => sql as string);
+      expect(clientCalls[0]).toBe('BEGIN');
+      expect(clientCalls[1]).toContain('INSERT INTO scheduled_jobs');
+      expect(clientCalls[2]).toContain('INSERT INTO tasks');
+      expect(clientCalls[clientCalls.length - 1]).toBe('COMMIT');
+      expect(client.release).toHaveBeenCalledOnce();
+    });
+
+    it('rolls back when the tasks CTE fails — no orphaned scheduled_jobs row', async () => {
+      const { pool, client } = mockTransactionalPool();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      svc = new SchedulerService(pool as any, bus as any, logger as any);
+
+      const jobId = 'job-rollback';
+      const cteError = new Error('tasks CTE failed');
+      client.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: jobId }] }) // INSERT scheduled_jobs
+        .mockRejectedValueOnce(cteError) // task CTE throws
+        .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
+
+      const params: CreateJobParams = {
+        agentId: 'agent-3',
+        cronExpr: '0 */6 * * *',
+        taskPayload: { skill: 'report' },
+        createdBy: 'system',
+        intentAnchor: 'weekly-report',
+      };
+
+      await expect(svc.createJob(params)).rejects.toThrow('tasks CTE failed');
+
+      const clientCalls = client.query.mock.calls.map(([sql]) => sql as string);
+      expect(clientCalls).toContain('BEGIN');
+      expect(clientCalls).toContain('ROLLBACK');
+      expect(clientCalls).not.toContain('COMMIT');
+      expect(bus.publish).not.toHaveBeenCalled();
+      expect(client.release).toHaveBeenCalledOnce();
     });
 
     it('rejects when neither cronExpr nor runAt is provided', async () => {
@@ -881,10 +933,15 @@ describe('SchedulerService', () => {
     });
 
     it('creates a tasks row when intent_anchor is provided', async () => {
-      // First query: the scheduled_jobs upsert; second query: CTE returns { task_id, job_id }
-      // confirming both the tasks INSERT and scheduled_jobs UPDATE succeeded.
-      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor' }] });
-      pool.query.mockResolvedValueOnce({ rows: [{ task_id: 'task-new', job_id: 'job-anchor' }] });
+      const { pool, client } = mockTransactionalPool();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      svc = new SchedulerService(pool as any, bus as any, logger as any);
+
+      client.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'job-anchor' }] }) // upsert
+        .mockResolvedValueOnce({ rows: [{ task_id: 'task-new', job_id: 'job-anchor' }] }) // task CTE
+        .mockResolvedValueOnce({ rows: [] }); // COMMIT
 
       await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
         cron: '0 9 * * 1',
@@ -892,24 +949,17 @@ describe('SchedulerService', () => {
         intent_anchor: 'Produce a weekly summary of key business metrics',
       });
 
-      expect(pool.query).toHaveBeenCalledTimes(2);
+      expect(pool.connect).toHaveBeenCalledOnce();
+      const clientCalls = client.query.mock.calls.map(([sql]) => sql as string);
+      expect(clientCalls[0]).toBe('BEGIN');
+      expect(clientCalls[1]).toContain('ON CONFLICT');
+      expect(clientCalls[2]).toContain('INSERT INTO tasks');
+      expect(clientCalls[2]).toContain('WHERE NOT EXISTS');
+      expect(clientCalls[2]).toContain('UPDATE scheduled_jobs');
+      expect(clientCalls[2]).toContain('AND task_id IS NULL');
+      expect(clientCalls[2]).toContain('cleanup_orphan');
+      expect(clientCalls[clientCalls.length - 1]).toBe('COMMIT');
 
-      // Second call must be the CTE: INSERT INTO tasks WHERE NOT EXISTS + UPDATE scheduled_jobs
-      // (guarded by AND task_id IS NULL) + cleanup_orphan DELETE + SELECT.
-      const [taskSql, taskParams] = pool.query.mock.calls[1] as [string, unknown[]];
-      expect(taskSql).toContain('INSERT INTO tasks');
-      expect(taskSql).toContain('WHERE NOT EXISTS');
-      expect(taskSql).toContain('UPDATE scheduled_jobs');
-      expect(taskSql).toContain('AND task_id IS NULL');
-      expect(taskSql).toContain('cleanup_orphan');
-      expect(taskSql).toContain('task_id');
-      expect(taskSql).toContain('job_id');
-      expect(taskParams).toContain('coordinator');
-      expect(taskParams).toContain('Produce a weekly summary of key business metrics');
-      expect(taskParams).toContain('active');
-      expect(taskParams).toContain('job-anchor');
-
-      // Logs at info level confirming the anchor was created.
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: 'coordinator', jobId: 'job-anchor', anchorCreated: true }),
         expect.stringContaining('drift detection enabled'),
@@ -917,9 +967,15 @@ describe('SchedulerService', () => {
     });
 
     it('is idempotent on restart — skips tasks INSERT when row already exists', async () => {
-      // rowCount: 0 means the WHERE NOT EXISTS guard fired — the existing row was preserved.
-      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-anchor-2' }] });
-      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      const { pool, client } = mockTransactionalPool();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      svc = new SchedulerService(pool as any, bus as any, logger as any);
+
+      client.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'job-anchor-2' }] }) // upsert
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // WHERE NOT EXISTS guard fired
+        .mockResolvedValueOnce({ rows: [] }); // COMMIT
 
       await svc.upsertDeclarativeJob('coordinator', 'coordinator', {
         cron: '0 9 * * 1',
@@ -927,9 +983,7 @@ describe('SchedulerService', () => {
         intent_anchor: 'Produce a weekly summary of key business metrics',
       });
 
-      expect(pool.query).toHaveBeenCalledTimes(2);
-
-      // Logs at info level confirming the existing row was preserved.
+      expect(pool.connect).toHaveBeenCalledOnce();
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: 'coordinator', jobId: 'job-anchor-2', anchorCreated: false }),
         expect.stringContaining('restart idempotency'),
@@ -949,12 +1003,15 @@ describe('SchedulerService', () => {
     });
 
     it('throws when tasks INSERT succeeds but scheduled_jobs UPDATE fails (orphan race)', async () => {
-      // Simulate the race where the scheduled_jobs row disappears (or was already linked
-      // by a concurrent startup) between the upsert and the task-link CTE.
-      // The cleanup_orphan CTE deletes the orphan task (DB-side); INSERT returns task_id
-      // but job_id is null, indicating the link failed.
-      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-race' }] });
-      pool.query.mockResolvedValueOnce({ rows: [{ task_id: 'task-orphan', job_id: null }] });
+      const { pool, client } = mockTransactionalPool();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      svc = new SchedulerService(pool as any, bus as any, logger as any);
+
+      client.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'job-race' }] }) // upsert
+        .mockResolvedValueOnce({ rows: [{ task_id: 'task-orphan', job_id: null }] }) // link failed
+        .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
 
       await expect(
         svc.upsertDeclarativeJob('coordinator', 'coordinator', {
@@ -964,10 +1021,40 @@ describe('SchedulerService', () => {
         }),
       ).rejects.toThrow(/scheduled_jobs row.*not found when linking task/);
 
+      const clientCalls = client.query.mock.calls.map(([sql]) => sql as string);
+      expect(clientCalls).toContain('ROLLBACK');
+      expect(clientCalls).not.toContain('COMMIT');
+
       expect(logger.error).toHaveBeenCalledWith(
         expect.objectContaining({ jobId: 'job-race', taskId: 'task-orphan' }),
         expect.stringContaining('orphaned task'),
       );
+    });
+
+    it('rolls back when the tasks CTE throws — no orphaned scheduled_jobs row', async () => {
+      const { pool, client } = mockTransactionalPool();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      svc = new SchedulerService(pool as any, bus as any, logger as any);
+
+      const cteError = new Error('task link failed');
+      client.query
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: 'job-rollback' }] }) // upsert
+        .mockRejectedValueOnce(cteError) // task CTE throws
+        .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
+
+      await expect(
+        svc.upsertDeclarativeJob('coordinator', 'coordinator', {
+          cron: '0 9 * * 1',
+          task: 'weekly digest',
+          intent_anchor: 'Produce a weekly summary',
+        }),
+      ).rejects.toThrow('task link failed');
+
+      const clientCalls = client.query.mock.calls.map(([sql]) => sql as string);
+      expect(clientCalls).toContain('BEGIN');
+      expect(clientCalls).toContain('ROLLBACK');
+      expect(clientCalls).not.toContain('COMMIT');
     });
 
     it('stamps a system originator with systemRole system and channel declarative', async () => {
