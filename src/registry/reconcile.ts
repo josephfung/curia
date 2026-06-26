@@ -46,7 +46,11 @@ async function reconcileOne(
       logger.warn({ kind, name }, 'registry: core default not found on disk; skipping enrollment');
       continue;
     }
-    await repo.installAndEnable(name, 'reconciliation');
-    logger.info({ kind, name }, 'registry: enrolled core default as enabled');
+    const enrolled = await repo.installAndEnable(name, 'reconciliation');
+    if (enrolled) {
+      logger.info({ kind, name }, 'registry: enrolled core default as enabled');
+    } else {
+      logger.info({ kind, name }, 'registry: core default already present on insert; left untouched');
+    }
   }
 }
