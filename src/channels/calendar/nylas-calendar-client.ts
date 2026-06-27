@@ -450,12 +450,14 @@ export class NylasCalendarClient {
       // it instead of silently scheduling over an unknown.
       const errored = entries.filter((fb) => fb.object === 'error' || fb.error != null);
       if (errored.length > 0) {
-        for (const e of errored) {
-          this.log.error({ email: e.email, error: e.error }, 'Nylas getFreeBusy returned an error entry for a calendar');
-        }
-        throw new Error(
-          `Free/busy lookup failed for ${errored.length} calendar(s): ${errored.map((e) => e.email).join(', ')}`,
+        // Log counts + provider reasons, not the mailbox identifiers (PII / CWE-532).
+        this.log.error(
+          { erroredCount: errored.length, totalCount: entries.length, reasons: errored.map((e) => e.error) },
+          'Nylas getFreeBusy returned error entries for one or more calendars',
         );
+        // Keep the thrown message free of email addresses — it propagates up into the
+        // skill result and agent context, not just logs.
+        throw new Error(`Free/busy lookup failed for ${errored.length} of ${entries.length} calendar(s)`);
       }
       return entries.map((fb) => ({
         email: fb.email,

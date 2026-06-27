@@ -193,12 +193,20 @@ describe('NylasCalendarClient — free/busy plumbing', () => {
       calendars: { getFreeBusy } as unknown as NylasCalendarLike['calendars'],
     });
 
-    await expect(
-      client.getFreeBusy(
+    let caught: unknown;
+    try {
+      await client.getFreeBusy(
         ['joseph@example.test'],
         '2026-06-29T00:00:00-04:00',
         '2026-06-30T00:00:00-04:00',
-      ),
-    ).rejects.toThrow(/free.?busy/i);
+      );
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toMatch(/free.?busy/i);
+    // The thrown message must not leak the mailbox identifier (PII).
+    expect((caught as Error).message).not.toContain('joseph@example.test');
   });
 });

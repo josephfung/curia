@@ -46,13 +46,21 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
       // HTTP 400 "Invalid label" — and removals silently no-op because a display
       // name never matches the message's stored IDs.
       const existingFolders = await client.listFolders();
-      const folderByToken = new Map<string, NylasFolder>();
+      // Keep ID and display-name indexes separate and resolve IDs first, so a label
+      // whose display name happens to equal another label's ID (e.g. a user label
+      // literally named "Label_43") can't shadow the real ID lookup.
+      const folderById = new Map<string, NylasFolder>();
+      const folderByName = new Map<string, NylasFolder>();
       for (const f of existingFolders) {
-        folderByToken.set(f.name.toUpperCase(), f);
-        folderByToken.set(f.id.toUpperCase(), f);
+        folderById.set(f.id.toUpperCase(), f);
+        if (f.name) {
+          folderByName.set(f.name.toUpperCase(), f);
+        }
       }
-      const resolveExistingId = (token: string): string | null =>
-        folderByToken.get(token.toUpperCase())?.id ?? null;
+      const resolveExistingId = (token: string): string | null => {
+        const key = token.toUpperCase();
+        return folderById.get(key)?.id ?? folderByName.get(key)?.id ?? null;
+      };
 
       // Resolve removals to IDs. A token that does not resolve to any known folder
       // is suspicious (typo / normalization drift), not a clean no-op — record it in
@@ -85,8 +93,11 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
           if (!folder.id) {
             throw new Error(`Nylas returned empty folder ID for label "${token}"`);
           }
-          folderByToken.set(token.toUpperCase(), folder);
-          folderByToken.set(folder.id.toUpperCase(), folder);
+          folderById.set(folder.id.toUpperCase(), folder);
+          folderByName.set(token.toUpperCase(), folder);
+          if (folder.name) {
+            folderByName.set(folder.name.toUpperCase(), folder);
+          }
           created.push(token);
           id = folder.id;
         }

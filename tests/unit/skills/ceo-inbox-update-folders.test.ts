@@ -184,6 +184,29 @@ describe('CeoInboxUpdateFoldersHandler', () => {
     expect(calls.putFolders).toContain('INBOX');
   });
 
+  it('resolves an ID token to the ID even when another label is named that ID', async () => {
+    // Pathological: a user label whose display name is literally another label's ID.
+    // An ID token must resolve to the ID folder, not the name-collision folder.
+    const folders: FolderFixture[] = [
+      { id: 'INBOX', name: 'INBOX' },
+      { id: 'Label_43', name: '⏳ In Progress' },
+      { id: 'Label_77', name: 'Label_43' }, // display name collides with the ID above
+    ];
+    const { calls } = mockNylas({
+      folders,
+      messageFolders: ['INBOX', 'Label_43', 'Label_77'],
+    });
+
+    const result = await handler.execute(
+      makeCtx({ message_id: 'msg-1', remove_folders: ['Label_43'] }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls.putFolders).not.toContain('Label_43'); // the ID was removed
+    expect(calls.putFolders).toContain('Label_77'); // the name-collision label untouched
+    expect(calls.putFolders).toContain('INBOX');
+  });
+
   it('resolves a display-name add_folders to an existing label ID', async () => {
     const { calls } = mockNylas({ folders: FOLDERS, messageFolders: ['INBOX'] });
 

@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.13.2"
+version: "0.13.3"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -577,9 +577,9 @@ system_prompt: |
      - Actions: file-parse (if ICS present), bullpen.post (CONSULT REQUEST),
        ceo-inbox-update-folders (⏳ In Progress), ceo-inbox-mark-read
     **While parked, apply the `⏳ In Progress` label ONLY** — do NOT apply
-    `✍️ Drafted` here or in decision-tagging (step 4g). No draft exists yet;
-    `✍️ Drafted` would defeat the consult-timeout safety wake. See the identical
-    note under the scheduling parking branch below.
+    `✍️ Drafted` here or in decision-tagging (step 4g). No draft exists yet, and
+    `✍️ Drafted` must mean "a draft exists" — applying it now would break that
+    invariant. See the identical note under the scheduling parking branch below.
   6. **Schedule consult-timeout safety wake** — see the consult-timeout contract
      in Scheduling-specific drafting rules below (`consult_kind=invite`).
 
@@ -777,9 +777,9 @@ system_prompt: |
        decision-tagging step (4g) for this message — there is no draft yet.
        `✍️ Drafted` is applied only once an actual draft exists: on the Branch A
        resume after the CONSULT REPLY, or in the consult-timeout fallback (step 4
-       of the consult-timeout branch). Applying `✍️ Drafted` now would make the
-       consult-timeout safety wake treat the reply as already written and skip
-       drafting — leaving the message stuck with no draft.
+       of the consult-timeout branch). The invariant is `✍️ Drafted` ⟺ a draft
+       exists; applying it on a parked message with no draft breaks that invariant
+       and leaves the message looking handled when the reply was never written.
 
     4. **Schedule consult-timeout safety wake** with `consult_kind=scheduling`
        (see contract above). Skip only when `bullpen.post` failed entirely.
@@ -861,9 +861,9 @@ system_prompt: |
   **Exception — parked calendar consults:** when the message is a scheduling or
   invite consult parked in flight (classification reported as `✍️ Drafted
   (parked — …)`), apply the `⏳ In Progress` label ONLY. Do NOT apply the
-  `✍️ Drafted` label while parked — there is no draft yet, and the label would
-  cause the consult-timeout safety wake to skip drafting. `✍️ Drafted` is
-  applied later, only when an actual draft is created.
+  `✍️ Drafted` label while parked — there is no draft yet, and `✍️ Drafted` must
+  mean "a draft exists". `✍️ Drafted` is applied later, only when an actual draft
+  is created.
 
   **Failure handling:** If ceo-inbox-label fails, log the error in the
   Response Format and continue to the next message. Do not abort the run.
