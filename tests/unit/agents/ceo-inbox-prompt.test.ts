@@ -411,3 +411,114 @@ describe('calendar consult prompt — formal invite RSVP behavior', () => {
     expect(consultSection).toContain('action_risk: medium');
   });
 });
+
+function extractCalendarRulesLoadSection(prompt: string): string {
+  const start = prompt.indexOf('## Task Start — Load Scheduling Rules');
+  const end = prompt.indexOf('## Answering a scheduling consult');
+  if (start === -1) throw new Error('Task Start — Load Scheduling Rules section not found');
+  if (end === -1 || end <= start)
+    throw new Error('Answering a scheduling consult not found after rules load section');
+  return prompt.slice(start, end);
+}
+
+function extractCalendarRulesManagementSection(prompt: string): string {
+  const start = prompt.indexOf('## Scheduling Rules Management');
+  if (start === -1) throw new Error('Scheduling Rules Management section not found');
+  return prompt.slice(start);
+}
+
+describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', () => {
+  it('loads scheduling rules from config-store calendar/rules by key at task start', () => {
+    const prompt = loadCalendarPrompt();
+    const loadSection = extractCalendarRulesLoadSection(prompt);
+
+    expect(loadSection).toContain('config-store');
+    expect(loadSection).toContain('namespace: calendar');
+    expect(loadSection).toContain('key: rules');
+    expect(loadSection).toContain('empty array');
+    expect(loadSection).toContain('system-prompt defaults apply unchanged');
+  });
+
+  it('documents lightly structured rule shape (applies_to, instruction, active)', () => {
+    const prompt = loadCalendarPrompt();
+    const loadSection = extractCalendarRulesLoadSection(prompt);
+
+    expect(loadSection).toContain('applies_to');
+    expect(loadSection).toContain('instruction');
+    expect(loadSection).toContain('active');
+  });
+
+  it('loads rules before proposing times in the consult flow', () => {
+    const prompt = loadCalendarPrompt();
+    const consultSection = extractCalendarConsultSection(prompt);
+    const loadStepPos = posIn(consultSection, '0. **Load scheduling rules');
+    const resolveStepPos = posIn(consultSection, '1. **Resolve calendars and timezones');
+    const memoryStepPos = posIn(consultSection, '2. **Recall per-contact context');
+
+    expect(loadStepPos).toBeGreaterThan(-1);
+    expect(resolveStepPos).toBeGreaterThan(loadStepPos);
+    expect(memoryStepPos).toBeGreaterThan(resolveStepPos);
+    expect(consultSection.slice(loadStepPos, resolveStepPos)).toContain('config-store');
+  });
+
+  it('uses memory-query for per-contact context only, not standing CEO rules', () => {
+    const prompt = loadCalendarPrompt();
+    const consultSection = extractCalendarConsultSection(prompt);
+    const memoryStepStart = posIn(consultSection, '2. **Recall per-contact context');
+    const proposedStepStart = posIn(consultSection, '3. **Check sender-proposed slots first');
+    expect(memoryStepStart).toBeGreaterThan(-1);
+    expect(proposedStepStart).toBeGreaterThan(memoryStepStart);
+
+    const memoryStep = consultSection.slice(memoryStepStart, proposedStepStart);
+    expect(memoryStep).toContain('memory-query');
+    expect(memoryStep).toContain('per-contact');
+    expect(memoryStep).toContain('Do not use `memory-query` for standing CEO-wide rules');
+  });
+
+  it('honours loaded rules when finding free time and picking slots', () => {
+    const prompt = loadCalendarPrompt();
+    const consultSection = extractCalendarConsultSection(prompt);
+
+    expect(consultSection).toContain('Honour the stated');
+    expect(consultSection).toContain('loaded scheduling rules');
+    expect(consultSection).toContain('selecting slot duration and time-of-day');
+  });
+
+  it('reports rules loaded and applied in CONSULT REPLY', () => {
+    const prompt = loadCalendarPrompt();
+    const consultSection = extractCalendarConsultSection(prompt);
+
+    expect(consultSection).toContain('Rules: loaded');
+    expect(consultSection).toContain('applied:');
+  });
+
+  it('documents rules-management delegation flow (add, list, pause, remove)', () => {
+    const prompt = loadCalendarPrompt();
+    const managementSection = extractCalendarRulesManagementSection(prompt);
+
+    expect(managementSection).toContain('**Add a rule:**');
+    expect(managementSection).toContain('**List rules:**');
+    expect(managementSection).toContain('**Pause a rule:**');
+    expect(managementSection).toContain('**Remove a rule:**');
+    expect(managementSection).toContain('namespace=calendar, key=rules');
+    expect(managementSection).toContain('Do NOT run a scheduling consult');
+  });
+
+  it('captures new CEO scheduling preferences as config-store rules', () => {
+    const prompt = loadCalendarPrompt();
+    const hierarchyStart = posIn(prompt, '## Preference Hierarchy');
+    const conflictStart = posIn(prompt, '## Conflict Escalation');
+    expect(hierarchyStart).toBeGreaterThan(-1);
+    expect(conflictStart).toBeGreaterThan(hierarchyStart);
+
+    const hierarchySection = prompt.slice(hierarchyStart, conflictStart);
+    expect(hierarchySection).toContain('Capturing new preferences');
+    expect(hierarchySection).toContain('config-store');
+    expect(hierarchySection).toContain('Do not store standing CEO-wide prefs via `memory-store`');
+  });
+
+  it('bumps calendar agent version for scheduling-rules capability', async () => {
+    const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
+    expect(config.version).toBe('0.6.0');
+  });
+});
