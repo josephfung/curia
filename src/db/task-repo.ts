@@ -16,6 +16,13 @@ import type { DbTaskRow, TaskRow } from './queries/tasks.js';
 import { mapTaskRow } from './queries/tasks.js';
 import type { TaskOriginator } from '../contacts/types.js';
 import { capOriginatorToParent } from '../contacts/principal.js';
+import {
+  readResumableBlock,
+  writeResumableBlock,
+  type PrepareResumableBlockInput,
+  type ResumableProgressBlock,
+  type ResumableWriteResult,
+} from './resumable-progress.js';
 
 // All SELECT / RETURNING clauses use this column list. Centralised so a schema
 // change only needs updating in one place.
@@ -557,5 +564,64 @@ export class TaskRepo {
       [taskId],
     );
     this.logger.info({ taskId, rowsAffected: result.rowCount }, 'task-repo: cancelled wake-up jobs');
+  }
+
+  /** Read the typed resumable block from a task's progress JSONB. */
+  async getResumableBlock(taskId: string): Promise<ResumableProgressBlock | null> {
+    const task = await this.getTask(taskId);
+    if (!task) return null;
+    return readResumableBlock(task.progress);
+  }
+
+  /**
+   * Persist a resumable checkpoint under progress.resumable. Enforces inline accumulator
+   * and block size caps — overflow requires spilling to the document workspace (#1210).
+   */
+  async setResumableBlock(
+    taskId: string,
+    input: PrepareResumableBlockInput,
+    callerAgentId?: string,
+  ): Promise<{ task: TaskRow; block: ResumableProgressBlock } | ResumableWriteResult> {
+    const current = await this.getTask(taskId);
+    if (!current) {
+      return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
+    }
+
+    const written = writeResumableBlock(current.progress, input);
+    if (!written.ok) return written;
+
+    const { rows } = await this.pool.query(
+      `UPDATE tasks SET progress = $1::jsonb, updated_at = now()
+       WHERE id = $2 AND status NOT IN ('done', 'cancelled')
+       RETURNING ${TASK_COLUMNS}`,
+      [JSON.stringify(written.progress), taskId],
+    );
+    const row = rows[0] as DbTaskRow | undefined;
+    if (!row) {
+      try {
+        await this.resolveEmptyUpdateReturning(taskId);
+        return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
+      } catch {
+        return { ok: false, code: 'invalid_block', message: `task ${taskId} is in a terminal state` };
+      }
+    }
+
+    const updated = mapTaskRow(row);
+
+    try {
+      await this.bus.publish('execution', createTaskUpdated({
+        taskId: updated.id,
+        previousStatus: current.status,
+        agentId: callerAgentId ?? null,
+      }));
+    } catch (busErr) {
+      this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after setResumableBlock');
+    }
+
+    this.logger.info(
+      { taskId: updated.id, done: written.block.done, total: written.block.total },
+      'task-repo: persisted resumable checkpoint',
+    );
+    return { task: updated, block: written.block };
   }
 }
