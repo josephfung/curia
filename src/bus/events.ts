@@ -67,6 +67,16 @@ interface AgentTaskPayload {
   expectedDurationSeconds?: number;
 }
 
+/** Coarse failure reason propagated on agent.response when isError is true.
+ *  Lets delegation consumers (e.g. the delegate skill) report the real cause
+ *  instead of confabulating an external timeout or generic error. */
+export type AgentResponseFailureReason =
+  | 'maxTurns'
+  | 'maxConsecutiveErrors'
+  | 'tool_error'
+  | 'api_error'
+  | 'blocked';
+
 interface AgentResponsePayload {
   agentId: string;
   conversationId: string;
@@ -75,6 +85,14 @@ interface AgentResponsePayload {
   // is a generic fallback message rather than a real response. Consumers (e.g. the
   // delegate skill) should treat this as a failure rather than a usable result.
   isError?: boolean;
+  /** Structured error type from the originating AgentError. Present when isError is true
+   *  and the runtime had a classified failure (budget exhaustion, LLM error, etc.). */
+  errorType?: ErrorType;
+  /** Coarse failure reason for planner consumption. Present when isError is true and
+   *  the runtime could determine the cause (see AgentResponseFailureReason). */
+  reason?: AgentResponseFailureReason;
+  /** Whether retrying the same delegation may succeed. Mirrors AgentError.retryable. */
+  retryable?: boolean;
   // Names of skills invoked during the task (in call order, may contain duplicates).
   // Populated by the agent runtime's tool-use loop; absent on error-path responses
   // where the runtime bailed before completing the loop.

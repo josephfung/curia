@@ -127,6 +127,55 @@ describe('DelegateHandler', () => {
     }
   });
 
+  it('returns structured failure when specialist responds with isError and structured reason (#1170)', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(logger);
+
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        const response = createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: "I'm sorry, I was unable to process that request. Please try again.",
+          isError: true,
+          errorType: 'BUDGET_EXCEEDED',
+          reason: 'maxTurns',
+          retryable: false,
+          parentEventId: event.id,
+        });
+        await bus.publish('agent', response);
+      }
+    });
+
+    const result = await handler.execute(makeCtx(
+      { agent: 'research-analyst', task: 'Research AI training costs', conversation_id: 'conv-2' },
+      { bus, agentRegistry },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as {
+        agent: string;
+        failed: boolean;
+        reason: string;
+        retryable: boolean;
+        errorType: string;
+        message: string;
+      };
+      expect(data.failed).toBe(true);
+      expect(data.agent).toBe('research-analyst');
+      expect(data.reason).toBe('maxTurns');
+      expect(data.retryable).toBe(false);
+      expect(data.errorType).toBe('BUDGET_EXCEEDED');
+      expect(data.message).toContain('turn budget');
+      expect(data.message).not.toContain('did not respond');
+      expect(data.message).not.toContain('encountered an error');
+    }
+  });
+
   it('returns failure when specialist responds with isError: true', async () => {
     const agentRegistry = new AgentRegistry();
     agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
@@ -156,7 +205,79 @@ describe('DelegateHandler', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toContain('error');
+      expect(result.error).toContain('encountered an error');
+    }
+  });
+
+  it('propagates runtime BUDGET_EXCEEDED(maxTurns) to delegate result (#1170)', async () => {
+    const { AgentRuntime } = await import('../../../src/agents/runtime.js');
+    const { vi } = await import('vitest');
+    type LLMProvider = import('../../../src/agents/llm/provider.js').LLMProvider;
+    type ExecutionLayer = import('../../../src/skills/execution.js').ExecutionLayer;
+
+    const bus = new EventBus(logger);
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+
+    let callId = 0;
+    const alwaysToolUseProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => ({
+        type: 'tool_use' as const,
+        toolCalls: [{ id: `call-${callId++}`, name: 'web-fetch', input: {} }],
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: {
+          requestedModel: 'mock-model',
+          actualModel: 'mock-model',
+          providerRequestId: 'msg_mock_budget',
+        },
+      })),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+    } as unknown as ExecutionLayer;
+
+    const toolDef = {
+      name: 'web-fetch',
+      description: 'Fetch',
+      input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    };
+
+    const specialist = new AgentRuntime({
+      agentId: 'research-analyst',
+      systemPrompt: 'You are a research analyst.',
+      provider: alwaysToolUseProvider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [toolDef],
+      errorBudget: { maxTurns: 3, maxConsecutiveErrors: 10 },
+    });
+    specialist.register();
+
+    // Dispatch subscriber required so agent.response publish is permitted
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const result = await handler.execute(makeCtx(
+      { agent: 'research-analyst', task: 'Post to Bluesky', conversation_id: 'conv-budget-delegate' },
+      { bus, agentRegistry },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as {
+        agent: string;
+        failed: boolean;
+        reason: string;
+        retryable: boolean;
+      };
+      expect(data.failed).toBe(true);
+      expect(data.agent).toBe('research-analyst');
+      expect(data.reason).toBe('maxTurns');
+      expect(data.retryable).toBe(false);
     }
   });
 

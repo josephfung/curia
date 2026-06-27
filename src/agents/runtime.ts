@@ -1,6 +1,6 @@
 import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
 import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
@@ -1459,7 +1459,7 @@ export class AgentRuntime {
             logger.error({ err: telemetryErr, agentId }, 'Failed to publish llm.error for fallback exception');
           }
           await this.publishAgentError(thrownErr, taskEvent);
-          await this.sendErrorResponse(taskEvent);
+          await this.sendErrorResponse(taskEvent, thrownErr);
           return null;
         }
         const fallbackLatencyMs = Date.now() - fallbackStartMs;
@@ -1482,7 +1482,7 @@ export class AgentRuntime {
         );
         await publishLlmErrorEvent(fallbackResponse, this.config.fallbackModel, this.config.fallbackProvider.id);
         await this.publishAgentError(fallbackErr, taskEvent);
-        await this.sendErrorResponse(taskEvent);
+        await this.sendErrorResponse(taskEvent, fallbackErr);
         return null;
       }
 
@@ -1494,7 +1494,7 @@ export class AgentRuntime {
       budget.turnsUsed += increment;
       logger.error({ agentId, errorType: agentErr.type, source: agentErr.source }, 'Non-retryable LLM error');
       await this.publishAgentError(agentErr, taskEvent);
-      await this.sendErrorResponse(taskEvent);
+      await this.sendErrorResponse(taskEvent, agentErr);
       return null;
     }
 
@@ -1535,7 +1535,7 @@ export class AgentRuntime {
       if (!latestErr.retryable) {
         logger.error({ agentId, errorType: latestErr.type }, 'Retry returned non-retryable error');
         await this.publishAgentError(latestErr, taskEvent);
-        await this.sendErrorResponse(taskEvent);
+        await this.sendErrorResponse(taskEvent, latestErr);
         return null;
       }
 
@@ -1548,7 +1548,7 @@ export class AgentRuntime {
     // All retries exhausted — publish the most recent error
     logger.error({ agentId, retries: RETRY_BACKOFF_MS.length }, 'All LLM retries exhausted');
     await this.publishAgentError(latestErr, taskEvent);
-    await this.sendErrorResponse(taskEvent);
+    await this.sendErrorResponse(taskEvent, latestErr);
     return null;
   }
 
@@ -1577,7 +1577,7 @@ export class AgentRuntime {
       timestamp: new Date(),
     };
     await this.publishAgentError(agentErr, taskEvent);
-    await this.sendErrorResponse(taskEvent);
+    await this.sendErrorResponse(taskEvent, agentErr);
   }
 
   /**
@@ -1627,10 +1627,13 @@ export class AgentRuntime {
 
   /**
    * Send a user-facing error response so the user isn't left waiting.
+   * When agentErr is provided, structured failure fields are copied onto the
+   * agent.response so delegation consumers can report the real cause (#1170).
    */
-  private async sendErrorResponse(taskEvent: AgentTaskEvent): Promise<void> {
+  private async sendErrorResponse(taskEvent: AgentTaskEvent, agentErr?: AgentError): Promise<void> {
     const { agentId, bus } = this.config;
     const { conversationId } = taskEvent.payload;
+    const structuredFailure = agentErr ? mapAgentErrorToResponseFields(agentErr) : undefined;
     const responseEvent = createAgentResponse({
       agentId,
       conversationId,
@@ -1638,8 +1641,30 @@ export class AgentRuntime {
       // Mark as an error response so consumers (e.g. the delegate skill) can distinguish
       // a failure from a real specialist result and surface it as { success: false }.
       isError: true,
+      ...structuredFailure,
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);
   }
+}
+
+/** Map an AgentError to the structured failure fields on agent.response (#1170). */
+function mapAgentErrorToResponseFields(agentErr: AgentError): {
+  errorType: AgentError['type'];
+  reason: AgentResponseFailureReason;
+  retryable: boolean;
+} {
+  if (agentErr.type === 'BUDGET_EXCEEDED') {
+    const budgetReason = agentErr.context.reason;
+    const reason: AgentResponseFailureReason =
+      budgetReason === 'maxConsecutiveErrors' ? 'maxConsecutiveErrors' : 'maxTurns';
+    return { errorType: agentErr.type, reason, retryable: agentErr.retryable };
+  }
+  if (agentErr.type === 'SKILL_ERROR') {
+    return { errorType: agentErr.type, reason: 'tool_error', retryable: agentErr.retryable };
+  }
+  if (agentErr.type === 'AUTH_FAILURE' || agentErr.type === 'VALIDATION_ERROR') {
+    return { errorType: agentErr.type, reason: 'blocked', retryable: agentErr.retryable };
+  }
+  return { errorType: agentErr.type, reason: 'api_error', retryable: agentErr.retryable };
 }
