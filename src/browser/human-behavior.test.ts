@@ -131,21 +131,37 @@ describe('humanClick', () => {
     const click = vi.fn().mockResolvedValue(undefined);
     const locator = {
       boundingBox: vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 }),
+      isVisible: vi.fn().mockResolvedValue(true),
       click,
     } as unknown as Locator;
     await humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 });
     expect((page.mouse.move as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
     expect(click).toHaveBeenCalledTimes(1);
+    expect(click).toHaveBeenCalledWith({ timeout: 10_000 });
   });
   it('still clicks when the bounding box is unavailable (best-effort)', async () => {
     const page = mockPage();
     const click = vi.fn().mockResolvedValue(undefined);
     const locator = {
       boundingBox: vi.fn().mockRejectedValue(new Error('detached')),
+      isVisible: vi.fn().mockResolvedValue(true),
       click,
     } as unknown as Locator;
     await humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 });
     expect(click).toHaveBeenCalledTimes(1);
+    expect(click).toHaveBeenCalledWith({ timeout: 10_000 });
+  });
+
+  it('force-clicks hidden custom form controls', async () => {
+    const page = mockPage();
+    const click = vi.fn().mockResolvedValue(undefined);
+    const locator = {
+      boundingBox: vi.fn().mockResolvedValue(null),
+      isVisible: vi.fn().mockResolvedValue(false),
+      click,
+    } as unknown as Locator;
+    await humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 });
+    expect(click).toHaveBeenCalledWith({ force: true, timeout: 10_000 });
   });
 });
 

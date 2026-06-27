@@ -14,17 +14,36 @@ const logger = pino({ level: 'silent' });
 const FAKE_SESSION_ID = 'test-session-123';
 const FAKE_URL = 'https://example.com';
 
+function makeMockLocator() {
+  const locator = {
+    count: vi.fn().mockResolvedValue(1),
+    first: vi.fn().mockReturnThis(),
+    nth: vi.fn().mockReturnThis(),
+    isVisible: vi.fn().mockResolvedValue(true),
+    boundingBox: vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 }),
+    click: vi.fn().mockResolvedValue(undefined),
+    fill: vi.fn().mockResolvedValue(undefined),
+    selectOption: vi.fn().mockResolvedValue(undefined),
+    hover: vi.fn().mockResolvedValue(undefined),
+    scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+    waitFor: vi.fn().mockResolvedValue(undefined),
+    locator: vi.fn().mockReturnThis(),
+  };
+  return locator;
+}
+
 // Minimal mock that satisfies what the handler calls on BrowserService
 function makeMockBrowserService(): BrowserService {
+  const locator = makeMockLocator();
   // The main frame supplies the cleaned content (getCleanedContent reads per-frame now).
   const mainFrame = {
     url: vi.fn().mockReturnValue(FAKE_URL),
     name: vi.fn().mockReturnValue(''),
     evaluate: vi.fn().mockResolvedValue('cleaned page content'),
-    getByText: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(0) }),
-    getByRole: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(0) }),
-    getByLabel: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(0) }),
-    locator: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(0) }),
+    getByText: vi.fn().mockReturnValue({ ...locator, count: vi.fn().mockResolvedValue(0) }),
+    getByRole: vi.fn().mockReturnValue({ ...locator, count: vi.fn().mockResolvedValue(0) }),
+    getByLabel: vi.fn().mockReturnValue({ ...locator, count: vi.fn().mockResolvedValue(0) }),
+    locator: vi.fn().mockReturnValue({ ...locator, count: vi.fn().mockResolvedValue(0) }),
   };
   const mockSession = {
     page: {
@@ -42,10 +61,10 @@ function makeMockBrowserService(): BrowserService {
       mouse: { wheel: vi.fn().mockResolvedValue(null) },
       frames: vi.fn().mockReturnValue([mainFrame]),
       mainFrame: vi.fn().mockReturnValue(mainFrame),
-      getByText: vi.fn().mockReturnValue({ click: vi.fn().mockResolvedValue(null), fill: vi.fn().mockResolvedValue(null), count: vi.fn().mockResolvedValue(0) }),
-      getByRole: vi.fn().mockReturnValue({ click: vi.fn().mockResolvedValue(null), fill: vi.fn().mockResolvedValue(null), count: vi.fn().mockResolvedValue(0) }),
-      getByLabel: vi.fn().mockReturnValue({ click: vi.fn().mockResolvedValue(null), fill: vi.fn().mockResolvedValue(null), count: vi.fn().mockResolvedValue(0) }),
-      locator: vi.fn().mockReturnValue({ click: vi.fn().mockResolvedValue(null), fill: vi.fn().mockResolvedValue(null), selectOption: vi.fn().mockResolvedValue(null), count: vi.fn().mockResolvedValue(1) }),
+      getByText: vi.fn().mockReturnValue({ ...locator, count: vi.fn().mockResolvedValue(0) }),
+      getByRole: vi.fn().mockReturnValue({ ...locator, count: vi.fn().mockResolvedValue(0) }),
+      getByLabel: vi.fn().mockReturnValue({ ...locator, count: vi.fn().mockResolvedValue(0) }),
+      locator: vi.fn().mockReturnValue(locator),
     },
     lastUsedAt: Date.now(),
     isExpired: vi.fn().mockReturnValue(false),

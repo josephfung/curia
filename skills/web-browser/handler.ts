@@ -31,6 +31,11 @@ const NETWORK_IDLE_TIMEOUT_MS = 5_000;
 // may not trigger navigation. Short — we don't want to stall when nothing navigates.
 const INTERACTION_SETTLE_TIMEOUT_MS = 1_500;
 
+// How long to poll for an in-flight edge challenge (Cloudflare "Just a moment…") to
+// clear before we treat the page as blocked. Kept under the skill timeout budget.
+const CHALLENGE_POLL_TIMEOUT_MS = 12_000;
+const CHALLENGE_POLL_INTERVAL_MS = 500;
+
 // How long `wait_for` waits for an element to become visible before giving up.
 const WAIT_FOR_TIMEOUT_MS = 10_000;
 
@@ -150,6 +155,12 @@ export class WebBrowserHandler implements SkillHandler {
             return { success: false, error: `Blocked: navigation to private/internal addresses is not allowed (${hostname})` };
           }
           const response = await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
+
+          // Cloudflare / Akamai often serve a short-lived challenge page that clears once
+          // behavioral JS runs. Poll until the challenge title/body disappears — otherwise
+          // isLikelyEmpty fires on the stub and we false-positive "blocked". (#1053+)
+          await waitForChallengeClear(page, ctx.log, sessionId);
+
           await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
             ctx.log.debug({ err, sessionId }, 'networkidle not reached after navigate — proceeding with current DOM');
           });
@@ -406,7 +417,38 @@ async function settleAfterInteraction(page: Page, ctx: SkillContext, sessionId: 
  * the LLM can still see an unrecognized block page and decide for itself.
  */
 function isHardBlock(title: string): boolean {
-  return /access denied|attention required|verify you are (?:a )?human|are you a robot|pardon our interruption/i.test(title);
+  return /access denied|attention required|verify you are (?:a )?human|are you a robot|pardon our interruption|unable to access|request blocked|security check/i.test(title);
+}
+
+/** True while an edge WAF is showing its interstitial (title or body tells). */
+function isChallengeInProgress(title: string, bodySnippet: string): boolean {
+  if (/just a moment|checking your browser|please wait|one more step|cf-browser-verification/i.test(title)) return true;
+  if (/checking if the site connection is secure|verify you are human|performance & security by cloudflare/i.test(bodySnippet)) return true;
+  return false;
+}
+
+/**
+ * Poll until a Cloudflare/Akamai challenge page clears or timeout. Best-effort — a timeout
+ * just means we proceed with whatever DOM is present (the soft-block reload may still help).
+ */
+async function waitForChallengeClear(page: Page, log: SkillContext['log'], sessionId: string): Promise<void> {
+  const deadline = Date.now() + CHALLENGE_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    let title = '';
+    let bodySnippet = '';
+    try {
+      title = await page.title();
+      bodySnippet = await page.evaluate(() => (document.body?.innerText ?? '').slice(0, 500));
+    } catch (err) {
+      log.debug({ err, sessionId }, 'waitForChallengeClear: could not read page — stopping poll');
+      return;
+    }
+    if (!isChallengeInProgress(title, bodySnippet)) return;
+    if (isHardBlock(title)) return;
+    log.debug({ sessionId, title }, 'Edge challenge in progress — waiting');
+    await new Promise((r) => setTimeout(r, CHALLENGE_POLL_INTERVAL_MS));
+  }
+  log.debug({ sessionId }, 'Edge challenge poll timed out — proceeding with current DOM');
 }
 
 // A near-empty body after load is a soft-block tell (CF/JS challenge serving a stub page),
@@ -456,7 +498,7 @@ async function isLikelyEmpty(page: Page, log: SkillContext['log']): Promise<bool
  */
 async function resolveLocator(page: Page, selector: string, log: SkillContext['log']): Promise<Locator> {
   // Main frame first (the common case, and the cheapest).
-  const top = await resolveInScope(page, selector);
+  const top = await resolveInScope(page, selector, log);
   if (top) return top;
 
   // Child frames eligible for interaction (exclude the main frame and private/internal
@@ -467,7 +509,7 @@ async function resolveLocator(page: Page, selector: string, log: SkillContext['l
   );
   for (const frame of childFrames) {
     try {
-      const inFrame = await resolveInScope(frame, selector);
+      const inFrame = await resolveInScope(frame, selector, log);
       if (inFrame) return inFrame;
     } catch (err) {
       log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during selector resolution (detached/error)');
@@ -498,7 +540,7 @@ async function resolveLocator(page: Page, selector: string, log: SkillContext['l
  * Try to resolve `selector` within a single scope (a Page or a Frame). Returns the
  * matching locator, or null if nothing matched (so the caller can try the next frame).
  */
-async function resolveInScope(scope: Page | Frame, selector: string): Promise<Locator | null> {
+async function resolveInScope(scope: Page | Frame, selector: string, log: SkillContext['log']): Promise<Locator | null> {
   // Roles ordered roughly by likelihood. `gridcell`/`cell` cover calendar date cells,
   // which custom date pickers expose inside a role="grid".
   const rolesToTry: Parameters<Page['getByRole']>[0][] = [
@@ -509,21 +551,58 @@ async function resolveInScope(scope: Page | Frame, selector: string): Promise<Lo
     const loc = scope.getByRole(role, { name: selector, exact: false });
     const count = await loc.count();
     if (count > 0) {
-      // Use .first() when multiple elements match to avoid Playwright strict-mode
-      // errors. The LLM can retry with a more specific selector if needed.
-      return count === 1 ? loc : loc.first();
+      return pickBestLocator(loc, log);
     }
   }
 
   const labelLocator = scope.getByLabel(selector, { exact: false });
   const labelCount = await labelLocator.count();
-  if (labelCount > 0) return labelCount === 1 ? labelLocator : labelLocator.first();
+  if (labelCount > 0) return pickBestLocator(labelLocator, log);
+
+  // Custom form widgets hide native inputs but keep aria-label on them. Partial attribute
+  // match reaches these when getByRole misses. Guard against CSS-hostile selector chars.
+  try {
+    const ariaLocator = scope.locator(`[aria-label*="${escapeAttrValue(selector)}" i]`);
+    const ariaCount = await ariaLocator.count();
+    if (ariaCount > 0) return pickBestLocator(ariaLocator, log);
+  } catch (err) {
+    log.debug({ err, selector }, 'aria-label locator failed — falling through to text/CSS resolution');
+  }
 
   const textLocator = scope.getByText(selector, { exact: false });
   const textCount = await textLocator.count();
-  if (textCount > 0) return textCount === 1 ? textLocator : textLocator.first();
+  if (textCount > 0) {
+    // Caption text often sits next to real controls — prefer an actionable ancestor.
+    const actionable = textLocator.locator('xpath=ancestor-or-self::button | ancestor-or-self::label | ancestor-or-self::*[@role="button"]');
+    const actionableCount = await actionable.count();
+    if (actionableCount > 0) return pickBestLocator(actionable, log);
+    return pickBestLocator(textLocator, log);
+  }
 
   return null;
+}
+
+/** Escape a string for use inside a Playwright attribute selector quoted value. */
+function escapeAttrValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * When a selector matches many elements (duplicate nav links, multi-question quizzes),
+ * prefer the first visible one in DOM order; fall back to .first() for hidden custom inputs.
+ */
+async function pickBestLocator(loc: Locator, log: SkillContext['log']): Promise<Locator> {
+  const count = await loc.count();
+  if (count <= 1) return count === 1 ? loc : loc.first();
+  for (let i = 0; i < count; i++) {
+    const nth = loc.nth(i);
+    const visible = await nth.isVisible().catch((err) => {
+      log.debug({ err, index: i }, 'pickBestLocator: isVisible failed for candidate — skipping');
+      return false;
+    });
+    if (visible) return nth;
+  }
+  return loc.first();
 }
 
 /**

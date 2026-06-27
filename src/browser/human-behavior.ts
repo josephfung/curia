@@ -178,7 +178,22 @@ export async function humanClick(page: Page, locator: Locator, opts: BehaviorOpt
     // is decorative; the click itself is what matters. Log so it's observable. (#1053)
     log?.debug({ err }, 'humanClick: movement failed — falling back to direct click');
   }
-  await locator.click({ timeout: 10_000 });
+  // Custom-styled radios/checkboxes hide the native input but keep aria-label on it.
+  // Playwright resolves them, yet they fail actionability checks — force click still
+  // toggles the control and emits the input events the site's JS listens for.
+  let visible: boolean;
+  try {
+    visible = await locator.isVisible();
+  } catch (err) {
+    log?.debug({ err }, 'humanClick: visibility check failed');
+    throw err;
+  }
+  if (visible) {
+    await locator.click({ timeout: 10_000 });
+  } else {
+    log?.debug('humanClick: target not visible — using force click (typical for custom radios/checkboxes)');
+    await locator.click({ force: true, timeout: 10_000 });
+  }
 }
 
 /**
