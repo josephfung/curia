@@ -58,7 +58,7 @@ export interface SkillManifest {
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, skillSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
-   *  taskRepo, secretCapture, secretResolver.
+   *  taskRepo, workingDocs, secretCapture, secretResolver.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -246,6 +246,9 @@ export interface SkillContext {
    *  Provides CRUD access to the tasks table and manages linked wake-up scheduled_jobs rows.
    *  Used by task-create, task-list, task-update, task-complete. */
   taskRepo?: import('../db/task-repo.js').TaskRepo;
+  /** Working document repo — available to skills declaring 'workingDocs' in capabilities.
+   *  OKF-serialized document workspace backed by Postgres (#1208). */
+  workingDocs?: import('../db/working-docs-repo.js').WorkingDocsRepo;
   /** Execution layer — available to skills declaring 'executionLayer' in capabilities.
    *  Allows re-invocation of skills with humanApproved bypass. Only approve-action (#428)
    *  should declare this capability; it is sensitivity: "elevated" (CEO-only). */

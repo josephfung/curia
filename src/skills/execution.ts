@@ -151,6 +151,7 @@ export class ExecutionLayer {
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
   private auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
   private taskRepo?: import('../db/task-repo.js').TaskRepo;
+  private workingDocsRepo?: import('../db/working-docs-repo.js').WorkingDocsRepo;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private tempFileStore?: TempFileStore;
   private readonly infraLlmService?: InfraLlmService;
@@ -199,6 +200,7 @@ export class ExecutionLayer {
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
     auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
     taskRepo?: import('../db/task-repo.js').TaskRepo;
+    workingDocsRepo?: import('../db/working-docs-repo.js').WorkingDocsRepo;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
     tempFileStore?: TempFileStore;
     infraLlmService?: InfraLlmService;
@@ -234,6 +236,7 @@ export class ExecutionLayer {
     this.actionLogRepo = options?.actionLogRepo;
     this.auditLogRepo = options?.auditLogRepo;
     this.taskRepo = options?.taskRepo;
+    this.workingDocsRepo = options?.workingDocsRepo;
     this.confidencePipeline = options?.confidencePipeline;
     this.tempFileStore = options?.tempFileStore;
     this.infraLlmService = options?.infraLlmService;
@@ -1031,6 +1034,7 @@ export class ExecutionLayer {
       actionLogRepo: this.actionLogRepo,
       auditLogRepo: this.auditLogRepo,
       taskRepo: this.taskRepo,
+      workingDocs: this.workingDocsRepo,
       confidencePipeline: this.confidencePipeline,
       // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).
       // Listed here so the missing-cap guard knows it's configured when this.tempFileStore is set.
