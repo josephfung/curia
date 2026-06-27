@@ -1,12 +1,76 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import pino from 'pino';
 import type { SkillContext } from '../../../src/skills/types.js';
 import { CeoInboxUpdateFoldersHandler } from '../../../skills/ceo-inbox-update-folders/handler.js';
 
 const logger = pino({ level: 'silent' });
 
-// CeoNylasClient uses global fetch — spy on it rather than mocking the constructor.
-// This avoids ESM constructor-mock complications and follows the ceo-nylas-client.test.ts pattern.
+// CeoNylasClient uses global fetch. The handler now resolves label display names to
+// Gmail label IDs, so it calls listFolders (GET /folders), optionally createFolder
+// (POST /folders), then getMessage (GET /messages/:id), then updateMessageFolders
+// (PUT /messages/:id). Route the fetch mock by URL + method so tests are robust to
+// the call order/count rather than relying on a fixed mockResolvedValueOnce sequence.
+
+interface FolderFixture {
+  id: string;
+  name: string;
+}
+
+function jsonResponse(obj: unknown): Response {
+  return new Response(JSON.stringify({ data: obj }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function mockNylas(opts: {
+  folders: FolderFixture[];
+  messageFolders: string[];
+  getMessageThrows?: boolean;
+  putEmptyFolders?: boolean;
+  putError?: { status: number; body: string };
+}) {
+  const folders = [...opts.folders];
+  const calls: { putFolders: string[] | null; createdNames: string[] } = {
+    putFolders: null,
+    createdNames: [],
+  };
+
+  const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input);
+    const method = (init?.method ?? 'GET').toUpperCase();
+
+    if (url.endsWith('/folders') && method === 'GET') {
+      return jsonResponse(folders);
+    }
+    if (url.endsWith('/folders') && method === 'POST') {
+      const body = JSON.parse(String(init?.body)) as { name: string };
+      const created = { id: `Label_new_${calls.createdNames.length}`, name: body.name };
+      calls.createdNames.push(body.name);
+      folders.push(created);
+      return jsonResponse(created);
+    }
+    if (url.includes('/messages/') && method === 'GET') {
+      if (opts.getMessageThrows) throw new Error('Nylas 404');
+      return jsonResponse({ id: 'msg-1', folders: opts.messageFolders });
+    }
+    if (url.includes('/messages/') && method === 'PUT') {
+      const body = JSON.parse(String(init?.body)) as { folders: string[] };
+      calls.putFolders = body.folders;
+      if (opts.putError) {
+        return new Response(opts.putError.body, {
+          status: opts.putError.status,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      // putEmptyFolders models Nylas omitting the folders field on the PUT echo.
+      return jsonResponse(opts.putEmptyFolders ? { id: 'msg-1' } : { id: 'msg-1', folders: body.folders });
+    }
+    throw new Error(`unexpected fetch: ${method} ${url}`);
+  });
+
+  return { spy, calls };
+}
 
 function makeCtx(input: Record<string, unknown>): SkillContext {
   return {
@@ -16,25 +80,20 @@ function makeCtx(input: Record<string, unknown>): SkillContext {
   } as unknown as SkillContext;
 }
 
-/** Build a successful Nylas JSON envelope response. */
-function nylasOk(data: unknown): Response {
-  return new Response(JSON.stringify({ data }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-/** Build a minimal Nylas message object (only fields the handler cares about). */
-function nylasMsg(id: string, folders: string[]) {
-  return { id, thread_id: 'thread-1', subject: 'Test', from: [], to: [], cc: [], snippet: '', date: 0, unread: false, folders };
-}
+// System folders (id === name) plus the emoji triage labels (id !== name).
+const FOLDERS: FolderFixture[] = [
+  { id: 'INBOX', name: 'INBOX' },
+  { id: 'SENT', name: 'SENT' },
+  { id: 'IMPORTANT', name: 'IMPORTANT' },
+  { id: 'SPAM', name: 'SPAM' },
+  { id: 'Label_43', name: '⏳ In Progress' },
+  { id: 'Label_39', name: '✍️ Drafted' },
+];
 
 describe('CeoInboxUpdateFoldersHandler', () => {
   const handler = new CeoInboxUpdateFoldersHandler();
 
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   // ── Input validation ──────────────────────────────────────────────────────
 
@@ -50,14 +109,10 @@ describe('CeoInboxUpdateFoldersHandler', () => {
     if (!result.success) expect(result.error).toContain('at least one');
   });
 
-  // ── Normal path ───────────────────────────────────────────────────────────
+  // ── Normal path (system folders, id === name) ─────────────────────────────
 
   it('returns the folders from the Nylas response when non-empty', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      // First call: getMessage → current folders are INBOX, SENT
-      .mockResolvedValueOnce(nylasOk(nylasMsg('msg-1', ['INBOX', 'SENT'])))
-      // Second call: updateMessageFolders → Nylas confirms new folder set
-      .mockResolvedValueOnce(nylasOk(nylasMsg('msg-1', ['INBOX', 'SENT', 'IMPORTANT'])));
+    mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'SENT'] });
 
     const result = await handler.execute(
       makeCtx({ message_id: 'msg-1', add_folders: ['IMPORTANT'] }),
@@ -71,9 +126,7 @@ describe('CeoInboxUpdateFoldersHandler', () => {
   });
 
   it('removes the specified folder from the current set', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(nylasOk(nylasMsg('msg-1', ['INBOX', 'SPAM'])))
-      .mockResolvedValueOnce(nylasOk(nylasMsg('msg-1', ['INBOX'])));
+    mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'SPAM'] });
 
     const result = await handler.execute(
       makeCtx({ message_id: 'msg-1', remove_folders: ['SPAM'] }),
@@ -89,11 +142,7 @@ describe('CeoInboxUpdateFoldersHandler', () => {
   // ── Empty-folders guard (the bug fixed by issue #596) ────────────────────
 
   it('falls back to the computed folder list when Nylas returns empty folders', async () => {
-    // Nylas omits the folders field — CeoNylasClient normalises it to [] via `data.folders ?? []`.
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(nylasOk(nylasMsg('msg-1', ['INBOX'])))
-      // Nylas PUT response with folders omitted — normalises to []
-      .mockResolvedValueOnce(nylasOk({ id: 'msg-1' }));
+    mockNylas({ folders: FOLDERS, messageFolders: ['INBOX'], putEmptyFolders: true });
 
     const result = await handler.execute(
       makeCtx({ message_id: 'msg-1', add_folders: ['IMPORTANT'] }),
@@ -102,15 +151,12 @@ describe('CeoInboxUpdateFoldersHandler', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const data = result.data as { folders: string[] };
-      // Must return the computed set (INBOX + IMPORTANT), not the empty Nylas response.
       expect(data.folders).toEqual(['INBOX', 'IMPORTANT']);
     }
   });
 
   it('does not duplicate a folder that is already present', async () => {
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(nylasOk(nylasMsg('msg-1', ['INBOX', 'IMPORTANT'])))
-      .mockResolvedValueOnce(nylasOk(nylasMsg('msg-1', ['INBOX', 'IMPORTANT'])));
+    mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'IMPORTANT'] });
 
     const result = await handler.execute(
       makeCtx({ message_id: 'msg-1', add_folders: ['IMPORTANT'] }),
@@ -123,10 +169,86 @@ describe('CeoInboxUpdateFoldersHandler', () => {
     }
   });
 
+  // ── Label name → ID resolution (issue #1216) ──────────────────────────────
+
+  it('resolves a display-name remove_folders to its label ID and removes it', async () => {
+    const { calls } = mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'Label_43'] });
+
+    const result = await handler.execute(
+      makeCtx({ message_id: 'msg-1', remove_folders: ['⏳ In Progress'] }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls.putFolders).not.toContain('Label_43');
+    expect(calls.putFolders).not.toContain('⏳ In Progress');
+    expect(calls.putFolders).toContain('INBOX');
+  });
+
+  it('resolves a display-name add_folders to an existing label ID', async () => {
+    const { calls } = mockNylas({ folders: FOLDERS, messageFolders: ['INBOX'] });
+
+    const result = await handler.execute(
+      makeCtx({ message_id: 'msg-1', add_folders: ['✍️ Drafted'] }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls.putFolders).toContain('Label_39');
+    expect(calls.putFolders).not.toContain('✍️ Drafted');
+    expect(calls.createdNames).toEqual([]);
+  });
+
+  it('creates a missing label for add_folders and writes the new ID', async () => {
+    const { calls } = mockNylas({ folders: FOLDERS, messageFolders: ['INBOX'] });
+
+    const result = await handler.execute(
+      makeCtx({ message_id: 'msg-1', add_folders: ['🚀 Brand New'] }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls.createdNames).toEqual(['🚀 Brand New']);
+    expect(calls.putFolders).toContain('Label_new_0');
+    expect(calls.putFolders).not.toContain('🚀 Brand New');
+  });
+
+  it('combines add + remove in a single write', async () => {
+    const { calls } = mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'Label_43'] });
+
+    const result = await handler.execute(
+      makeCtx({
+        message_id: 'msg-1',
+        add_folders: ['✍️ Drafted'],
+        remove_folders: ['⏳ In Progress'],
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls.putFolders).toContain('Label_39');
+    expect(calls.putFolders).not.toContain('Label_43');
+    expect(calls.putFolders).toContain('INBOX');
+  });
+
+  it('reports remove tokens that match no folder in removed_unresolved', async () => {
+    const { calls } = mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'Label_43'] });
+
+    const result = await handler.execute(
+      makeCtx({
+        message_id: 'msg-1',
+        remove_folders: ['⏳ In Progress', '🤷 Does Not Exist'],
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { removed_unresolved: string[] };
+      expect(data.removed_unresolved).toEqual(['🤷 Does Not Exist']);
+    }
+    expect(calls.putFolders).not.toContain('Label_43');
+  });
+
   // ── Error handling ────────────────────────────────────────────────────────
 
   it('returns failure when getMessage throws', async () => {
-    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Nylas 404'));
+    mockNylas({ folders: FOLDERS, messageFolders: [], getMessageThrows: true });
 
     const result = await handler.execute(
       makeCtx({ message_id: 'msg-missing', add_folders: ['INBOX'] }),
@@ -134,5 +256,26 @@ describe('CeoInboxUpdateFoldersHandler', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('Failed to update');
+  });
+
+  it('surfaces the underlying error detail when the folder write fails', async () => {
+    mockNylas({
+      folders: FOLDERS,
+      messageFolders: ['INBOX'],
+      putError: {
+        status: 400,
+        body: JSON.stringify({ error: { message: 'Invalid label: ⏳ In Progress' } }),
+      },
+    });
+
+    const result = await handler.execute(
+      makeCtx({ message_id: 'msg-1', add_folders: ['✍️ Drafted'] }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('Failed to update CEO inbox message folders');
+      expect(result.error).toContain('400');
+    }
   });
 });
