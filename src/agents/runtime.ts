@@ -1663,5 +1663,8 @@ function mapAgentErrorToResponseFields(agentErr: AgentError): {
   if (agentErr.type === 'SKILL_ERROR') {
     return { errorType: agentErr.type, reason: 'tool_error', retryable: agentErr.retryable };
   }
+  if (agentErr.type === 'AUTH_FAILURE' || agentErr.type === 'VALIDATION_ERROR') {
+    return { errorType: agentErr.type, reason: 'blocked', retryable: agentErr.retryable };
+  }
   return { errorType: agentErr.type, reason: 'api_error', retryable: agentErr.retryable };
 }

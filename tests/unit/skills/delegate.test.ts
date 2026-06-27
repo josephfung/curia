@@ -211,13 +211,11 @@ describe('DelegateHandler', () => {
 
   it('propagates runtime BUDGET_EXCEEDED(maxTurns) to delegate result (#1170)', async () => {
     const { AgentRuntime } = await import('../../../src/agents/runtime.js');
-    const { createLogger } = await import('../../../src/logger.js');
     const { vi } = await import('vitest');
     type LLMProvider = import('../../../src/agents/llm/provider.js').LLMProvider;
     type ExecutionLayer = import('../../../src/skills/execution.js').ExecutionLayer;
 
-    const testLogger = createLogger('error');
-    const bus = new EventBus(testLogger);
+    const bus = new EventBus(logger);
     const agentRegistry = new AgentRegistry();
     agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
     agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
@@ -253,7 +251,7 @@ describe('DelegateHandler', () => {
       provider: alwaysToolUseProvider,
       resolvedModel: 'mock-model',
       bus,
-      logger: testLogger,
+      logger,
       executionLayer: mockExecution,
       skillToolDefs: [toolDef],
       errorBudget: { maxTurns: 3, maxConsecutiveErrors: 10 },
