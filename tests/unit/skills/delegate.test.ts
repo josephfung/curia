@@ -211,7 +211,6 @@ describe('DelegateHandler', () => {
 
   it('propagates runtime BUDGET_EXCEEDED(maxTurns) to delegate result (#1170)', async () => {
     const { AgentRuntime } = await import('../../../src/agents/runtime.js');
-    const { createAgentTask } = await import('../../../src/bus/events.js');
     const { createLogger } = await import('../../../src/logger.js');
     const { vi } = await import('vitest');
     type LLMProvider = import('../../../src/agents/llm/provider.js').LLMProvider;
