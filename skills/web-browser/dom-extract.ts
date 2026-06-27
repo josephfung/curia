@@ -62,6 +62,9 @@ export function extractFrameContent(): string {
   document.querySelectorAll('input, select, textarea').forEach(el => {
     const input = el as HTMLInputElement;
     if (input.type === 'hidden') return;
+    const fieldset = input.closest('fieldset');
+    const legend = fieldset?.querySelector('legend')?.textContent?.trim();
+    const groupedKey = legend?.slice(0, 120);
     const id = input.id;
     const labelEl = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
     const label = input.getAttribute('aria-label')
@@ -70,8 +73,12 @@ export function extractFrameContent(): string {
       ?? input.getAttribute('name')
       ?? input.type;
     const entry = `[${input.type ?? 'field'}: ${label}]`;
-    // Skip radios already covered by a fieldset group above.
-    if ((input.type === 'radio' || input.type === 'checkbox') && seenGroups.size > 0) return;
+    // Skip only radios/checkboxes already covered by their own fieldset group.
+    if (
+      (input.type === 'radio' || input.type === 'checkbox')
+      && groupedKey
+      && seenGroups.has(groupedKey)
+    ) return;
     formFields.push(entry);
   });
 

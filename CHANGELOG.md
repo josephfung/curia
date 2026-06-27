@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **`web-browser`** — waits for Cloudflare-style challenge interstitials to clear before declaring a block; resolves hidden custom form controls via aria-label and force-click; extracts grouped fieldsets with per-option labels and prioritizes main content over nav chrome. (v1.5.0)
+- **`web-browser`** — waits through edge WAF challenge pages and resolves hidden custom form controls. (v1.5.0)
 
 ## [0.38.0] — 2026-06-26 — "Deckard"
 

@@ -498,7 +498,7 @@ async function isLikelyEmpty(page: Page, log: SkillContext['log']): Promise<bool
  */
 async function resolveLocator(page: Page, selector: string, log: SkillContext['log']): Promise<Locator> {
   // Main frame first (the common case, and the cheapest).
-  const top = await resolveInScope(page, selector);
+  const top = await resolveInScope(page, selector, log);
   if (top) return top;
 
   // Child frames eligible for interaction (exclude the main frame and private/internal
@@ -509,7 +509,7 @@ async function resolveLocator(page: Page, selector: string, log: SkillContext['l
   );
   for (const frame of childFrames) {
     try {
-      const inFrame = await resolveInScope(frame, selector);
+      const inFrame = await resolveInScope(frame, selector, log);
       if (inFrame) return inFrame;
     } catch (err) {
       log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during selector resolution (detached/error)');
@@ -540,7 +540,7 @@ async function resolveLocator(page: Page, selector: string, log: SkillContext['l
  * Try to resolve `selector` within a single scope (a Page or a Frame). Returns the
  * matching locator, or null if nothing matched (so the caller can try the next frame).
  */
-async function resolveInScope(scope: Page | Frame, selector: string): Promise<Locator | null> {
+async function resolveInScope(scope: Page | Frame, selector: string, log: SkillContext['log']): Promise<Locator | null> {
   // Roles ordered roughly by likelihood. `gridcell`/`cell` cover calendar date cells,
   // which custom date pickers expose inside a role="grid".
   const rolesToTry: Parameters<Page['getByRole']>[0][] = [
@@ -551,29 +551,32 @@ async function resolveInScope(scope: Page | Frame, selector: string): Promise<Lo
     const loc = scope.getByRole(role, { name: selector, exact: false });
     const count = await loc.count();
     if (count > 0) {
-      return pickBestLocator(loc);
+      return pickBestLocator(loc, log);
     }
   }
 
   const labelLocator = scope.getByLabel(selector, { exact: false });
   const labelCount = await labelLocator.count();
-  if (labelCount > 0) return pickBestLocator(labelLocator);
+  if (labelCount > 0) return pickBestLocator(labelLocator, log);
 
-  // Custom form widgets (16personalities, Material UI, etc.) hide native inputs but keep
-  // aria-label on them. Partial attribute match reaches these when getByRole misses.
-  const ariaLocator = scope.locator(`[aria-label*="${escapeAttrValue(selector)}" i]`);
-  const ariaCount = await ariaLocator.count();
-  if (ariaCount > 0) return pickBestLocator(ariaLocator);
+  // Custom form widgets hide native inputs but keep aria-label on them. Partial attribute
+  // match reaches these when getByRole misses. Guard against CSS-hostile selector chars.
+  try {
+    const ariaLocator = scope.locator(`[aria-label*="${escapeAttrValue(selector)}" i]`);
+    const ariaCount = await ariaLocator.count();
+    if (ariaCount > 0) return pickBestLocator(ariaLocator, log);
+  } catch (err) {
+    log.debug({ err, selector }, 'aria-label locator failed — falling through to text/CSS resolution');
+  }
 
   const textLocator = scope.getByText(selector, { exact: false });
   const textCount = await textLocator.count();
   if (textCount > 0) {
-    // Caption divs ("Agree"/"Disagree" labels) sit next to real controls — prefer an
-    // actionable ancestor (button, label, [role=button]) over inert decoration text.
+    // Caption text often sits next to real controls — prefer an actionable ancestor.
     const actionable = textLocator.locator('xpath=ancestor-or-self::button | ancestor-or-self::label | ancestor-or-self::*[@role="button"]');
     const actionableCount = await actionable.count();
-    if (actionableCount > 0) return pickBestLocator(actionable);
-    return pickBestLocator(textLocator);
+    if (actionableCount > 0) return pickBestLocator(actionable, log);
+    return pickBestLocator(textLocator, log);
   }
 
   return null;
@@ -588,12 +591,16 @@ function escapeAttrValue(value: string): string {
  * When a selector matches many elements (duplicate nav links, multi-question quizzes),
  * prefer the first visible one in DOM order; fall back to .first() for hidden custom inputs.
  */
-async function pickBestLocator(loc: Locator): Promise<Locator> {
+async function pickBestLocator(loc: Locator, log: SkillContext['log']): Promise<Locator> {
   const count = await loc.count();
   if (count <= 1) return count === 1 ? loc : loc.first();
   for (let i = 0; i < count; i++) {
     const nth = loc.nth(i);
-    if (await nth.isVisible().catch(() => false)) return nth;
+    const visible = await nth.isVisible().catch((err) => {
+      log.debug({ err, index: i }, 'pickBestLocator: isVisible failed for candidate — skipping');
+      return false;
+    });
+    if (visible) return nth;
   }
   return loc.first();
 }
