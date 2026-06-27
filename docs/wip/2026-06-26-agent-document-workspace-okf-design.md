@@ -1,7 +1,7 @@
 # Agent Document Workspace (on the Open Knowledge Format) — Design
 
 **Date:** 2026-06-26
-**Status:** Draft / Exploration — recommends OKF as the format; backing store recommended, not locked
+**Status:** Draft — OKF format accepted as the direction; backing store recommended (Postgres), not locked. Decomposed into v0.39 epic [#1207] (sub-issues [#1208]–[#1213])
 **Builds on:** [spec 01 — Memory System](../specs/01-memory-system.md), [resumable tasks & projects design](2026-06-23-resumable-tasks-and-projects-design.md), [spec 19 — Tasks & Backlog](../specs/19-tasks-and-backlog.md)
 
 ## Context — the gap
@@ -234,23 +234,39 @@ write nothing project-specific (the resumable design's "no project foresight" pr
   the workspace through `extract-facts` / `extract-relationships` so durable facts land in
   the KG *through* the validation gates, then archive the documents.
 
-## Path to v0.39 (non-binding)
+## Path to v0.39
 
-Issue decomposition is deferred — this addendum settles the *model* only. The likely shape
-when it does land:
+Decomposed into a dedicated epic, [#1207] — **Agent Document Workspace (OKF)** — with six
+sub-issues on milestone v0.39, plus amendments to the resumable-tasks issues. It complements
+the resumable epic [#1150] (it supplies the spill target) but does not gate its close
+condition.
 
-- A standalone **workspace primitive** issue under the resumable epic [#1150]: the OKF
-  store (option A) + the backlink index + the `read`/`write`/`list`/`search` skills +
-  harness-injected guidance.
-- A one-line **amendment to [#1172]**: the accumulator spill target becomes a workspace
-  **path** pointer (`{ kind: "document", path, section? }`) instead of config-store.
-  `#1172` can still ship first with an inline cap only, so it isn't blocked.
-- Optional follow-ups: `DreamEngine` lint, completion-time KG distillation, OKF-bundle
-  export + the static visualizer.
+**Core (P2)**
 
-Ordering: the workspace primitive depends on `#1172`'s pointer shape and should land
-before / with `#1173` (the `checkpoint` primitive), which would inject the document
-manifest into its resumable-task guidance.
+- [#1208] (W1) — OKF store, repo, and backlink index (the `working_documents` /
+  `working_document_links` migration, `WorkingDocsRepo`, frontmatter + link parsing).
+- [#1209] (W2) — `doc-read` / `doc-list` / `doc-write` / `doc-search` skills + harness-
+  injected workspace guidance and auto-pin.
+- [#1210] (W3) — spill the resumable accumulator into a workspace document; stores a
+  `{ kind: "document", path, section? }` pointer in `progress.resumable`. Depends on
+  [#1208] and [#1172].
+
+**Follow-ups (P3/P4)**
+
+- [#1211] (W4) — distill a completed workspace into the KG via the existing
+  `extract-facts` / `extract-relationships` validation gates.
+- [#1212] (W5) — nightly `DreamEngine` lint (orphans / stale / contradictions) + `/scratch`
+  TTL sweep.
+- [#1213] (W6) — OKF-bundle export + the static-HTML visualizer.
+
+**Amendments applied:** [#1172] — accumulator spill target changed from config-store to a
+workspace path pointer (implemented in [#1210]); `#1172` can still ship inline-cap-only
+first. [#1173] — its injected resumable-task guidance composes with the workspace guidance
+([#1209]). [#1150] — cross-referenced to this epic.
+
+**Ordering:** [#1208] is the foundation; everything else depends on it. [#1210] also depends
+on [#1172]'s pointer shape and should land before / with [#1173] (the `checkpoint`
+primitive), which injects the document manifest into its resumable-task guidance.
 
 ## Open questions
 
@@ -278,7 +294,14 @@ manifest into its resumable-task guidance.
   — if the standard stalls we still have a sane, self-contained markdown format — and the
   loose untyped-wiki model stays cleanly complementary to the strict, typed KG.
 
+[#521]: https://github.com/josephfung/curia/issues/521
 [#1150]: https://github.com/josephfung/curia/issues/1150
 [#1172]: https://github.com/josephfung/curia/issues/1172
 [#1173]: https://github.com/josephfung/curia/issues/1173
-[#521]: https://github.com/josephfung/curia/issues/521
+[#1207]: https://github.com/josephfung/curia/issues/1207
+[#1208]: https://github.com/josephfung/curia/issues/1208
+[#1209]: https://github.com/josephfung/curia/issues/1209
+[#1210]: https://github.com/josephfung/curia/issues/1210
+[#1211]: https://github.com/josephfung/curia/issues/1211
+[#1212]: https://github.com/josephfung/curia/issues/1212
+[#1213]: https://github.com/josephfung/curia/issues/1213
