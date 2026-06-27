@@ -21,6 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Calendar free/busy** — `getFreeBusy` now calls the real Nylas v8 `calendars.getFreeBusy` endpoint; the previous call to a non-existent `calendars_free_busy` resource crashed every `calendar-check-conflicts` and `calendar-find-free-time` invocation. (#1214)
 - **`ceo-inbox-update-folders`** — resolves label display names (e.g. "⏳ In Progress") to Gmail label IDs and creates missing labels before writing, so adds/removes no longer fail with "Invalid label" and "⏳ In Progress" can actually be cleared. (#1216)
+- **`ceo-inbox` scheduling consults** — a message parked for a calendar consult is no longer labeled "✍️ Drafted" before a draft exists, and the consult-timeout wake now keys off actual draft existence; parked scheduling replies get drafted instead of stranding the email as "In Progress + Drafted" with no draft. (#1215)
 
 ## [0.38.0] — 2026-06-26 — "Deckard"
 

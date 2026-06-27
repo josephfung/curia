@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.13.1"
+version: "0.13.2"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -234,10 +234,18 @@ system_prompt: |
     2. Call `ceo-inbox-read` with that `message_id`.
     3. **Idempotent no-op (already resolved):** Inspect label/folder state from
        step 2. Then call `ceo-inbox-list` with `folder: "DRAFTS"` and check for
-       any draft whose `thread_id` matches this message's thread. If the message
-       does NOT have `⏳ In Progress`, OR it already has `✍️ Drafted` or
-       `✅ Handled`, OR a reply draft exists for this thread — call
-       `task-complete` ("consult already resolved") and exit without drafting.
+       any draft whose `thread_id` matches this message's thread. Call
+       `task-complete` ("consult already resolved") and exit without drafting
+       ONLY when there is positive evidence the reply was completed:
+         - a reply draft already exists for this thread, OR
+         - the message no longer has `⏳ In Progress` (it was carried to a
+           terminal state such as `✅ Handled` or archived).
+       Do NOT treat the `✍️ Drafted` label alone as proof of completion. A parked
+       consult must never carry `✍️ Drafted` without a draft (see the parking
+       steps), but if labels are ever out of sync, the draft-existence check
+       above is authoritative — a `✍️ Drafted` label with no matching draft and
+       `⏳ In Progress` still present means the reply was never written, so fall
+       through to step 4 and draft it.
     4. **Still parked (`⏳ In Progress` present, no terminal outcome):** bounded
        fallback so scheduling mail cannot park forever:
        - Read `consult_kind` from the task description (`scheduling` or
@@ -568,6 +576,10 @@ system_prompt: |
      - Classification: ✍️ Drafted (parked — calendar invite consult in flight)
      - Actions: file-parse (if ICS present), bullpen.post (CONSULT REQUEST),
        ceo-inbox-update-folders (⏳ In Progress), ceo-inbox-mark-read
+    **While parked, apply the `⏳ In Progress` label ONLY** — do NOT apply
+    `✍️ Drafted` here or in decision-tagging (step 4g). No draft exists yet;
+    `✍️ Drafted` would defeat the consult-timeout safety wake. See the identical
+    note under the scheduling parking branch below.
   6. **Schedule consult-timeout safety wake** — see the consult-timeout contract
      in Scheduling-specific drafting rules below (`consult_kind=invite`).
 
@@ -760,6 +772,14 @@ system_prompt: |
        - Classification: ✍️ Drafted (parked — calendar consult in flight)
        - Actions: bullpen.post (CONSULT REQUEST), ceo-inbox-label (⏳ In Progress),
          ceo-inbox-mark-read
+       **While parked, the message carries the `⏳ In Progress` label ONLY.** Do
+       NOT apply the `✍️ Drafted` Gmail label here, and skip `✍️ Drafted` in the
+       decision-tagging step (4g) for this message — there is no draft yet.
+       `✍️ Drafted` is applied only once an actual draft exists: on the Branch A
+       resume after the CONSULT REPLY, or in the consult-timeout fallback (step 4
+       of the consult-timeout branch). Applying `✍️ Drafted` now would make the
+       consult-timeout safety wake treat the reply as already written and skip
+       drafting — leaving the message stuck with no draft.
 
     4. **Schedule consult-timeout safety wake** with `consult_kind=scheduling`
        (see contract above). Skip only when `bullpen.post` failed entirely.
@@ -837,6 +857,13 @@ system_prompt: |
 
   This applies the classification as a Gmail label. Use the final
   classification (after any rule overrides), not the original.
+
+  **Exception — parked calendar consults:** when the message is a scheduling or
+  invite consult parked in flight (classification reported as `✍️ Drafted
+  (parked — …)`), apply the `⏳ In Progress` label ONLY. Do NOT apply the
+  `✍️ Drafted` label while parked — there is no draft yet, and the label would
+  cause the consult-timeout safety wake to skip drafting. `✍️ Drafted` is
+  applied later, only when an actual draft is created.
 
   **Failure handling:** If ceo-inbox-label fails, log the error in the
   Response Format and continue to the next message. Do not abort the run.
