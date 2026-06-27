@@ -123,6 +123,11 @@ interface NylasRawEvent {
 
 interface NylasRawFreeBusy {
   email: string;
+  // Nylas returns a discriminated array: success entries (object "free_busy", with
+  // timeSlots) and per-calendar error entries (object "error", carrying `error` and
+  // no timeSlots). Both fields are optional so the error variant can be detected.
+  object?: string;
+  error?: string;
   timeSlots?: Array<{
     startTime: number;
     endTime: number;
@@ -437,7 +442,22 @@ export class NylasCalendarClient {
           emails: calendarIds,
         },
       });
-      return (response?.data ?? []).map((fb) => ({
+      const entries = response?.data ?? [];
+      // A per-calendar error entry (object "error" / has `error`, no timeSlots) must
+      // NOT be collapsed to an empty slot list — that would read an unreadable
+      // calendar as fully free and let a conflict check double-book the principal.
+      // Fail loud so the caller (calendar-check-conflicts / -find-free-time) surfaces
+      // it instead of silently scheduling over an unknown.
+      const errored = entries.filter((fb) => fb.object === 'error' || fb.error != null);
+      if (errored.length > 0) {
+        for (const e of errored) {
+          this.log.error({ email: e.email, error: e.error }, 'Nylas getFreeBusy returned an error entry for a calendar');
+        }
+        throw new Error(
+          `Free/busy lookup failed for ${errored.length} calendar(s): ${errored.map((e) => e.email).join(', ')}`,
+        );
+      }
+      return entries.map((fb) => ({
         email: fb.email,
         timeSlots: (fb.timeSlots ?? []).map((ts) => ({
           startTime: ts.startTime,

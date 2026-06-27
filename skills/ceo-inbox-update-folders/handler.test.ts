@@ -28,7 +28,11 @@ function jsonResponse(obj: unknown): Response {
  * Returns the spy plus a `calls` record capturing the PUT body and any
  * createFolder POSTs, for assertions.
  */
-function mockNylas(opts: { folders: NylasFolderFixture[]; messageFolders: string[] }) {
+function mockNylas(opts: {
+  folders: NylasFolderFixture[];
+  messageFolders: string[];
+  putError?: { status: number; body: string };
+}) {
   const folders = [...opts.folders];
   const calls: { putFolders: string[] | null; createdNames: string[] } = {
     putFolders: null,
@@ -55,6 +59,12 @@ function mockNylas(opts: { folders: NylasFolderFixture[]; messageFolders: string
     if (url.includes('/messages/') && method === 'PUT') {
       const body = JSON.parse(String(init?.body)) as { folders: string[] };
       calls.putFolders = body.folders;
+      if (opts.putError) {
+        return new Response(opts.putError.body, {
+          status: opts.putError.status,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       return jsonResponse({ data: { id: 'msg-1', folders: body.folders } });
     }
     throw new Error(`unexpected fetch: ${method} ${url}`);
@@ -144,5 +154,46 @@ describe('CeoInboxUpdateFoldersHandler — label name/ID resolution', () => {
     expect(calls.putFolders).toContain('Label_39'); // ✍️ Drafted added
     expect(calls.putFolders).not.toContain('Label_43'); // ⏳ In Progress removed
     expect(calls.putFolders).toContain('INBOX'); // untouched
+  });
+
+  it('reports remove tokens that match no folder in removed_unresolved', async () => {
+    const { calls } = mockNylas({ folders: FOLDERS, messageFolders: ['INBOX', 'Label_43'] });
+    const handler = new CeoInboxUpdateFoldersHandler();
+
+    const result = await handler.execute(
+      makeCtx({
+        message_id: 'msg-1',
+        remove_folders: ['⏳ In Progress', '🤷 Does Not Exist'],
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    const data = (result as { data: Record<string, unknown> }).data;
+    expect(data.removed_unresolved).toEqual(['🤷 Does Not Exist']);
+    // The resolvable one is still removed.
+    expect(calls.putFolders).not.toContain('Label_43');
+  });
+
+  it('surfaces the underlying error detail when the folder write fails', async () => {
+    mockNylas({
+      folders: FOLDERS,
+      messageFolders: ['INBOX'],
+      putError: {
+        status: 400,
+        body: JSON.stringify({ error: { message: 'Invalid label: ⏳ In Progress' } }),
+      },
+    });
+    const handler = new CeoInboxUpdateFoldersHandler();
+
+    const result = await handler.execute(
+      makeCtx({ message_id: 'msg-1', add_folders: ['✍️ Drafted'] }),
+    );
+
+    expect(result.success).toBe(false);
+    // The generic prefix is kept, but the real Nylas/Gmail detail is appended so
+    // the agent can adapt instead of seeing an opaque "Bad Request".
+    const error = (result as { error: string }).error;
+    expect(error).toContain('Failed to update CEO inbox message folders');
+    expect(error).toContain('400');
   });
 });

@@ -177,4 +177,28 @@ describe('NylasCalendarClient — free/busy plumbing', () => {
       },
     ]);
   });
+
+  it('throws when a calendar returns a free/busy error entry instead of treating it as free', async () => {
+    // Nylas getFreeBusy returns a mixed array: success entries (object: "free_busy",
+    // with timeSlots) and error entries (object: "error", with an error string and no
+    // timeSlots). An error entry must NOT be silently mapped to an empty (= free) slot
+    // list, or a conflict check would read an unreadable calendar as wide open and
+    // double-book the principal.
+    const getFreeBusy = vi.fn().mockResolvedValue({
+      data: [
+        { email: 'joseph@example.test', error: 'permission denied', object: 'error' },
+      ],
+    });
+    const client = makeClientWith({
+      calendars: { getFreeBusy } as unknown as NylasCalendarLike['calendars'],
+    });
+
+    await expect(
+      client.getFreeBusy(
+        ['joseph@example.test'],
+        '2026-06-29T00:00:00-04:00',
+        '2026-06-30T00:00:00-04:00',
+      ),
+    ).rejects.toThrow(/free.?busy/i);
+  });
 });

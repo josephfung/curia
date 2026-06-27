@@ -54,8 +54,12 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
       const resolveExistingId = (token: string): string | null =>
         folderByToken.get(token.toUpperCase())?.id ?? null;
 
-      // Resolve removals to IDs. An unknown token has nothing to remove — warn and skip.
+      // Resolve removals to IDs. A token that does not resolve to any known folder
+      // is suspicious (typo / normalization drift), not a clean no-op — record it in
+      // `removed_unresolved` so the caller never reads a bare success as "label
+      // cleared" when nothing matched.
       const removeIds = new Set<string>();
+      const removeUnresolved: string[] = [];
       for (const token of removeFolders) {
         const id = resolveExistingId(token);
         if (id) {
@@ -63,8 +67,9 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
         } else {
           ctx.log.warn(
             { token },
-            'ceo-inbox-update-folders: remove target not found among folders — skipping',
+            'ceo-inbox-update-folders: remove target did not resolve to any folder — skipping',
           );
+          removeUnresolved.push(token);
         }
       }
 
@@ -121,11 +126,16 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
           message_id: messageId,
           folders: finalFolders,
           created,
+          removed_unresolved: removeUnresolved,
         },
       };
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-update-folders: failed to update');
-      return { success: false, error: 'Failed to update CEO inbox message folders' };
+      // Surface the underlying detail (Gmail "Invalid label", auth, network, etc.)
+      // so the agent can adapt instead of seeing an opaque message — mirrors
+      // ceo-inbox-label's error surfacing.
+      const detail = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Failed to update CEO inbox message folders: ${detail}` };
     }
   }
 }
