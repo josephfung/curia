@@ -18,7 +18,7 @@ import type { TaskOriginator } from '../contacts/types.js';
 import { capOriginatorToParent } from '../contacts/principal.js';
 import {
   readResumableBlock,
-  writeResumableBlock,
+  prepareResumableBlock,
   type PrepareResumableBlockInput,
   type ResumableProgressBlock,
   type ResumableWriteResult,
@@ -587,23 +587,28 @@ export class TaskRepo {
       return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
     }
 
-    const written = writeResumableBlock(current.progress, input);
-    if (!written.ok) return written;
+    const prepared = prepareResumableBlock(input);
+    if (!prepared.ok) return prepared;
 
     const { rows } = await this.pool.query(
-      `UPDATE tasks SET progress = $1::jsonb, updated_at = now()
-       WHERE id = $2 AND status NOT IN ('done', 'cancelled')
-       RETURNING ${TASK_COLUMNS}`,
-      [JSON.stringify(written.progress), taskId],
+      `UPDATE tasks
+          SET progress = jsonb_set(COALESCE(progress, '{}'::jsonb), '{resumable}', $1::jsonb, true),
+              updated_at = now()
+        WHERE id = $2
+          AND status NOT IN ('done', 'cancelled')
+        RETURNING ${TASK_COLUMNS}`,
+      [JSON.stringify(prepared.block), taskId],
     );
     const row = rows[0] as DbTaskRow | undefined;
     if (!row) {
-      try {
-        await this.resolveEmptyUpdateReturning(taskId);
+      const currentTask = await this.getTask(taskId);
+      if (!currentTask) {
         return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
-      } catch {
+      }
+      if (TERMINAL_STATUSES.has(currentTask.status)) {
         return { ok: false, code: 'invalid_block', message: `task ${taskId} is in a terminal state` };
       }
+      throw new Error(`task-repo: setResumableBlock update returned no row for non-terminal task ${taskId}`);
     }
 
     const updated = mapTaskRow(row);
@@ -619,9 +624,9 @@ export class TaskRepo {
     }
 
     this.logger.info(
-      { taskId: updated.id, done: written.block.done, total: written.block.total },
+      { taskId: updated.id, done: prepared.block.done, total: prepared.block.total },
       'task-repo: persisted resumable checkpoint',
     );
-    return { task: updated, block: written.block };
+    return { task: updated, block: prepared.block };
   }
 }

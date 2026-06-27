@@ -82,6 +82,31 @@ describeIf('TaskRepo resumable progress (#1172)', () => {
     expect((reloaded?.progress as { notes?: unknown[] }).notes).toEqual([]);
   });
 
+  it('does not clobber concurrent progress.notes when checkpointing', async () => {
+    const task = await repo.createTask({
+      agentId: 'social-media',
+      title: `${PREFIX} notes`,
+      source: 'coordinator',
+    });
+
+    await repo.updateTask(task.id, { progressNote: 'Slice 1 complete' }, 'social-media');
+
+    const result = await repo.setResumableBlock(task.id, {
+      cursor: 'page:2',
+      done: 50,
+      total: 1300,
+      accumulator: ['did:plc:abc'],
+      lastSliceUnits: 25,
+      next: 'Review page 3',
+    });
+    expect('task' in result).toBe(true);
+
+    const reloaded = await repo.getTask(task.id);
+    const notes = (reloaded?.progress as { notes?: Array<{ note: string }> }).notes ?? [];
+    expect(notes.some((n) => n.note === 'Slice 1 complete')).toBe(true);
+    expect(await repo.getResumableBlock(task.id)).toMatchObject({ cursor: 'page:2', done: 50 });
+  });
+
   it('persists a document pointer accumulator', async () => {
     const task = await repo.createTask({
       agentId: 'social-media',

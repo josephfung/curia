@@ -82,6 +82,13 @@ describe('parseResumableBlock', () => {
     expect(parseResumableBlock({ ...BASE_INPUT, next: '   ' })).toBeNull();
     expect(parseResumableBlock({ ...BASE_INPUT, accumulator: { kind: 'document', path: '' } })).toBeNull();
   });
+
+  it('rejects non-JSON-serializable cursor values', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(parseResumableBlock({ ...BASE_INPUT, cursor: circular })).toBeNull();
+    expect(parseResumableBlock({ ...BASE_INPUT, cursor: BigInt(1) })).toBeNull();
+  });
 });
 
 describe('readResumableBlock / mergeResumableIntoProgress round-trip', () => {

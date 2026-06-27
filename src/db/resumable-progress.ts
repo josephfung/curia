@@ -77,10 +77,21 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isJsonSerializable(value: unknown): boolean {
+  try {
+    JSON.stringify(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseCursor(raw: unknown): ResumableCursor | undefined {
   if (raw === null) return null;
   if (typeof raw === 'string') return raw;
-  if (isPlainObject(raw)) return raw;
+  if (isPlainObject(raw)) {
+    return isJsonSerializable(raw) ? raw : undefined;
+  }
   return undefined;
 }
 
@@ -103,12 +114,7 @@ function parseAccumulator(raw: unknown): ResumableAccumulator | undefined {
   }
   if (raw === undefined) return undefined;
   // Any JSON-serializable inline value (array, object, string, number, etc.).
-  try {
-    JSON.stringify(raw);
-    return raw as ResumableInlineAccumulator;
-  } catch {
-    return undefined;
-  }
+  return isJsonSerializable(raw) ? (raw as ResumableInlineAccumulator) : undefined;
 }
 
 /** Parse a resumable block from persisted progress JSON. Returns null when absent or invalid. */

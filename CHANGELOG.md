@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **`progress.resumable`** — typed checkpoint block on `tasks.progress` with shared read/write helpers, inline accumulator cap (4 KB), document-workspace spill pointer shape, and round-trip/stress tests. (#1172)
+- **`progress.resumable`** — typed checkpoint block with bounded accumulator and spill pointer, plus round-trip tests. (#1172)
 
 ### Changed
 
