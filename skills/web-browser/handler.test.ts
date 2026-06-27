@@ -57,9 +57,12 @@ function makeMockPage(
   url = 'https://aeroplan.com/account',
   opts: { status?: number; title?: string } = {},
 ) {
-  const locator = {
+    const locator = {
     count: vi.fn().mockResolvedValue(1),
     first: vi.fn().mockReturnThis(),
+    nth: vi.fn().mockReturnThis(),
+    isVisible: vi.fn().mockResolvedValue(true),
+    locator: vi.fn().mockReturnThis(),
     fill,
     click: vi.fn().mockResolvedValue(undefined),
     selectOption: vi.fn().mockResolvedValue(undefined),
@@ -813,6 +816,7 @@ describe('web-browser navigate hardening — dwell + soft-block reload (#1053)',
     // isLikelyEmpty now requires ALL THREE signals to be below threshold before it
     // treats a page as empty — so the "clear" return must exceed at least one. (#1053)
     page.evaluate = vi.fn()
+      .mockResolvedValueOnce('normal page body')  // waitForChallengeClear body snippet
       .mockResolvedValueOnce({ textLength: 10, htmlLength: 200, interactiveCount: 0 })  // first: all thresholds met → empty
       .mockResolvedValue({ textLength: 500, htmlLength: 5_000, interactiveCount: 3 });  // after reload: not empty → success
     // title is always clean (not a hard block title)
@@ -846,7 +850,9 @@ describe('web-browser navigate hardening — dwell + soft-block reload (#1053)',
     // evaluate always returns a stub-page metrics object — isLikelyEmpty fires on both
     // the first check and the post-reload re-check (all three signals below threshold),
     // so the block persists and the handler fails fast. (#1053)
-    page.evaluate = vi.fn().mockResolvedValue({ textLength: 10, htmlLength: 200, interactiveCount: 0 });
+    page.evaluate = vi.fn()
+      .mockResolvedValueOnce('normal page body')  // waitForChallengeClear body snippet
+      .mockResolvedValue({ textLength: 10, htmlLength: 200, interactiveCount: 0 });
     page.title = vi.fn().mockResolvedValue('Empty Page'); // not a hard-block title
     const ctx = makeNavCtx(page);
 
@@ -877,5 +883,37 @@ describe('web-browser click uses human behavior (#1053)', () => {
 
     expect(result.success).toBe(true);
     expect(vi.mocked(humanClick)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('web-browser navigate — challenge poll (#1053+)', () => {
+  it('waits through a Cloudflare interstitial before proceeding', async () => {
+    const fill = vi.fn();
+    const page = makeMockPage('Medium article body content here', fill, 'https://josephfung.ca/', {
+      title: 'Just a moment...',
+    });
+    page.title = vi.fn()
+      .mockResolvedValueOnce('Just a moment...')
+      .mockResolvedValue('Joseph Fung – Medium');
+    page.evaluate = vi.fn()
+      .mockResolvedValueOnce('Checking if the site connection is secure')
+      .mockResolvedValueOnce('Article body loaded on Medium')
+      .mockResolvedValue({ textLength: 500, htmlLength: 5_000, interactiveCount: 3 });
+    const ctx = {
+      input: { action: 'navigate', url: 'https://josephfung.ca' },
+      log: logger,
+      browserService: {
+        getOrCreateSession: vi.fn().mockResolvedValue({
+          sessionId: 'sess-cf',
+          session: new BrowserSession({} as unknown as BrowserContext, page as unknown as Page),
+        }),
+        closeSession: vi.fn(),
+      } as unknown as BrowserService,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(simulateHumanPresence)).toHaveBeenCalledTimes(1);
   });
 });

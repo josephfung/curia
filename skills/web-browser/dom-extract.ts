@@ -35,19 +35,50 @@ export function extractFrameContent(): string {
   // fields exist and what they're called to fill them correctly.
   // Query the live DOM for form fields so we can look up labels by ID.
   const formFields: string[] = [];
+  const seenGroups = new Set<string>();
+
+  // Group radios/checkboxes by fieldset legend or aria-labelledby so quiz widgets
+  // (e.g. 16personalities) expose "Question N: …" plus clickable option labels.
+  document.querySelectorAll('fieldset').forEach(fieldset => {
+    const legend = fieldset.querySelector('legend')?.textContent?.trim();
+    if (!legend) return;
+    const key = legend.slice(0, 120);
+    if (seenGroups.has(key)) return;
+    seenGroups.add(key);
+    const options: string[] = [];
+    fieldset.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(el => {
+      const input = el as HTMLInputElement;
+      const opt = input.getAttribute('aria-label')
+        ?? input.getAttribute('value')
+        ?? input.id;
+      if (opt) options.push(opt);
+    });
+    if (options.length > 0) {
+      formFields.push(`[question: ${legend}]`);
+      options.forEach(o => formFields.push(`  (option: ${o})`));
+    }
+  });
+
   document.querySelectorAll('input, select, textarea').forEach(el => {
     const input = el as HTMLInputElement;
     if (input.type === 'hidden') return;
     const id = input.id;
     const labelEl = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
-    const label = labelEl?.textContent?.trim()
+    const label = input.getAttribute('aria-label')
+      ?? labelEl?.textContent?.trim()
       ?? input.getAttribute('placeholder')
       ?? input.getAttribute('name')
       ?? input.type;
-    formFields.push(`[${input.type ?? 'field'}: ${label}]`);
+    const entry = `[${input.type ?? 'field'}: ${label}]`;
+    // Skip radios already covered by a fieldset group above.
+    if ((input.type === 'radio' || input.type === 'checkbox') && seenGroups.size > 0) return;
+    formFields.push(entry);
   });
 
-  const bodyText = (root.innerText ?? root.textContent ?? '').trim();
+  // Prefer main/article content over chrome when the page has a clear content root.
+  const contentRoot = (document.querySelector('main, [role="main"], article, .sp-card')
+    ?? root) as HTMLElement;
+  const bodyText = (contentRoot.innerText ?? contentRoot.textContent ?? root.innerText ?? '').trim();
   const formSummary = formFields.length > 0
     ? '\n\n--- Form fields ---\n' + formFields.join('\n')
     : '';

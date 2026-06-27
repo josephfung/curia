@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **`web-browser`** — waits for Cloudflare-style challenge interstitials to clear before declaring a block; resolves hidden custom radios via aria-label and force-click; extracts quiz fieldsets with per-option labels and prioritizes main content over nav chrome. (v1.5.0)
+
 ## [0.38.0] — 2026-06-26 — "Deckard"
 
 > **Rick Deckard** *(Blade Runner, 1982, Ridley Scott — from Philip K. Dick's "Do Androids Dream of Electric Sheep?", 1968)* — a blade runner whose whole craft is telling a genuinely living person from a replicant that only wears the appearance of one. This release teaches Curia the same distinction: authority now answers solely to the principal who is actually, presently live — never to a woken task that merely carries their lineage.
