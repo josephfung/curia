@@ -138,3 +138,43 @@ describe('NylasCalendarClient — RSVP plumbing', () => {
     expect(event.participants[0]!.status).toBe('yes');
   });
 });
+
+describe('NylasCalendarClient — free/busy plumbing', () => {
+  it('queries the real Nylas calendars.getFreeBusy endpoint and maps busy slots', async () => {
+    const getFreeBusy = vi.fn().mockResolvedValue({
+      data: [
+        {
+          email: 'joseph@example.test',
+          timeSlots: [{ startTime: 1_780_000_000, endTime: 1_780_003_600, status: 'busy' }],
+          object: 'free_busy',
+        },
+      ],
+    });
+    // Only stub `calendars.getFreeBusy` — the real Nylas v8 SDK has no
+    // `calendars_free_busy` resource, so the previous implementation crashed here.
+    const client = makeClientWith({
+      calendars: { getFreeBusy } as unknown as NylasCalendarLike['calendars'],
+    });
+
+    const result = await client.getFreeBusy(
+      ['joseph@example.test'],
+      '2026-06-29T00:00:00-04:00',
+      '2026-06-30T00:00:00-04:00',
+    );
+
+    expect(getFreeBusy).toHaveBeenCalledWith({
+      identifier: 'grant_test',
+      requestBody: {
+        start_time: Math.floor(new Date('2026-06-29T00:00:00-04:00').getTime() / 1000),
+        end_time: Math.floor(new Date('2026-06-30T00:00:00-04:00').getTime() / 1000),
+        emails: ['joseph@example.test'],
+      },
+    });
+    expect(result).toEqual([
+      {
+        email: 'joseph@example.test',
+        timeSlots: [{ startTime: 1_780_000_000, endTime: 1_780_003_600, status: 'busy' }],
+      },
+    ]);
+  });
+});

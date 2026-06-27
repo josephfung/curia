@@ -24,6 +24,14 @@ export interface NylasCalendarLike {
       identifier: string;
       calendarId: string;
     }): Promise<{ data: NylasRawCalendar }>;
+
+    // Free/busy lives on the `calendars` resource in the Nylas v8 SDK
+    // (POST /v3/grants/{identifier}/calendars/free-busy). There is no
+    // top-level `calendars_free_busy` resource — calling one crashes at runtime.
+    getFreeBusy(params: {
+      identifier: string;
+      requestBody: Record<string, unknown>;
+    }): Promise<{ data: NylasRawFreeBusy[] }>;
   };
 
   events: {
@@ -65,12 +73,6 @@ export interface NylasCalendarLike {
     }): Promise<void>;
   };
 
-  calendars_free_busy: {
-    list(params: {
-      identifier: string;
-      requestBody: Record<string, unknown>;
-    }): Promise<{ data: NylasRawFreeBusy[] }>;
-  };
 }
 
 // -- Raw Nylas SDK types (subset we use) --
@@ -427,7 +429,7 @@ export class NylasCalendarClient {
       throw new Error(`Invalid time range: timeMax must be after timeMin (timeMin="${timeMin}", timeMax="${timeMax}")`);
     }
     try {
-      const response = await this.nylas.calendars_free_busy.list({
+      const response = await this.nylas.calendars.getFreeBusy({
         identifier: this.grantId,
         requestBody: {
           start_time: startUnix,

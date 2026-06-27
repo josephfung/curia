@@ -17,6 +17,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`web-browser`** — waits through edge WAF challenge pages and resolves hidden custom form controls. (v1.5.0)
 
+### Fixed
+
+- **Calendar free/busy** — `getFreeBusy` now calls the real Nylas v8 `calendars.getFreeBusy` endpoint; the previous call to a non-existent `calendars_free_busy` resource crashed every `calendar-check-conflicts` and `calendar-find-free-time` invocation. (#1214)
+
 ## [0.38.0] — 2026-06-26 — "Deckard"
 
 > **Rick Deckard** *(Blade Runner, 1982, Ridley Scott — from Philip K. Dick's "Do Androids Dream of Electric Sheep?", 1968)* — a blade runner whose whole craft is telling a genuinely living person from a replicant that only wears the appearance of one. This release teaches Curia the same distinction: authority now answers solely to the principal who is actually, presently live — never to a woken task that merely carries their lineage.
