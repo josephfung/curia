@@ -88,6 +88,9 @@ export interface InvokeOptions {
    *  All other checks (elevated-skill gate, content filter, blocked-contact) still run.
    *  See ADR-018. */
   humanApproved?: boolean;
+  /** Per-task-turn guard against blind identical re-delegation (#1171). Owned by the agent
+   *  runtime; forwarded to the delegate skill for defense in depth. */
+  delegationGuard?: import('../agents/delegation-guard.js').DelegationGuard;
 }
 
 /** Cap on the input rendering passed to the escalation judge — keeps full email bodies and
@@ -989,6 +992,7 @@ export class ExecutionLayer {
       // a synchronously-delegated specialist (a specialist acting inside the CEO's live turn).
       // Distinct from taskMetadata so no persistence skill can sweep it into a wakeable row.
       liveTurn: options?.liveTurn,
+      delegationGuard: options?.delegationGuard,
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.
       timezone: this.timezone,

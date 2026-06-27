@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`delegate`** — honors `retryable: false` on specialist failures with an enforceable per-turn guard: identical re-delegations are blocked and non-retryable failures escalate to the CEO backlog via `task-create`. (#1171)
 - **`delegate`** — specialist failures now propagate structured `reason` and `retryable` from the runtime (e.g. `maxTurns`) instead of generic timeout/error strings, so the coordinator can report the real cause. (#1170)
 - **`web-browser`** — waits through edge WAF challenge pages and resolves hidden custom form controls. (v1.5.0)
 

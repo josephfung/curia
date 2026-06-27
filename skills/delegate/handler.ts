@@ -25,6 +25,7 @@ import { createAgentTask, type AgentResponseEvent, type AgentResponseFailureReas
 // Resume-token format lives in ONE place (#995): decode + version via the shared helper, so a
 // future format change can't silently desync this handler from runtime.ts and the resume subscriber.
 import { decodeResumeToken, RESUME_TOKEN_VERSION } from '../../src/agents/resume-token.js';
+import { delegationKey } from '../../src/agents/delegation-guard.js';
 
 // Default wait for the specialist to respond — appropriate for interactive tasks.
 // Long-running scheduled tasks should pass timeout_ms explicitly (injected by the runtime
@@ -129,6 +130,33 @@ export class DelegateHandler implements SkillHandler {
     }
 
     const conversationId = conversation_id ?? `delegate-${randomUUID()}`;
+
+    // Identical-delegation guard (#1171): resume continuations are exempt — they carry new
+    // CEO direction and a different effective brief. Without a resume_token, block when the
+    // runtime has already recorded a non-retryable failure for this agent+task pair.
+    const hasResumeToken = typeof resume_token === 'string' && resume_token !== '';
+    if (!hasResumeToken && ctx.delegationGuard) {
+      const dKey = delegationKey(agent, task);
+      if (!ctx.delegationGuard.canAttempt(dKey)) {
+        const prior = ctx.delegationGuard.getFailure(dKey);
+        ctx.log.warn(
+          { targetAgent: agent, reason: prior?.reason },
+          'Blocked identical re-delegation at delegate handler',
+        );
+        return {
+          success: true,
+          data: {
+            agent,
+            failed: true,
+            blocked: true,
+            reason: prior?.reason ?? 'blocked',
+            retryable: false,
+            message: prior?.message ?? formatStructuredFailureMessage(agent, 'blocked'),
+            escalated: ctx.delegationGuard.isEscalated(dKey),
+          },
+        };
+      }
+    }
 
     // Resume flow: when resume_token is provided, decode it and construct a
     // full task brief from the original context + the CEO's direction (the
