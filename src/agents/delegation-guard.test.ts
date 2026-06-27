@@ -67,6 +67,14 @@ describe('DelegationGuard', () => {
     expect(guard.canAttempt(otherKey)).toBe(true);
   });
 
+  it('does not block successful repeat delegations before any failure is recorded', () => {
+    const guard = new DelegationGuard();
+    for (let i = 0; i < MAX_RETRYABLE_IDENTICAL_DELEGATIONS + 1; i++) {
+      guard.recordInvocation(key);
+    }
+    expect(guard.canAttempt(key)).toBe(true);
+  });
+
   it(`allows up to ${MAX_RETRYABLE_IDENTICAL_DELEGATIONS} attempts for retryable failures`, () => {
     const guard = new DelegationGuard();
     for (let i = 0; i < MAX_RETRYABLE_IDENTICAL_DELEGATIONS - 1; i++) {

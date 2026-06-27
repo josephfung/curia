@@ -3345,6 +3345,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(taskCreateCount.n).toBe(1);
     expect(provider.chat).toHaveBeenCalledTimes(1);
 
+    expect(agentResponses).toHaveLength(1);
     const response = agentResponses[0]!;
     expect(response.payload.content).toContain('delegation_failure');
     expect(response.payload.content).toContain('maxTurns');

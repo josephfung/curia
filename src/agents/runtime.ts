@@ -763,7 +763,7 @@ export class AgentRuntime {
     // Delegation circuit-breaker state (#1171). Tracks identical delegate(agent, task)
     // calls within this turn so non-retryable specialist failures cannot be blind-retried.
     const delegationGuard = new DelegationGuard();
-    let pendingDelegationEscalation: (DelegationFailureInfo & { task: string }) | null = null;
+    let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
 
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
@@ -940,7 +940,6 @@ export class AgentRuntime {
                 },
               };
             } else {
-              delegationGuard.recordInvocation(dKey);
               result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
             }
           } else {
@@ -1049,7 +1048,7 @@ export class AgentRuntime {
             skillInput !== null &&
             !Array.isArray(skillInput)
           ) {
-            const delegateFailure = parseDelegateFailureData(result.data);
+            const delegateFailure = parseDelegateFailureData(result.data, logger);
             if (delegateFailure) {
               const delegateInput = skillInput as Record<string, unknown>;
               const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
@@ -1066,7 +1065,7 @@ export class AgentRuntime {
                 if (escalated) {
                   delegationGuard.markEscalated(dKey);
                 }
-                pendingDelegationEscalation = { ...delegateFailure, task: delegateTask };
+                pendingDelegationEscalation = { ...delegateFailure, task: delegateTask, escalated };
               }
             }
           }
@@ -1077,6 +1076,9 @@ export class AgentRuntime {
             tool_use_id: toolCall.id,
             content: resultContent,
           } as ToolResultContent);
+          if (pendingDelegationEscalation) {
+            break;
+          }
         } else {
           // Failure: classify the error and format as a structured <task_error> block
           // so the LLM gets machine-readable error context instead of raw strings.
@@ -1168,7 +1170,7 @@ export class AgentRuntime {
           reason: pendingDelegationEscalation.reason,
           retryable: false,
           message: pendingDelegationEscalation.message,
-          escalated: true,
+          escalated: pendingDelegationEscalation.escalated,
         });
 
         if (memory) {
@@ -1190,8 +1192,11 @@ export class AgentRuntime {
             conversationId,
             targetAgent: pendingDelegationEscalation.agent,
             reason: pendingDelegationEscalation.reason,
+            escalated: pendingDelegationEscalation.escalated,
           },
-          'Task stopped after non-retryable delegation failure — escalated to CEO backlog',
+          pendingDelegationEscalation.escalated
+            ? 'Task stopped after non-retryable delegation failure — escalated to CEO backlog'
+            : 'Task stopped after non-retryable delegation failure — CEO backlog escalation failed',
         );
         return;
       }

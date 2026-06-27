@@ -36,7 +36,8 @@ export class DelegationGuard {
   canAttempt(key: string): boolean {
     const entry = this.entries.get(key);
     if (!entry) return true;
-    if (entry.lastFailure?.retryable === false) return false;
+    if (!entry.lastFailure) return true;
+    if (entry.lastFailure.retryable === false) return false;
     return entry.attempts < MAX_RETRYABLE_IDENTICAL_DELEGATIONS;
   }
 
@@ -82,13 +83,17 @@ export interface DelegateFailureResult extends DelegationFailureInfo {
 }
 
 /** Parse a delegate skill success payload that carries structured failure fields. */
-export function parseDelegateFailureData(data: unknown): DelegateFailureResult | null {
+export function parseDelegateFailureData(data: unknown, logger?: Logger): DelegateFailureResult | null {
   if (data === null || data === undefined) return null;
   let record: Record<string, unknown>;
   if (typeof data === 'string') {
     try {
       record = JSON.parse(data) as Record<string, unknown>;
-    } catch {
+    } catch (err) {
+      logger?.warn(
+        { err, dataPreview: data.slice(0, 200) },
+        'Failed to parse delegate failure payload — treating as non-failure',
+      );
       return null;
     }
   } else if (typeof data === 'object' && !Array.isArray(data)) {

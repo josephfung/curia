@@ -156,6 +156,7 @@ export class DelegateHandler implements SkillHandler {
           },
         };
       }
+      ctx.delegationGuard.recordInvocation(dKey);
     }
 
     // Resume flow: when resume_token is provided, decode it and construct a
