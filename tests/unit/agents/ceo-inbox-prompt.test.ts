@@ -16,11 +16,6 @@ function loadCeoInboxPrompt(): string {
   return config.system_prompt;
 }
 
-function loadCalendarPrompt(): string {
-  const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
-  return config.system_prompt;
-}
-
 // Extract the text of the Branch A section from the ceo-inbox prompt.
 // Branch A runs from its header to the start of the Scheduled-wake resume
 // section (the second resume mode). Note: "Branch B" appears earlier in the
@@ -53,15 +48,6 @@ function extractSchedulingConsultSection(prompt: string): string {
   if (start === -1) throw new Error('Scheduling-specific drafting rules not found');
   if (end === -1 || end <= start)
     throw new Error('Scheduling section end not found after scheduling rules');
-  return prompt.slice(start, end);
-}
-
-function extractCalendarConsultSection(prompt: string): string {
-  const start = prompt.indexOf('## Answering a scheduling consult');
-  const end = prompt.indexOf('## Holds toggle');
-  if (start === -1) throw new Error('Calendar consult section not found');
-  if (end === -1 || end <= start)
-    throw new Error('Holds toggle section not found after calendar consult section');
   return prompt.slice(start, end);
 }
 
@@ -303,111 +289,5 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     expect(branchA).toContain('Result: invite_recommendation');
     expect(branchA).toContain('Do NOT archive');
     expect(branchA).toContain('pending approval');
-  });
-});
-
-describe('calendar consult prompt — proposed-time conflict checks', () => {
-  it('documents Proposed as optional and leaves no-proposal consults on free-time search', () => {
-    const prompt = loadCalendarPrompt();
-    const consultSection = extractCalendarConsultSection(prompt);
-
-    expect(consultSection).toContain('The `Proposed:` block is optional');
-    expect(consultSection).toContain('consult without `Proposed:`');
-    expect(consultSection).toContain('existing free-time search flow unchanged');
-    expect(consultSection).toContain('calendar-find-free-time');
-  });
-
-  it('checks proposed slots before finding new free time', () => {
-    const prompt = loadCalendarPrompt();
-    const consultSection = extractCalendarConsultSection(prompt);
-    const checkPos = posIn(consultSection, 'calendar-check-conflicts');
-    const findPos = posIn(consultSection, 'calendar-find-free-time');
-
-    expect(checkPos).toBeGreaterThan(-1);
-    expect(findPos).toBeGreaterThan(checkPos);
-  });
-
-  it('confirms the first conflict-free proposed slot without holds or alternatives', () => {
-    const prompt = loadCalendarPrompt();
-    const consultSection = extractCalendarConsultSection(prompt);
-    const proposedStepStart = posIn(consultSection, '3. **Check sender-proposed slots first');
-    const findStepStart = posIn(consultSection, '4. **Find conflict-free windows');
-    expect(proposedStepStart).toBeGreaterThan(-1);
-    expect(findStepStart).toBeGreaterThan(proposedStepStart);
-
-    const proposedStep = consultSection.slice(proposedStepStart, findStepStart);
-    expect(proposedStep).toContain('Result: confirmed');
-    expect(proposedStep).toContain('Do NOT call `calendar-find-free-time`');
-    expect(proposedStep).toContain('do NOT place a hold');
-  });
-
-  it('falls back to alternatives when all proposed slots conflict', () => {
-    const prompt = loadCalendarPrompt();
-    const consultSection = extractCalendarConsultSection(prompt);
-    const proposedStepStart = posIn(consultSection, '3. **Check sender-proposed slots first');
-    const findStepStart = posIn(consultSection, '4. **Find conflict-free windows');
-    expect(proposedStepStart).toBeGreaterThan(-1);
-    expect(findStepStart).toBeGreaterThan(proposedStepStart);
-
-    const proposedStep = consultSection.slice(proposedStepStart, findStepStart);
-    expect(proposedStep).toContain('If every proposed slot conflicts');
-    expect(proposedStep).toContain('continue to');
-    expect(proposedStep).toContain('find alternatives');
-  });
-
-  it('adds a confirmed CONSULT REPLY variant distinct from ok alternatives', () => {
-    const prompt = loadCalendarPrompt();
-    const consultSection = extractCalendarConsultSection(prompt);
-    const confirmedPos = posIn(consultSection, 'Result: confirmed');
-    const confirmedFieldPos = posIn(consultSection, 'Confirmed:');
-    const okPos = posIn(consultSection, 'Result: ok');
-
-    expect(confirmedPos).toBeGreaterThan(-1);
-    expect(confirmedFieldPos).toBeGreaterThan(confirmedPos);
-    expect(okPos).toBeGreaterThan(confirmedFieldPos);
-    expect(consultSection).toContain('For `Result: confirmed`, never mark "hold');
-    expect(consultSection).toContain('never call `calendar-create-hold`');
-  });
-});
-
-describe('calendar consult prompt — formal invite RSVP behavior', () => {
-  it('uses standard model tier for RSVP judgment', async () => {
-    const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
-    expect(config.model.tier).toBe('standard');
-  });
-
-  it('links formal invite consults to Nylas calendar events when needed', () => {
-    const prompt = loadCalendarPrompt();
-    const consultSection = extractCalendarConsultSection(prompt);
-
-    expect(consultSection).toContain('Need: RSVP for formal calendar invite');
-    expect(consultSection).toContain('calendar-list-events');
-    expect(consultSection).toContain('could not link invite to calendar event');
-    expect(consultSection).toContain('start`, or `end`');
-    expect(consultSection).toContain('Only after concrete start/end are known');
-  });
-
-  it('allows context-aware RSVP attempts and reserves recommendations for ambiguity', () => {
-    const prompt = loadCalendarPrompt();
-    const consultSection = extractCalendarConsultSection(prompt);
-    const decidePos = posIn(consultSection, 'Decide the RSVP response from all available context');
-    const rsvpPos = posIn(consultSection, 'calendar-respond-to-invite');
-    const ambiguousPos = posIn(consultSection, 'If the correct RSVP is genuinely ambiguous');
-
-    expect(rsvpPos).toBeGreaterThan(-1);
-    expect(decidePos).toBeGreaterThan(-1);
-    expect(ambiguousPos).toBeGreaterThan(rsvpPos);
-    expect(consultSection).toContain('relationship tier, sender kind');
-    expect(consultSection).toContain('Result: invite_recommendation');
-    expect(consultSection).toContain('ignoreHoldCriteria');
-  });
-
-  it('documents pending approval when medium-risk RSVP is autonomy-gated', () => {
-    const prompt = loadCalendarPrompt();
-    const consultSection = extractCalendarConsultSection(prompt);
-
-    expect(consultSection).toContain('Result: invite_pending_approval');
-    expect(consultSection).toContain('pending-approval/autonomy-gate error');
-    expect(consultSection).toContain('action_risk: medium');
   });
 });

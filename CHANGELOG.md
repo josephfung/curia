@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Calendar scheduling rules** — calendar agent loads CEO scheduling rules from `config-store` by key at task start, replacing semantic `memory-query`. (#1223)
 - **`progress.resumable`** — typed checkpoint block with bounded accumulator and spill pointer, plus round-trip tests. (#1172)
 - **Document workspace** — `working_documents` / `working_document_links` Postgres store with `WorkingDocsRepo`, OKF frontmatter round-trip, backlink index, and optimistic concurrency (document + per-section). (#1208)
 
