@@ -649,4 +649,38 @@ describe('Stage 2.5 escalation judge delegation', () => {
       expect.objectContaining({ recipientTier: 'trusted' }),
     );
   });
+
+  it('does not call the judge for principal recipients — policy always allows, LLM call is unnecessary and risky', async () => {
+    // A fail-closed LLM failure in classifyDisclosure() returns decision='escalate' without
+    // reaching applyDisclosurePolicy. For principal recipients the policy allows all classes,
+    // so calling the LLM can only cause spurious blocks. The guard short-circuits before the call.
+    const judge = makeEscalationJudge({ decision: 'escalate', reason: 'would block if called' });
+    const filter = filterWithEscalationJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      recipientTier: 'principal',
+      content: 'Here is your daily recap: 3 open tasks, 1 pending approval.',
+    });
+    expect(result.passed).toBe(true);
+    expect(judge.classifyDisclosure).not.toHaveBeenCalled();
+  });
+
+  it('still calls the judge and blocks for non-principal recipients when the judge escalates', async () => {
+    // Belt-and-suspenders: confirm the principal short-circuit does not weaken
+    // the gate for non-principal recipients.
+    const judge = makeEscalationJudge({
+      decision: 'escalate',
+      disclosureClass: 'principal-context',
+      reason: 'CEO availability should not reach unknown contacts',
+    });
+    const filter = filterWithEscalationJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      recipientTier: 'unknown',
+      content: 'Joseph is free on Thursday afternoon.',
+    });
+    expect(result.passed).toBe(false);
+    expect(result.stage).toBe('disclosure-gate');
+    expect(judge.classifyDisclosure).toHaveBeenCalledTimes(1);
+  });
 });

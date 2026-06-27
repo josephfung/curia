@@ -465,6 +465,13 @@ export class OutboundContentFilter {
     // every message (which is what classifyDisclosure returns when enabled=false).
     if (!this.escalationJudge || !this.escalationJudge.isEnabled()) return [];
 
+    // Principal tier allows all disclosure classes (see DISCLOSURE_ALLOWED in escalation-policy.ts).
+    // Calling the LLM is unnecessary and risky: classifyDisclosure() is fail-closed, so a transient
+    // LLM failure would return decision='escalate' without ever reaching applyDisclosurePolicy —
+    // incorrectly blocking a principal-bound message that the policy unconditionally permits.
+    // Mirrors Stage 2's principalIsSoleRecipient short-circuit in OutboundLlmJudge.review().
+    if (input.recipientTier === 'principal') return [];
+
     const verdict = await this.escalationJudge.classifyDisclosure({
       content: input.content,
       recipientTier: input.recipientTier,
