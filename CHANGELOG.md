@@ -20,6 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Calendar free/busy** — `getFreeBusy` now calls the real Nylas v8 `calendars.getFreeBusy` endpoint; the previous call to a non-existent `calendars_free_busy` resource crashed every `calendar-check-conflicts` and `calendar-find-free-time` invocation. (#1214)
+- **`ceo-inbox-update-folders`** — resolves label display names (e.g. "⏳ In Progress") to Gmail label IDs and creates missing labels before writing, so adds/removes no longer fail with "Invalid label" and "⏳ In Progress" can actually be cleared. (#1216)
 
 ## [0.38.0] — 2026-06-26 — "Deckard"
 

@@ -1,5 +1,6 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { CeoNylasClient } from '../_shared/ceo-nylas-client.js';
+import type { NylasFolder } from '../_shared/ceo-nylas-client.js';
 
 export class CeoInboxUpdateFoldersHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -18,10 +19,14 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
     }
 
     const addFolders = Array.isArray(input.add_folders)
-      ? input.add_folders.filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
+      ? input.add_folders
+          .filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
+          .map((f) => f.trim())
       : [];
     const removeFolders = Array.isArray(input.remove_folders)
-      ? input.remove_folders.filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
+      ? input.remove_folders
+          .filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
+          .map((f) => f.trim())
       : [];
 
     if (addFolders.length === 0 && removeFolders.length === 0) {
@@ -34,17 +39,63 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
     );
 
     try {
-      // Fetch current folders, apply changes, then update
+      // add_folders / remove_folders arrive as display names (e.g. "⏳ In Progress")
+      // or as IDs ("Label_43", "INBOX"). Gmail's PUT requires label *IDs*, so every
+      // token must be resolved through the folder list (mirrors ceo-inbox-label).
+      // Without this, raw display names reach Gmail and the write fails with
+      // HTTP 400 "Invalid label" — and removals silently no-op because a display
+      // name never matches the message's stored IDs.
+      const existingFolders = await client.listFolders();
+      const folderByToken = new Map<string, NylasFolder>();
+      for (const f of existingFolders) {
+        folderByToken.set(f.name.toUpperCase(), f);
+        folderByToken.set(f.id.toUpperCase(), f);
+      }
+      const resolveExistingId = (token: string): string | null =>
+        folderByToken.get(token.toUpperCase())?.id ?? null;
+
+      // Resolve removals to IDs. An unknown token has nothing to remove — warn and skip.
+      const removeIds = new Set<string>();
+      for (const token of removeFolders) {
+        const id = resolveExistingId(token);
+        if (id) {
+          removeIds.add(id.toUpperCase());
+        } else {
+          ctx.log.warn(
+            { token },
+            'ceo-inbox-update-folders: remove target not found among folders — skipping',
+          );
+        }
+      }
+
+      // Resolve additions to IDs, lazily creating the label when it does not yet
+      // exist (same behaviour as ceo-inbox-label).
+      const created: string[] = [];
+      const addIds: string[] = [];
+      for (const token of addFolders) {
+        let id = resolveExistingId(token);
+        if (!id) {
+          ctx.log.info({ token }, 'ceo-inbox-update-folders: creating new label');
+          const folder = await client.createFolder(token);
+          if (!folder.id) {
+            throw new Error(`Nylas returned empty folder ID for label "${token}"`);
+          }
+          folderByToken.set(token.toUpperCase(), folder);
+          folderByToken.set(folder.id.toUpperCase(), folder);
+          created.push(token);
+          id = folder.id;
+        }
+        addIds.push(id);
+      }
+
+      // Read current folders (IDs), drop removals, append additions — all by ID.
       const msg = await client.getMessage(messageId);
-      const currentFolders = new Set(msg.folders ?? []);
-
-      const removeSet = new Set(removeFolders.map((f) => f.toUpperCase()));
-      const updatedFolders = [...currentFolders]
-        .filter((f) => !removeSet.has(f.toUpperCase()));
-
-      for (const folder of addFolders) {
-        if (!updatedFolders.some((f) => f.toUpperCase() === folder.toUpperCase())) {
-          updatedFolders.push(folder);
+      const updatedFolders = [...new Set(msg.folders ?? [])].filter(
+        (f) => !removeIds.has(f.toUpperCase()),
+      );
+      for (const id of addIds) {
+        if (!updatedFolders.some((f) => f.toUpperCase() === id.toUpperCase())) {
+          updatedFolders.push(id);
         }
       }
 
@@ -60,7 +111,7 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
       const finalFolders = result.folders.length > 0 ? result.folders : updatedFolders;
 
       ctx.log.info(
-        { messageId, folders: finalFolders },
+        { messageId, folders: finalFolders, created },
         'ceo-inbox-update-folders: updated successfully',
       );
 
@@ -69,6 +120,7 @@ export class CeoInboxUpdateFoldersHandler implements SkillHandler {
         data: {
           message_id: messageId,
           folders: finalFolders,
+          created,
         },
       };
     } catch (err) {
