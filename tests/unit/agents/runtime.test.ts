@@ -1723,8 +1723,10 @@ describe('AgentRuntime error budget', () => {
     bus.subscribe('agent.error', 'system', (event) => {
       agentErrors.push(event as AgentErrorEvent);
     });
-    // Need a dispatch subscriber for agent.response so the bus allows it
-    bus.subscribe('agent.response', 'dispatch', () => {});
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
 
     const agent = new AgentRuntime({
       agentId: 'coordinator',
@@ -1757,6 +1759,13 @@ describe('AgentRuntime error budget', () => {
     expect(agentErrors).toHaveLength(1);
     expect(agentErrors[0]?.payload.errorType).toBe('BUDGET_EXCEEDED');
     expect(agentErrors[0]?.payload.message).toContain('turn budget');
+
+    // agent.response should carry structured failure fields for delegation consumers (#1170)
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]?.payload.isError).toBe(true);
+    expect(agentResponses[0]?.payload.errorType).toBe('BUDGET_EXCEEDED');
+    expect(agentResponses[0]?.payload.reason).toBe('maxTurns');
+    expect(agentResponses[0]?.payload.retryable).toBe(false);
   });
 
   it('stops after maxConsecutiveErrors is exceeded', async () => {

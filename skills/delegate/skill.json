@@ -1,7 +1,7 @@
 {
   "name": "delegate",
   "description": "Delegate a task to a specialist agent. Use this when the user's request requires specialized expertise (research, expense tracking, etc.). Provide the specialist's name and a clear task description.",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -17,7 +17,12 @@
     "needs_clarification": "boolean?",
     "question": "string?",
     "context": "string?",
-    "resume_token": "string?"
+    "resume_token": "string?",
+    "failed": "boolean?",
+    "reason": "string?",
+    "retryable": "boolean?",
+    "errorType": "string?",
+    "message": "string?"
   },
   "permissions": [],
   "secrets": [],

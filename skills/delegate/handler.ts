@@ -21,7 +21,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { createAgentTask, type AgentResponseEvent } from '../../src/bus/events.js';
+import { createAgentTask, type AgentResponseEvent, type AgentResponseFailureReason } from '../../src/bus/events.js';
 // Resume-token format lives in ONE place (#995): decode + version via the shared helper, so a
 // future format change can't silently desync this handler from runtime.ts and the resume subscriber.
 import { decodeResumeToken, RESUME_TOKEN_VERSION } from '../../src/agents/resume-token.js';
@@ -30,6 +30,41 @@ import { decodeResumeToken, RESUME_TOKEN_VERSION } from '../../src/agents/resume
 // Long-running scheduled tasks should pass timeout_ms explicitly (injected by the runtime
 // from the originating agent.task event's expectedDurationSeconds).
 const DEFAULT_SPECIALIST_TIMEOUT_MS = 90000;
+
+/** Sentinel shape rejected by the response promise when a specialist returns isError with
+ *  structured failure fields — caught in execute() and turned into a typed delegate result. */
+interface StructuredDelegateFailure {
+  __structuredDelegateFailure: true;
+  agent: string;
+  reason: AgentResponseFailureReason;
+  retryable: boolean;
+  errorType?: string;
+}
+
+function isStructuredDelegateFailure(err: unknown): err is StructuredDelegateFailure {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as StructuredDelegateFailure).__structuredDelegateFailure === true
+  );
+}
+
+function formatStructuredFailureMessage(agent: string, reason: AgentResponseFailureReason): string {
+  switch (reason) {
+    case 'maxTurns':
+      return `Specialist '${agent}' exceeded its turn budget and could not complete the task`;
+    case 'maxConsecutiveErrors':
+      return `Specialist '${agent}' exceeded its consecutive error budget and could not complete the task`;
+    case 'tool_error':
+      return `Specialist '${agent}' failed due to a tool error`;
+    case 'api_error':
+      return `Specialist '${agent}' failed due to an API error`;
+    case 'blocked':
+      return `Specialist '${agent}' was blocked from completing the task`;
+    default:
+      return `Specialist '${agent}' could not complete the task`;
+  }
+}
 
 export class DelegateHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -251,8 +286,19 @@ export class DelegateHandler implements SkillHandler {
             clearTimeout(timeoutHandle);
             // isError means the specialist hit an unrecoverable error (context overflow,
             // LLM failure, budget exhaustion). Reject so the catch block returns
-            // { success: false } instead of forwarding the fallback message as a result.
+            // { success: false } or a structured failure result when reason is present.
             if (responseEvent.payload.isError) {
+              const { errorType, reason, retryable } = responseEvent.payload;
+              if (reason !== undefined && retryable !== undefined) {
+                reject({
+                  __structuredDelegateFailure: true,
+                  agent,
+                  reason,
+                  retryable,
+                  ...(errorType !== undefined && { errorType }),
+                } satisfies StructuredDelegateFailure);
+                return;
+              }
               reject(new Error(`Specialist '${agent}' encountered an error and could not complete the task`));
             } else {
               resolve(responseEvent.payload.content);
@@ -346,6 +392,24 @@ export class DelegateHandler implements SkillHandler {
         },
       };
     } catch (err) {
+      if (isStructuredDelegateFailure(err)) {
+        const message = formatStructuredFailureMessage(err.agent, err.reason);
+        ctx.log.error(
+          { targetAgent: err.agent, reason: err.reason, retryable: err.retryable, errorType: err.errorType },
+          'Delegation failed with structured specialist error',
+        );
+        return {
+          success: true,
+          data: {
+            agent: err.agent,
+            failed: true,
+            reason: err.reason,
+            retryable: err.retryable,
+            ...(err.errorType !== undefined && { errorType: err.errorType }),
+            message,
+          },
+        };
+      }
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, targetAgent: agent }, 'Delegation failed');
       return { success: false, error: message };
