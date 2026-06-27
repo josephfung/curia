@@ -21,6 +21,7 @@ function makeMockSdk(): NylasCalendarLike {
     calendars: {
       list: vi.fn().mockResolvedValue({ data: [] }),
       find: vi.fn(),
+      getFreeBusy: vi.fn().mockResolvedValue({ data: [] }),
     },
     events: {
       list: vi.fn().mockResolvedValue({ data: [] }),
@@ -29,9 +30,6 @@ function makeMockSdk(): NylasCalendarLike {
       update: vi.fn().mockResolvedValue({ data: { id: 'evt-1' } }),
       sendRsvp: vi.fn().mockResolvedValue({ requestId: 'req-1' }),
       destroy: vi.fn().mockResolvedValue(undefined),
-    },
-    calendars_free_busy: {
-      list: vi.fn().mockResolvedValue({ data: [] }),
     },
   };
 }
@@ -239,7 +237,7 @@ describe('NylasCalendarClient', () => {
       );
 
       // Nylas expects Unix timestamps (seconds), not ISO strings — assert the converted values.
-      expect(sdk.calendars_free_busy.list).toHaveBeenCalledWith({
+      expect(sdk.calendars.getFreeBusy).toHaveBeenCalledWith({
         identifier: 'grant-123',
         requestBody: {
           start_time: Math.floor(new Date('2026-04-01T00:00:00Z').getTime() / 1000),
@@ -251,7 +249,7 @@ describe('NylasCalendarClient', () => {
 
     it('returns normalized free-busy slots from camelCase SDK response', async () => {
       // The Nylas SDK v8 camelCases the response — timeSlots, startTime, endTime.
-      (sdk.calendars_free_busy.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (sdk.calendars.getFreeBusy as ReturnType<typeof vi.fn>).mockResolvedValue({
         data: [{
           email: 'cal-1',
           timeSlots: [

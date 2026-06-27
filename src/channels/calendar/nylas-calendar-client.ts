@@ -24,6 +24,14 @@ export interface NylasCalendarLike {
       identifier: string;
       calendarId: string;
     }): Promise<{ data: NylasRawCalendar }>;
+
+    // Free/busy lives on the `calendars` resource in the Nylas v8 SDK
+    // (POST /v3/grants/{identifier}/calendars/free-busy). There is no
+    // top-level `calendars_free_busy` resource — calling one crashes at runtime.
+    getFreeBusy(params: {
+      identifier: string;
+      requestBody: Record<string, unknown>;
+    }): Promise<{ data: NylasRawFreeBusy[] }>;
   };
 
   events: {
@@ -65,12 +73,6 @@ export interface NylasCalendarLike {
     }): Promise<void>;
   };
 
-  calendars_free_busy: {
-    list(params: {
-      identifier: string;
-      requestBody: Record<string, unknown>;
-    }): Promise<{ data: NylasRawFreeBusy[] }>;
-  };
 }
 
 // -- Raw Nylas SDK types (subset we use) --
@@ -121,6 +123,11 @@ interface NylasRawEvent {
 
 interface NylasRawFreeBusy {
   email: string;
+  // Nylas returns a discriminated array: success entries (object "free_busy", with
+  // timeSlots) and per-calendar error entries (object "error", carrying `error` and
+  // no timeSlots). Both fields are optional so the error variant can be detected.
+  object?: string;
+  error?: string;
   timeSlots?: Array<{
     startTime: number;
     endTime: number;
@@ -427,7 +434,7 @@ export class NylasCalendarClient {
       throw new Error(`Invalid time range: timeMax must be after timeMin (timeMin="${timeMin}", timeMax="${timeMax}")`);
     }
     try {
-      const response = await this.nylas.calendars_free_busy.list({
+      const response = await this.nylas.calendars.getFreeBusy({
         identifier: this.grantId,
         requestBody: {
           start_time: startUnix,
@@ -435,7 +442,24 @@ export class NylasCalendarClient {
           emails: calendarIds,
         },
       });
-      return (response?.data ?? []).map((fb) => ({
+      const entries = response?.data ?? [];
+      // A per-calendar error entry (object "error" / has `error`, no timeSlots) must
+      // NOT be collapsed to an empty slot list — that would read an unreadable
+      // calendar as fully free and let a conflict check double-book the principal.
+      // Fail loud so the caller (calendar-check-conflicts / -find-free-time) surfaces
+      // it instead of silently scheduling over an unknown.
+      const errored = entries.filter((fb) => fb.object === 'error' || fb.error != null);
+      if (errored.length > 0) {
+        // Log counts + provider reasons, not the mailbox identifiers (PII / CWE-532).
+        this.log.error(
+          { erroredCount: errored.length, totalCount: entries.length, reasons: errored.map((e) => e.error) },
+          'Nylas getFreeBusy returned error entries for one or more calendars',
+        );
+        // Keep the thrown message free of email addresses — it propagates up into the
+        // skill result and agent context, not just logs.
+        throw new Error(`Free/busy lookup failed for ${errored.length} of ${entries.length} calendar(s)`);
+      }
+      return entries.map((fb) => ({
         email: fb.email,
         timeSlots: (fb.timeSlots ?? []).map((ts) => ({
           startTime: ts.startTime,

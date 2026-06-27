@@ -138,3 +138,75 @@ describe('NylasCalendarClient — RSVP plumbing', () => {
     expect(event.participants[0]!.status).toBe('yes');
   });
 });
+
+describe('NylasCalendarClient — free/busy plumbing', () => {
+  it('queries the real Nylas calendars.getFreeBusy endpoint and maps busy slots', async () => {
+    const getFreeBusy = vi.fn().mockResolvedValue({
+      data: [
+        {
+          email: 'joseph@example.test',
+          timeSlots: [{ startTime: 1_780_000_000, endTime: 1_780_003_600, status: 'busy' }],
+          object: 'free_busy',
+        },
+      ],
+    });
+    // Only stub `calendars.getFreeBusy` — the real Nylas v8 SDK has no
+    // `calendars_free_busy` resource, so the previous implementation crashed here.
+    const client = makeClientWith({
+      calendars: { getFreeBusy } as unknown as NylasCalendarLike['calendars'],
+    });
+
+    const result = await client.getFreeBusy(
+      ['joseph@example.test'],
+      '2026-06-29T00:00:00-04:00',
+      '2026-06-30T00:00:00-04:00',
+    );
+
+    expect(getFreeBusy).toHaveBeenCalledWith({
+      identifier: 'grant_test',
+      requestBody: {
+        start_time: Math.floor(new Date('2026-06-29T00:00:00-04:00').getTime() / 1000),
+        end_time: Math.floor(new Date('2026-06-30T00:00:00-04:00').getTime() / 1000),
+        emails: ['joseph@example.test'],
+      },
+    });
+    expect(result).toEqual([
+      {
+        email: 'joseph@example.test',
+        timeSlots: [{ startTime: 1_780_000_000, endTime: 1_780_003_600, status: 'busy' }],
+      },
+    ]);
+  });
+
+  it('throws when a calendar returns a free/busy error entry instead of treating it as free', async () => {
+    // Nylas getFreeBusy returns a mixed array: success entries (object: "free_busy",
+    // with timeSlots) and error entries (object: "error", with an error string and no
+    // timeSlots). An error entry must NOT be silently mapped to an empty (= free) slot
+    // list, or a conflict check would read an unreadable calendar as wide open and
+    // double-book the principal.
+    const getFreeBusy = vi.fn().mockResolvedValue({
+      data: [
+        { email: 'joseph@example.test', error: 'permission denied', object: 'error' },
+      ],
+    });
+    const client = makeClientWith({
+      calendars: { getFreeBusy } as unknown as NylasCalendarLike['calendars'],
+    });
+
+    let caught: unknown;
+    try {
+      await client.getFreeBusy(
+        ['joseph@example.test'],
+        '2026-06-29T00:00:00-04:00',
+        '2026-06-30T00:00:00-04:00',
+      );
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toMatch(/free.?busy/i);
+    // The thrown message must not leak the mailbox identifier (PII).
+    expect((caught as Error).message).not.toContain('joseph@example.test');
+  });
+});
