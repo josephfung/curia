@@ -24,6 +24,13 @@ import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js'
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { encodeResumeToken } from './resume-token.js';
+import {
+  DelegationGuard,
+  delegationKey,
+  escalateDelegationFailure,
+  parseDelegateFailureData,
+  type DelegationFailureInfo,
+} from './delegation-guard.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -753,6 +760,11 @@ export class AgentRuntime {
     // into code: the runtime produces it, the DelegateHandler parses it.
     let pendingClarification: { question: string; context: string } | null = null;
 
+    // Delegation circuit-breaker state (#1171). Tracks identical delegate(agent, task)
+    // calls within this turn so non-retryable specialist failures cannot be blind-retried.
+    const delegationGuard = new DelegationGuard();
+    let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
+
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
@@ -880,22 +892,62 @@ export class AgentRuntime {
         });
         await bus.publish('agent', invokeEvent);
 
-        const startTime = Date.now();
-        // Thread task context so the execution layer can emit memory.store audit events
-        // for any KG writes that happen inside this skill invocation (#200).
-        const result = await executionLayer.invoke(toolCall.name, skillInput, caller, {
+        const invokeOptions = {
           taskEventId: taskEvent.id,
           agentId,
           channelId: taskEvent.payload.channelId,
           conversationId,
           parentEventId: invokeEvent.id,
-          // Pass task-level metadata so skill handlers can inspect task-wide signals
-          // without bus or dispatcher access.
           taskMetadata: taskEvent.payload.metadata,
-          // Live-principal-turn signal (#1126) — a distinct payload field (never in metadata), so
-          // it can't be persisted. Drives the elevated-skill gate; `delegate` forwards it onward.
           liveTurn: taskEvent.payload.liveTurn,
-        });
+          delegationGuard,
+        };
+
+        const startTime = Date.now();
+        let delegateBlocked = false;
+        let result: Awaited<ReturnType<ExecutionLayer['invoke']>>;
+        if (
+          toolCall.name === 'delegate' &&
+          typeof skillInput === 'object' &&
+          skillInput !== null &&
+          !Array.isArray(skillInput)
+        ) {
+          const delegateInput = skillInput as Record<string, unknown>;
+          const delegateAgent = typeof delegateInput['agent'] === 'string' ? delegateInput['agent'] : '';
+          const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
+          const hasResumeToken =
+            typeof delegateInput['resume_token'] === 'string' && delegateInput['resume_token'] !== '';
+          if (!hasResumeToken && delegateAgent && delegateTask) {
+            const dKey = delegationKey(delegateAgent, delegateTask);
+            if (!delegationGuard.canAttempt(dKey)) {
+              delegateBlocked = true;
+              const prior = delegationGuard.getFailure(dKey);
+              logger.warn(
+                { agentId, targetAgent: delegateAgent, reason: prior?.reason },
+                'Blocked identical re-delegation after specialist failure',
+              );
+              result = {
+                success: true,
+                data: {
+                  agent: delegateAgent,
+                  failed: true,
+                  blocked: true,
+                  reason: prior?.reason ?? 'blocked',
+                  retryable: false,
+                  message: prior?.message
+                    ?? `Re-delegation to '${delegateAgent}' is blocked for this task.`,
+                  escalated: delegationGuard.isEscalated(dKey),
+                },
+              };
+            } else {
+              result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
+            }
+          } else {
+            result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
+          }
+        } else {
+          result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
+        }
         const durationMs = Date.now() - startTime;
 
         // Publish skill.result for audit trail
@@ -985,12 +1037,48 @@ export class AgentRuntime {
             }
           }
 
+          // Delegation failure circuit-breaker (#1171): when delegate returns failed{retryable},
+          // record the outcome and escalate to the CEO backlog when retries are exhausted or
+          // the failure is non-retryable. Short-circuit the turn after escalation so the LLM
+          // cannot blind-re-delegate in subsequent rounds.
+          if (
+            toolCall.name === 'delegate' &&
+            !delegateBlocked &&
+            typeof skillInput === 'object' &&
+            skillInput !== null &&
+            !Array.isArray(skillInput)
+          ) {
+            const delegateFailure = parseDelegateFailureData(result.data, logger);
+            if (delegateFailure) {
+              const delegateInput = skillInput as Record<string, unknown>;
+              const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
+              const dKey = delegationKey(delegateFailure.agent, delegateTask);
+              delegationGuard.recordFailure(dKey, delegateFailure);
+              if (delegationGuard.shouldEscalate(dKey)) {
+                const escalated = await escalateDelegationFailure(
+                  executionLayer,
+                  caller,
+                  invokeOptions,
+                  { ...delegateFailure, task: delegateTask },
+                  logger,
+                );
+                if (escalated) {
+                  delegationGuard.markEscalated(dKey);
+                }
+                pendingDelegationEscalation = { ...delegateFailure, task: delegateTask, escalated };
+              }
+            }
+          }
+
           const resultContent = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
           toolResultBlocks.push({
             type: 'tool_result',
             tool_use_id: toolCall.id,
             content: resultContent,
           } as ToolResultContent);
+          if (pendingDelegationEscalation) {
+            break;
+          }
         } else {
           // Failure: classify the error and format as a structured <task_error> block
           // so the LLM gets machine-readable error context instead of raw strings.
@@ -1068,6 +1156,47 @@ export class AgentRuntime {
         logger.info(
           { agentId, conversationId, question: pendingClarification.question.slice(0, 100) },
           'Task paused for clarification — specialist requested CEO direction',
+        );
+        return;
+      }
+
+      // Delegation failure short-circuit (#1171): after a non-retryable specialist failure
+      // (or exhausted retryable attempts), emit a deterministic protocol response so the
+      // coordinator reports the honest reason instead of confabulating or re-delegating.
+      if (pendingDelegationEscalation) {
+        const escalationContent = JSON.stringify({
+          _curia_protocol: 'delegation_failure',
+          agent: pendingDelegationEscalation.agent,
+          reason: pendingDelegationEscalation.reason,
+          retryable: false,
+          message: pendingDelegationEscalation.message,
+          escalated: pendingDelegationEscalation.escalated,
+        });
+
+        if (memory) {
+          await memory.addTurn(conversationId, agentId, { role: 'assistant', content: escalationContent });
+        }
+
+        const escalationResponse = createAgentResponse({
+          agentId,
+          conversationId,
+          content: escalationContent,
+          skillsCalled,
+          parentEventId: taskEvent.id,
+        });
+        await bus.publish('agent', escalationResponse);
+
+        logger.info(
+          {
+            agentId,
+            conversationId,
+            targetAgent: pendingDelegationEscalation.agent,
+            reason: pendingDelegationEscalation.reason,
+            escalated: pendingDelegationEscalation.escalated,
+          },
+          pendingDelegationEscalation.escalated
+            ? 'Task stopped after non-retryable delegation failure — escalated to CEO backlog'
+            : 'Task stopped after non-retryable delegation failure — CEO backlog escalation failed',
         );
         return;
       }

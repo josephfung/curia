@@ -3255,3 +3255,100 @@ describe('AgentRuntime bullpen read-watermark (#1065)', () => {
     expect(seenResponses[0]!.payload.isError).toBeFalsy();
   });
 });
+
+describe('Delegation failure circuit-breaker (#1171)', () => {
+  const delegateToolDef = {
+    name: 'delegate',
+    description: 'Delegate to a specialist',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent: { type: 'string' },
+        task: { type: 'string' },
+      },
+      required: ['agent', 'task'] as string[],
+    },
+  };
+
+  it('blocks a second identical delegate call and escalates once after BUDGET_EXCEEDED failure', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const delegateInvokeCount = { n: 0 };
+    const taskCreateCount = { n: 0 };
+
+    const mockExecution = {
+      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>) => {
+        if (skillName === 'task-create') {
+          taskCreateCount.n += 1;
+          return { success: true, data: { task_id: 'escalation-task-1' } };
+        }
+        if (skillName === 'delegate') {
+          delegateInvokeCount.n += 1;
+          return {
+            success: true,
+            data: {
+              agent: input['agent'],
+              failed: true,
+              reason: 'maxTurns',
+              retryable: false,
+              message: "Specialist 'social-media' exceeded its turn budget and could not complete the task",
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'tool_use' as const,
+        toolCalls: [
+          { id: 'call-delegate-1', name: 'delegate', input: { agent: 'social-media', task: 'Post to Bluesky' } },
+          { id: 'call-delegate-2', name: 'delegate', input: { agent: 'social-media', task: 'Post to Bluesky' } },
+        ],
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      }),
+    };
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-delegate-guard-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Post this to Bluesky',
+      parentEventId: 'inbound-delegate-guard-1',
+    }));
+
+    expect(delegateInvokeCount.n).toBe(1);
+    expect(taskCreateCount.n).toBe(1);
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+
+    expect(agentResponses).toHaveLength(1);
+    const response = agentResponses[0]!;
+    expect(response.payload.content).toContain('delegation_failure');
+    expect(response.payload.content).toContain('maxTurns');
+    expect(response.payload.content).toContain('"escalated":true');
+  });
+});

@@ -289,6 +289,9 @@ export interface SkillContext {
   /** Local HTTP port the SPA is served on, used as the dev fallback origin when appOrigin
    *  is unset. Sourced from config.httpPort. */
   httpPort?: number;
+  /** Per-task-turn guard against blind identical re-delegation (#1171). Populated by the
+   *  agent runtime and read by the delegate skill. */
+  delegationGuard?: import('../agents/delegation-guard.js').DelegationGuard;
 }
 
 /**
