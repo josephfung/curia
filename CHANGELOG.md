@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`progress.resumable`** — typed checkpoint block with bounded accumulator and spill pointer, plus round-trip tests. (#1172)
+
 ### Changed
 
 - **`delegate`** — honors `retryable: false` on specialist failures with an enforceable per-turn guard: identical re-delegations are blocked and non-retryable failures escalate to the CEO backlog via `task-create`. (#1171)
