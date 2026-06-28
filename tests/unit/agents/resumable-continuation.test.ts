@@ -167,4 +167,23 @@ describe('scheduleResumableContinuation', () => {
     expect(result).toEqual({ scheduled: false, reason: 'no_checkpoint' });
     expect(enqueueTaskWake).not.toHaveBeenCalled();
   });
+
+  it('treats a unique-index race on enqueue as pending_wake_exists', async () => {
+    const pool = {
+      query: vi.fn().mockResolvedValue({ rows: [{ pending: false }] }),
+    };
+    vi.spyOn(tasksQueries, 'getTaskById').mockResolvedValue(sampleTask());
+    enqueueTaskWake.mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }));
+
+    const result = await scheduleResumableContinuation({
+      pool: pool as never,
+      schedulerService: schedulerService as never,
+      logger: mockLogger() as never,
+      taskId: 'task-1',
+      delaySeconds: 30,
+      eligibleAgents,
+    });
+
+    expect(result).toEqual({ scheduled: false, reason: 'pending_wake_exists' });
+  });
 });

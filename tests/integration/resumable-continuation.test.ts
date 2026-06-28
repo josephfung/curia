@@ -193,34 +193,37 @@ describeIf('Resumable continuation scheduling (#1175)', () => {
       schedulerService,
     });
     scheduler.start();
-    await scheduler.pollDueJobs();
+    try {
+      await scheduler.pollDueJobs();
 
-    await vi.waitFor(() => {
-      expect(agentTaskEvents.length).toBeGreaterThan(0);
-      expect(specialistLlm.chat).toHaveBeenCalled();
-    });
-    scheduler.stop();
+      await vi.waitFor(() => {
+        expect(agentTaskEvents.length).toBeGreaterThan(0);
+        expect(specialistLlm.chat).toHaveBeenCalled();
+      });
 
-    expect(agentTaskEvents[0]!.agentId).toBe('social-media');
-    const boundTask = (agentTaskEvents[0]!.metadata?.boundTask ?? {}) as {
-      progress?: { resumable?: { done?: number; total?: number } };
-    };
-    expect(boundTask.progress?.resumable?.done).toBe(25);
-    expect(boundTask.progress?.resumable?.total).toBe(1300);
-    expect(capturedSystemPrompt).toContain('## Last Checkpoint (resume from here)');
-    expect(capturedSystemPrompt).toContain('25 / 1300');
+      expect(agentTaskEvents[0]!.agentId).toBe('social-media');
+      const boundTask = (agentTaskEvents[0]!.metadata?.boundTask ?? {}) as {
+        progress?: { resumable?: { done?: number; total?: number } };
+      };
+      expect(boundTask.progress?.resumable?.done).toBe(25);
+      expect(boundTask.progress?.resumable?.total).toBe(1300);
+      expect(capturedSystemPrompt).toContain('## Last Checkpoint (resume from here)');
+      expect(capturedSystemPrompt).toContain('25 / 1300');
 
-    const advanced = await repo.setResumableBlock(task.id, {
-      cursor: 'page:4',
-      done: 50,
-      total: 1300,
-      accumulator: ['did:plc:abc', 'did:plc:def'],
-      lastSliceUnits: 25,
-      next: 'Review page 5',
-    }, 'social-media');
-    expect('task' in advanced).toBe(true);
-    const block = await repo.getResumableBlock(task.id);
-    expect(block?.done).toBe(50);
-    expect(block?.cursor).toBe('page:4');
+      const advanced = await repo.setResumableBlock(task.id, {
+        cursor: 'page:4',
+        done: 50,
+        total: 1300,
+        accumulator: ['did:plc:abc', 'did:plc:def'],
+        lastSliceUnits: 25,
+        next: 'Review page 5',
+      }, 'social-media');
+      expect('task' in advanced).toBe(true);
+      const block = await repo.getResumableBlock(task.id);
+      expect(block?.done).toBe(50);
+      expect(block?.cursor).toBe('page:4');
+    } finally {
+      scheduler.stop();
+    }
   });
 });

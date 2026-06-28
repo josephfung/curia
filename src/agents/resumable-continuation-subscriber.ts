@@ -26,7 +26,7 @@ export class ResumableContinuationSubscriber {
   constructor(private readonly opts: ResumableContinuationSubscriberOptions) {}
 
   start(): void {
-    this.opts.bus.subscribe('agent.response', 'system', (event) => {
+    this.opts.bus.subscribe('agent.response', 'system', async (event) => {
       const responseEvent = event as AgentResponseEvent;
       if (responseEvent.payload.isError) return;
 
@@ -42,20 +42,23 @@ export class ResumableContinuationSubscriber {
         return;
       }
 
-      scheduleResumableContinuation({
-        pool: this.opts.pool,
-        schedulerService: this.opts.schedulerService,
-        logger: this.opts.logger,
-        taskId,
-        delaySeconds: this.opts.continuationDelaySeconds,
-        eligibleAgents: this.opts.eligibleAgents,
-        fallbackAgentId: this.opts.fallbackAgentId,
-      }).catch((err) => {
+      try {
+        await scheduleResumableContinuation({
+          pool: this.opts.pool,
+          schedulerService: this.opts.schedulerService,
+          logger: this.opts.logger,
+          taskId,
+          delaySeconds: this.opts.continuationDelaySeconds,
+          eligibleAgents: this.opts.eligibleAgents,
+          fallbackAgentId: this.opts.fallbackAgentId,
+        });
+      } catch (err) {
         this.opts.logger.error(
           { err, taskId, agentId: responseEvent.payload.agentId },
           'Failed to schedule resumable continuation wake',
         );
-      });
+        throw err;
+      }
     });
 
     this.opts.logger.info(

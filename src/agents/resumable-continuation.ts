@@ -32,16 +32,20 @@ export type ScheduleResumableContinuationResult =
   | { scheduled: true; jobId: string; agentId: string; runAt: Date }
   | { scheduled: false; reason: 'task_not_found' | 'not_resumable' | 'no_checkpoint' | 'pending_wake_exists' };
 
+function isPgUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
+}
+
 /** True when the task already has a pending or running scheduled_jobs wake. */
 export async function taskHasPendingWake(pool: Pool, taskId: string): Promise<boolean> {
-  const { rows } = await pool.query(
+  const { rows } = await pool.query<{ pending: boolean }>(
     `SELECT EXISTS(
        SELECT 1 FROM scheduled_jobs
         WHERE task_id = $1 AND status IN ('pending', 'running')
      ) AS pending`,
     [taskId],
   );
-  return (rows[0] as { pending: boolean }).pending;
+  return rows[0]!.pending;
 }
 
 /** Resolve the agent that should receive the continuation wake. */
@@ -71,6 +75,7 @@ export function isContinuationEligible(task: TaskRow): boolean {
 /**
  * Enqueue a single near-term continuation wake for a paused resumable task.
  * Idempotent while a pending/running wake already exists for the task.
+ * Duplicate inserts are also blocked by migration 067's partial unique index.
  */
 export async function scheduleResumableContinuation(
   opts: ScheduleResumableContinuationOptions,
@@ -92,6 +97,7 @@ export async function scheduleResumableContinuation(
     return { scheduled: false, reason: 'no_checkpoint' };
   }
 
+  // Fast path — the DB unique index (067) is the atomic guarantee under concurrency.
   if (await taskHasPendingWake(pool, taskId)) {
     logger.debug({ taskId }, 'Resumable continuation: pending wake already exists — skipping');
     return { scheduled: false, reason: 'pending_wake_exists' };
@@ -101,19 +107,27 @@ export async function scheduleResumableContinuation(
   const derived = task.source === 'agent' || task.parentTaskId !== null;
   const runAt = new Date(Date.now() + delaySeconds * 1000);
 
-  const { jobId } = await schedulerService.enqueueTaskWake({
-    taskId,
-    agentId,
-    runAt,
-    createdBy: RESUMABLE_CONTINUATION_CREATED_BY,
-    originator: task.originator,
-    derived,
-  });
+  try {
+    const { jobId } = await schedulerService.enqueueTaskWake({
+      taskId,
+      agentId,
+      runAt,
+      createdBy: RESUMABLE_CONTINUATION_CREATED_BY,
+      originator: task.originator,
+      derived,
+    });
 
-  logger.info(
-    { taskId, jobId, agentId, runAt: runAt.toISOString(), delaySeconds },
-    'Resumable continuation wake scheduled',
-  );
+    logger.info(
+      { taskId, jobId, agentId, runAt: runAt.toISOString(), delaySeconds },
+      'Resumable continuation wake scheduled',
+    );
 
-  return { scheduled: true, jobId, agentId, runAt };
+    return { scheduled: true, jobId, agentId, runAt };
+  } catch (err) {
+    if (isPgUniqueViolation(err)) {
+      logger.debug({ taskId }, 'Resumable continuation: concurrent wake insert lost race — skipping');
+      return { scheduled: false, reason: 'pending_wake_exists' };
+    }
+    throw err;
+  }
 }
