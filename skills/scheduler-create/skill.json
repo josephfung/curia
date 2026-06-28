@@ -1,7 +1,7 @@
 {
   "name": "scheduler-create",
   "description": "Create a scheduled job. Supports cron expressions for recurring jobs and ISO 8601 timestamps for one-shot jobs. Provide intent_anchor to create a persistent multi-burst task.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -10,7 +10,7 @@
     "run_at": "timestamp?",
     "agent_id": "string?",
     "intent_anchor": "string?",
-    "error_budget": "object?",
+    "error_budget": "object? (resumable task config only: resumable, max_stalls, max_iterations, max_wallclock_hours, max_cost_usd — not per-invocation turn limits)",
     "timezone": "string? (IANA timezone name, e.g. America/Toronto — overrides Curia's default timezone for this job's cron schedule)"
   },
   "outputs": {

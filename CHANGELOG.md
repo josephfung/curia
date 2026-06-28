@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Per-task error_budget** — HTTP and scheduler paths now reject per-invocation turn-limit keys (`maxTurns`, `maxConsecutiveErrors`); per-agent YAML remains the sole source of truth for slice budgets, while the column keeps resumable flags and aggregate ceiling overrides. (#883)
 - **`delegate`** — honors `retryable: false` on specialist failures with an enforceable per-turn guard: identical re-delegations are blocked and non-retryable failures escalate to the CEO backlog via `task-create`. (#1171)
 - **`delegate`** — specialist failures now propagate structured `reason` and `retryable` from the runtime (e.g. `maxTurns`) instead of generic timeout/error strings, so the coordinator can report the real cause. (#1170)
 - **`web-browser`** — waits through edge WAF challenge pages and resolves hidden custom form controls. (v1.5.0)

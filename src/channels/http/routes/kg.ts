@@ -12,6 +12,7 @@ import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../s
 import { resolveConsoleOriginator } from '../console-originator.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
+import { validateTaskErrorBudget } from '../../../tasks/task-error-budget.js';
 
 export interface KnowledgeGraphRouteOptions {
   pool: Pool;
@@ -439,6 +440,12 @@ export async function knowledgeGraphRoutes(
     if (body.errorBudget !== undefined && (typeof body.errorBudget !== 'object' || body.errorBudget === null || Array.isArray(body.errorBudget))) {
       return reply.status(400).send({ error: 'errorBudget must be a JSON object.' });
     }
+    if (body.errorBudget !== undefined) {
+      const budgetError = validateTaskErrorBudget(body.errorBudget as Record<string, unknown>);
+      if (budgetError) {
+        return reply.status(400).send({ error: budgetError });
+      }
+    }
     if (body.progress !== undefined && (typeof body.progress !== 'object' || body.progress === null || Array.isArray(body.progress))) {
       return reply.status(400).send({ error: 'progress must be a JSON object.' });
     }
@@ -624,6 +631,12 @@ export async function knowledgeGraphRoutes(
     }
     if (body.errorBudget !== undefined && (typeof body.errorBudget !== 'object' || body.errorBudget === null || Array.isArray(body.errorBudget))) {
       return reply.status(400).send({ error: 'errorBudget must be a JSON object.' });
+    }
+    if (body.errorBudget !== undefined) {
+      const budgetError = validateTaskErrorBudget(body.errorBudget as Record<string, unknown>);
+      if (budgetError) {
+        return reply.status(400).send({ error: budgetError });
+      }
     }
     if (body.progress !== undefined && (typeof body.progress !== 'object' || body.progress === null || Array.isArray(body.progress))) {
       return reply.status(400).send({ error: 'progress must be a JSON object.' });

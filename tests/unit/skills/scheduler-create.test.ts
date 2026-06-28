@@ -124,7 +124,7 @@ describe('SchedulerCreateHandler', () => {
         task: 'weekly report',
         cron_expr: '0 9 * * 1',
         intent_anchor: 'weekly-report-v1',
-        error_budget: { maxRetries: 3 },
+        error_budget: { resumable: true },
       },
       { schedulerService: schedulerService as never },
     ));
@@ -142,9 +142,33 @@ describe('SchedulerCreateHandler', () => {
       taskPayload: { task: 'weekly report' },
       createdBy: 'coordinator',
       intentAnchor: 'weekly-report-v1',
-      errorBudget: { maxRetries: 3 },
+      errorBudget: { resumable: true },
       originator: undefined,
     });
+  });
+
+  it('rejects per-invocation error_budget keys (#883)', async () => {
+    const schedulerService = {
+      createJob: vi.fn(),
+      listJobs: vi.fn(),
+      cancelJob: vi.fn(),
+    };
+
+    const result = await handler.execute(makeCtx(
+      {
+        task: 'weekly report',
+        cron_expr: '0 9 * * 1',
+        intent_anchor: 'weekly-report-v1',
+        error_budget: { maxTurns: 30 },
+      },
+      { schedulerService: schedulerService as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/not supported on tasks/);
+    }
+    expect(schedulerService.createJob).not.toHaveBeenCalled();
   });
 
   it('returns failure when createJob throws', async () => {

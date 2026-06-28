@@ -6,6 +6,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
+import { validateTaskErrorBudget } from '../../src/tasks/task-error-budget.js';
 
 export class SchedulerCreateHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -37,6 +38,12 @@ export class SchedulerCreateHandler implements SkillHandler {
     // skipped by the runtime's truthiness guard, giving the illusion of drift prevention with none.
     if (intent_anchor !== undefined && typeof intent_anchor === 'string' && intent_anchor.trim() === '') {
       return { success: false, error: 'intent_anchor must not be blank — provide a meaningful description or omit the field' };
+    }
+    if (error_budget !== undefined) {
+      const budgetError = validateTaskErrorBudget(error_budget);
+      if (budgetError) {
+        return { success: false, error: budgetError };
+      }
     }
 
     const agentId = agent_id ?? 'coordinator';

@@ -445,8 +445,9 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
           )}
 
           <div className="form-field">
-            <label htmlFor="tf-budget">Error budget JSON</label>
-            <textarea id="tf-budget" rows={4} value={errorBudget} onChange={e => setErrorBudget(e.target.value)} placeholder='{"maxTurns": 12, "maxConsecutiveErrors": 3}' style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
+            <label htmlFor="tf-budget">Resumable config JSON</label>
+            <textarea id="tf-budget" rows={4} value={errorBudget} onChange={e => setErrorBudget(e.target.value)} placeholder='{"resumable": true, "max_iterations": 50}' style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }} />
+            <p style={{ fontSize: 12, margin: '4px 0 0', opacity: 0.75 }}>Per-invocation turn limits are set in agent YAML, not here. Use resumable flags and aggregate ceiling overrides only.</p>
           </div>
           <div className="form-field">
             <label htmlFor="tf-progress">Progress JSON</label>
