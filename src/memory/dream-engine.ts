@@ -5,6 +5,7 @@ import type { MemoryDecayWarningPayload } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { AutonomyScoringPass } from '../autonomy/scoring-pass.js';
 import type { WorkingMemory } from './working-memory.js';
+import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
 
 // Config shape mirrors YamlConfig.dreaming.decay — all fields required at construction
 // time (caller resolves defaults before passing in).
@@ -65,14 +66,27 @@ export class DreamEngine {
   // limit backoff) could let two passes read the same unscored rows concurrently,
   // wasting LLM spend and applying the adjustment formula twice.
   private scoringPassInFlight = false;
+  private workingDocsRepo?: WorkingDocsRepo;
+  private scratchTtlDays?: number;
 
-  constructor(pool: Pool, bus: EventBus, logger: Logger, config: DecayConfig, scoringPass?: AutonomyScoringPass, workingMemory?: WorkingMemory) {
+  constructor(
+    pool: Pool,
+    bus: EventBus,
+    logger: Logger,
+    config: DecayConfig,
+    scoringPass?: AutonomyScoringPass,
+    workingMemory?: WorkingMemory,
+    workingDocsRepo?: WorkingDocsRepo,
+    scratchTtlDays?: number,
+  ) {
     this.pool = pool;
     this.bus = bus;
     this.logger = logger;
     this.config = config;
     this.scoringPass = scoringPass;
     this.workingMemory = workingMemory;
+    this.workingDocsRepo = workingDocsRepo;
+    this.scratchTtlDays = scratchTtlDays;
   }
 
   /**
@@ -115,6 +129,8 @@ export class DreamEngine {
         scoringIntervalMs: this.scoringPass?.intervalMs ?? null,
         archiveThreshold: this.config.archiveThreshold,
         hasScoringPass: !!this.scoringPass,
+        hasScratchDocPurge: !!(this.workingDocsRepo && this.scratchTtlDays != null),
+        scratchTtlDays: this.scratchTtlDays ?? null,
       },
       'DreamEngine started (decay pass scheduled)',
     );
@@ -192,6 +208,22 @@ export class DreamEngine {
             { err: purgeErr },
             'DreamEngine: working memory purge failed — will retry on next pass. ' +
             'To check backlog: SELECT COUNT(*) FROM working_memory WHERE expires_at IS NOT NULL AND expires_at < now() AND archived = false',
+          );
+        }
+      }
+
+      if (this.workingDocsRepo && this.scratchTtlDays != null) {
+        try {
+          const purgedScratchDocs = await this.workingDocsRepo.purgeExpiredScratch(this.scratchTtlDays);
+          this.logger.info(
+            { purgedScratchDocs, scratchTtlDays: this.scratchTtlDays },
+            'DreamEngine: scratch document purge complete',
+          );
+        } catch (purgeErr) {
+          this.logger.error(
+            { err: purgeErr, scratchTtlDays: this.scratchTtlDays },
+            'DreamEngine: scratch document purge failed — will retry on next pass. ' +
+            'To check backlog: SELECT COUNT(*) FROM working_documents WHERE path LIKE \'/scratch/%\' AND archived_at IS NULL',
           );
         }
       }

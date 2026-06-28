@@ -124,7 +124,7 @@ import { runReadinessChecks } from './startup/readiness.js';
 import { compileSecurityContextBlock } from './security/security-context.js';
 import { OutboundContextService } from './dispatch/outbound-context.js';
 import { applyTaskManagement } from './agents/task-management.js';
-import { applyDocumentWorkspace } from './agents/document-workspace.js';
+import { applyDocumentWorkspace, DEFAULT_SCRATCH_DOC_TTL_DAYS } from './agents/document-workspace.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import * as fs from 'node:fs';
@@ -1540,8 +1540,24 @@ async function main(): Promise<void> {
   const scoringPass = new AutonomyScoringPass(actionLogRepo, autonomyService, scoringProvider, logger, scoringPassConfig);
   logger.info({ scoringPassConfig }, 'AutonomyScoringPass configured');
 
-  const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig, scoringPass, memory);
-  logger.info({ decayConfig }, 'DreamEngine configured');
+  const dreamEngine = new DreamEngine(
+    pool,
+    bus,
+    logger,
+    decayConfig,
+    scoringPass,
+    memory,
+    workingDocsRepo,
+    yamlConfig.documentWorkspace?.scratchTtlDays ?? DEFAULT_SCRATCH_DOC_TTL_DAYS,
+  );
+  logger.info(
+    {
+      decayConfig,
+      scratchTtlDays: yamlConfig.documentWorkspace?.scratchTtlDays ?? DEFAULT_SCRATCH_DOC_TTL_DAYS,
+      scratchTtlFromConfig: yamlConfig.documentWorkspace?.scratchTtlDays !== undefined,
+    },
+    'DreamEngine configured',
+  );
 
   // Outbound context bridge — delegation-aware context registry for
   // specialist-initiated outbound. Requires pool (Postgres).

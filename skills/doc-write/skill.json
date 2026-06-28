@@ -1,7 +1,7 @@
 {
   "name": "doc-write",
-  "description": "Write to the OKF document workspace. Modes: `create` (new document — requires `type`, optional `body`/`frontmatter`), `append` (add content — requires `content` + `expected_version`), `replace` (swap full body — requires `body` + `expected_version`), `section-edit` (replace a `##` section — requires `section`, `content`, optional `expected_section_version`). Every successful write appends an entry to the directory's reserved `log.md`. On version mismatch returns `conflict: true` with the latest document versions — re-read and retry.",
-  "version": "0.1.0",
+  "description": "Write to the OKF document workspace. Modes: `create` (new document — requires `type`, optional `body`/`frontmatter`), `append` (add content — requires `content` + `expected_version`), `replace` (swap full body — requires `body` + `expected_version`), `section-edit` (replace a `##` section — requires `section`, `content`, optional `expected_section_version`). Every successful write appends an entry to the directory's reserved `log.md`. On version mismatch returns `conflict: true` with the latest document versions — re-read and retry. **Retention:** `/projects/…` is durable (never auto-purged). `/scratch/<conversation-id>/…` is ephemeral — omit `ttl_days` to inherit the configured scratch TTL, set `ttl_days: <n>` to override, or `ttl_days: 0` to opt out. `ttl_days` on non-scratch paths is ignored (a `retention_warning` is returned).",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -10,7 +10,7 @@
     "type": "string? (required for create — OKF frontmatter type)",
     "body": "string? (required for replace; optional for create)",
     "content": "string? (required for append and section-edit)",
-    "frontmatter": "object? (optional YAML frontmatter fields except type)",
+    "frontmatter": "object? (optional YAML frontmatter fields except type; `ttl_days` controls scratch retention — omit to inherit default, 0 to opt out)",
     "section": "string? (required for section-edit — `##` heading)",
     "expected_version": "number? (required for append/replace — from last doc-read)",
     "expected_section_version": "number? (optional for section-edit — per-section optimistic version)",
@@ -26,7 +26,8 @@
     "version": "number?",
     "section_versions": "object?",
     "updated_at": "string?",
-    "displayTimezone": "string?"
+    "displayTimezone": "string?",
+    "retention_warning": "string? (when ttl_days is set on a non-scratch path)"
   },
   "permissions": [],
   "secrets": [],

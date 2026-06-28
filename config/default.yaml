@@ -78,6 +78,14 @@ workingMemory:
     threshold: 20   # turns that trigger a summarization pass
     keepWindow: 10  # most-recent turns to retain as active after summarization
 
+documentWorkspace:
+  # Inactivity TTL for ephemeral `/scratch/<conversation-id>/…` documents. DreamEngine's
+  # nightly pass soft-deletes (sets archived_at) on live scratch rows whose updated_at is
+  # older than this many days. Omit `ttl_days` in frontmatter to inherit this default;
+  # set `ttl_days: 0` on a scratch doc to opt out. `/projects/…` documents are never
+  # auto-archived.
+  scratchTtlDays: 7
+
 skillOutput:
   # Maximum character length of a sanitized skill result before truncation.
   # Skills that return more than this (search results, page crawls, long calendar

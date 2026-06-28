@@ -197,4 +197,55 @@ describeIf('WorkingDocsRepo (integration)', () => {
       expect(appended.document.version).toBe(2);
     }
   });
+
+  it('purgeExpiredScratch archives only expired /scratch/<conversation-id>/… documents', async () => {
+    await repo.create({ path: '/scratch/expired/note.md', type: 'note', body: 'old' });
+    await repo.create({ path: '/scratch/fresh/note.md', type: 'note', body: 'new' });
+    await repo.create({ path: '/projects/durable/brief.md', type: 'brief', body: 'keep' });
+    await repo.create({ path: '/scratch/index.md', type: 'index', body: 'root scratch' });
+
+    await pool.query(
+      `UPDATE working_documents
+       SET updated_at = now() - INTERVAL '10 days'
+       WHERE path IN ('/scratch/expired/note.md', '/scratch/index.md')`,
+    );
+
+    const archived = await repo.purgeExpiredScratch(7);
+    expect(archived).toBe(1);
+
+    expect(await repo.read('/scratch/expired/note.md')).toBeNull();
+    expect(await repo.read('/scratch/fresh/note.md')).not.toBeNull();
+    expect(await repo.read('/projects/durable/brief.md')).not.toBeNull();
+    expect(await repo.read('/scratch/index.md')).not.toBeNull();
+
+    const { rows } = await pool.query<{ archived_at: Date | null }>(
+      `SELECT archived_at FROM working_documents WHERE path = '/scratch/expired/note.md'`,
+    );
+    expect(rows[0]?.archived_at).not.toBeNull();
+  });
+
+  it('purgeExpiredScratch respects ttl_days: 0 opt-out on scratch paths', async () => {
+    await repo.create({
+      path: '/scratch/permanent/note.md',
+      type: 'note',
+      body: 'stay',
+      frontmatter: { ttl_days: 0 },
+    });
+    await pool.query(
+      `UPDATE working_documents
+       SET updated_at = now() - INTERVAL '30 days'
+       WHERE path = '/scratch/permanent/note.md'`,
+    );
+
+    const deleted = await repo.purgeExpiredScratch(7);
+    expect(deleted).toBe(0);
+    expect(await repo.read('/scratch/permanent/note.md')).not.toBeNull();
+  });
+
+  it('purgeExpiredScratch is idempotent when nothing is expired', async () => {
+    await repo.create({ path: '/scratch/active/note.md', type: 'note', body: 'fresh' });
+    expect(await repo.purgeExpiredScratch(7)).toBe(0);
+    expect(await repo.purgeExpiredScratch(7)).toBe(0);
+    expect(await repo.read('/scratch/active/note.md')).not.toBeNull();
+  });
 });

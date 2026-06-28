@@ -25,6 +25,18 @@ export const RESERVED_LEAF_NAMES = new Set([INDEX_FILENAME, LOG_FILENAME]);
 
 /** Single source of truth for the workspace discipline block injected into every
  *  document-workspace-enabled agent's effective system prompt (#1209). */
+/** Default inactivity TTL for `/scratch/<conversation-id>/…` when config omits scratchTtlDays (#1212). */
+export const DEFAULT_SCRATCH_DOC_TTL_DAYS = 7;
+
+/** Max per-doc / config TTL — matches `documentWorkspace.scratchTtlDays` validation in config.ts. */
+export const MAX_SCRATCH_DOC_TTL_DAYS = 36500;
+
+/**
+ * Ephemeral scratch workspace paths: `/scratch/<conversation-id>/…` with at least one
+ * leaf segment (excludes bare `/scratch` and root-level `/scratch/foo.md`).
+ */
+export const SCRATCH_CONVERSATION_PATH_RE = /^\/scratch\/[^/]+\/.+/;
+
 export const DOCUMENT_WORKSPACE_BLOCK = [
   '## Document Workspace',
   '',
@@ -35,6 +47,14 @@ export const DOCUMENT_WORKSPACE_BLOCK = [
   '`/scratch/<conversation-id>/outline.md`. Directories are path prefixes — `doc-list` on',
   'a prefix is like `ls` on a folder. Each directory has reserved `index.md` (navigation',
   'catalog) and `log.md` (append-only change history).',
+  '',
+  '**Retention.** `/projects/…` documents are durable — they are never auto-purged. Use them',
+  'for task work that must survive across days and distillation. `/scratch/<conversation-id>/…`',
+  'is ephemeral: the nightly purge removes scratch documents after a period of inactivity',
+  '(measured from `updated_at`). Omit `ttl_days` in frontmatter to inherit the configured',
+  'scratch default; set `ttl_days: <n>` on a scratch document to override retention, or',
+  '`ttl_days: 0` to opt out (prefer `/projects/` for anything that should outlive the',
+  'conversation). `ttl_days` on non-scratch paths is ignored.',
   '',
   '**Manifest first, bodies on demand.** On resume you may receive a directory manifest',
   '(the `index.md` projection) at the tail of your task message — that is the map, not',
@@ -286,4 +306,50 @@ export function documentPointerFromProgress(progress: unknown): ResumableDocumen
   if (!resumable || typeof resumable !== 'object' || Array.isArray(resumable)) return null;
   const accumulator = (resumable as Record<string, unknown>).accumulator;
   return isDocumentPointer(accumulator) ? accumulator : null;
+}
+
+/** True for `/scratch/<conversation-id>/…` paths subject to TTL sweep (#1212). */
+export function isScratchDocumentPath(path: string): boolean {
+  return SCRATCH_CONVERSATION_PATH_RE.test(normalizeDocPath(path));
+}
+
+/** Parse optional `ttl_days` from OKF frontmatter. Non-numeric / out-of-range values are unset. */
+export function parseTtlDaysFrontmatter(frontmatter: Record<string, unknown>): number | undefined {
+  const raw = frontmatter.ttl_days;
+  if (raw === undefined || raw === null) return undefined;
+  let parsed: number | undefined;
+  if (typeof raw === 'number' && Number.isInteger(raw)) parsed = raw;
+  else if (typeof raw === 'string' && /^[0-9]+$/.test(raw.trim())) {
+    parsed = Number.parseInt(raw.trim(), 10);
+  } else {
+    return undefined;
+  }
+  if (parsed < 0 || parsed > MAX_SCRATCH_DOC_TTL_DAYS) return undefined;
+  return parsed;
+}
+
+/**
+ * Resolve effective scratch TTL in days for purge eligibility.
+ * Returns `null` when the document opts out (`ttl_days: 0`) or is not under `/scratch/`.
+ */
+export function resolveScratchDocTtlDays(
+  path: string,
+  frontmatter: Record<string, unknown>,
+  defaultScratchTtlDays: number,
+): number | null {
+  if (!isScratchDocumentPath(path)) return null;
+  const ttlDays = parseTtlDaysFrontmatter(frontmatter);
+  if (ttlDays === 0) return null;
+  if (ttlDays !== undefined && ttlDays > 0) return ttlDays;
+  return defaultScratchTtlDays;
+}
+
+/** Warn when frontmatter sets ttl_days on a non-scratch path (value is ignored at purge time). */
+export function ttlDaysFrontmatterWarning(
+  path: string,
+  frontmatter?: Record<string, unknown>,
+): string | null {
+  if (!frontmatter || parseTtlDaysFrontmatter(frontmatter) === undefined) return null;
+  if (isScratchDocumentPath(path)) return null;
+  return 'ttl_days in frontmatter only affects retention for /scratch/ paths — this document will not auto-expire';
 }

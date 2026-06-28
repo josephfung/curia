@@ -7,6 +7,7 @@ import {
   mapDocumentRow,
   mapWriteConflict,
   requireWorkingDocs,
+  ttlDaysFrontmatterWarning,
   validateWritePath,
 } from '../_shared/doc-workspace.js';
 
@@ -50,6 +51,7 @@ export class DocWriteHandler implements SkillHandler {
     const timezone = ctx.timezone ?? 'UTC';
     const normalized = normalizeDocPath(input.path);
     const summary = typeof input.summary === 'string' ? input.summary : `${input.mode} ${normalized}`;
+    const ttlWarning = ttlDaysFrontmatterWarning(normalized, input.frontmatter);
 
     try {
       const repo = ctx.workingDocs!;
@@ -76,7 +78,11 @@ export class DocWriteHandler implements SkillHandler {
           await appendDirectoryLog(ctx, normalized, 'create', summary);
           return {
             success: true,
-            data: { action: 'created', document: mapDocumentRow(created, timezone) },
+            data: {
+              action: 'created',
+              document: mapDocumentRow(created, timezone),
+              ...(ttlWarning ? { retention_warning: ttlWarning } : {}),
+            },
           };
         }
         case 'append': {
@@ -126,7 +132,11 @@ export class DocWriteHandler implements SkillHandler {
           await appendDirectoryLog(ctx, normalized, 'replace', summary);
           return {
             success: true,
-            data: { action: 'replaced', document: mapDocumentRow(result.document, timezone) },
+            data: {
+              action: 'replaced',
+              document: mapDocumentRow(result.document, timezone),
+              ...(ttlWarning ? { retention_warning: ttlWarning } : {}),
+            },
           };
         }
         case 'section-edit': {

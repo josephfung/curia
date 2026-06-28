@@ -11,10 +11,14 @@ import {
   formatWorkspaceManifestBlock,
   grepDocuments,
   indexPathForDirectory,
+  isScratchDocumentPath,
   logPathForDocument,
   parseTaskWakePayload,
+  parseTtlDaysFrontmatter,
+  resolveScratchDocTtlDays,
   resolveWorkspaceDirectoryPrefix,
   resolveWorkspacePrefixFromTaskContent,
+  ttlDaysFrontmatterWarning,
 } from '../../../src/agents/document-workspace.js';
 import type { AgentYamlConfig } from '../../../src/agents/loader.js';
 import type { WorkingDocRow } from '../../../src/db/working-docs-repo.js';
@@ -166,6 +170,44 @@ describe('reserved path helpers', () => {
     const block = formatWorkspaceManifestBlock('/projects/x/', '# Index\n');
     expect(block).toContain('Workspace Manifest');
     expect(block).toContain('# Index');
+  });
+});
+
+describe('scratch document TTL helpers (#1212)', () => {
+  it('identifies conversation-scoped scratch paths only', () => {
+    expect(isScratchDocumentPath('/scratch/conv/outline.md')).toBe(true);
+    expect(isScratchDocumentPath('/scratch/index.md')).toBe(false);
+    expect(isScratchDocumentPath('/scratch')).toBe(false);
+    expect(isScratchDocumentPath('/projects/x/brief.md')).toBe(false);
+  });
+
+  it('inherits default TTL when ttl_days is omitted on scratch paths', () => {
+    expect(resolveScratchDocTtlDays('/scratch/c/note.md', {}, 7)).toBe(7);
+  });
+
+  it('honours positive ttl_days overrides on scratch paths', () => {
+    expect(resolveScratchDocTtlDays('/scratch/c/note.md', { ttl_days: 14 }, 7)).toBe(14);
+  });
+
+  it('opts out when ttl_days is zero on scratch paths', () => {
+    expect(resolveScratchDocTtlDays('/scratch/c/note.md', { ttl_days: 0 }, 7)).toBeNull();
+  });
+
+  it('ignores ttl_days on non-scratch paths', () => {
+    expect(resolveScratchDocTtlDays('/projects/x/brief.md', { ttl_days: 3 }, 7)).toBeNull();
+  });
+
+  it('parses string ttl_days values', () => {
+    expect(parseTtlDaysFrontmatter({ ttl_days: '5' })).toBe(5);
+  });
+
+  it('treats out-of-range ttl_days as unset in frontmatter parsing', () => {
+    expect(parseTtlDaysFrontmatter({ ttl_days: 999999 })).toBeUndefined();
+  });
+
+  it('warns when ttl_days is set on a non-scratch path', () => {
+    const warning = ttlDaysFrontmatterWarning('/projects/x/brief.md', { ttl_days: 3 });
+    expect(warning).toMatch(/ignored|not auto-expire/i);
   });
 });
 
