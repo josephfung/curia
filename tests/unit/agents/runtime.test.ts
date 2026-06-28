@@ -1717,6 +1717,7 @@ describe('AgentRuntime error budget', () => {
 
     const mockExecution = {
       invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+      getToolDefinitions: vi.fn().mockReturnValue([]),
     } as unknown as ExecutionLayer;
 
     const agentErrors: AgentErrorEvent[] = [];
@@ -1929,6 +1930,7 @@ describe('AgentRuntime error budget', () => {
 
     const mockExecution = {
       invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+      getToolDefinitions: vi.fn().mockReturnValue([]),
     } as unknown as ExecutionLayer;
 
     const agentErrors: AgentErrorEvent[] = [];
@@ -1965,6 +1967,215 @@ describe('AgentRuntime error budget', () => {
     expect(mockExecution.invoke).toHaveBeenCalledTimes(19);
     expect(agentErrors).toHaveLength(1);
     expect(agentErrors[0]?.payload.errorType).toBe('BUDGET_EXCEEDED');
+  });
+});
+
+describe('AgentRuntime resumable budget safety-net (#1174)', () => {
+  const toolDef = {
+    name: 'web-fetch',
+    description: 'Fetch',
+    input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+  };
+
+  const resumableCheckpoint = {
+    cursor: 'page-2',
+    done: 25,
+    total: 1300,
+    accumulator: [],
+    lastSliceUnits: 25,
+    next: 'Continue paging',
+  };
+
+  function makeAlwaysToolProvider(): LLMProvider {
+    let callId = 0;
+    return {
+      id: 'mock',
+      chat: vi.fn(async () => ({
+        type: 'tool_use' as const,
+        toolCalls: [{ id: `call-${callId++}`, name: 'web-fetch', input: {} }],
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      })),
+    };
+  }
+
+  it('converts maxTurns budget hit to paused when a resumable checkpoint exists', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+      getToolDefinitions: vi.fn().mockReturnValue([]),
+    } as unknown as ExecutionLayer;
+
+    const agentErrors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.error', 'system', (event) => {
+      agentErrors.push(event as AgentErrorEvent);
+    });
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'social-media',
+      systemPrompt: 'You are a social media specialist.',
+      provider: makeAlwaysToolProvider(),
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [toolDef],
+      errorBudget: { maxTurns: 3, maxConsecutiveErrors: 10 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'social-media',
+      conversationId: 'conv-resumable-paused',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task_id: 'task-resumable-1' }),
+      metadata: {
+        boundTask: {
+          taskId: 'task-resumable-1',
+          errorBudget: { resumable: true },
+          progress: { resumable: resumableCheckpoint },
+        },
+      },
+      parentEventId: 'parent-resumable-paused',
+    }));
+
+    expect(agentErrors).toHaveLength(0);
+    expect(agentResponses).toHaveLength(1);
+    const response = agentResponses[0]!;
+    expect(response.payload.isError).toBeUndefined();
+    const parsed = JSON.parse(response.payload.content) as { _curia_protocol: string; done: number; total: number };
+    expect(parsed._curia_protocol).toBe('execution_paused');
+    expect(parsed.done).toBe(25);
+    expect(parsed.total).toBe(1300);
+  });
+
+  it('emits BUDGET_EXCEEDED when resumable task has no checkpoint', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+      getToolDefinitions: vi.fn().mockReturnValue([]),
+    } as unknown as ExecutionLayer;
+
+    const agentErrors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.error', 'system', (event) => {
+      agentErrors.push(event as AgentErrorEvent);
+    });
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'social-media',
+      systemPrompt: 'You are a social media specialist.',
+      provider: makeAlwaysToolProvider(),
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [toolDef],
+      errorBudget: { maxTurns: 3, maxConsecutiveErrors: 10 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'social-media',
+      conversationId: 'conv-resumable-failed',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task_id: 'task-resumable-2' }),
+      metadata: {
+        boundTask: {
+          taskId: 'task-resumable-2',
+          errorBudget: { resumable: true },
+          progress: {},
+        },
+      },
+      parentEventId: 'parent-resumable-failed',
+    }));
+
+    expect(agentErrors).toHaveLength(1);
+    expect(agentErrors[0]?.payload.errorType).toBe('BUDGET_EXCEEDED');
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]?.payload.isError).toBe(true);
+    expect(agentResponses[0]?.payload.reason).toBe('maxTurns');
+  });
+
+  it('pauses when maxTurns is exhausted inside chatWithRetry retry path', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const retryableErrorProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => ({
+        type: 'error' as const,
+        error: {
+          type: 'RATE_LIMIT' as const,
+          source: 'mock',
+          message: 'rate limited',
+          retryable: true,
+          context: {},
+          timestamp: new Date(),
+        },
+      })),
+    };
+
+    const agentErrors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.error', 'system', (event) => {
+      agentErrors.push(event as AgentErrorEvent);
+    });
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'social-media',
+      systemPrompt: 'You are a social media specialist.',
+      provider: retryableErrorProvider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      errorBudget: { maxTurns: 1, maxConsecutiveErrors: 10 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'social-media',
+      conversationId: 'conv-resumable-retry-pause',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task_id: 'task-resumable-retry' }),
+      metadata: {
+        boundTask: {
+          taskId: 'task-resumable-retry',
+          errorBudget: { resumable: true },
+          progress: {
+            resumable: {
+              cursor: 'page-1',
+              done: 10,
+              total: 100,
+              accumulator: [],
+              lastSliceUnits: 10,
+              next: 'Continue',
+            },
+          },
+        },
+      },
+      parentEventId: 'parent-resumable-retry',
+    }));
+
+    expect(agentErrors).toHaveLength(0);
+    expect(agentResponses).toHaveLength(1);
+    const parsed = JSON.parse(agentResponses[0]!.payload.content) as { _curia_protocol: string };
+    expect(parsed._curia_protocol).toBe('execution_paused');
   });
 });
 
@@ -2864,6 +3075,7 @@ describe('AgentRuntime Bullpen context refresh', () => {
 
     const mockExecution = {
       invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+      getToolDefinitions: vi.fn().mockReturnValue([]),
     } as unknown as ExecutionLayer;
 
     let bullpenCallCount = 0;
@@ -2958,6 +3170,7 @@ describe('AgentRuntime Bullpen context refresh', () => {
 
     const mockExecution = {
       invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+      getToolDefinitions: vi.fn().mockReturnValue([]),
     } as unknown as ExecutionLayer;
 
     let bullpenCallCount = 0;
@@ -3350,5 +3563,80 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).toContain('delegation_failure');
     expect(response.payload.content).toContain('maxTurns');
     expect(response.payload.content).toContain('"escalated":true');
+  });
+
+  it('does not escalate or block when delegate returns paused (#1174)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const taskCreateCount = { n: 0 };
+
+    const mockExecution = {
+      invoke: vi.fn(async (skillName: string) => {
+        if (skillName === 'task-create') {
+          taskCreateCount.n += 1;
+          return { success: true, data: { task_id: 'escalation-task-1' } };
+        }
+        if (skillName === 'delegate') {
+          return {
+            success: true,
+            data: {
+              agent: 'social-media',
+              paused: true,
+              done: 25,
+              total: 1300,
+              next: 'Continue paging',
+              message: 'Still working — 25 of 1300 complete. Continue paging',
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn()
+        .mockResolvedValueOnce({
+          type: 'tool_use' as const,
+          toolCalls: [
+            { id: 'call-delegate-paused-1', name: 'delegate', input: { agent: 'social-media', task: 'Audit follows' } },
+          ],
+          usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        })
+        .mockResolvedValueOnce({
+          type: 'text' as const,
+          content: 'The audit is in progress — 25 of 1300 done so far.',
+          usage: { inputTokens: 80, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        }),
+    };
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-delegate-paused',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Audit my Bluesky follows',
+      parentEventId: 'inbound-delegate-paused',
+    }));
+
+    expect(taskCreateCount.n).toBe(0);
+    expect(provider.chat).toHaveBeenCalledTimes(2);
   });
 });

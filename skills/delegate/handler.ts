@@ -26,6 +26,11 @@ import { createAgentTask, type AgentResponseEvent, type AgentResponseFailureReas
 // future format change can't silently desync this handler from runtime.ts and the resume subscriber.
 import { decodeResumeToken, RESUME_TOKEN_VERSION } from '../../src/agents/resume-token.js';
 import { delegationKey } from '../../src/agents/delegation-guard.js';
+import {
+  EXECUTION_PAUSED_PROTOCOL,
+  formatPausedProgressMessage,
+  parseExecutionPausedPayload,
+} from '../../src/agents/resumable-task.js';
 
 // Default wait for the specialist to respond — appropriate for interactive tasks.
 // Long-running scheduled tasks should pass timeout_ms explicitly (injected by the runtime
@@ -330,6 +335,23 @@ export class DelegateHandler implements SkillHandler {
               }
               reject(new Error(`Specialist '${agent}' encountered an error and could not complete the task`));
             } else {
+              const pausedPayload = parseExecutionPausedPayload(responseEvent.payload.content, ctx.log);
+              if (pausedPayload) {
+                resolve(JSON.stringify({
+                  _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
+                  agent,
+                  task_id: pausedPayload.task_id,
+                  done: pausedPayload.done,
+                  total: pausedPayload.total,
+                  next: pausedPayload.next,
+                  message: formatPausedProgressMessage({
+                    done: pausedPayload.done,
+                    total: pausedPayload.total,
+                    next: pausedPayload.next,
+                  }),
+                }));
+                return;
+              }
               resolve(responseEvent.payload.content);
             }
           }
@@ -398,6 +420,41 @@ export class DelegateHandler implements SkillHandler {
                 question,
                 context: ctxValue,
                 resume_token: resumeToken,
+              },
+            };
+          }
+        }
+
+        if (parsed._curia_protocol === EXECUTION_PAUSED_PROTOCOL) {
+          const done = parsed.done;
+          const total = parsed.total;
+          const next = parsed.next;
+          const message = parsed.message;
+          if (
+            typeof done !== 'number' ||
+            typeof total !== 'number' ||
+            typeof next !== 'string' ||
+            typeof message !== 'string'
+          ) {
+            ctx.log.warn(
+              { targetAgent: agent },
+              'Execution paused protocol marker present but payload fields are invalid — falling back to raw response',
+            );
+          } else {
+            ctx.log.info(
+              { targetAgent: agent, done, total },
+              'Specialist paused mid-task — returning typed paused result to coordinator',
+            );
+            return {
+              success: true,
+              data: {
+                agent,
+                paused: true,
+                done,
+                total,
+                next,
+                message,
+                ...(typeof parsed.task_id === 'string' && { task_id: parsed.task_id }),
               },
             };
           }

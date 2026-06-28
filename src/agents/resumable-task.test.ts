@@ -1,15 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildCheckpointBudgetNudgeMessage,
+  buildExecutionPausedResponse,
   buildResumableCheckpointResumeBlock,
   buildResumableTaskGuidanceBlock,
   boundTaskFromSchedulerContent,
   checkpointNudgeThreshold,
+  EXECUTION_PAUSED_PROTOCOL,
+  formatPausedProgressMessage,
   isResumableTask,
+  parseDelegatePausedData,
+  parseExecutionPausedPayload,
   resolveBoundTaskContext,
   shouldSendCheckpointBudgetNudge,
 } from './resumable-task.js';
 import type { ResumableProgressBlock } from '../db/resumable-progress.js';
+import { readResumableBlock } from '../db/resumable-progress.js';
 
 describe('isResumableTask', () => {
   it('returns true when error_budget.resumable is set', () => {
@@ -124,5 +130,77 @@ describe('buildCheckpointBudgetNudgeMessage', () => {
     const msg = buildCheckpointBudgetNudgeMessage(3, 20);
     expect(msg).toContain('3 of 20');
     expect(msg).toContain('checkpoint');
+  });
+});
+
+describe('executor outcome contract (#1174)', () => {
+  const checkpoint: ResumableProgressBlock = {
+    cursor: 'page-3',
+    done: 12,
+    total: 1300,
+    accumulator: [],
+    lastSliceUnits: 12,
+    next: 'Continue paging follows',
+    checkpointedAt: '2026-06-28T12:00:00.000Z',
+  };
+
+  it('round-trips execution_paused protocol JSON', () => {
+    const content = buildExecutionPausedResponse({
+      taskId: '00000000-0000-0000-0000-000000000099',
+      progress: checkpoint,
+    });
+    const parsed = parseExecutionPausedPayload(content);
+    expect(parsed?._curia_protocol).toBe(EXECUTION_PAUSED_PROTOCOL);
+    expect(parsed?.task_id).toBe('00000000-0000-0000-0000-000000000099');
+    expect(parsed?.done).toBe(12);
+    expect(parsed?.total).toBe(1300);
+    expect(parsed?.next).toBe('Continue paging follows');
+  });
+
+  it('formats paused progress message for coordinator consumption', () => {
+    expect(formatPausedProgressMessage(checkpoint)).toBe(
+      'Still working — 12 of 1300 complete. Continue paging follows',
+    );
+  });
+
+  it('parses delegate paused payload', () => {
+    const data = parseDelegatePausedData({
+      paused: true,
+      agent: 'social-media',
+      task_id: 'task-1',
+      done: 12,
+      total: 1300,
+      next: 'Continue',
+      message: 'Still working — 12 of 1300 complete. Continue',
+    });
+    expect(data?.paused).toBe(true);
+    expect(data?.agent).toBe('social-media');
+    expect(data?.task_id).toBe('task-1');
+  });
+
+  it('resolves scheduler metadata with checkpoint for budget safety-net (#1174)', () => {
+    const ctx = resolveBoundTaskContext(
+      {
+        boundTask: {
+          taskId: 'task-resumable-1',
+          errorBudget: { resumable: true },
+          progress: {
+            resumable: {
+              cursor: 'page-2',
+              done: 25,
+              total: 1300,
+              accumulator: [],
+              lastSliceUnits: 25,
+              next: 'Continue paging',
+            },
+          },
+        },
+      },
+      JSON.stringify({ task_id: 'task-resumable-1' }),
+      'scheduler',
+    );
+    expect(ctx).not.toBeNull();
+    expect(isResumableTask(ctx!)).toBe(true);
+    expect(readResumableBlock(ctx!.progress ?? {})).not.toBeNull();
   });
 });
