@@ -4,12 +4,16 @@ import {
   buildIndexProjection,
   DOCUMENT_WORKSPACE_BLOCK,
   DOCUMENT_WORKSPACE_SKILLS,
+  documentPointerFromTaskContent,
   extractSectionContent,
+  formatAccumulatorResumeBlock,
   formatLogEntry,
   formatWorkspaceManifestBlock,
   grepDocuments,
   indexPathForDirectory,
   logPathForDocument,
+  parseTaskWakePayload,
+  resolveWorkspaceDirectoryPrefix,
   resolveWorkspacePrefixFromTaskContent,
 } from '../../../src/agents/document-workspace.js';
 import type { AgentYamlConfig } from '../../../src/agents/loader.js';
@@ -162,5 +166,50 @@ describe('reserved path helpers', () => {
     const block = formatWorkspaceManifestBlock('/projects/x/', '# Index\n');
     expect(block).toContain('Workspace Manifest');
     expect(block).toContain('# Index');
+  });
+});
+
+describe('parseTaskWakePayload / resume helpers (#1210)', () => {
+  it('parses JSON wake payloads and rejects non-JSON', () => {
+    expect(parseTaskWakePayload(JSON.stringify({ task_id: 'abc' }))).toEqual({ task_id: 'abc' });
+    expect(parseTaskWakePayload('hello')).toBeNull();
+  });
+
+  it('reads a document pointer from task wake content', () => {
+    const pointer = documentPointerFromTaskContent(JSON.stringify({
+      task_id: 'leaf',
+      progress: {
+        resumable: {
+          accumulator: { kind: 'document', path: '/projects/root/accumulator.md' },
+        },
+      },
+    }));
+    expect(pointer?.path).toBe('/projects/root/accumulator.md');
+  });
+
+  it('walks to the project root for child task wakes', async () => {
+    const prefix = await resolveWorkspaceDirectoryPrefix(
+      JSON.stringify({ task_id: 'child-task' }),
+      async () => 'root-task',
+    );
+    expect(prefix).toBe('/projects/root-task/');
+  });
+
+  it('formats spilled accumulator content for resume injection', () => {
+    const block = formatAccumulatorResumeBlock(
+      { kind: 'document', path: '/projects/x/accumulator.md' },
+      '# Accumulator\n\n```json\n[]\n```',
+    );
+    expect(block).toContain('Resumable Accumulator');
+    expect(block).toContain('`/projects/x/accumulator.md`');
+  });
+
+  it('uses a longer fence when spilled content already contains fences', () => {
+    const block = formatAccumulatorResumeBlock(
+      { kind: 'document', path: '/projects/x/accumulator.md' },
+      '```markdown\nnested\n```',
+    );
+    expect(block).toContain('````markdown');
+    expect(block.trimEnd()).toMatch(/````$/);
   });
 });

@@ -2,6 +2,7 @@ import type { AgentYamlConfig } from './loader.js';
 import type { WorkingDocRow } from '../db/working-docs-repo.js';
 import {
   docDirectory,
+  markdownFenceFor,
   normalizeDocPath,
   splitSections,
 } from '../memory/okf.js';
@@ -182,8 +183,8 @@ export function grepDocuments(
   return matches;
 }
 
-/** Parse scheduler / task-wake JSON content for a workspace directory prefix. */
-export function resolveWorkspacePrefixFromTaskContent(content: string): string | null {
+/** Parse scheduler / task-wake JSON content. Returns null for non-JSON payloads. */
+export function parseTaskWakePayload(content: string): Record<string, unknown> | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
@@ -191,25 +192,57 @@ export function resolveWorkspacePrefixFromTaskContent(content: string): string |
     return null;
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const obj = parsed as Record<string, unknown>;
+  return parsed as Record<string, unknown>;
+}
 
-  const progress = obj.progress;
-  if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
-    const resumable = (progress as Record<string, unknown>).resumable;
-    if (resumable && typeof resumable === 'object' && !Array.isArray(resumable)) {
-      const accumulator = (resumable as Record<string, unknown>).accumulator;
-      if (isDocumentPointer(accumulator)) {
-        return docDirectory(accumulator.path);
-      }
-    }
+function resolveWorkspacePrefixFromPayload(
+  payload: Record<string, unknown>,
+  rootTaskId?: string,
+): string | null {
+  const pointer = documentPointerFromProgress(payload.progress);
+  if (pointer) {
+    return docDirectory(pointer.path);
   }
 
-  const taskId = obj.task_id;
-  if (typeof taskId === 'string' && taskId.length > 0) {
-    // Convention: project documents live under /projects/<task-id>/
-    return `/projects/${taskId}/`;
+  const taskId = typeof payload.task_id === 'string' && payload.task_id.length > 0
+    ? payload.task_id
+    : null;
+  if (!taskId) return null;
+
+  // Convention: project documents live under /projects/<root-task-id>/ (#1210).
+  const resolvedRoot = rootTaskId ?? taskId;
+  return `/projects/${resolvedRoot}/`;
+}
+
+/** Parse scheduler / task-wake JSON content for a workspace directory prefix. */
+export function resolveWorkspacePrefixFromTaskContent(content: string): string | null {
+  const payload = parseTaskWakePayload(content);
+  if (!payload) return null;
+  return resolveWorkspacePrefixFromPayload(payload);
+}
+
+/** Resolve the workspace directory prefix, optionally walking to the project-root task. */
+export async function resolveWorkspaceDirectoryPrefix(
+  content: string,
+  resolveRootTaskId?: (taskId: string) => Promise<string | null>,
+): Promise<string | null> {
+  const payload = parseTaskWakePayload(content);
+  if (!payload) return null;
+
+  let rootTaskId: string | undefined;
+  if (resolveRootTaskId && typeof payload.task_id === 'string' && payload.task_id.length > 0) {
+    const root = await resolveRootTaskId(payload.task_id);
+    if (root) rootTaskId = root;
   }
-  return null;
+
+  return resolveWorkspacePrefixFromPayload(payload, rootTaskId);
+}
+
+/** Read a document pointer from scheduler / task-wake JSON content. */
+export function documentPointerFromTaskContent(content: string): ResumableDocumentPointer | null {
+  const payload = parseTaskWakePayload(content);
+  if (!payload) return null;
+  return documentPointerFromProgress(payload.progress);
 }
 
 /** Build the tail message block injected on task resume (manifest only). */
@@ -223,6 +256,27 @@ export function formatWorkspaceManifestBlock(directoryPrefix: string, indexBody:
     '```markdown',
     indexBody.trimEnd(),
     '```',
+  ].join('\n');
+}
+
+/** Build the tail message block for a spilled resumable accumulator document (#1210). */
+export function formatAccumulatorResumeBlock(
+  pointer: ResumableDocumentPointer,
+  content: string,
+  resolvedSection?: string,
+): string {
+  const sectionName = pointer.section ?? resolvedSection;
+  const sectionClause = sectionName ? ` (section \`${sectionName}\`)` : '';
+  const trimmed = content.trimEnd();
+  const fence = markdownFenceFor(trimmed);
+  return [
+    '## Resumable Accumulator',
+    '',
+    `Document \`${pointer.path}\`${sectionClause} — checkpoint spill from your last run:`,
+    '',
+    `${fence}markdown`,
+    trimmed,
+    fence,
   ].join('\n');
 }
 

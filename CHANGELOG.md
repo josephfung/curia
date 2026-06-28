@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`checkpoint`** — resumable-task primitive writing `progress.resumable`; dedicated skill (not folded into `task-update`) with platform guidance, checkpoint resume injection, a one-time ~15% budget nudge at the message tail, auto-pin even for tool-less agents, and no raw UTC in skill results when timezone is absent. (#1173)
 - **Calendar scheduling rules** — calendar agent loads CEO scheduling rules from `config-store` by key at task start, replacing semantic `memory-query`. (#1223)
 - **`progress.resumable`** — typed checkpoint block with bounded accumulator and spill pointer, plus round-trip tests. (#1172)
+- **Resumable accumulator spill** — inline overflow writes to `/projects/<root>/accumulator.md` and stores a workspace document pointer; resume injects the manifest and spilled doc at the message tail. (#1210)
 - **Document workspace** — `working_documents` / `working_document_links` Postgres store with `WorkingDocsRepo`, OKF frontmatter round-trip, backlink index, and optimistic concurrency (document + per-section). (#1208)
 - **`doc-read` / `doc-list` / `doc-write` / `doc-search`** — OKF workspace skills with harness-injected guidance, auto-pin on task-management agents, manifest-only tail injection, and `log.md` append on writes. (#1209)
 
