@@ -171,6 +171,32 @@ describe('SchedulerCreateHandler', () => {
     expect(schedulerService.createJob).not.toHaveBeenCalled();
   });
 
+  it('rejects null and array error_budget values (#883)', async () => {
+    const schedulerService = {
+      createJob: vi.fn(),
+      listJobs: vi.fn(),
+      cancelJob: vi.fn(),
+    };
+
+    for (const error_budget of [null, []]) {
+      const result = await handler.execute(makeCtx(
+        {
+          task: 'weekly report',
+          cron_expr: '0 9 * * 1',
+          intent_anchor: 'weekly-report-v1',
+          error_budget: error_budget as never,
+        },
+        { schedulerService: schedulerService as never },
+      ));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/must be an object/);
+      }
+    }
+    expect(schedulerService.createJob).not.toHaveBeenCalled();
+  });
+
   it('returns failure when createJob throws', async () => {
     const schedulerService = {
       createJob: vi.fn().mockRejectedValue(new Error('DB connection lost')),

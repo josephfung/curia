@@ -32,8 +32,18 @@ const NUMERIC_CEILING_KEYS = [
  * Validate a task error_budget object before persistence.
  * Returns an error message when invalid, or null when acceptable.
  */
-export function validateTaskErrorBudget(errorBudget: Record<string, unknown>): string | null {
-  for (const key of Object.keys(errorBudget)) {
+export function validateTaskErrorBudget(errorBudget: unknown): string | null {
+  if (
+    errorBudget === null ||
+    typeof errorBudget !== 'object' ||
+    Array.isArray(errorBudget)
+  ) {
+    return 'error_budget must be an object.';
+  }
+
+  const budget = errorBudget as Record<string, unknown>;
+
+  for (const key of Object.keys(budget)) {
     if (FORBIDDEN_PER_INVOCATION_BUDGET_KEYS.has(key)) {
       return (
         `error_budget.${key} is not supported on tasks — per-invocation turn limits are ` +
@@ -50,13 +60,13 @@ export function validateTaskErrorBudget(errorBudget: Record<string, unknown>): s
     }
   }
 
-  if ('resumable' in errorBudget && typeof errorBudget.resumable !== 'boolean') {
+  if ('resumable' in budget && typeof budget.resumable !== 'boolean') {
     return 'error_budget.resumable must be a boolean.';
   }
 
   for (const key of NUMERIC_CEILING_KEYS) {
-    if (key in errorBudget) {
-      const value = errorBudget[key];
+    if (key in budget) {
+      const value = budget[key];
       if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
         return `error_budget.${key} must be a positive number.`;
       }

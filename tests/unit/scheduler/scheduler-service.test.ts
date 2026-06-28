@@ -154,6 +154,22 @@ describe('SchedulerService', () => {
       expect(pool.connect).not.toHaveBeenCalled();
     });
 
+    it('rejects null and array errorBudget values (#883)', async () => {
+      const base: CreateJobParams = {
+        agentId: 'agent-3',
+        cronExpr: '0 */6 * * *',
+        taskPayload: { skill: 'report' },
+        createdBy: 'system',
+        intentAnchor: 'weekly-report',
+      };
+
+      await expect(svc.createJob({ ...base, errorBudget: null as unknown as Record<string, unknown> }))
+        .rejects.toThrow(/must be an object/);
+      await expect(svc.createJob({ ...base, errorBudget: [] as unknown as Record<string, unknown> }))
+        .rejects.toThrow(/must be an object/);
+      expect(pool.connect).not.toHaveBeenCalled();
+    });
+
     it('rolls back when the task CTE throws — no orphaned scheduled_jobs row', async () => {
       const jobId = 'job-rollback';
       pool._clientQuery

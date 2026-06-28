@@ -10,6 +10,10 @@ describe('validateTaskErrorBudget', () => {
     expect(validateTaskErrorBudget({})).toBeNull();
   });
 
+  it.each([null, [], 'string', 42])('rejects non-object input %j', (input) => {
+    expect(validateTaskErrorBudget(input)).toBe('error_budget must be an object.');
+  });
+
   it('accepts resumable flag and ceiling overrides', () => {
     expect(
       validateTaskErrorBudget({
