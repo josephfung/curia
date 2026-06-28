@@ -82,8 +82,10 @@ describeIf('Resumable continuation scheduling (#1175)', () => {
       bus,
       logger: logger as never,
       schedulerService,
+      taskRepo: repo,
       eligibleAgents: new Set(['social-media', 'coordinator']),
       continuationDelaySeconds: 1,
+      resumableCeilings: { maxStalls: 3, maxIterations: 100, maxWallclockHours: 24, maxCostUsd: 10 },
     });
     subscriber.start();
 

@@ -210,6 +210,8 @@ export interface ExecutionPausedPayload {
   cursor: ResumableProgressBlock['cursor'];
   last_slice_units: number;
   next: string;
+  /** Aggregate LLM cost for this slice (USD) — feeds resumable cost ceiling (#1176). */
+  slice_cost_usd?: number;
 }
 
 export interface DelegatePausedResult {
@@ -233,6 +235,7 @@ export function formatPausedProgressMessage(
 export function buildExecutionPausedResponse(options: {
   taskId?: string;
   progress: ResumableProgressBlock;
+  sliceCostUsd?: number;
 }): string {
   const payload: ExecutionPausedPayload = {
     _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
@@ -243,6 +246,9 @@ export function buildExecutionPausedResponse(options: {
     next: options.progress.next,
   };
   if (options.taskId) payload.task_id = options.taskId;
+  if (options.sliceCostUsd !== undefined && options.sliceCostUsd > 0) {
+    payload.slice_cost_usd = options.sliceCostUsd;
+  }
   return JSON.stringify(payload);
 }
 

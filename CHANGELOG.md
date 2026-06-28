@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Resumable circuit breaker** — progress-based stall counter plus per-task iteration/wallclock/cost ceilings; K consecutive no-progress pauses or a ceiling breach fails the task and escalates via the backlog path instead of looping. Config: `tasks.resumableCeilings` (defaults documented in `config/default.yaml`). (#1176)
 - **Resumable executor contract** — checkpointed budget-hit pauses instead of `BUDGET_EXCEEDED`; coordinator treats `paused` as success. (#1174)
 - **Resumable self-continuation** — paused resumable tasks schedule a single near-term `scheduled_jobs` wake routed to `source_agent_id` (config: `tasks.resumableContinuationSeconds`); the hourly BacklogHeartbeat remains the backstop. (#1175)
 - **`checkpoint`** — resumable-task primitive writing `progress.resumable`; dedicated skill (not folded into `task-update`) with platform guidance, checkpoint resume injection, a one-time ~15% budget nudge at the message tail, auto-pin even for tool-less agents, and no raw UTC in skill results when timezone is absent. (#1173)

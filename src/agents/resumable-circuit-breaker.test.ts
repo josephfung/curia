@@ -1,0 +1,143 @@
+import { describe, it, expect } from 'vitest';
+import {
+  cursorsEqual,
+  hasForwardProgress,
+  processPausedSliceOutcome,
+  readCircuitState,
+  resolveResumableCeilings,
+  mergeCircuitState,
+} from './resumable-circuit-breaker.js';
+import { DEFAULT_RESUMABLE_CEILINGS } from '../config.js';
+import type { ExecutionPausedPayload } from './resumable-task.js';
+
+function paused(overrides: Partial<ExecutionPausedPayload> = {}): ExecutionPausedPayload {
+  return {
+    _curia_protocol: 'execution_paused',
+    done: 25,
+    total: 100,
+    cursor: 'page:3',
+    last_slice_units: 25,
+    next: 'continue',
+    ...overrides,
+  };
+}
+
+describe('resumable-circuit-breaker (#1176)', () => {
+  it('detects forward progress via done-count or cursor change', () => {
+    expect(hasForwardProgress({ done: 10, cursor: 'a' }, { done: 11, cursor: 'a' })).toBe(true);
+    expect(hasForwardProgress({ done: 10, cursor: 'a' }, { done: 10, cursor: 'b' })).toBe(true);
+    expect(hasForwardProgress({ done: 10, cursor: 'a' }, { done: 10, cursor: 'a' })).toBe(false);
+    expect(cursorsEqual({ x: 1 }, { x: 1 })).toBe(true);
+    expect(cursorsEqual('page:1', 'page:2')).toBe(false);
+  });
+
+  it('resets stall counter on forward progress', () => {
+    const circuit = {
+      stallCount: 2,
+      iterationCount: 5,
+      startedAt: '2026-06-01T00:00:00.000Z',
+      totalCostUsd: 0,
+      lastProgress: { done: 20, cursor: 'page:2' },
+    };
+    const result = processPausedSliceOutcome({
+      paused: paused({ done: 25, cursor: 'page:3' }),
+      circuit,
+      ceilings: { ...DEFAULT_RESUMABLE_CEILINGS, maxStalls: 3 },
+      now: new Date('2026-06-01T01:00:00.000Z'),
+    });
+    expect(result.action).toBe('continue');
+    if (result.action === 'continue') {
+      expect(result.state.stallCount).toBe(0);
+      expect(result.state.iterationCount).toBe(6);
+    }
+  });
+
+  it('increments stall counter when paused with no progress', () => {
+    const circuit = {
+      stallCount: 0,
+      iterationCount: 1,
+      startedAt: '2026-06-01T00:00:00.000Z',
+      totalCostUsd: 0,
+      lastProgress: { done: 25, cursor: 'page:3' },
+    };
+    const result = processPausedSliceOutcome({
+      paused: paused({ done: 25, cursor: 'page:3' }),
+      circuit,
+      ceilings: { ...DEFAULT_RESUMABLE_CEILINGS, maxStalls: 3 },
+      now: new Date('2026-06-01T01:00:00.000Z'),
+    });
+    expect(result.action).toBe('continue');
+    if (result.action === 'continue') {
+      expect(result.state.stallCount).toBe(1);
+    }
+  });
+
+  it('breaches after K consecutive stalls', () => {
+    const circuit = {
+      stallCount: 2,
+      iterationCount: 10,
+      startedAt: '2026-06-01T00:00:00.000Z',
+      totalCostUsd: 0,
+      lastProgress: { done: 25, cursor: 'page:3' },
+    };
+    const result = processPausedSliceOutcome({
+      paused: paused({ done: 25, cursor: 'page:3' }),
+      circuit,
+      ceilings: { ...DEFAULT_RESUMABLE_CEILINGS, maxStalls: 3 },
+      now: new Date('2026-06-01T01:00:00.000Z'),
+    });
+    expect(result.action).toBe('breach');
+    if (result.action === 'breach') {
+      expect(result.breach.reason).toBe('stall_limit');
+    }
+  });
+
+  it('breaches on iteration, wallclock, and cost ceilings', () => {
+    const base = {
+      stallCount: 0,
+      iterationCount: 99,
+      startedAt: '2026-06-01T00:00:00.000Z',
+      totalCostUsd: 9.5,
+      lastProgress: { done: 25, cursor: 'page:3' },
+    };
+    expect(processPausedSliceOutcome({
+      paused: paused({ done: 30, cursor: 'page:4' }),
+      circuit: base,
+      ceilings: { ...DEFAULT_RESUMABLE_CEILINGS, maxIterations: 100 },
+      now: new Date('2026-06-01T01:00:00.000Z'),
+    }).action).toBe('breach');
+
+    expect(processPausedSliceOutcome({
+      paused: paused({ done: 30, cursor: 'page:4' }),
+      circuit: { ...base, iterationCount: 5 },
+      ceilings: { ...DEFAULT_RESUMABLE_CEILINGS, maxWallclockHours: 1 },
+      now: new Date('2026-06-01T02:00:00.000Z'),
+    }).action).toBe('breach');
+
+    expect(processPausedSliceOutcome({
+      paused: paused({ done: 30, cursor: 'page:4' }),
+      circuit: base,
+      ceilings: { ...DEFAULT_RESUMABLE_CEILINGS, maxCostUsd: 10 },
+      sliceCostUsd: 0.6,
+      now: new Date('2026-06-01T01:00:00.000Z'),
+    }).action).toBe('breach');
+  });
+
+  it('resolves per-task error_budget overrides', () => {
+    expect(resolveResumableCeilings(DEFAULT_RESUMABLE_CEILINGS, { max_stalls: 5 })).toMatchObject({
+      maxStalls: 5,
+    });
+  });
+
+  it('round-trips circuit state in progress JSON', () => {
+    const state = {
+      stallCount: 1,
+      iterationCount: 4,
+      startedAt: '2026-06-01T00:00:00.000Z',
+      totalCostUsd: 1.25,
+      lastProgress: { done: 10, cursor: null },
+    };
+    const merged = mergeCircuitState({ notes: [] }, state);
+    expect(readCircuitState(merged)).toEqual(state);
+  });
+});

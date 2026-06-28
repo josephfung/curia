@@ -2021,8 +2021,10 @@ async function main(): Promise<void> {
     bus,
     logger,
     schedulerService,
+    taskRepo,
     eligibleAgents: taskManagementAgents,
     continuationDelaySeconds: tasksConfig.resumableContinuationSeconds,
+    resumableCeilings: tasksConfig.resumableCeilings,
   });
   resumableContinuationSubscriber.start();
 

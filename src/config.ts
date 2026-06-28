@@ -47,6 +47,22 @@ export interface Config {
   signalPhoneNumber: string | undefined;
 }
 
+/** Per-resumable-task aggregate ceilings — progress-based circuit breaker (#1176). */
+export interface ResumableCeilingsConfig {
+  /** Consecutive paused slices with no forward progress before fail/escalate (K). */
+  maxStalls: number;
+  maxIterations: number;
+  maxWallclockHours: number;
+  maxCostUsd: number;
+}
+
+export const DEFAULT_RESUMABLE_CEILINGS: ResumableCeilingsConfig = {
+  maxStalls: 3,
+  maxIterations: 100,
+  maxWallclockHours: 24,
+  maxCostUsd: 10,
+};
+
 export interface TasksConfig {
   heartbeatIntervalMinutes: number;
   heartbeatMaxWakesPerTick: number;
@@ -54,6 +70,8 @@ export interface TasksConfig {
   staleWaitThresholdHours: number;
   /** Seconds until a paused resumable task's self-continuation wake fires. */
   resumableContinuationSeconds: number;
+  /** Progress-based circuit-breaker defaults for resumable tasks (#1176). */
+  resumableCeilings: ResumableCeilingsConfig;
 }
 
 export const DEFAULT_TASKS_CONFIG: TasksConfig = {
@@ -62,7 +80,18 @@ export const DEFAULT_TASKS_CONFIG: TasksConfig = {
   idleThresholdHours: 4,
   staleWaitThresholdHours: 48,
   resumableContinuationSeconds: 30,
+  resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
 };
+
+function resolveResumableCeilings(yaml: YamlConfig['tasks']): ResumableCeilingsConfig {
+  const r = yaml?.resumableCeilings;
+  return {
+    maxStalls: r?.maxStalls ?? DEFAULT_RESUMABLE_CEILINGS.maxStalls,
+    maxIterations: r?.maxIterations ?? DEFAULT_RESUMABLE_CEILINGS.maxIterations,
+    maxWallclockHours: r?.maxWallclockHours ?? DEFAULT_RESUMABLE_CEILINGS.maxWallclockHours,
+    maxCostUsd: r?.maxCostUsd ?? DEFAULT_RESUMABLE_CEILINGS.maxCostUsd,
+  };
+}
 
 /** Resolve the optional YAML tasks block to a fully-populated config with defaults. */
 export function resolveTasksConfig(yaml: YamlConfig['tasks']): TasksConfig {
@@ -72,6 +101,7 @@ export function resolveTasksConfig(yaml: YamlConfig['tasks']): TasksConfig {
     idleThresholdHours: yaml?.idleThresholdHours ?? DEFAULT_TASKS_CONFIG.idleThresholdHours,
     staleWaitThresholdHours: yaml?.staleWaitThresholdHours ?? DEFAULT_TASKS_CONFIG.staleWaitThresholdHours,
     resumableContinuationSeconds: yaml?.resumableContinuationSeconds ?? DEFAULT_TASKS_CONFIG.resumableContinuationSeconds,
+    resumableCeilings: resolveResumableCeilings(yaml),
   };
 }
 
@@ -429,6 +459,17 @@ export interface YamlConfig {
     staleWaitThresholdHours?: number;
     /** Seconds until a paused resumable task's self-continuation wake fires. Default 30. */
     resumableContinuationSeconds?: number;
+    /** Progress-based circuit-breaker ceilings for resumable tasks (#1176). */
+    resumableCeilings?: {
+      /** Consecutive no-progress pauses before fail/escalate (K). Default 3. */
+      maxStalls?: number;
+      /** Max continuation slices. Default 100. */
+      maxIterations?: number;
+      /** Max wallclock hours from first pause. Default 24. */
+      maxWallclockHours?: number;
+      /** Max aggregate LLM cost (USD) across slices. Default 10. */
+      maxCostUsd?: number;
+    };
   };
   health?: {
     liveness?: {
@@ -940,6 +981,21 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       !Number.isInteger(t.resumableContinuationSeconds) || t.resumableContinuationSeconds < 1
     )) {
       throw new Error(`tasks.resumableContinuationSeconds must be a positive integer, got: ${String(t.resumableContinuationSeconds)}`);
+    }
+    if (t.resumableCeilings !== undefined) {
+      const c = t.resumableCeilings;
+      if (c.maxStalls !== undefined && (!Number.isInteger(c.maxStalls) || c.maxStalls < 1)) {
+        throw new Error(`tasks.resumableCeilings.maxStalls must be a positive integer, got: ${String(c.maxStalls)}`);
+      }
+      if (c.maxIterations !== undefined && (!Number.isInteger(c.maxIterations) || c.maxIterations < 1)) {
+        throw new Error(`tasks.resumableCeilings.maxIterations must be a positive integer, got: ${String(c.maxIterations)}`);
+      }
+      if (c.maxWallclockHours !== undefined && (!Number.isFinite(c.maxWallclockHours) || c.maxWallclockHours <= 0)) {
+        throw new Error(`tasks.resumableCeilings.maxWallclockHours must be a positive number, got: ${String(c.maxWallclockHours)}`);
+      }
+      if (c.maxCostUsd !== undefined && (!Number.isFinite(c.maxCostUsd) || c.maxCostUsd <= 0)) {
+        throw new Error(`tasks.resumableCeilings.maxCostUsd must be a positive number, got: ${String(c.maxCostUsd)}`);
+      }
     }
   }
 
