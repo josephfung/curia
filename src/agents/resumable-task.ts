@@ -8,6 +8,10 @@ import {
   readResumableBlock,
   type ResumableProgressBlock,
 } from '../db/resumable-progress.js';
+import {
+  indexPathForDirectory,
+  resolveWorkspacePrefixFromTaskContent,
+} from './document-workspace.js';
 
 export const CHECKPOINT_SKILL_NAME = 'checkpoint';
 
@@ -20,7 +24,7 @@ export interface BoundTaskContext {
   errorBudget?: Record<string, unknown>;
   tags?: string[];
   progress?: Record<string, unknown>;
-  /** Populated when #1209 document-workspace guidance lands. */
+  /** Populated from the project workspace directory when document-workspace is active (#1209). */
   workspaceManifestPath?: string;
 }
 
@@ -61,6 +65,8 @@ export function shouldSendCheckpointBudgetNudge(
 
 export function buildResumableTaskGuidanceBlock(options?: {
   workspaceManifestPath?: string;
+  /** True when #1209 appended a ## Workspace Manifest block to the task message tail. */
+  workspaceManifestInjected?: boolean;
 }): string {
   const lines = [
     '## Resumable Task',
@@ -73,15 +79,20 @@ export function buildResumableTaskGuidanceBlock(options?: {
     'what to do on the next slice.',
   ];
 
-  if (options?.workspaceManifestPath) {
+  if (options?.workspaceManifestInjected) {
+    lines.push(
+      '',
+      'This project has a document workspace. On resume, a **## Workspace Manifest** block is',
+      'appended to your task message (index projection only). Re-read it before continuing;',
+      'use `doc-read` for document bodies and specific sections.',
+    );
+    if (options.workspaceManifestPath) {
+      lines.push(`Index path: \`${options.workspaceManifestPath}\`.`);
+    }
+  } else if (options?.workspaceManifestPath) {
     lines.push(
       '',
       `This project has a document workspace. Re-read the manifest at \`${options.workspaceManifestPath}\` on resume before continuing.`,
-    );
-  } else {
-    lines.push(
-      '',
-      '_When a document workspace is configured for this project (#1209), the manifest path will appear here._',
     );
   }
 
@@ -154,11 +165,19 @@ export function boundTaskFromSchedulerContent(content: string): BoundTaskContext
 
 export function resolveBoundTaskContext(
   metadata: Record<string, unknown> | undefined,
-  content: string,
+  rawTaskContent: string,
   channelId: string,
 ): BoundTaskContext | null {
   const fromMeta = boundTaskFromMetadata(metadata);
-  if (fromMeta) return fromMeta;
-  if (channelId === 'scheduler') return boundTaskFromSchedulerContent(content);
-  return null;
+  const ctx = fromMeta ?? (channelId === 'scheduler' ? boundTaskFromSchedulerContent(rawTaskContent) : null);
+  if (!ctx) return null;
+  enrichBoundTaskWorkspace(ctx, rawTaskContent);
+  return ctx;
+}
+
+/** Derive the workspace index path from task content / resumable accumulator (#1209 compose). */
+export function enrichBoundTaskWorkspace(ctx: BoundTaskContext, rawTaskContent: string): void {
+  if (ctx.workspaceManifestPath) return;
+  const prefix = resolveWorkspacePrefixFromTaskContent(rawTaskContent);
+  if (prefix) ctx.workspaceManifestPath = indexPathForDirectory(prefix);
 }

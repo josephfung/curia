@@ -56,6 +56,10 @@ skills:
   - task-update
   # Config + identity
   - config-store
+  - doc-list
+  - doc-read
+  - doc-search
+  - doc-write
   - executive-profile-get
   - executive-profile-update
   - behavioral-preferences-update

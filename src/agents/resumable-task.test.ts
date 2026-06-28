@@ -59,9 +59,19 @@ describe('guidance blocks', () => {
     expect(block).toContain('/projects/audit/index.md');
   });
 
-  it('notes #1209 follow-up when workspace manifest is absent', () => {
+  it('notes tail manifest when workspace is active', () => {
+    const block = buildResumableTaskGuidanceBlock({
+      workspaceManifestPath: '/projects/audit/index.md',
+      workspaceManifestInjected: true,
+    });
+    expect(block).toContain('## Workspace Manifest');
+    expect(block).toContain('/projects/audit/index.md');
+  });
+
+  it('omits workspace placeholder when no workspace is configured', () => {
     const block = buildResumableTaskGuidanceBlock();
-    expect(block).toContain('#1209');
+    expect(block).not.toContain('#1209');
+    expect(block).not.toContain('document workspace');
   });
 
   it('formats checkpoint resume block', () => {
@@ -81,7 +91,7 @@ describe('guidance blocks', () => {
 });
 
 describe('bound task resolution', () => {
-  it('reads boundTask from metadata', () => {
+  it('reads boundTask from metadata and derives workspace index path', () => {
     const ctx = resolveBoundTaskContext(
       {
         boundTask: {
@@ -91,10 +101,11 @@ describe('bound task resolution', () => {
           progress: {},
         },
       },
-      '{}',
+      JSON.stringify({ task_id: '00000000-0000-0000-0000-000000000099' }),
       'scheduler',
     );
     expect(ctx?.taskId).toBe('00000000-0000-0000-0000-000000000099');
+    expect(ctx?.workspaceManifestPath).toBe('/projects/00000000-0000-0000-0000-000000000099/index.md');
     expect(isResumableTask(ctx!)).toBe(true);
   });
 

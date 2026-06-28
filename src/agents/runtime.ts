@@ -254,7 +254,8 @@ export class AgentRuntime {
 
     // Manifest-only workspace injection at the message tail — keeps document bodies out
     // of the cached system prefix (#1209). Best-effort: a missing repo or parse failure
-    // must not abort the task.
+    // must not abort the task. Parse originalContent only — never the post-append string.
+    let workspaceManifestInjected = false;
     if (this.config.documentWorkspaceEnabled && this.config.workingDocsRepo) {
       try {
         const prefix = resolveWorkspacePrefixFromTaskContent(originalContent);
@@ -262,6 +263,7 @@ export class AgentRuntime {
           const documents = await this.config.workingDocsRepo.listByPrefix(prefix);
           const manifest = buildIndexProjection(prefix, documents);
           promptContent = `${promptContent}\n\n${formatWorkspaceManifestBlock(prefix, manifest)}`;
+          workspaceManifestInjected = true;
         }
       } catch (err) {
         logger.warn({ err, agentId }, 'Document workspace manifest injection failed — proceeding without manifest');
@@ -411,16 +413,17 @@ export class AgentRuntime {
 
     // Resumable-task harness (#1173): fixed-slot guidance + checkpoint resume for
     // iterate leaves. Injected per-turn when the bound task is resumable — not in
-    // agent YAML. Composes with document-workspace guidance when #1209 lands.
+    // agent YAML. Composes with document-workspace tail manifest injection (#1209).
     const boundTaskCtx = resolveBoundTaskContext(
       taskEvent.payload.metadata as Record<string, unknown> | undefined,
-      content,
+      originalContent,
       taskEvent.payload.channelId,
     );
     const resumableActive = boundTaskCtx !== null && isResumableTask(boundTaskCtx);
     if (resumableActive && boundTaskCtx) {
       effectiveSystemPrompt += '\n\n' + buildResumableTaskGuidanceBlock({
         workspaceManifestPath: boundTaskCtx.workspaceManifestPath,
+        workspaceManifestInjected,
       });
       const existingCheckpoint = readResumableBlock(boundTaskCtx.progress ?? {});
       if (existingCheckpoint) {
