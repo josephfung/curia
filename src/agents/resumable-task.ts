@@ -181,3 +181,123 @@ export function enrichBoundTaskWorkspace(ctx: BoundTaskContext, rawTaskContent: 
   const prefix = resolveWorkspacePrefixFromTaskContent(rawTaskContent);
   if (prefix) ctx.workspaceManifestPath = indexPathForDirectory(prefix);
 }
+
+// ---------------------------------------------------------------------------
+// Executor outcome contract (#1174) — done | paused | failed{reason, retryable}
+// ---------------------------------------------------------------------------
+
+/** Protocol marker on agent.response when a resumable executor pauses mid-work. */
+export const EXECUTION_PAUSED_PROTOCOL = 'execution_paused';
+
+/** Coarse failure reasons for executor invocations (planner-facing). */
+export type ExecutorFailureReason =
+  | 'budget_max_turns'
+  | 'tool_error'
+  | 'api_error'
+  | 'blocked';
+
+export type ExecutorOutcome =
+  | { status: 'done' }
+  | { status: 'paused'; taskId?: string; progress: ResumableProgressBlock }
+  | { status: 'failed'; reason: ExecutorFailureReason; retryable: boolean };
+
+export interface ExecutionPausedPayload {
+  _curia_protocol: typeof EXECUTION_PAUSED_PROTOCOL;
+  task_id?: string;
+  done: number;
+  total: number;
+  cursor: ResumableProgressBlock['cursor'];
+  last_slice_units: number;
+  next: string;
+}
+
+export interface DelegatePausedResult {
+  paused: true;
+  agent: string;
+  task_id?: string;
+  done: number;
+  total: number;
+  next: string;
+  message: string;
+}
+
+/** Human-readable progress summary for coordinator / delegate consumers. */
+export function formatPausedProgressMessage(
+  progress: Pick<ResumableProgressBlock, 'done' | 'total' | 'next'>,
+): string {
+  return `Still working — ${progress.done} of ${progress.total} complete. ${progress.next}`;
+}
+
+/** Build the deterministic JSON body for a paused executor response. */
+export function buildExecutionPausedResponse(options: {
+  taskId?: string;
+  progress: ResumableProgressBlock;
+}): string {
+  const payload: ExecutionPausedPayload = {
+    _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
+    done: options.progress.done,
+    total: options.progress.total,
+    cursor: options.progress.cursor,
+    last_slice_units: options.progress.lastSliceUnits,
+    next: options.progress.next,
+  };
+  if (options.taskId) payload.task_id = options.taskId;
+  return JSON.stringify(payload);
+}
+
+/** Parse a paused protocol payload from agent.response content. */
+export function parseExecutionPausedPayload(content: string): ExecutionPausedPayload | null {
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    if (parsed['_curia_protocol'] !== EXECUTION_PAUSED_PROTOCOL) return null;
+    if (typeof parsed['done'] !== 'number' || typeof parsed['total'] !== 'number') return null;
+    if (typeof parsed['next'] !== 'string') return null;
+    if (typeof parsed['last_slice_units'] !== 'number') return null;
+    const cursor = parsed['cursor'];
+    if (cursor !== null && typeof cursor !== 'string' && !isPlainObject(cursor)) return null;
+    const payload: ExecutionPausedPayload = {
+      _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
+      done: parsed['done'],
+      total: parsed['total'],
+      cursor: cursor as ResumableProgressBlock['cursor'],
+      last_slice_units: parsed['last_slice_units'],
+      next: parsed['next'],
+    };
+    if (typeof parsed['task_id'] === 'string' && parsed['task_id'].length > 0) {
+      payload.task_id = parsed['task_id'];
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse a delegate skill success payload that carries paused (not failed) fields. */
+export function parseDelegatePausedData(data: unknown): DelegatePausedResult | null {
+  if (data === null || data === undefined) return null;
+  let record: Record<string, unknown>;
+  if (typeof data === 'string') {
+    try {
+      record = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  } else if (typeof data === 'object' && !Array.isArray(data)) {
+    record = data as Record<string, unknown>;
+  } else {
+    return null;
+  }
+  if (record['paused'] !== true) return null;
+  if (typeof record['agent'] !== 'string') return null;
+  if (typeof record['done'] !== 'number' || typeof record['total'] !== 'number') return null;
+  if (typeof record['next'] !== 'string' || typeof record['message'] !== 'string') return null;
+  return {
+    paused: true,
+    agent: record['agent'],
+    done: record['done'],
+    total: record['total'],
+    next: record['next'],
+    message: record['message'],
+    ...(typeof record['task_id'] === 'string' && { task_id: record['task_id'] }),
+  };
+}

@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Resumable executor contract** — `done | paused | failed` outcomes; budget-hit on a checkpointed resumable task pauses from the last checkpoint instead of `BUDGET_EXCEEDED`, and the coordinator treats `paused` as success (no re-delegation). (#1174)
 - **`checkpoint`** — resumable-task primitive writing `progress.resumable`; dedicated skill (not folded into `task-update`) with platform guidance, checkpoint resume injection, a one-time ~15% budget nudge at the message tail, auto-pin even for tool-less agents, and no raw UTC in skill results when timezone is absent. (#1173)
 - **Calendar scheduling rules** — calendar agent loads CEO scheduling rules from `config-store` by key at task start, replacing semantic `memory-query`. (#1223)
 - **`progress.resumable`** — typed checkpoint block with bounded accumulator and spill pointer, plus round-trip tests. (#1172)

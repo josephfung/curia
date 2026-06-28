@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.11.0"
+version: "0.11.1"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -265,6 +265,19 @@ system_prompt: |
   4. The specialist resumes with full context automatically. Handle the result
      normally — it may be a final answer or another clarification request.
      Multiple clarification rounds are supported.
+
+  ### Handling resumable-task pauses (partial progress, not failure)
+  When delegate returns with `paused: true`, a specialist made real progress on a
+  long resumable task but hit its per-slice turn budget. This is **success at the
+  delegation layer**, not a timeout or error.
+
+  1. **Do not re-delegate** the same work in this turn or immediately retry — the
+     platform schedules a continuation automatically.
+  2. Record the progress using the `done`, `total`, and `message` fields. Optionally
+     tell the CEO "still working, X of Y" in your own voice when they are waiting
+     on synchronous channels.
+  3. Treat `paused` differently from `failed` — never confabulate an external cause
+     (API timeout, service outage) when the reason is budget exhaustion with progress.
 
   ## What I Do Directly
 

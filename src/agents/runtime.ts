@@ -22,14 +22,17 @@ import { formatTurnBudgetBlock } from './turn-budget.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import {
   buildCheckpointBudgetNudgeMessage,
+  buildExecutionPausedResponse,
   buildResumableCheckpointResumeBlock,
   buildResumableTaskGuidanceBlock,
   CHECKPOINT_SKILL_NAME,
   isResumableTask,
+  parseDelegatePausedData,
   resolveBoundTaskContext,
   shouldSendCheckpointBudgetNudge,
+  type BoundTaskContext,
 } from './resumable-task.js';
-import { readResumableBlock } from '../db/resumable-progress.js';
+import { readResumableBlock, type ResumableProgressBlock } from '../db/resumable-progress.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -894,7 +897,12 @@ export class AgentRuntime {
       budget.turnsUsed++;
       maybeAppendCheckpointBudgetNudge();
       if (budget.turnsUsed >= budget.maxTurns) {
-        await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns');
+        await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', {
+          conversationId,
+          skillsCalled,
+          boundTaskCtx,
+          memory,
+        });
         return;
       }
 
@@ -1166,6 +1174,7 @@ export class AgentRuntime {
           // record the outcome and escalate to the CEO backlog when retries are exhausted or
           // the failure is non-retryable. Short-circuit the turn after escalation so the LLM
           // cannot blind-re-delegate in subsequent rounds.
+          // Paused delegate results (#1174) are success at the delegation layer — do not record.
           if (
             toolCall.name === 'delegate' &&
             !delegateBlocked &&
@@ -1173,24 +1182,27 @@ export class AgentRuntime {
             skillInput !== null &&
             !Array.isArray(skillInput)
           ) {
-            const delegateFailure = parseDelegateFailureData(result.data, logger);
-            if (delegateFailure) {
-              const delegateInput = skillInput as Record<string, unknown>;
-              const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
-              const dKey = delegationKey(delegateFailure.agent, delegateTask);
-              delegationGuard.recordFailure(dKey, delegateFailure);
-              if (delegationGuard.shouldEscalate(dKey)) {
-                const escalated = await escalateDelegationFailure(
-                  executionLayer,
-                  caller,
-                  invokeOptions,
-                  { ...delegateFailure, task: delegateTask },
-                  logger,
-                );
-                if (escalated) {
-                  delegationGuard.markEscalated(dKey);
+            const delegatePaused = parseDelegatePausedData(result.data);
+            if (!delegatePaused) {
+              const delegateFailure = parseDelegateFailureData(result.data, logger);
+              if (delegateFailure) {
+                const delegateInput = skillInput as Record<string, unknown>;
+                const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
+                const dKey = delegationKey(delegateFailure.agent, delegateTask);
+                delegationGuard.recordFailure(dKey, delegateFailure);
+                if (delegationGuard.shouldEscalate(dKey)) {
+                  const escalated = await escalateDelegationFailure(
+                    executionLayer,
+                    caller,
+                    invokeOptions,
+                    { ...delegateFailure, task: delegateTask },
+                    logger,
+                  );
+                  if (escalated) {
+                    delegationGuard.markEscalated(dKey);
+                  }
+                  pendingDelegationEscalation = { ...delegateFailure, task: delegateTask, escalated };
                 }
-                pendingDelegationEscalation = { ...delegateFailure, task: delegateTask, escalated };
               }
             }
           }
@@ -1370,7 +1382,12 @@ export class AgentRuntime {
         // Count the recovery call against the turn budget — it is a real LLM round-trip.
         budget.turnsUsed++;
         if (budget.turnsUsed >= budget.maxTurns) {
-          await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns');
+          await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', {
+            conversationId,
+            skillsCalled,
+            boundTaskCtx,
+            memory,
+          });
           return;
         }
 
@@ -1810,13 +1827,40 @@ export class AgentRuntime {
   /**
    * Handle budget exhaustion: log, publish a BUDGET_EXCEEDED agent.error event,
    * and send a user-facing error response.
+   *
+   * Safety-net (#1174): on maxTurns for a resumable task with a persisted checkpoint,
+   * convert the budget hit into a paused executor outcome instead of BUDGET_EXCEEDED.
    */
   private async handleBudgetExceeded(
     budget: ErrorBudget,
     taskEvent: AgentTaskEvent,
     reason: 'maxTurns' | 'maxConsecutiveErrors',
+    handoff?: {
+      conversationId: string;
+      skillsCalled: string[];
+      boundTaskCtx: BoundTaskContext | null;
+      memory?: WorkingMemory;
+    },
   ): Promise<void> {
     const { agentId, logger } = this.config;
+
+    if (reason === 'maxTurns' && handoff?.boundTaskCtx && isResumableTask(handoff.boundTaskCtx)) {
+      const checkpoint = readResumableBlock(handoff.boundTaskCtx.progress ?? {});
+      if (checkpoint) {
+        await this.publishExecutionPaused(
+          taskEvent,
+          handoff.boundTaskCtx.taskId,
+          checkpoint,
+          handoff.conversationId,
+          handoff.skillsCalled,
+          handoff.memory,
+          budget,
+          reason,
+        );
+        return;
+      }
+    }
+
     const message = reason === 'maxTurns'
       ? `Task exceeded turn budget (${budget.turnsUsed}/${budget.maxTurns} turns used)`
       : `Task exceeded consecutive error budget (${budget.consecutiveErrors}/${budget.maxConsecutiveErrors} consecutive errors)`;
@@ -1833,6 +1877,42 @@ export class AgentRuntime {
     };
     await this.publishAgentError(agentErr, taskEvent);
     await this.sendErrorResponse(taskEvent, agentErr);
+  }
+
+  /**
+   * Emit a paused executor outcome from the last persisted checkpoint (#1174).
+   * Success at the delegation layer — not isError, no BUDGET_EXCEEDED.
+   */
+  private async publishExecutionPaused(
+    taskEvent: AgentTaskEvent,
+    taskId: string,
+    checkpoint: ResumableProgressBlock,
+    conversationId: string,
+    skillsCalled: string[],
+    memory: WorkingMemory | undefined,
+    budget: ErrorBudget,
+    reason: 'maxTurns',
+  ): Promise<void> {
+    const { agentId, bus, logger } = this.config;
+    logger.info(
+      { agentId, taskId, done: checkpoint.done, total: checkpoint.total, budget, reason },
+      'Resumable task hit turn budget — pausing from last checkpoint',
+    );
+
+    const content = buildExecutionPausedResponse({ taskId, progress: checkpoint });
+
+    if (memory) {
+      await memory.addTurn(conversationId, agentId, { role: 'assistant', content });
+    }
+
+    const responseEvent = createAgentResponse({
+      agentId,
+      conversationId,
+      content,
+      skillsCalled,
+      parentEventId: taskEvent.id,
+    });
+    await bus.publish('agent', responseEvent);
   }
 
   /**

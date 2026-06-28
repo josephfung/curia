@@ -382,4 +382,58 @@ describe('DelegateHandler', () => {
     });
     expect(capturedMetadata).not.toHaveProperty('originator');
   });
+
+  it('returns paused (not failed) when specialist hits resumable budget safety-net (#1174)', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('social-media', { role: 'specialist', description: 'Social' });
+    const bus = new EventBus(logger);
+
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'social-media') {
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        const { buildExecutionPausedResponse } = await import('../../../src/agents/resumable-task.js');
+        const content = buildExecutionPausedResponse({
+          taskId: 'task-resumable-1',
+          progress: {
+            cursor: 'page-2',
+            done: 25,
+            total: 1300,
+            accumulator: [],
+            lastSliceUnits: 25,
+            next: 'Continue paging',
+          },
+        });
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'social-media',
+          conversationId: event.payload.conversationId,
+          content,
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    const result = await handler.execute(makeCtx(
+      { agent: 'social-media', task: 'Audit Bluesky follows', conversation_id: 'conv-paused' },
+      { bus, agentRegistry },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as {
+        agent: string;
+        paused: boolean;
+        done: number;
+        total: number;
+        message: string;
+        failed?: boolean;
+      };
+      expect(data.paused).toBe(true);
+      expect(data.failed).toBeUndefined();
+      expect(data.agent).toBe('social-media');
+      expect(data.done).toBe(25);
+      expect(data.total).toBe(1300);
+      expect(data.message).toContain('25 of 1300');
+    }
+  });
 });
