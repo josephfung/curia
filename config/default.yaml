@@ -401,6 +401,12 @@ tasks:
   heartbeatMaxWakesPerTick: 5
   idleThresholdHours: 4
   staleWaitThresholdHours: 48
+  # Seconds after a paused resumable task before its self-continuation wake fires.
+  # Default 30s loops iterate leaves promptly (seconds → low minutes) instead of waiting
+  # for the BacklogHeartbeat (heartbeatIntervalMinutes, typically 60) or its idle
+  # threshold (idleThresholdHours, typically 4). At most one pending wake per task —
+  # a lost continuation is re-surfaced by the heartbeat once idleThresholdHours elapses.
+  resumableContinuationSeconds: 30
 
 # Autonomy authorization (#1125). The bypass ladder governs how much LINEAGE standing a
 # heartbeat-woken/derived task inherits at the live autonomy score. The score can only ever

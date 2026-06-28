@@ -342,7 +342,8 @@
         "heartbeatIntervalMinutes": { "type": "integer", "minimum": 1 },
         "heartbeatMaxWakesPerTick": { "type": "integer", "minimum": 1 },
         "idleThresholdHours": { "type": "number", "minimum": 0 },
-        "staleWaitThresholdHours": { "type": "number", "minimum": 0 }
+        "staleWaitThresholdHours": { "type": "number", "minimum": 0 },
+        "resumableContinuationSeconds": { "type": "integer", "minimum": 1 }
       }
     },
     "autonomy": {

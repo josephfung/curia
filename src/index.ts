@@ -126,6 +126,7 @@ import { OutboundContextService } from './dispatch/outbound-context.js';
 import { applyTaskManagement } from './agents/task-management.js';
 import { applyDocumentWorkspace } from './agents/document-workspace.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
+import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import * as fs from 'node:fs';
 import * as yaml from 'js-yaml';
 import { RegistryRepo } from './registry/registry-repo.js';
@@ -1998,6 +1999,17 @@ async function main(): Promise<void> {
 
   scheduler.start();
   backlogHeartbeat.start();
+
+  const resumableContinuationSubscriber = new ResumableContinuationSubscriber({
+    pool,
+    bus,
+    logger,
+    schedulerService,
+    eligibleAgents: taskManagementAgents,
+    continuationDelaySeconds: tasksConfig.resumableContinuationSeconds,
+  });
+  resumableContinuationSubscriber.start();
+
   logger.info('Scheduler started');
 
   // Log the scrubber status after the logger is available (patterns are loaded at module
