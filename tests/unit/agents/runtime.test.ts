@@ -2117,7 +2117,7 @@ describe('AgentRuntime resumable budget safety-net (#1174)', () => {
       chat: vi.fn(async () => ({
         type: 'error' as const,
         error: {
-          type: 'RATE_LIMITED',
+          type: 'RATE_LIMIT' as const,
           source: 'mock',
           message: 'rate limited',
           retryable: true,
