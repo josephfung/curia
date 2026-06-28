@@ -1,0 +1,23 @@
+{
+  "name": "doc-list",
+  "description": "List a directory in the OKF document workspace — like `ls` on a path prefix. Returns the `index.md` projection (manifest) listing direct child documents with titles and types, plus structured metadata. Does not return full document bodies; use `doc-read` for content.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "path": "string (directory prefix, e.g. '/projects/bluesky-audit/' or '/projects/bluesky-audit')"
+  },
+  "outputs": {
+    "directory": "string (normalized directory prefix)",
+    "index_path": "string (conventional index.md path for this directory)",
+    "manifest": "string (index.md projection markdown)",
+    "document_count": "number",
+    "documents": "array of {path, type, title?, updated_at}",
+    "updated_at": "string",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["workingDocs"]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "doc-search",
+  "description": "Search the OKF document workspace with a case-sensitive substring grep. Optionally limit to a path prefix (defaults to the whole workspace). Returns matching paths, line numbers, and line text — up to 50 matches. Use `doc-read` to pull full context around a hit.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "query": "string (substring to grep for in document bodies)",
+    "path_prefix": "string? (optional directory prefix to scope the search, e.g. '/projects/audit/')"
+  },
+  "outputs": {
+    "query": "string",
+    "path_prefix": "string",
+    "match_count": "number",
+    "matches": "array of {path, line_number, line}",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["workingDocs"]
+}

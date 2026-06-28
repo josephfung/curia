@@ -1,0 +1,35 @@
+{
+  "name": "doc-write",
+  "description": "Write to the OKF document workspace. Modes: `create` (new document — requires `type`, optional `body`/`frontmatter`), `append` (add content — requires `content` + `expected_version`), `replace` (swap full body — requires `body` + `expected_version`), `section-edit` (replace a `##` section — requires `section`, `content`, optional `expected_section_version`). Every successful write appends an entry to the directory's reserved `log.md`. On version mismatch returns `conflict: true` with the latest document versions — re-read and retry.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "path": "string",
+    "mode": "string (create | append | replace | section-edit)",
+    "type": "string? (required for create — OKF frontmatter type)",
+    "body": "string? (required for replace; optional for create)",
+    "content": "string? (required for append and section-edit)",
+    "frontmatter": "object? (optional YAML frontmatter fields except type)",
+    "section": "string? (required for section-edit — `##` heading)",
+    "expected_version": "number? (required for append/replace — from last doc-read)",
+    "expected_section_version": "number? (optional for section-edit — per-section optimistic version)",
+    "summary": "string? (one-line description for log.md — defaults to mode + path)",
+    "task_id": "string? (optional association)",
+    "conversation_id": "string? (optional association)"
+  },
+  "outputs": {
+    "action": "string? (created | appended | replaced | section-edited)",
+    "document": "object? (written document metadata on success)",
+    "conflict": "boolean? (true when optimistic concurrency failed)",
+    "path": "string?",
+    "version": "number?",
+    "section_versions": "object?",
+    "updated_at": "string?",
+    "displayTimezone": "string?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["workingDocs"]
+}

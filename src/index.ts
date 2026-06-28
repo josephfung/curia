@@ -124,6 +124,7 @@ import { runReadinessChecks } from './startup/readiness.js';
 import { compileSecurityContextBlock } from './security/security-context.js';
 import { OutboundContextService } from './dispatch/outbound-context.js';
 import { applyTaskManagement } from './agents/task-management.js';
+import { applyDocumentWorkspace } from './agents/document-workspace.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import * as fs from 'node:fs';
 import * as yaml from 'js-yaml';
@@ -1809,10 +1810,14 @@ async function main(): Promise<void> {
     // discipline block, and register heartbeat-eligibility. No-op when the flag is off.
     const taskMgmt = applyTaskManagement(agentConfig, systemPrompt, agentPinnedSkills);
     systemPrompt = taskMgmt.systemPrompt;
-    const effectivePinnedSkills = taskMgmt.pinnedSkills;
+    let effectivePinnedSkills = taskMgmt.pinnedSkills;
     if (taskMgmt.heartbeatEligible) {
       taskManagementAgents.add(agentConfig.name);
     }
+
+    const docWorkspace = applyDocumentWorkspace(agentConfig, systemPrompt, effectivePinnedSkills);
+    systemPrompt = docWorkspace.systemPrompt;
+    effectivePinnedSkills = docWorkspace.pinnedSkills;
 
     // was: const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
     const agentToolDefs = skillRegistry.toToolDefinitions(effectivePinnedSkills);
@@ -1946,6 +1951,8 @@ async function main(): Promise<void> {
       } : undefined,
       bullpenService,
       bullpenWindowMinutes: 60,
+      documentWorkspaceEnabled: agentConfig.enable_task_management === true,
+      workingDocsRepo,
     });
     agent.register();
 

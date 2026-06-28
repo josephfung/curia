@@ -31,6 +31,12 @@ import {
   parseDelegateFailureData,
   type DelegationFailureInfo,
 } from './delegation-guard.js';
+import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
+import {
+  buildIndexProjection,
+  formatWorkspaceManifestBlock,
+  resolveWorkspacePrefixFromTaskContent,
+} from './document-workspace.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -135,6 +141,10 @@ export interface AgentConfig {
    *  system prompt (immediately after the identity block) on every task. When omitted,
    *  no injection occurs. */
   securityContextBlock?: string;
+  /** When true, append workspace index manifests to the user message tail on task resume (#1209). */
+  documentWorkspaceEnabled?: boolean;
+  /** Working document repo — required when documentWorkspaceEnabled is true. */
+  workingDocsRepo?: WorkingDocsRepo;
 }
 
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
@@ -228,7 +238,25 @@ export class AgentRuntime {
 
   private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
     const { agentId, systemPrompt, provider, bus, logger, memory, executionLayer, skillToolDefs, autonomyService, officeIdentityService } = this.config;
-    const { content, conversationId } = taskEvent.payload;
+    const originalContent = taskEvent.payload.content;
+    let promptContent = originalContent;
+    const { conversationId } = taskEvent.payload;
+
+    // Manifest-only workspace injection at the message tail — keeps document bodies out
+    // of the cached system prefix (#1209). Best-effort: a missing repo or parse failure
+    // must not abort the task.
+    if (this.config.documentWorkspaceEnabled && this.config.workingDocsRepo) {
+      try {
+        const prefix = resolveWorkspacePrefixFromTaskContent(originalContent);
+        if (prefix) {
+          const documents = await this.config.workingDocsRepo.listByPrefix(prefix);
+          const manifest = buildIndexProjection(prefix, documents);
+          promptContent = `${promptContent}\n\n${formatWorkspaceManifestBlock(prefix, manifest)}`;
+        }
+      } catch (err) {
+        logger.warn({ err, agentId }, 'Document workspace manifest injection failed — proceeding without manifest');
+      }
+    }
 
     // Per-task mutable working copy of the tool list so discovered skills can be
     // appended mid-turn without mutating the shared startup list. Concurrent tasks
@@ -439,7 +467,7 @@ export class AgentRuntime {
     // This matches the design spec priority order and ensures higher-priority tiers
     // (especially security-relevant sender context) aren't starved by greedy history.
     ctxBudget.allocateRequired('system_prompt', [{ role: 'system', content: effectiveSystemPrompt }]);
-    ctxBudget.allocateRequired('user_message', [{ role: 'user', content }]);
+    ctxBudget.allocateRequired('user_message', [{ role: 'user', content: promptContent }]);
     if (ctxBudget.remaining < 0) {
       logger.error(
         { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
@@ -678,13 +706,13 @@ export class AgentRuntime {
     // Append history and user message to complete the messages array.
     // Final order: system prompt → sender context → bullpen → history → user message.
     messages.push(...budgetedHistory);
-    messages.push({ role: 'user', content });
+    messages.push({ role: 'user', content: promptContent });
 
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
 
     // Persist the incoming user message
     if (memory) {
-      await memory.addTurn(conversationId, agentId, { role: 'user', content });
+      await memory.addTurn(conversationId, agentId, { role: 'user', content: originalContent });
     }
 
     // Publish context budget telemetry — captures per-tier token estimates even if
