@@ -23,6 +23,8 @@ import {
   type ResumableProgressBlock,
   type ResumableWriteResult,
 } from './resumable-progress.js';
+import { prepareResumableBlockWithSpill } from './resumable-accumulator-spill.js';
+import type { WorkingDocsRepo } from './working-docs-repo.js';
 
 // All SELECT / RETURNING clauses use this column list. Centralised so a schema
 // change only needs updating in one place.
@@ -96,6 +98,7 @@ export class TaskRepo {
     private readonly bus: EventBus,
     private readonly logger: Logger,
     private readonly timezone: string = 'UTC',
+    private readonly workingDocsRepo?: WorkingDocsRepo,
   ) {}
 
   /**
@@ -248,6 +251,24 @@ export class TaskRepo {
     );
     const row = rows[0] as DbTaskRow | undefined;
     return row ? mapTaskRow(row) : null;
+  }
+
+  /** Walk parent_task_id links to the project-root task (#1210). Returns null when not found. */
+  async resolveProjectRootTaskId(taskId: string): Promise<string | null> {
+    let currentId: string | null = taskId;
+    let rootId: string | null = null;
+    const seen = new Set<string>();
+
+    while (currentId) {
+      if (seen.has(currentId)) break;
+      seen.add(currentId);
+      rootId = currentId;
+      const task = await this.getTask(currentId);
+      if (!task) return rootId;
+      currentId = task.parentTaskId;
+    }
+
+    return rootId;
   }
 
   /**
@@ -580,7 +601,7 @@ export class TaskRepo {
 
   /**
    * Persist a resumable checkpoint under progress.resumable. Enforces inline accumulator
-   * and block size caps — overflow requires spilling to the document workspace (#1210).
+   * and block size caps — inline overflow spills to the document workspace (#1210).
    */
   async setResumableBlock(
     taskId: string,
@@ -592,7 +613,19 @@ export class TaskRepo {
       return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
     }
 
-    const prepared = prepareResumableBlock(input);
+    let prepared = prepareResumableBlock(input);
+    if (!prepared.ok && prepared.code === 'inline_accumulator_overflow' && this.workingDocsRepo) {
+      const rootTaskId = await this.resolveProjectRootTaskId(taskId);
+      if (!rootTaskId) {
+        return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
+      }
+      prepared = await prepareResumableBlockWithSpill(input, {
+        workingDocsRepo: this.workingDocsRepo,
+        rootTaskId,
+        taskId,
+        agentId: callerAgentId,
+      });
+    }
     if (!prepared.ok) return prepared;
 
     const { rows } = await this.pool.query(

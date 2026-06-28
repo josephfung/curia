@@ -1205,8 +1205,8 @@ async function main(): Promise<void> {
   const auditLogRepo = new AuditLogRepo(pool, logger);
 
   // TaskRepo — used by task-create, task-list, task-update, task-complete skills.
-  const taskRepo = new TaskRepo(pool, bus, logger, config.timezone);
   const workingDocsRepo = new WorkingDocsRepo(pool, logger);
+  const taskRepo = new TaskRepo(pool, bus, logger, config.timezone, workingDocsRepo);
 
   // principalContact + principalIdentities were resolved once near the top of bootstrap
   // (see the "Principal contact resolution" block above, #1049). They are reused here for
@@ -1953,6 +1953,7 @@ async function main(): Promise<void> {
       bullpenWindowMinutes: 60,
       documentWorkspaceEnabled: agentConfig.enable_task_management === true,
       workingDocsRepo,
+      taskRepo: agentConfig.enable_task_management === true ? taskRepo : undefined,
     });
     agent.register();
 

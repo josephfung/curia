@@ -4,13 +4,18 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
 import pino from 'pino';
 import { TaskRepo } from '../../src/db/task-repo.js';
+import { WorkingDocsRepo } from '../../src/db/working-docs-repo.js';
 import {
   RESUMABLE_BLOCK_MAX_BYTES,
-  RESUMABLE_INLINE_ACCUMULATOR_MAX_BYTES,
   documentAccumulatorPointer,
+  isDocumentPointer,
   resumableBlockBytes,
-  inlineAccumulatorBytes,
 } from '../../src/db/resumable-progress.js';
+import { accumulatorDocPath } from '../../src/db/resumable-accumulator-spill.js';
+import {
+  documentPointerFromTaskContent,
+  resolveWorkspaceDirectoryPrefix,
+} from '../../src/agents/document-workspace.js';
 import type { EventBus } from '../../src/bus/bus.js';
 
 const { Pool } = pg;
@@ -27,15 +32,19 @@ async function cleanup(pool: pg.Pool): Promise<void> {
     [`${PREFIX}%`],
   );
   await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${PREFIX}%`]);
+  await pool.query('DELETE FROM working_document_links');
+  await pool.query(`DELETE FROM working_documents WHERE path LIKE '/projects/%'`);
 }
 
-describeIf('TaskRepo resumable progress (#1172)', () => {
+describeIf('TaskRepo resumable progress (#1172, #1210)', () => {
   let pool: pg.Pool;
   let repo: TaskRepo;
+  let workingDocs: WorkingDocsRepo;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    repo = new TaskRepo(pool, noopBus, logger as never, 'UTC');
+    workingDocs = new WorkingDocsRepo(pool, logger as never);
+    repo = new TaskRepo(pool, noopBus, logger as never, 'UTC', workingDocs);
   });
   afterAll(async () => { await cleanup(pool); await pool.end(); });
   beforeEach(async () => { await cleanup(pool); });
@@ -129,45 +138,105 @@ describeIf('TaskRepo resumable progress (#1172)', () => {
     expect(block?.accumulator).toEqual(pointer);
   });
 
-  it('stress: repeated checkpoints cannot grow progress.resumable past the cap', async () => {
+  it('stress: inline overflow auto-spills and progress stays under the cap', async () => {
     const task = await repo.createTask({
       agentId: 'social-media',
-      title: `${PREFIX} stress`,
+      title: `${PREFIX} stress spill`,
       source: 'coordinator',
     });
 
     let flagged: string[] = [];
-    let lastGoodBlock = await repo.getResumableBlock(task.id);
+    let accumulator: unknown = flagged;
+    let spilled = false;
 
     for (let i = 0; i < 500; i++) {
-      flagged = [...flagged, `did:plc:${String(i).padStart(6, '0')}`];
+      if (!spilled) {
+        flagged = [...flagged, `did:plc:${String(i).padStart(6, '0')}`];
+        accumulator = flagged;
+      }
+
       const result = await repo.setResumableBlock(task.id, {
         cursor: String(i),
         done: i + 1,
         total: 1300,
-        accumulator: flagged,
+        accumulator,
         lastSliceUnits: 25,
         next: 'Keep paging',
-      });
+      }, 'social-media');
 
-      if (!('task' in result)) {
-        expect(result.ok).toBe(false);
-        if (result.ok) return;
-        expect(result.code).toBe('inline_accumulator_overflow');
-        expect(lastGoodBlock).not.toBeNull();
-        expect(resumableBlockBytes(lastGoodBlock!)).toBeLessThanOrEqual(RESUMABLE_BLOCK_MAX_BYTES);
-        expect(inlineAccumulatorBytes(lastGoodBlock!.accumulator)).toBeLessThanOrEqual(
-          RESUMABLE_INLINE_ACCUMULATOR_MAX_BYTES,
-        );
-        return;
+      expect('task' in result).toBe(true);
+      if (!('task' in result)) return;
+
+      if (!spilled && isDocumentPointer(result.block.accumulator)) {
+        spilled = true;
+        accumulator = result.block.accumulator;
+        const doc = await workingDocs.read(result.block.accumulator.path);
+        expect(doc?.body).toContain('"did:plc:');
       }
 
-      lastGoodBlock = result.block;
+      expect(resumableBlockBytes(result.block)).toBeLessThanOrEqual(RESUMABLE_BLOCK_MAX_BYTES);
       const persisted = await repo.getResumableBlock(task.id);
       expect(persisted).not.toBeNull();
       expect(resumableBlockBytes(persisted!)).toBeLessThanOrEqual(RESUMABLE_BLOCK_MAX_BYTES);
     }
 
-    throw new Error('expected inline accumulator overflow before 500 iterations');
+    expect(spilled).toBe(true);
+  });
+
+  it('round-trip: child task spill, resume prefix, and continue from pointer', async () => {
+    const parent = await repo.createTask({
+      agentId: 'social-media',
+      title: `${PREFIX} parent`,
+      source: 'coordinator',
+    });
+    const child = await repo.createTask({
+      agentId: 'social-media',
+      title: `${PREFIX} child`,
+      source: 'coordinator',
+      parentTaskId: parent.id,
+    });
+
+    const flagged = Array.from({ length: 400 }, (_, i) => `did:plc:${String(i).padStart(6, '0')}`);
+    const spill = await repo.setResumableBlock(child.id, {
+      cursor: 'page:10',
+      done: 400,
+      total: 1300,
+      accumulator: flagged,
+      lastSliceUnits: 25,
+      next: 'Review page 11 from workspace doc',
+    }, 'social-media');
+    expect('task' in spill).toBe(true);
+    if (!('task' in spill)) return;
+
+    const pointer = spill.block.accumulator;
+    expect(isDocumentPointer(pointer)).toBe(true);
+    if (!isDocumentPointer(pointer)) return;
+    expect(pointer.path).toBe(accumulatorDocPath(parent.id));
+
+    const doc = await workingDocs.read(pointer.path);
+    expect(doc?.body).toContain('"did:plc:000000"');
+
+    const wakeContent = JSON.stringify({
+      task_id: child.id,
+      progress: (await repo.getTask(child.id))?.progress ?? {},
+    });
+    expect(documentPointerFromTaskContent(wakeContent)?.path).toBe(pointer.path);
+    expect(await resolveWorkspaceDirectoryPrefix(
+      wakeContent,
+      (taskId) => repo.resolveProjectRootTaskId(taskId),
+    )).toBe(`/projects/${parent.id}/`);
+
+    const resumed = await repo.setResumableBlock(child.id, {
+      cursor: 'page:11',
+      done: 425,
+      total: 1300,
+      accumulator: pointer,
+      lastSliceUnits: 25,
+      next: 'Finish remaining pages',
+    }, 'social-media');
+    expect('task' in resumed).toBe(true);
+    if (!('task' in resumed)) return;
+    expect(resumed.block.cursor).toBe('page:11');
+    expect(resumed.block.accumulator).toEqual(pointer);
   });
 });

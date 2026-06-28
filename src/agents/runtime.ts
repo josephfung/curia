@@ -42,10 +42,14 @@ import {
   type DelegationFailureInfo,
 } from './delegation-guard.js';
 import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
+import type { TaskRepo } from '../db/task-repo.js';
 import {
   buildIndexProjection,
+  documentPointerFromTaskContent,
+  extractSectionContent,
+  formatAccumulatorResumeBlock,
   formatWorkspaceManifestBlock,
-  resolveWorkspacePrefixFromTaskContent,
+  resolveWorkspaceDirectoryPrefix,
 } from './document-workspace.js';
 
 export interface AgentConfig {
@@ -155,6 +159,8 @@ export interface AgentConfig {
   documentWorkspaceEnabled?: boolean;
   /** Working document repo — required when documentWorkspaceEnabled is true. */
   workingDocsRepo?: WorkingDocsRepo;
+  /** Task repo — used to resolve project-root workspace prefixes on resume (#1210). */
+  taskRepo?: TaskRepo;
 }
 
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
@@ -253,17 +259,37 @@ export class AgentRuntime {
     const { conversationId } = taskEvent.payload;
 
     // Manifest-only workspace injection at the message tail — keeps document bodies out
-    // of the cached system prefix (#1209). Best-effort: a missing repo or parse failure
-    // must not abort the task. Parse originalContent only — never the post-append string.
+    // of the cached system prefix (#1209). Spilled accumulator content is injected here
+    // too (#1210). Best-effort: a missing repo or parse failure must not abort the task.
+    // Parse originalContent only — never the post-append string.
     let workspaceManifestInjected = false;
     if (this.config.documentWorkspaceEnabled && this.config.workingDocsRepo) {
       try {
-        const prefix = resolveWorkspacePrefixFromTaskContent(originalContent);
+        const resolveRoot = this.config.taskRepo
+          ? (taskId: string) => this.config.taskRepo!.resolveProjectRootTaskId(taskId)
+          : undefined;
+        const prefix = await resolveWorkspaceDirectoryPrefix(originalContent, resolveRoot);
         if (prefix) {
           const documents = await this.config.workingDocsRepo.listByPrefix(prefix);
           const manifest = buildIndexProjection(prefix, documents);
           promptContent = `${promptContent}\n\n${formatWorkspaceManifestBlock(prefix, manifest)}`;
           workspaceManifestInjected = true;
+        }
+
+        const pointer = documentPointerFromTaskContent(originalContent);
+        if (pointer) {
+          const doc = await this.config.workingDocsRepo.read(pointer.path);
+          if (doc) {
+            const sectionResult = extractSectionContent(doc.body, pointer.section);
+            const content = pointer.section && sectionResult.found !== false
+              ? sectionResult.content
+              : doc.body;
+            promptContent = `${promptContent}\n\n${formatAccumulatorResumeBlock(
+              pointer,
+              content,
+              sectionResult.section,
+            )}`;
+          }
         }
       } catch (err) {
         logger.warn({ err, agentId }, 'Document workspace manifest injection failed — proceeding without manifest');
