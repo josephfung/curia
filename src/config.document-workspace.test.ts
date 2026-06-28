@@ -22,6 +22,16 @@ describe('loadYamlConfig: documentWorkspace.scratchTtlDays', () => {
     expect(() => loadYamlConfig(dir)).toThrow('documentWorkspace.scratchTtlDays');
   });
 
+  it('rejects values above the supported maximum', () => {
+    const dir = writeTempConfig(`documentWorkspace:\n  scratchTtlDays: 36501\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('documentWorkspace.scratchTtlDays');
+  });
+
+  it('rejects a non-mapping documentWorkspace block', () => {
+    const dir = writeTempConfig(`documentWorkspace: 7\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('documentWorkspace must be a YAML mapping');
+  });
+
   it('is absent when documentWorkspace block is omitted', () => {
     const dir = writeTempConfig(`skillOutput:\n  maxLength: 100000\n`);
     const config = loadYamlConfig(dir);

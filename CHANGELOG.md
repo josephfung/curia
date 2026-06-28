@@ -23,7 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Resumable accumulator spill** — inline overflow writes to `/projects/<root>/accumulator.md` and stores a workspace document pointer; resume injects the manifest and spilled doc at the message tail. (#1210)
 - **Document workspace** — `working_documents` / `working_document_links` Postgres store with `WorkingDocsRepo`, OKF frontmatter round-trip, backlink index, and optimistic concurrency (document + per-section). (#1208)
 - **`doc-read` / `doc-list` / `doc-write` / `doc-search`** — OKF workspace skills with harness-injected guidance, auto-pin on task-management agents, manifest-only tail injection, and `log.md` append on writes. (#1209)
-- **Document workspace scratch TTL** — DreamEngine nightly pass hard-deletes inactive `/scratch/` documents; configurable `documentWorkspace.scratchTtlDays` with optional per-doc `ttl_days` frontmatter override. (#1212)
+- **Document workspace scratch TTL** — DreamEngine nightly pass archives expired `/scratch/<conversation-id>/…` documents (`archived_at`); configurable `documentWorkspace.scratchTtlDays` with optional per-doc `ttl_days` frontmatter override. (#1212)
 
 ### Changed
 

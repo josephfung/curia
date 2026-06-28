@@ -80,9 +80,10 @@ workingMemory:
 
 documentWorkspace:
   # Inactivity TTL for ephemeral `/scratch/<conversation-id>/…` documents. DreamEngine's
-  # nightly pass hard-deletes live scratch rows whose updated_at is older than this many
-  # days. Omit `ttl_days` in frontmatter to inherit this default; set `ttl_days: 0` on a
-  # scratch doc to opt out. `/projects/…` documents are never auto-purged.
+  # nightly pass soft-deletes (sets archived_at) on live scratch rows whose updated_at is
+  # older than this many days. Omit `ttl_days` in frontmatter to inherit this default;
+  # set `ttl_days: 0` on a scratch doc to opt out. `/projects/…` documents are never
+  # auto-archived.
   scratchTtlDays: 7
 
 skillOutput:

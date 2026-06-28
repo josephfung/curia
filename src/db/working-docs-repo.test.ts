@@ -137,41 +137,32 @@ describe('WorkingDocsRepo (unit)', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('purgeExpiredScratch deletes only expired /scratch/ rows', async () => {
+  it('purgeExpiredScratch archives only expired /scratch/<conversation-id>/… rows', async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const client = makeClient({
       query: async (sql: string, params?: unknown[]) => {
         queries.push({ sql, params });
         if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [], rowCount: 0 } as unknown as QueryResult;
-        if (sql.includes('SELECT path') && sql.includes("LIKE '/scratch/%'")) {
-          return {
-            rows: [{ path: '/scratch/old/note.md' }],
-            rowCount: 1,
-          } as QueryResult;
-        }
-        if (sql.startsWith('DELETE FROM working_document_links')) {
-          return { rows: [], rowCount: 1 } as unknown as QueryResult;
-        }
-        if (sql.startsWith('DELETE FROM working_documents')) {
-          expect(params?.[0]).toEqual(['/scratch/old/note.md']);
-          return { rows: [], rowCount: 1 } as unknown as QueryResult;
+        if (sql.includes('WITH archived AS')) {
+          return { rows: [{ archived_count: '1' }], rowCount: 1 } as QueryResult;
         }
         throw new Error(`unexpected sql: ${sql}`);
       },
     });
     const { pool } = makePool(client);
     const repo = new WorkingDocsRepo(pool, createSilentLogger());
-    const deleted = await repo.purgeExpiredScratch(7);
-    expect(deleted).toBe(1);
-    expect(queries.some(q => q.sql.includes("LIKE '/scratch/%'"))).toBe(true);
-    expect(queries.some(q => q.sql.startsWith('DELETE FROM working_documents'))).toBe(true);
+    const archived = await repo.purgeExpiredScratch(7);
+    expect(archived).toBe(1);
+    expect(queries.some(q => q.sql.includes("path ~ '^/scratch/[^/]+/'"))).toBe(true);
+    expect(queries.some(q => q.sql.includes('UPDATE working_documents'))).toBe(true);
+    expect(queries.some(q => q.sql.includes('DELETE FROM working_documents'))).toBe(false);
   });
 
   it('purgeExpiredScratch is a no-op when nothing is expired', async () => {
     const client = makeClient({
       query: async (sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [], rowCount: 0 } as unknown as QueryResult;
-        if (sql.includes('SELECT path')) return { rows: [], rowCount: 0 } as unknown as QueryResult;
+        if (sql.includes('WITH archived AS')) return { rows: [{ archived_count: '0' }], rowCount: 0 } as unknown as QueryResult;
         throw new Error(`unexpected sql: ${sql}`);
       },
     });

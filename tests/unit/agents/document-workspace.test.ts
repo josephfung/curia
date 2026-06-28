@@ -174,8 +174,10 @@ describe('reserved path helpers', () => {
 });
 
 describe('scratch document TTL helpers (#1212)', () => {
-  it('identifies scratch paths', () => {
+  it('identifies conversation-scoped scratch paths only', () => {
     expect(isScratchDocumentPath('/scratch/conv/outline.md')).toBe(true);
+    expect(isScratchDocumentPath('/scratch/index.md')).toBe(false);
+    expect(isScratchDocumentPath('/scratch')).toBe(false);
     expect(isScratchDocumentPath('/projects/x/brief.md')).toBe(false);
   });
 
@@ -197,6 +199,10 @@ describe('scratch document TTL helpers (#1212)', () => {
 
   it('parses string ttl_days values', () => {
     expect(parseTtlDaysFrontmatter({ ttl_days: '5' })).toBe(5);
+  });
+
+  it('treats out-of-range ttl_days as unset in frontmatter parsing', () => {
+    expect(parseTtlDaysFrontmatter({ ttl_days: 999999 })).toBeUndefined();
   });
 
   it('warns when ttl_days is set on a non-scratch path', () => {

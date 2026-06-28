@@ -216,7 +216,7 @@ export interface YamlConfig {
     };
   };
   documentWorkspace?: {
-    /** Days of inactivity before `/scratch/` documents are hard-deleted by DreamEngine. Default: 7. */
+    /** Days of inactivity before `/scratch/<conversation-id>/…` documents are archived by DreamEngine. Default: 7. */
     scratchTtlDays?: number;
   };
   skillOutput?: {

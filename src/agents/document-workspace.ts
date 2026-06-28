@@ -25,8 +25,17 @@ export const RESERVED_LEAF_NAMES = new Set([INDEX_FILENAME, LOG_FILENAME]);
 
 /** Single source of truth for the workspace discipline block injected into every
  *  document-workspace-enabled agent's effective system prompt (#1209). */
-/** Default inactivity TTL for `/scratch/` documents when config omits scratchTtlDays (#1212). */
+/** Default inactivity TTL for `/scratch/<conversation-id>/…` when config omits scratchTtlDays (#1212). */
 export const DEFAULT_SCRATCH_DOC_TTL_DAYS = 7;
+
+/** Max per-doc / config TTL — matches `documentWorkspace.scratchTtlDays` validation in config.ts. */
+export const MAX_SCRATCH_DOC_TTL_DAYS = 36500;
+
+/**
+ * Ephemeral scratch workspace paths: `/scratch/<conversation-id>/…` with at least one
+ * leaf segment (excludes bare `/scratch` and root-level `/scratch/foo.md`).
+ */
+export const SCRATCH_CONVERSATION_PATH_RE = /^\/scratch\/[^/]+\/.+/;
 
 export const DOCUMENT_WORKSPACE_BLOCK = [
   '## Document Workspace',
@@ -299,19 +308,24 @@ export function documentPointerFromProgress(progress: unknown): ResumableDocumen
   return isDocumentPointer(accumulator) ? accumulator : null;
 }
 
-/** True when `path` is under the ephemeral `/scratch/` prefix (#1212). */
+/** True for `/scratch/<conversation-id>/…` paths subject to TTL sweep (#1212). */
 export function isScratchDocumentPath(path: string): boolean {
-  const normalized = normalizeDocPath(path);
-  return normalized === '/scratch' || normalized.startsWith('/scratch/');
+  return SCRATCH_CONVERSATION_PATH_RE.test(normalizeDocPath(path));
 }
 
-/** Parse optional `ttl_days` from OKF frontmatter. Non-numeric values are treated as unset. */
+/** Parse optional `ttl_days` from OKF frontmatter. Non-numeric / out-of-range values are unset. */
 export function parseTtlDaysFrontmatter(frontmatter: Record<string, unknown>): number | undefined {
   const raw = frontmatter.ttl_days;
   if (raw === undefined || raw === null) return undefined;
-  if (typeof raw === 'number' && Number.isInteger(raw)) return raw;
-  if (typeof raw === 'string' && /^[0-9]+$/.test(raw.trim())) return Number.parseInt(raw.trim(), 10);
-  return undefined;
+  let parsed: number | undefined;
+  if (typeof raw === 'number' && Number.isInteger(raw)) parsed = raw;
+  else if (typeof raw === 'string' && /^[0-9]+$/.test(raw.trim())) {
+    parsed = Number.parseInt(raw.trim(), 10);
+  } else {
+    return undefined;
+  }
+  if (parsed < 0 || parsed > MAX_SCRATCH_DOC_TTL_DAYS) return undefined;
+  return parsed;
 }
 
 /**

@@ -376,64 +376,68 @@ export class WorkingDocsRepo {
   }
 
   /**
-   * Hard-delete expired `/scratch/` documents past their TTL (#1212).
+   * Soft-delete expired `/scratch/<conversation-id>/…` documents past their TTL (#1212).
    * Non-scratch paths are never touched. TTL is derived from `updated_at` and either
-   * frontmatter `ttl_days` (scratch only) or the configured default. Returns deleted count.
+   * frontmatter `ttl_days` (scratch only) or the configured default.
+   *
+   * Link cleanup: removes outbound `source_path` links from archived docs (same as
+   * `softDelete()`). Inbound links whose `target_path` points at an archived doc are
+   * left in place — `getBacklinks()` joins on live sources only, so they are harmless.
+   *
+   * The archive runs as a single `UPDATE … RETURNING` so the TTL predicate is enforced
+   * at write time (no snapshot-then-delete race).
    */
   async purgeExpiredScratch(defaultTtlDays: number): Promise<number> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
-      const { rows } = await client.query<{ path: string }>(
-        `SELECT path
-         FROM working_documents
-         WHERE path LIKE '/scratch/%'
-           AND archived_at IS NULL
-           AND COALESCE(
-             CASE
-               WHEN (frontmatter->>'ttl_days') ~ '^[0-9]+$' THEN (frontmatter->>'ttl_days')::int
-               ELSE NULL
-             END,
-             $1
-           ) > 0
-           AND updated_at < now() - (
-             COALESCE(
-               CASE
-                 WHEN (frontmatter->>'ttl_days') ~ '^[0-9]+$' AND (frontmatter->>'ttl_days')::int > 0
-                   THEN (frontmatter->>'ttl_days')::int
-                 ELSE NULL
-               END,
-               $1
-             ) * INTERVAL '1 day'
-           )`,
+      const { rows } = await client.query<{ archived_count: string }>(
+        `WITH archived AS (
+           UPDATE working_documents
+              SET archived_at = now(),
+                  updated_at = now()
+            WHERE path ~ '^/scratch/[^/]+/'
+              AND archived_at IS NULL
+              AND COALESCE(
+                CASE
+                  WHEN (frontmatter->>'ttl_days') ~ '^[0-9]+$'
+                    AND (frontmatter->>'ttl_days')::int = 0 THEN 0
+                  WHEN (frontmatter->>'ttl_days') ~ '^[0-9]{1,5}$'
+                    AND (frontmatter->>'ttl_days')::int BETWEEN 1 AND 36500
+                    THEN (frontmatter->>'ttl_days')::int
+                  ELSE NULL
+                END,
+                $1
+              ) > 0
+              AND updated_at < now() - (
+                COALESCE(
+                  CASE
+                    WHEN (frontmatter->>'ttl_days') ~ '^[0-9]{1,5}$'
+                      AND (frontmatter->>'ttl_days')::int BETWEEN 1 AND 36500
+                      THEN (frontmatter->>'ttl_days')::int
+                    ELSE NULL
+                  END,
+                  $1
+                ) * INTERVAL '1 day'
+              )
+           RETURNING path
+         ),
+         _links AS (
+           DELETE FROM working_document_links
+            WHERE source_path IN (SELECT path FROM archived)
+         )
+         SELECT COUNT(*)::text AS archived_count FROM archived`,
         [defaultTtlDays],
       );
 
-      if (rows.length === 0) {
-        await client.query('COMMIT');
-        return 0;
-      }
-
-      const paths = rows.map(r => r.path);
-      await client.query(
-        `DELETE FROM working_document_links
-         WHERE source_path = ANY($1::text[]) OR target_path = ANY($1::text[])`,
-        [paths],
-      );
-      const deleteResult = await client.query(
-        `DELETE FROM working_documents
-         WHERE path = ANY($1::text[])`,
-        [paths],
-      );
-
       await client.query('COMMIT');
-      const deleted = deleteResult.rowCount ?? 0;
+      const archived = Number.parseInt(rows[0]?.archived_count ?? '0', 10);
       this.logger.info(
-        { deleted, defaultTtlDays, paths },
-        'working-docs-repo: purged expired scratch documents',
+        { archived, defaultTtlDays },
+        'working-docs-repo: archived expired scratch documents',
       );
-      return deleted;
+      return archived;
     } catch (err) {
       await client.query('ROLLBACK');
       this.logger.error({ err, defaultTtlDays }, 'working-docs-repo: purgeExpiredScratch failed');
