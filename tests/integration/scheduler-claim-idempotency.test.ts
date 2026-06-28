@@ -64,7 +64,8 @@ describeIf('Scheduler cron claim idempotency (#1159)', () => {
       taskPayload: { task: 'send digest' }, status: 'pending',
       lastRunAt: null, nextRunAt: pastDue, lastError: null, consecutiveFailures: 0,
       createdBy: 'system', createdAt: new Date().toISOString(), timezone: 'UTC',
-      agentTaskId: null, intentAnchor: null, progress: null, taskTitle: null,
+      agentTaskId: null, intentAnchor: null, progress: null,
+      taskErrorBudget: null, taskTags: null, taskTitle: null,
       runStartedAt: null, expectedDurationSeconds: null, lastRunOutcome: null,
       lastRunSummary: null, lastRunContext: null, originator: null,
     };

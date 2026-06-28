@@ -49,6 +49,7 @@ skills:
   - contact-unlink-identity
   - contact-update
   # Tasks
+  - checkpoint
   - task-create
   - task-list
   - task-complete

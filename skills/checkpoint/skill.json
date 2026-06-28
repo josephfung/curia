@@ -1,0 +1,27 @@
+{
+  "name": "checkpoint",
+  "description": "Persist resumable progress for a long-running task. Writes the typed progress.resumable block (cursor, done/total, accumulator, last_slice_units, next). Only available on tasks marked resumable. Use periodically and before running low on turn budget.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "task_id": "string?",
+    "cursor": "string?",
+    "done": "number",
+    "total": "number",
+    "accumulator": "object?",
+    "last_slice_units": "number",
+    "next": "string"
+  },
+  "outputs": {
+    "task_id": "string",
+    "done": "number",
+    "total": "number",
+    "checkpointed_at": "string",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["taskRepo"]
+}
