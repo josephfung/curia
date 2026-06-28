@@ -50,13 +50,15 @@ export class ResumableContinuationSubscriber {
       }
 
       let sliceCostUsd: number | undefined;
-      try {
-        const parsed = JSON.parse(responseEvent.payload.content) as Record<string, unknown>;
-        if (typeof parsed.slice_cost_usd === 'number' && Number.isFinite(parsed.slice_cost_usd)) {
-          sliceCostUsd = parsed.slice_cost_usd;
+      if (paused.slice_cost_usd !== undefined) {
+        if (Number.isFinite(paused.slice_cost_usd) && paused.slice_cost_usd >= 0) {
+          sliceCostUsd = paused.slice_cost_usd;
+        } else {
+          this.opts.logger.warn(
+            { taskId, sliceCostUsd: paused.slice_cost_usd },
+            'execution_paused slice_cost_usd invalid — ignoring',
+          );
         }
-      } catch {
-        // parseExecutionPausedPayload already validated the payload above.
       }
 
       try {

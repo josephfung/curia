@@ -25,7 +25,7 @@ import {
 } from './resumable-progress.js';
 import { prepareResumableBlockWithSpill } from './resumable-accumulator-spill.js';
 import type { WorkingDocsRepo } from './working-docs-repo.js';
-import { mergeCircuitState, type ResumableCircuitState } from '../agents/resumable-circuit-breaker.js';
+import { type ResumableCircuitState } from '../agents/resumable-circuit-breaker.js';
 
 // All SELECT / RETURNING clauses use this column list. Centralised so a schema
 // change only needs updating in one place.
@@ -674,17 +674,13 @@ export class TaskRepo {
 
   /** Persist progress.resumableCircuit counters after a healthy paused slice (#1176). */
   async persistResumableCircuitState(taskId: string, state: ResumableCircuitState): Promise<void> {
-    const current = await this.getTask(taskId);
-    if (!current || TERMINAL_STATUSES.has(current.status)) return;
-
-    const merged = mergeCircuitState(current.progress, state);
     await this.pool.query(
       `UPDATE tasks
-          SET progress = $1::jsonb,
+          SET progress = COALESCE(progress, '{}'::jsonb) || jsonb_build_object('resumableCircuit', $1::jsonb),
               updated_at = now()
         WHERE id = $2
           AND status NOT IN ('done', 'cancelled', 'failed')`,
-      [JSON.stringify(merged), taskId],
+      [JSON.stringify(state), taskId],
     );
   }
 
@@ -706,28 +702,28 @@ export class TaskRepo {
       return current;
     }
 
-    const notes = (Array.isArray(current.progress.notes) ? current.progress.notes : []) as Array<unknown>;
-    notes.push({ at: new Date().toISOString(), note: options.progressNote });
+    const notes = [{ at: new Date().toISOString(), note: options.progressNote }];
     const mergedTags = [...new Set([...current.tags, ...options.tags])];
-    const progress = mergeCircuitState({ ...current.progress, notes }, options.circuitState);
 
     const { rows } = await this.pool.query(
       `WITH updated_task AS (
          UPDATE tasks
             SET status = 'failed',
-                progress = $1::jsonb,
-                tags = $2::text[],
+                progress = COALESCE(progress, '{}'::jsonb)
+                  || jsonb_build_object('resumableCircuit', $1::jsonb)
+                  || jsonb_build_object('notes', COALESCE(progress->'notes', '[]'::jsonb) || $2::jsonb),
+                tags = $3::text[],
                 updated_at = now()
-          WHERE id = $3
+          WHERE id = $4
             AND status NOT IN ('done', 'cancelled', 'failed')
           RETURNING ${TASK_COLUMNS}
        ),
        _cancel_wake AS (
          UPDATE scheduled_jobs SET status = 'cancelled'
-          WHERE task_id = $3 AND status IN ('pending', 'running')
+          WHERE task_id = $4 AND status IN ('pending', 'running')
        )
        SELECT * FROM updated_task`,
-      [JSON.stringify(progress), mergedTags, taskId],
+      [JSON.stringify(options.circuitState), JSON.stringify(notes), mergedTags, taskId],
     );
 
     const row = rows[0] as DbTaskRow | undefined;
@@ -738,6 +734,8 @@ export class TaskRepo {
       await this.bus.publish('execution', createTaskUpdated({
         taskId: updated.id,
         previousStatus: current.status,
+        newStatus: 'failed',
+        progressNote: options.progressNote,
         agentId: null,
       }));
     } catch (busErr) {

@@ -14,7 +14,7 @@ describe('ResumableContinuationSubscriber', () => {
   beforeEach(() => vi.restoreAllMocks());
 
   it('schedules a continuation when execution_paused is emitted and breaker allows', async () => {
-    vi.spyOn(circuitBreaker, 'handlePausedSliceForCircuitBreaker')
+    const breakerSpy = vi.spyOn(circuitBreaker, 'handlePausedSliceForCircuitBreaker')
       .mockResolvedValue({ scheduleContinuation: true });
     const scheduleSpy = vi.spyOn(continuation, 'scheduleResumableContinuation')
       .mockResolvedValue({ scheduled: true, jobId: 'job-1', agentId: 'social-media', runAt: new Date() });
@@ -32,21 +32,33 @@ describe('ResumableContinuationSubscriber', () => {
     });
     subscriber.start();
 
+    const pausedContent = {
+      _curia_protocol: 'execution_paused',
+      task_id: 'task-abc',
+      done: 25,
+      total: 1300,
+      cursor: 'page:3',
+      last_slice_units: 25,
+      next: 'Review page 4',
+      slice_cost_usd: 0.42,
+    };
+
     await bus.publish('agent', createAgentResponse({
       agentId: 'social-media',
       conversationId: 'conv-1',
-      content: JSON.stringify({
-        _curia_protocol: 'execution_paused',
-        task_id: 'task-abc',
-        done: 25,
-        total: 1300,
-        cursor: 'page:3',
-        last_slice_units: 25,
-        next: 'Review page 4',
-      }),
+      content: JSON.stringify(pausedContent),
       parentEventId: 'parent-1',
     }));
 
+    expect(breakerSpy).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-abc',
+      paused: expect.objectContaining({
+        task_id: 'task-abc',
+        done: 25,
+        slice_cost_usd: 0.42,
+      }),
+      sliceCostUsd: 0.42,
+    }));
     expect(scheduleSpy).toHaveBeenCalledWith(expect.objectContaining({
       taskId: 'task-abc',
       delaySeconds: 30,

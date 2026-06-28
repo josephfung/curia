@@ -4,6 +4,7 @@
 // count. A paused-with-no-progress continuation increments stallCount; K consecutive
 // stalls or a ceiling breach fails the task and escalates instead of looping.
 
+import { isDeepStrictEqual } from 'node:util';
 import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
@@ -60,7 +61,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function parseCursor(raw: unknown): ResumableCursor | undefined {
   if (raw === null) return null;
   if (typeof raw === 'string') return raw;
-  if (isPlainObject(raw)) return raw as ResumableCursor;
+  if (isPlainObject(raw)) return raw as unknown as ResumableCursor;
   return undefined;
 }
 
@@ -88,6 +89,7 @@ export function readCircuitState(progress: Record<string, unknown>): ResumableCi
     typeof stallCount !== 'number' || !Number.isInteger(stallCount) || stallCount < 0
     || typeof iterationCount !== 'number' || !Number.isInteger(iterationCount) || iterationCount < 0
     || typeof startedAt !== 'string' || startedAt.length === 0
+    || !Number.isFinite(Date.parse(startedAt))
     || typeof totalCostUsd !== 'number' || !Number.isFinite(totalCostUsd) || totalCostUsd < 0
     || !lastProgress
   ) {
@@ -111,7 +113,7 @@ export function cursorsEqual(a: ResumableCursor, b: ResumableCursor): boolean {
   if (a === null || b === null) return false;
   if (typeof a === 'string' && typeof b === 'string') return a === b;
   if (typeof a === 'object' && typeof b === 'object' && a !== null && b !== null) {
-    return JSON.stringify(a) === JSON.stringify(b);
+    return isDeepStrictEqual(a, b);
   }
   return false;
 }
@@ -169,8 +171,11 @@ function detectBreach(
 ): CircuitBreachReason | null {
   if (state.stallCount >= ceilings.maxStalls) return 'stall_limit';
   if (state.iterationCount >= ceilings.maxIterations) return 'max_iterations';
-  const elapsedHours = (now.getTime() - new Date(state.startedAt).getTime()) / 3_600_000;
-  if (elapsedHours >= ceilings.maxWallclockHours) return 'max_wallclock';
+  const startedMs = Date.parse(state.startedAt);
+  if (Number.isFinite(startedMs)) {
+    const elapsedHours = (now.getTime() - startedMs) / 3_600_000;
+    if (elapsedHours >= ceilings.maxWallclockHours) return 'max_wallclock';
+  }
   if (state.totalCostUsd >= ceilings.maxCostUsd) return 'max_cost';
   return null;
 }
@@ -182,7 +187,8 @@ function detectBreach(
 export function processPausedSliceOutcome(input: ProcessPausedSliceInput): ProcessPausedSliceResult {
   const now = input.now ?? new Date();
   const nextProgress = { done: input.paused.done, cursor: input.paused.cursor };
-  const sliceCostUsd = input.sliceCostUsd ?? 0;
+  const rawSliceCost = input.sliceCostUsd ?? input.paused.slice_cost_usd ?? 0;
+  const sliceCostUsd = Number.isFinite(rawSliceCost) && rawSliceCost >= 0 ? rawSliceCost : 0;
 
   const base: ResumableCircuitState = input.circuit ?? {
     stallCount: 0,
@@ -272,7 +278,11 @@ export async function escalateCircuitBreach(opts: EscalateCircuitBreachOptions):
     content: notifyContent,
     parentEventId: task.id,
   });
-  await bus.publish('system', notifyEvent);
+  try {
+    await bus.publish('system', notifyEvent);
+  } catch (err) {
+    logger.error({ err, taskId: task.id }, 'Failed to notify coordinator of circuit breach');
+  }
 
   try {
     await taskRepo.createTask({

@@ -246,7 +246,7 @@ export function buildExecutionPausedResponse(options: {
     next: options.progress.next,
   };
   if (options.taskId) payload.task_id = options.taskId;
-  if (options.sliceCostUsd !== undefined && options.sliceCostUsd > 0) {
+  if (options.sliceCostUsd !== undefined && Number.isFinite(options.sliceCostUsd) && options.sliceCostUsd > 0) {
     payload.slice_cost_usd = options.sliceCostUsd;
   }
   return JSON.stringify(payload);
@@ -272,6 +272,9 @@ export function parseExecutionPausedPayload(content: string, logger?: Logger): E
     };
     if (typeof parsed['task_id'] === 'string' && parsed['task_id'].length > 0) {
       payload.task_id = parsed['task_id'];
+    }
+    if (typeof parsed['slice_cost_usd'] === 'number' && Number.isFinite(parsed['slice_cost_usd'])) {
+      payload.slice_cost_usd = parsed['slice_cost_usd'];
     }
     return payload;
   } catch (err) {

@@ -984,6 +984,9 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     }
     if (t.resumableCeilings !== undefined) {
       const c = t.resumableCeilings;
+      if (typeof c !== 'object' || c === null || Array.isArray(c)) {
+        throw new Error(`tasks.resumableCeilings must be an object, got: ${String(c)}`);
+      }
       if (c.maxStalls !== undefined && (!Number.isInteger(c.maxStalls) || c.maxStalls < 1)) {
         throw new Error(`tasks.resumableCeilings.maxStalls must be a positive integer, got: ${String(c.maxStalls)}`);
       }

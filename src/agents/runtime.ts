@@ -1633,7 +1633,7 @@ export class AgentRuntime {
           parentEventId: taskEvent.id,
         });
         const estimatedCostUsd = event.payload.estimatedCostUsd;
-        if (budgetHandoff?.sliceCostTracker && estimatedCostUsd > 0) {
+        if (budgetHandoff?.sliceCostTracker && Number.isFinite(estimatedCostUsd) && estimatedCostUsd > 0) {
           budgetHandoff.sliceCostTracker.usd += estimatedCostUsd;
         }
         await bus.publish('agent', event);

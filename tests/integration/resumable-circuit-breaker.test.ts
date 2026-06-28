@@ -21,6 +21,7 @@ async function cleanup(pool: pg.Pool): Promise<void> {
     `DELETE FROM scheduled_jobs WHERE task_id IN (SELECT id FROM tasks WHERE title LIKE $1)`,
     [`${PREFIX}%`],
   );
+  await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`Review: resumable task stalled (${PREFIX}%`]);
   await pool.query(`DELETE FROM tasks WHERE title LIKE $1 OR parent_task_id IN (
     SELECT id FROM tasks WHERE title LIKE $1
   )`, [`${PREFIX}%`]);
@@ -33,8 +34,6 @@ describeIf('Resumable circuit breaker (#1176)', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    bus = new EventBus(logger as never);
-    repo = new TaskRepo(pool, bus, logger as never, 'UTC');
   });
 
   afterAll(async () => {
@@ -44,6 +43,8 @@ describeIf('Resumable circuit breaker (#1176)', () => {
 
   beforeEach(async () => {
     await cleanup(pool);
+    bus = new EventBus(logger as never);
+    repo = new TaskRepo(pool, bus, logger as never, 'UTC');
   });
 
   it('escalates after K no-progress pauses instead of scheduling another continuation', async () => {
