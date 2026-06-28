@@ -415,6 +415,15 @@ tasks:
   # threshold (idleThresholdHours, typically 4). At most one pending wake per task —
   # a lost continuation is re-surfaced by the heartbeat once idleThresholdHours elapses.
   resumableContinuationSeconds: 30
+  # Progress-based circuit breaker for resumable iterate leaves (#1176).
+  # Per-task error_budget may override any key (max_stalls, max_iterations,
+  # max_wallclock_hours, max_cost_usd). A breach fails the task and escalates
+  # via the backlog-surfacing path instead of looping silently.
+  resumableCeilings:
+    maxStalls: 3          # K — consecutive paused slices with no cursor/done advance
+    maxIterations: 100    # hard cap on continuation slices
+    maxWallclockHours: 24 # hours from first processed pause
+    maxCostUsd: 10.00     # aggregate LLM spend across slices (USD)
 
 # Autonomy authorization (#1125). The bypass ladder governs how much LINEAGE standing a
 # heartbeat-woken/derived task inherits at the live autonomy score. The score can only ever

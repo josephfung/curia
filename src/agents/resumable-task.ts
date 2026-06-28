@@ -210,6 +210,8 @@ export interface ExecutionPausedPayload {
   cursor: ResumableProgressBlock['cursor'];
   last_slice_units: number;
   next: string;
+  /** Aggregate LLM cost for this slice (USD) — feeds resumable cost ceiling (#1176). */
+  slice_cost_usd?: number;
 }
 
 export interface DelegatePausedResult {
@@ -233,6 +235,7 @@ export function formatPausedProgressMessage(
 export function buildExecutionPausedResponse(options: {
   taskId?: string;
   progress: ResumableProgressBlock;
+  sliceCostUsd?: number;
 }): string {
   const payload: ExecutionPausedPayload = {
     _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
@@ -243,6 +246,9 @@ export function buildExecutionPausedResponse(options: {
     next: options.progress.next,
   };
   if (options.taskId) payload.task_id = options.taskId;
+  if (options.sliceCostUsd !== undefined && Number.isFinite(options.sliceCostUsd) && options.sliceCostUsd > 0) {
+    payload.slice_cost_usd = options.sliceCostUsd;
+  }
   return JSON.stringify(payload);
 }
 
@@ -266,6 +272,9 @@ export function parseExecutionPausedPayload(content: string, logger?: Logger): E
     };
     if (typeof parsed['task_id'] === 'string' && parsed['task_id'].length > 0) {
       payload.task_id = parsed['task_id'];
+    }
+    if (typeof parsed['slice_cost_usd'] === 'number' && Number.isFinite(parsed['slice_cost_usd'])) {
+      payload.slice_cost_usd = parsed['slice_cost_usd'];
     }
     return payload;
   } catch (err) {

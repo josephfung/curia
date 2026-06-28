@@ -350,7 +350,17 @@
         "heartbeatMaxWakesPerTick": { "type": "integer", "minimum": 1 },
         "idleThresholdHours": { "type": "number", "minimum": 0 },
         "staleWaitThresholdHours": { "type": "number", "minimum": 0 },
-        "resumableContinuationSeconds": { "type": "integer", "minimum": 1 }
+        "resumableContinuationSeconds": { "type": "integer", "minimum": 1 },
+        "resumableCeilings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxStalls": { "type": "integer", "minimum": 1 },
+            "maxIterations": { "type": "integer", "minimum": 1 },
+            "maxWallclockHours": { "type": "number", "exclusiveMinimum": 0 },
+            "maxCostUsd": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
       }
     },
     "autonomy": {

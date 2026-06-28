@@ -25,6 +25,7 @@ import {
 } from './resumable-progress.js';
 import { prepareResumableBlockWithSpill } from './resumable-accumulator-spill.js';
 import type { WorkingDocsRepo } from './working-docs-repo.js';
+import { type ResumableCircuitState } from '../agents/resumable-circuit-breaker.js';
 
 // All SELECT / RETURNING clauses use this column list. Centralised so a schema
 // change only needs updating in one place.
@@ -669,5 +670,78 @@ export class TaskRepo {
       'task-repo: persisted resumable checkpoint',
     );
     return { task: updated, block: prepared.block };
+  }
+
+  /** Persist progress.resumableCircuit counters after a healthy paused slice (#1176). */
+  async persistResumableCircuitState(taskId: string, state: ResumableCircuitState): Promise<void> {
+    await this.pool.query(
+      `UPDATE tasks
+          SET progress = COALESCE(progress, '{}'::jsonb) || jsonb_build_object('resumableCircuit', $1::jsonb),
+              updated_at = now()
+        WHERE id = $2
+          AND status NOT IN ('done', 'cancelled', 'failed')`,
+      [JSON.stringify(state), taskId],
+    );
+  }
+
+  /**
+   * Fail a resumable task on circuit-breaker breach: status failed, cancel wakes,
+   * merge circuit state + progress note, add escalation tags.
+   */
+  async failResumableTask(
+    taskId: string,
+    options: {
+      progressNote: string;
+      circuitState: ResumableCircuitState;
+      tags: string[];
+    },
+  ): Promise<TaskRow | null> {
+    const current = await this.getTask(taskId);
+    if (!current) return null;
+    if (TERMINAL_STATUSES.has(current.status) || current.status === 'failed') {
+      return current;
+    }
+
+    const notes = [{ at: new Date().toISOString(), note: options.progressNote }];
+    const mergedTags = [...new Set([...current.tags, ...options.tags])];
+
+    const { rows } = await this.pool.query(
+      `WITH updated_task AS (
+         UPDATE tasks
+            SET status = 'failed',
+                progress = COALESCE(progress, '{}'::jsonb)
+                  || jsonb_build_object('resumableCircuit', $1::jsonb)
+                  || jsonb_build_object('notes', COALESCE(progress->'notes', '[]'::jsonb) || $2::jsonb),
+                tags = $3::text[],
+                updated_at = now()
+          WHERE id = $4
+            AND status NOT IN ('done', 'cancelled', 'failed')
+          RETURNING ${TASK_COLUMNS}
+       ),
+       _cancel_wake AS (
+         UPDATE scheduled_jobs SET status = 'cancelled'
+          WHERE task_id = $4 AND status IN ('pending', 'running')
+       )
+       SELECT * FROM updated_task`,
+      [JSON.stringify(options.circuitState), JSON.stringify(notes), mergedTags, taskId],
+    );
+
+    const row = rows[0] as DbTaskRow | undefined;
+    if (!row) return await this.getTask(taskId);
+
+    const updated = mapTaskRow(row);
+    try {
+      await this.bus.publish('execution', createTaskUpdated({
+        taskId: updated.id,
+        previousStatus: current.status,
+        newStatus: 'failed',
+        progressNote: options.progressNote,
+        agentId: null,
+      }));
+    } catch (busErr) {
+      this.logger.error({ busErr, taskId }, 'task-repo: bus publish failed after failResumableTask');
+    }
+    this.logger.warn({ taskId }, 'task-repo: resumable task failed by circuit breaker');
+    return updated;
   }
 }

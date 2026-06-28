@@ -482,12 +482,19 @@ export class AgentRuntime {
     }
 
     let checkpointBudgetNudgeSent = false;
+    const sliceCostTracker = { usd: 0 };
 
     // Accumulate skill names across all tool-use turns so we can report them
     // on the agent.response event for audit and monitoring.
     const skillsCalled: string[] = [];
     // Threaded into every maxTurns budget check (tool loop, recovery, chatWithRetry).
-    const budgetHandoff = { conversationId, skillsCalled, boundTaskCtx, memory };
+    const budgetHandoff = {
+      conversationId,
+      skillsCalled,
+      boundTaskCtx,
+      memory,
+      sliceCostTracker: resumableActive ? sliceCostTracker : undefined,
+    };
 
     // Append intent anchor — present only for persistent scheduler tasks that have a
     // linked agent_task record. Injected near the end so it sits close to the conversation
@@ -1573,6 +1580,7 @@ export class AgentRuntime {
       skillsCalled: string[];
       boundTaskCtx: BoundTaskContext | null;
       memory?: WorkingMemory;
+      sliceCostTracker?: { usd: number };
     },
   ): Promise<LLMResponse | null> {
     const { agentId, bus, logger } = this.config;
@@ -1624,6 +1632,10 @@ export class AgentRuntime {
           responseHash,
           parentEventId: taskEvent.id,
         });
+        const estimatedCostUsd = event.payload.estimatedCostUsd;
+        if (budgetHandoff?.sliceCostTracker && Number.isFinite(estimatedCostUsd) && estimatedCostUsd > 0) {
+          budgetHandoff.sliceCostTracker.usd += estimatedCostUsd;
+        }
         await bus.publish('agent', event);
       } catch (err) {
         // Telemetry failure must not abort the agent task. Log at error so the gap
@@ -1847,6 +1859,7 @@ export class AgentRuntime {
       skillsCalled: string[];
       boundTaskCtx: BoundTaskContext | null;
       memory?: WorkingMemory;
+      sliceCostTracker?: { usd: number };
     },
   ): Promise<boolean> {
     if (budget.turnsUsed < budget.maxTurns) return false;
@@ -1870,6 +1883,7 @@ export class AgentRuntime {
       skillsCalled: string[];
       boundTaskCtx: BoundTaskContext | null;
       memory?: WorkingMemory;
+      sliceCostTracker?: { usd: number };
     },
   ): Promise<void> {
     const { agentId, logger } = this.config;
@@ -1886,6 +1900,7 @@ export class AgentRuntime {
           handoff.memory,
           budget,
           reason,
+          handoff.sliceCostTracker?.usd,
         );
         return;
       }
@@ -1922,14 +1937,19 @@ export class AgentRuntime {
     memory: WorkingMemory | undefined,
     budget: ErrorBudget,
     reason: 'maxTurns',
+    sliceCostUsd?: number,
   ): Promise<void> {
     const { agentId, bus, logger } = this.config;
     logger.info(
-      { agentId, taskId, done: checkpoint.done, total: checkpoint.total, budget, reason },
+      { agentId, taskId, done: checkpoint.done, total: checkpoint.total, budget, reason, sliceCostUsd },
       'Resumable task hit turn budget — pausing from last checkpoint',
     );
 
-    const content = buildExecutionPausedResponse({ taskId, progress: checkpoint });
+    const content = buildExecutionPausedResponse({
+      taskId,
+      progress: checkpoint,
+      sliceCostUsd,
+    });
 
     if (memory) {
       await memory.addTurn(conversationId, agentId, { role: 'assistant', content });
