@@ -2107,6 +2107,76 @@ describe('AgentRuntime resumable budget safety-net (#1174)', () => {
     expect(agentResponses[0]?.payload.isError).toBe(true);
     expect(agentResponses[0]?.payload.reason).toBe('maxTurns');
   });
+
+  it('pauses when maxTurns is exhausted inside chatWithRetry retry path', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const retryableErrorProvider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => ({
+        type: 'error' as const,
+        error: {
+          type: 'RATE_LIMITED',
+          source: 'mock',
+          message: 'rate limited',
+          retryable: true,
+          context: {},
+          timestamp: new Date(),
+        },
+      })),
+    };
+
+    const agentErrors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.error', 'system', (event) => {
+      agentErrors.push(event as AgentErrorEvent);
+    });
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'social-media',
+      systemPrompt: 'You are a social media specialist.',
+      provider: retryableErrorProvider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      errorBudget: { maxTurns: 1, maxConsecutiveErrors: 10 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'social-media',
+      conversationId: 'conv-resumable-retry-pause',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task_id: 'task-resumable-retry' }),
+      metadata: {
+        boundTask: {
+          taskId: 'task-resumable-retry',
+          errorBudget: { resumable: true },
+          progress: {
+            resumable: {
+              cursor: 'page-1',
+              done: 10,
+              total: 100,
+              accumulator: [],
+              lastSliceUnits: 10,
+              next: 'Continue',
+            },
+          },
+        },
+      },
+      parentEventId: 'parent-resumable-retry',
+    }));
+
+    expect(agentErrors).toHaveLength(0);
+    expect(agentResponses).toHaveLength(1);
+    const parsed = JSON.parse(agentResponses[0]!.payload.content) as { _curia_protocol: string };
+    expect(parsed._curia_protocol).toBe('execution_paused');
+  });
 });
 
 // -- Structured error injection test --

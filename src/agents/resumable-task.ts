@@ -8,6 +8,7 @@ import {
   readResumableBlock,
   type ResumableProgressBlock,
 } from '../db/resumable-progress.js';
+import type { Logger } from '../logger.js';
 import {
   indexPathForDirectory,
   resolveWorkspacePrefixFromTaskContent,
@@ -246,7 +247,7 @@ export function buildExecutionPausedResponse(options: {
 }
 
 /** Parse a paused protocol payload from agent.response content. */
-export function parseExecutionPausedPayload(content: string): ExecutionPausedPayload | null {
+export function parseExecutionPausedPayload(content: string, logger?: Logger): ExecutionPausedPayload | null {
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>;
     if (parsed['_curia_protocol'] !== EXECUTION_PAUSED_PROTOCOL) return null;
@@ -267,19 +268,27 @@ export function parseExecutionPausedPayload(content: string): ExecutionPausedPay
       payload.task_id = parsed['task_id'];
     }
     return payload;
-  } catch {
+  } catch (err) {
+    logger?.warn(
+      { err, contentPreview: content.slice(0, 200) },
+      'Failed to parse execution_paused protocol payload — treating as non-paused response',
+    );
     return null;
   }
 }
 
 /** Parse a delegate skill success payload that carries paused (not failed) fields. */
-export function parseDelegatePausedData(data: unknown): DelegatePausedResult | null {
+export function parseDelegatePausedData(data: unknown, logger?: Logger): DelegatePausedResult | null {
   if (data === null || data === undefined) return null;
   let record: Record<string, unknown>;
   if (typeof data === 'string') {
     try {
       record = JSON.parse(data) as Record<string, unknown>;
-    } catch {
+    } catch (err) {
+      logger?.warn(
+        { err, dataPreview: data.slice(0, 200) },
+        'Failed to parse delegate paused payload JSON — treating as non-paused result',
+      );
       return null;
     }
   } else if (typeof data === 'object' && !Array.isArray(data)) {

@@ -271,8 +271,9 @@ system_prompt: |
   long resumable task but hit its per-slice turn budget. This is **success at the
   delegation layer**, not a timeout or error.
 
-  1. **Do not re-delegate** the same work in this turn or immediately retry — the
-     platform schedules a continuation automatically.
+  1. **Do not re-delegate** the same work in this turn or immediately retry in this
+     conversation turn. Continuation is not automatic in this release — do not assume
+     the platform will resume the task on its own.
   2. Record the progress using the `done`, `total`, and `message` fields. Optionally
      tell the CEO "still working, X of Y" in your own voice when they are waiting
      on synchronous channels.

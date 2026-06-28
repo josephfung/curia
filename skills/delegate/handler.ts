@@ -335,7 +335,7 @@ export class DelegateHandler implements SkillHandler {
               }
               reject(new Error(`Specialist '${agent}' encountered an error and could not complete the task`));
             } else {
-              const pausedPayload = parseExecutionPausedPayload(responseEvent.payload.content);
+              const pausedPayload = parseExecutionPausedPayload(responseEvent.payload.content, ctx.log);
               if (pausedPayload) {
                 resolve(JSON.stringify({
                   _curia_protocol: EXECUTION_PAUSED_PROTOCOL,

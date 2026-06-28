@@ -483,6 +483,12 @@ export class AgentRuntime {
 
     let checkpointBudgetNudgeSent = false;
 
+    // Accumulate skill names across all tool-use turns so we can report them
+    // on the agent.response event for audit and monitoring.
+    const skillsCalled: string[] = [];
+    // Threaded into every maxTurns budget check (tool loop, recovery, chatWithRetry).
+    const budgetHandoff = { conversationId, skillsCalled, boundTaskCtx, memory };
+
     // Append intent anchor — present only for persistent scheduler tasks that have a
     // linked agent_task record. Injected near the end so it sits close to the conversation
     // and remains maximally salient. It is non-negotiable: the agent may evolve its
@@ -846,7 +852,7 @@ export class AgentRuntime {
     // The loop exits when: the LLM returns text, the budget is exhausted, or
     // consecutive errors exceed the threshold.
     maybeAppendCheckpointBudgetNudge();
-    let response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent);
+    let response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent, budgetHandoff);
     if (!response) return; // chatWithRetry already published error events
 
     // Extract caller context once — it doesn't change between tool-use rounds.
@@ -876,10 +882,6 @@ export class AgentRuntime {
       caller = { contactId: originator.contactId, role: null, channel: originator.channel };
     }
 
-    // Accumulate skill names across all tool-use turns so we can report them
-    // on the agent.response event for audit and monitoring.
-    const skillsCalled: string[] = [];
-
     // Clarification short-circuit state. When a specialist calls request-clarification,
     // the runtime detects the protocol marker in the skill result and short-circuits the
     // tool-use loop — emitting a deterministic JSON response instead of asking the LLM
@@ -897,12 +899,7 @@ export class AgentRuntime {
       budget.turnsUsed++;
       maybeAppendCheckpointBudgetNudge();
       if (budget.turnsUsed >= budget.maxTurns) {
-        await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', {
-          conversationId,
-          skillsCalled,
-          boundTaskCtx,
-          memory,
-        });
+        await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', budgetHandoff);
         return;
       }
 
@@ -1182,7 +1179,7 @@ export class AgentRuntime {
             skillInput !== null &&
             !Array.isArray(skillInput)
           ) {
-            const delegatePaused = parseDelegatePausedData(result.data);
+            const delegatePaused = parseDelegatePausedData(result.data, logger);
             if (!delegatePaused) {
               const delegateFailure = parseDelegateFailureData(result.data, logger);
               if (delegateFailure) {
@@ -1344,7 +1341,7 @@ export class AgentRuntime {
 
       maybeAppendCheckpointBudgetNudge();
       // Continue the loop — the full conversation history is now in messages
-      response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent);
+      response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent, budgetHandoff);
       if (!response) return; // chatWithRetry already published error events
     }
 
@@ -1382,17 +1379,12 @@ export class AgentRuntime {
         // Count the recovery call against the turn budget — it is a real LLM round-trip.
         budget.turnsUsed++;
         if (budget.turnsUsed >= budget.maxTurns) {
-          await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', {
-            conversationId,
-            skillsCalled,
-            boundTaskCtx,
-            memory,
-          });
+          await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', budgetHandoff);
           return;
         }
 
         // Call without tools — the LLM must produce text, it cannot call more tools.
-        const recovery = await this.chatWithRetry(provider, { messages }, budget, taskEvent);
+        const recovery = await this.chatWithRetry(provider, { messages }, budget, taskEvent, budgetHandoff);
         // chatWithRetry returns null when it has already published error events and sent an
         // error response — bail out here to avoid double-publishing a second response event
         // and writing a phantom turn to working memory.
@@ -1576,6 +1568,12 @@ export class AgentRuntime {
     params: { messages: Message[]; tools?: ToolDefinition[] },
     budget: ErrorBudget,
     taskEvent: AgentTaskEvent,
+    budgetHandoff?: {
+      conversationId: string;
+      skillsCalled: string[];
+      boundTaskCtx: BoundTaskContext | null;
+      memory?: WorkingMemory;
+    },
   ): Promise<LLMResponse | null> {
     const { agentId, bus, logger } = this.config;
 
@@ -1711,6 +1709,9 @@ export class AgentRuntime {
           };
           budget.consecutiveErrors += 1;
           budget.turnsUsed += 1;
+          if (await this.enforceMaxTurnsBudget(budget, taskEvent, budgetHandoff)) {
+            return null;
+          }
           logger.error(
             { agentId, err, fallbackModel: this.config.fallbackModel },
             'Fallback provider threw an unexpected exception',
@@ -1748,6 +1749,9 @@ export class AgentRuntime {
         const fallbackIncrement = fallbackErr.type === 'AUTH_FAILURE' ? 2 : 1;
         budget.consecutiveErrors += fallbackIncrement;
         budget.turnsUsed += fallbackIncrement;
+        if (await this.enforceMaxTurnsBudget(budget, taskEvent, budgetHandoff)) {
+          return null;
+        }
         logger.error(
           { agentId, errorType: fallbackErr.type, fallbackModel: this.config.fallbackModel },
           'Fallback model also failed',
@@ -1764,6 +1768,9 @@ export class AgentRuntime {
       const increment = agentErr.type === 'AUTH_FAILURE' ? 2 : 1;
       budget.consecutiveErrors += increment;
       budget.turnsUsed += increment;
+      if (await this.enforceMaxTurnsBudget(budget, taskEvent, budgetHandoff)) {
+        return null;
+      }
       logger.error({ agentId, errorType: agentErr.type, source: agentErr.source }, 'Non-retryable LLM error');
       await this.publishAgentError(agentErr, taskEvent);
       await this.sendErrorResponse(taskEvent, agentErr);
@@ -1779,6 +1786,10 @@ export class AgentRuntime {
       // Increment budget counters for the failed attempt.
       budget.consecutiveErrors++;
       budget.turnsUsed++;
+
+      if (await this.enforceMaxTurnsBudget(budget, taskEvent, budgetHandoff)) {
+        return null;
+      }
 
       // Check budget before waiting — if already exceeded, no point retrying
       if (budget.consecutiveErrors >= budget.maxConsecutiveErrors) {
@@ -1822,6 +1833,25 @@ export class AgentRuntime {
     await this.publishAgentError(latestErr, taskEvent);
     await this.sendErrorResponse(taskEvent, latestErr);
     return null;
+  }
+
+  /**
+   * When maxTurns is exhausted, run the pause safety-net or honest failure path.
+   * Returns true when the task should stop (paused or failed response published).
+   */
+  private async enforceMaxTurnsBudget(
+    budget: ErrorBudget,
+    taskEvent: AgentTaskEvent,
+    handoff?: {
+      conversationId: string;
+      skillsCalled: string[];
+      boundTaskCtx: BoundTaskContext | null;
+      memory?: WorkingMemory;
+    },
+  ): Promise<boolean> {
+    if (budget.turnsUsed < budget.maxTurns) return false;
+    await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', handoff);
+    return true;
   }
 
   /**
