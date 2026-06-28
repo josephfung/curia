@@ -6,12 +6,13 @@ describe('resolveTasksConfig', () => {
     expect(resolveTasksConfig(undefined)).toEqual(DEFAULT_TASKS_CONFIG);
   });
 
-  it('defaults are 60 / 5 / 4 / 48', () => {
+  it('defaults are 60 / 5 / 4 / 48 / 30', () => {
     expect(DEFAULT_TASKS_CONFIG).toEqual({
       heartbeatIntervalMinutes: 60,
       heartbeatMaxWakesPerTick: 5,
       idleThresholdHours: 4,
       staleWaitThresholdHours: 48,
+      resumableContinuationSeconds: 30,
     });
   });
 
@@ -21,6 +22,7 @@ describe('resolveTasksConfig', () => {
       heartbeatMaxWakesPerTick: 5,
       idleThresholdHours: 2,
       staleWaitThresholdHours: 48,
+      resumableContinuationSeconds: 30,
     });
   });
 });

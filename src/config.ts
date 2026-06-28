@@ -52,6 +52,8 @@ export interface TasksConfig {
   heartbeatMaxWakesPerTick: number;
   idleThresholdHours: number;
   staleWaitThresholdHours: number;
+  /** Seconds until a paused resumable task's self-continuation wake fires. */
+  resumableContinuationSeconds: number;
 }
 
 export const DEFAULT_TASKS_CONFIG: TasksConfig = {
@@ -59,6 +61,7 @@ export const DEFAULT_TASKS_CONFIG: TasksConfig = {
   heartbeatMaxWakesPerTick: 5,
   idleThresholdHours: 4,
   staleWaitThresholdHours: 48,
+  resumableContinuationSeconds: 30,
 };
 
 /** Resolve the optional YAML tasks block to a fully-populated config with defaults. */
@@ -68,6 +71,7 @@ export function resolveTasksConfig(yaml: YamlConfig['tasks']): TasksConfig {
     heartbeatMaxWakesPerTick: yaml?.heartbeatMaxWakesPerTick ?? DEFAULT_TASKS_CONFIG.heartbeatMaxWakesPerTick,
     idleThresholdHours: yaml?.idleThresholdHours ?? DEFAULT_TASKS_CONFIG.idleThresholdHours,
     staleWaitThresholdHours: yaml?.staleWaitThresholdHours ?? DEFAULT_TASKS_CONFIG.staleWaitThresholdHours,
+    resumableContinuationSeconds: yaml?.resumableContinuationSeconds ?? DEFAULT_TASKS_CONFIG.resumableContinuationSeconds,
   };
 }
 
@@ -419,6 +423,8 @@ export interface YamlConfig {
     /** Hours a waiting/blocked task with no pending wake may sit before the
      *  heartbeat surfaces it as an orphaned wait. Default 48. */
     staleWaitThresholdHours?: number;
+    /** Seconds until a paused resumable task's self-continuation wake fires. Default 30. */
+    resumableContinuationSeconds?: number;
   };
   health?: {
     liveness?: {
@@ -909,6 +915,11 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       !Number.isFinite(t.staleWaitThresholdHours) || t.staleWaitThresholdHours < 0
     )) {
       throw new Error(`tasks.staleWaitThresholdHours must be a non-negative finite number, got: ${String(t.staleWaitThresholdHours)}`);
+    }
+    if (t.resumableContinuationSeconds !== undefined && (
+      !Number.isInteger(t.resumableContinuationSeconds) || t.resumableContinuationSeconds < 1
+    )) {
+      throw new Error(`tasks.resumableContinuationSeconds must be a positive integer, got: ${String(t.resumableContinuationSeconds)}`);
     }
   }
 
