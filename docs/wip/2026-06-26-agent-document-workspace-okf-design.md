@@ -230,9 +230,13 @@ write nothing project-specific (the resumable design's "no project foresight" pr
   (FTS first, optional embeddings, bounded graph retrieval).
 - **Lint.** Extend `DreamEngine`'s nightly job to flag orphans, stale documents, and
   obvious contradictions — the LLM-Wiki *lint* step, reusing machinery we already run.
+  *(Revised 2026-06-28 — reduced to just the `/scratch` TTL sweep; orphan/stale/contradiction
+  dropped as noise on a WIP workspace. See [Revisions](#revisions).)*
 - **Distillation.** On project completion (`completeTask`), best-effort and non-fatal: feed
   the workspace through `extract-facts` / `extract-relationships` so durable facts land in
   the KG *through* the validation gates, then archive the documents.
+  *(Revised 2026-06-28 — ownership moved to [#1177]'s deliverable step; promote a curated
+  deliverable, not the whole workspace. See [Revisions](#revisions).)*
 
 ## Path to v0.39
 
@@ -251,7 +255,8 @@ condition.
   `{ kind: "document", path, section? }` pointer in `progress.resumable`. Depends on
   [#1208] and [#1172].
 
-**Follow-ups (P3/P4)**
+**Follow-ups (P3/P4)** *(retriaged 2026-06-28 — see [Revisions](#revisions): W4 folded into
+[#1177], W5 reduced to the `/scratch` TTL sweep, W6 deferred off v0.39.)*
 
 - [#1211] (W4) — distill a completed workspace into the KG via the existing
   `extract-facts` / `extract-relationships` validation gates.
@@ -286,7 +291,9 @@ primitive), which injects the document manifest into its resumable-task guidance
   bodies (and specific sections) via `read` as tool results at the tail.
 - **Embedding strategy** for mutable documents (lazy vs. scheduled vs. none-at-launch).
 - **Distillation trigger** — automatic on completion vs. explicit agent/CEO action.
-  Recommend automatic-but-non-fatal, with a disable flag.
+  Recommend automatic-but-non-fatal, with a disable flag. *(Resolved 2026-06-28 — distillation
+  is owned by [#1177]'s deliverable/synthesis step, which produces the curated result to
+  promote; see [Revisions](#revisions).)*
 - **`memory.scopes` (#521)** is parsed but inert today. Keep the workspace decoupled from
   it; `agent_id` is the forward-compat hook if scopes ever activate as a real isolation
   boundary.
@@ -294,10 +301,49 @@ primitive), which injects the document manifest into its resumable-task guidance
   — if the standard stalls we still have a sane, self-contained markdown format — and the
   loose untyped-wiki model stays cleanly complementary to the strict, typed KG.
 
+## Revisions
+
+### 2026-06-28 — follow-up retriage (post-implementation review)
+
+The core landed — [#1208] (store) closed, [#1209] (skills) merged, [#1210] (spill) done — and
+the three P3/P4 follow-ups were reworked after review. The model above (an OKF-conformant
+workspace backed by Postgres, bridged to the KG by distillation) is unchanged; only the
+follow-up *scopes* moved.
+
+- **[#1213] (W6 — export + visualizer): deferred off v0.39** (kept open). The store is already
+  OKF-conformant, so the *option* to export and run the static-HTML visualizer is preserved at
+  zero cost; build it when there is a concrete human-viewing need or the OKF tooling ecosystem
+  matures. Deliberately not closed `wontfix` — the free visualizer is the payoff that justified
+  adopting OKF over a bespoke markdown format, so it stays a live future. Small carve-out worth
+  keeping near the store: an export→reimport round-trip test guarding that Postgres never
+  silently drifts from OKF.
+
+- **[#1212] (W5 — lint): rescoped to the `/scratch` TTL sweep only.** The orphan / stale /
+  contradiction checks are dropped — they are noise on a work-in-progress workspace: a project
+  *root* document has no inbound backlinks (so it reads as an "orphan"), a dormant long-running
+  or recurring task reads as "stale" by mtime, and an LLM contradiction-hunter fires on exactly
+  the normal revision that the workspace and `log.md` exist to allow. The lint was report-only,
+  so it never guarded against deletion either. What remains is the one reliable piece: purge
+  expired `/scratch/<conversation-id>` documents — the retention the Lifecycle section already
+  promised. Implementation note: migration `066_create_working_documents.sql` has **no
+  `expires_at` column**, so expiry is *derived* from `updated_at` + a configured TTL.
+
+- **[#1211] (W4 — distillation): closed, folded into the resumable epic [#1150] / [#1177].**
+  Distillation has two halves on different layers. The *salience* judgment — deciding what a
+  completed project durably concluded — is the **deliverable / synthesis step** of [#1177]'s
+  `plan` primitive (and the multi-document "project" abstraction this triggered on is itself a
+  [#1177] Phase-2 construct; resumable Phase 1 only handles long *leaves*, not multi-task
+  projects). The *bridge* — promoting that curated deliverable into the KG through the existing
+  `extract-facts` / `extract-relationships` gates, **capped and audited**, archiving the docs,
+  never the per-item worklog — is absorbed into [#1177]'s deliverable step and re-emerges as a
+  concrete sub-issue when it decomposes. This resolves the "Distillation trigger" open question
+  above: promotion is owned by the project's deliverable step, not a standalone workspace pass.
+
 [#521]: https://github.com/josephfung/curia/issues/521
 [#1150]: https://github.com/josephfung/curia/issues/1150
 [#1172]: https://github.com/josephfung/curia/issues/1172
 [#1173]: https://github.com/josephfung/curia/issues/1173
+[#1177]: https://github.com/josephfung/curia/issues/1177
 [#1207]: https://github.com/josephfung/curia/issues/1207
 [#1208]: https://github.com/josephfung/curia/issues/1208
 [#1209]: https://github.com/josephfung/curia/issues/1209
