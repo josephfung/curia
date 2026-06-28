@@ -47,6 +47,7 @@ export class TaskCreateHandler implements SkillHandler {
       intent_anchor?: string;
       source?: string;
       target_agent_id?: string;
+      resumable?: boolean;
     };
 
     if (!input.title || typeof input.title !== 'string' || !input.title.trim()) {
@@ -172,6 +173,7 @@ export class TaskCreateHandler implements SkillHandler {
         // Copy the creating turn's lineage onto the task (#1125). TaskRepo caps it to the
         // parent's lineage when parent_task_id is set, so a child never exceeds its parent.
         originator: (ctx.taskMetadata?.originator as TaskOriginator | undefined) ?? null,
+        resumable: input.resumable === true,
       });
 
       const tz = ctx.timezone;

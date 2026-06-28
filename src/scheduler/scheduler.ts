@@ -274,6 +274,8 @@ export class Scheduler {
                t.id AS agent_task_id,
                t.intent_anchor,
                t.progress,
+               t.error_budget AS task_error_budget,
+               t.tags AS task_tags,
                t.title AS task_title
           FROM scheduled_jobs sj
           LEFT JOIN tasks t ON sj.task_id = t.id
@@ -303,6 +305,8 @@ export class Scheduler {
           agentTaskId: row.agent_task_id ?? null,
           intentAnchor: row.intent_anchor ?? null,
           progress: row.progress ?? null,
+          taskErrorBudget: row.task_error_budget ?? null,
+          taskTags: row.task_tags ?? null,
           taskTitle: row.task_title ?? null,
           runStartedAt: row.run_started_at ?? null,
           expectedDurationSeconds: row.expected_duration_seconds ?? null,
@@ -513,10 +517,18 @@ export class Scheduler {
       ? (job.taskPayload as { standing?: { derived?: boolean } }).standing
       : undefined;
     let metadata: Record<string, unknown> | undefined;
-    if (job.originator || taskWakeStanding) {
+    if (job.originator || taskWakeStanding || job.agentTaskId) {
       metadata = {};
       if (job.originator) metadata.originator = job.originator;
       if (taskWakeStanding) metadata.wakeContext = makeWakeContext(taskWakeStanding.derived === true);
+      if (job.agentTaskId) {
+        metadata.boundTask = {
+          taskId: job.agentTaskId,
+          errorBudget: job.taskErrorBudget ?? {},
+          tags: job.taskTags ?? [],
+          progress: job.progress ?? {},
+        };
+      }
     }
 
     // Publish agent.task so the coordinator picks up the work.

@@ -57,6 +57,8 @@ export interface CreateTaskParams {
    *  (ctx.taskMetadata.originator). For child tasks (parentTaskId set) it is capped to the
    *  parent's lineage, never above it. Absent/null → no lineage (agent / no-bypass). */
   originator?: TaskOriginator | null;
+  /** When true, stamps error_budget.resumable so the checkpoint harness activates (#1173). */
+  resumable?: boolean;
 }
 
 export interface UpdateTaskParams {
@@ -119,10 +121,12 @@ export class TaskRepo {
       createdBy,
       wakeAt,
       originator,
+      resumable,
     } = params;
 
     const resolvedCreatedBy = createdBy ?? agentId;
     const resolvedIntentAnchor = intentAnchor ?? title;
+    const errorBudgetJson = resumable ? JSON.stringify({ resumable: true }) : '{}';
 
     // Resolve the lineage to stamp (#1125). For a child task, cap the creating event's
     // originator to the parent's lineage so a child can never carry standing above its parent.
@@ -141,7 +145,7 @@ export class TaskRepo {
         owner, parent_task_id, blocked_by_task_id, priority, due_at, tags,
         waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by, originator
       )
-      VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, '{}'::jsonb,
+      VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, $17::jsonb,
               $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
       RETURNING ${TASK_COLUMNS}
     `;
@@ -162,6 +166,7 @@ export class TaskRepo {
       sourceAgentId ?? null,
       resolvedCreatedBy,
       originatorJson,
+      errorBudgetJson,
     ];
 
     let row: DbTaskRow;
@@ -185,23 +190,23 @@ export class TaskRepo {
             owner, parent_task_id, blocked_by_task_id, priority, due_at, tags,
             waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by, originator
           )
-          VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, '{}'::jsonb,
+          VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, $17::jsonb,
                   $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
           RETURNING ${TASK_COLUMNS}
         ),
         _wake_job AS (
           INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
-          SELECT $17, $18, '{"type":"task-wake"}'::jsonb, 'pending', $18, $19, $20, new_task.id, new_task.originator
+          SELECT $18, $19, '{"type":"task-wake"}'::jsonb, 'pending', $19, $20, $21, new_task.id, new_task.originator
           FROM new_task
         )
         SELECT * FROM new_task
       `;
       const { rows } = await this.pool.query(cteSql, [
         ...taskParams,
-        agentId,           // $17 — scheduled_jobs.agent_id
-        wakeAt,            // $18 — run_at / next_run_at
-        resolvedCreatedBy, // $19 — created_by
-        this.timezone,     // $20 — timezone
+        agentId,           // $18 — scheduled_jobs.agent_id
+        wakeAt,            // $19 — run_at / next_run_at
+        resolvedCreatedBy, // $20 — created_by
+        this.timezone,     // $21 — timezone
       ]);
       row = rows[0] as DbTaskRow | undefined
         ?? (() => { throw new Error('task-repo: createTask CTE returned no row'); })();

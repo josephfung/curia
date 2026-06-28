@@ -56,6 +56,8 @@ export interface JobRow {
   agentTaskId: string | null;
   intentAnchor: string | null;
   progress: Record<string, unknown> | null;
+  taskErrorBudget: Record<string, unknown> | null;
+  taskTags: string[] | null;
   /** Human-readable task title — included in the content bundle so receiving agents have context. */
   taskTitle: string | null;
   runStartedAt: string | null;
@@ -93,6 +95,8 @@ interface DbJobRow {
   agent_task_id: string | null;
   intent_anchor: string | null;
   progress: Record<string, unknown> | null;
+  task_error_budget: Record<string, unknown> | null;
+  task_tags: string[] | null;
   task_title: string | null;
   run_started_at: string | null;          // set when job enters 'running'; cleared on completion
   expected_duration_seconds: number | null; // per-job timeout hint; NULL → system default (600s)
@@ -325,6 +329,8 @@ export class SchedulerService {
              t.id AS agent_task_id,
              t.intent_anchor,
              t.progress,
+             t.error_budget AS task_error_budget,
+             t.tags AS task_tags,
              t.title AS task_title
         FROM scheduled_jobs sj
         LEFT JOIN tasks t ON sj.task_id = t.id
@@ -363,6 +369,8 @@ export class SchedulerService {
              t.id AS agent_task_id,
              t.intent_anchor,
              t.progress,
+             t.error_budget AS task_error_budget,
+             t.tags AS task_tags,
              t.title AS task_title
         FROM scheduled_jobs sj
         LEFT JOIN tasks t ON sj.task_id = t.id
@@ -1127,6 +1135,8 @@ function mapJobRow(row: DbJobRow): JobRow {
     agentTaskId: row.agent_task_id,
     intentAnchor: row.intent_anchor ?? null,
     progress: row.progress,
+    taskErrorBudget: row.task_error_budget ?? null,
+    taskTags: row.task_tags ?? null,
     taskTitle: row.task_title ?? null,
     runStartedAt: row.run_started_at,
     expectedDurationSeconds: row.expected_duration_seconds,

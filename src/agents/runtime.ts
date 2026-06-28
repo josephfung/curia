@@ -20,6 +20,16 @@ import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
 import { formatTurnBudgetBlock } from './turn-budget.js';
 import type { OfficeIdentityService } from '../identity/service.js';
+import {
+  buildCheckpointBudgetNudgeMessage,
+  buildResumableCheckpointResumeBlock,
+  buildResumableTaskGuidanceBlock,
+  CHECKPOINT_SKILL_NAME,
+  isResumableTask,
+  resolveBoundTaskContext,
+  shouldSendCheckpointBudgetNudge,
+} from './resumable-task.js';
+import { readResumableBlock } from '../db/resumable-progress.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -244,7 +254,8 @@ export class AgentRuntime {
 
     // Manifest-only workspace injection at the message tail — keeps document bodies out
     // of the cached system prefix (#1209). Best-effort: a missing repo or parse failure
-    // must not abort the task.
+    // must not abort the task. Parse originalContent only — never the post-append string.
+    let workspaceManifestInjected = false;
     if (this.config.documentWorkspaceEnabled && this.config.workingDocsRepo) {
       try {
         const prefix = resolveWorkspacePrefixFromTaskContent(originalContent);
@@ -252,6 +263,7 @@ export class AgentRuntime {
           const documents = await this.config.workingDocsRepo.listByPrefix(prefix);
           const manifest = buildIndexProjection(prefix, documents);
           promptContent = `${promptContent}\n\n${formatWorkspaceManifestBlock(prefix, manifest)}`;
+          workspaceManifestInjected = true;
         }
       } catch (err) {
         logger.warn({ err, agentId }, 'Document workspace manifest injection failed — proceeding without manifest');
@@ -261,7 +273,7 @@ export class AgentRuntime {
     // Per-task mutable working copy of the tool list so discovered skills can be
     // appended mid-turn without mutating the shared startup list. Concurrent tasks
     // each get their own copy and never see each other's expansions.
-    const workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
+    let workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
 
     // Build the fixed preamble — constraints first, most salient. Identity then
     // security are PREPENDED to the body (not substituted in-place), so the YAML
@@ -398,6 +410,42 @@ export class AgentRuntime {
     // Injected for ALL agents, same as the date/time and contact details blocks.
     // Must come before the intent anchor so the anchor stays close to the end.
     effectiveSystemPrompt += '\n\n' + formatTurnBudgetBlock(budget.maxTurns);
+
+    // Resumable-task harness (#1173): fixed-slot guidance + checkpoint resume for
+    // iterate leaves. Injected per-turn when the bound task is resumable — not in
+    // agent YAML. Composes with document-workspace tail manifest injection (#1209).
+    const boundTaskCtx = resolveBoundTaskContext(
+      taskEvent.payload.metadata as Record<string, unknown> | undefined,
+      originalContent,
+      taskEvent.payload.channelId,
+    );
+    const resumableActive = boundTaskCtx !== null && isResumableTask(boundTaskCtx);
+    if (resumableActive && boundTaskCtx) {
+      effectiveSystemPrompt += '\n\n' + buildResumableTaskGuidanceBlock({
+        workspaceManifestPath: boundTaskCtx.workspaceManifestPath,
+        workspaceManifestInjected,
+      });
+      const existingCheckpoint = readResumableBlock(boundTaskCtx.progress ?? {});
+      if (existingCheckpoint) {
+        effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint);
+      }
+    }
+
+    // Auto-pin checkpoint for resumable tasks (per-turn, like dynamic skill discovery).
+    if (resumableActive && executionLayer) {
+      if (!workingToolDefs) {
+        workingToolDefs = [];
+      }
+      const hasCheckpoint = workingToolDefs.some(t => t.name === CHECKPOINT_SKILL_NAME);
+      if (!hasCheckpoint) {
+        const checkpointDefs = executionLayer.getToolDefinitions([CHECKPOINT_SKILL_NAME]);
+        if (checkpointDefs.length > 0) {
+          workingToolDefs.push(...checkpointDefs);
+        }
+      }
+    }
+
+    let checkpointBudgetNudgeSent = false;
 
     // Append intent anchor — present only for persistent scheduler tasks that have a
     // linked agent_task record. Injected near the end so it sits close to the conversation
@@ -708,6 +756,20 @@ export class AgentRuntime {
     messages.push(...budgetedHistory);
     messages.push({ role: 'user', content: promptContent });
 
+    const maybeAppendCheckpointBudgetNudge = (): void => {
+      if (!resumableActive || checkpointBudgetNudgeSent) return;
+      if (!shouldSendCheckpointBudgetNudge(budget.turnsUsed, budget.maxTurns, checkpointBudgetNudgeSent)) {
+        return;
+      }
+      const remaining = budget.maxTurns - budget.turnsUsed;
+      messages.push({
+        role: 'user',
+        content: buildCheckpointBudgetNudgeMessage(remaining, budget.maxTurns),
+      });
+      checkpointBudgetNudgeSent = true;
+      logger.info({ agentId, remaining, maxTurns: budget.maxTurns }, 'Appended resumable-task checkpoint budget nudge');
+    };
+
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
 
     // Persist the incoming user message
@@ -747,6 +809,7 @@ export class AgentRuntime {
     // Budget-driven loop: each LLM round-trip consumes one turn from the budget.
     // The loop exits when: the LLM returns text, the budget is exhausted, or
     // consecutive errors exceed the threshold.
+    maybeAppendCheckpointBudgetNudge();
     let response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent);
     if (!response) return; // chatWithRetry already published error events
 
@@ -796,6 +859,7 @@ export class AgentRuntime {
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
+      maybeAppendCheckpointBudgetNudge();
       if (budget.turnsUsed >= budget.maxTurns) {
         await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns');
         return;
@@ -1233,6 +1297,7 @@ export class AgentRuntime {
       // any new replies or closures that occurred during skill execution (#213).
       await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, injectedBullpenThreadIds);
 
+      maybeAppendCheckpointBudgetNudge();
       // Continue the loop — the full conversation history is now in messages
       response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent);
       if (!response) return; // chatWithRetry already published error events

@@ -64,6 +64,8 @@ function fakeDbRow(overrides: Record<string, unknown> = {}) {
     agent_task_id: null,
     intent_anchor: null,
     progress: null,
+    task_error_budget: null,
+    task_tags: null,
     task_title: null,
     run_started_at: null,
     expected_duration_seconds: null,
@@ -672,6 +674,36 @@ describe('Scheduler', () => {
 
       const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
       expect(taskEvent.payload.metadata).toBeUndefined();
+    });
+
+    it('threads boundTask metadata for task-bound fires (#1173)', async () => {
+      const row = fakeDbRow({
+        agent_task_id: 'task-resumable-1',
+        task_error_budget: { resumable: true },
+        task_tags: ['audit'],
+        progress: { resumable: { cursor: null, done: 5, total: 100, accumulator: [], lastSliceUnits: 5, next: 'Continue' } },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { metadata?: Record<string, unknown> } }];
+      expect(taskEvent.payload.metadata?.boundTask).toEqual({
+        taskId: 'task-resumable-1',
+        errorBudget: { resumable: true },
+        tags: ['audit'],
+        progress: {
+          resumable: {
+            cursor: null,
+            done: 5,
+            total: 100,
+            accumulator: [],
+            lastSliceUnits: 5,
+            next: 'Continue',
+          },
+        },
+      });
     });
 
     it('stamps a wakeContext for a heartbeat wake (task-wake payload) so the ladder applies (#1125)', async () => {
