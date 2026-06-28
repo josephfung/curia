@@ -375,6 +375,74 @@ export class WorkingDocsRepo {
     return rows.map(mapRow);
   }
 
+  /**
+   * Hard-delete expired `/scratch/` documents past their TTL (#1212).
+   * Non-scratch paths are never touched. TTL is derived from `updated_at` and either
+   * frontmatter `ttl_days` (scratch only) or the configured default. Returns deleted count.
+   */
+  async purgeExpiredScratch(defaultTtlDays: number): Promise<number> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows } = await client.query<{ path: string }>(
+        `SELECT path
+         FROM working_documents
+         WHERE path LIKE '/scratch/%'
+           AND archived_at IS NULL
+           AND COALESCE(
+             CASE
+               WHEN (frontmatter->>'ttl_days') ~ '^[0-9]+$' THEN (frontmatter->>'ttl_days')::int
+               ELSE NULL
+             END,
+             $1
+           ) > 0
+           AND updated_at < now() - (
+             COALESCE(
+               CASE
+                 WHEN (frontmatter->>'ttl_days') ~ '^[0-9]+$' AND (frontmatter->>'ttl_days')::int > 0
+                   THEN (frontmatter->>'ttl_days')::int
+                 ELSE NULL
+               END,
+               $1
+             ) * INTERVAL '1 day'
+           )`,
+        [defaultTtlDays],
+      );
+
+      if (rows.length === 0) {
+        await client.query('COMMIT');
+        return 0;
+      }
+
+      const paths = rows.map(r => r.path);
+      await client.query(
+        `DELETE FROM working_document_links
+         WHERE source_path = ANY($1::text[]) OR target_path = ANY($1::text[])`,
+        [paths],
+      );
+      const deleteResult = await client.query(
+        `DELETE FROM working_documents
+         WHERE path = ANY($1::text[])`,
+        [paths],
+      );
+
+      await client.query('COMMIT');
+      const deleted = deleteResult.rowCount ?? 0;
+      this.logger.info(
+        { deleted, defaultTtlDays, paths },
+        'working-docs-repo: purged expired scratch documents',
+      );
+      return deleted;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error({ err, defaultTtlDays }, 'working-docs-repo: purgeExpiredScratch failed');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async softDelete(path: string): Promise<WorkingDocRow | null> {
     const normalized = normalizeDocPath(path);
     const client = await this.pool.connect();

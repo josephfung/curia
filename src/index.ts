@@ -1540,8 +1540,24 @@ async function main(): Promise<void> {
   const scoringPass = new AutonomyScoringPass(actionLogRepo, autonomyService, scoringProvider, logger, scoringPassConfig);
   logger.info({ scoringPassConfig }, 'AutonomyScoringPass configured');
 
-  const dreamEngine = new DreamEngine(pool, bus, logger, decayConfig, scoringPass, memory);
-  logger.info({ decayConfig }, 'DreamEngine configured');
+  const dreamEngine = new DreamEngine(
+    pool,
+    bus,
+    logger,
+    decayConfig,
+    scoringPass,
+    memory,
+    workingDocsRepo,
+    yamlConfig.documentWorkspace?.scratchTtlDays ?? 7,
+  );
+  logger.info(
+    {
+      decayConfig,
+      scratchTtlDays: yamlConfig.documentWorkspace?.scratchTtlDays ?? 7,
+      scratchTtlFromConfig: yamlConfig.documentWorkspace?.scratchTtlDays !== undefined,
+    },
+    'DreamEngine configured',
+  );
 
   // Outbound context bridge — delegation-aware context registry for
   // specialist-initiated outbound. Requires pool (Postgres).

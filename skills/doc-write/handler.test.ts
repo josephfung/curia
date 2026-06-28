@@ -52,6 +52,26 @@ function makeCtx(input: Record<string, unknown>, repo?: WorkingDocsRepo): SkillC
 }
 
 describe('DocWriteHandler', () => {
+  it('returns retention_warning when ttl_days is set on a project path', async () => {
+    const repo = makeRepo({
+      read: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null),
+    });
+    const result = await new DocWriteHandler().execute(makeCtx({
+      path: '/projects/x/new.md',
+      mode: 'create',
+      type: 'note',
+      body: 'hello',
+      frontmatter: { ttl_days: 3 },
+    }, repo));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { retention_warning?: string };
+      expect(data.retention_warning).toMatch(/scratch/i);
+    }
+  });
+
   it('creates a document and appends log.md', async () => {
     const repo = makeRepo({
       read: vi.fn()

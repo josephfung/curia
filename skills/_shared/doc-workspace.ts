@@ -13,6 +13,7 @@ import {
   normalizeDirectoryPrefix,
   RESERVED_LEAF_NAMES,
   LOG_FILENAME,
+  ttlDaysFrontmatterWarning,
 } from '../../src/agents/document-workspace.js';
 import { normalizeDocPath } from '../../src/memory/okf.js';
 
@@ -201,3 +202,5 @@ export function validateWritePath(path: string, _mode: string): string | null {
   }
   return `Cannot write to reserved file ${leaf} — use doc-list for the index projection`;
 }
+
+export { ttlDaysFrontmatterWarning };

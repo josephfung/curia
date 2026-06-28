@@ -215,6 +215,10 @@ export interface YamlConfig {
       keepWindow?: number;
     };
   };
+  documentWorkspace?: {
+    /** Days of inactivity before `/scratch/` documents are hard-deleted by DreamEngine. Default: 7. */
+    scratchTtlDays?: number;
+  };
   skillOutput?: {
     /** Max character length for skill results before truncation. Default: 200_000. */
     maxLength?: number;
@@ -694,6 +698,22 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (effectiveKeepWindow >= effectiveThreshold) {
         throw new Error(
           `workingMemory.summarization.keepWindow (${effectiveKeepWindow}) must be less than threshold (${effectiveThreshold})`,
+        );
+      }
+    }
+  }
+
+  const documentWorkspace = config.documentWorkspace;
+  if (documentWorkspace !== undefined) {
+    if (documentWorkspace === null || typeof documentWorkspace !== 'object' || Array.isArray(documentWorkspace)) {
+      throw new Error('documentWorkspace must be a YAML mapping');
+    }
+
+    if (documentWorkspace.scratchTtlDays !== undefined) {
+      const scratchTtlDays = documentWorkspace.scratchTtlDays;
+      if (!Number.isInteger(scratchTtlDays) || scratchTtlDays < 1 || scratchTtlDays > 36500) {
+        throw new Error(
+          `documentWorkspace.scratchTtlDays must be a positive integer no greater than 36500, got: ${scratchTtlDays}`,
         );
       }
     }

@@ -94,6 +94,13 @@
         }
       }
     },
+    "documentWorkspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scratchTtlDays": { "type": "integer", "minimum": 1 }
+      }
+    },
     "skillOutput": {
       "type": "object",
       "additionalProperties": false,
