@@ -132,7 +132,10 @@ export function indexPathForDirectory(directoryPrefix: string): string {
 }
 
 /** Extract a `##` section body, or the full document when section is omitted. */
-export function extractSectionContent(body: string, section?: string): { content: string; section?: string } {
+export function extractSectionContent(
+  body: string,
+  section?: string,
+): { content: string; section?: string; found?: boolean } {
   if (!section || !section.trim()) {
     return { content: body };
   }
@@ -140,10 +143,17 @@ export function extractSectionContent(body: string, section?: string): { content
   const { sections } = splitSections(body);
   const match = sections.find(s => s.heading.toLowerCase() === key.toLowerCase());
   if (!match) {
-    return { content: '', section: key };
+    return { content: '', found: false };
   }
   const content = match.content.length > 0 ? `${match.content.replace(/\n$/, '')}\n` : '';
-  return { content, section: match.heading };
+  return { content, section: match.heading, found: true };
+}
+
+/** True when the path names a document leaf (e.g. ends in `.md`), not a directory prefix. */
+export function looksLikeDocumentPath(path: string): boolean {
+  const normalized = normalizeDocPath(path);
+  const leaf = normalized.split('/').pop() ?? '';
+  return leaf.includes('.');
 }
 
 export interface GrepMatch {

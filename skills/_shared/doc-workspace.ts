@@ -12,6 +12,7 @@ import {
   logPathForDocument,
   normalizeDirectoryPrefix,
   RESERVED_LEAF_NAMES,
+  LOG_FILENAME,
 } from '../../src/agents/document-workspace.js';
 import { normalizeDocPath } from '../../src/memory/okf.js';
 
@@ -66,22 +67,43 @@ export async function appendDirectoryLog(
   const logPath = logPathForDocument(documentPath);
   const iso = new Date().toISOString();
   const entry = formatLogEntry(iso, operation, summary);
-  const existing = await repo.read(logPath);
-  if (!existing) {
-    await repo.create({
-      path: logPath,
-      type: 'log',
-      body: entry,
-      conversationId: ctx.conversationId ?? undefined,
-      agentId: ctx.agentId ?? undefined,
-    });
-    return;
-  }
-  const result = await repo.append(logPath, { content: entry.trimEnd(), expectedVersion: existing.version });
-  if (!result.ok) {
+
+  try {
+    const maxAttempts = 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const existing = await repo.read(logPath);
+      if (!existing) {
+        try {
+          await repo.create({
+            path: logPath,
+            type: 'log',
+            body: entry,
+            conversationId: ctx.conversationId ?? undefined,
+            agentId: ctx.agentId ?? undefined,
+          });
+          return;
+        } catch (err) {
+          // Another writer may have created log.md between read and create — retry.
+          if (attempt === maxAttempts - 1) throw err;
+          continue;
+        }
+      }
+      const result = await repo.append(logPath, {
+        content: entry.trimEnd(),
+        expectedVersion: existing.version,
+      });
+      if (result.ok) return;
+      if (attempt === maxAttempts - 1) {
+        ctx.log.warn(
+          { path: logPath, version: existing.version },
+          'doc-write: log.md append conflict after retries — change record may be missing for this write',
+        );
+      }
+    }
+  } catch (err) {
     ctx.log.warn(
-      { path: logPath, version: existing.version },
-      'doc-write: log.md append conflict — change record may be missing for this write',
+      { err, path: logPath },
+      'doc-write: log.md append failed — document write succeeded; audit entry may be missing',
     );
   }
 }
@@ -117,7 +139,7 @@ export async function readDocument(
   }
 
   const timezone = ctx.timezone ?? 'UTC';
-  const { content, section: resolvedSection } = extractSectionContent(doc.body, section);
+  const sectionResult = extractSectionContent(doc.body, section);
   const displayTimezone = timezone === 'UTC' ? 'UTC' : formatDisplayTimezone(timezone, new Date());
   const updatedUnix = Math.floor(new Date(doc.updatedAt).getTime() / 1000);
   const data: Record<string, unknown> = {
@@ -131,9 +153,9 @@ export async function readDocument(
     displayTimezone,
   };
   if (section && section.trim()) {
-    data.section = resolvedSection ?? section.trim();
-    data.content = content;
-    data.section_found = resolvedSection !== undefined && content.length > 0;
+    data.section = sectionResult.section ?? section.trim();
+    data.content = sectionResult.content;
+    data.section_found = sectionResult.found === true;
   } else {
     data.body = doc.body;
     data.okf = ctx.workingDocs!.toOkf(doc);
@@ -170,11 +192,12 @@ export async function searchDocuments(
   };
 }
 
-export function validateWritePath(path: string, mode: string): string | null {
+export function validateWritePath(path: string, _mode: string): string | null {
   const normalized = normalizeDocPath(path);
   const leaf = normalized.split('/').pop() ?? '';
-  if (mode === 'create' && RESERVED_LEAF_NAMES.has(leaf)) {
-    return `Cannot create reserved file ${leaf} directly — use doc-list for index projection and let doc-write append log.md automatically`;
+  if (!RESERVED_LEAF_NAMES.has(leaf)) return null;
+  if (leaf === LOG_FILENAME) {
+    return `Cannot write to reserved file ${leaf} — log entries are appended automatically by doc-write`;
   }
-  return null;
+  return `Cannot write to reserved file ${leaf} — use doc-list for the index projection`;
 }

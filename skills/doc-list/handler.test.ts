@@ -19,6 +19,12 @@ function makeCtx(docs: WorkingDocRow[], input: Record<string, unknown> = { path:
 }
 
 describe('DocListHandler', () => {
+  it('rejects document file paths', async () => {
+    const result = await new DocListHandler().execute(makeCtx([], { path: '/projects/x/brief.md' }));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/directory prefix/i);
+  });
+
   it('returns index projection for direct children', async () => {
     const docs: WorkingDocRow[] = [
       {

@@ -95,9 +95,24 @@ describe('extractSectionContent', () => {
   });
 
   it('returns a matching section body', () => {
-    const { content, section } = extractSectionContent('## Alpha\n\none\n\n## Beta\n\ntwo', 'beta');
-    expect(section).toBe('Beta');
-    expect(content.trim()).toBe('two');
+    const result = extractSectionContent('## Alpha\n\none\n\n## Beta\n\ntwo', 'beta');
+    expect(result.section).toBe('Beta');
+    expect(result.found).toBe(true);
+    expect(result.content.trim()).toBe('two');
+  });
+
+  it('marks missing sections with found:false and no section name', () => {
+    const result = extractSectionContent('## Alpha\n\none', 'missing');
+    expect(result.found).toBe(false);
+    expect(result.section).toBeUndefined();
+    expect(result.content).toBe('');
+  });
+
+  it('marks empty sections as found with empty content', () => {
+    const result = extractSectionContent('## Empty\n\n## Next\n\nbody', 'Empty');
+    expect(result.found).toBe(true);
+    expect(result.section).toBe('Empty');
+    expect(result.content).toBe('');
   });
 });
 

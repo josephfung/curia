@@ -85,4 +85,20 @@ describe('DocReadHandler', () => {
       expect(data.section_found).toBe(true);
     }
   });
+
+  it('returns section_found:true for an existing empty section', async () => {
+    const repo = makeRepo({
+      read: vi.fn().mockResolvedValue(makeDoc({ body: '## Goal\n\n## Notes\n\nfilled\n' })),
+    });
+    const result = await new DocReadHandler().execute(makeCtx({
+      path: '/projects/x/brief.md',
+      section: 'Goal',
+    }, repo));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { section_found?: boolean; content?: string };
+      expect(data.section_found).toBe(true);
+      expect(data.content).toBe('');
+    }
+  });
 });

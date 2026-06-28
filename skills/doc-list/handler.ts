@@ -6,6 +6,7 @@ import {
   listDirectoryProjection,
   requireWorkingDocs,
 } from '../_shared/doc-workspace.js';
+import { looksLikeDocumentPath } from '../../src/agents/document-workspace.js';
 
 export class DocListHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -13,6 +14,12 @@ export class DocListHandler implements SkillHandler {
 
     if (!path || typeof path !== 'string' || !path.trim()) {
       return { success: false, error: 'Missing required input: path (directory prefix string)' };
+    }
+    if (looksLikeDocumentPath(path)) {
+      return {
+        success: false,
+        error: 'path must be a directory prefix (e.g. /projects/x/), not a document file path — use doc-read for documents',
+      };
     }
 
     const guard = requireWorkingDocs(ctx);

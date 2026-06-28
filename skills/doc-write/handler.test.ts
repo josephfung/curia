@@ -83,6 +83,41 @@ describe('DocWriteHandler', () => {
     if (!result.success) expect(result.error).toMatch(/reserved/i);
   });
 
+  it('rejects append to reserved log.md', async () => {
+    const result = await new DocWriteHandler().execute(makeCtx({
+      path: '/projects/x/log.md',
+      mode: 'append',
+      content: 'tamper',
+      expected_version: 1,
+    }));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/reserved/i);
+  });
+
+  it('succeeds when log append fails after the document write', async () => {
+    const repo = makeRepo({
+      read: vi.fn().mockImplementation(async (path: string) => {
+        if (path.endsWith('/new.md') || path.endsWith('/log.md')) return null;
+        return null;
+      }),
+      create: vi.fn().mockImplementation(async (params: { path: string }) => {
+        if (params.path.endsWith('/log.md')) throw new Error('log create failed');
+        return makeDoc({ path: '/projects/x/new.md', version: 1, body: 'hello' });
+      }),
+    });
+    const result = await new DocWriteHandler().execute(makeCtx({
+      path: '/projects/x/new.md',
+      mode: 'create',
+      type: 'note',
+      body: 'hello',
+    }, repo));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { action?: string };
+      expect(data.action).toBe('created');
+    }
+  });
+
   it('returns conflict data on version mismatch', async () => {
     const repo = makeRepo({
       read: vi.fn().mockResolvedValue(makeDoc()),
