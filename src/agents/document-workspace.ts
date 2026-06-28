@@ -2,6 +2,7 @@ import type { AgentYamlConfig } from './loader.js';
 import type { WorkingDocRow } from '../db/working-docs-repo.js';
 import {
   docDirectory,
+  markdownFenceFor,
   normalizeDocPath,
   splitSections,
 } from '../memory/okf.js';
@@ -266,14 +267,16 @@ export function formatAccumulatorResumeBlock(
 ): string {
   const sectionName = pointer.section ?? resolvedSection;
   const sectionClause = sectionName ? ` (section \`${sectionName}\`)` : '';
+  const trimmed = content.trimEnd();
+  const fence = markdownFenceFor(trimmed);
   return [
     '## Resumable Accumulator',
     '',
     `Document \`${pointer.path}\`${sectionClause} — checkpoint spill from your last run:`,
     '',
-    '```markdown',
-    content.trimEnd(),
-    '```',
+    `${fence}markdown`,
+    trimmed,
+    fence,
   ].join('\n');
 }
 

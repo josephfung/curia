@@ -248,3 +248,10 @@ export function editSectionBody(
   sections[idx] = { heading: existing.heading, content: updatedContent };
   return joinSections(preamble, sections);
 }
+
+/** Build a backtick fence long enough to wrap content that may contain nested fences. */
+export function markdownFenceFor(content: string, minTicks = 3): string {
+  const runs = content.match(/`+/g) ?? [];
+  const longest = runs.length > 0 ? Math.max(...runs.map(run => run.length)) : 0;
+  return '`'.repeat(Math.max(minTicks, longest + 1));
+}

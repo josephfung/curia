@@ -52,6 +52,13 @@ describe('accumulatorDocPath / formatAccumulatorDocumentBody', () => {
     expect(body).toContain('```json');
     expect(body).toContain('"a"');
   });
+
+  it('uses a longer fence when serialized JSON contains backticks', () => {
+    const body = formatAccumulatorDocumentBody(['```']);
+    expect(body).toContain('````json');
+    expect(body).toContain('````\n');
+    expect(body).not.toMatch(/\n```\n\[/);
+  });
 });
 
 describe('spillInlineAccumulator', () => {
@@ -91,6 +98,25 @@ describe('spillInlineAccumulator', () => {
       expectedVersion: 2,
       taskId: 'root',
     }));
+  });
+
+  it('retries as update when concurrent writers race on first create', async () => {
+    const existing = makeDoc({ version: 1 });
+    const read = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(existing);
+    const create = vi.fn(async () => { throw new Error('duplicate key'); });
+    const update = vi.fn(async () => ({ ok: true as const, document: makeDoc({ version: 2 }) }));
+    const repo = { create, read, update } as unknown as WorkingDocsRepo;
+
+    const pointer = await spillInlineAccumulator(repo, {
+      rootTaskId: 'root',
+      inlineValue: ['did:plc:abc'],
+    });
+
+    expect(pointer.path).toBe('/projects/root/accumulator.md');
+    expect(create).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledOnce();
   });
 });
 

@@ -275,7 +275,11 @@ export class AgentRuntime {
           promptContent = `${promptContent}\n\n${formatWorkspaceManifestBlock(prefix, manifest)}`;
           workspaceManifestInjected = true;
         }
+      } catch (err) {
+        logger.warn({ err, agentId }, 'Document workspace manifest injection failed — proceeding without manifest');
+      }
 
+      try {
         const pointer = documentPointerFromTaskContent(originalContent);
         if (pointer) {
           const doc = await this.config.workingDocsRepo.read(pointer.path);
@@ -292,7 +296,10 @@ export class AgentRuntime {
           }
         }
       } catch (err) {
-        logger.warn({ err, agentId }, 'Document workspace manifest injection failed — proceeding without manifest');
+        logger.warn(
+          { err, agentId },
+          'Resumable accumulator document injection failed — proceeding without spilled accumulator content',
+        );
       }
     }
 

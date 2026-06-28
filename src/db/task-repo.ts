@@ -260,11 +260,11 @@ export class TaskRepo {
     const seen = new Set<string>();
 
     while (currentId) {
-      if (seen.has(currentId)) break;
+      if (seen.has(currentId)) return null;
       seen.add(currentId);
-      rootId = currentId;
       const task = await this.getTask(currentId);
-      if (!task) return rootId;
+      if (!task) return null;
+      rootId = task.id;
       currentId = task.parentTaskId;
     }
 
@@ -611,6 +611,9 @@ export class TaskRepo {
     const current = await this.getTask(taskId);
     if (!current) {
       return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
+    }
+    if (TERMINAL_STATUSES.has(current.status)) {
+      return { ok: false, code: 'invalid_block', message: `task ${taskId} is in a terminal state` };
     }
 
     let prepared = prepareResumableBlock(input);

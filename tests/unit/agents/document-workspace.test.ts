@@ -203,4 +203,13 @@ describe('parseTaskWakePayload / resume helpers (#1210)', () => {
     expect(block).toContain('Resumable Accumulator');
     expect(block).toContain('`/projects/x/accumulator.md`');
   });
+
+  it('uses a longer fence when spilled content already contains fences', () => {
+    const block = formatAccumulatorResumeBlock(
+      { kind: 'document', path: '/projects/x/accumulator.md' },
+      '```markdown\nnested\n```',
+    );
+    expect(block).toContain('````markdown');
+    expect(block.trimEnd()).toMatch(/````$/);
+  });
 });

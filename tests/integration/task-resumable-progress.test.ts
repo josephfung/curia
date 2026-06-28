@@ -27,13 +27,27 @@ const logger = pino({ level: 'silent' });
 const noopBus = { publish: async () => {}, subscribe: () => {} } as unknown as EventBus;
 
 async function cleanup(pool: pg.Pool): Promise<void> {
+  const titleLike = `${PREFIX}%`;
   await pool.query(
     `DELETE FROM scheduled_jobs WHERE task_id IN (SELECT id FROM tasks WHERE title LIKE $1)`,
-    [`${PREFIX}%`],
+    [titleLike],
   );
-  await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${PREFIX}%`]);
-  await pool.query('DELETE FROM working_document_links');
-  await pool.query(`DELETE FROM working_documents WHERE path LIKE '/projects/%'`);
+  await pool.query(
+    `DELETE FROM working_document_links
+      WHERE source_path IN (
+        SELECT wd.path
+        FROM working_documents wd
+        INNER JOIN tasks t ON t.id = wd.task_id
+        WHERE t.title LIKE $1
+      )`,
+    [titleLike],
+  );
+  await pool.query(
+    `DELETE FROM working_documents
+      WHERE task_id IN (SELECT id FROM tasks WHERE title LIKE $1)`,
+    [titleLike],
+  );
+  await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [titleLike]);
 }
 
 describeIf('TaskRepo resumable progress (#1172, #1210)', () => {
