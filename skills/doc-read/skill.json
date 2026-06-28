@@ -1,0 +1,30 @@
+{
+  "name": "doc-read",
+  "description": "Read a document from the OKF document workspace by path. Optionally pass `section` to read only a `##` heading's body — keeps per-burst context cost down. Returns full OKF markdown when no section is requested; returns `content` + `section_found` when a section is requested. Documents not found return `found: false`.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "path": "string (absolute document path, e.g. '/projects/audit/brief.md')",
+    "section": "string? (optional `##` section heading — case-insensitive match)"
+  },
+  "outputs": {
+    "found": "boolean",
+    "path": "string",
+    "type": "string? (OKF frontmatter type when found)",
+    "frontmatter": "object? (parsed frontmatter when found)",
+    "body": "string? (full markdown body when no section requested)",
+    "okf": "string? (serialized OKF document when no section requested)",
+    "section": "string? (resolved section heading when section input provided)",
+    "content": "string? (section body when section input provided)",
+    "section_found": "boolean? (false when the section heading does not exist)",
+    "version": "number?",
+    "section_versions": "object?",
+    "updated_at": "string?",
+    "displayTimezone": "string?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["workingDocs"]
+}
