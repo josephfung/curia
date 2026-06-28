@@ -108,6 +108,41 @@ describe('CheckpointHandler', () => {
     );
   });
 
+  it('omits user-facing timestamps when timezone is unavailable', async () => {
+    const block = {
+      cursor: null,
+      done: 1,
+      total: 10,
+      accumulator: [],
+      lastSliceUnits: 1,
+      next: 'Continue',
+      checkpointedAt: '2026-06-28T12:00:00.000Z',
+    };
+    const taskRepo = {
+      getTask: vi.fn().mockResolvedValue(makeTaskRow()),
+      setResumableBlock: vi.fn().mockResolvedValue({ task: makeTaskRow(), block }),
+    } as unknown as TaskRepo;
+
+    const handler = new CheckpointHandler();
+    const result = await handler.execute(makeCtx({
+      input: {
+        task_id: VALID_UUID,
+        done: 1,
+        total: 10,
+        last_slice_units: 1,
+        next: 'Continue',
+      },
+      timezone: undefined,
+      taskRepo,
+    }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty('checkpointed_at');
+      expect(result.data).not.toHaveProperty('displayTimezone');
+    }
+  });
+
   it('surfaces inline accumulator overflow', async () => {
     const taskRepo = {
       getTask: vi.fn().mockResolvedValue(makeTaskRow()),

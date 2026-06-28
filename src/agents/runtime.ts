@@ -273,7 +273,7 @@ export class AgentRuntime {
     // Per-task mutable working copy of the tool list so discovered skills can be
     // appended mid-turn without mutating the shared startup list. Concurrent tasks
     // each get their own copy and never see each other's expansions.
-    const workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
+    let workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
 
     // Build the fixed preamble — constraints first, most salient. Identity then
     // security are PREPENDED to the body (not substituted in-place), so the YAML
@@ -432,7 +432,10 @@ export class AgentRuntime {
     }
 
     // Auto-pin checkpoint for resumable tasks (per-turn, like dynamic skill discovery).
-    if (resumableActive && workingToolDefs && executionLayer) {
+    if (resumableActive && executionLayer) {
+      if (!workingToolDefs) {
+        workingToolDefs = [];
+      }
       const hasCheckpoint = workingToolDefs.some(t => t.name === CHECKPOINT_SKILL_NAME);
       if (!hasCheckpoint) {
         const checkpointDefs = executionLayer.getToolDefinitions([CHECKPOINT_SKILL_NAME]);

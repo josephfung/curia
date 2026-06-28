@@ -124,6 +124,9 @@ export class CheckpointHandler implements SkillHandler {
       const { block } = result as { task: unknown; block: { checkpointedAt?: string } };
       const tz = ctx.timezone;
       const checkpointedAt = block.checkpointedAt ?? new Date().toISOString();
+      const checkpointedAtDisplay = tz
+        ? toLocalIso(Math.floor(new Date(checkpointedAt).getTime() / 1000), tz)
+        : null;
 
       return {
         success: true,
@@ -131,8 +134,8 @@ export class CheckpointHandler implements SkillHandler {
           task_id: taskId,
           done: input.done,
           total: input.total,
-          checkpointed_at: toLocalIso(Math.floor(new Date(checkpointedAt).getTime() / 1000), tz) ?? checkpointedAt,
-          displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : 'UTC',
+          ...(checkpointedAtDisplay != null ? { checkpointed_at: checkpointedAtDisplay } : {}),
+          ...(tz ? { displayTimezone: formatDisplayTimezone(tz, new Date()) } : {}),
         },
       };
     } catch (err) {

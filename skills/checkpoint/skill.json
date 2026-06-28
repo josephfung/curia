@@ -1,7 +1,7 @@
 {
   "name": "checkpoint",
   "description": "Persist resumable progress for a long-running task. Writes the typed progress.resumable block (cursor, done/total, accumulator, last_slice_units, next). Only available on tasks marked resumable. Use periodically and before running low on turn budget.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -9,7 +9,7 @@
     "cursor": "string?",
     "done": "number",
     "total": "number",
-    "accumulator": "object?",
+    "accumulator": "object[]? (optional inline slice results — defaults to [] when omitted; after spill use { kind: document, path, section? } object instead)",
     "last_slice_units": "number",
     "next": "string"
   },
@@ -17,8 +17,8 @@
     "task_id": "string",
     "done": "number",
     "total": "number",
-    "checkpointed_at": "string",
-    "displayTimezone": "string"
+    "checkpointed_at": "string?",
+    "displayTimezone": "string?"
   },
   "permissions": [],
   "secrets": [],
