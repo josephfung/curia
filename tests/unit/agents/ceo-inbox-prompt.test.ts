@@ -21,8 +21,17 @@ function loadCeoInboxPrompt(): string {
 // section (the second resume mode). Note: "Branch B" appears earlier in the
 // intro text ("do not fall through to Branch B") so it cannot be used as the
 // delimiter here.
+function extractResumePreamble(prompt: string): string {
+  const start = prompt.indexOf('**Resume mode**');
+  const branchAStart = prompt.indexOf('**Branch A — Calendar consult reply');
+  if (start === -1) throw new Error('Resume mode section not found');
+  if (branchAStart === -1 || branchAStart <= start)
+    throw new Error('Branch A header not found after Resume mode');
+  return prompt.slice(start, branchAStart);
+}
+
 function extractBranchASection(prompt: string): string {
-  const branchAStart = prompt.indexOf('Branch A');
+  const branchAStart = prompt.indexOf('**Branch A — Calendar consult reply');
   // "**Scheduled-wake resume" marks the boundary between Branch A and Branch B.
   const scheduledWakeStart = prompt.indexOf('**Scheduled-wake resume');
   if (branchAStart === -1) throw new Error('Branch A section not found in prompt');
@@ -81,6 +90,7 @@ describe('ceo-inbox consult-timeout self-healing', () => {
     expect(blindDraftPos).toBeGreaterThan(getThreadPos);
     expect(scheduledWake).toContain('CONSULT REPLY');
     expect(scheduledWake).toContain('run Branch A');
+    expect(scheduledWake).toContain('draft-existence check');
   });
 
   it('cancels consult-timeout tasks when Branch A handles a CONSULT REPLY', () => {
@@ -128,6 +138,42 @@ describe('ceo-inbox consult-timeout self-healing', () => {
   });
 });
 
+describe('ceo-inbox closed bullpen wake routing (#1256)', () => {
+  it('routes threadClosed wakes to get_thread before the Branch A content gate', () => {
+    const prompt = loadCeoInboxPrompt();
+    const preamble = extractResumePreamble(prompt);
+    const branchA = extractBranchASection(prompt);
+
+    expect(preamble).toContain('Closed bullpen thread wake');
+    expect(preamble).toContain('threadClosed: true');
+    expect(preamble).toContain('get_thread');
+    expect(preamble).toMatch(/Branch A[\s\n]+sub-steps/);
+
+    const closedGetThreadPos = posIn(preamble, 'get_thread');
+    const branchAContentGatePos = posIn(
+      branchA,
+      'If the bullpen message body visible in injected context is a CONSULT REPLY',
+    );
+    expect(closedGetThreadPos).toBeGreaterThan(-1);
+    expect(branchAContentGatePos).toBeGreaterThan(-1);
+    // Closed-path fetch is in the preamble, which precedes the open-thread gate.
+    expect(preamble.length).toBeLessThan(
+      prompt.indexOf(
+        'If the bullpen message body visible in injected context is a CONSULT REPLY',
+      ),
+    );
+  });
+
+  it('closed wake path enters full Branch A protocol (not a shortcut)', () => {
+    const prompt = loadCeoInboxPrompt();
+    const preamble = extractResumePreamble(prompt);
+    expect(preamble).toContain('verbatim slots');
+    expect(preamble).toContain('date-resolve');
+    expect(preamble).toContain('no "pending your calendar" qualifier');
+    expect(preamble).toContain('consult-timeout cancellation');
+  });
+});
+
 describe('ceo-inbox Branch A prompt — memory-query contract', () => {
   it('loads the full bullpen thread via get_thread before acting', () => {
     const prompt = loadCeoInboxPrompt();
@@ -136,8 +182,7 @@ describe('ceo-inbox Branch A prompt — memory-query contract', () => {
     const readEmailPos = posIn(branchA, 'ceo-inbox-read');
     expect(getThreadPos).toBeGreaterThan(-1);
     expect(readEmailPos).toBeGreaterThan(getThreadPos);
-    expect(branchA).toContain('threadClosed');
-    expect(branchA).toContain('do not reply in-thread');
+    expect(branchA).toContain('closed wake path above');
   });
 
   it('Branch A section contains a memory-query call', () => {
