@@ -32,6 +32,10 @@ import {
   shouldSendCheckpointBudgetNudge,
   type BoundTaskContext,
 } from './resumable-task.js';
+import {
+  applyPlanHarness,
+  shouldOfferPlanSkill,
+} from './planned-task.js';
 import { readResumableBlock, type ResumableProgressBlock } from '../db/resumable-progress.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
@@ -465,6 +469,18 @@ export class AgentRuntime {
       if (existingCheckpoint) {
         effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint);
       }
+    }
+
+    const planActive = boundTaskCtx !== null && shouldOfferPlanSkill(boundTaskCtx);
+    if (planActive && boundTaskCtx) {
+      const planHarness = applyPlanHarness({
+        boundTaskCtx,
+        workingToolDefs,
+        getToolDefinitions: (names) => executionLayer?.getToolDefinitions(names) ?? [],
+        effectiveSystemPrompt,
+      });
+      effectiveSystemPrompt = planHarness.effectiveSystemPrompt;
+      workingToolDefs = planHarness.workingToolDefs ?? undefined;
     }
 
     // Auto-pin checkpoint for resumable tasks (per-turn, like dynamic skill discovery).
