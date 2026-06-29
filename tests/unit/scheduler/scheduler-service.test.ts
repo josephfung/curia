@@ -124,7 +124,7 @@ describe('SchedulerService', () => {
         taskPayload: { skill: 'report' },
         createdBy: 'system',
         intentAnchor: 'weekly-report',
-        errorBudget: { maxRetries: 5 },
+        errorBudget: { resumable: true, max_iterations: 50 },
       };
       const result = await svc.createJob(params);
 
@@ -138,6 +138,36 @@ describe('SchedulerService', () => {
       expect(clientCalls[2]).toContain('INSERT INTO tasks');
       expect(clientCalls[3]).toBe('COMMIT');
       expect(pool._client.release).toHaveBeenCalledOnce();
+    });
+
+    it('rejects per-invocation error_budget keys on persistent tasks (#883)', async () => {
+      const params: CreateJobParams = {
+        agentId: 'agent-3',
+        cronExpr: '0 */6 * * *',
+        taskPayload: { skill: 'report' },
+        createdBy: 'system',
+        intentAnchor: 'weekly-report',
+        errorBudget: { maxTurns: 30 },
+      };
+
+      await expect(svc.createJob(params)).rejects.toThrow(/not supported on tasks/);
+      expect(pool.connect).not.toHaveBeenCalled();
+    });
+
+    it('rejects null and array errorBudget values (#883)', async () => {
+      const base: CreateJobParams = {
+        agentId: 'agent-3',
+        cronExpr: '0 */6 * * *',
+        taskPayload: { skill: 'report' },
+        createdBy: 'system',
+        intentAnchor: 'weekly-report',
+      };
+
+      await expect(svc.createJob({ ...base, errorBudget: null as unknown as Record<string, unknown> }))
+        .rejects.toThrow(/must be an object/);
+      await expect(svc.createJob({ ...base, errorBudget: [] as unknown as Record<string, unknown> }))
+        .rejects.toThrow(/must be an object/);
+      expect(pool.connect).not.toHaveBeenCalled();
     });
 
     it('rolls back when the task CTE throws — no orphaned scheduled_jobs row', async () => {

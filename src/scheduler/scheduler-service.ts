@@ -6,6 +6,7 @@ import type { Logger } from '../logger.js';
 import { createScheduleCreated } from '../bus/events.js';
 import type { TaskOriginator } from '../contacts/types.js';
 import { makeSystemOriginator } from '../contacts/principal.js';
+import { validateTaskErrorBudget } from '../tasks/task-error-budget.js';
 
 // -- Public types --
 
@@ -166,6 +167,12 @@ export class SchedulerService {
 
   async createJob(params: CreateJobParams): Promise<CreateJobResult> {
     const { agentId, cronExpr, runAt, taskPayload, createdBy, intentAnchor, errorBudget } = params;
+    if (errorBudget !== undefined) {
+      const budgetError = validateTaskErrorBudget(errorBudget);
+      if (budgetError) {
+        throw new Error(budgetError);
+      }
+    }
     // Per-job timezone: use caller's override, fall back to service default.
     // Validate LLM-supplied overrides — cron-parser accepts some invalid zone strings
     // (e.g. "UTC+99") without throwing, which would silently schedule jobs at wrong times.
