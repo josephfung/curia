@@ -47,6 +47,7 @@ describe('BullpenHandler', () => {
     const publishCall = (ctx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(publishCall[0]).toBe('agent');
     expect(publishCall[1].type).toBe('agent.discuss');
+    expect(publishCall[1].payload.threadClosed).toBeUndefined();
   });
 
   it('post: defaults mentionedAgentIds to all participants when omitted', async () => {
@@ -107,6 +108,9 @@ describe('BullpenHandler', () => {
     const data = (replyResult as { success: true; data: Record<string, unknown> }).data;
     expect(typeof data.message_id).toBe('string');
     expect(data.status).toBe('closed');
+
+    const publishCall = (openCtx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls[1]!;
+    expect(publishCall[1].payload.threadClosed).toBe(true);
 
     // Thread is actually closed: a follow-up reply must now fail.
     const followUp = makeCtx(

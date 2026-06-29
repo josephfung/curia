@@ -165,6 +165,7 @@ export class BullpenHandler implements SkillHandler {
             participants: existing.thread.participants,
             mentionedAgentIds,
             content,
+            threadClosed: closeAfter,
             // Forward the parent task's originator so BullpenDispatcher can stamp it
             // on the reply tasks it creates for each participant.
             originator: ctx.taskMetadata?.originator as TaskOriginator | undefined,

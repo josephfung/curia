@@ -66,9 +66,21 @@ describe('ceo-inbox consult-timeout self-healing', () => {
     expect(schedulingSection).toContain('consult_timeout_minutes');
     expect(schedulingSection).toContain('consult_kind=scheduling');
     expect(schedulingSection).toContain('source_message_id=<id>');
+    expect(schedulingSection).toContain('thread_id=<bullpen thread id');
     expect(scheduledWake).toContain('`consult-timeout` tag');
     expect(scheduledWake).toContain('pending your calendar');
     expect(scheduledWake).toContain('consult already resolved');
+  });
+
+  it('checks bullpen get_thread for a late CONSULT REPLY before blind-drafting', () => {
+    const prompt = loadCeoInboxPrompt();
+    const scheduledWake = extractScheduledWakeSection(prompt);
+    const getThreadPos = posIn(scheduledWake, 'get_thread');
+    const blindDraftPos = posIn(scheduledWake, 'pending your calendar');
+    expect(getThreadPos).toBeGreaterThan(-1);
+    expect(blindDraftPos).toBeGreaterThan(getThreadPos);
+    expect(scheduledWake).toContain('CONSULT REPLY');
+    expect(scheduledWake).toContain('run Branch A');
   });
 
   it('cancels consult-timeout tasks when Branch A handles a CONSULT REPLY', () => {
@@ -89,9 +101,11 @@ describe('ceo-inbox consult-timeout self-healing', () => {
   it('runs idempotent no-op before timeout fallback and checks DRAFTS folder', () => {
     const prompt = loadCeoInboxPrompt();
     const scheduledWake = extractScheduledWakeSection(prompt);
+    const getThreadPos = posIn(scheduledWake, 'get_thread');
     const noopPos = posIn(scheduledWake, 'Idempotent no-op');
     const fallbackPos = posIn(scheduledWake, 'Still parked');
-    expect(noopPos).toBeGreaterThan(-1);
+    expect(getThreadPos).toBeGreaterThan(-1);
+    expect(noopPos).toBeGreaterThan(getThreadPos);
     expect(fallbackPos).toBeGreaterThan(noopPos);
     expect(scheduledWake).toContain('ceo-inbox-list');
     expect(scheduledWake).toContain('folder: "DRAFTS"');
@@ -115,6 +129,17 @@ describe('ceo-inbox consult-timeout self-healing', () => {
 });
 
 describe('ceo-inbox Branch A prompt — memory-query contract', () => {
+  it('loads the full bullpen thread via get_thread before acting', () => {
+    const prompt = loadCeoInboxPrompt();
+    const branchA = extractBranchASection(prompt);
+    const getThreadPos = posIn(branchA, 'get_thread');
+    const readEmailPos = posIn(branchA, 'ceo-inbox-read');
+    expect(getThreadPos).toBeGreaterThan(-1);
+    expect(readEmailPos).toBeGreaterThan(getThreadPos);
+    expect(branchA).toContain('threadClosed');
+    expect(branchA).toContain('do not reply in-thread');
+  });
+
   it('Branch A section contains a memory-query call', () => {
     const prompt = loadCeoInboxPrompt();
     const branchA = extractBranchASection(prompt);
@@ -249,6 +274,7 @@ describe('ceo-inbox scheduling consult prompt — proposed-time protocol', () =>
     expect(okSection).toContain('counter-proposal');
     expect(okSection).toMatch(/new\s+alternatives/);
     expect(okSection).toContain('hold placed');
+    expect(okSection).toContain('Do NOT include any "pending your calendar"');
   });
 });
 
