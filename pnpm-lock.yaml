@@ -98,8 +98,8 @@ importers:
         specifier: ^1.1.2
         version: 1.1.2(pdf-parse@2.4.5)(react@19.2.7)
       patchright:
-        specifier: 1.61.0
-        version: 1.61.0
+        specifier: 1.61.1
+        version: 1.61.1
       pdf-parse:
         specifier: ^2.4.5
         version: 2.4.5
@@ -4219,13 +4219,13 @@ packages:
   pascal-case@3.1.2:
     resolution: {integrity: sha512-uWlGT3YSnK9x3BQJaOdcZwrnV6hPpd8jFH1/ucpiLRPh/2zCVJKS19E4GvYHvaCcACn3foXZ0cLB9Wrx1KGe5g==}
 
-  patchright-core@1.61.0:
-    resolution: {integrity: sha512-XataPFEwgufNBgIhBMDjrKVXHyrAcW19HlUc//4yBClKzrxgKgcwAGNbg0q1Dn0QEgtgxtAjKRtWsDgqCclI+A==}
+  patchright-core@1.61.1:
+    resolution: {integrity: sha512-d6Ju67DE6OzqlEX3WPvUX2SLEs6iMY1WERit//mpsrT98VHcztaUo0CBw2Lpxq25VdufVEiWEdcc0HnLwdiq6A==}
     engines: {node: '>=18'}
     hasBin: true
 
-  patchright@1.61.0:
-    resolution: {integrity: sha512-R2EYP5QnXNIDPVlrTF+vy30fg8cgwYtNhHr9WAaEX20Up19biAfKy1UqmrNiKZKim22OV4fIavfTjiXPU8CKSQ==}
+  patchright@1.61.1:
+    resolution: {integrity: sha512-kZWNZ2tunsBMTBWtARFVWaNvB739GOybTlIPLT91eyx0YERjtUjESawomwO0hnOh6jt1L3Sru0PK62ylYOfqQw==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -9612,11 +9612,11 @@ snapshots:
       no-case: 3.0.4
       tslib: 2.8.1
 
-  patchright-core@1.61.0: {}
+  patchright-core@1.61.1: {}
 
-  patchright@1.61.0:
+  patchright@1.61.1:
     dependencies:
-      patchright-core: 1.61.0
+      patchright-core: 1.61.1
     optionalDependencies:
       fsevents: 2.3.2
 
