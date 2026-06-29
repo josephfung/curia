@@ -7,7 +7,7 @@ import { EventBus } from '../../src/bus/bus.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
 import { SchedulerService } from '../../src/scheduler/scheduler-service.js';
 import { PlanFrontierSubscriber } from '../../src/agents/plan-frontier-subscriber.js';
-import { advancePlanFrontier } from '../../src/agents/plan-frontier.js';
+import { createScheduleFired } from '../../src/bus/events.js';
 import { RESUMABLE_CONTINUATION_CREATED_BY } from '../../src/agents/resumable-continuation.js';
 import { PLAN_FRONTIER_CHILD_DISPATCH_CREATED_BY } from '../../src/agents/plan-frontier.js';
 
@@ -35,9 +35,6 @@ describeIf('Plan frontier advancement (#1238)', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    bus = new EventBus(logger as never);
-    repo = new TaskRepo(pool, bus, logger as never, 'UTC');
-    schedulerService = new SchedulerService(pool, bus, logger as never, 'UTC');
   });
 
   afterAll(async () => {
@@ -47,6 +44,9 @@ describeIf('Plan frontier advancement (#1238)', () => {
 
   beforeEach(async () => {
     await cleanup(pool);
+    bus = new EventBus(logger as never);
+    repo = new TaskRepo(pool, bus, logger as never, 'UTC');
+    schedulerService = new SchedulerService(pool, bus, logger as never, 'UTC');
   });
 
   it('completing the first child wakes the parent and dispatches blocked siblings', async () => {
@@ -114,16 +114,15 @@ describeIf('Plan frontier advancement (#1238)', () => {
     expect(parentWakes.rows[0]!.created_by).toBe(RESUMABLE_CONTINUATION_CREATED_BY);
     expect(parentWakes.rows[0]!.status).toBe('pending');
 
-    const advanced = await advancePlanFrontier({
-      pool,
-      taskRepo: repo,
-      schedulerService,
-      logger: logger as never,
-      parentTaskId: parent.id,
-      eligibleAgents: new Set(['coordinator']),
-    });
-    expect(advanced?.rollup).toEqual({ done: 1, total: 3 });
-    expect(advanced?.dispatchedChildIds.sort()).toEqual([child2.id, child3.id].sort());
+    await bus.publish('system', createScheduleFired({
+      jobId: parentWakes.rows[0]!.id,
+      agentId: 'coordinator',
+      agentTaskId: parent.id,
+      parentEventId: 'test-parent-wake-1',
+    }));
+
+    const planAfterFirstWake = await repo.getPlanBlock(parent.id);
+    expect(planAfterFirstWake).toMatchObject({ done: 1, total: 3 });
 
     const childWakes = await pool.query<{ task_id: string; created_by: string }>(
       `SELECT task_id, created_by FROM scheduled_jobs
@@ -136,15 +135,12 @@ describeIf('Plan frontier advancement (#1238)', () => {
     await repo.updateTask(child2.id, { status: 'done' }, 'coordinator');
     await repo.updateTask(child3.id, { status: 'done' }, 'coordinator');
 
-    const finalAdvance = await advancePlanFrontier({
-      pool,
-      taskRepo: repo,
-      schedulerService,
-      logger: logger as never,
-      parentTaskId: parent.id,
-      eligibleAgents: new Set(['coordinator']),
-    });
-    expect(finalAdvance?.rollup).toEqual({ done: 3, total: 3 });
+    await bus.publish('system', createScheduleFired({
+      jobId: parentWakes.rows[0]!.id,
+      agentId: 'coordinator',
+      agentTaskId: parent.id,
+      parentEventId: 'test-parent-wake-2',
+    }));
 
     const plan = await repo.getPlanBlock(parent.id);
     expect(plan).toMatchObject({ done: 3, total: 3, deliverableStepId: 'step-3' });
