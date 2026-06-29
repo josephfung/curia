@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`plan`** — rows-direct goal decomposition skill writing child task rows and `progress.plan`; platform plan-altitude guidance and per-turn dynamic pin for complex bound tasks. (#1237)
+- **`progress.plan`** — typed plan block with child-step descriptors, deliverable step pointer, and "X of Y" rollup helper; round-trip persistence via `getPlanBlock` / `setPlanBlock`. (#1236)
 - **Resumable circuit breaker** — stall counter and aggregate ceilings fail stuck resumable tasks instead of looping. (#1176)
 - **Resumable executor contract** — checkpointed budget-hit pauses instead of `BUDGET_EXCEEDED`; coordinator treats `paused` as success. (#1174)
 - **Resumable self-continuation** — paused resumable tasks schedule a single near-term `scheduled_jobs` wake routed to `source_agent_id` (config: `tasks.resumableContinuationSeconds`); the hourly BacklogHeartbeat remains the backstop. (#1175)
