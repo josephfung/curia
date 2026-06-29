@@ -75,12 +75,13 @@ describeIf('TaskRepo plan progress (#1236)', () => {
     expect('task' in first).toBe(true);
     if (!('task' in first)) return;
 
-    expect(publishedEvents).toContainEqual(
-      expect.objectContaining({
-        topic: 'execution',
-        event: expect.objectContaining({ type: 'task.updated', taskId: task.id }),
-      }),
-    );
+    expect(
+      publishedEvents.some((entry) =>
+        entry.topic === 'execution'
+        && (entry.event as { type?: string }).type === 'task.updated'
+        && (entry.event as { payload?: { taskId?: string } }).payload?.taskId === task.id
+      ),
+    ).toBe(true);
 
     const reread = await repo.getPlanBlock(task.id);
     expect(reread?.deliverableStepId).toBe('assemble-plan');
