@@ -6,7 +6,7 @@
 # version and apply the "don't chase Current majors" ignore rule in
 # .github/dependabot.yml — a bare `node@sha256:…` pin would otherwise track `latest`.
 # Node 24 "Krypton" is the Active LTS (node 22 is Maintenance, node 26 is Current).
-FROM node:24-slim@sha256:c2d5ade763cacfb03fe9cb8e8af5d1be5041ff331921fa26a9b231ca3a4f780a AS build
+FROM node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS build
 
 WORKDIR /app
 
@@ -33,7 +33,7 @@ RUN pnpm --filter @curia/console run build
 # Production stage: minimal runtime image.
 # Same node:24-slim digest pin as the build stage above (see that comment for the
 # Scorecard / Dependabot rationale). Both stages must stay on the same digest.
-FROM node:24-slim@sha256:c2d5ade763cacfb03fe9cb8e8af5d1be5041ff331921fa26a9b231ca3a4f780a
+FROM node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc
 
 # curl is needed for the HEALTHCHECK command
 # Copy uv/uvx binaries from the official signed image (Astral's recommended
