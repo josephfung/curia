@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Plan frontier advancement** — child terminal resolution schedules a near-term planned-parent wake; the wake recomputes `progress.plan` rollup and dispatches newly-unblocked children (BacklogHeartbeat remains the backstop). (#1238)
 - **`plan`** — rows-direct goal decomposition skill writing child task rows and `progress.plan`; platform plan-altitude guidance and per-turn dynamic pin for complex bound tasks. (#1237)
 - **`progress.plan`** — typed plan block with child-step descriptors, deliverable step pointer, and "X of Y" rollup helper; round-trip persistence via `getPlanBlock` / `setPlanBlock`. (#1236)
 - **Resumable circuit breaker** — stall counter and aggregate ceilings fail stuck resumable tasks instead of looping. (#1176)

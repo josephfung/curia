@@ -36,6 +36,7 @@ import {
   applyPlanHarness,
   shouldOfferPlanSkill,
 } from './planned-task.js';
+import { readPlanBlock } from '../db/plan-progress.js';
 import { readResumableBlock, type ResumableProgressBlock } from '../db/resumable-progress.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
@@ -454,11 +455,26 @@ export class AgentRuntime {
     // Resumable-task harness (#1173): fixed-slot guidance + checkpoint resume for
     // iterate leaves. Injected per-turn when the bound task is resumable — not in
     // agent YAML. Composes with document-workspace tail manifest injection (#1209).
-    const boundTaskCtx = resolveBoundTaskContext(
+    let boundTaskCtx = resolveBoundTaskContext(
       taskEvent.payload.metadata as Record<string, unknown> | undefined,
       originalContent,
       taskEvent.payload.channelId,
     );
+
+    // Planned-parent scheduler wakes: frontier advancement runs on schedule.fired before
+    // this turn; reload progress so harness guidance reflects the fresh rollup (#1238).
+    if (
+      boundTaskCtx
+      && taskEvent.payload.channelId === 'scheduler'
+      && this.config.taskRepo
+      && readPlanBlock(boundTaskCtx.progress ?? {})
+    ) {
+      const fresh = await this.config.taskRepo.getTask(boundTaskCtx.taskId);
+      if (fresh) {
+        boundTaskCtx = { ...boundTaskCtx, progress: fresh.progress };
+      }
+    }
+
     const resumableActive = boundTaskCtx !== null && isResumableTask(boundTaskCtx);
     if (resumableActive && boundTaskCtx) {
       effectiveSystemPrompt += '\n\n' + buildResumableTaskGuidanceBlock({
