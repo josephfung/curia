@@ -42,7 +42,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Calendar free/busy** — `getFreeBusy` now calls the real Nylas v8 `calendars.getFreeBusy` endpoint; the previous call to a non-existent `calendars_free_busy` resource crashed every `calendar-check-conflicts` and `calendar-find-free-time` invocation. It also fails loud on a per-calendar free/busy *error* entry instead of treating that calendar as fully free (which could double-book the principal). (#1214)
 - **`ceo-inbox-update-folders`** — resolves label display names (e.g. "⏳ In Progress") to Gmail label IDs and creates missing labels before writing, so adds/removes no longer fail with "Invalid label" and "⏳ In Progress" can actually be cleared. (#1216)
 - **`ceo-inbox` scheduling consults** — a message parked for a calendar consult is no longer labeled "✍️ Drafted" before a draft exists, and the consult-timeout wake now keys off actual draft existence; parked scheduling replies get drafted instead of stranding the email as "In Progress + Drafted" with no draft. (#1215)
-- **Bullpen `close_after`** — closed-thread replies now deliver to all participants via read-and-act wakes; `ceo-inbox` routes these through full-thread load before Branch A and consult-timeout recovery. (#1256)
+- **Bullpen `close_after`** — closed-thread replies deliver to mentioned participants via read-and-act wakes; `close_after` with no mentions auto-mentions the thread opener; `ceo-inbox` loads the full thread before Branch A. (#1256)
 
 ## [0.38.0] — 2026-06-26 — "Deckard"
 

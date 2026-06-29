@@ -142,7 +142,7 @@ export class BullpenHandler implements SkillHandler {
           const rawMentioned = input['mentioned_agent_ids'];
           // Trim/filter mentions, then constrain to actual thread participants to prevent out-of-thread fan-out.
           // Default: empty (broadcast reply — no specific response expected).
-          const mentionedAgentIds: string[] = Array.isArray(rawMentioned) && rawMentioned.every(m => typeof m === 'string')
+          let mentionedAgentIds: string[] = Array.isArray(rawMentioned) && rawMentioned.every(m => typeof m === 'string')
             ? (rawMentioned as string[]).map(m => m.trim()).filter(m => m.length > 0 && existing.thread.participants.includes(m))
             : [];
 
@@ -150,6 +150,15 @@ export class BullpenHandler implements SkillHandler {
           // The message is persisted first, then the thread is closed atomically — so a
           // successful postMessage means both happened. Only an explicit `true` closes.
           const closeAfter = input['close_after'] === true;
+
+          // Closing without explicit mentions: wake the thread opener to act on the
+          // conclusion (#1256). Other participants receive FYI only via the dispatcher.
+          if (closeAfter && mentionedAgentIds.length === 0) {
+            const opener = existing.thread.creatorAgentId;
+            if (opener !== ctx.agentId && existing.thread.participants.includes(opener)) {
+              mentionedAgentIds = [opener];
+            }
+          }
 
           const message = await ctx.bullpenService.postMessage(threadId, ctx.agentId, content, mentionedAgentIds, closeAfter);
 

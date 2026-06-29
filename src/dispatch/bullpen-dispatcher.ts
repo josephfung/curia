@@ -61,17 +61,15 @@ export class BullpenDispatcher {
     const effectiveOriginator = event.payload.originator ?? threadRecord.thread.originator ?? undefined;
 
     // Create one agent.task per participant, excluding the sender.
-    // Open threads: mentioned agents get a reply-expected prompt; others get FYI.
-    // Closed threads: empty mentions broadcast the act prompt to all non-senders
-    // (consult hand-off); when mentions are present, only mentioned agents act.
+    // Mentioned agents get a reply-expected (open) or act-on-conclusion (closed) prompt;
+    // others get FYI. close_after replies with no explicit mentions auto-mention the
+    // thread opener in the bullpen handler so consult hand-offs wake the originator.
     const otherParticipants = participants.filter((id) => id !== senderAgentId);
 
     let dispatched = 0;
     for (const agentId of otherParticipants) {
       const isMentioned = mentionedAgentIds.includes(agentId);
-      const shouldAct = threadClosed
-        ? mentionedAgentIds.length === 0 || isMentioned
-        : isMentioned;
+      const shouldAct = isMentioned;
       const content = threadClosed
         ? shouldAct
           ? `Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId} — the thread is now closed. Call bullpen get_thread to read the full history, act on the conclusion (do not reply in-thread).`

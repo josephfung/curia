@@ -42,15 +42,15 @@ describe('bullpen close_after scheduling consult regression (#1256)', () => {
     dispatcher.register();
   });
 
-  it('wakes ceo-inbox when calendar closes consult with Result: ok and empty mentions', async () => {
+  it('wakes ceo-inbox when calendar closes consult with Result: ok (handler auto-mentions opener)', async () => {
     const { thread } = await bullpenService.openThread(
       'Scheduling: coffee with Alice',
       'ceo-inbox',
-      ['ceo-inbox', 'calendar'],
+      ['calendar'],
       'CONSULT REQUEST\nContext: source_message_id=msg-sched-1',
       [],
     );
-    await bullpenService.postMessage(thread.id, 'calendar', CONSULT_REPLY, [], true);
+    await bullpenService.postMessage(thread.id, 'calendar', CONSULT_REPLY, ['ceo-inbox'], true);
 
     const event = createAgentDiscuss({
       threadId: thread.id,
@@ -58,7 +58,7 @@ describe('bullpen close_after scheduling consult regression (#1256)', () => {
       topic: 'Scheduling: coffee with Alice',
       senderAgentId: 'calendar',
       participants: ['ceo-inbox', 'calendar'],
-      mentionedAgentIds: [],
+      mentionedAgentIds: ['ceo-inbox'],
       content: CONSULT_REPLY,
       threadClosed: true,
       parentEventId: 'calendar-task-1',
