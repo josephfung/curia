@@ -29,7 +29,9 @@ export const SEED_SECRET_NAMES = [
   'nylas_api_key',
   'nylas_grant_id',
   'nylas_self_email',
-  'signal_phone_number',
+  // Signal phone number is NOT seeded — it is the canonical channel.signal.phone_number key
+  // written via the console (or read from SIGNAL_PHONE_NUMBER env as back-compat), the same
+  // as signal_socket_path which was never seeded (#1140).
   // skill-scoped (resolved at call time by ctx.secret)
   'ceo_nylas_grant_id',
   'ceo_self_email',
