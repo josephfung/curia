@@ -111,6 +111,7 @@ describe('BullpenHandler', () => {
 
     const publishCall = (openCtx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls[1]!;
     expect(publishCall[1].payload.threadClosed).toBe(true);
+    expect(publishCall[1].payload.mentionedAgentIds).toEqual(['coordinator']);
 
     // Thread is actually closed: a follow-up reply must now fail.
     const followUp = makeCtx(
@@ -120,6 +121,28 @@ describe('BullpenHandler', () => {
     const followUpResult = await handler.execute(followUp);
     expect(followUpResult.success).toBe(false);
     expect((followUpResult as { success: false; error: string }).error).toMatch(/closed/);
+  });
+
+  it('reply: close_after with no mentions auto-mentions the thread opener', async () => {
+    const openCtx = makeCtx({
+      action: 'post',
+      topic: 'Consult hand-off',
+      participants: ['calendar'],
+      content: 'CONSULT REQUEST',
+      mentioned_agent_ids: ['calendar'],
+    }, { agentId: 'ceo-inbox' });
+    const openResult = await handler.execute(openCtx);
+    const threadId = ((openResult as { success: true; data: Record<string, unknown> }).data).thread_id as string;
+
+    const replyCtx = makeCtx(
+      { action: 'reply', thread_id: threadId, content: 'CONSULT REPLY\nResult: ok', close_after: true },
+      { bullpenService: openCtx.bullpenService, bus: openCtx.bus, agentId: 'calendar' },
+    );
+    await handler.execute(replyCtx);
+
+    const publishCall = (openCtx.bus!.publish as ReturnType<typeof vi.fn>).mock.calls[1]!;
+    expect(publishCall[1].payload.mentionedAgentIds).toEqual(['ceo-inbox']);
+    expect(publishCall[1].payload.threadClosed).toBe(true);
   });
 
   it('reply: close_after=false (default) leaves the thread open', async () => {

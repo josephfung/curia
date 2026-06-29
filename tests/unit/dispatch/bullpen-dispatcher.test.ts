@@ -215,9 +215,8 @@ describe('BullpenDispatcher', () => {
     expect(tasks).toHaveLength(0);
   });
 
-  it('creates agent.task for originator when thread is closed via close_after (even with empty mentions)', async () => {
-    // A close_after reply closes the thread atomically; the concluding message must
-    // still wake other participants so consult hand-offs complete. (#1256)
+  it('creates agent.task for originator when thread is closed via close_after', async () => {
+    // Handler auto-mentions the thread opener on close_after; dispatcher acts only on mentions.
     const { thread } = await bullpenService.openThread(
       'Scheduling consult', 'ceo-inbox', ['ceo-inbox', 'calendar'], 'CONSULT REQUEST', [],
     );
@@ -225,7 +224,7 @@ describe('BullpenDispatcher', () => {
     const event = createAgentDiscuss({
       threadId: thread.id, messageId: 'msg-closed', topic: 'Scheduling consult',
       senderAgentId: 'calendar', participants: ['ceo-inbox', 'calendar'],
-      mentionedAgentIds: [], content: 'CONSULT REPLY\nResult: ok', threadClosed: true,
+      mentionedAgentIds: ['ceo-inbox'], content: 'CONSULT REPLY\nResult: ok', threadClosed: true,
       parentEventId: 'task-1',
     });
     await bus._trigger('agent.discuss', event);
@@ -239,6 +238,28 @@ describe('BullpenDispatcher', () => {
     expect(tasks[0]!.payload.content).toContain('do not reply in-thread');
     expect(tasks[0]!.payload.content).not.toContain('reply using the bullpen skill');
     expect(tasks[0]!.payload.metadata?.threadClosed).toBe(true);
+  });
+
+  it('closed thread with no mentions: non-mentioned participants get FYI only', async () => {
+    const { thread } = await bullpenService.openThread(
+      'Closed FYI test', 'coordinator', ['coordinator', 'agent-b', 'agent-c'], 'Start', [],
+    );
+    await bullpenService.postMessage(thread.id, 'agent-b', 'Done', [], true);
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-closed', topic: 'Closed FYI test',
+      senderAgentId: 'agent-b', participants: ['coordinator', 'agent-b', 'agent-c'],
+      mentionedAgentIds: [], content: 'Done', threadClosed: true,
+      parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const tasks = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([_l, e]) => (e as { type: string }).type === 'agent.task')
+      .map(([_l, e]) => e as { payload: { agentId: string; content: string } });
+    expect(tasks).toHaveLength(2);
+    for (const task of tasks) {
+      expect(task.payload.content).toContain('FYI: Final message');
+      expect(task.payload.content).not.toContain('act on the conclusion');
+    }
   });
 
   it('closed thread with explicit mentions: only mentioned agents get act prompt', async () => {
