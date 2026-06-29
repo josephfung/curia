@@ -61,7 +61,10 @@ export class BullpenDispatcher {
     const effectiveOriginator = event.payload.originator ?? threadRecord.thread.originator ?? undefined;
 
     // Create one agent.task per participant, excluding the sender.
-    // Mentioned agents get a reply-expected prompt; others get an FYI.
+    // Open threads: mentioned agents get a reply-expected prompt; others get FYI.
+    // Closed threads: every non-sender gets the same "act on the conclusion" prompt —
+    // we intentionally collapse the mentioned/FYI distinction (fine for 2-party consult
+    // hand-offs, the only case today; 3+-party closed threads would also tell bystanders to act).
     const otherParticipants = participants.filter((id) => id !== senderAgentId);
 
     let dispatched = 0;
