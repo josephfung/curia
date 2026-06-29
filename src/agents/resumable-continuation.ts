@@ -37,9 +37,10 @@ export type SchedulePlanParentWakeResult =
   | { scheduled: true; jobId: string; agentId: string; runAt: Date }
   | { scheduled: false; reason: 'task_not_found' | 'not_planned_parent' | 'pending_wake_exists' };
 
-const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled']);
+const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled', 'failed']);
 
-function isPgUniqueViolation(err: unknown): boolean {
+/** True when a Postgres insert hit a unique-constraint violation (e.g. migration 067 wake dedup). */
+export function isPgUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
 }
 

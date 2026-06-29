@@ -36,7 +36,6 @@ import {
   applyPlanHarness,
   shouldOfferPlanSkill,
 } from './planned-task.js';
-import { readPlanBlock } from '../db/plan-progress.js';
 import { readResumableBlock, type ResumableProgressBlock } from '../db/resumable-progress.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
@@ -461,14 +460,9 @@ export class AgentRuntime {
       taskEvent.payload.channelId,
     );
 
-    // Planned-parent scheduler wakes: frontier advancement runs on schedule.fired before
-    // this turn; reload progress so harness guidance reflects the fresh rollup (#1238).
-    if (
-      boundTaskCtx
-      && taskEvent.payload.channelId === 'scheduler'
-      && this.config.taskRepo
-      && readPlanBlock(boundTaskCtx.progress ?? {})
-    ) {
+    // Scheduler-bound task wakes carry metadata/content progress that can be empty or stale.
+    // Reload from the task row so harness guidance (plan rollup, checkpoint resume) is fresh (#1238).
+    if (boundTaskCtx && taskEvent.payload.channelId === 'scheduler' && this.config.taskRepo) {
       const fresh = await this.config.taskRepo.getTask(boundTaskCtx.taskId);
       if (fresh) {
         boundTaskCtx = { ...boundTaskCtx, progress: fresh.progress };

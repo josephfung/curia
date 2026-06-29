@@ -105,6 +105,7 @@ describe('isPlanParentWakeEligible', () => {
   it('requires a non-terminal task with a plan block', () => {
     expect(isPlanParentWakeEligible(sampleParent())).toBe(true);
     expect(isPlanParentWakeEligible(sampleParent({ status: 'done' }))).toBe(false);
+    expect(isPlanParentWakeEligible(sampleParent({ status: 'failed' }))).toBe(false);
     expect(isPlanParentWakeEligible(sampleParent({ progress: {} }))).toBe(false);
   });
 });

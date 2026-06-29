@@ -20,6 +20,7 @@ import {
   schedulePlanParentWake,
   taskHasPendingWake,
   isPlanParentWakeEligible,
+  isPgUniqueViolation,
 } from './resumable-continuation.js';
 
 /** created_by marker on child dispatches from frontier advancement. */
@@ -136,14 +137,26 @@ async function dispatchChildWake(
   const agentId = resolveContinuationAgent(child, opts.eligibleAgents, opts.fallbackAgentId ?? 'coordinator');
   const derived = child.source === 'agent' || child.parentTaskId !== null;
 
-  const { jobId } = await opts.schedulerService.enqueueTaskWake({
-    taskId: child.id,
-    agentId,
-    runAt: new Date(),
-    createdBy: PLAN_FRONTIER_CHILD_DISPATCH_CREATED_BY,
-    originator: child.originator,
-    derived,
-  });
+  let jobId: string;
+  try {
+    ({ jobId } = await opts.schedulerService.enqueueTaskWake({
+      taskId: child.id,
+      agentId,
+      runAt: new Date(),
+      createdBy: PLAN_FRONTIER_CHILD_DISPATCH_CREATED_BY,
+      originator: child.originator,
+      derived,
+    }));
+  } catch (err) {
+    if (isPgUniqueViolation(err)) {
+      opts.logger.debug(
+        { parentTaskId: opts.parentTaskId, childTaskId: child.id },
+        'Plan frontier: child wake already pending',
+      );
+      return null;
+    }
+    throw err;
+  }
 
   opts.logger.info(
     { parentTaskId: opts.parentTaskId, childTaskId: child.id, jobId, agentId },
@@ -161,6 +174,8 @@ export async function advancePlanFrontier(
 ): Promise<AdvancePlanFrontierResult | null> {
   const parent = await opts.taskRepo.getTask(opts.parentTaskId);
   if (!parent) return null;
+
+  if (!isPlanParentWakeEligible(parent)) return null;
 
   const plan = readPlanBlock(parent.progress);
   if (!plan) return null;
