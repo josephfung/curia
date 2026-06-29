@@ -1,0 +1,28 @@
+{
+  "name": "plan",
+  "description": "Decompose a complex goal into child task steps with dependencies. Writes child rows directly (rows-direct) and persists progress.plan. Use for ~10 heterogeneous steps — not one row per item (use resumable iterate leaves for high-count homogeneous work). Re-runnable: reconciles by step id without duplicating children.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "task_id": "string?",
+    "goal": "string?",
+    "steps": "object[] (id, title, target_agent_id; optional description, blocked_by_step_id, waiting_on_contact_id, waiting_on_text, materialize=false for lazy, resumable=true for iterate leaf)",
+    "deliverable_step_id": "string? (null = default child-summary rollup)",
+    "next": "string"
+  },
+  "outputs": {
+    "task_id": "string",
+    "done": "number",
+    "total": "number",
+    "deliverable_step_id": "string?",
+    "steps": "object[]",
+    "materialized": "number",
+    "iterate_leaves": "number",
+    "lazy_steps": "number"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 60000,
+  "capabilities": ["taskRepo", "agentRegistry"]
+}
