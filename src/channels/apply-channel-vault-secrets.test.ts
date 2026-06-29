@@ -53,6 +53,21 @@ describe('applyChannelVaultSecrets', () => {
     expect(config.signalSocketPath).toBe('/run/signal/socket');
   });
 
+  it('activates Signal from a console-only entry — channel.signal.phone_number alone, no flat bootstrap, no env', async () => {
+    // baseConfig().signalPhoneNumber is undefined: there is no flat-key bootstrap value to
+    // fall back on, so this proves the console-written key alone populates config (#1140).
+    const config = baseConfig();
+    const secrets = fakeSecrets({
+      'channel.signal.phone_number': '+15550009999',
+      'channel.signal.socket_path': '/run/signal/socket',
+    });
+
+    await applyChannelVaultSecrets(config, secrets, {}, logger);
+
+    expect(config.signalPhoneNumber).toBe('+15550009999');
+    expect(config.signalSocketPath).toBe('/run/signal/socket');
+  });
+
   it('falls back to env when the vault is empty', async () => {
     const config = baseConfig();
     const secrets = fakeSecrets({});
