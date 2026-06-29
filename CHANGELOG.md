@@ -37,7 +37,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Signal phone number** — consolidated onto a single canonical vault key, `channel.signal.phone_number`; the divergent legacy flat `signal_phone_number` read is removed and an existing value is backfilled by migration. Console-only entry now activates Signal. (#1140)
+- **Signal phone number** — consolidated onto one canonical vault key (`channel.signal.phone_number`), backfilled by migration; console entry alone now activates Signal. (#1140)
 - **Outbound content filter** — Stage 2.5 escalation judge no longer calls the LLM for principal-tier recipients; `classifyDisclosure()` is fail-closed, so a transient provider failure was incorrectly blocking principal-bound emails (e.g. the daily recap) even though the policy unconditionally permits all disclosure classes for the principal. (#1225)
 - **Calendar free/busy** — `getFreeBusy` now calls the real Nylas v8 `calendars.getFreeBusy` endpoint; the previous call to a non-existent `calendars_free_busy` resource crashed every `calendar-check-conflicts` and `calendar-find-free-time` invocation. It also fails loud on a per-calendar free/busy *error* entry instead of treating that calendar as fully free (which could double-book the principal). (#1214)
 - **`ceo-inbox-update-folders`** — resolves label display names (e.g. "⏳ In Progress") to Gmail label IDs and creates missing labels before writing, so adds/removes no longer fail with "Invalid label" and "⏳ In Progress" can actually be cleared. (#1216)
