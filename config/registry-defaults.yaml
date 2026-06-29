@@ -50,6 +50,7 @@ skills:
   - contact-update
   # Tasks
   - checkpoint
+  - plan
   - task-create
   - task-list
   - task-complete
