@@ -17,6 +17,13 @@ import { mapTaskRow } from './queries/tasks.js';
 import type { TaskOriginator } from '../contacts/types.js';
 import { capOriginatorToParent } from '../contacts/principal.js';
 import {
+  readPlanBlock,
+  preparePlanBlock,
+  type PreparePlanBlockInput,
+  type PlanProgressBlock,
+  type PlanWriteResult,
+} from './plan-progress.js';
+import {
   readResumableBlock,
   prepareResumableBlock,
   type PrepareResumableBlockInput,
@@ -668,6 +675,73 @@ export class TaskRepo {
     this.logger.info(
       { taskId: updated.id, done: prepared.block.done, total: prepared.block.total },
       'task-repo: persisted resumable checkpoint',
+    );
+    return { task: updated, block: prepared.block };
+  }
+
+  /** Read the typed plan block from a task's progress JSONB. */
+  async getPlanBlock(taskId: string): Promise<PlanProgressBlock | null> {
+    const task = await this.getTask(taskId);
+    if (!task) return null;
+    return readPlanBlock(task.progress);
+  }
+
+  /**
+   * Persist a plan under progress.plan. Enforces the block size cap — descriptors only,
+   * no per-item payloads inline (#1236).
+   */
+  async setPlanBlock(
+    taskId: string,
+    input: PreparePlanBlockInput,
+    callerAgentId?: string,
+  ): Promise<{ task: TaskRow; block: PlanProgressBlock } | PlanWriteResult> {
+    const current = await this.getTask(taskId);
+    if (!current) {
+      return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
+    }
+    if (TERMINAL_STATUSES.has(current.status)) {
+      return { ok: false, code: 'invalid_block', message: `task ${taskId} is in a terminal state` };
+    }
+
+    const prepared = preparePlanBlock(input);
+    if (!prepared.ok) return prepared;
+
+    const { rows } = await this.pool.query(
+      `UPDATE tasks
+          SET progress = jsonb_set(COALESCE(progress, '{}'::jsonb), '{plan}', $1::jsonb, true),
+              updated_at = now()
+        WHERE id = $2
+          AND status NOT IN ('done', 'cancelled')
+        RETURNING ${TASK_COLUMNS}`,
+      [JSON.stringify(prepared.block), taskId],
+    );
+    const row = rows[0] as DbTaskRow | undefined;
+    if (!row) {
+      const currentTask = await this.getTask(taskId);
+      if (!currentTask) {
+        return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
+      }
+      if (TERMINAL_STATUSES.has(currentTask.status)) {
+        return { ok: false, code: 'invalid_block', message: `task ${taskId} is in a terminal state` };
+      }
+      throw new Error(`task-repo: setPlanBlock update returned no row for non-terminal task ${taskId}`);
+    }
+
+    const updated = mapTaskRow(row);
+
+    try {
+      await this.bus.publish('execution', createTaskUpdated({
+        taskId: updated.id,
+        previousStatus: current.status,
+        agentId: callerAgentId ?? null,
+      }));
+    } catch (busErr) {
+      this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after setPlanBlock');
+    }
+
+    this.logger.info(
+      { taskId: updated.id, done: prepared.block.done, total: prepared.block.total },
+      'task-repo: persisted plan block',
     );
     return { task: updated, block: prepared.block };
   }
