@@ -198,7 +198,6 @@ export interface PreparePlanBlockInput {
   done: number;
   total: number;
   next: string;
-  plannedAt?: string;
 }
 
 /** Validate and normalize a plan block before persistence. */
@@ -209,7 +208,6 @@ export function preparePlanBlock(input: PreparePlanBlockInput): PlanWriteResult 
     done: input.done,
     total: input.total,
     next: input.next,
-    plannedAt: input.plannedAt,
   });
 
   if (!parsed) {
@@ -218,7 +216,7 @@ export function preparePlanBlock(input: PreparePlanBlockInput): PlanWriteResult 
 
   const block: PlanProgressBlock = {
     ...parsed,
-    plannedAt: input.plannedAt ?? new Date().toISOString(),
+    plannedAt: new Date().toISOString(),
   };
 
   const capError = validateBlockForWrite(block);

@@ -363,14 +363,6 @@ export class TaskRepo {
       }
     }
 
-    // Append progress note to progress.notes if provided.
-    let newProgress = current.progress;
-    if (updates.progressNote) {
-      const notes = (Array.isArray(newProgress.notes) ? newProgress.notes : []) as Array<unknown>;
-      notes.push({ at: new Date().toISOString(), note: updates.progressNote });
-      newProgress = { ...newProgress, notes };
-    }
-
     // Build the SET clause dynamically — only update columns that were supplied.
     const setClauses: string[] = ['updated_at = now()'];
     const updateParams: unknown[] = [];
@@ -396,9 +388,16 @@ export class TaskRepo {
       setClauses.push(`tags = $${idx++}`);
       updateParams.push(updates.tags);
     }
-    if (updates.progressNote !== undefined) {
-      setClauses.push(`progress = $${idx++}::jsonb`);
-      updateParams.push(JSON.stringify(newProgress));
+    // Append progress note atomically — jsonb_set preserves sibling blocks (plan, resumable, etc.).
+    if (updates.progressNote) {
+      const noteEntry = { at: new Date().toISOString(), note: updates.progressNote };
+      setClauses.push(`progress = jsonb_set(
+        COALESCE(progress, '{}'::jsonb),
+        '{notes}',
+        COALESCE(progress->'notes', '[]'::jsonb) || $${idx++}::jsonb,
+        true
+      )`);
+      updateParams.push(JSON.stringify([noteEntry]));
     }
     if ('blockedByTaskId' in updates) {
       setClauses.push(`blocked_by_task_id = $${idx++}`);
@@ -539,19 +538,22 @@ export class TaskRepo {
       );
     }
 
-    // Append completion note to progress.notes if provided.
-    const notes = (Array.isArray(current.progress.notes) ? current.progress.notes : []) as Array<unknown>;
-    if (completionNote) {
-      notes.push({ at: new Date().toISOString(), note: completionNote });
-    }
-    const newProgress = { ...current.progress, notes };
+    const noteEntry = completionNote
+      ? { at: new Date().toISOString(), note: completionNote }
+      : null;
 
-    // The WHERE guard prevents a concurrent write from moving the task to a terminal
-    // state between our pre-check read and this UPDATE.
-    const cteSql = `
+    const cteSql = noteEntry
+      ? `
       WITH done_task AS (
         UPDATE tasks
-        SET status = 'done', progress = $1::jsonb, updated_at = now()
+        SET status = 'done',
+            progress = jsonb_set(
+              COALESCE(progress, '{}'::jsonb),
+              '{notes}',
+              COALESCE(progress->'notes', '[]'::jsonb) || $1::jsonb,
+              true
+            ),
+            updated_at = now()
         WHERE id = $2 AND status NOT IN ('done', 'cancelled')
         RETURNING ${TASK_COLUMNS}
       ),
@@ -560,9 +562,26 @@ export class TaskRepo {
         WHERE task_id = $2 AND status = 'pending'
       )
       SELECT * FROM done_task
+    `
+      : `
+      WITH done_task AS (
+        UPDATE tasks
+        SET status = 'done', updated_at = now()
+        WHERE id = $1 AND status NOT IN ('done', 'cancelled')
+        RETURNING ${TASK_COLUMNS}
+      ),
+      _cancel_wake AS (
+        UPDATE scheduled_jobs SET status = 'cancelled'
+        WHERE task_id = $1 AND status = 'pending'
+      )
+      SELECT * FROM done_task
     `;
 
-    const { rows } = await this.pool.query(cteSql, [JSON.stringify(newProgress), taskId]);
+    const queryParams = noteEntry
+      ? [JSON.stringify([noteEntry]), taskId]
+      : [taskId];
+
+    const { rows } = await this.pool.query(cteSql, queryParams);
     const row = rows[0] as DbTaskRow | undefined;
     if (!row) {
       // Task existed at pre-check time and was not terminal — if RETURNING is empty,

@@ -136,7 +136,11 @@ describe('computePlanRollup', () => {
       { id: 'a', taskId: CHILD_A },
       { id: 'b', taskId: null },
     ];
-    const rollup = computePlanRollup(steps, { [CHILD_A]: 'done' });
+    const rollup = computePlanRollup(steps, {
+      [CHILD_A]: 'done',
+      [CHILD_B]: 'done',
+      'dddddddd-dddd-dddd-dddd-dddddddddddd': 'done',
+    });
     expect(rollup).toEqual({ done: 1, total: 2 });
   });
 
@@ -147,6 +151,16 @@ describe('computePlanRollup', () => {
       [CHILD_C]: 'failed',
     });
     expect(rollup).toEqual({ done: 0, total: 3 });
+  });
+});
+
+describe('preparePlanBlock', () => {
+  it('always stamps plannedAt at write time', () => {
+    const result = preparePlanBlock(BASE_INPUT);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.block.plannedAt).toBeDefined();
+    expect(Number.isNaN(Date.parse(result.block.plannedAt!))).toBe(false);
   });
 });
 

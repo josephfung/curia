@@ -19,7 +19,13 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 
 const PREFIX = 'PlanProgress Test';
 const logger = pino({ level: 'silent' });
-const noopBus = { publish: async () => {}, subscribe: () => {} } as unknown as EventBus;
+const publishedEvents: Array<{ topic: string; event: unknown }> = [];
+const recordingBus = {
+  publish: async (topic: string, event: unknown) => {
+    publishedEvents.push({ topic, event });
+  },
+  subscribe: () => {},
+} as unknown as EventBus;
 
 const CHILD_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const CHILD_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
@@ -39,12 +45,15 @@ describeIf('TaskRepo plan progress (#1236)', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    repo = new TaskRepo(pool, noopBus, logger as never, 'UTC');
+    repo = new TaskRepo(pool, recordingBus, logger as never, 'UTC');
   });
   afterAll(async () => { await cleanup(pool); await pool.end(); });
-  beforeEach(async () => { await cleanup(pool); });
+  beforeEach(async () => {
+    publishedEvents.length = 0;
+    await cleanup(pool);
+  });
 
-  it('round-trips a plan block', async () => {
+  it('round-trips a plan block and publishes task.updated', async () => {
     const task = await repo.createTask({
       agentId: 'coordinator',
       title: `${PREFIX} kickoff`,
@@ -65,6 +74,13 @@ describeIf('TaskRepo plan progress (#1236)', () => {
     });
     expect('task' in first).toBe(true);
     if (!('task' in first)) return;
+
+    expect(publishedEvents).toContainEqual(
+      expect.objectContaining({
+        topic: 'execution',
+        event: expect.objectContaining({ type: 'task.updated', taskId: task.id }),
+      }),
+    );
 
     const reread = await repo.getPlanBlock(task.id);
     expect(reread?.deliverableStepId).toBe('assemble-plan');
@@ -135,6 +151,30 @@ describeIf('TaskRepo plan progress (#1236)', () => {
     expect(planBlockBytes(persisted!)).toBeLessThanOrEqual(PLAN_BLOCK_MAX_BYTES);
   });
 
+  it('rejects plan blocks over PLAN_BLOCK_MAX_BYTES', async () => {
+    const task = await repo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX} overflow`,
+      source: 'coordinator',
+    });
+
+    const manySteps = Array.from({ length: 200 }, (_, i) => ({
+      id: `step-${String(i).padStart(4, '0')}-with-a-long-descriptor-id-suffix`,
+      taskId: `${String(i).padStart(8, '0')}-aaaa-aaaa-aaaa-aaaaaaaaaaaa`,
+    }));
+
+    const result = await repo.setPlanBlock(task.id, {
+      steps: manySteps,
+      deliverableStepId: null,
+      done: 0,
+      total: manySteps.length,
+      next: 'This plan is intentionally wide to test the block size cap',
+    });
+    expect('ok' in result && result.ok === false).toBe(true);
+    if (!('ok' in result) || result.ok !== false) return;
+    expect(result.code).toBe('block_overflow');
+  });
+
   it('rollup helper reflects child statuses from the database', async () => {
     const parent = await repo.createTask({
       agentId: 'coordinator',
@@ -160,9 +200,13 @@ describeIf('TaskRepo plan progress (#1236)', () => {
       { id: 'first', taskId: childDone.id },
       { id: 'second', taskId: childOpen.id },
     ];
+    const [reloadedDone, reloadedOpen] = await Promise.all([
+      repo.getTask(childDone.id),
+      repo.getTask(childOpen.id),
+    ]);
     const rollup = computePlanRollup(steps, {
-      [childDone.id]: 'done',
-      [childOpen.id]: 'open',
+      [childDone.id]: reloadedDone!.status,
+      [childOpen.id]: reloadedOpen!.status,
     });
     expect(rollup).toEqual({ done: 1, total: 2 });
 
