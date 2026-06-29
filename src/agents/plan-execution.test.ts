@@ -5,12 +5,41 @@ import {
   existingTaskIdForStep,
   findRemovedChildTaskIds,
   parsePlanStepsInput,
+  planStepDriftsFromChild,
+  preflightPlanBlockWrite,
   resolveBlockedByTaskId,
   validateDeliverableStepId,
+  validatePlanStepsGraph,
 } from './plan-execution.js';
 import type { PlanProgressBlock } from '../db/plan-progress.js';
 
+describe('validatePlanStepsGraph', () => {
+  it('rejects self-referential and cyclic dependencies', () => {
+    expect(validatePlanStepsGraph([
+      { id: 'a', title: 'A', target_agent_id: 'coordinator', blocked_by_step_id: 'a' },
+    ])).toMatch(/cycle/);
+    expect(validatePlanStepsGraph([
+      { id: 'a', title: 'A', target_agent_id: 'coordinator', blocked_by_step_id: 'b' },
+      { id: 'b', title: 'B', target_agent_id: 'coordinator', blocked_by_step_id: 'a' },
+    ])).toMatch(/cycle/);
+  });
+
+  it('rejects dependencies on lazy (unmaterialized) predecessors', () => {
+    expect(validatePlanStepsGraph([
+      { id: 'lazy', title: 'Lazy', target_agent_id: 'coordinator', materialize: false },
+      { id: 'child', title: 'Child', target_agent_id: 'coordinator', blocked_by_step_id: 'lazy' },
+    ])).toMatch(/lazy step/);
+  });
+});
+
 describe('parsePlanStepsInput', () => {
+  it('returns null for cyclic dependency graphs', () => {
+    expect(parsePlanStepsInput([
+      { id: 'a', title: 'A', target_agent_id: 'coordinator', blocked_by_step_id: 'b' },
+      { id: 'b', title: 'B', target_agent_id: 'coordinator', blocked_by_step_id: 'a' },
+    ])).toBeNull();
+  });
+
   it('parses heterogeneous and iterate-leaf steps', () => {
     const steps = parsePlanStepsInput([
       { id: 'gather', title: 'Gather exec input', target_agent_id: 'coordinator' },
@@ -109,5 +138,41 @@ describe('validateDeliverableStepId', () => {
     expect(validateDeliverableStepId(null, steps!)).toBeNull();
     expect(validateDeliverableStepId('final', steps!)).toBe('final');
     expect(validateDeliverableStepId('missing', steps!)).toBeUndefined();
+  });
+});
+
+describe('planStepDriftsFromChild', () => {
+  it('detects field drift on reused children', () => {
+    const step = { id: 'a', title: 'New title', target_agent_id: 'coordinator' };
+    expect(planStepDriftsFromChild(step, {
+      title: 'Old title',
+      description: null,
+      agentId: 'coordinator',
+      waitingOnContactId: null,
+      waitingOnText: null,
+      errorBudget: {},
+    })).toBe(true);
+    expect(planStepDriftsFromChild(step, {
+      title: 'New title',
+      description: null,
+      agentId: 'coordinator',
+      waitingOnContactId: null,
+      waitingOnText: null,
+      errorBudget: {},
+    })).toBe(false);
+  });
+});
+
+describe('preflightPlanBlockWrite', () => {
+  it('rejects oversized plan blocks before child mutations', () => {
+    const steps = parsePlanStepsInput([
+      { id: 'a', title: 'A', target_agent_id: 'coordinator' },
+    ])!;
+    const hugeNext = 'x'.repeat(9000);
+    const result = preflightPlanBlockWrite(steps!, null, null, hugeNext);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('block_overflow');
+    }
   });
 });

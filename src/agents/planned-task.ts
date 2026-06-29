@@ -5,6 +5,7 @@
 
 import { isPlannedStep, readPlanBlock, type PlanProgressBlock } from '../db/plan-progress.js';
 import { isResumableTask, type BoundTaskContext } from './resumable-task.js';
+import type { ToolDefinition } from './llm/provider.js';
 
 export const PLAN_SKILL_NAME = 'plan';
 
@@ -13,6 +14,15 @@ export function shouldOfferPlanSkill(ctx: Pick<BoundTaskContext, 'errorBudget' |
   if (isPlannedStep(ctx.progress ?? {})) return true;
   // Iterate leaves are resumable-only; they checkpoint, they do not plan.
   return !isResumableTask(ctx);
+}
+
+/** Strip control chars / newlines from persisted plan text before prompt injection. */
+export function sanitizePlanPromptText(value: string): string {
+  return value
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\r?\n/g, ' ')
+    .replace(/`/g, '\'')
+    .trim();
 }
 
 export function buildPlanTaskGuidanceBlock(existingPlan?: PlanProgressBlock | null): string {
@@ -40,9 +50,9 @@ export function buildPlanTaskGuidanceBlock(existingPlan?: PlanProgressBlock | nu
       '',
       '### Current plan',
       `- Progress: ${existingPlan.done} / ${existingPlan.total}`,
-      `- Next: ${existingPlan.next}`,
+      `- Next: ${sanitizePlanPromptText(existingPlan.next)}`,
       existingPlan.deliverableStepId
-        ? `- Deliverable step: \`${existingPlan.deliverableStepId}\``
+        ? `- Deliverable step: \`${sanitizePlanPromptText(existingPlan.deliverableStepId)}\``
         : '- Deliverable: default child-summary rollup',
     );
   }
@@ -56,4 +66,37 @@ export function readExistingPlan(progress: Record<string, unknown> | undefined):
 
 export function isPlannedParentTask(ctx: Pick<BoundTaskContext, 'progress'>): boolean {
   return isPlannedStep(ctx.progress ?? {});
+}
+
+/** Runtime wiring: append plan guidance and auto-pin the plan tool for eligible bound tasks. */
+export function applyPlanHarness(options: {
+  boundTaskCtx: BoundTaskContext;
+  workingToolDefs: ToolDefinition[] | null | undefined;
+  getToolDefinitions: (names: string[]) => ToolDefinition[];
+  effectiveSystemPrompt: string;
+}): { effectiveSystemPrompt: string; workingToolDefs: ToolDefinition[] | null | undefined } {
+  if (!shouldOfferPlanSkill(options.boundTaskCtx)) {
+    return {
+      effectiveSystemPrompt: options.effectiveSystemPrompt,
+      workingToolDefs: options.workingToolDefs,
+    };
+  }
+
+  let workingToolDefs = options.workingToolDefs;
+  const effectiveSystemPrompt = `${options.effectiveSystemPrompt}\n\n${buildPlanTaskGuidanceBlock(
+    readExistingPlan(options.boundTaskCtx.progress),
+  )}`;
+
+  if (!workingToolDefs) {
+    workingToolDefs = [];
+  }
+  const hasPlan = workingToolDefs.some((tool) => tool.name === PLAN_SKILL_NAME);
+  if (!hasPlan) {
+    const planDefs = options.getToolDefinitions([PLAN_SKILL_NAME]);
+    if (planDefs.length > 0) {
+      workingToolDefs = [...workingToolDefs, ...planDefs];
+    }
+  }
+
+  return { effectiveSystemPrompt, workingToolDefs };
 }

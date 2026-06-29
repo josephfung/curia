@@ -1,5 +1,6 @@
 // plan-execution.ts — pure reconcile helpers for the plan skill (#1237).
 
+import { preparePlanBlock } from '../db/plan-progress.js';
 import type { PlanProgressBlock, PlanStepDescriptor } from '../db/plan-progress.js';
 
 export interface PlanStepInput {
@@ -15,6 +16,17 @@ export interface PlanStepInput {
   /** When true on a materialized step, creates a single iterate leaf (not one row per item). */
   resumable?: boolean;
 }
+
+export interface PlanChildRowSnapshot {
+  title: string;
+  description: string | null;
+  agentId: string;
+  waitingOnContactId: string | null;
+  waitingOnText: string | null;
+  errorBudget: Record<string, unknown>;
+}
+
+const PLACEHOLDER_TASK_ID_PREFIX = '00000000-0000-4000-8000-';
 
 export function parsePlanStepInput(raw: unknown): PlanStepInput | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -47,6 +59,36 @@ export function parsePlanStepInput(raw: unknown): PlanStepInput | null {
   return step;
 }
 
+/** Validate dependency graph: known blockers, no cycles, no lazy predecessors. */
+export function validatePlanStepsGraph(steps: readonly PlanStepInput[]): string | null {
+  const stepById = new Map(steps.map((s) => [s.id, s]));
+
+  for (const step of steps) {
+    if (!step.blocked_by_step_id) continue;
+    const blocker = stepById.get(step.blocked_by_step_id);
+    if (!blocker) {
+      return `blocked_by_step_id '${step.blocked_by_step_id}' is not a step in this plan`;
+    }
+    if (blocker.materialize === false) {
+      return `blocked_by_step_id '${step.blocked_by_step_id}' refers to a lazy step — materialize the predecessor or remove the dependency`;
+    }
+  }
+
+  for (const step of steps) {
+    const visiting = new Set<string>();
+    let current: string | null | undefined = step.id;
+    while (current) {
+      if (visiting.has(current)) {
+        return `plan dependency cycle detected involving step '${step.id}'`;
+      }
+      visiting.add(current);
+      current = stepById.get(current)?.blocked_by_step_id ?? null;
+    }
+  }
+
+  return null;
+}
+
 export function parsePlanStepsInput(raw: unknown): PlanStepInput[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const steps: PlanStepInput[] = [];
@@ -57,6 +99,7 @@ export function parsePlanStepsInput(raw: unknown): PlanStepInput[] | null {
     seen.add(step.id);
     steps.push(step);
   }
+  if (validatePlanStepsGraph(steps) !== null) return null;
   return steps;
 }
 
@@ -113,6 +156,51 @@ export function validateDeliverableStepId(
   const trimmed = deliverableStepId.trim();
   if (!trimmed) return undefined;
   return steps.some((s) => s.id === trimmed) ? trimmed : undefined;
+}
+
+/** True when a reused child row no longer matches the requested step fields. */
+export function planStepDriftsFromChild(step: PlanStepInput, child: PlanChildRowSnapshot): boolean {
+  if (child.title !== step.title) return true;
+  if ((child.description ?? undefined) !== step.description) return true;
+  if (child.agentId !== step.target_agent_id) return true;
+  if ((child.waitingOnContactId ?? undefined) !== (step.waiting_on_contact_id ?? undefined)) return true;
+  if ((child.waitingOnText ?? undefined) !== (step.waiting_on_text ?? undefined)) return true;
+  const childResumable = child.errorBudget?.['resumable'] === true;
+  return childResumable !== (step.resumable === true);
+}
+
+/** Project descriptors for preflight validation before any child rows are written. */
+export function projectPlanStepTaskIds(
+  steps: readonly PlanStepInput[],
+  existingPlan: PlanProgressBlock | null,
+): Record<string, string | null> {
+  const stepTaskIds: Record<string, string | null> = {};
+  steps.forEach((step, index) => {
+    if (step.materialize === false) {
+      stepTaskIds[step.id] = null;
+      return;
+    }
+    stepTaskIds[step.id] = existingTaskIdForStep(existingPlan, step.id)
+      ?? `${PLACEHOLDER_TASK_ID_PREFIX}${String(index).padStart(12, '0')}`;
+  });
+  return stepTaskIds;
+}
+
+/** Preflight the plan block size/shape before mutating child rows. */
+export function preflightPlanBlockWrite(
+  steps: readonly PlanStepInput[],
+  existingPlan: PlanProgressBlock | null,
+  deliverableStepId: string | null,
+  next: string,
+) {
+  const descriptors = buildPlanStepDescriptors(steps, projectPlanStepTaskIds(steps, existingPlan));
+  return preparePlanBlock({
+    steps: descriptors,
+    deliverableStepId,
+    done: 0,
+    total: descriptors.length,
+    next,
+  });
 }
 
 /** Count materialized iterate-leaf steps (resumable) vs heterogeneous rows. */

@@ -10,13 +10,17 @@ import {
   countMaterializationKinds,
   existingTaskIdForStep,
   findRemovedChildTaskIds,
+  parsePlanStepInput,
   parsePlanStepsInput,
+  planStepDriftsFromChild,
+  preflightPlanBlockWrite,
   resolveBlockedByTaskId,
   validateDeliverableStepId,
+  validatePlanStepsGraph,
   type PlanStepInput,
 } from '../../src/agents/plan-execution.js';
 import { computePlanRollup, readPlanBlock } from '../../src/db/plan-progress.js';
-import type { TaskOriginator } from '../../src/contacts/types.js';
+import type { TaskRow } from '../../src/db/queries/tasks.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
@@ -45,6 +49,16 @@ export class PlanHandler implements SkillHandler {
 
     const steps = parsePlanStepsInput(input.steps);
     if (!steps) {
+      const rawSteps = Array.isArray(input.steps) ? input.steps : [];
+      const parsedSteps: PlanStepInput[] = [];
+      for (const item of rawSteps) {
+        const step = parsePlanStepInput(item);
+        if (step) parsedSteps.push(step);
+      }
+      const graphError = parsedSteps.length > 0 ? validatePlanStepsGraph(parsedSteps) : null;
+      if (graphError) {
+        return { success: false, error: graphError };
+      }
       return { success: false, error: 'Missing or invalid required input: steps (non-empty array)' };
     }
 
@@ -90,19 +104,26 @@ export class PlanHandler implements SkillHandler {
           };
         }
       }
-      if (step.blocked_by_step_id && !steps.some((s) => s.id === step.blocked_by_step_id)) {
-        return {
-          success: false,
-          error: `blocked_by_step_id '${step.blocked_by_step_id}' is not a step in this plan`,
-        };
-      }
     }
 
     const existingPlan = readPlanBlock(parent.progress);
     const newStepIds = new Set(steps.map((s) => s.id));
     const stepTaskIds: Record<string, string | null> = {};
-    const originator = (ctx.taskMetadata?.originator as TaskOriginator | undefined) ?? null;
+    const originator = parent.originator;
     const creatorAgentId = ctx.agentId ?? 'system';
+    const next = input.next.trim();
+    const createdTaskIds: string[] = [];
+
+    const preflight = preflightPlanBlockWrite(steps, existingPlan, deliverableStepId, next);
+    if (!preflight.ok) {
+      if (preflight.code === 'block_overflow') {
+        return {
+          success: false,
+          error: `Plan block exceeds cap (${preflight.bytes} bytes, max ${preflight.maxBytes})`,
+        };
+      }
+      return { success: false, error: preflight.message ?? 'plan block failed validation' };
+    }
 
     ctx.log.info(
       {
@@ -113,6 +134,19 @@ export class PlanHandler implements SkillHandler {
       },
       'Executing plan decomposition',
     );
+
+    const rollbackCreatedTasks = async (): Promise<void> => {
+      for (const childId of createdTaskIds) {
+        const child = await ctx.taskRepo!.getTask(childId);
+        if (child && !TERMINAL_STATUSES.has(child.status)) {
+          await ctx.taskRepo!.updateTask(
+            childId,
+            { status: 'cancelled', progressNote: 'Plan write failed — rolling back created child' },
+            ctx.agentId,
+          );
+        }
+      }
+    };
 
     try {
       // First pass: create or reuse materialized child rows (blocked_by resolved in pass two).
@@ -126,8 +160,17 @@ export class PlanHandler implements SkillHandler {
         if (priorTaskId) {
           const priorChild = await ctx.taskRepo.getTask(priorTaskId);
           if (priorChild && priorChild.parentTaskId === taskId) {
-            stepTaskIds[step.id] = priorTaskId;
-            continue;
+            if (!planStepDriftsFromChild(step, priorChild)) {
+              stepTaskIds[step.id] = priorTaskId;
+              continue;
+            }
+            if (!TERMINAL_STATUSES.has(priorChild.status)) {
+              await ctx.taskRepo.updateTask(
+                priorTaskId,
+                { status: 'cancelled', progressNote: 'Replaced during plan reconcile' },
+                ctx.agentId,
+              );
+            }
           }
         }
 
@@ -144,6 +187,7 @@ export class PlanHandler implements SkillHandler {
           originator,
           resumable: step.resumable === true,
         });
+        createdTaskIds.push(child.id);
         stepTaskIds[step.id] = child.id;
       }
 
@@ -154,9 +198,11 @@ export class PlanHandler implements SkillHandler {
         if (!childTaskId) continue;
 
         const blockedByTaskId = resolveBlockedByTaskId(step.blocked_by_step_id, stepTaskIds);
-        if (blockedByTaskId) {
-          await ctx.taskRepo.updateTask(childTaskId, { blockedByTaskId }, ctx.agentId);
-        }
+        await ctx.taskRepo.updateTask(
+          childTaskId,
+          { blockedByTaskId: blockedByTaskId ?? null },
+          ctx.agentId,
+        );
       }
 
       // Adaptive re-plan: cancel open children removed from the plan.
@@ -188,12 +234,13 @@ export class PlanHandler implements SkillHandler {
           deliverableStepId,
           done: rollup.done,
           total: rollup.total,
-          next: input.next.trim(),
+          next,
         },
         ctx.agentId,
       );
 
       if ('ok' in planResult && planResult.ok === false) {
+        await rollbackCreatedTasks();
         if (planResult.code === 'block_overflow') {
           return {
             success: false,
@@ -203,7 +250,7 @@ export class PlanHandler implements SkillHandler {
         return { success: false, error: planResult.message ?? 'Failed to write plan block' };
       }
 
-      const { block } = planResult as { task: unknown; block: { total: number; done: number } };
+      const { block } = planResult as { task: TaskRow; block: { total: number; done: number } };
       const materialization = countMaterializationKinds(steps);
 
       return {
@@ -220,6 +267,7 @@ export class PlanHandler implements SkillHandler {
         },
       };
     } catch (err) {
+      await rollbackCreatedTasks();
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, taskId }, 'Failed to execute plan');
       return { success: false, error: `Failed to execute plan: ${message}` };

@@ -33,9 +33,7 @@ import {
   type BoundTaskContext,
 } from './resumable-task.js';
 import {
-  buildPlanTaskGuidanceBlock,
-  PLAN_SKILL_NAME,
-  readExistingPlan,
+  applyPlanHarness,
   shouldOfferPlanSkill,
 } from './planned-task.js';
 import { readResumableBlock, type ResumableProgressBlock } from '../db/resumable-progress.js';
@@ -475,9 +473,14 @@ export class AgentRuntime {
 
     const planActive = boundTaskCtx !== null && shouldOfferPlanSkill(boundTaskCtx);
     if (planActive && boundTaskCtx) {
-      effectiveSystemPrompt += '\n\n' + buildPlanTaskGuidanceBlock(
-        readExistingPlan(boundTaskCtx.progress),
-      );
+      const planHarness = applyPlanHarness({
+        boundTaskCtx,
+        workingToolDefs,
+        getToolDefinitions: (names) => executionLayer?.getToolDefinitions(names) ?? [],
+        effectiveSystemPrompt,
+      });
+      effectiveSystemPrompt = planHarness.effectiveSystemPrompt;
+      workingToolDefs = planHarness.workingToolDefs ?? undefined;
     }
 
     // Auto-pin checkpoint for resumable tasks (per-turn, like dynamic skill discovery).
@@ -490,20 +493,6 @@ export class AgentRuntime {
         const checkpointDefs = executionLayer.getToolDefinitions([CHECKPOINT_SKILL_NAME]);
         if (checkpointDefs.length > 0) {
           workingToolDefs.push(...checkpointDefs);
-        }
-      }
-    }
-
-    // Auto-pin plan for complex bound tasks (per-turn — not in agent YAML).
-    if (planActive && executionLayer) {
-      if (!workingToolDefs) {
-        workingToolDefs = [];
-      }
-      const hasPlan = workingToolDefs.some(t => t.name === PLAN_SKILL_NAME);
-      if (!hasPlan) {
-        const planDefs = executionLayer.getToolDefinitions([PLAN_SKILL_NAME]);
-        if (planDefs.length > 0) {
-          workingToolDefs.push(...planDefs);
         }
       }
     }
