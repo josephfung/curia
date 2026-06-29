@@ -62,17 +62,21 @@ export class BullpenDispatcher {
 
     // Create one agent.task per participant, excluding the sender.
     // Open threads: mentioned agents get a reply-expected prompt; others get FYI.
-    // Closed threads: every non-sender gets the same "act on the conclusion" prompt —
-    // we intentionally collapse the mentioned/FYI distinction (fine for 2-party consult
-    // hand-offs, the only case today; 3+-party closed threads would also tell bystanders to act).
+    // Closed threads: empty mentions broadcast the act prompt to all non-senders
+    // (consult hand-off); when mentions are present, only mentioned agents act.
     const otherParticipants = participants.filter((id) => id !== senderAgentId);
 
     let dispatched = 0;
     for (const agentId of otherParticipants) {
       const isMentioned = mentionedAgentIds.includes(agentId);
+      const shouldAct = threadClosed
+        ? mentionedAgentIds.length === 0 || isMentioned
+        : isMentioned;
       const content = threadClosed
-        ? `Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId} — the thread is now closed. Call bullpen get_thread to read the full history, act on the conclusion (do not reply in-thread).`
-        : isMentioned
+        ? shouldAct
+          ? `Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId} — the thread is now closed. Call bullpen get_thread to read the full history, act on the conclusion (do not reply in-thread).`
+          : `FYI: Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. Call bullpen get_thread to read the full history if needed, but do not reply in-thread.`
+        : shouldAct
           ? `You've been mentioned in Bullpen thread "${topic}" (thread_id: ${threadId}) by ${senderAgentId}. Review the injected thread context and reply using the bullpen skill.`
           : `FYI: New activity in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. No response required, but reply if you have something to add.`;
 

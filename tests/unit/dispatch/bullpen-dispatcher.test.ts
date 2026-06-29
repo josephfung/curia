@@ -241,6 +241,29 @@ describe('BullpenDispatcher', () => {
     expect(tasks[0]!.payload.metadata?.threadClosed).toBe(true);
   });
 
+  it('closed thread with explicit mentions: only mentioned agents get act prompt', async () => {
+    const { thread } = await bullpenService.openThread(
+      'Multi-party close', 'coordinator', ['coordinator', 'agent-b', 'agent-c'], 'Start', [],
+    );
+    await bullpenService.postMessage(thread.id, 'agent-b', 'Done', ['coordinator'], true);
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-closed', topic: 'Multi-party close',
+      senderAgentId: 'agent-b', participants: ['coordinator', 'agent-b', 'agent-c'],
+      mentionedAgentIds: ['coordinator'], content: 'Done', threadClosed: true,
+      parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const tasks = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([_l, e]) => (e as { type: string }).type === 'agent.task')
+      .map(([_l, e]) => e as { payload: { agentId: string; content: string } });
+    expect(tasks).toHaveLength(2);
+    const coordTask = tasks.find(t => t.payload.agentId === 'coordinator');
+    const cTask = tasks.find(t => t.payload.agentId === 'agent-c');
+    expect(coordTask?.payload.content).toContain('act on the conclusion');
+    expect(cTask?.payload.content).toContain('FYI: Final message');
+    expect(cTask?.payload.content).not.toContain('act on the conclusion');
+  });
+
   it('sets threadClosed false on open-thread dispatch tasks', async () => {
     const { thread } = await bullpenService.openThread(
       'Open thread', 'coordinator', ['coordinator', 'agent-b'], 'Hi', ['agent-b'],
