@@ -4,6 +4,7 @@ import {
   isContinuationEligible,
   resolveContinuationAgent,
   scheduleResumableContinuation,
+  schedulePlanParentWake,
 } from '../../../src/agents/resumable-continuation.js';
 import type { TaskRow } from '../../../src/db/queries/tasks.js';
 import * as tasksQueries from '../../../src/db/queries/tasks.js';
@@ -185,5 +186,67 @@ describe('scheduleResumableContinuation', () => {
     });
 
     expect(result).toEqual({ scheduled: false, reason: 'pending_wake_exists' });
+  });
+});
+
+describe('schedulePlanParentWake', () => {
+  const eligibleAgents = new Set(['coordinator', 'social-media']);
+  let enqueueTaskWake: ReturnType<typeof vi.fn>;
+  let schedulerService: { enqueueTaskWake: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    enqueueTaskWake = vi.fn().mockResolvedValue({ jobId: 'job-parent' });
+    schedulerService = { enqueueTaskWake };
+  });
+
+  it('enqueues a near-term parent wake when progress.plan is present', async () => {
+    const pool = {
+      query: vi.fn().mockResolvedValue({ rows: [{ pending: false }] }),
+    };
+    vi.spyOn(tasksQueries, 'getTaskById').mockResolvedValue(sampleTask({
+      progress: {
+        plan: {
+          steps: [{ id: 'only', taskId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }],
+          deliverableStepId: null,
+          done: 0,
+          total: 1,
+          next: 'Run the step',
+        },
+      },
+      errorBudget: {},
+      tags: [],
+    }));
+
+    const result = await schedulePlanParentWake({
+      pool: pool as never,
+      schedulerService: schedulerService as never,
+      logger: mockLogger() as never,
+      taskId: 'task-1',
+      delaySeconds: 30,
+      eligibleAgents,
+    });
+
+    expect(result).toMatchObject({ scheduled: true, jobId: 'job-parent', agentId: 'social-media' });
+    expect(enqueueTaskWake).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-1',
+      createdBy: RESUMABLE_CONTINUATION_CREATED_BY,
+    }));
+  });
+
+  it('skips parents without a plan block', async () => {
+    vi.spyOn(tasksQueries, 'getTaskById').mockResolvedValue(sampleTask({ progress: {} }));
+
+    const result = await schedulePlanParentWake({
+      pool: { query: vi.fn() } as never,
+      schedulerService: schedulerService as never,
+      logger: mockLogger() as never,
+      taskId: 'task-1',
+      delaySeconds: 30,
+      eligibleAgents,
+    });
+
+    expect(result).toEqual({ scheduled: false, reason: 'not_planned_parent' });
+    expect(enqueueTaskWake).not.toHaveBeenCalled();
   });
 });

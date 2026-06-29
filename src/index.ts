@@ -127,6 +127,7 @@ import { applyTaskManagement } from './agents/task-management.js';
 import { applyDocumentWorkspace, DEFAULT_SCRATCH_DOC_TTL_DAYS } from './agents/document-workspace.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
+import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
 import * as fs from 'node:fs';
 import * as yaml from 'js-yaml';
 import { RegistryRepo } from './registry/registry-repo.js';
@@ -2030,6 +2031,17 @@ async function main(): Promise<void> {
     resumableCeilings: tasksConfig.resumableCeilings,
   });
   resumableContinuationSubscriber.start();
+
+  const planFrontierSubscriber = new PlanFrontierSubscriber({
+    pool,
+    bus,
+    logger,
+    schedulerService,
+    taskRepo,
+    eligibleAgents: taskManagementAgents,
+    continuationDelaySeconds: tasksConfig.resumableContinuationSeconds,
+  });
+  planFrontierSubscriber.start();
 
   logger.info('Scheduler started');
 
