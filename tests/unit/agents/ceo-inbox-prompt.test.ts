@@ -142,7 +142,6 @@ describe('ceo-inbox closed bullpen wake routing (#1256)', () => {
   it('routes threadClosed wakes to get_thread before the Branch A content gate', () => {
     const prompt = loadCeoInboxPrompt();
     const preamble = extractResumePreamble(prompt);
-    const branchA = extractBranchASection(prompt);
 
     expect(preamble).toContain('Closed bullpen thread wake');
     expect(preamble).toContain('threadClosed: true');
@@ -150,18 +149,16 @@ describe('ceo-inbox closed bullpen wake routing (#1256)', () => {
     expect(preamble).toMatch(/Branch A[\s\n]+sub-steps/);
 
     const closedGetThreadPos = posIn(preamble, 'get_thread');
-    const branchAContentGatePos = posIn(
-      branchA,
+    const closedHeaderAbsPos = prompt.indexOf('**Closed bullpen thread wake');
+    const closedGetThreadAbsPos = prompt.indexOf('get_thread', closedHeaderAbsPos);
+    const branchAContentGateAbsPos = prompt.indexOf(
       'If the bullpen message body visible in injected context is a CONSULT REPLY',
     );
+    expect(closedHeaderAbsPos).toBeGreaterThan(-1);
     expect(closedGetThreadPos).toBeGreaterThan(-1);
-    expect(branchAContentGatePos).toBeGreaterThan(-1);
-    // Closed-path fetch is in the preamble, which precedes the open-thread gate.
-    expect(preamble.length).toBeLessThan(
-      prompt.indexOf(
-        'If the bullpen message body visible in injected context is a CONSULT REPLY',
-      ),
-    );
+    expect(branchAContentGateAbsPos).toBeGreaterThan(-1);
+    expect(closedGetThreadAbsPos).toBeGreaterThan(closedHeaderAbsPos);
+    expect(branchAContentGateAbsPos).toBeGreaterThan(closedGetThreadAbsPos);
   });
 
   it('closed wake path enters full Branch A protocol (not a shortcut)', () => {
