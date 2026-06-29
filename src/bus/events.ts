@@ -263,6 +263,9 @@ interface AgentDiscussPayload {
   participants: string[];      // all thread participants
   mentionedAgentIds: string[]; // subset that get reply-expected tasks (empty = broadcast)
   content: string;
+  /** True when the reply closed the thread atomically (close_after: true). BullpenDispatcher
+   *  uses this to deliver a read-and-act wake without inviting an in-thread reply. */
+  threadClosed?: boolean;
   /** TaskOriginator of the task that published this discuss event. Forwarded by
    *  BullpenDispatcher into the resulting agent.task metadata so that skills invoked
    *  during bullpen work can pass the elevated-skill gate for principal-authorized tasks. */

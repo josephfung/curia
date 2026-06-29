@@ -215,21 +215,46 @@ describe('BullpenDispatcher', () => {
     expect(tasks).toHaveLength(0);
   });
 
-  it('skips task creation when the thread is closed (e.g. reply with close_after)', async () => {
-    // A close_after reply closes the thread atomically and then publishes the concluding
-    // agent.discuss; the dispatcher must not fan out reply tasks for a closed thread. (#881)
+  it('creates agent.task for originator when thread is closed via close_after (even with empty mentions)', async () => {
+    // A close_after reply closes the thread atomically; the concluding message must
+    // still wake other participants so consult hand-offs complete. (#1256)
     const { thread } = await bullpenService.openThread(
-      'Close-after dispatch test', 'coordinator', ['coordinator', 'agent-b'], 'Start', [],
+      'Scheduling consult', 'ceo-inbox', ['ceo-inbox', 'calendar'], 'CONSULT REQUEST', [],
     );
-    await bullpenService.postMessage(thread.id, 'agent-b', 'Concluding reply', [], true);
+    await bullpenService.postMessage(thread.id, 'calendar', 'CONSULT REPLY\nResult: ok\n...', [], true);
     const event = createAgentDiscuss({
-      threadId: thread.id, messageId: 'msg-closed', topic: 'Close-after dispatch test',
-      senderAgentId: 'agent-b', participants: ['coordinator', 'agent-b'],
-      mentionedAgentIds: ['coordinator'], content: 'Concluding reply', parentEventId: 'task-1',
+      threadId: thread.id, messageId: 'msg-closed', topic: 'Scheduling consult',
+      senderAgentId: 'calendar', participants: ['ceo-inbox', 'calendar'],
+      mentionedAgentIds: [], content: 'CONSULT REPLY\nResult: ok', threadClosed: true,
+      parentEventId: 'task-1',
     });
     await bus._trigger('agent.discuss', event);
     const tasks = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
-      .filter(([_l, e]) => (e as { type: string }).type === 'agent.task');
-    expect(tasks).toHaveLength(0);
+      .filter(([_l, e]) => (e as { type: string }).type === 'agent.task')
+      .map(([_l, e]) => e as { payload: { agentId: string; content: string; metadata: Record<string, unknown> } });
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.payload.agentId).toBe('ceo-inbox');
+    expect(tasks[0]!.payload.content).toContain('thread is now closed');
+    expect(tasks[0]!.payload.content).toContain('get_thread');
+    expect(tasks[0]!.payload.content).toContain('do not reply in-thread');
+    expect(tasks[0]!.payload.content).not.toContain('reply using the bullpen skill');
+    expect(tasks[0]!.payload.metadata?.threadClosed).toBe(true);
+  });
+
+  it('sets threadClosed false on open-thread dispatch tasks', async () => {
+    const { thread } = await bullpenService.openThread(
+      'Open thread', 'coordinator', ['coordinator', 'agent-b'], 'Hi', ['agent-b'],
+    );
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-1', topic: 'Open thread',
+      senderAgentId: 'coordinator', participants: ['coordinator', 'agent-b'],
+      mentionedAgentIds: ['agent-b'], content: 'Hi', threadClosed: false,
+      parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const task = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([_l, e]) => (e as { type: string }).type === 'agent.task')?.[1] as
+      { payload: { metadata: Record<string, unknown> } };
+    expect(task?.payload.metadata?.threadClosed).toBe(false);
   });
 });
