@@ -1,6 +1,7 @@
 // src/channels/credential-resolver.test.ts
 import { describe, it, expect } from 'vitest';
 import { channelCredentialStatus } from './credential-resolver.js';
+import { getChannelDescriptor } from './catalog.js';
 import type { ChannelDescriptor } from './catalog.js';
 
 const signal: ChannelDescriptor = {
@@ -62,6 +63,17 @@ describe('channelCredentialStatus', () => {
     const res = await channelCredentialStatus({ secrets, env }, signal);
     expect(res.requiredResolvable).toBe(true);
     expect(res.fields.find(f => f.key === 'socket_path')!.source).toBe('env');
+  });
+
+  it('reports the real Signal catalog descriptor resolvable from console-only vault keys (#1140)', async () => {
+    const descriptor = getChannelDescriptor('signal')!;
+    const secrets = fakeSecrets({
+      'channel.signal.socket_path': '/run/sig.sock',
+      'channel.signal.phone_number': '+15551234567',
+    });
+    const res = await channelCredentialStatus({ secrets, env: {} }, descriptor);
+    expect(res.requiredResolvable).toBe(true);
+    expect(res.fields.map(f => f.source)).toEqual(['vault', 'vault']);
   });
 
   it('a channel with no required keys is always resolvable', async () => {
