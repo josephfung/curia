@@ -46,24 +46,35 @@ describe('applyVaultSecrets', () => {
     const config = blankConfig();
     await applyVaultSecrets(
       config,
-      stubSecrets({ anthropic_api_key: '  sk-ant-x\n', signal_phone_number: ' +12223334444 ' }),
+      stubSecrets({ anthropic_api_key: '  sk-ant-x\n', api_token: '  tok-x \n' }),
       logger,
     );
     expect(config.anthropicApiKey).toBe('sk-ant-x');
-    expect(config.signalPhoneNumber).toBe('+12223334444');
+    expect(config.apiToken).toBe('tok-x');
   });
 
   it('collapses a whitespace-only value to undefined so feature/boot guards stay honest', async () => {
     const config = blankConfig();
     await applyVaultSecrets(
       config,
-      // A blank signal_phone_number must NOT wire up the Signal channel; a blank
-      // api_token must trip the !config.apiToken boot guard rather than read as present.
-      stubSecrets({ signal_phone_number: '   ', api_token: ' ' }),
+      // A blank api_token must trip the !config.apiToken boot guard rather than read as present.
+      stubSecrets({ api_token: ' ', nylas_api_key: '   ' }),
+      logger,
+    );
+    expect(config.apiToken).toBeUndefined();
+    expect(config.nylasApiKey).toBeUndefined();
+  });
+
+  it('does not read or write signalPhoneNumber — that key is owned by applyChannelVaultSecrets', async () => {
+    const config = blankConfig();
+    // Even with a legacy flat signal_phone_number present in the vault, applyVaultSecrets
+    // must leave config.signalPhoneNumber untouched (#1140 consolidation).
+    await applyVaultSecrets(
+      config,
+      stubSecrets({ signal_phone_number: '+12223334444' }),
       logger,
     );
     expect(config.signalPhoneNumber).toBeUndefined();
-    expect(config.apiToken).toBeUndefined();
   });
 
   it('defaults nylasSelfEmail to an empty string, never undefined', async () => {

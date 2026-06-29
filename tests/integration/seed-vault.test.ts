@@ -30,6 +30,14 @@ describeIf('seedVault', () => {
     await pool.end();
   });
 
+  it('does not seed the legacy signal_phone_number key (consolidated to channel.signal.phone_number, #1140)', async () => {
+    expect([...SEED_SECRET_NAMES]).not.toContain('signal_phone_number');
+    const { seeded, skipped } = await seedVault(secrets, { SIGNAL_PHONE_NUMBER: '+12223334444' }, logger);
+    expect(seeded).not.toContain('signal_phone_number');
+    expect(skipped).not.toContain('signal_phone_number');
+    expect(await secrets.get('signal_phone_number')).toBeNull();
+  });
+
   it('seeds present env values into the vault and skips absent ones', async () => {
     const env = { NYLAS_API_KEY: 'nyk_test_123', TAVILY_API_KEY: 'tvly_test_456' };
     const { seeded, skipped } = await seedVault(secrets, env, logger);

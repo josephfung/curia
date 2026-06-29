@@ -760,7 +760,10 @@ async function main(): Promise<void> {
     // in any log aggregation pipeline. The socket path is sufficient for diagnostics.
     logger.info({ socketPath: config.signalSocketPath }, 'Signal RPC client created');
   } else {
-    logger.warn('SIGNAL_SOCKET_PATH/SIGNAL_PHONE_NUMBER not set — Signal channel disabled');
+    // Point operators at the canonical config path first: the console writes
+    // channel.signal.socket_path / channel.signal.phone_number to the vault (#1140).
+    // SIGNAL_SOCKET_PATH / SIGNAL_PHONE_NUMBER env remain only as back-compat fallbacks.
+    logger.warn('Signal socket path or phone number not configured — Signal channel disabled. Set them in the console (Settings → Channels → Signal), or via the SIGNAL_SOCKET_PATH / SIGNAL_PHONE_NUMBER env fallbacks.');
   }
 
   // Calendar client — uses the primary email account's Nylas credentials.
