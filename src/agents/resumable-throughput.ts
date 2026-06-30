@@ -155,6 +155,7 @@ export async function emitResumableThroughputTelemetry(
       { err, taskId: opts.taskId },
       'Failed to publish task.resumable_throughput audit event',
     );
+    throw err;
   }
 
   return metrics;
