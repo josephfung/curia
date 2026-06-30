@@ -48,6 +48,7 @@ import { TempFileStore } from './temp-file-store.js';
 import type { InfraLlmService } from './infra-llm.js';
 import { OutboundContextService, ScopedOutboundContext } from '../dispatch/outbound-context.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
+import { DEFAULT_RESUMABLE_CEILINGS, type ResumableCeilingsConfig } from '../config.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -176,6 +177,8 @@ export class ExecutionLayer {
   /** Bypass-ladder thresholds (#1125) governing how much lineage standing a woken/derived task
    *  inherits at the live autonomy score. Defaults to 70 (same-task) / 90 (derived child). */
   private bypassLadder: BypassLadderConfig;
+  /** Resumable / plan-adaptive ceiling defaults from tasks.resumableCeilings (#1266). */
+  private resumableCeilings: ResumableCeilingsConfig;
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -213,6 +216,7 @@ export class ExecutionLayer {
     appOrigin?: string;
     httpPort?: number;
     bypassLadder?: BypassLadderConfig;
+    resumableCeilings?: ResumableCeilingsConfig;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -249,6 +253,7 @@ export class ExecutionLayer {
     this.appOrigin = options?.appOrigin;
     this.httpPort = options?.httpPort;
     this.bypassLadder = options?.bypassLadder ?? DEFAULT_BYPASS_LADDER;
+    this.resumableCeilings = options?.resumableCeilings ?? DEFAULT_RESUMABLE_CEILINGS;
   }
 
   /**
@@ -1003,6 +1008,7 @@ export class ExecutionLayer {
       selfEmail: this.selfEmail,
       // Configurable fallback timeout for the delegate skill (sourced from config.delegate.defaultTimeoutMs).
       defaultDelegateTimeoutMs: this.defaultDelegateTimeoutMs,
+      resumableCeilings: this.resumableCeilings,
       // Console origin + local port so the capture skills can build the magic-link URL
       // (appOrigin in prod, http://localhost:{httpPort} in dev). Harmless for other skills.
       appOrigin: this.appOrigin,

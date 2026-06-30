@@ -927,12 +927,12 @@ export class TaskRepo {
     );
   }
 
-  /** Persist progress.planAdaptive state (divergence signals, depth counters) (#1266). */
+  /** Persist progress.planAdaptive state (divergence signals, depth counters) (#1266).
+   *  Does not touch updated_at — child blocked-since uses updatedAt as its signal proxy. */
   async persistPlanAdaptiveState(taskId: string, state: PlanAdaptiveState): Promise<void> {
     await this.pool.query(
       `UPDATE tasks
-          SET progress = COALESCE(progress, '{}'::jsonb) || jsonb_build_object('planAdaptive', $1::jsonb),
-              updated_at = now()
+          SET progress = COALESCE(progress, '{}'::jsonb) || jsonb_build_object('planAdaptive', $1::jsonb)
         WHERE id = $2
           AND status NOT IN ('done', 'cancelled', 'failed')`,
       [JSON.stringify(state), taskId],

@@ -40,7 +40,7 @@ export type PlanWriteResult =
   | { ok: false; code: 'invalid_block'; message: string };
 
 /** Child statuses that count as resolved for the "X of Y" rollup. */
-const RESOLVED_CHILD_STATUSES = new Set(['done', 'cancelled']);
+const RESOLVED_CHILD_STATUSES = new Set(['done', 'cancelled', 'failed']);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

@@ -122,13 +122,22 @@ describe('readPlanBlock / writePlanBlock round-trip', () => {
 });
 
 describe('computePlanRollup', () => {
-  it('counts done and cancelled children as resolved', () => {
+  it('counts done, cancelled, and failed children as resolved', () => {
     const rollup = computePlanRollup(STEPS, {
       [CHILD_A]: 'done',
       [CHILD_B]: 'in_progress',
       [CHILD_C]: 'cancelled',
     });
     expect(rollup).toEqual({ done: 2, total: 3 });
+  });
+
+  it('counts failed children toward the resolved rollup', () => {
+    const rollup = computePlanRollup(STEPS, {
+      [CHILD_A]: 'in_progress',
+      [CHILD_B]: 'open',
+      [CHILD_C]: 'failed',
+    });
+    expect(rollup).toEqual({ done: 1, total: 3 });
   });
 
   it('ignores unmaterialized steps and unknown task ids', () => {
@@ -148,7 +157,7 @@ describe('computePlanRollup', () => {
     const rollup = computePlanRollup(STEPS, {
       [CHILD_A]: 'in_progress',
       [CHILD_B]: 'open',
-      [CHILD_C]: 'failed',
+      [CHILD_C]: 'open',
     });
     expect(rollup).toEqual({ done: 0, total: 3 });
   });

@@ -209,6 +209,11 @@ describe('plan completion helpers (#1239, #1240)', () => {
       'child-2': 'done',
       'child-3': 'open',
     })).toBe(false);
+    expect(isPlanReadyForAutoComplete(plan, {
+      'child-1': 'failed',
+      'child-2': 'done',
+      'child-3': 'done',
+    })).toBe(true);
   });
 
   it('surfaces the deliverable step output as the completion note', () => {

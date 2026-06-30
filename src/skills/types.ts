@@ -272,6 +272,8 @@ export interface SkillContext {
   /** Configurable fallback timeout for specialist delegations when no timeout_ms is supplied.
    *  Sourced from config.delegate.defaultTimeoutMs. Relevant to the delegate skill only. */
   defaultDelegateTimeoutMs?: number;
+  /** Resumable / plan-adaptive ceiling defaults from tasks.resumableCeilings (#1266). */
+  resumableCeilings?: import('../config.js').ResumableCeilingsConfig;
   /** Secret-capture minter — available to skills declaring 'secretCapture' in capabilities.
    *  Mints one-time tokenized links for agent-initiated secret capture (#971). Deliberately
    *  a MINT-ONLY surface: there is no method that returns a stored secret value, so the

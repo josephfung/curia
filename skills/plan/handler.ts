@@ -9,6 +9,7 @@ import { DEFAULT_RESUMABLE_CEILINGS } from '../../src/config.js';
 import {
   detectPlanAdaptiveBreach,
   escalatePlanAdaptiveBreach,
+  isPlanAdaptiveEscalationComplete,
   readPlanAdaptiveState,
   resolvePlanDepthForWrite,
 } from '../../src/agents/plan-adaptive-replan.js';
@@ -30,7 +31,7 @@ import { computePlanRollup, readPlanBlock } from '../../src/db/plan-progress.js'
 import type { TaskRow } from '../../src/db/queries/tasks.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
+const TERMINAL_STATUSES = new Set(['done', 'cancelled', 'failed']);
 
 export class PlanHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -96,6 +97,8 @@ export class PlanHandler implements SkillHandler {
       return { success: false, error: `Task ${taskId} is in a terminal state` };
     }
 
+    const resumableCeilings = ctx.resumableCeilings ?? DEFAULT_RESUMABLE_CEILINGS;
+
     for (const step of steps) {
       if (step.target_agent_id !== ctx.agentId) {
         if (!ctx.agentRegistry) {
@@ -116,15 +119,19 @@ export class PlanHandler implements SkillHandler {
     const existingPlan = readPlanBlock(parent.progress);
     const isReplan = existingPlan !== null;
     const existingAdaptive = readPlanAdaptiveState(parent.progress);
-    const grandparent = parent.parentTaskId
+    const immediateParent = parent.parentTaskId
       ? await ctx.taskRepo.getTask(parent.parentTaskId)
       : null;
-    const planDepth = resolvePlanDepthForWrite(parent, grandparent, isReplan);
+    const planDepth = resolvePlanDepthForWrite(parent, immediateParent, isReplan);
     const replanCount = (existingAdaptive?.replanCount ?? 0) + (isReplan ? 1 : 0);
+
+    if (isPlanAdaptiveEscalationComplete(parent)) {
+      return { success: false, error: 'Task already failed after a plan adaptive breach escalation' };
+    }
 
     const breach = detectPlanAdaptiveBreach(
       { planDepth, replanCount: isReplan ? replanCount : (existingAdaptive?.replanCount ?? 0) },
-      DEFAULT_RESUMABLE_CEILINGS,
+      resumableCeilings,
       parent.errorBudget,
     );
     if (breach) {

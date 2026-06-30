@@ -49,10 +49,16 @@ describe('validateTaskErrorBudget', () => {
 
   it('rejects non-positive ceiling values', () => {
     expect(validateTaskErrorBudget({ max_iterations: 0 })).toBe(
-      'error_budget.max_iterations must be a positive number.',
+      'error_budget.max_iterations must be a positive integer.',
     );
     expect(validateTaskErrorBudget({ max_cost_usd: -1 })).toBe(
       'error_budget.max_cost_usd must be a positive number.',
+    );
+    expect(validateTaskErrorBudget({ max_plan_depth: 2.5 })).toBe(
+      'error_budget.max_plan_depth must be a positive integer.',
+    );
+    expect(validateTaskErrorBudget({ throughput_divergence_ratio: 5 })).toBe(
+      'error_budget.throughput_divergence_ratio must be in (0, 1].',
     );
   });
 
