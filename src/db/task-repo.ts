@@ -34,6 +34,7 @@ import { prepareResumableBlockWithSpill } from './resumable-accumulator-spill.js
 import type { WorkingDocsRepo } from './working-docs-repo.js';
 import { type ResumableCircuitState } from '../agents/resumable-circuit-breaker.js';
 import type { PlanAdaptiveState } from '../agents/plan-adaptive-replan.js';
+import type { TaskEscalation } from '../agents/task-escalation.js';
 
 // All SELECT / RETURNING clauses use this column list. Centralised so a schema
 // change only needs updating in one place.
@@ -70,6 +71,31 @@ export interface CreateTaskParams {
   originator?: TaskOriginator | null;
   /** When true, stamps error_budget.resumable so the checkpoint harness activates (#1173). */
   resumable?: boolean;
+  /** Seeds an initial progress note (#1267). Makes the new row's last_progress_note non-empty
+   *  so the daily digest renders real content, not just title + tags. */
+  progressNote?: string;
+  /** Structured escalation payload (#1267), stored at progress.escalation for audit and a
+   *  future interactive surface. Set by the circuit-breaker / delegation escalation paths. */
+  escalation?: TaskEscalation;
+}
+
+/**
+ * Build the initial tasks.progress JSON for a new row (#1267). Defaults to the legacy
+ * empty-notes seed (`{"notes":[]}`). An optional first progress note makes the row's
+ * last_progress_note non-empty — the field the daily digest reads — and an optional
+ * structured escalation block is stored under progress.escalation.
+ */
+export function buildInitialTaskProgress(opts: {
+  progressNote?: string;
+  escalation?: TaskEscalation;
+  now?: Date;
+}): Record<string, unknown> {
+  const notes = opts.progressNote
+    ? [{ at: (opts.now ?? new Date()).toISOString(), note: opts.progressNote }]
+    : [];
+  const progress: Record<string, unknown> = { notes };
+  if (opts.escalation) progress.escalation = opts.escalation;
+  return progress;
 }
 
 export interface UpdateTaskParams {
@@ -144,11 +170,15 @@ export class TaskRepo {
       wakeAt,
       originator,
       resumable,
+      progressNote,
+      escalation,
     } = params;
 
     const resolvedCreatedBy = createdBy ?? agentId;
     const resolvedIntentAnchor = intentAnchor ?? title;
     const errorBudgetJson = resumable ? JSON.stringify({ resumable: true }) : '{}';
+    // Seed the row's progress so the digest's last_progress_note has content from creation (#1267).
+    const progressJson = JSON.stringify(buildInitialTaskProgress({ progressNote, escalation }));
 
     // Resolve the lineage to stamp (#1125). For a child task, cap the creating event's
     // originator to the parent's lineage so a child can never carry standing above its parent.
@@ -167,7 +197,7 @@ export class TaskRepo {
         owner, parent_task_id, blocked_by_task_id, priority, due_at, tags,
         waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by, originator
       )
-      VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, $17::jsonb,
+      VALUES ($1, $2, $3, $4, 'open', $18::jsonb, $17::jsonb,
               $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
       RETURNING ${TASK_COLUMNS}
     `;
@@ -189,6 +219,7 @@ export class TaskRepo {
       resolvedCreatedBy,
       originatorJson,
       errorBudgetJson,
+      progressJson, // $18 — seeded progress (notes + optional escalation block)
     ];
 
     let row: DbTaskRow;
@@ -212,23 +243,23 @@ export class TaskRepo {
             owner, parent_task_id, blocked_by_task_id, priority, due_at, tags,
             waiting_on_contact_id, waiting_on_text, source, source_agent_id, created_by, originator
           )
-          VALUES ($1, $2, $3, $4, 'open', '{"notes":[]}'::jsonb, $17::jsonb,
+          VALUES ($1, $2, $3, $4, 'open', $18::jsonb, $17::jsonb,
                   $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
           RETURNING ${TASK_COLUMNS}
         ),
         _wake_job AS (
           INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
-          SELECT $18, $19, '{"type":"task-wake"}'::jsonb, 'pending', $19, $20, $21, new_task.id, new_task.originator
+          SELECT $19, $20, '{"type":"task-wake"}'::jsonb, 'pending', $20, $21, $22, new_task.id, new_task.originator
           FROM new_task
         )
         SELECT * FROM new_task
       `;
       const { rows } = await this.pool.query(cteSql, [
-        ...taskParams,
-        agentId,           // $18 — scheduled_jobs.agent_id
-        wakeAt,            // $19 — run_at / next_run_at
-        resolvedCreatedBy, // $20 — created_by
-        this.timezone,     // $21 — timezone
+        ...taskParams,     // $1–$18 (taskParams[17] = $18 = seeded progress)
+        agentId,           // $19 — scheduled_jobs.agent_id
+        wakeAt,            // $20 — run_at / next_run_at
+        resolvedCreatedBy, // $21 — created_by
+        this.timezone,     // $22 — timezone
       ]);
       row = rows[0] as DbTaskRow | undefined
         ?? (() => { throw new Error('task-repo: createTask CTE returned no row'); })();

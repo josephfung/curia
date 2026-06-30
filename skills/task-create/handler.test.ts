@@ -364,4 +364,62 @@ describe('TaskCreateHandler', () => {
     expect(result.success).toBe(false);
     expect((result as { success: false; error: string }).error).toMatch(/DB connection lost/);
   });
+
+  // ── Escalation seeding (#1267) ────────────────────────────────────────────
+
+  it('forwards progress_note to createTask so the row seeds a last progress note', async () => {
+    const createTask = vi.fn().mockResolvedValue(makeTaskRow());
+    const taskRepo = makeTaskRepo({ createTask });
+    const ctx = makeCtx({ input: { title: 'Review', progress_note: 'Stalled at 25 of 1300.' }, taskRepo });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ progressNote: 'Stalled at 25 of 1300.' }),
+    );
+  });
+
+  it('parses escalation_json and forwards the structured block to createTask', async () => {
+    const createTask = vi.fn().mockResolvedValue(makeTaskRow());
+    const taskRepo = makeTaskRepo({ createTask });
+    const escalation = {
+      failureMode: 'agent_incomplete',
+      reason: 'maxTurns',
+      source: 'delegation',
+      headline: 'research could not finish',
+      suggestedActions: ['Re-scope it smaller.'],
+    };
+    const ctx = makeCtx({ input: { title: 'Review', escalation_json: JSON.stringify(escalation) }, taskRepo });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ escalation: expect.objectContaining({ failureMode: 'agent_incomplete' }) }),
+    );
+  });
+
+  it('ignores malformed escalation_json but still creates the task', async () => {
+    const createTask = vi.fn().mockResolvedValue(makeTaskRow());
+    const taskRepo = makeTaskRepo({ createTask });
+    const ctx = makeCtx({ input: { title: 'Review', escalation_json: '{not json' }, taskRepo });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ escalation: undefined }),
+    );
+  });
+
+  it('rejects a non-string progress_note', async () => {
+    const taskRepo = makeTaskRepo();
+    const ctx = makeCtx({ input: { title: 'Review', progress_note: 123 as unknown as string }, taskRepo });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/progress_note/);
+  });
 });

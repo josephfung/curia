@@ -21,6 +21,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
+import type { TaskEscalation } from '../../src/agents/task-escalation.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
@@ -48,6 +49,8 @@ export class TaskCreateHandler implements SkillHandler {
       source?: string;
       target_agent_id?: string;
       resumable?: boolean;
+      progress_note?: string;
+      escalation_json?: string;
     };
 
     if (!input.title || typeof input.title !== 'string' || !input.title.trim()) {
@@ -72,6 +75,29 @@ export class TaskCreateHandler implements SkillHandler {
     }
     if (input.tags && !Array.isArray(input.tags)) {
       return { success: false, error: 'tags must be an array of strings' };
+    }
+    if (input.progress_note !== undefined && typeof input.progress_note !== 'string') {
+      return { success: false, error: 'progress_note must be a string' };
+    }
+    if (input.progress_note && input.progress_note.length > 5000) {
+      return { success: false, error: 'progress_note must be 5000 characters or fewer' };
+    }
+
+    // Optional structured escalation block (#1267) — seeded onto progress.escalation. Carried
+    // as a JSON string to keep the input schema primitive. Malformed JSON is non-fatal: the
+    // task still gets created (and the progress note still surfaces), we just skip the block.
+    let escalation: TaskEscalation | undefined;
+    if (input.escalation_json) {
+      try {
+        const parsed: unknown = JSON.parse(input.escalation_json);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          escalation = parsed as TaskEscalation;
+        } else {
+          ctx.log.warn({ title: input.title }, 'task-create: escalation_json is not an object — ignoring');
+        }
+      } catch (err) {
+        ctx.log.warn({ err, title: input.title }, 'task-create: failed to parse escalation_json — ignoring');
+      }
     }
 
     if (!ctx.taskRepo) {
@@ -174,6 +200,10 @@ export class TaskCreateHandler implements SkillHandler {
         // parent's lineage when parent_task_id is set, so a child never exceeds its parent.
         originator: (ctx.taskMetadata?.originator as TaskOriginator | undefined) ?? null,
         resumable: input.resumable === true,
+        // Seed the first progress note + structured escalation block (#1267) so the row's
+        // last_progress_note is non-empty and the digest renders real content.
+        progressNote: input.progress_note,
+        escalation,
       });
 
       const tz = ctx.timezone;
