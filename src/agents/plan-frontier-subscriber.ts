@@ -15,6 +15,11 @@ import type {
 import { readPlanBlock } from '../db/plan-progress.js';
 import { handlePlanFrontierWakeForCircuitBreaker } from './resumable-circuit-breaker.js';
 import {
+  detectPlanAdaptiveBreach,
+  escalatePlanAdaptiveBreach,
+  readPlanAdaptiveState,
+} from './plan-adaptive-replan.js';
+import {
   advancePlanFrontier,
   handleChildTerminalResolution,
   isChildTerminalStatus,
@@ -98,9 +103,33 @@ export class PlanFrontierSubscriber {
           parentTaskId,
           eligibleAgents: this.opts.eligibleAgents,
           fallbackAgentId: this.opts.fallbackAgentId,
+          resumableCeilings: this.opts.resumableCeilings,
         });
 
         if (!result || result.autoCompleted) return;
+
+        const parentAfter = await this.opts.taskRepo.getTask(parentTaskId);
+        if (parentAfter) {
+          const adaptive = readPlanAdaptiveState(parentAfter.progress);
+          if (adaptive) {
+            const depthBreach = detectPlanAdaptiveBreach(
+              adaptive,
+              this.opts.resumableCeilings,
+              parentAfter.errorBudget,
+            );
+            if (depthBreach) {
+              await escalatePlanAdaptiveBreach({
+                bus: this.opts.bus,
+                taskRepo: this.opts.taskRepo,
+                logger: this.opts.logger,
+                task: parentAfter,
+                breach: depthBreach,
+                agentId: fired.payload.agentId,
+              });
+              return;
+            }
+          }
+        }
 
         await handlePlanFrontierWakeForCircuitBreaker({
           pool: this.opts.pool,

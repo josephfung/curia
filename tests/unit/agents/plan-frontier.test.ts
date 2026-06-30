@@ -6,6 +6,7 @@ import {
   isChildTerminalStatus,
 } from '../../../src/agents/plan-frontier.js';
 import { isPlanParentWakeEligible } from '../../../src/agents/resumable-continuation.js';
+import { DEFAULT_RESUMABLE_CEILINGS } from '../../../src/config.js';
 import type { TaskRow } from '../../../src/db/queries/tasks.js';
 import * as tasksQueries from '../../../src/db/queries/tasks.js';
 import * as continuation from '../../../src/agents/resumable-continuation.js';
@@ -197,6 +198,7 @@ describe('advancePlanFrontier', () => {
         },
       }),
       completeTask: vi.fn().mockResolvedValue(null),
+      persistPlanAdaptiveState: vi.fn().mockResolvedValue(undefined),
     };
 
     let tasksQueryCount = 0;
@@ -223,6 +225,7 @@ describe('advancePlanFrontier', () => {
       logger: logger as never,
       parentTaskId: PARENT_1,
       eligibleAgents: new Set(['coordinator']),
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
     });
 
     expect(result?.rollup).toEqual({ done: 1, total: 3 });
@@ -230,6 +233,47 @@ describe('advancePlanFrontier', () => {
     expect(result?.dispatchedChildIds).toEqual([CHILD_2, CHILD_3]);
     expect(result?.autoCompleted).toBe(false);
     expect(enqueueTaskWake).toHaveBeenCalledTimes(2);
+    expect(taskRepo.persistPlanAdaptiveState).toHaveBeenCalled();
+  });
+
+  it('persists divergence signals when a child failed', async () => {
+    const child1 = sampleChild({ id: CHILD_1, status: 'failed' });
+    const parent = sampleParent({ status: 'in_progress' });
+
+    const persistPlanAdaptiveState = vi.fn().mockResolvedValue(undefined);
+    const taskRepo = {
+      getTask: vi.fn().mockResolvedValue(parent),
+      setPlanBlock: vi.fn(),
+      completeTask: vi.fn().mockResolvedValue(null),
+      persistPlanAdaptiveState,
+    };
+
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('scheduled_jobs')) return { rows: [{ pending: false }] };
+        return { rows: [child1].map(toDbRow) };
+      }),
+    };
+
+    const result = await advancePlanFrontier({
+      pool: pool as never,
+      taskRepo: taskRepo as never,
+      schedulerService: { enqueueTaskWake: vi.fn() } as never,
+      logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never,
+      parentTaskId: PARENT_1,
+      eligibleAgents: new Set(['coordinator']),
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
+    });
+
+    expect(result?.divergenceSignals.some((s) => s.reason === 'child_failed')).toBe(true);
+    expect(persistPlanAdaptiveState).toHaveBeenCalledWith(
+      PARENT_1,
+      expect.objectContaining({
+        pendingSignals: expect.arrayContaining([
+          expect.objectContaining({ reason: 'child_failed' }),
+        ]),
+      }),
+    );
   });
 
   it('auto-completes the parent when all children and the deliverable step are done', async () => {
@@ -260,6 +304,7 @@ describe('advancePlanFrontier', () => {
         },
       }),
       completeTask,
+      persistPlanAdaptiveState: vi.fn().mockResolvedValue(undefined),
     };
 
     const pool = {
@@ -276,6 +321,7 @@ describe('advancePlanFrontier', () => {
       logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never,
       parentTaskId: PARENT_1,
       eligibleAgents: new Set(['coordinator']),
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
     });
 
     expect(result?.autoCompleted).toBe(true);
@@ -320,6 +366,7 @@ describe('advancePlanFrontier', () => {
       getTask: vi.fn().mockResolvedValue(parent),
       setPlanBlock: vi.fn(),
       completeTask,
+      persistPlanAdaptiveState: vi.fn().mockResolvedValue(undefined),
     };
 
     const pool = {
@@ -336,6 +383,7 @@ describe('advancePlanFrontier', () => {
       logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never,
       parentTaskId: PARENT_1,
       eligibleAgents: new Set(['coordinator']),
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
     });
 
     expect(result?.autoCompleted).toBe(true);

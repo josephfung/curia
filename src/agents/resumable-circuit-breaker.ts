@@ -150,6 +150,10 @@ export function resolveResumableCeilings(
     maxIterations: pick('maxIterations', 'max_iterations'),
     maxWallclockHours: pick('maxWallclockHours', 'max_wallclock_hours'),
     maxCostUsd: pick('maxCostUsd', 'max_cost_usd'),
+    maxPlanDepth: pick('maxPlanDepth', 'max_plan_depth'),
+    maxReplansPerSubtree: pick('maxReplansPerSubtree', 'max_replans_per_subtree'),
+    blockedStepHours: pick('blockedStepHours', 'blocked_step_hours'),
+    throughputDivergenceRatio: pick('throughputDivergenceRatio', 'throughput_divergence_ratio'),
   };
 }
 

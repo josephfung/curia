@@ -5,6 +5,13 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import { DEFAULT_RESUMABLE_CEILINGS } from '../../src/config.js';
+import {
+  detectPlanAdaptiveBreach,
+  escalatePlanAdaptiveBreach,
+  readPlanAdaptiveState,
+  resolvePlanDepthForWrite,
+} from '../../src/agents/plan-adaptive-replan.js';
 import {
   buildPlanStepDescriptors,
   countMaterializationKinds,
@@ -107,6 +114,31 @@ export class PlanHandler implements SkillHandler {
     }
 
     const existingPlan = readPlanBlock(parent.progress);
+    const isReplan = existingPlan !== null;
+    const existingAdaptive = readPlanAdaptiveState(parent.progress);
+    const grandparent = parent.parentTaskId
+      ? await ctx.taskRepo.getTask(parent.parentTaskId)
+      : null;
+    const planDepth = resolvePlanDepthForWrite(parent, grandparent, isReplan);
+    const replanCount = (existingAdaptive?.replanCount ?? 0) + (isReplan ? 1 : 0);
+
+    const breach = detectPlanAdaptiveBreach(
+      { planDepth, replanCount: isReplan ? replanCount : (existingAdaptive?.replanCount ?? 0) },
+      DEFAULT_RESUMABLE_CEILINGS,
+      parent.errorBudget,
+    );
+    if (breach) {
+      await escalatePlanAdaptiveBreach({
+        bus: ctx.bus,
+        taskRepo: ctx.taskRepo,
+        logger: ctx.log,
+        task: parent,
+        breach,
+        agentId: ctx.agentId ?? 'system',
+      });
+      return { success: false, error: breach.message };
+    }
+
     const newStepIds = new Set(steps.map((s) => s.id));
     const stepTaskIds: Record<string, string | null> = {};
     const originator = parent.originator;
@@ -252,6 +284,12 @@ export class PlanHandler implements SkillHandler {
 
       const { block } = planResult as { task: TaskRow; block: { total: number; done: number } };
       const materialization = countMaterializationKinds(steps);
+
+      await ctx.taskRepo.persistPlanAdaptiveState(taskId, {
+        planDepth,
+        replanCount,
+        pendingSignals: [],
+      });
 
       return {
         success: true,

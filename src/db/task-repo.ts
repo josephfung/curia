@@ -33,6 +33,7 @@ import {
 import { prepareResumableBlockWithSpill } from './resumable-accumulator-spill.js';
 import type { WorkingDocsRepo } from './working-docs-repo.js';
 import { type ResumableCircuitState } from '../agents/resumable-circuit-breaker.js';
+import type { PlanAdaptiveState } from '../agents/plan-adaptive-replan.js';
 
 // All SELECT / RETURNING clauses use this column list. Centralised so a schema
 // change only needs updating in one place.
@@ -919,6 +920,18 @@ export class TaskRepo {
     await this.pool.query(
       `UPDATE tasks
           SET progress = COALESCE(progress, '{}'::jsonb) || jsonb_build_object('resumableCircuit', $1::jsonb),
+              updated_at = now()
+        WHERE id = $2
+          AND status NOT IN ('done', 'cancelled', 'failed')`,
+      [JSON.stringify(state), taskId],
+    );
+  }
+
+  /** Persist progress.planAdaptive state (divergence signals, depth counters) (#1266). */
+  async persistPlanAdaptiveState(taskId: string, state: PlanAdaptiveState): Promise<void> {
+    await this.pool.query(
+      `UPDATE tasks
+          SET progress = COALESCE(progress, '{}'::jsonb) || jsonb_build_object('planAdaptive', $1::jsonb),
               updated_at = now()
         WHERE id = $2
           AND status NOT IN ('done', 'cancelled', 'failed')`,

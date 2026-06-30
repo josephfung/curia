@@ -6,6 +6,7 @@
 
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
+import type { ResumableCeilingsConfig } from '../config.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { TaskRow, DbTaskRow } from '../db/queries/tasks.js';
@@ -27,6 +28,11 @@ import {
   isPgUniqueViolation,
 } from './resumable-continuation.js';
 import { snapshotPlanFrontier } from './resumable-circuit-breaker.js';
+import {
+  detectPlanDivergence,
+  readPlanAdaptiveState,
+  type PlanDivergenceSignal,
+} from './plan-adaptive-replan.js';
 
 /** created_by marker on child dispatches from frontier advancement. */
 export const PLAN_FRONTIER_CHILD_DISPATCH_CREATED_BY = 'plan-frontier';
@@ -98,6 +104,7 @@ export interface AdvancePlanFrontierOptions {
   parentTaskId: string;
   eligibleAgents: Set<string>;
   fallbackAgentId?: string;
+  resumableCeilings: ResumableCeilingsConfig;
 }
 
 export interface AdvancePlanFrontierResult {
@@ -106,6 +113,7 @@ export interface AdvancePlanFrontierResult {
   dispatchedChildIds: string[];
   autoCompleted: boolean;
   frontierSnapshot: ReturnType<typeof snapshotPlanFrontier>;
+  divergenceSignals: PlanDivergenceSignal[];
 }
 
 async function loadTasksByIds(pool: Pool, taskIds: readonly string[]): Promise<Map<string, TaskRow>> {
@@ -253,6 +261,33 @@ export async function advancePlanFrontier(
   const childStatuses = childStatusMap(children);
   const frontierSnapshot = snapshotPlanFrontier(currentPlan.steps, childStatuses);
 
+  const stepTitleById = new Map<string, string>();
+  for (const step of currentPlan.steps) {
+    const child = step.taskId ? children.get(step.taskId) : undefined;
+    if (child?.title) stepTitleById.set(step.id, child.title);
+  }
+
+  const divergenceSignals = detectPlanDivergence({
+    steps: currentPlan.steps,
+    children,
+    ceilings: opts.resumableCeilings,
+    stepTitleById,
+  });
+
+  const existingAdaptive = readPlanAdaptiveState(parent.progress);
+  const planAdaptiveState = {
+    planDepth: existingAdaptive?.planDepth ?? 1,
+    replanCount: existingAdaptive?.replanCount ?? 0,
+    pendingSignals: divergenceSignals,
+  };
+  await opts.taskRepo.persistPlanAdaptiveState(parent.id, planAdaptiveState);
+  if (divergenceSignals.length > 0) {
+    opts.logger.info(
+      { parentTaskId: parent.id, signalCount: divergenceSignals.length, reasons: divergenceSignals.map((s) => s.reason) },
+      'Plan frontier: divergence signals surfaced',
+    );
+  }
+
   let autoCompleted = false;
   if (isPlanReadyForAutoComplete(currentPlan, childStatuses)) {
     const completionNote = resolvePlanCompletionNote(currentPlan, children);
@@ -270,5 +305,5 @@ export async function advancePlanFrontier(
     }
   }
 
-  return { rollup, rollupUpdated, dispatchedChildIds, autoCompleted, frontierSnapshot };
+  return { rollup, rollupUpdated, dispatchedChildIds, autoCompleted, frontierSnapshot, divergenceSignals };
 }

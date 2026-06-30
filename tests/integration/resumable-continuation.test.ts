@@ -11,6 +11,7 @@ import { TaskRepo } from '../../src/db/task-repo.js';
 import { ResumableContinuationSubscriber } from '../../src/agents/resumable-continuation-subscriber.js';
 import { RESUMABLE_CONTINUATION_CREATED_BY } from '../../src/agents/resumable-continuation.js';
 import { createAgentResponse } from '../../src/bus/events.js';
+import { DEFAULT_RESUMABLE_CEILINGS } from '../../src/config.js';
 import type { LLMProvider, Message } from '../../src/agents/llm/provider.js';
 import type { EventBus as EventBusType } from '../../src/bus/bus.js';
 
@@ -85,7 +86,7 @@ describeIf('Resumable continuation scheduling (#1175)', () => {
       taskRepo: repo,
       eligibleAgents: new Set(['social-media', 'coordinator']),
       continuationDelaySeconds: 1,
-      resumableCeilings: { maxStalls: 3, maxIterations: 100, maxWallclockHours: 24, maxCostUsd: 10 },
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
     });
     subscriber.start();
 

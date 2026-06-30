@@ -431,6 +431,10 @@ tasks:
     maxIterations: 100    # hard cap on continuation slices
     maxWallclockHours: 24 # hours from first processed pause
     maxCostUsd: 10.00     # aggregate LLM spend across slices (USD)
+    maxPlanDepth: 3       # max plan-decomposition depth per subtree (#1266)
+    maxReplansPerSubtree: 5  # max adaptive re-plans per planned task (#1266)
+    blockedStepHours: 48  # blocked child hours before divergence signal (#1266)
+    throughputDivergenceRatio: 0.5  # measured/implied pace ratio floor (#1266)
 
 # Autonomy authorization (#1125). The bypass ladder governs how much LINEAGE standing a
 # heartbeat-woken/derived task inherits at the live autonomy score. The score can only ever
