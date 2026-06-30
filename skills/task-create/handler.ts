@@ -31,6 +31,20 @@ const VALID_SOURCES = new Set(['ceo', 'agent', 'scheduler', 'coordinator']);
 // "June 10 2026" or "2026/06/10" that new Date() would silently accept.
 const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
+// Validate the required TaskEscalation fields before trusting an escalation_json blob (#1267).
+// A bare `{}` or arbitrary object would otherwise pass an is-object check and land permanently
+// in progress.escalation, leaving downstream readers a swamp of inconsistent shapes. Optional
+// fields (progress, throughput, blocker, costUsd) are intentionally not checked.
+function isValidEscalationShape(value: unknown): value is TaskEscalation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.failureMode === 'string'
+    && typeof v.reason === 'string'
+    && typeof v.source === 'string'
+    && typeof v.headline === 'string'
+    && Array.isArray(v.suggestedActions);
+}
+
 export class TaskCreateHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     const input = ctx.input as {
@@ -90,10 +104,10 @@ export class TaskCreateHandler implements SkillHandler {
     if (input.escalation_json) {
       try {
         const parsed: unknown = JSON.parse(input.escalation_json);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          escalation = parsed as TaskEscalation;
+        if (isValidEscalationShape(parsed)) {
+          escalation = parsed;
         } else {
-          ctx.log.warn({ title: input.title }, 'task-create: escalation_json is not an object — ignoring');
+          ctx.log.warn({ title: input.title }, 'task-create: escalation_json missing required fields — ignoring');
         }
       } catch (err) {
         ctx.log.warn({ err, title: input.title }, 'task-create: failed to parse escalation_json — ignoring');

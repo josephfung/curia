@@ -413,6 +413,20 @@ describe('TaskCreateHandler', () => {
     );
   });
 
+  it('ignores a well-formed object that is not a valid escalation shape', async () => {
+    const createTask = vi.fn().mockResolvedValue(makeTaskRow());
+    const taskRepo = makeTaskRepo({ createTask });
+    // Valid JSON, an object, but missing the required TaskEscalation fields — must not persist.
+    const ctx = makeCtx({ input: { title: 'Review', escalation_json: JSON.stringify({ foo: 'bar' }) }, taskRepo });
+
+    const result = await new TaskCreateHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ escalation: undefined }),
+    );
+  });
+
   it('rejects a non-string progress_note', async () => {
     const taskRepo = makeTaskRepo();
     const ctx = makeCtx({ input: { title: 'Review', progress_note: 123 as unknown as string }, taskRepo });
