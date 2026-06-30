@@ -12,12 +12,16 @@ const CHILD_AUDIT = '00000000-0000-0000-0000-000000000003';
 const CHILD_SYNTH = '00000000-0000-0000-0000-000000000004';
 
 function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
+  const taskRepo = overrides.taskRepo
+    ? { ...planRepoExtras(), ...overrides.taskRepo }
+    : undefined;
   return {
     input: {},
     secret: () => 'unused',
     log: silentLog,
     agentId: 'coordinator',
     ...overrides,
+    taskRepo,
   } as unknown as SkillContext;
 }
 
@@ -47,6 +51,12 @@ function makeTaskRow(overrides: Partial<TaskRow> = {}): TaskRow {
     tags: [],
     originator: null,
     ...overrides,
+  };
+}
+
+function planRepoExtras() {
+  return {
+    persistPlanAdaptiveState: vi.fn().mockResolvedValue(undefined),
   };
 }
 
