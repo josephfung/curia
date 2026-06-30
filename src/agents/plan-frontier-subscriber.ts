@@ -1,8 +1,10 @@
 // plan-frontier-subscriber.ts — child→parent wake + frontier advancement (#1238).
+// Applies the progress-based circuit breaker on planned-parent wakes (#1239).
 
 import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
+import type { ResumableCeilingsConfig } from '../config.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type {
@@ -11,6 +13,7 @@ import type {
   TaskUpdatedEvent,
 } from '../bus/events.js';
 import { readPlanBlock } from '../db/plan-progress.js';
+import { handlePlanFrontierWakeForCircuitBreaker } from './resumable-circuit-breaker.js';
 import {
   advancePlanFrontier,
   handleChildTerminalResolution,
@@ -25,6 +28,7 @@ export interface PlanFrontierSubscriberOptions {
   taskRepo: TaskRepo;
   eligibleAgents: Set<string>;
   continuationDelaySeconds: number;
+  resumableCeilings: ResumableCeilingsConfig;
   fallbackAgentId?: string;
 }
 
@@ -86,7 +90,7 @@ export class PlanFrontierSubscriber {
         const parent = await this.opts.taskRepo.getTask(parentTaskId);
         if (!parent || !readPlanBlock(parent.progress)) return;
 
-        await advancePlanFrontier({
+        const result = await advancePlanFrontier({
           pool: this.opts.pool,
           taskRepo: this.opts.taskRepo,
           schedulerService: this.opts.schedulerService,
@@ -95,6 +99,19 @@ export class PlanFrontierSubscriber {
           eligibleAgents: this.opts.eligibleAgents,
           fallbackAgentId: this.opts.fallbackAgentId,
         });
+
+        if (!result || result.autoCompleted) return;
+
+        await handlePlanFrontierWakeForCircuitBreaker({
+          pool: this.opts.pool,
+          bus: this.opts.bus,
+          taskRepo: this.opts.taskRepo,
+          logger: this.opts.logger,
+          taskId: parentTaskId,
+          snapshot: result.frontierSnapshot,
+          ceilings: this.opts.resumableCeilings,
+          agentId: fired.payload.agentId,
+        });
       } catch (err) {
         this.opts.logger.error({ err, parentTaskId }, 'Plan frontier: failed to advance on parent wake');
         throw err;
@@ -102,7 +119,10 @@ export class PlanFrontierSubscriber {
     });
 
     this.opts.logger.info(
-      { continuationDelaySeconds: this.opts.continuationDelaySeconds },
+      {
+        continuationDelaySeconds: this.opts.continuationDelaySeconds,
+        resumableCeilings: this.opts.resumableCeilings,
+      },
       'PlanFrontierSubscriber started',
     );
   }

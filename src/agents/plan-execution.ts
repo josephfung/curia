@@ -223,3 +223,55 @@ export function countMaterializationKinds(steps: readonly PlanStepInput[]): {
   }
   return { iterateLeaves, heterogeneousRows, lazySteps };
 }
+
+/** Extract the best available output text from a completed child task. */
+export function extractTaskOutputNote(task: {
+  title: string;
+  description: string | null;
+  progress: Record<string, unknown>;
+}): string {
+  const notes = task.progress.notes;
+  if (Array.isArray(notes) && notes.length > 0) {
+    const last = notes[notes.length - 1] as { note?: string } | null;
+    if (last?.note && last.note.trim().length > 0) return last.note.trim();
+  }
+  if (task.description && task.description.trim().length > 0) return task.description.trim();
+  return task.title;
+}
+
+/** Build the parent completion note from the deliverable step or a child-summary rollup. */
+export function resolvePlanCompletionNote(
+  plan: PlanProgressBlock,
+  children: ReadonlyMap<string, { title: string; description: string | null; progress: Record<string, unknown> }>,
+): string {
+  if (plan.deliverableStepId) {
+    const step = plan.steps.find((s) => s.id === plan.deliverableStepId);
+    const child = step?.taskId ? children.get(step.taskId) : undefined;
+    if (child) return extractTaskOutputNote(child);
+  }
+
+  const lines: string[] = [];
+  for (const step of plan.steps) {
+    if (!step.taskId) continue;
+    const child = children.get(step.taskId);
+    if (!child) continue;
+    lines.push(`${child.title}: ${extractTaskOutputNote(child)}`);
+  }
+  return lines.join('\n\n');
+}
+
+/** True when every planned child is resolved and the deliverable step (if any) is done. */
+export function isPlanReadyForAutoComplete(
+  plan: PlanProgressBlock,
+  childStatusByTaskId: Readonly<Record<string, string>>,
+): boolean {
+  if (plan.done !== plan.total || plan.total === 0) return false;
+
+  if (plan.deliverableStepId) {
+    const step = plan.steps.find((s) => s.id === plan.deliverableStepId);
+    if (!step?.taskId) return false;
+    return childStatusByTaskId[step.taskId] === 'done';
+  }
+
+  return true;
+}

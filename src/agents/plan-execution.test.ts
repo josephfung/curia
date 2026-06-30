@@ -4,10 +4,12 @@ import {
   countMaterializationKinds,
   existingTaskIdForStep,
   findRemovedChildTaskIds,
+  isPlanReadyForAutoComplete,
   parsePlanStepsInput,
   planStepDriftsFromChild,
   preflightPlanBlockWrite,
   resolveBlockedByTaskId,
+  resolvePlanCompletionNote,
   validateDeliverableStepId,
   validatePlanStepsGraph,
 } from './plan-execution.js';
@@ -174,5 +176,48 @@ describe('preflightPlanBlockWrite', () => {
     if (!result.ok) {
       expect(result.code).toBe('block_overflow');
     }
+  });
+});
+
+describe('plan completion helpers (#1239)', () => {
+  const plan: PlanProgressBlock = {
+    steps: [
+      { id: 'step-1', taskId: 'child-1' },
+      { id: 'step-2', taskId: 'child-2' },
+      { id: 'deliverable', taskId: 'child-3' },
+    ],
+    deliverableStepId: 'deliverable',
+    done: 3,
+    total: 3,
+    next: 'Done',
+  };
+
+  it('requires the deliverable child to be done before auto-complete', () => {
+    expect(isPlanReadyForAutoComplete(plan, {
+      'child-1': 'done',
+      'child-2': 'done',
+      'child-3': 'done',
+    })).toBe(true);
+    expect(isPlanReadyForAutoComplete(plan, {
+      'child-1': 'done',
+      'child-2': 'done',
+      'child-3': 'cancelled',
+    })).toBe(false);
+    expect(isPlanReadyForAutoComplete({ ...plan, done: 2 }, {
+      'child-1': 'done',
+      'child-2': 'done',
+      'child-3': 'open',
+    })).toBe(false);
+  });
+
+  it('surfaces the deliverable step output as the completion note', () => {
+    const children = new Map([
+      ['child-3', {
+        title: 'Synthesis',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Kickoff plan ready' }] },
+      }],
+    ]);
+    expect(resolvePlanCompletionNote(plan, children)).toBe('Kickoff plan ready');
   });
 });
