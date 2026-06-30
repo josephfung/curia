@@ -66,11 +66,12 @@ describe('computeResumableThroughput (#1264)', () => {
 });
 
 describe('emitResumableThroughputTelemetry', () => {
-  it('logs and publishes audit telemetry without throwing on publish failure', async () => {
+  it('logs and rethrows when audit publish fails', async () => {
     const logger = { info: vi.fn(), error: vi.fn() };
-    const bus = { publish: vi.fn().mockRejectedValue(new Error('audit down')) };
+    const publishError = new Error('audit down');
+    const bus = { publish: vi.fn().mockRejectedValue(publishError) };
 
-    await emitResumableThroughputTelemetry({
+    await expect(emitResumableThroughputTelemetry({
       logger: logger as never,
       bus: bus as never,
       taskId: 'task-1',
@@ -78,7 +79,7 @@ describe('emitResumableThroughputTelemetry', () => {
       resumable: { done: 60, total: 1300, lastSliceUnits: 12 },
       circuit: baseCircuit,
       now: new Date('2026-06-01T01:00:00.000Z'),
-    });
+    })).rejects.toThrow('audit down');
 
     expect(logger.info).toHaveBeenCalled();
     expect(bus.publish).toHaveBeenCalledWith('system', expect.objectContaining({ type: 'task.resumable_throughput' }));
