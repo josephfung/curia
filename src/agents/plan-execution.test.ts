@@ -179,7 +179,7 @@ describe('preflightPlanBlockWrite', () => {
   });
 });
 
-describe('plan completion helpers (#1239)', () => {
+describe('plan completion helpers (#1239, #1240)', () => {
   const plan: PlanProgressBlock = {
     steps: [
       { id: 'step-1', taskId: 'child-1' },
@@ -235,5 +235,54 @@ describe('plan completion helpers (#1239)', () => {
       }],
     ]);
     expect(resolvePlanCompletionNote(plan, children)).toBe('Real output');
+  });
+
+  it('auto-completes when all children are done and no deliverable step is marked', () => {
+    const rollupPlan: PlanProgressBlock = {
+      steps: [
+        { id: 'step-1', taskId: 'child-1' },
+        { id: 'step-2', taskId: 'child-2' },
+      ],
+      deliverableStepId: null,
+      done: 2,
+      total: 2,
+      next: 'Done',
+    };
+    expect(isPlanReadyForAutoComplete(rollupPlan, {
+      'child-1': 'done',
+      'child-2': 'done',
+    })).toBe(true);
+    expect(isPlanReadyForAutoComplete({ ...rollupPlan, done: 1 }, {
+      'child-1': 'done',
+      'child-2': 'open',
+    })).toBe(false);
+  });
+
+  it('rolls up child summaries in plan order when no deliverable step is marked', () => {
+    const rollupPlan: PlanProgressBlock = {
+      steps: [
+        { id: 'step-1', taskId: 'child-1' },
+        { id: 'step-2', taskId: 'child-2' },
+      ],
+      deliverableStepId: null,
+      done: 2,
+      total: 2,
+      next: 'Done',
+    };
+    const children = new Map([
+      ['child-1', {
+        title: 'Research',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Found 12 competitors' }] },
+      }],
+      ['child-2', {
+        title: 'Draft',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Outline complete' }] },
+      }],
+    ]);
+    expect(resolvePlanCompletionNote(rollupPlan, children)).toBe(
+      'Research: Found 12 competitors\n\nDraft: Outline complete',
+    );
   });
 });

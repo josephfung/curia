@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Plan frontier advancement** — child terminal resolution schedules a near-term planned-parent wake; the wake recomputes `progress.plan` rollup and dispatches newly-unblocked children (BacklogHeartbeat remains the backstop). (#1238)
 - **Plan completion reconciliation** — terminal plan parents now cancel open descendants and their pending wakes. (#1239)
 - **Plan auto-complete** — fully-resolved plans now finish automatically using the deliverable step output. (#1239)
+- **Plan deliverable surfacing** — parent auto-complete honors `deliverableStepId` for the completion summary, defaulting to a plan-order rollup of child outputs when unset. (#1240)
 - **Plan frontier circuit breaker** — planned-parent wakes now escalate after repeated stalls without frontier progress. (#1239)
 - **`plan`** — rows-direct goal decomposition skill writing child task rows and `progress.plan`; platform plan-altitude guidance and per-turn dynamic pin for complex bound tasks. (#1237)
 - **`progress.plan`** — typed plan block with child-step descriptors, deliverable step pointer, and "X of Y" rollup helper; round-trip persistence via `getPlanBlock` / `setPlanBlock`. (#1236)

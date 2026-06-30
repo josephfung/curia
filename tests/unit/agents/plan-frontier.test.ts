@@ -285,4 +285,64 @@ describe('advancePlanFrontier', () => {
       'coordinator',
     );
   });
+
+  it('auto-completes with a child-summary rollup when no deliverable step is marked', async () => {
+    const child1 = sampleChild({
+      id: CHILD_1,
+      status: 'done',
+      title: 'Research',
+      progress: { notes: [{ at: 't', note: 'Found 12 competitors' }] },
+    });
+    const child2 = sampleChild({
+      id: CHILD_2,
+      status: 'done',
+      title: 'Draft',
+      progress: { notes: [{ at: 't', note: 'Outline complete' }] },
+    });
+    const parent = sampleParent({
+      status: 'in_progress',
+      progress: {
+        plan: {
+          steps: [
+            { id: 'step-1', taskId: CHILD_1 },
+            { id: 'step-2', taskId: CHILD_2 },
+          ],
+          deliverableStepId: null,
+          done: 2,
+          total: 2,
+          next: 'Done',
+        },
+      },
+    });
+
+    const completeTask = vi.fn().mockResolvedValue({ ...parent, status: 'done' });
+    const taskRepo = {
+      getTask: vi.fn().mockResolvedValue(parent),
+      setPlanBlock: vi.fn(),
+      completeTask,
+    };
+
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('scheduled_jobs')) return { rows: [{ pending: false }] };
+        return { rows: [child1, child2].map(toDbRow) };
+      }),
+    };
+
+    const result = await advancePlanFrontier({
+      pool: pool as never,
+      taskRepo: taskRepo as never,
+      schedulerService: { enqueueTaskWake: vi.fn() } as never,
+      logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never,
+      parentTaskId: PARENT_1,
+      eligibleAgents: new Set(['coordinator']),
+    });
+
+    expect(result?.autoCompleted).toBe(true);
+    expect(completeTask).toHaveBeenCalledWith(
+      PARENT_1,
+      'Research: Found 12 competitors\n\nDraft: Outline complete',
+      'coordinator',
+    );
+  });
 });

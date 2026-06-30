@@ -179,6 +179,77 @@ describeIf('Plan completion reconciliation (#1239)', () => {
     expect(notes?.some((n) => n.note === 'Deliverable synthesis output')).toBe(true);
   });
 
+  it('auto-completes the parent with a child-summary rollup when no deliverable is marked', async () => {
+    const subscriber = new PlanFrontierSubscriber({
+      pool,
+      bus,
+      logger,
+      schedulerService,
+      taskRepo: repo,
+      eligibleAgents: new Set(['coordinator']),
+      continuationDelaySeconds: 30,
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
+    });
+    subscriber.start();
+
+    const parent = await repo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX} rollup parent`,
+      source: 'coordinator',
+      sourceAgentId: 'coordinator',
+    });
+    const child1 = await repo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX} rollup child 1`,
+      source: 'coordinator',
+      sourceAgentId: 'coordinator',
+      parentTaskId: parent.id,
+    });
+    const child2 = await repo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX} rollup child 2`,
+      source: 'coordinator',
+      sourceAgentId: 'coordinator',
+      parentTaskId: parent.id,
+    });
+    await repo.updateTask(child1.id, { progressNote: 'Found 12 competitors' }, 'coordinator');
+    await repo.updateTask(child2.id, { progressNote: 'Outline complete' }, 'coordinator');
+    await repo.updateTask(child1.id, { status: 'done' }, 'coordinator');
+    await repo.updateTask(child2.id, { status: 'done' }, 'coordinator');
+
+    await repo.setPlanBlock(parent.id, {
+      steps: [
+        { id: 'step-1', taskId: child1.id },
+        { id: 'step-2', taskId: child2.id },
+      ],
+      deliverableStepId: null,
+      done: 2,
+      total: 2,
+      next: 'Done',
+    }, 'coordinator');
+
+    const parentWake = await schedulerService.enqueueTaskWake({
+      taskId: parent.id,
+      agentId: 'coordinator',
+      runAt: new Date(),
+      createdBy: 'test',
+    });
+
+    await bus.publish('system', createScheduleFired({
+      jobId: parentWake.jobId,
+      agentId: 'coordinator',
+      agentTaskId: parent.id,
+      parentEventId: 'rollup-auto-complete-wake',
+    }));
+
+    const reloadedParent = await repo.getTask(parent.id);
+    expect(reloadedParent?.status).toBe('done');
+    const notes = reloadedParent?.progress.notes as Array<{ note: string }> | undefined;
+    const completionNote = notes?.find((n) => n.note.includes('Found 12 competitors'))?.note;
+    expect(completionNote).toContain('Found 12 competitors');
+    expect(completionNote).toContain('Outline complete');
+  });
+
   it('escalates a planned parent that wakes with no frontier progress', async () => {
     const ceilings = { ...DEFAULT_RESUMABLE_CEILINGS, maxStalls: 2 };
     const subscriber = new PlanFrontierSubscriber({
