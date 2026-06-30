@@ -232,8 +232,10 @@ export function extractTaskOutputNote(task: {
 }): string {
   const notes = task.progress.notes;
   if (Array.isArray(notes) && notes.length > 0) {
-    const last = notes[notes.length - 1] as { note?: string } | null;
-    if (last?.note && last.note.trim().length > 0) return last.note.trim();
+    for (let i = notes.length - 1; i >= 0; i--) {
+      const entry = notes[i] as { note?: string } | null;
+      if (entry?.note && entry.note.trim().length > 0) return entry.note.trim();
+    }
   }
   if (task.description && task.description.trim().length > 0) return task.description.trim();
   return task.title;

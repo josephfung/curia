@@ -120,7 +120,10 @@ describe('PlanFrontierSubscriber', () => {
     expect(advanceSpy).toHaveBeenCalledWith(expect.objectContaining({
       parentTaskId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
     }));
-    expect(breakerSpy).toHaveBeenCalled();
+    expect(breakerSpy).toHaveBeenCalledWith(expect.objectContaining({
+      ceilings: DEFAULT_RESUMABLE_CEILINGS,
+      snapshot: { rollupDone: 1, terminalChildCount: 1 },
+    }));
   });
 
   it('skips the circuit breaker when the parent auto-completes', async () => {
