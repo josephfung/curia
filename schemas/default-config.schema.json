@@ -98,7 +98,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "scratchTtlDays": { "type": "integer", "minimum": 1, "maximum": 36500 }
+        "scratchTtlDays": { "type": "integer", "minimum": 1, "maximum": 36500 },
+        "kgPromotion": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "maxFacts": { "type": "integer", "minimum": 0 },
+            "maxRelationships": { "type": "integer", "minimum": 0 }
+          }
+        }
       }
     },
     "skillOutput": {

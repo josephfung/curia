@@ -35,7 +35,7 @@ const DECAY_CLASSES_LIST = DECAY_CLASSES.join(', ');
 
 export class ExtractFactsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { text, source } = ctx.input as { text?: string; source?: string };
+    const { text, source, max_stored } = ctx.input as { text?: string; source?: string; max_stored?: number };
 
     if (!text || typeof text !== 'string') {
       // Log only safe metadata — never log ctx.input directly (contains full transcript)
@@ -58,6 +58,15 @@ export class ExtractFactsHandler implements SkillHandler {
     }
 
     try {
+      const maxStored = typeof max_stored === 'number' && Number.isFinite(max_stored) && max_stored >= 0
+        ? Math.floor(max_stored)
+        : undefined;
+
+      if (maxStored === 0) {
+        ctx.log.info({ stored: 0, redirected: 0, failed: 0 }, 'extract-facts: complete');
+        return { success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 0 } };
+      }
+
       // -- Step 1: Classifier gate --
       // Cheap fast-tier call — exits early on messages that carry no facts about a
       // single entity (e.g. action requests, scheduling, relationship-only text).
@@ -256,6 +265,7 @@ ${text}`,
                 }
 
                 if (contact) {
+                  if (maxStored !== undefined && stored + redirected >= maxStored) break;
                   try {
                     await ctx.contactService.updateContactFields(contact.id, patch.fields);
                     ctx.log.info(
@@ -263,6 +273,7 @@ ${text}`,
                       'extract-facts: canonical attribute redirected to ContactService',
                     );
                     redirected++;
+                    if (maxStored !== undefined && stored + redirected >= maxStored) break;
                     continue;
                   } catch (err) {
                     if (err instanceof ContactValidationError) {
@@ -304,6 +315,8 @@ ${text}`,
             );
           }
 
+          if (maxStored !== undefined && stored + redirected >= maxStored) break;
+
           const result = await ctx.entityMemory.storeFact({
             entityNodeId: entityNode.id,
             label,
@@ -322,6 +335,7 @@ ${text}`,
               );
             }
             stored++;
+            if (maxStored !== undefined && stored + redirected >= maxStored) break;
           } else if (result.action === 'rate_limited') {
             // The 50-writes-per-task limit is exhausted — all remaining storeFact calls
             // in this batch will also fail, so break immediately rather than burning

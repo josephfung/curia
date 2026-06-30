@@ -248,6 +248,12 @@ export interface YamlConfig {
   documentWorkspace?: {
     /** Days of inactivity before `/scratch/<conversation-id>/…` documents are archived by DreamEngine. Default: 7. */
     scratchTtlDays?: number;
+    /** KG promotion when a planned parent completes (#1241). */
+    kgPromotion?: {
+      enabled?: boolean;
+      maxFacts?: number;
+      maxRelationships?: number;
+    };
   };
   skillOutput?: {
     /** Max character length for skill results before truncation. Default: 200_000. */
@@ -756,6 +762,28 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         throw new Error(
           `documentWorkspace.scratchTtlDays must be a positive integer no greater than 36500, got: ${scratchTtlDays}`,
         );
+      }
+    }
+
+    const kgPromotion = documentWorkspace.kgPromotion;
+    if (kgPromotion !== undefined) {
+      if (kgPromotion === null || typeof kgPromotion !== 'object' || Array.isArray(kgPromotion)) {
+        throw new Error('documentWorkspace.kgPromotion must be a YAML mapping');
+      }
+      if (kgPromotion.enabled !== undefined && typeof kgPromotion.enabled !== 'boolean') {
+        throw new Error(`documentWorkspace.kgPromotion.enabled must be a boolean, got: ${String(kgPromotion.enabled)}`);
+      }
+      if (kgPromotion.maxFacts !== undefined) {
+        if (!Number.isInteger(kgPromotion.maxFacts) || kgPromotion.maxFacts < 0) {
+          throw new Error(`documentWorkspace.kgPromotion.maxFacts must be a non-negative integer, got: ${String(kgPromotion.maxFacts)}`);
+        }
+      }
+      if (kgPromotion.maxRelationships !== undefined) {
+        if (!Number.isInteger(kgPromotion.maxRelationships) || kgPromotion.maxRelationships < 0) {
+          throw new Error(
+            `documentWorkspace.kgPromotion.maxRelationships must be a non-negative integer, got: ${String(kgPromotion.maxRelationships)}`,
+          );
+        }
       }
     }
   }

@@ -16,6 +16,8 @@ import {
 } from './resumable-task.js';
 import type { ResumableProgressBlock } from '../db/resumable-progress.js';
 import { readResumableBlock } from '../db/resumable-progress.js';
+import { computeResumableThroughput } from './resumable-throughput.js';
+import type { ResumableCircuitState } from './resumable-circuit-breaker.js';
 
 describe('isResumableTask', () => {
   it('returns true when error_budget.resumable is set', () => {
@@ -57,6 +59,37 @@ describe('checkpoint budget nudge', () => {
     expect(shouldSendCheckpointBudgetNudge(16, 20, false)).toBe(false);
     expect(shouldSendCheckpointBudgetNudge(17, 20, true)).toBe(false);
   });
+
+  const warmCircuit: ResumableCircuitState = {
+    stallCount: 0,
+    iterationCount: 5,
+    startedAt: '2026-06-01T00:00:00.000Z',
+    totalCostUsd: 0.5,
+    lastProgress: { done: 60, cursor: 'page:5' },
+  };
+
+  it('falls back to turn fraction on cold start (no throughput context)', () => {
+    expect(shouldSendCheckpointBudgetNudge(17, 20, false, null)).toBe(true);
+    expect(shouldSendCheckpointBudgetNudge(16, 20, false, null)).toBe(false);
+  });
+
+  it('fires throughput-aware nudge before turn fraction when last slice overshot avg', () => {
+    const ctx = {
+      resumable: { done: 60, total: 1300, lastSliceUnits: 100 },
+      circuit: warmCircuit,
+    };
+    expect(shouldSendCheckpointBudgetNudge(3, 20, false, ctx)).toBe(true);
+    expect(shouldSendCheckpointBudgetNudge(2, 20, false, ctx)).toBe(false);
+  });
+
+  it('uses turn fraction when throughput estimate unavailable', () => {
+    const ctx = {
+      resumable: { done: 0, total: 1300, lastSliceUnits: 0 },
+      circuit: warmCircuit,
+    };
+    expect(shouldSendCheckpointBudgetNudge(17, 20, false, ctx)).toBe(true);
+    expect(shouldSendCheckpointBudgetNudge(16, 20, false, ctx)).toBe(false);
+  });
 });
 
 describe('guidance blocks', () => {
@@ -93,6 +126,54 @@ describe('guidance blocks', () => {
     const text = buildResumableCheckpointResumeBlock(block);
     expect(text).toContain('12 / 1300');
     expect(text).toContain('Page 2 of follows');
+    expect(text).toContain('no estimate yet');
+  });
+
+  it('includes throughput averages and ETA on resume when circuit state exists', () => {
+    const block: ResumableProgressBlock = {
+      cursor: 'page:5',
+      done: 60,
+      total: 1300,
+      accumulator: [],
+      lastSliceUnits: 12,
+      next: 'Continue paging',
+      checkpointedAt: '2026-06-28T12:00:00.000Z',
+    };
+    const text = buildResumableCheckpointResumeBlock(block, {
+      circuit: {
+        stallCount: 0,
+        iterationCount: 5,
+        startedAt: '2026-06-01T00:00:00.000Z',
+        totalCostUsd: 0.5,
+        lastProgress: { done: 60, cursor: 'page:5' },
+      },
+      now: new Date('2026-06-01T01:00:00.000Z'),
+    });
+    expect(text).toContain('units/slice avg');
+    expect(text).toContain('ETA');
+    expect(text).toContain('Suggested slice');
+  });
+
+  it('includes advisory slice sizing in guidance when throughput is warm', () => {
+    const metrics = computeResumableThroughput(
+      { done: 60, total: 1300, lastSliceUnits: 12 },
+      {
+        stallCount: 0,
+        iterationCount: 5,
+        startedAt: '2026-06-01T00:00:00.000Z',
+        totalCostUsd: 0.5,
+        lastProgress: { done: 60, cursor: 'page:5' },
+      },
+      new Date('2026-06-01T01:00:00.000Z'),
+    );
+    const block = buildResumableTaskGuidanceBlock({ throughputMetrics: metrics });
+    expect(block).toContain('Right-sizing (advisory)');
+    expect(block).toContain('aim for ~12 this slice');
+  });
+
+  it('omits advisory slice sizing on cold start', () => {
+    const block = buildResumableTaskGuidanceBlock();
+    expect(block).not.toContain('Right-sizing (advisory)');
   });
 });
 
@@ -130,6 +211,22 @@ describe('buildCheckpointBudgetNudgeMessage', () => {
     const msg = buildCheckpointBudgetNudgeMessage(3, 20);
     expect(msg).toContain('3 of 20');
     expect(msg).toContain('checkpoint');
+  });
+
+  it('includes throughput advisory when metrics are warm', () => {
+    const metrics = computeResumableThroughput(
+      { done: 60, total: 1300, lastSliceUnits: 12 },
+      {
+        stallCount: 0,
+        iterationCount: 5,
+        startedAt: '2026-06-01T00:00:00.000Z',
+        totalCostUsd: 0.5,
+        lastProgress: { done: 60, cursor: 'page:5' },
+      },
+    );
+    const msg = buildCheckpointBudgetNudgeMessage(3, 20, metrics);
+    expect(msg).toContain('units/slice');
+    expect(msg).toContain('aim for ~12');
   });
 });
 
