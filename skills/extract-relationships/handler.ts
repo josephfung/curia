@@ -56,6 +56,11 @@ export class ExtractRelationshipsHandler implements SkillHandler {
         ? Math.floor(max_stored)
         : undefined;
 
+      if (maxStored === 0) {
+        ctx.log.info({ extracted: 0, confirmed: 0, failed: 0 }, 'extract-relationships: complete');
+        return { success: true, data: { extracted: 0, confirmed: 0, failed: 0, skipped: false } };
+      }
+
       // -- Step 1: Classifier gate --
     // Cheap fast-tier call — exits early on the majority of messages (scheduling,
     // email drafts, lookups) that contain no entity-to-entity relationships.
@@ -199,6 +204,8 @@ ${text}`,
         const confidence = typeof triple.confidence === 'number'
           ? Math.min(1, Math.max(0, triple.confidence))
           : 0.7;
+
+        if (maxStored !== undefined && extracted + confirmed >= maxStored) break;
 
         const { created } = await ctx.entityMemory.upsertEdge(
           subjectNode.id,

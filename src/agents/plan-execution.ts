@@ -224,6 +224,22 @@ export function countMaterializationKinds(steps: readonly PlanStepInput[]): {
   return { iterateLeaves, heterogeneousRows, lazySteps };
 }
 
+/** Extract note/description output from a completed child — no title fallback. */
+export function extractTaskWrittenOutput(task: {
+  description: string | null;
+  progress: Record<string, unknown>;
+}): string | null {
+  const notes = task.progress.notes;
+  if (Array.isArray(notes) && notes.length > 0) {
+    for (let i = notes.length - 1; i >= 0; i--) {
+      const entry = notes[i] as { note?: string } | null;
+      if (entry?.note && entry.note.trim().length > 0) return entry.note.trim();
+    }
+  }
+  if (task.description && task.description.trim().length > 0) return task.description.trim();
+  return null;
+}
+
 /** Extract the best available output text from a completed child task. */
 export function extractTaskOutputNote(task: {
   title: string;
@@ -282,8 +298,7 @@ export function resolvePromotionText(
     const step = plan.steps.find((s) => s.id === plan.deliverableStepId);
     const child = step?.taskId ? children.get(step.taskId) : undefined;
     if (!child) return null;
-    const text = extractTaskOutputNote(child);
-    return text.trim().length > 0 ? text : null;
+    return extractTaskWrittenOutput(child);
   }
 
   const lines: string[] = [];
