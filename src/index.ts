@@ -2040,6 +2040,7 @@ async function main(): Promise<void> {
     taskRepo,
     eligibleAgents: taskManagementAgents,
     continuationDelaySeconds: tasksConfig.resumableContinuationSeconds,
+    resumableCeilings: tasksConfig.resumableCeilings,
   });
   planFrontierSubscriber.start();
 

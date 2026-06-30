@@ -9,6 +9,7 @@ import { SchedulerService } from '../../src/scheduler/scheduler-service.js';
 import { PlanFrontierSubscriber } from '../../src/agents/plan-frontier-subscriber.js';
 import { createScheduleFired } from '../../src/bus/events.js';
 import { RESUMABLE_CONTINUATION_CREATED_BY } from '../../src/agents/resumable-continuation.js';
+import { DEFAULT_RESUMABLE_CEILINGS } from '../../src/config.js';
 import { PLAN_FRONTIER_CHILD_DISPATCH_CREATED_BY } from '../../src/agents/plan-frontier.js';
 
 const { Pool } = pg;
@@ -58,6 +59,7 @@ describeIf('Plan frontier advancement (#1238)', () => {
       taskRepo: repo,
       eligibleAgents: new Set(['coordinator']),
       continuationDelaySeconds: 30,
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
     });
     subscriber.start();
 
@@ -155,6 +157,7 @@ describeIf('Plan frontier advancement (#1238)', () => {
       taskRepo: repo,
       eligibleAgents: new Set(['coordinator']),
       continuationDelaySeconds: 30,
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
     });
     subscriber.start();
 

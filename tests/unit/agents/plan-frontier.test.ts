@@ -196,6 +196,7 @@ describe('advancePlanFrontier', () => {
           next: 'Run step 1',
         },
       }),
+      completeTask: vi.fn().mockResolvedValue(null),
     };
 
     let tasksQueryCount = 0;
@@ -227,6 +228,61 @@ describe('advancePlanFrontier', () => {
     expect(result?.rollup).toEqual({ done: 1, total: 3 });
     expect(result?.rollupUpdated).toBe(true);
     expect(result?.dispatchedChildIds).toEqual([CHILD_2, CHILD_3]);
+    expect(result?.autoCompleted).toBe(false);
     expect(enqueueTaskWake).toHaveBeenCalledTimes(2);
+  });
+
+  it('auto-completes the parent when all children and the deliverable step are done', async () => {
+    const child1 = sampleChild({ id: CHILD_1, status: 'done', progress: { notes: [{ at: 't', note: 'Step 1 done' }] } });
+    const child2 = sampleChild({ id: CHILD_2, status: 'done' });
+    const child3 = sampleChild({
+      id: CHILD_3,
+      status: 'done',
+      progress: { notes: [{ at: 't', note: 'Final deliverable output' }] },
+    });
+    const parent = sampleParent({ status: 'in_progress' });
+
+    const completeTask = vi.fn().mockResolvedValue({ ...parent, status: 'done' });
+    const taskRepo = {
+      getTask: vi.fn().mockResolvedValue(parent),
+      setPlanBlock: vi.fn().mockResolvedValue({
+        task: parent,
+        block: {
+          steps: [
+            { id: 'step-1', taskId: CHILD_1 },
+            { id: 'step-2', taskId: CHILD_2 },
+            { id: 'step-3', taskId: CHILD_3 },
+          ],
+          deliverableStepId: 'step-3',
+          done: 3,
+          total: 3,
+          next: 'Done',
+        },
+      }),
+      completeTask,
+    };
+
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('scheduled_jobs')) return { rows: [{ pending: false }] };
+        return { rows: [child1, child2, child3].map(toDbRow) };
+      }),
+    };
+
+    const result = await advancePlanFrontier({
+      pool: pool as never,
+      taskRepo: taskRepo as never,
+      schedulerService: { enqueueTaskWake: vi.fn() } as never,
+      logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never,
+      parentTaskId: PARENT_1,
+      eligibleAgents: new Set(['coordinator']),
+    });
+
+    expect(result?.autoCompleted).toBe(true);
+    expect(completeTask).toHaveBeenCalledWith(
+      PARENT_1,
+      'Final deliverable output',
+      'coordinator',
+    );
   });
 });

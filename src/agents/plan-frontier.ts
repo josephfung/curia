@@ -16,12 +16,17 @@ import {
   type PlanProgressBlock,
 } from '../db/plan-progress.js';
 import {
+  isPlanReadyForAutoComplete,
+  resolvePlanCompletionNote,
+} from './plan-execution.js';
+import {
   resolveContinuationAgent,
   schedulePlanParentWake,
   taskHasPendingWake,
   isPlanParentWakeEligible,
   isPgUniqueViolation,
 } from './resumable-continuation.js';
+import { snapshotPlanFrontier } from './resumable-circuit-breaker.js';
 
 /** created_by marker on child dispatches from frontier advancement. */
 export const PLAN_FRONTIER_CHILD_DISPATCH_CREATED_BY = 'plan-frontier';
@@ -99,6 +104,8 @@ export interface AdvancePlanFrontierResult {
   rollup: { done: number; total: number };
   rollupUpdated: boolean;
   dispatchedChildIds: string[];
+  autoCompleted: boolean;
+  frontierSnapshot: ReturnType<typeof snapshotPlanFrontier>;
 }
 
 async function loadTasksByIds(pool: Pool, taskIds: readonly string[]): Promise<Map<string, TaskRow>> {
@@ -243,5 +250,25 @@ export async function advancePlanFrontier(
     );
   }
 
-  return { rollup, rollupUpdated, dispatchedChildIds };
+  const childStatuses = childStatusMap(children);
+  const frontierSnapshot = snapshotPlanFrontier(currentPlan.steps, childStatuses);
+
+  let autoCompleted = false;
+  if (isPlanReadyForAutoComplete(currentPlan, childStatuses)) {
+    const completionNote = resolvePlanCompletionNote(currentPlan, children);
+    const completed = await opts.taskRepo.completeTask(
+      parent.id,
+      completionNote,
+      parent.sourceAgentId ?? parent.agentId,
+    );
+    if (completed) {
+      autoCompleted = true;
+      opts.logger.info(
+        { parentTaskId: parent.id, deliverableStepId: currentPlan.deliverableStepId },
+        'Plan frontier: parent auto-completed',
+      );
+    }
+  }
+
+  return { rollup, rollupUpdated, dispatchedChildIds, autoCompleted, frontierSnapshot };
 }

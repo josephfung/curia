@@ -13,6 +13,7 @@ import type { TaskRow } from '../db/queries/tasks.js';
 import { getTaskById } from '../db/queries/tasks.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { ResumableCursor } from '../db/resumable-progress.js';
+import { computePlanRollup, type PlanStepDescriptor } from '../db/plan-progress.js';
 import { createAgentTask } from '../bus/events.js';
 import type { ExecutionPausedPayload } from './resumable-task.js';
 
@@ -353,4 +354,159 @@ export async function handlePausedSliceForCircuitBreaker(opts: {
 
   await opts.taskRepo.persistResumableCircuitState(opts.taskId, outcome.state);
   return { scheduleContinuation: true };
+}
+
+/** Snapshot of planned-parent frontier progress for the circuit breaker (#1239). */
+export interface PlanFrontierSnapshot {
+  rollupDone: number;
+  /** Children in done / cancelled / failed — terminal since last wake. */
+  terminalChildCount: number;
+}
+
+const PLAN_FRONTIER_TERMINAL_CHILD_STATUSES = new Set(['done', 'cancelled', 'failed']);
+
+/** Build a frontier snapshot from live child rows. */
+export function snapshotPlanFrontier(
+  steps: readonly PlanStepDescriptor[],
+  childStatusByTaskId: Readonly<Record<string, string>>,
+): PlanFrontierSnapshot {
+  let terminalChildCount = 0;
+  for (const step of steps) {
+    if (!step.taskId) continue;
+    const status = childStatusByTaskId[step.taskId];
+    if (status !== undefined && PLAN_FRONTIER_TERMINAL_CHILD_STATUSES.has(status)) {
+      terminalChildCount++;
+    }
+  }
+  const { done: rollupDone } = computePlanRollup(steps, childStatusByTaskId);
+  return { rollupDone, terminalChildCount };
+}
+
+/** True when rollup advanced or a child reached a terminal status since the last wake. */
+export function hasFrontierProgress(
+  previous: PlanFrontierSnapshot,
+  next: PlanFrontierSnapshot,
+): boolean {
+  if (next.rollupDone > previous.rollupDone) return true;
+  return next.terminalChildCount > previous.terminalChildCount;
+}
+
+function snapshotToLastProgress(snapshot: PlanFrontierSnapshot): ResumableCircuitState['lastProgress'] {
+  return {
+    done: snapshot.rollupDone,
+    cursor: { terminalChildren: snapshot.terminalChildCount },
+  };
+}
+
+export interface ProcessPlanFrontierWakeInput {
+  snapshot: PlanFrontierSnapshot;
+  circuit: ResumableCircuitState | null;
+  ceilings: ResumableCeilingsConfig;
+  sliceCostUsd?: number;
+  now?: Date;
+}
+
+/**
+ * Process a planned-parent wake: update counters, detect frontier stalls/ceilings.
+ * Does not persist — caller writes state or fails the task.
+ */
+export function processPlanFrontierWakeOutcome(
+  input: ProcessPlanFrontierWakeInput,
+): ProcessPausedSliceResult {
+  const now = input.now ?? new Date();
+  const nextProgress = snapshotToLastProgress(input.snapshot);
+  const rawSliceCost = input.sliceCostUsd ?? 0;
+  const sliceCostUsd = Number.isFinite(rawSliceCost) && rawSliceCost >= 0 ? rawSliceCost : 0;
+
+  const base: ResumableCircuitState = input.circuit ?? {
+    stallCount: 0,
+    iterationCount: 0,
+    startedAt: now.toISOString(),
+    totalCostUsd: 0,
+    lastProgress: nextProgress,
+  };
+
+  const madeProgress = input.circuit
+    ? hasFrontierProgress(
+      {
+        rollupDone: input.circuit.lastProgress.done,
+        terminalChildCount: typeof input.circuit.lastProgress.cursor === 'object'
+          && input.circuit.lastProgress.cursor !== null
+          && 'terminalChildren' in input.circuit.lastProgress.cursor
+          ? Number((input.circuit.lastProgress.cursor as { terminalChildren: number }).terminalChildren)
+          : 0,
+      },
+      input.snapshot,
+    )
+    : true;
+
+  const state: ResumableCircuitState = {
+    ...base,
+    iterationCount: base.iterationCount + 1,
+    totalCostUsd: base.totalCostUsd + Math.max(0, sliceCostUsd),
+    lastProgress: nextProgress,
+    stallCount: madeProgress ? 0 : base.stallCount + 1,
+  };
+
+  const reason = detectBreach(state, input.ceilings, now);
+  if (reason) {
+    return {
+      action: 'breach',
+      breach: {
+        reason,
+        message: breachMessage(reason, state, input.ceilings),
+        state,
+      },
+    };
+  }
+
+  return { action: 'continue', state };
+}
+
+/** Load task, process frontier wake, persist state or escalate. Returns whether the parent may continue. */
+export async function handlePlanFrontierWakeForCircuitBreaker(opts: {
+  pool: Pool;
+  bus: EventBus;
+  taskRepo: TaskRepo;
+  logger: Logger;
+  taskId: string;
+  snapshot: PlanFrontierSnapshot;
+  ceilings: ResumableCeilingsConfig;
+  agentId: string;
+  sliceCostUsd?: number;
+}): Promise<{ continueParent: boolean; breach?: CircuitBreach }> {
+  const task = await getTaskById(opts.pool, opts.taskId);
+  if (!task) {
+    opts.logger.warn({ taskId: opts.taskId }, 'Plan frontier circuit breaker: task not found');
+    return { continueParent: false };
+  }
+
+  const ceilings = resolveResumableCeilings(opts.ceilings, task.errorBudget);
+  const circuit = readCircuitState(task.progress);
+  const outcome = processPlanFrontierWakeOutcome({
+    snapshot: opts.snapshot,
+    circuit,
+    ceilings,
+    sliceCostUsd: opts.sliceCostUsd,
+  });
+
+  if (outcome.action === 'breach') {
+    opts.logger.warn(
+      { taskId: opts.taskId, reason: outcome.breach.reason, state: outcome.breach.state },
+      'Planned-parent frontier circuit breaker tripped',
+    );
+    await escalateCircuitBreach({
+      pool: opts.pool,
+      bus: opts.bus,
+      taskRepo: opts.taskRepo,
+      logger: opts.logger,
+      task,
+      breach: outcome.breach,
+      agentId: opts.agentId,
+    });
+    return { continueParent: false, breach: outcome.breach };
+  }
+
+  await opts.taskRepo.persistResumableCircuitState(opts.taskId, outcome.state);
+  return { continueParent: true };
 }

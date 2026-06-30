@@ -100,6 +100,9 @@ export interface TaskListRow extends TaskRow {
 // Terminal statuses: no transitions out of these.
 const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
 
+/** Active child statuses reconciled when a parent reaches a terminal state (#1239). */
+const RECONCILABLE_CHILD_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
+
 export class TaskRepo {
   constructor(
     private readonly pool: Pool,
@@ -496,6 +499,18 @@ export class TaskRepo {
       this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after updateTask');
     }
 
+    if (
+      updates.status !== undefined
+      && updates.status !== current.status
+      && (updates.status === 'done' || updates.status === 'cancelled')
+    ) {
+      await this.reconcileChildrenOnParentTerminal(
+        updated.id,
+        updates.status,
+        callerAgentId,
+      );
+    }
+
     this.logger.info(
       { taskId: updated.id, previousStatus: current.status, newStatus: updated.status },
       'task-repo: updated task',
@@ -601,8 +616,92 @@ export class TaskRepo {
       this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after completeTask');
     }
 
+    await this.reconcileChildrenOnParentTerminal(taskId, 'done', callerAgentId);
+
     this.logger.info({ taskId: updated.id }, 'task-repo: completed task');
     return updated;
+  }
+
+  /**
+   * Recursively cancel non-terminal descendant tasks and their pending wakes when a
+   * parent goal completes, is cancelled, or is superseded (#1239).
+   */
+  async reconcileChildren(
+    taskId: string,
+    reason: string,
+    callerAgentId?: string,
+  ): Promise<string[]> {
+    const noteEntry = { at: new Date().toISOString(), note: reason };
+
+    const { rows } = await this.pool.query<{ id: string; previous_status: string }>(
+      `WITH RECURSIVE descendants AS (
+         SELECT id, status FROM tasks WHERE parent_task_id = $1
+         UNION ALL
+         SELECT t.id, t.status FROM tasks t
+         INNER JOIN descendants d ON t.parent_task_id = d.id
+       ),
+       to_reconcile AS (
+         SELECT id, status AS previous_status FROM descendants
+         WHERE status = ANY($2::text[])
+       ),
+       cancelled AS (
+         UPDATE tasks
+            SET status = 'cancelled',
+                progress = jsonb_set(
+                  COALESCE(progress, '{}'::jsonb),
+                  '{notes}',
+                  COALESCE(progress->'notes', '[]'::jsonb) || $3::jsonb,
+                  true
+                ),
+                updated_at = now()
+          WHERE id IN (SELECT id FROM to_reconcile)
+          RETURNING id
+       ),
+       _cancel_wakes AS (
+         UPDATE scheduled_jobs SET status = 'cancelled'
+          WHERE task_id IN (SELECT id FROM to_reconcile)
+            AND status IN ('pending', 'running')
+       )
+       SELECT c.id, tr.previous_status
+         FROM cancelled c
+         JOIN to_reconcile tr ON tr.id = c.id`,
+      [taskId, RECONCILABLE_CHILD_STATUSES, JSON.stringify([noteEntry])],
+    );
+
+    for (const row of rows) {
+      try {
+        await this.bus.publish('execution', createTaskUpdated({
+          taskId: row.id,
+          previousStatus: row.previous_status,
+          newStatus: 'cancelled',
+          progressNote: reason,
+          agentId: callerAgentId ?? null,
+        }));
+      } catch (busErr) {
+        this.logger.error({ busErr, taskId: row.id }, 'task-repo: bus publish failed after reconcileChildren');
+      }
+    }
+
+    if (rows.length > 0) {
+      this.logger.info(
+        { parentTaskId: taskId, cancelledChildIds: rows.map((r) => r.id), reason },
+        'task-repo: reconciled open descendant children',
+      );
+    }
+
+    return rows.map((r) => r.id);
+  }
+
+  private async reconcileChildrenOnParentTerminal(
+    taskId: string,
+    parentState: 'done' | 'cancelled',
+    callerAgentId?: string,
+  ): Promise<void> {
+    await this.reconcileChildren(
+      taskId,
+      `reconciled: parent ${taskId} ${parentState}`,
+      callerAgentId,
+    );
   }
 
   /**
