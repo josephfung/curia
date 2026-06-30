@@ -13,6 +13,9 @@ import type { ResumableCircuitState } from './resumable-circuit-breaker.js';
 import {
   computeResumableThroughput,
   formatResumableThroughputForResume,
+  shouldNudgeFromThroughput,
+  suggestedSliceSize,
+  type ResumableThroughputMetrics,
 } from './resumable-throughput.js';
 import {
   indexPathForDirectory,
@@ -59,20 +62,47 @@ export function checkpointNudgeThreshold(maxTurns: number): number {
   return Math.max(1, Math.floor(maxTurns * CHECKPOINT_BUDGET_NUDGE_FRACTION));
 }
 
+/** Context for throughput-aware budget nudge (#1265). */
+export interface CheckpointBudgetNudgeContext {
+  resumable: Pick<ResumableProgressBlock, 'done' | 'total' | 'lastSliceUnits'>;
+  circuit: ResumableCircuitState;
+}
+
 export function shouldSendCheckpointBudgetNudge(
   turnsUsed: number,
   maxTurns: number,
   alreadySent: boolean,
+  throughputCtx?: CheckpointBudgetNudgeContext | null,
 ): boolean {
   if (alreadySent || maxTurns <= 0) return false;
   const remaining = maxTurns - turnsUsed;
-  return remaining > 0 && remaining <= checkpointNudgeThreshold(maxTurns);
+  const turnFractionNudge = remaining > 0 && remaining <= checkpointNudgeThreshold(maxTurns);
+
+  if (!throughputCtx) {
+    return turnFractionNudge;
+  }
+
+  const metrics = computeResumableThroughput(throughputCtx.resumable, throughputCtx.circuit);
+  if (!metrics.estimateAvailable || metrics.unitsPerSlice === null || metrics.unitsPerSlice <= 0) {
+    return turnFractionNudge;
+  }
+
+  const throughputNudge = shouldNudgeFromThroughput({
+    turnsUsed,
+    maxTurns,
+    unitsPerSlice: metrics.unitsPerSlice,
+    lastSliceUnits: throughputCtx.resumable.lastSliceUnits,
+  });
+
+  return turnFractionNudge || throughputNudge;
 }
 
 export function buildResumableTaskGuidanceBlock(options?: {
   workspaceManifestPath?: string;
   /** True when #1209 appended a ## Workspace Manifest block to the task message tail. */
   workspaceManifestInjected?: boolean;
+  /** Warm-path throughput metrics for advisory slice sizing (#1265). */
+  throughputMetrics?: ResumableThroughputMetrics | null;
 }): string {
   const lines = [
     '## Resumable Task',
@@ -84,6 +114,16 @@ export function buildResumableTaskGuidanceBlock(options?: {
     '(or a document pointer after spill), last_slice_units, and a one-line `next` describing',
     'what to do on the next slice.',
   ];
+
+  const suggested = options?.throughputMetrics ? suggestedSliceSize(options.throughputMetrics) : null;
+  const avgUnits = options?.throughputMetrics?.unitsPerSlice;
+  if (suggested !== null && avgUnits !== null && avgUnits !== undefined) {
+    lines.push(
+      '',
+      `Right-sizing (advisory): you've averaged ~${avgUnits.toFixed(1)} units/slice —`,
+      `aim for ~${suggested} this slice and checkpoint before budget. You decide the exact batch.`,
+    );
+  }
 
   if (options?.workspaceManifestInjected) {
     lines.push(
@@ -132,13 +172,31 @@ export function buildResumableCheckpointResumeBlock(
   ].filter(Boolean).join('\n');
 }
 
-export function buildCheckpointBudgetNudgeMessage(remainingTurns: number, maxTurns: number): string {
-  return [
+export function buildCheckpointBudgetNudgeMessage(
+  remainingTurns: number,
+  maxTurns: number,
+  throughputMetrics?: ResumableThroughputMetrics | null,
+): string {
+  const lines = [
     '[Platform — resumable task budget nudge]',
     `You have ${remainingTurns} of ${maxTurns} turns remaining on this resumable task.`,
+  ];
+
+  const suggested = throughputMetrics ? suggestedSliceSize(throughputMetrics) : null;
+  const avgUnits = throughputMetrics?.unitsPerSlice;
+  if (suggested !== null && avgUnits !== null && avgUnits !== undefined) {
+    lines.push(
+      `You've averaged ~${avgUnits.toFixed(1)} units/slice —`,
+      `aim for ~${suggested} this slice (advisory).`,
+    );
+  }
+
+  lines.push(
     'Call `checkpoint` with your current progress now, then pause — do not keep iterating.',
     'A partial checkpoint is success; the platform will resume you on the next slice.',
-  ].join(' ');
+  );
+
+  return lines.join(' ');
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
