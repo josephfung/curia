@@ -97,7 +97,12 @@ The circuit-breaker keys on **progress, not error count** (`src/agents/resumable
 state in `progress.resumableCircuit`). A continuation that makes no forward progress (cursor
 unchanged and done-count flat) increments a stall counter; after K stalls, or on breach of a
 hard per-task ceiling, the task is failed and escalated via the existing `needs-attention`
-backlog path. Defaults (`tasks.resumableCeilings`): `maxStalls: 3`, `maxIterations: 100`,
+backlog path. The escalation carries a structured, principal-facing payload
+(`src/agents/task-escalation.ts`, #1267) — one of four real failure modes (**stalled** /
+**hit-a-limit** / **blocked-on-a-person** / **agent-couldn't-finish**), progress, throughput +
+ETA (resumable leaves) or X-of-Y (planned parents), and suggested next actions — stored at
+`progress.escalation` and rendered into the CEO row's `last_progress_note` so the daily digest
+surfaces real detail, not a bare row. Defaults (`tasks.resumableCeilings`): `maxStalls: 3`, `maxIterations: 100`,
 `maxWallclockHours: 24`, `maxCostUsd: 10`; each is overridable per task through the
 `error_budget` keys validated in `src/tasks/task-error-budget.ts` (per #883: per-task keys
 only — per-invocation `max_turns`/`max_errors` belong to agent config and are rejected on

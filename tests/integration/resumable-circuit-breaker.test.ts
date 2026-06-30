@@ -21,7 +21,7 @@ async function cleanup(pool: pg.Pool): Promise<void> {
     `DELETE FROM scheduled_jobs WHERE task_id IN (SELECT id FROM tasks WHERE title LIKE $1)`,
     [`${PREFIX}%`],
   );
-  await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`Review: resumable task stalled (${PREFIX}%`]);
+  await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`Review:%${PREFIX}%`]);
   await pool.query(`DELETE FROM tasks WHERE title LIKE $1 OR parent_task_id IN (
     SELECT id FROM tasks WHERE title LIKE $1
   )`, [`${PREFIX}%`]);
@@ -124,13 +124,58 @@ describeIf('Resumable circuit breaker (#1176)', () => {
     );
     expect(wakes).toHaveLength(0);
 
+    // The coordinator poke carries the rendered, principal-facing summary + the no-blind-retry
+    // instruction (#1267), not the old generic "circuit breaker" line.
     expect(coordinatorTasks.length).toBeGreaterThan(0);
-    expect(coordinatorTasks[0]!.content).toContain('circuit breaker');
+    expect(coordinatorTasks[0]!.content).toContain('Do not re-delegate');
+    expect(coordinatorTasks[0]!.content).toContain('25 of 1300');
 
+    // Scope to THIS test's escalation by title — integration files run in parallel against the
+    // same DB, so an unscoped tag-only query catches other tests' circuit-breach rows.
+    const ceoRowFilter = `Review:%${PREFIX}%`;
     const { rows: ceoTasks } = await pool.query(
-      `SELECT id, owner, tags FROM tasks WHERE owner = 'ceo' AND tags @> ARRAY['resumable-circuit-breach']::text[]`,
+      `SELECT id, owner, tags, title, progress FROM tasks
+         WHERE owner = 'ceo' AND tags @> ARRAY['resumable-circuit-breach']::text[]
+           AND title LIKE $1`,
+      [ceoRowFilter],
     );
-    expect(ceoTasks.length).toBeGreaterThan(0);
+    expect(ceoTasks).toHaveLength(1);
+
+    // Richer escalation UX (#1267): the CEO row carries a structured progress.escalation block
+    // AND a non-empty last progress note — the field the daily digest reads — so the detail
+    // reaches the principal instead of being a bare backlog row.
+    const ceo = ceoTasks[0]! as { progress: Record<string, unknown> };
+    const escalation = ceo.progress.escalation as Record<string, unknown> | undefined;
+    expect(escalation).toBeTruthy();
+    expect(escalation!.failureMode).toBe('stalled');
+    expect(escalation!.source).toBe('resumable_leaf');
+    expect(escalation!.reason).toBe('stall_limit');
+    expect(escalation!.progress).toEqual({ done: 25, total: 1300 });
+    expect(Array.isArray(escalation!.suggestedActions)).toBe(true);
+    expect((escalation!.suggestedActions as unknown[]).length).toBeGreaterThan(0);
+
+    const notes = ceo.progress.notes as Array<{ note: string }> | undefined;
+    const lastNote = notes && notes.length > 0 ? notes[notes.length - 1]!.note : '';
+    expect(lastNote.length).toBeGreaterThan(0);
+    expect(lastNote).toContain('25 of 1300');
+    expect(lastNote.toLowerCase()).toContain('stall');
+
+    // Re-firing the same pause on the now-failed task must NOT create a second CEO row or
+    // a second coordinator poke — the terminal-task guard short-circuits the re-escalation (#1267).
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'social-media',
+      conversationId: 'conv-stall-refire',
+      content: JSON.stringify(pausedPayload),
+      parentEventId: 'parent-stall-refire',
+    }));
+
+    const { rows: ceoTasksAfterRefire } = await pool.query(
+      `SELECT id FROM tasks WHERE owner = 'ceo' AND tags @> ARRAY['resumable-circuit-breach']::text[]
+         AND title LIKE $1`,
+      [ceoRowFilter],
+    );
+    expect(ceoTasksAfterRefire).toHaveLength(1);
+    expect(coordinatorTasks).toHaveLength(1);
   });
 
   it('schedules continuation when progress advances', async () => {

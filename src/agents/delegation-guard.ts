@@ -8,6 +8,7 @@ import type { AgentResponseFailureReason } from '../bus/events.js';
 import type { ExecutionLayer, InvokeOptions } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
 import type { Logger } from '../logger.js';
+import { buildDelegationEscalation, renderEscalation } from './task-escalation.js';
 
 /** Total identical delegate calls allowed when the specialist failure was retryable. */
 export const MAX_RETRYABLE_IDENTICAL_DELEGATIONS = 2;
@@ -117,7 +118,7 @@ export function parseDelegateFailureData(data: unknown, logger?: Logger): Delega
   };
 }
 
-/** Surface a non-retryable delegation failure on the CEO backlog via task-create (#1171). */
+/** Surface a non-retryable delegation failure on the CEO backlog via task-create (#1171, #1267). */
 export async function escalateDelegationFailure(
   executionLayer: ExecutionLayer,
   caller: CallerContext | undefined,
@@ -125,22 +126,38 @@ export async function escalateDelegationFailure(
   failure: DelegationFailureInfo & { task: string },
   logger: Logger,
 ): Promise<boolean> {
+  // Structured, principal-facing payload (#1267): reason 'blocked' → blocked_on_human,
+  // anything else → agent_incomplete. Rendered into the CEO task's progress note (the digest's
+  // data source) + description, and stored as the structured progress.escalation block.
+  const escalation = buildDelegationEscalation({
+    agent: failure.agent,
+    reason: String(failure.reason),
+    retryable: failure.retryable,
+    message: failure.message,
+    task: failure.task,
+  });
+  const rendered = renderEscalation(escalation);
+  const title = escalation.failureMode === 'blocked_on_human'
+    ? `Review: ${failure.agent} is blocked on a person`
+    : `Review: ${failure.agent} could not complete delegated work`;
+
   try {
     const result = await executionLayer.invoke(
       'task-create',
       {
-        title: `Review: ${failure.agent} could not complete delegated work`,
+        title,
         description: [
-          failure.message,
-          '',
-          `Reason: ${failure.reason}`,
+          rendered.description,
           '',
           'Original delegated task:',
           failure.task,
         ].join('\n'),
         owner: 'ceo',
         source: 'coordinator',
-        tags: ['delegation-failure', failure.agent],
+        // The failureMode tag distinguishes blocked-on-a-person from couldn't-finish (#1267).
+        tags: ['delegation-failure', failure.agent, escalation.failureMode],
+        progress_note: rendered.progressNote,
+        escalation_json: JSON.stringify(escalation),
       },
       caller,
       options,

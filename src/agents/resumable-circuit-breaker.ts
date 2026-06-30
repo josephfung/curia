@@ -17,6 +17,7 @@ import { computePlanRollup, type PlanStepDescriptor } from '../db/plan-progress.
 import { createAgentTask } from '../bus/events.js';
 import type { ExecutionPausedPayload } from './resumable-task.js';
 import { emitResumableThroughputTelemetry } from './resumable-throughput.js';
+import { buildCircuitBreachEscalation, renderEscalation } from './task-escalation.js';
 
 /** Persisted under tasks.progress.resumableCircuit — separate from the bounded resumable block. */
 export interface ResumableCircuitState {
@@ -247,14 +248,30 @@ export interface EscalateCircuitBreachOptions {
  */
 export async function escalateCircuitBreach(opts: EscalateCircuitBreachOptions): Promise<void> {
   const { task, breach, bus, taskRepo, logger, agentId } = opts;
-  const progressNote = [
-    breach.message,
-    `Progress at breach: ${breach.state.lastProgress.done} done, cursor ${JSON.stringify(breach.state.lastProgress.cursor)}.`,
-    `Iterations: ${breach.state.iterationCount}, stalls: ${breach.state.stallCount}, cost: $${breach.state.totalCostUsd.toFixed(4)}.`,
-  ].join(' ');
+
+  // Skip re-escalation of an already-terminal task (#1267). A redelivered pause/wake can
+  // re-enter here after the task was failed; `failResumableTask` is idempotent and returns the
+  // existing row, so without this guard the truthy-`updated` check below would fall through and
+  // publish a duplicate coordinator poke + create a duplicate CEO backlog row. Mirrors the guard
+  // in handlePlanFrontierWakeForCircuitBreaker / plan-adaptive-replan.
+  if (task.status === 'failed' || task.status === 'done' || task.status === 'cancelled') {
+    logger.debug({ taskId: task.id, status: task.status }, 'Circuit breach escalation: task already terminal — skipping');
+    return;
+  }
+
+  // Structured, principal-facing payload + its three renderings (#1267). Detects resumable
+  // leaf vs planned parent and attaches throughput/ETA or the X-of-Y rollup accordingly.
+  const escalation = buildCircuitBreachEscalation(task, breach);
+  const rendered = renderEscalation(escalation);
+  // Traceability footer for the CEO task view — the failed task id + which specialist owned it.
+  const description = [
+    rendered.description,
+    '',
+    `Task: ${task.id} · Specialist: ${task.sourceAgentId ?? agentId}`,
+  ].join('\n');
 
   const updated = await taskRepo.failResumableTask(task.id, {
-    progressNote,
+    progressNote: rendered.progressNote,
     circuitState: breach.state,
     tags: ['needs-attention', 'resumable-circuit-breach'],
   });
@@ -264,52 +281,57 @@ export async function escalateCircuitBreach(opts: EscalateCircuitBreachOptions):
     return;
   }
 
-  const notifyContent = [
-    'A resumable task hit its progress-based circuit breaker and needs attention.',
-    '',
-    `Task: ${task.id}`,
-    `Title: ${task.title}`,
-    `Agent: ${agentId}`,
-    `Reason: ${breach.reason}`,
-    breach.message,
-    '',
-    'Do not re-delegate or schedule continuations for this task. Let the principal know and help them decide next steps.',
-  ].join('\n');
-
   const notifyEvent = createAgentTask({
     agentId: 'coordinator',
     conversationId: `resumable-circuit:${task.id}`,
     channelId: 'scheduler',
     senderId: 'system',
-    content: notifyContent,
+    content: rendered.notifyContent,
     parentEventId: task.id,
   });
+  let notifySucceeded = false;
   try {
     await bus.publish('system', notifyEvent);
+    notifySucceeded = true;
   } catch (err) {
     logger.error({ err, taskId: task.id }, 'Failed to notify coordinator of circuit breach');
   }
 
+  // The CEO row carries the rendered summary as its first progress note (so the digest's
+  // last_progress_note has real content) plus the structured escalation block (#1267).
+  const kind = escalation.source === 'planned_parent' ? 'plan' : 'task';
+  const modeLabel = escalation.failureMode === 'stalled' ? 'stalled' : 'hit a limit';
+  let backlogSucceeded = false;
   try {
     await taskRepo.createTask({
       agentId: 'coordinator',
-      title: `Review: resumable task stalled (${task.title})`,
-      description: [
-        breach.message,
-        '',
-        `Task ID: ${task.id}`,
-        `Specialist: ${task.sourceAgentId ?? agentId}`,
-        '',
-        progressNote,
-      ].join('\n'),
+      title: `Review: ${kind} ${modeLabel} (${task.title})`,
+      description,
       owner: 'ceo',
       source: 'coordinator',
       tags: ['needs-attention', 'resumable-circuit-breach', breach.reason],
       parentTaskId: task.parentTaskId ?? undefined,
+      progressNote: rendered.progressNote,
+      escalation,
     });
-    logger.info({ taskId: task.id, reason: breach.reason }, 'Escalated resumable circuit breach to CEO backlog');
+    backlogSucceeded = true;
+    logger.info(
+      { taskId: task.id, reason: breach.reason, failureMode: escalation.failureMode, source: escalation.source },
+      'Escalated resumable circuit breach to CEO backlog',
+    );
   } catch (err) {
     logger.error({ err, taskId: task.id }, 'Failed to create CEO backlog task for circuit breach');
+  }
+
+  // The CEO backlog row is the digest carrier and the coordinator poke is the live surface; the
+  // failed task itself is owned by the specialist, not the principal, so it never surfaces. If a
+  // correlated infra outage takes out BOTH, the task is terminally failed with no path to the
+  // principal — log loudly so it is alertable rather than silently lost (#1267).
+  if (!notifySucceeded && !backlogSucceeded) {
+    logger.error(
+      { taskId: task.id, reason: breach.reason },
+      'Circuit breach escalation reached NEITHER the coordinator nor the CEO backlog — principal will not see this failure',
+    );
   }
 }
 

@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Principal-facing escalation UX** — stalled / ceiling / blocked-on-human / agent-incomplete escalations now carry a structured `progress.escalation` block and a rendered progress note, so the daily digest surfaces real detail (progress, throughput/ETA, suggested actions) instead of a bare backlog row. Adds optional `progress_note` / `escalation_json` inputs to the `task-create` manifest. (#1267)
 - **Adaptive re-planning** — frontier wakes surface advisory divergence signals (failed/cancelled child, throughput below estimate, over-blocked step); plan depth and re-plan count are bounded with escalation on breach. (#1266)
 
 ### Fixed
