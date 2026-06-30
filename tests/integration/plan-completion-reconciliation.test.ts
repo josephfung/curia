@@ -246,8 +246,9 @@ describeIf('Plan completion reconciliation (#1239)', () => {
     expect(reloadedParent?.status).toBe('done');
     const notes = reloadedParent?.progress.notes as Array<{ note: string }> | undefined;
     const completionNote = notes?.find((n) => n.note.includes('Found 12 competitors'))?.note;
-    expect(completionNote).toContain('Found 12 competitors');
-    expect(completionNote).toContain('Outline complete');
+    expect(completionNote).toBe(
+      `${PREFIX} rollup child 1: Found 12 competitors\n\n${PREFIX} rollup child 2: Outline complete`,
+    );
   });
 
   it('escalates a planned parent that wakes with no frontier progress', async () => {
