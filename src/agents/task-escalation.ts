@@ -166,7 +166,7 @@ export function buildCircuitBreachEscalation(
     if (metrics.estimateAvailable) throughput = metrics;
   }
 
-  const headline = circuitHeadline(failureMode, breach, source, progress);
+  const headline = circuitHeadline(failureMode, breach, source);
 
   return {
     failureMode,
@@ -181,38 +181,42 @@ export function buildCircuitBreachEscalation(
   };
 }
 
+// The headline names the failure type only. Progress (X of Y) and cost ($) are NOT restated
+// here — renderEscalation's dedicated `Progress:` / `Cost so far:` lines are the single source
+// of truth for those numbers (#1267, avoids stating them twice in the principal-facing text).
 function circuitHeadline(
   mode: EscalationFailureMode,
   breach: CircuitBreach,
   source: EscalationSource,
-  progress: EscalationProgress,
 ): string {
   const what = source === 'planned_parent' ? 'the plan' : 'the task';
   if (mode === 'stalled') {
     const unit = source === 'planned_parent' ? 'wake' : 'slice';
-    return `Stalled: ${what} made no forward progress for ${breach.state.stallCount} ${unit}(s) `
-      + `at ${formatProgress(progress)}.`;
+    return `Stalled: ${what} made no forward progress for ${breach.state.stallCount} ${unit}(s).`;
   }
   switch (breach.reason) {
     case 'max_cost':
-      return `Hit the cost ceiling ($${breach.state.totalCostUsd.toFixed(2)}) at ${formatProgress(progress)}.`;
+      return 'Hit the cost ceiling.';
     case 'max_wallclock':
-      return `Hit the time ceiling at ${formatProgress(progress)}.`;
+      return 'Hit the time ceiling.';
     case 'max_iterations':
-      return `Hit the slice ceiling (${breach.state.iterationCount} continuations) at ${formatProgress(progress)}.`;
+      return `Hit the slice ceiling (${breach.state.iterationCount} continuations).`;
     default:
-      return `${what} breached a ceiling at ${formatProgress(progress)}.`;
+      return `${what} breached a ceiling.`;
   }
 }
 
+// Non-numeric constraint descriptor for the structured `blocker` field. Deliberately carries no
+// dollar / count — those live on the dedicated render lines, so the "Blocked by:" line never
+// repeats a figure already stated above it (#1267).
 function circuitBlocker(breach: CircuitBreach): string | undefined {
   switch (breach.reason) {
     case 'max_cost':
-      return `$${breach.state.totalCostUsd.toFixed(2)} cost ceiling`;
+      return 'the cost ceiling';
     case 'max_wallclock':
-      return 'wallclock ceiling';
+      return 'the wallclock ceiling';
     case 'max_iterations':
-      return `${breach.state.iterationCount}-slice ceiling`;
+      return 'the iteration ceiling';
     default:
       return undefined;
   }

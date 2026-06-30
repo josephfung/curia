@@ -212,4 +212,20 @@ describe('renderEscalation (#1267)', () => {
 
     expect(r.progressNote).not.toContain('units/slice');
   });
+
+  it('states each figure exactly once — no headline/dedicated-line duplication', () => {
+    const occurrences = (haystack: string, needle: string) => haystack.split(needle).length - 1;
+    const task = makeTask({ progress: { resumable: RESUMABLE_BLOCK } });
+
+    // max_cost is the worst case — the old headline + Cost-so-far + blocker said "$10.54" thrice.
+    const cost = renderEscalation(buildCircuitBreachEscalation(task, breach('max_cost'), NOW));
+    expect(occurrences(cost.progressNote, '$10.54')).toBe(1);
+    expect(occurrences(cost.progressNote, '25 of 1300')).toBe(1);
+    expect(occurrences(cost.description, '$10.54')).toBe(1);
+    expect(occurrences(cost.description, '25 of 1300')).toBe(1);
+
+    // Stalled leaf — the X-of-Y must not appear in both the headline and the Progress line.
+    const stalled = renderEscalation(buildCircuitBreachEscalation(task, breach('stall_limit'), NOW));
+    expect(occurrences(stalled.progressNote, '25 of 1300')).toBe(1);
+  });
 });
