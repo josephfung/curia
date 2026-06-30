@@ -447,6 +447,52 @@ export class WorkingDocsRepo {
     }
   }
 
+  /**
+   * Archive all live workspace documents for a completed project (#1241).
+   * Matches rows by task_id and by `/projects/<rootTaskId>/…` path prefix.
+   */
+  async archiveProjectWorkspaceDocs(rootTaskId: string): Promise<number> {
+    const pathPrefix = `/projects/${rootTaskId}/`;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows } = await client.query<{ archived_count: string }>(
+        `WITH archived AS (
+           UPDATE working_documents
+              SET archived_at = now(),
+                  updated_at = now()
+            WHERE archived_at IS NULL
+              AND (
+                task_id = $1::uuid
+                OR path LIKE $2 ESCAPE '\\'
+              )
+           RETURNING path
+         ),
+         _links AS (
+           DELETE FROM working_document_links
+            WHERE source_path IN (SELECT path FROM archived)
+         )
+         SELECT COUNT(*)::text AS archived_count FROM archived`,
+        [rootTaskId, `${escapeLikePattern(pathPrefix)}%`],
+      );
+
+      await client.query('COMMIT');
+      const archived = Number.parseInt(rows[0]?.archived_count ?? '0', 10);
+      this.logger.info(
+        { rootTaskId, archived },
+        'working-docs-repo: archived project workspace documents',
+      );
+      return archived;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error({ err, rootTaskId }, 'working-docs-repo: archiveProjectWorkspaceDocs failed');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async softDelete(path: string): Promise<WorkingDocRow | null> {
     const normalized = normalizeDocPath(path);
     const client = await this.pool.connect();

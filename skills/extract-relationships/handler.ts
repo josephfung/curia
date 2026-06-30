@@ -29,7 +29,7 @@ const NODE_TYPES_LIST = NODE_TYPES.join(', ');
 
 export class ExtractRelationshipsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { text, source } = ctx.input as { text?: string; source?: string };
+    const { text, source, max_stored } = ctx.input as { text?: string; source?: string; max_stored?: number };
 
     if (!text || typeof text !== 'string') {
       // Log only safe metadata — never log ctx.input directly (contains full transcript)
@@ -52,7 +52,11 @@ export class ExtractRelationshipsHandler implements SkillHandler {
     }
 
     try {
-    // -- Step 1: Classifier gate --
+      const maxStored = typeof max_stored === 'number' && Number.isFinite(max_stored) && max_stored >= 0
+        ? Math.floor(max_stored)
+        : undefined;
+
+      // -- Step 1: Classifier gate --
     // Cheap fast-tier call — exits early on the majority of messages (scheduling,
     // email drafts, lookups) that contain no entity-to-entity relationships.
     const classifyResult = await ctx.infraLlm.classify(
@@ -210,6 +214,7 @@ ${text}`,
         } else {
           confirmed++;
         }
+        if (maxStored !== undefined && extracted + confirmed >= maxStored) break;
       } catch (err) {
         // Log at error (not warn) — persistence failures are infrastructure errors
         // (DB outage, connection loss) that must surface in Sentry, not soft warnings.

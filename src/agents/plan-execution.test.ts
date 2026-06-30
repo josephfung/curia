@@ -10,6 +10,7 @@ import {
   preflightPlanBlockWrite,
   resolveBlockedByTaskId,
   resolvePlanCompletionNote,
+  resolvePromotionText,
   validateDeliverableStepId,
   validatePlanStepsGraph,
 } from './plan-execution.js';
@@ -284,5 +285,61 @@ describe('plan completion helpers (#1239, #1240)', () => {
     expect(resolvePlanCompletionNote(rollupPlan, children)).toBe(
       'Research: Found 12 competitors\n\nDraft: Outline complete',
     );
+  });
+});
+
+describe('resolvePromotionText (#1241)', () => {
+  it('uses only the deliverable step output when marked', () => {
+    const plan: PlanProgressBlock = {
+      steps: [
+        { id: 'iterate', taskId: 'child-1' },
+        { id: 'deliverable', taskId: 'child-2' },
+      ],
+      deliverableStepId: 'deliverable',
+      done: 2,
+      total: 2,
+      next: 'Done',
+    };
+    const children = new Map([
+      ['child-1', {
+        title: 'Findings worklog',
+        description: null,
+        progress: { notes: [{ at: 't', note: '1300 rows of flagged accounts' }] },
+        errorBudget: { resumable: true },
+      }],
+      ['child-2', {
+        title: 'Synthesis',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Audit complete — 42 flagged for review' }] },
+      }],
+    ]);
+    expect(resolvePromotionText(plan, children)).toBe('Audit complete — 42 flagged for review');
+  });
+
+  it('skips resumable iterate leaves when rolling up without a deliverable step', () => {
+    const plan: PlanProgressBlock = {
+      steps: [
+        { id: 'iterate', taskId: 'child-1' },
+        { id: 'research', taskId: 'child-2' },
+      ],
+      deliverableStepId: null,
+      done: 2,
+      total: 2,
+      next: 'Done',
+    };
+    const children = new Map([
+      ['child-1', {
+        title: 'Findings worklog',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'row 1300' }] },
+        errorBudget: { resumable: true },
+      }],
+      ['child-2', {
+        title: 'Research',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Themes identified' }] },
+      }],
+    ]);
+    expect(resolvePromotionText(plan, children)).toBe('Research: Themes identified');
   });
 });

@@ -262,6 +262,43 @@ export function resolvePlanCompletionNote(
   return lines.join('\n\n');
 }
 
+export interface PromotionChildSnapshot {
+  title: string;
+  description: string | null;
+  progress: Record<string, unknown>;
+  errorBudget?: Record<string, unknown>;
+}
+
+/**
+ * Text to promote into the KG on project completion — curated deliverable only.
+ * When a deliverable step is marked, uses that step's output exclusively. Otherwise
+ * rolls up non-resumable child summaries (skipping iterate-leaf worklogs).
+ */
+export function resolvePromotionText(
+  plan: PlanProgressBlock,
+  children: ReadonlyMap<string, PromotionChildSnapshot>,
+): string | null {
+  if (plan.deliverableStepId) {
+    const step = plan.steps.find((s) => s.id === plan.deliverableStepId);
+    const child = step?.taskId ? children.get(step.taskId) : undefined;
+    if (!child) return null;
+    const text = extractTaskOutputNote(child);
+    return text.trim().length > 0 ? text : null;
+  }
+
+  const lines: string[] = [];
+  for (const step of plan.steps) {
+    if (!step.taskId) continue;
+    const child = children.get(step.taskId);
+    if (!child) continue;
+    if (child.errorBudget?.['resumable'] === true) continue;
+    const note = extractTaskOutputNote(child);
+    if (note.trim().length === 0) continue;
+    lines.push(`${child.title}: ${note}`);
+  }
+  return lines.length > 0 ? lines.join('\n\n') : null;
+}
+
 /** True when every planned child is resolved and the deliverable step (if any) is done. */
 export function isPlanReadyForAutoComplete(
   plan: PlanProgressBlock,

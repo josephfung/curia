@@ -128,6 +128,10 @@ import { applyDocumentWorkspace, DEFAULT_SCRATCH_DOC_TTL_DAYS } from './agents/d
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
+import {
+  DeliverableKgPromotionSubscriber,
+  resolveKgPromotionConfig,
+} from './agents/deliverable-kg-promotion.js';
 import * as fs from 'node:fs';
 import * as yaml from 'js-yaml';
 import { RegistryRepo } from './registry/registry-repo.js';
@@ -2043,6 +2047,18 @@ async function main(): Promise<void> {
     resumableCeilings: tasksConfig.resumableCeilings,
   });
   planFrontierSubscriber.start();
+
+  if (workingDocsRepo) {
+    const deliverableKgPromotionSubscriber = new DeliverableKgPromotionSubscriber({
+      bus,
+      taskRepo,
+      workingDocsRepo,
+      executionLayer,
+      config: resolveKgPromotionConfig(yamlConfig.documentWorkspace?.kgPromotion),
+      logger,
+    });
+    deliverableKgPromotionSubscriber.start();
+  }
 
   logger.info('Scheduler started');
 
