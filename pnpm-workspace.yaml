@@ -11,6 +11,27 @@ packages:
 # pnpm default changes.
 blockExoticSubdeps: true
 
+# Supply-chain hardening: quarantine newly-published package versions. pnpm refuses
+# to resolve/verify any version published less than this many minutes ago, blunting
+# the "publish a malicious patch, install it within minutes" attack class.
+#
+# 1440 minutes = 24h. This is a deliberate floor, NOT the primary quarantine:
+#   - The primary 7-day quarantine lives in .github/dependabot.yml (`cooldown`),
+#     which stops Dependabot from ever PROPOSING a version younger than 7 days.
+#   - This 24h pnpm gate is the in-tree backstop that catches anything the cooldown
+#     doesn't cover (e.g. a manual `pnpm add` of a brand-new package), and declares
+#     the policy where it's visible (and where Semgrep checks for it).
+#
+# Why 24h and not 7 days here: this value is verified against the COMMITTED lockfile
+# on every `pnpm install --frozen-lockfile` — CI, local installs, AND the production
+# image build (curia-deploy/deploy/compose/Dockerfile.curia copies this file and runs
+# frozen installs at both stages). A 7-day floor (10080) fails today's lockfile (it
+# holds entries <7 days old) and would block builds/deploys; 24h is satisfied by the
+# current lockfile. With the 7-day Dependabot cooldown upstream, lockfile entries are
+# effectively always far older than 24h by the time they're merged, so this rarely
+# bites in practice. Requires pnpm >=10.16.0. Ref: https://pnpm.io/settings#minimumreleaseage
+minimumReleaseAge: 1440
+
 # Dependency version overrides. pnpm v10+ reads `overrides` ONLY from this file —
 # a `pnpm.overrides` block in package.json is silently ignored. These pins force
 # transitive deps onto patched versions to clear known CVEs.

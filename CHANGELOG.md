@@ -63,6 +63,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **Dependabot cooldown** — all four ecosystems (npm, github-actions, docker ×2) now wait 7 days before proposing a bump, quarantining freshly-published (potentially compromised) versions at the PR-proposal layer. Clears Semgrep `dependabot-missing-cooldown` alerts.
+- **pnpm `minimumReleaseAge`** — `pnpm-workspace.yaml` now sets a 24h floor (1440 min), an in-tree backstop to the Dependabot cooldown that blocks installs of just-published versions across CI, local, and the prod image build. (Semgrep's `pnpm-minimum-release-age` rule wants 7 days/10080, which fails the current lockfile's frozen-install check; 24h is the build-compatible floor.)
 
 ## [0.38.0] — 2026-06-26 — "Deckard"
 
