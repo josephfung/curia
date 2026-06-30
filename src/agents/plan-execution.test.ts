@@ -4,10 +4,13 @@ import {
   countMaterializationKinds,
   existingTaskIdForStep,
   findRemovedChildTaskIds,
+  isPlanReadyForAutoComplete,
   parsePlanStepsInput,
   planStepDriftsFromChild,
   preflightPlanBlockWrite,
   resolveBlockedByTaskId,
+  resolvePlanCompletionNote,
+  resolvePromotionText,
   validateDeliverableStepId,
   validatePlanStepsGraph,
 } from './plan-execution.js';
@@ -174,5 +177,187 @@ describe('preflightPlanBlockWrite', () => {
     if (!result.ok) {
       expect(result.code).toBe('block_overflow');
     }
+  });
+});
+
+describe('plan completion helpers (#1239, #1240)', () => {
+  const plan: PlanProgressBlock = {
+    steps: [
+      { id: 'step-1', taskId: 'child-1' },
+      { id: 'step-2', taskId: 'child-2' },
+      { id: 'deliverable', taskId: 'child-3' },
+    ],
+    deliverableStepId: 'deliverable',
+    done: 3,
+    total: 3,
+    next: 'Done',
+  };
+
+  it('requires the deliverable child to be done before auto-complete', () => {
+    expect(isPlanReadyForAutoComplete(plan, {
+      'child-1': 'done',
+      'child-2': 'done',
+      'child-3': 'done',
+    })).toBe(true);
+    expect(isPlanReadyForAutoComplete(plan, {
+      'child-1': 'done',
+      'child-2': 'done',
+      'child-3': 'cancelled',
+    })).toBe(false);
+    expect(isPlanReadyForAutoComplete({ ...plan, done: 2 }, {
+      'child-1': 'done',
+      'child-2': 'done',
+      'child-3': 'open',
+    })).toBe(false);
+  });
+
+  it('surfaces the deliverable step output as the completion note', () => {
+    const children = new Map([
+      ['child-3', {
+        title: 'Synthesis',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Kickoff plan ready' }] },
+      }],
+    ]);
+    expect(resolvePlanCompletionNote(plan, children)).toBe('Kickoff plan ready');
+  });
+
+  it('skips trailing empty notes when extracting child output', () => {
+    const children = new Map([
+      ['child-3', {
+        title: 'Synthesis',
+        description: null,
+        progress: {
+          notes: [
+            { at: 't1', note: 'Real output' },
+            { at: 't2', note: '   ' },
+          ],
+        },
+      }],
+    ]);
+    expect(resolvePlanCompletionNote(plan, children)).toBe('Real output');
+  });
+
+  it('auto-completes when all children are done and no deliverable step is marked', () => {
+    const rollupPlan: PlanProgressBlock = {
+      steps: [
+        { id: 'step-1', taskId: 'child-1' },
+        { id: 'step-2', taskId: 'child-2' },
+      ],
+      deliverableStepId: null,
+      done: 2,
+      total: 2,
+      next: 'Done',
+    };
+    expect(isPlanReadyForAutoComplete(rollupPlan, {
+      'child-1': 'done',
+      'child-2': 'done',
+    })).toBe(true);
+    expect(isPlanReadyForAutoComplete({ ...rollupPlan, done: 1 }, {
+      'child-1': 'done',
+      'child-2': 'open',
+    })).toBe(false);
+  });
+
+  it('rolls up child summaries in plan order when no deliverable step is marked', () => {
+    const rollupPlan: PlanProgressBlock = {
+      steps: [
+        { id: 'step-1', taskId: 'child-1' },
+        { id: 'step-2', taskId: 'child-2' },
+      ],
+      deliverableStepId: null,
+      done: 2,
+      total: 2,
+      next: 'Done',
+    };
+    const children = new Map([
+      ['child-1', {
+        title: 'Research',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Found 12 competitors' }] },
+      }],
+      ['child-2', {
+        title: 'Draft',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Outline complete' }] },
+      }],
+    ]);
+    expect(resolvePlanCompletionNote(rollupPlan, children)).toBe(
+      'Research: Found 12 competitors\n\nDraft: Outline complete',
+    );
+  });
+});
+
+describe('resolvePromotionText (#1241)', () => {
+  it('uses only the deliverable step output when marked', () => {
+    const plan: PlanProgressBlock = {
+      steps: [
+        { id: 'iterate', taskId: 'child-1' },
+        { id: 'deliverable', taskId: 'child-2' },
+      ],
+      deliverableStepId: 'deliverable',
+      done: 2,
+      total: 2,
+      next: 'Done',
+    };
+    const children = new Map([
+      ['child-1', {
+        title: 'Findings worklog',
+        description: null,
+        progress: { notes: [{ at: 't', note: '1300 rows of flagged accounts' }] },
+        errorBudget: { resumable: true },
+      }],
+      ['child-2', {
+        title: 'Synthesis',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Audit complete — 42 flagged for review' }] },
+      }],
+    ]);
+    expect(resolvePromotionText(plan, children)).toBe('Audit complete — 42 flagged for review');
+  });
+
+  it('returns null for a deliverable step with only a title fallback', () => {
+    const plan: PlanProgressBlock = {
+      steps: [{ id: 'deliverable', taskId: 'child-1' }],
+      deliverableStepId: 'deliverable',
+      done: 1,
+      total: 1,
+      next: 'Done',
+    };
+    const children = new Map([
+      ['child-1', {
+        title: 'Synthesis',
+        description: null,
+        progress: {},
+      }],
+    ]);
+    expect(resolvePromotionText(plan, children)).toBeNull();
+  });
+
+  it('skips resumable iterate leaves when rolling up without a deliverable step', () => {
+    const plan: PlanProgressBlock = {
+      steps: [
+        { id: 'iterate', taskId: 'child-1' },
+        { id: 'research', taskId: 'child-2' },
+      ],
+      deliverableStepId: null,
+      done: 2,
+      total: 2,
+      next: 'Done',
+    };
+    const children = new Map([
+      ['child-1', {
+        title: 'Findings worklog',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'row 1300' }] },
+        errorBudget: { resumable: true },
+      }],
+      ['child-2', {
+        title: 'Research',
+        description: null,
+        progress: { notes: [{ at: 't', note: 'Themes identified' }] },
+      }],
+    ]);
+    expect(resolvePromotionText(plan, children)).toBe('Research: Themes identified');
   });
 });

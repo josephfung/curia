@@ -93,6 +93,31 @@ describe('guidance blocks', () => {
     const text = buildResumableCheckpointResumeBlock(block);
     expect(text).toContain('12 / 1300');
     expect(text).toContain('Page 2 of follows');
+    expect(text).toContain('no estimate yet');
+  });
+
+  it('includes throughput averages and ETA on resume when circuit state exists', () => {
+    const block: ResumableProgressBlock = {
+      cursor: 'page:5',
+      done: 60,
+      total: 1300,
+      accumulator: [],
+      lastSliceUnits: 12,
+      next: 'Continue paging',
+      checkpointedAt: '2026-06-28T12:00:00.000Z',
+    };
+    const text = buildResumableCheckpointResumeBlock(block, {
+      circuit: {
+        stallCount: 0,
+        iterationCount: 5,
+        startedAt: '2026-06-01T00:00:00.000Z',
+        totalCostUsd: 0.5,
+        lastProgress: { done: 60, cursor: 'page:5' },
+      },
+      now: new Date('2026-06-01T01:00:00.000Z'),
+    });
+    expect(text).toContain('units/slice avg');
+    expect(text).toContain('ETA');
   });
 });
 

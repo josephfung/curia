@@ -51,19 +51,8 @@ export class BullpenDispatcher {
       return;
     }
 
-    // A reply with close_after: true closes the thread atomically, then still publishes a
-    // normal agent.discuss event for the concluding message. Creating reply-oriented tasks
-    // for a closed thread is a dead end — any reply is rejected with "Cannot post to closed
-    // thread" — so skip dispatch here, mirroring the message-cap guard above. (#881)
-    if (threadRecord.thread.status === 'closed') {
-      this.logger.info(
-        { threadId },
-        'BullpenDispatcher: thread is closed — skipping task creation (concluding reply needs no follow-up)',
-      );
-      return;
-    }
-
     const { topic, participants } = threadRecord.thread;
+    const threadClosed = event.payload.threadClosed === true;
 
     // Prefer the originator from the discuss event (fast path — already in memory).
     // Fall back to the originator stored on the thread at creation time: this covers
@@ -72,15 +61,22 @@ export class BullpenDispatcher {
     const effectiveOriginator = event.payload.originator ?? threadRecord.thread.originator ?? undefined;
 
     // Create one agent.task per participant, excluding the sender.
-    // Mentioned agents get a reply-expected prompt; others get an FYI.
+    // Mentioned agents get a reply-expected (open) or act-on-conclusion (closed) prompt;
+    // others get FYI. close_after replies with no explicit mentions auto-mention the
+    // thread opener in the bullpen handler so consult hand-offs wake the originator.
     const otherParticipants = participants.filter((id) => id !== senderAgentId);
 
     let dispatched = 0;
     for (const agentId of otherParticipants) {
       const isMentioned = mentionedAgentIds.includes(agentId);
-      const content = isMentioned
-        ? `You've been mentioned in Bullpen thread "${topic}" (thread_id: ${threadId}) by ${senderAgentId}. Review the injected thread context and reply using the bullpen skill.`
-        : `FYI: New activity in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. No response required, but reply if you have something to add.`;
+      const shouldAct = isMentioned;
+      const content = threadClosed
+        ? shouldAct
+          ? `Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId} — the thread is now closed. Call bullpen get_thread to read the full history, act on the conclusion (do not reply in-thread).`
+          : `FYI: Final message in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. Call bullpen get_thread to read the full history if needed, but do not reply in-thread.`
+        : shouldAct
+          ? `You've been mentioned in Bullpen thread "${topic}" (thread_id: ${threadId}) by ${senderAgentId}. Review the injected thread context and reply using the bullpen skill.`
+          : `FYI: New activity in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. No response required, but reply if you have something to add.`;
 
       try {
         const task = createAgentTask({
@@ -95,6 +91,7 @@ export class BullpenDispatcher {
             taskOrigin: 'bullpen',
             threadId,
             mentioned: isMentioned,
+            threadClosed,
             // Propagate the originator (LINEAGE) so the receiving agent's task carries the
             // original TaskOriginator — this drives the autonomy principal-bypass for `normal`
             // skills at sufficient trust. NOTE (#1126): bullpen is a persisted/async path, so it

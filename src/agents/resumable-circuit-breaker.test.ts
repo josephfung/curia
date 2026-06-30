@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   cursorsEqual,
   hasForwardProgress,
+  hasFrontierProgress,
   processPausedSliceOutcome,
+  processPlanFrontierWakeOutcome,
   readCircuitState,
   resolveResumableCeilings,
   mergeCircuitState,
@@ -174,5 +176,58 @@ describe('resumable-circuit-breaker (#1176)', () => {
     };
     const merged = mergeCircuitState({ notes: [] }, state);
     expect(readCircuitState(merged)).toEqual(state);
+  });
+
+  describe('planned-parent frontier progress (#1239)', () => {
+    it('detects frontier progress via rollup or terminal children', () => {
+      expect(hasFrontierProgress(
+        { rollupDone: 1, terminalChildCount: 1 },
+        { rollupDone: 2, terminalChildCount: 1 },
+      )).toBe(true);
+      expect(hasFrontierProgress(
+        { rollupDone: 2, terminalChildCount: 2 },
+        { rollupDone: 2, terminalChildCount: 3 },
+      )).toBe(true);
+      expect(hasFrontierProgress(
+        { rollupDone: 2, terminalChildCount: 3 },
+        { rollupDone: 2, terminalChildCount: 3 },
+      )).toBe(false);
+    });
+
+    it('breaches after K parent wakes with no frontier progress', () => {
+      const circuit = {
+        stallCount: 2,
+        iterationCount: 5,
+        startedAt: '2026-06-01T00:00:00.000Z',
+        totalCostUsd: 0,
+        lastProgress: { done: 1, cursor: { terminalChildren: 1 } },
+      };
+      const result = processPlanFrontierWakeOutcome({
+        snapshot: { rollupDone: 1, terminalChildCount: 1 },
+        circuit,
+        ceilings: { ...DEFAULT_RESUMABLE_CEILINGS, maxStalls: 3 },
+        now: new Date('2026-06-01T01:00:00.000Z'),
+      });
+      expect(result.action).toBe('breach');
+      if (result.action === 'breach') expect(result.breach.reason).toBe('stall_limit');
+    });
+
+    it('resets stall counter when the frontier advances', () => {
+      const circuit = {
+        stallCount: 2,
+        iterationCount: 5,
+        startedAt: '2026-06-01T00:00:00.000Z',
+        totalCostUsd: 0,
+        lastProgress: { done: 1, cursor: { terminalChildren: 1 } },
+      };
+      const result = processPlanFrontierWakeOutcome({
+        snapshot: { rollupDone: 2, terminalChildCount: 2 },
+        circuit,
+        ceilings: { ...DEFAULT_RESUMABLE_CEILINGS, maxStalls: 3 },
+        now: new Date('2026-06-01T01:00:00.000Z'),
+      });
+      expect(result.action).toBe('continue');
+      if (result.action === 'continue') expect(result.state.stallCount).toBe(0);
+    });
   });
 });

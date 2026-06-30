@@ -32,6 +32,7 @@ import {
   shouldSendCheckpointBudgetNudge,
   type BoundTaskContext,
 } from './resumable-task.js';
+import { readCircuitState } from './resumable-circuit-breaker.js';
 import {
   applyPlanHarness,
   shouldOfferPlanSkill,
@@ -454,11 +455,21 @@ export class AgentRuntime {
     // Resumable-task harness (#1173): fixed-slot guidance + checkpoint resume for
     // iterate leaves. Injected per-turn when the bound task is resumable — not in
     // agent YAML. Composes with document-workspace tail manifest injection (#1209).
-    const boundTaskCtx = resolveBoundTaskContext(
+    let boundTaskCtx = resolveBoundTaskContext(
       taskEvent.payload.metadata as Record<string, unknown> | undefined,
       originalContent,
       taskEvent.payload.channelId,
     );
+
+    // Scheduler-bound task wakes carry metadata/content progress that can be empty or stale.
+    // Reload from the task row so harness guidance (plan rollup, checkpoint resume) is fresh (#1238).
+    if (boundTaskCtx && taskEvent.payload.channelId === 'scheduler' && this.config.taskRepo) {
+      const fresh = await this.config.taskRepo.getTask(boundTaskCtx.taskId);
+      if (fresh) {
+        boundTaskCtx = { ...boundTaskCtx, progress: fresh.progress };
+      }
+    }
+
     const resumableActive = boundTaskCtx !== null && isResumableTask(boundTaskCtx);
     if (resumableActive && boundTaskCtx) {
       effectiveSystemPrompt += '\n\n' + buildResumableTaskGuidanceBlock({
@@ -467,7 +478,8 @@ export class AgentRuntime {
       });
       const existingCheckpoint = readResumableBlock(boundTaskCtx.progress ?? {});
       if (existingCheckpoint) {
-        effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint);
+        const circuit = readCircuitState(boundTaskCtx.progress ?? {});
+        effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint, { circuit });
       }
     }
 

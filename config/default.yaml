@@ -85,6 +85,13 @@ documentWorkspace:
   # set `ttl_days: 0` on a scratch doc to opt out. `/projects/…` documents are never
   # auto-archived.
   scratchTtlDays: 7
+  # When a planned parent completes, promote its curated deliverable into the KG via
+  # extract-facts / extract-relationships, then archive the project's workspace docs.
+  # Per-task override: error_budget.kg_promotion: false skips promotion for that task.
+  kgPromotion:
+    enabled: true
+    maxFacts: 50
+    maxRelationships: 50
 
 skillOutput:
   # Maximum character length of a sanitized skill result before truncation.

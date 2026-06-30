@@ -263,6 +263,9 @@ interface AgentDiscussPayload {
   participants: string[];      // all thread participants
   mentionedAgentIds: string[]; // subset that get reply-expected tasks (empty = broadcast)
   content: string;
+  /** True when the reply closed the thread atomically (close_after: true). BullpenDispatcher
+   *  uses this to deliver a read-and-act wake without inviting an in-thread reply. */
+  threadClosed?: boolean;
   /** TaskOriginator of the task that published this discuss event. Forwarded by
    *  BullpenDispatcher into the resulting agent.task metadata so that skills invoked
    *  during bullpen work can pass the elevated-skill gate for principal-authorized tasks. */
@@ -610,6 +613,26 @@ interface TaskCompletedPayload {
   taskId: string;
   completionNote?: string;
   agentId: string | null;
+}
+
+// task.resumable_throughput — emitted when a resumable task pauses mid-work (#1264).
+// Derived telemetry from progress.resumable + progress.resumableCircuit for audit trails.
+interface TaskResumableThroughputPayload {
+  taskId: string;
+  agentId: string;
+  done: number;
+  total: number;
+  lastSliceUnits: number;
+  iterationCount: number;
+  stallCount: number;
+  totalCostUsd: number;
+  startedAt: string;
+  estimateAvailable: boolean;
+  unitsPerSlice: number | null;
+  unitsPerWallclockMinute: number | null;
+  costPerUnit: number | null;
+  etaSlices: number | null;
+  etaWallclockMinutes: number | null;
 }
 
 // -- Discriminated union --
@@ -1019,6 +1042,12 @@ export interface TaskCompletedEvent extends BaseEvent {
   payload: TaskCompletedPayload;
 }
 
+export interface TaskResumableThroughputEvent extends BaseEvent {
+  type: 'task.resumable_throughput';
+  sourceLayer: 'system';
+  payload: TaskResumableThroughputPayload;
+}
+
 // ChannelPollEvent — emitted by EmailAdapter after each successful Nylas poll cycle.
 // Provides an observable heartbeat: if channel.poll stops appearing in the audit log,
 // the adapter has stalled. One event per poll regardless of whether messages were found.
@@ -1114,6 +1143,7 @@ export type BusEvent =
   | TaskCreatedEvent           // Tasks v1: task created via task-create skill (#835)
   | TaskUpdatedEvent           // Tasks v1: task fields updated via task-update skill (#835)
   | TaskCompletedEvent         // Tasks v1: task set to done via task-complete skill (#835)
+  | TaskResumableThroughputEvent // #1264: resumable pause throughput telemetry
   | ChannelPollEvent           // #846: email adapter poll heartbeat (one per cycle)
   | ChannelStalledEvent;       // #846: email adapter stall detection (fire-once per lifecycle)
 
@@ -1718,6 +1748,20 @@ export function createTaskCompleted(
     timestamp: new Date(),
     type: 'task.completed',
     sourceLayer: 'execution',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createTaskResumableThroughput(
+  payload: TaskResumableThroughputPayload & { parentEventId?: string },
+): TaskResumableThroughputEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'task.resumable_throughput',
+    sourceLayer: 'system',
     payload: rest,
     parentEventId,
   };

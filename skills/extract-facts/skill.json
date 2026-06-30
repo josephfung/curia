@@ -1,12 +1,13 @@
 {
   "name": "extract-facts",
   "description": "Extract single-entity attribute facts from a passage of text and persist them as knowledge graph fact nodes. Self-classifies internally — always safe to call; exits early if no facts are found.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
     "text": "string (the message or turn text to extract facts from)",
-    "source": "string (provenance string, e.g. 'system:checkpoint/conversation:abc/agent:coordinator/channel:cli')"
+    "source": "string (provenance string, e.g. 'system:checkpoint/conversation:abc/agent:coordinator/channel:cli')",
+    "max_stored": "number? (optional cap on facts persisted in this invocation)"
   },
   "outputs": {
     "stored": "number (new or updated fact nodes persisted to the KG)",

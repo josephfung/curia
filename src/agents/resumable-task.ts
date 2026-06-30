@@ -9,6 +9,11 @@ import {
   type ResumableProgressBlock,
 } from '../db/resumable-progress.js';
 import type { Logger } from '../logger.js';
+import type { ResumableCircuitState } from './resumable-circuit-breaker.js';
+import {
+  computeResumableThroughput,
+  formatResumableThroughputForResume,
+} from './resumable-throughput.js';
 import {
   indexPathForDirectory,
   resolveWorkspacePrefixFromTaskContent,
@@ -100,7 +105,10 @@ export function buildResumableTaskGuidanceBlock(options?: {
   return lines.join('\n');
 }
 
-export function buildResumableCheckpointResumeBlock(block: ResumableProgressBlock): string {
+export function buildResumableCheckpointResumeBlock(
+  block: ResumableProgressBlock,
+  options?: { circuit?: ResumableCircuitState | null; now?: Date },
+): string {
   const accumulatorSummary = typeof block.accumulator === 'object'
     && block.accumulator !== null
     && !Array.isArray(block.accumulator)
@@ -108,10 +116,15 @@ export function buildResumableCheckpointResumeBlock(block: ResumableProgressBloc
     ? `document pointer ${JSON.stringify(block.accumulator)}`
     : JSON.stringify(block.accumulator);
 
+  const throughputLine = formatResumableThroughputForResume(
+    computeResumableThroughput(block, options?.circuit ?? null, options?.now),
+  );
+
   return [
     '## Last Checkpoint (resume from here)',
     '',
     `- Progress: ${block.done} / ${block.total} (${block.lastSliceUnits} units last slice)`,
+    `- ${throughputLine}`,
     `- Cursor: ${JSON.stringify(block.cursor)}`,
     `- Accumulator: ${accumulatorSummary}`,
     `- Next: ${block.next}`,

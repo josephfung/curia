@@ -1,7 +1,7 @@
 {
   "name": "bullpen",
   "description": "Open, reply to, read, or close inter-agent Bullpen discussion threads. Use 'post' to start a new thread addressed to other agents, 'reply' to add a message to an existing thread, 'get_thread' to read the full message history, and 'close' to end a thread when the discussion is complete.",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

@@ -1,7 +1,7 @@
 # Resumable Tasks & Projects — Design
 
 **Date:** 2026-06-23
-**Status:** Draft / Decision-ready (no implementation yet)
+**Status:** Shipped (Phases 0–2) — promoted to [spec 20 — Resumable Tasks & Projects](../specs/20-resumable-tasks-and-projects.md). This memo is kept as the dated design record.
 **Builds on:** [spec 19 — Tasks & Backlog](../specs/19-tasks-and-backlog.md), [spec 07 — Scheduler](../specs/07-scheduler.md), [spec 14 — Autonomy Engine](../specs/14-autonomy-engine.md)
 
 ## Context — the motivating failure
