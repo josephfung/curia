@@ -59,11 +59,15 @@ describe('validateTaskErrorBudget', () => {
   it('documents allowed keys for operator-facing errors', () => {
     const allowed = [...ALLOWED_TASK_ERROR_BUDGET_KEYS].sort();
     expect(allowed).toEqual([
+      'blocked_step_hours',
       'max_cost_usd',
       'max_iterations',
+      'max_plan_depth',
+      'max_replans_per_subtree',
       'max_stalls',
       'max_wallclock_hours',
       'resumable',
+      'throughput_divergence_ratio',
     ]);
   });
 });

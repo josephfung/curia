@@ -367,7 +367,11 @@
             "maxStalls": { "type": "integer", "minimum": 1 },
             "maxIterations": { "type": "integer", "minimum": 1 },
             "maxWallclockHours": { "type": "number", "exclusiveMinimum": 0 },
-            "maxCostUsd": { "type": "number", "exclusiveMinimum": 0 }
+            "maxCostUsd": { "type": "number", "exclusiveMinimum": 0 },
+            "maxPlanDepth": { "type": "integer", "minimum": 1 },
+            "maxReplansPerSubtree": { "type": "integer", "minimum": 1 },
+            "blockedStepHours": { "type": "number", "exclusiveMinimum": 0 },
+            "throughputDivergenceRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
           }
         }
       }
