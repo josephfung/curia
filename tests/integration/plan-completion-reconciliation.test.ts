@@ -4,6 +4,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
 import pino from 'pino';
 import { EventBus } from '../../src/bus/bus.js';
+import type { Logger } from '../../src/logger.js';
 import { TaskRepo } from '../../src/db/task-repo.js';
 import { SchedulerService } from '../../src/scheduler/scheduler-service.js';
 import { PlanFrontierSubscriber } from '../../src/agents/plan-frontier-subscriber.js';
@@ -15,7 +16,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
 const PREFIX = 'PlanReconcile Test';
-const logger = pino({ level: 'silent' });
+const logger: Logger = pino({ level: 'silent' });
 
 async function cleanup(pool: pg.Pool): Promise<void> {
   const titleLike = `${PREFIX}%`;
@@ -43,9 +44,9 @@ describeIf('Plan completion reconciliation (#1239)', () => {
 
   beforeEach(async () => {
     await cleanup(pool);
-    bus = new EventBus(logger as never);
-    repo = new TaskRepo(pool, bus, logger as never, 'UTC');
-    schedulerService = new SchedulerService(pool, bus, logger as never, 'UTC');
+    bus = new EventBus(logger);
+    repo = new TaskRepo(pool, bus, logger, 'UTC');
+    schedulerService = new SchedulerService(pool, bus, logger, 'UTC');
   });
 
   it('reconcile-on-done leaves no open descendant children', async () => {
@@ -114,7 +115,7 @@ describeIf('Plan completion reconciliation (#1239)', () => {
     const subscriber = new PlanFrontierSubscriber({
       pool,
       bus,
-      logger: logger as never,
+      logger,
       schedulerService,
       taskRepo: repo,
       eligibleAgents: new Set(['coordinator']),
@@ -183,7 +184,7 @@ describeIf('Plan completion reconciliation (#1239)', () => {
     const subscriber = new PlanFrontierSubscriber({
       pool,
       bus,
-      logger: logger as never,
+      logger,
       schedulerService,
       taskRepo: repo,
       eligibleAgents: new Set(['coordinator']),
@@ -278,7 +279,7 @@ describeIf('Plan completion reconciliation (#1239)', () => {
     const subscriber = new PlanFrontierSubscriber({
       pool,
       bus,
-      logger: logger as never,
+      logger,
       schedulerService,
       taskRepo: repo,
       eligibleAgents: new Set(['coordinator']),

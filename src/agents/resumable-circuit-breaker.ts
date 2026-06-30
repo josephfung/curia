@@ -480,6 +480,13 @@ export async function handlePlanFrontierWakeForCircuitBreaker(opts: {
     opts.logger.warn({ taskId: opts.taskId }, 'Plan frontier circuit breaker: task not found');
     return { continueParent: false };
   }
+  if (task.status === 'done' || task.status === 'cancelled' || task.status === 'failed') {
+    opts.logger.debug(
+      { taskId: opts.taskId, status: task.status },
+      'Plan frontier circuit breaker: task already terminal',
+    );
+    return { continueParent: false };
+  }
 
   const ceilings = resolveResumableCeilings(opts.ceilings, task.errorBudget);
   const circuit = readCircuitState(task.progress);

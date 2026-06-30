@@ -103,6 +103,13 @@ const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
 /** Active child statuses reconciled when a parent reaches a terminal state (#1239). */
 const RECONCILABLE_CHILD_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
 
+type DbQueryable = Pick<Pool, 'query'>;
+
+interface ReconciledChildRow {
+  id: string;
+  previous_status: string;
+}
+
 export class TaskRepo {
   constructor(
     private readonly pool: Pool,
@@ -426,17 +433,19 @@ export class TaskRepo {
     const cancelOnTerminal = (updates.status === 'cancelled' || updates.status === 'done')
       && !updates.wakeAt;
 
-    let updatedRow: DbTaskRow;
+    const transitioningToTerminal = updates.status !== undefined
+      && updates.status !== current.status
+      && (updates.status === 'done' || updates.status === 'cancelled');
 
-    if (updates.wakeAt || cancelOnTerminal) {
-      // Atomic CTE: update task + cancel old wake-up jobs + optionally insert new one.
-      const wakeAgentIdx = whereIdx + 1;
-      const wakeRunAtIdx = updates.wakeAt ? whereIdx + 2 : null;
-      const wakeCreatedByIdx = updates.wakeAt ? whereIdx + 3 : null;
-      const wakeTzIdx = updates.wakeAt ? whereIdx + 4 : null;
-      const wakeOriginatorIdx = updates.wakeAt ? whereIdx + 5 : null;
+    const executeUpdate = async (executor: DbQueryable): Promise<DbTaskRow | null> => {
+      if (updates.wakeAt || cancelOnTerminal) {
+        const wakeAgentIdx = whereIdx + 1;
+        const wakeRunAtIdx = updates.wakeAt ? whereIdx + 2 : null;
+        const wakeCreatedByIdx = updates.wakeAt ? whereIdx + 3 : null;
+        const wakeTzIdx = updates.wakeAt ? whereIdx + 4 : null;
+        const wakeOriginatorIdx = updates.wakeAt ? whereIdx + 5 : null;
 
-      const cteSql = `
+        const cteSql = `
         WITH updated_task AS (
           ${updateSql}
         ),
@@ -451,36 +460,55 @@ export class TaskRepo {
         )` : ''}
         SELECT * FROM updated_task
       `;
-      const allParams: unknown[] = [...updateParams];
-      if (updates.wakeAt) {
-        allParams.push(
-          // Route the new wake-up job to the correct specialist, in priority order:
-          // 1. source_agent_id — explicit specialist set at task-create time
-          // 2. tasks.agent_id  — stable task ownership (covers legacy/manual tasks where
-          //                      source_agent_id is NULL but agent_id names a specialist)
-          // 3. callerAgentId   — last resort; avoids routing to coordinator when the
-          //                      task has no agent assignment at all
-          current.sourceAgentId ?? current.agentId ?? callerAgentId, // $wakeAgentIdx
-          updates.wakeAt,                                             // $wakeRunAtIdx
-          callerAgentId ?? current.agentId,                          // $wakeCreatedByIdx
-          this.timezone,                                             // $wakeTzIdx
-          // Carry the task's (immutable) lineage onto the new wake job so a self-deferral keeps its
-          // originator at fire time — no `standing` envelope, so fireJob mints no wakeContext and the
-          // bypass ladder never runs (a pre-chosen wake_at is pre-authorized, like scheduler-create) (#1153).
-          current.originator ? JSON.stringify(current.originator) : null, // $wakeOriginatorIdx
+        const allParams: unknown[] = [...updateParams];
+        if (updates.wakeAt) {
+          allParams.push(
+            current.sourceAgentId ?? current.agentId ?? callerAgentId,
+            updates.wakeAt,
+            callerAgentId ?? current.agentId,
+            this.timezone,
+            current.originator ? JSON.stringify(current.originator) : null,
+          );
+        }
+        const { rows } = await executor.query(cteSql, allParams);
+        return (rows[0] as DbTaskRow | undefined) ?? null;
+      }
+
+      const { rows } = await executor.query(updateSql, updateParams);
+      return (rows[0] as DbTaskRow | undefined) ?? null;
+    };
+
+    let updatedRow: DbTaskRow;
+    let reconciledChildren: ReconciledChildRow[] = [];
+
+    if (transitioningToTerminal) {
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+        const row = await executeUpdate(client);
+        if (!row) {
+          await client.query('ROLLBACK');
+          return await this.resolveEmptyUpdateReturning(taskId);
+        }
+        reconciledChildren = await this.runReconcileChildrenQuery(
+          client,
+          taskId,
+          `reconciled: parent ${taskId} ${updates.status}`,
         );
+        await client.query('COMMIT');
+        updatedRow = row;
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
-      const { rows } = await this.pool.query(cteSql, allParams);
-      if (!rows[0]) {
-        return await this.resolveEmptyUpdateReturning(taskId);
-      }
-      updatedRow = rows[0] as DbTaskRow;
     } else {
-      const { rows } = await this.pool.query(updateSql, updateParams);
-      if (!rows[0]) {
+      const row = await executeUpdate(this.pool);
+      if (!row) {
         return await this.resolveEmptyUpdateReturning(taskId);
       }
-      updatedRow = rows[0] as DbTaskRow;
+      updatedRow = row;
     }
 
     const updated = mapTaskRow(updatedRow);
@@ -499,16 +527,9 @@ export class TaskRepo {
       this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after updateTask');
     }
 
-    if (
-      updates.status !== undefined
-      && updates.status !== current.status
-      && (updates.status === 'done' || updates.status === 'cancelled')
-    ) {
-      await this.reconcileChildrenOnParentTerminal(
-        updated.id,
-        updates.status,
-        callerAgentId,
-      );
+    if (reconciledChildren.length > 0) {
+      const reason = `reconciled: parent ${taskId} ${updates.status}`;
+      await this.publishReconcileChildEvents(reconciledChildren, reason, callerAgentId, taskId);
     }
 
     this.logger.info(
@@ -596,12 +617,28 @@ export class TaskRepo {
       ? [JSON.stringify([noteEntry]), taskId]
       : [taskId];
 
-    const { rows } = await this.pool.query(cteSql, queryParams);
-    const row = rows[0] as DbTaskRow | undefined;
-    if (!row) {
-      // Task existed at pre-check time and was not terminal — if RETURNING is empty,
-      // the row was either deleted or moved to a terminal state concurrently.
-      return await this.resolveEmptyUpdateReturning(taskId);
+    const client = await this.pool.connect();
+    let row: DbTaskRow | undefined;
+    let reconciledChildren: ReconciledChildRow[] = [];
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(cteSql, queryParams);
+      row = rows[0] as DbTaskRow | undefined;
+      if (!row) {
+        await client.query('ROLLBACK');
+        return await this.resolveEmptyUpdateReturning(taskId);
+      }
+      reconciledChildren = await this.runReconcileChildrenQuery(
+        client,
+        taskId,
+        `reconciled: parent ${taskId} done`,
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
 
     const updated = mapTaskRow(row);
@@ -616,24 +653,27 @@ export class TaskRepo {
       this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after completeTask');
     }
 
-    await this.reconcileChildrenOnParentTerminal(taskId, 'done', callerAgentId);
+    if (reconciledChildren.length > 0) {
+      await this.publishReconcileChildEvents(
+        reconciledChildren,
+        `reconciled: parent ${taskId} done`,
+        callerAgentId,
+        taskId,
+      );
+    }
 
     this.logger.info({ taskId: updated.id }, 'task-repo: completed task');
     return updated;
   }
 
-  /**
-   * Recursively cancel non-terminal descendant tasks and their pending wakes when a
-   * parent goal completes, is cancelled, or is superseded (#1239).
-   */
-  async reconcileChildren(
+  private async runReconcileChildrenQuery(
+    executor: DbQueryable,
     taskId: string,
     reason: string,
-    callerAgentId?: string,
-  ): Promise<string[]> {
+  ): Promise<ReconciledChildRow[]> {
     const noteEntry = { at: new Date().toISOString(), note: reason };
 
-    const { rows } = await this.pool.query<{ id: string; previous_status: string }>(
+    const { rows } = await executor.query<ReconciledChildRow>(
       `WITH RECURSIVE descendants AS (
          SELECT id, status FROM tasks WHERE parent_task_id = $1
          UNION ALL
@@ -655,6 +695,7 @@ export class TaskRepo {
                 ),
                 updated_at = now()
           WHERE id IN (SELECT id FROM to_reconcile)
+            AND status = ANY($2::text[])
           RETURNING id
        ),
        _cancel_wakes AS (
@@ -668,6 +709,15 @@ export class TaskRepo {
       [taskId, RECONCILABLE_CHILD_STATUSES, JSON.stringify([noteEntry])],
     );
 
+    return rows;
+  }
+
+  private async publishReconcileChildEvents(
+    rows: readonly ReconciledChildRow[],
+    reason: string,
+    callerAgentId: string | undefined,
+    parentTaskId: string,
+  ): Promise<void> {
     for (const row of rows) {
       try {
         await this.bus.publish('execution', createTaskUpdated({
@@ -684,24 +734,24 @@ export class TaskRepo {
 
     if (rows.length > 0) {
       this.logger.info(
-        { parentTaskId: taskId, cancelledChildIds: rows.map((r) => r.id), reason },
+        { parentTaskId, cancelledChildIds: rows.map((r) => r.id), reason },
         'task-repo: reconciled open descendant children',
       );
     }
-
-    return rows.map((r) => r.id);
   }
 
-  private async reconcileChildrenOnParentTerminal(
+  /**
+   * Recursively cancel non-terminal descendant tasks and their pending wakes when a
+   * parent goal completes, is cancelled, or is superseded (#1239).
+   */
+  async reconcileChildren(
     taskId: string,
-    parentState: 'done' | 'cancelled',
+    reason: string,
     callerAgentId?: string,
-  ): Promise<void> {
-    await this.reconcileChildren(
-      taskId,
-      `reconciled: parent ${taskId} ${parentState}`,
-      callerAgentId,
-    );
+  ): Promise<string[]> {
+    const rows = await this.runReconcileChildrenQuery(this.pool, taskId, reason);
+    await this.publishReconcileChildEvents(rows, reason, callerAgentId, taskId);
+    return rows.map((r) => r.id);
   }
 
   /**

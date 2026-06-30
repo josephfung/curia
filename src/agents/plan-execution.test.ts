@@ -220,4 +220,20 @@ describe('plan completion helpers (#1239)', () => {
     ]);
     expect(resolvePlanCompletionNote(plan, children)).toBe('Kickoff plan ready');
   });
+
+  it('skips trailing empty notes when extracting child output', () => {
+    const children = new Map([
+      ['child-3', {
+        title: 'Synthesis',
+        description: null,
+        progress: {
+          notes: [
+            { at: 't1', note: 'Real output' },
+            { at: 't2', note: '   ' },
+          ],
+        },
+      }],
+    ]);
+    expect(resolvePlanCompletionNote(plan, children)).toBe('Real output');
+  });
 });
