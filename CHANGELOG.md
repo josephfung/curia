@@ -15,34 +15,36 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Plan frontier advancement** — child terminal resolution schedules a near-term planned-parent wake; the wake recomputes `progress.plan` rollup and dispatches newly-unblocked children (BacklogHeartbeat remains the backstop). (#1238)
-- **Plan completion reconciliation** — terminal plan parents now cancel open descendants and their pending wakes. (#1239)
-- **Plan auto-complete** — fully-resolved plans now finish automatically using the deliverable step output. (#1239)
-- **Plan deliverable surfacing** — parent auto-complete honors `deliverableStepId` for the completion summary, defaulting to a plan-order rollup of child outputs when unset. (#1240)
-- **Deliverable KG promotion** — planned-parent completion promotes the curated deliverable via `extract-facts` / `extract-relationships` (capped, audited, best-effort), then archives project workspace docs; per-task `error_budget.kg_promotion: false` or `documentWorkspace.kgPromotion.enabled: false` skips it. (#1241)
-- **Plan frontier circuit breaker** — planned-parent wakes now escalate after repeated stalls without frontier progress. (#1239)
-- **`plan`** — rows-direct goal decomposition skill writing child task rows and `progress.plan`; platform plan-altitude guidance and per-turn dynamic pin for complex bound tasks. (#1237)
-- **`progress.plan`** — typed plan block with child-step descriptors, deliverable step pointer, and "X of Y" rollup helper; round-trip persistence via `getPlanBlock` / `setPlanBlock`. (#1236)
-- **Resumable circuit breaker** — stall counter and aggregate ceilings fail stuck resumable tasks instead of looping. (#1176)
-- **Resumable executor contract** — checkpointed budget-hit pauses instead of `BUDGET_EXCEEDED`; coordinator treats `paused` as success. (#1174)
-- **Resumable self-continuation** — paused resumable tasks schedule a single near-term `scheduled_jobs` wake routed to `source_agent_id` (config: `tasks.resumableContinuationSeconds`); the hourly BacklogHeartbeat remains the backstop. (#1175)
-- **`checkpoint`** — resumable-task primitive writing `progress.resumable`; dedicated skill (not folded into `task-update`) with platform guidance, checkpoint resume injection, a one-time ~15% budget nudge at the message tail, auto-pin even for tool-less agents, and no raw UTC in skill results when timezone is absent. (#1173)
+- **Spec 20 — Resumable Tasks & Projects** — as-built design promoted to a permanent spec. (#1177)
+- **Plan frontier advancement** — child completion wakes the parent, dispatches unblocked siblings. (#1238)
+- **Plan completion reconciliation** — terminal parents cancel open descendants and their wakes. (#1239)
+- **Plan auto-complete** — resolved plans finish using the deliverable output. (#1239)
+- **Plan deliverable surfacing** — parent result honors `deliverableStepId`, else child-summary rollup. (#1240)
+- **Deliverable KG promotion** — completed plans promote the curated deliverable, capped and non-fatal. (#1241)
+- **Plan frontier circuit breaker** — stalled planned parents escalate instead of looping. (#1239)
+- **`plan`** — rows-direct goal decomposition skill writing child task rows. (#1237)
+- **`progress.plan`** — typed plan block with an X-of-Y rollup helper. (#1236)
+- **Resumable circuit breaker** — stall counter and ceilings fail stuck tasks. (#1176)
+- **Resumable executor contract** — checkpointed budget-hit pauses instead of failing. (#1174)
+- **Resumable self-continuation** — paused tasks schedule a near-term continuation wake. (#1175)
+- **`checkpoint`** — resumable-task primitive writing `progress.resumable` with a budget nudge. (#1173)
 - **Calendar scheduling rules** — calendar agent loads CEO scheduling rules from `config-store` by key at task start, replacing semantic `memory-query`. (#1223)
-- **`progress.resumable`** — typed checkpoint block with bounded accumulator and spill pointer, plus round-trip tests. (#1172)
-- **Resumable accumulator spill** — inline overflow writes to `/projects/<root>/accumulator.md` and stores a workspace document pointer; resume injects the manifest and spilled doc at the message tail. (#1210)
+- **`progress.resumable`** — typed checkpoint block with bounded accumulator and spill. (#1172)
+- **Resumable accumulator spill** — inline overflow spills to a workspace doc pointer. (#1210)
 - **Document workspace** — `working_documents` / `working_document_links` Postgres store with `WorkingDocsRepo`, OKF frontmatter round-trip, backlink index, and optimistic concurrency (document + per-section). (#1208)
 - **`doc-read` / `doc-list` / `doc-write` / `doc-search`** — OKF workspace skills with harness-injected guidance, auto-pin on task-management agents, manifest-only tail injection, and `log.md` append on writes. (#1209)
 - **Document workspace scratch TTL** — DreamEngine nightly pass archives expired `/scratch/<conversation-id>/…` documents (`archived_at`); configurable `documentWorkspace.scratchTtlDays` with optional per-doc `ttl_days` frontmatter override. (#1212)
 
 ### Changed
 
-- **Per-task error_budget** — HTTP and scheduler paths now reject per-invocation turn-limit keys (`maxTurns`, `maxConsecutiveErrors`); per-agent YAML remains the sole source of truth for slice budgets, while the column keeps resumable flags and aggregate ceiling overrides. (#883)
-- **`delegate`** — honors `retryable: false` on specialist failures with an enforceable per-turn guard: identical re-delegations are blocked and non-retryable failures escalate to the CEO backlog via `task-create`. (#1171)
-- **`delegate`** — specialist failures now propagate structured `reason` and `retryable` from the runtime (e.g. `maxTurns`) instead of generic timeout/error strings, so the coordinator can report the real cause. (#1170)
+- **Per-task error_budget** — rejects per-invocation turn-limit keys; keeps resumable ceilings. (#883)
+- **`delegate`** — honors `retryable: false`; blocks blind re-delegation and escalates. (#1171)
+- **`delegate`** — propagates structured failure `reason`/`retryable` to the coordinator. (#1170)
 - **`web-browser`** — waits through edge WAF challenge pages and resolves hidden custom form controls. (v1.5.0)
 
 ### Fixed
 
+- **Plan reconciliation on failure** — circuit-breaker `failed` parents now cancel open children. (#1177)
 - **Signal phone number** — consolidated onto one canonical vault key (`channel.signal.phone_number`), backfilled by migration; console entry alone now activates Signal. (#1140)
 - **Outbound content filter** — Stage 2.5 escalation judge no longer calls the LLM for principal-tier recipients; `classifyDisclosure()` is fail-closed, so a transient provider failure was incorrectly blocking principal-bound emails (e.g. the daily recap) even though the policy unconditionally permits all disclosure classes for the principal. (#1225)
 - **Calendar free/busy** — `getFreeBusy` now calls the real Nylas v8 `calendars.getFreeBusy` endpoint; the previous call to a non-existent `calendars_free_busy` resource crashed every `calendar-check-conflicts` and `calendar-find-free-time` invocation. It also fails loud on a per-calendar free/busy *error* entry instead of treating that calendar as fully free (which could double-book the principal). (#1214)

@@ -928,7 +928,14 @@ export class TaskRepo {
 
   /**
    * Fail a resumable task on circuit-breaker breach: status failed, cancel wakes,
-   * merge circuit state + progress note, add escalation tags.
+   * merge circuit state + progress note, add escalation tags, and reconcile
+   * (cancel) open descendant children.
+   *
+   * `failed` is a terminal state just like `done`/`cancelled`, so it must run the
+   * same child reconciliation those paths do — otherwise a planned parent that the
+   * circuit-breaker fails leaves its open children behind for the BacklogHeartbeat
+   * to re-poke forever, which is exactly the orphaned-subtask futility loop
+   * (memo gap #6) the plan primitive exists to close (#1177 closeout).
    */
   async failResumableTask(
     taskId: string,
@@ -946,30 +953,53 @@ export class TaskRepo {
 
     const notes = [{ at: new Date().toISOString(), note: options.progressNote }];
     const mergedTags = [...new Set([...current.tags, ...options.tags])];
+    const reconcileReason = `reconciled: parent ${taskId} failed`;
 
-    const { rows } = await this.pool.query(
-      `WITH updated_task AS (
-         UPDATE tasks
-            SET status = 'failed',
-                progress = COALESCE(progress, '{}'::jsonb)
-                  || jsonb_build_object('resumableCircuit', $1::jsonb)
-                  || jsonb_build_object('notes', COALESCE(progress->'notes', '[]'::jsonb) || $2::jsonb),
-                tags = $3::text[],
-                updated_at = now()
-          WHERE id = $4
-            AND status NOT IN ('done', 'cancelled', 'failed')
-          RETURNING ${TASK_COLUMNS}
-       ),
-       _cancel_wake AS (
-         UPDATE scheduled_jobs SET status = 'cancelled'
-          WHERE task_id = $4 AND status IN ('pending', 'running')
-       )
-       SELECT * FROM updated_task`,
-      [JSON.stringify(options.circuitState), JSON.stringify(notes), mergedTags, taskId],
-    );
-
-    const row = rows[0] as DbTaskRow | undefined;
-    if (!row) return await this.getTask(taskId);
+    // The parent-fail UPDATE and the descendant reconciliation run in one
+    // transaction so a failed parent can never be observed with open children
+    // (mirrors completeTask's atomic reconcile).
+    const client = await this.pool.connect();
+    let row: DbTaskRow | undefined;
+    let reconciledChildren: ReconciledChildRow[] = [];
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `WITH updated_task AS (
+           UPDATE tasks
+              SET status = 'failed',
+                  progress = COALESCE(progress, '{}'::jsonb)
+                    || jsonb_build_object('resumableCircuit', $1::jsonb)
+                    || jsonb_build_object('notes', COALESCE(progress->'notes', '[]'::jsonb) || $2::jsonb),
+                  tags = $3::text[],
+                  updated_at = now()
+            WHERE id = $4
+              AND status NOT IN ('done', 'cancelled', 'failed')
+            RETURNING ${TASK_COLUMNS}
+         ),
+         _cancel_wake AS (
+           UPDATE scheduled_jobs SET status = 'cancelled'
+            WHERE task_id = $4 AND status IN ('pending', 'running')
+         )
+         SELECT * FROM updated_task`,
+        [JSON.stringify(options.circuitState), JSON.stringify(notes), mergedTags, taskId],
+      );
+      row = rows[0] as DbTaskRow | undefined;
+      if (!row) {
+        // The row flipped to a terminal status (or vanished) between getTask and
+        // this UPDATE. Unlike completeTask we return current truth rather than
+        // throwing — failResumableTask is idempotent terminalization (the top
+        // guard already treats an already-terminal task as a no-op success).
+        await client.query('ROLLBACK');
+        return await this.getTask(taskId);
+      }
+      reconciledChildren = await this.runReconcileChildrenQuery(client, taskId, reconcileReason);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
 
     const updated = mapTaskRow(row);
     try {
@@ -983,6 +1013,12 @@ export class TaskRepo {
     } catch (busErr) {
       this.logger.error({ busErr, taskId }, 'task-repo: bus publish failed after failResumableTask');
     }
+
+    // System-triggered failure has no caller agent (matches the null agentId above).
+    if (reconciledChildren.length > 0) {
+      await this.publishReconcileChildEvents(reconciledChildren, reconcileReason, undefined, taskId);
+    }
+
     this.logger.warn({ taskId }, 'task-repo: resumable task failed by circuit breaker');
     return updated;
   }
