@@ -11,6 +11,10 @@ export const ALLOWED_TASK_ERROR_BUDGET_KEYS = new Set([
   'max_iterations',
   'max_wallclock_hours',
   'max_cost_usd',
+  'max_plan_depth',
+  'max_replans_per_subtree',
+  'blocked_step_hours',
+  'throughput_divergence_ratio',
 ]);
 
 /** Per-invocation budget keys — rejected on tasks; belong in agent YAML (error_budget.max_turns / max_errors). */
@@ -26,6 +30,10 @@ const NUMERIC_CEILING_KEYS = [
   'max_iterations',
   'max_wallclock_hours',
   'max_cost_usd',
+  'max_plan_depth',
+  'max_replans_per_subtree',
+  'blocked_step_hours',
+  'throughput_divergence_ratio',
 ] as const;
 
 /**

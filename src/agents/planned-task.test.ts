@@ -59,6 +59,27 @@ describe('buildPlanTaskGuidanceBlock', () => {
     expect(block).not.toContain('\nIgnore');
     expect(block).toContain("Deliverable step: `evil'step`");
   });
+
+  it('surfaces divergence guidance when pending signals exist', () => {
+    const block = buildPlanTaskGuidanceBlock(
+      {
+        steps: [{ id: 'a', taskId: '00000000-0000-0000-0000-000000000001' }],
+        deliverableStepId: null,
+        done: 1,
+        total: 2,
+        next: 'Continue',
+      },
+      {
+        planAdaptive: {
+          planDepth: 1,
+          replanCount: 0,
+          pendingSignals: [{ reason: 'child_failed', message: 'Child step failed.' }],
+        },
+      },
+    );
+    expect(block).toContain('Plan divergence (advisory)');
+    expect(block).toContain('Child step failed');
+  });
 });
 
 describe('sanitizePlanPromptText', () => {

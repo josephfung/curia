@@ -87,6 +87,7 @@ describe('PlanFrontierSubscriber', () => {
       dispatchedChildIds: ['child-2'],
       autoCompleted: false,
       frontierSnapshot: { rollupDone: 1, terminalChildCount: 1 },
+      divergenceSignals: [],
     });
     const breakerSpy = vi.spyOn(circuitBreaker, 'handlePlanFrontierWakeForCircuitBreaker')
       .mockResolvedValue({ continueParent: true });
@@ -133,6 +134,7 @@ describe('PlanFrontierSubscriber', () => {
       dispatchedChildIds: [],
       autoCompleted: true,
       frontierSnapshot: { rollupDone: 3, terminalChildCount: 3 },
+      divergenceSignals: [],
     });
     const breakerSpy = vi.spyOn(circuitBreaker, 'handlePlanFrontierWakeForCircuitBreaker')
       .mockResolvedValue({ continueParent: true });
@@ -155,6 +157,60 @@ describe('PlanFrontierSubscriber', () => {
       parentEventId: 'parent-event',
     }));
 
+    expect(breakerSpy).not.toHaveBeenCalled();
+  });
+
+  it('skips the circuit breaker when depth limits are breached', async () => {
+    vi.spyOn(planFrontier, 'advancePlanFrontier').mockResolvedValue({
+      rollup: { done: 1, total: 3 },
+      rollupUpdated: false,
+      dispatchedChildIds: [],
+      autoCompleted: false,
+      frontierSnapshot: { rollupDone: 1, terminalChildCount: 1 },
+      divergenceSignals: [],
+    });
+    const deepParent = {
+      id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      title: 'Deep plan',
+      status: 'in_progress',
+      errorBudget: {},
+      progress: {
+        plan: {
+          steps: [{ id: 'step-1', taskId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }],
+          deliverableStepId: null,
+          done: 0,
+          total: 1,
+          next: 'Continue',
+        },
+        planAdaptive: { planDepth: 4, replanCount: 0, pendingSignals: [] },
+      },
+    };
+    const breakerSpy = vi.spyOn(circuitBreaker, 'handlePlanFrontierWakeForCircuitBreaker')
+      .mockResolvedValue({ continueParent: true });
+    const bus = new EventBus(mockLogger() as never);
+    const failResumableTask = vi.fn().mockResolvedValue(deepParent);
+    const taskRepo = {
+      getTask: vi.fn()
+        .mockResolvedValueOnce({
+          id: deepParent.id,
+          progress: { plan: deepParent.progress.plan },
+        })
+        .mockResolvedValue(deepParent),
+      failResumableTask,
+      createTask: vi.fn().mockResolvedValue({}),
+    };
+
+    const subscriber = new PlanFrontierSubscriber(subscriberOpts(bus, { taskRepo }));
+    subscriber.start();
+
+    await bus.publish('system', createScheduleFired({
+      jobId: 'job-1',
+      agentId: 'coordinator',
+      agentTaskId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      parentEventId: 'parent-event',
+    }));
+
+    expect(failResumableTask).toHaveBeenCalled();
     expect(breakerSpy).not.toHaveBeenCalled();
   });
 });

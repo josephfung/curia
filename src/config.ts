@@ -54,6 +54,14 @@ export interface ResumableCeilingsConfig {
   maxIterations: number;
   maxWallclockHours: number;
   maxCostUsd: number;
+  /** Max plan-decomposition depth per subtree (#1266). */
+  maxPlanDepth: number;
+  /** Max adaptive re-plans per planned task (#1266). */
+  maxReplansPerSubtree: number;
+  /** Hours a child may stay blocked before a divergence signal (#1266). */
+  blockedStepHours: number;
+  /** Measured units/slice below this fraction of implied pace triggers divergence (#1266). */
+  throughputDivergenceRatio: number;
 }
 
 export const DEFAULT_RESUMABLE_CEILINGS: ResumableCeilingsConfig = {
@@ -61,6 +69,10 @@ export const DEFAULT_RESUMABLE_CEILINGS: ResumableCeilingsConfig = {
   maxIterations: 100,
   maxWallclockHours: 24,
   maxCostUsd: 10,
+  maxPlanDepth: 3,
+  maxReplansPerSubtree: 5,
+  blockedStepHours: 48,
+  throughputDivergenceRatio: 0.5,
 };
 
 export interface TasksConfig {
@@ -90,6 +102,10 @@ function resolveResumableCeilings(yaml: YamlConfig['tasks']): ResumableCeilingsC
     maxIterations: r?.maxIterations ?? DEFAULT_RESUMABLE_CEILINGS.maxIterations,
     maxWallclockHours: r?.maxWallclockHours ?? DEFAULT_RESUMABLE_CEILINGS.maxWallclockHours,
     maxCostUsd: r?.maxCostUsd ?? DEFAULT_RESUMABLE_CEILINGS.maxCostUsd,
+    maxPlanDepth: r?.maxPlanDepth ?? DEFAULT_RESUMABLE_CEILINGS.maxPlanDepth,
+    maxReplansPerSubtree: r?.maxReplansPerSubtree ?? DEFAULT_RESUMABLE_CEILINGS.maxReplansPerSubtree,
+    blockedStepHours: r?.blockedStepHours ?? DEFAULT_RESUMABLE_CEILINGS.blockedStepHours,
+    throughputDivergenceRatio: r?.throughputDivergenceRatio ?? DEFAULT_RESUMABLE_CEILINGS.throughputDivergenceRatio,
   };
 }
 
@@ -475,6 +491,14 @@ export interface YamlConfig {
       maxWallclockHours?: number;
       /** Max aggregate LLM cost (USD) across slices. Default 10. */
       maxCostUsd?: number;
+      /** Max plan-decomposition depth per subtree. Default 3. */
+      maxPlanDepth?: number;
+      /** Max adaptive re-plans per planned task. Default 5. */
+      maxReplansPerSubtree?: number;
+      /** Hours a blocked child may sit before a divergence signal. Default 48. */
+      blockedStepHours?: number;
+      /** Throughput divergence ratio threshold (0–1). Default 0.5. */
+      throughputDivergenceRatio?: number;
     };
   };
   health?: {
@@ -1026,6 +1050,20 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       }
       if (c.maxCostUsd !== undefined && (!Number.isFinite(c.maxCostUsd) || c.maxCostUsd <= 0)) {
         throw new Error(`tasks.resumableCeilings.maxCostUsd must be a positive number, got: ${String(c.maxCostUsd)}`);
+      }
+      if (c.maxPlanDepth !== undefined && (!Number.isInteger(c.maxPlanDepth) || c.maxPlanDepth < 1)) {
+        throw new Error(`tasks.resumableCeilings.maxPlanDepth must be a positive integer, got: ${String(c.maxPlanDepth)}`);
+      }
+      if (c.maxReplansPerSubtree !== undefined && (!Number.isInteger(c.maxReplansPerSubtree) || c.maxReplansPerSubtree < 1)) {
+        throw new Error(`tasks.resumableCeilings.maxReplansPerSubtree must be a positive integer, got: ${String(c.maxReplansPerSubtree)}`);
+      }
+      if (c.blockedStepHours !== undefined && (!Number.isFinite(c.blockedStepHours) || c.blockedStepHours <= 0)) {
+        throw new Error(`tasks.resumableCeilings.blockedStepHours must be a positive number, got: ${String(c.blockedStepHours)}`);
+      }
+      if (c.throughputDivergenceRatio !== undefined && (
+        !Number.isFinite(c.throughputDivergenceRatio) || c.throughputDivergenceRatio <= 0 || c.throughputDivergenceRatio > 1
+      )) {
+        throw new Error(`tasks.resumableCeilings.throughputDivergenceRatio must be in (0, 1], got: ${String(c.throughputDivergenceRatio)}`);
       }
     }
   }

@@ -5,6 +5,10 @@
 
 import { isPlannedStep, readPlanBlock, type PlanProgressBlock } from '../db/plan-progress.js';
 import { isResumableTask, type BoundTaskContext } from './resumable-task.js';
+import {
+  buildPlanDivergenceGuidanceBlock,
+  readPlanAdaptiveState,
+} from './plan-adaptive-replan.js';
 import type { ToolDefinition } from './llm/provider.js';
 
 export const PLAN_SKILL_NAME = 'plan';
@@ -25,7 +29,10 @@ export function sanitizePlanPromptText(value: string): string {
     .trim();
 }
 
-export function buildPlanTaskGuidanceBlock(existingPlan?: PlanProgressBlock | null): string {
+export function buildPlanTaskGuidanceBlock(
+  existingPlan?: PlanProgressBlock | null,
+  progress?: Record<string, unknown>,
+): string {
   const lines = [
     '## Planned Task',
     '',
@@ -57,6 +64,13 @@ export function buildPlanTaskGuidanceBlock(existingPlan?: PlanProgressBlock | nu
     );
   }
 
+  const divergenceBlock = buildPlanDivergenceGuidanceBlock(
+    readPlanAdaptiveState(progress ?? {})?.pendingSignals ?? [],
+  );
+  if (divergenceBlock) {
+    lines.push('', divergenceBlock);
+  }
+
   return lines.join('\n');
 }
 
@@ -85,6 +99,7 @@ export function applyPlanHarness(options: {
   let workingToolDefs = options.workingToolDefs;
   const effectiveSystemPrompt = `${options.effectiveSystemPrompt}\n\n${buildPlanTaskGuidanceBlock(
     readExistingPlan(options.boundTaskCtx.progress),
+    options.boundTaskCtx.progress,
   )}`;
 
   if (!workingToolDefs) {
