@@ -59,6 +59,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ceo-inbox` scheduling consults** — a message parked for a calendar consult is no longer labeled "✍️ Drafted" before a draft exists, and the consult-timeout wake now keys off actual draft existence; parked scheduling replies get drafted instead of stranding the email as "In Progress + Drafted" with no draft. (#1215)
 - **Bullpen `close_after`** — closed-thread replies deliver to mentioned participants via read-and-act wakes; `close_after` with no mentions auto-mentions the thread opener; `ceo-inbox` loads the full thread before Branch A. (#1256)
 
+### Security
+
+- **Dependabot cooldown** — all four ecosystems (npm, github-actions, docker ×2) now wait 7 days before proposing a bump, quarantining freshly-published (potentially compromised) versions at the PR-proposal layer. Clears Semgrep `dependabot-missing-cooldown` alerts.
+
 ## [0.38.0] — 2026-06-26 — "Deckard"
 
 > **Rick Deckard** *(Blade Runner, 1982, Ridley Scott — from Philip K. Dick's "Do Androids Dream of Electric Sheep?", 1968)* — a blade runner whose whole craft is telling a genuinely living person from a replicant that only wears the appearance of one. This release teaches Curia the same distinction: authority now answers solely to the principal who is actually, presently live — never to a woken task that merely carries their lineage.

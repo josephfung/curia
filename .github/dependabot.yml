@@ -8,6 +8,15 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    # Quarantine newly-published versions for 7 days before proposing a bump.
+    # A compromised package version is most often caught and yanked within days of
+    # publish; waiting 7 days lets Dependabot skip that window. We rely on this
+    # PR-proposal-layer gate rather than pnpm's install-time `minimumReleaseAge`,
+    # which would retroactively reject the existing lockfile and break CI.
+    # NOTE: cooldown applies to version updates only — Dependabot *security*
+    # updates (CVE fixes from alerts) bypass it, so CVE patches are not delayed.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     groups:
       dev-dependencies:
@@ -22,6 +31,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    # 7-day quarantine on newly-published action versions (see npm block above).
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns:
@@ -36,6 +48,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    # 7-day quarantine on newly-published image digests (see npm block above).
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     ignore:
       # node 24 is the Active LTS. Do NOT auto-bump the major: the next even
@@ -53,6 +68,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    # 7-day quarantine on newly-published image digests (see npm block above).
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     ignore:
       - dependency-name: "pgvector/pgvector"
