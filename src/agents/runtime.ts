@@ -32,6 +32,7 @@ import {
   shouldSendCheckpointBudgetNudge,
   type BoundTaskContext,
 } from './resumable-task.js';
+import { readCircuitState } from './resumable-circuit-breaker.js';
 import {
   applyPlanHarness,
   shouldOfferPlanSkill,
@@ -477,7 +478,8 @@ export class AgentRuntime {
       });
       const existingCheckpoint = readResumableBlock(boundTaskCtx.progress ?? {});
       if (existingCheckpoint) {
-        effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint);
+        const circuit = readCircuitState(boundTaskCtx.progress ?? {});
+        effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint, { circuit });
       }
     }
 

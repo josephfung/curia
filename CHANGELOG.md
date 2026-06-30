@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Resumable throughput telemetry** — derived units/slice, cost/unit, and ETA surfaced on resume and emitted to logs/audit on each pause. (#1264)
 - **Spec 20 — Resumable Tasks & Projects** — as-built design promoted to a permanent spec. (#1177)
 - **Plan frontier advancement** — child completion wakes the parent, dispatches unblocked siblings. (#1238)
 - **Plan completion reconciliation** — terminal parents cancel open descendants and their wakes. (#1239)

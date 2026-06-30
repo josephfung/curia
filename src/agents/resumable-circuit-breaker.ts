@@ -16,6 +16,7 @@ import type { ResumableCursor } from '../db/resumable-progress.js';
 import { computePlanRollup, type PlanStepDescriptor } from '../db/plan-progress.js';
 import { createAgentTask } from '../bus/events.js';
 import type { ExecutionPausedPayload } from './resumable-task.js';
+import { emitResumableThroughputTelemetry } from './resumable-throughput.js';
 
 /** Persisted under tasks.progress.resumableCircuit — separate from the bounded resumable block. */
 export interface ResumableCircuitState {
@@ -319,6 +320,7 @@ export async function handlePausedSliceForCircuitBreaker(opts: {
   ceilings: ResumableCeilingsConfig;
   agentId: string;
   sliceCostUsd?: number;
+  parentEventId?: string;
 }): Promise<{ scheduleContinuation: boolean; breach?: CircuitBreach }> {
   const task = await getTaskById(opts.pool, opts.taskId);
   if (!task) {
@@ -333,6 +335,20 @@ export async function handlePausedSliceForCircuitBreaker(opts: {
     circuit,
     ceilings,
     sliceCostUsd: opts.sliceCostUsd,
+  });
+
+  await emitResumableThroughputTelemetry({
+    logger: opts.logger,
+    bus: opts.bus,
+    taskId: opts.taskId,
+    agentId: opts.agentId,
+    parentEventId: opts.parentEventId,
+    resumable: {
+      done: opts.paused.done,
+      total: opts.paused.total,
+      lastSliceUnits: opts.paused.last_slice_units,
+    },
+    circuit: outcome.action === 'continue' ? outcome.state : outcome.breach.state,
   });
 
   if (outcome.action === 'breach') {
