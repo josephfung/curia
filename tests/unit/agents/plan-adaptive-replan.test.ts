@@ -248,6 +248,12 @@ describe('plan-adaptive-replan (#1266)', () => {
     } as TaskRow;
     expect(isPlanAdaptiveEscalationComplete(task)).toBe(true);
 
+    const circuitBreakerOnly = {
+      ...task,
+      tags: ['needs-attention', 'circuit-breaker'],
+    } as TaskRow;
+    expect(isPlanAdaptiveEscalationComplete(circuitBreakerOnly)).toBe(false);
+
     const failResumableTask = vi.fn();
     const createTask = vi.fn();
     await escalatePlanAdaptiveBreach({

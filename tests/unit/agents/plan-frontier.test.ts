@@ -240,7 +240,11 @@ describe('advancePlanFrontier', () => {
     const child1 = sampleChild({ id: CHILD_1, status: 'failed' });
     const parent = sampleParent({ status: 'in_progress' });
     const updatedBlock = {
-      steps: parent.progress.plan!.steps,
+      steps: [
+        { id: 'step-1', taskId: CHILD_1 },
+        { id: 'step-2', taskId: CHILD_2 },
+        { id: 'step-3', taskId: CHILD_3 },
+      ],
       deliverableStepId: 'step-3',
       done: 1,
       total: 3,

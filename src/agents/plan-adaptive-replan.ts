@@ -52,7 +52,7 @@ export interface PlanAdaptiveBreach {
   replanCount: number;
 }
 
-const PLAN_ADAPTIVE_ESCALATION_TAGS = new Set(['plan-adaptive-breach', 'needs-attention']);
+const PLAN_ADAPTIVE_ESCALATION_TAG = 'plan-adaptive-breach';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -123,7 +123,7 @@ export function mergePlanAdaptiveState(
 
 export function isPlanAdaptiveEscalationComplete(task: Pick<TaskRow, 'status' | 'tags'>): boolean {
   if (task.status !== 'failed') return false;
-  return task.tags.some((tag) => PLAN_ADAPTIVE_ESCALATION_TAGS.has(tag));
+  return task.tags.includes(PLAN_ADAPTIVE_ESCALATION_TAG);
 }
 
 export interface DetectPlanDivergenceInput {
