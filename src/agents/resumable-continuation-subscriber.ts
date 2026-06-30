@@ -72,6 +72,7 @@ export class ResumableContinuationSubscriber {
           ceilings: this.opts.resumableCeilings,
           agentId: responseEvent.payload.agentId,
           sliceCostUsd,
+          parentEventId: responseEvent.id,
         });
 
         if (!breaker.scheduleContinuation) {
