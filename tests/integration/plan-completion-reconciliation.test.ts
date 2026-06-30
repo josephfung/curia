@@ -313,6 +313,103 @@ describeIf('Plan completion reconciliation (#1239)', () => {
     expect(reloaded?.tags).toContain('needs-attention');
   });
 
+  it('reconciles open children when the circuit-breaker fails a planned parent', async () => {
+    // Regression for the gap closing out #1177: when the progress circuit-breaker
+    // fails a stalled planned parent, its open children must be reconciled
+    // (cancelled) rather than left for the BacklogHeartbeat to re-poke forever —
+    // the exact orphaned-subtask futility loop (gap #6) Phase 2 exists to close.
+    const ceilings = { ...DEFAULT_RESUMABLE_CEILINGS, maxStalls: 2 };
+    const subscriber = new PlanFrontierSubscriber({
+      pool,
+      bus,
+      logger,
+      schedulerService,
+      taskRepo: repo,
+      eligibleAgents: new Set(['coordinator']),
+      continuationDelaySeconds: 30,
+      resumableCeilings: ceilings,
+    });
+    subscriber.start();
+
+    const parent = await repo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX} breaker-fail parent`,
+      source: 'coordinator',
+      sourceAgentId: 'coordinator',
+    });
+    const child = await repo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX} breaker-fail child`,
+      source: 'coordinator',
+      sourceAgentId: 'coordinator',
+      parentTaskId: parent.id,
+    });
+    // A pending wake on the still-open child — reconciliation must cancel it too.
+    await schedulerService.enqueueTaskWake({
+      taskId: child.id,
+      agentId: 'coordinator',
+      runAt: new Date(Date.now() + 60_000),
+      createdBy: 'test',
+    });
+
+    await repo.setPlanBlock(parent.id, {
+      steps: [{ id: 'only', taskId: child.id }],
+      deliverableStepId: 'only',
+      done: 0,
+      total: 1,
+      next: 'Waiting on child',
+    }, 'coordinator');
+
+    // One stall short of the ceiling so this wake (no frontier progress) trips it.
+    await repo.persistResumableCircuitState(parent.id, {
+      stallCount: 1,
+      iterationCount: 3,
+      startedAt: new Date().toISOString(),
+      totalCostUsd: 0,
+      lastProgress: { done: 0, cursor: { terminalChildren: 0 } },
+    });
+
+    const parentWake = await schedulerService.enqueueTaskWake({
+      taskId: parent.id,
+      agentId: 'coordinator',
+      runAt: new Date(),
+      createdBy: 'test',
+    });
+
+    await bus.publish('system', createScheduleFired({
+      jobId: parentWake.jobId,
+      agentId: 'coordinator',
+      agentTaskId: parent.id,
+      parentEventId: 'breaker-fail-wake',
+    }));
+
+    const reloadedParent = await repo.getTask(parent.id);
+    expect(reloadedParent?.status).toBe('failed');
+
+    // The open child must be reconciled (cancelled), not left orphaned.
+    const reloadedChild = await repo.getTask(child.id);
+    expect(reloadedChild?.status).toBe('cancelled');
+
+    const openChildren = await pool.query<{ count: string }>(
+      `WITH RECURSIVE descendants AS (
+         SELECT id, status FROM tasks WHERE parent_task_id = $1
+         UNION ALL
+         SELECT t.id, t.status FROM tasks t
+         INNER JOIN descendants d ON t.parent_task_id = d.id
+       )
+       SELECT COUNT(*)::text AS count FROM descendants WHERE status NOT IN ('done', 'cancelled', 'failed')`,
+      [parent.id],
+    );
+    expect(openChildren.rows[0]!.count).toBe('0');
+
+    // The child's pending wake must be cancelled by reconciliation.
+    const pendingWakes = await pool.query(
+      `SELECT id FROM scheduled_jobs WHERE task_id = $1 AND status IN ('pending', 'running')`,
+      [child.id],
+    );
+    expect(pendingWakes.rows).toHaveLength(0);
+  });
+
   it('does not trip the breaker when the frontier advances between wakes', async () => {
     const ceilings = { ...DEFAULT_RESUMABLE_CEILINGS, maxStalls: 2 };
 
