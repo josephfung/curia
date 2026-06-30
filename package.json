@@ -55,7 +55,7 @@
     "markdown-it": "^14.2.0",
     "node-html-parser": "^8.0.3",
     "node-pg-migrate": "^8.0.4",
-    "nylas": "^8.4.0",
+    "nylas": "^17.13.1",
     "openai": "^6.45.0",
     "openredaction": "^1.1.2",
     "patchright": "1.61.1",
