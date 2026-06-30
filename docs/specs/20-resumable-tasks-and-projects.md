@@ -183,6 +183,7 @@ Per-task overrides live in `tasks.error_budget` (`resumable`, `max_stalls`, `max
 
 This spec supersedes several items spec 19 §10 deferred: durable multi-step projects with a
 weighted progress rollup (the `progress.plan` "X of Y"), and decomposition with dependencies.
-The single-`blocked_by_task_id` DAG limitation and a first-class `goals`/`commitments` entity
-remain deferred. Everything here reuses spec 19's `tasks` + `scheduled_jobs` + heartbeat — no
-parallel "project runner" subsystem was introduced (explicitly rejected in the design memo).
+The single-`blocked_by_task_id` DAG limitation, a first-class `goals`/`commitments` entity,
+an LLM groomer, and an interactive digest surface remain deferred (spec 19 §10). Everything
+here reuses spec 19's `tasks` + `scheduled_jobs` + heartbeat — no parallel "project runner"
+subsystem was introduced (explicitly rejected in the design memo).

@@ -146,14 +146,28 @@ describeIf('Plan primitive end-to-end (#1177)', () => {
     );
     expect(synthDispatch.rows).toHaveLength(1);
 
+    // Mark the already-fired gather wake completed (as the scheduler would after a
+    // run), so the one-active-wake-per-task dedup frees. This lets us prove synth
+    // completion schedules a *fresh* parent wake rather than recycling the gather one.
+    await schedulerService.completeJobRun(parentWakeId, true);
+
     // 5. The deliverable child produces its output and completes.
     const deliverable = `${PREFIX} kickoff plan: agenda, sessions, owners`;
     await repo.updateTask(synthId, { progressNote: deliverable }, 'coordinator');
     await repo.updateTask(synthId, { status: 'done' }, 'coordinator');
 
-    // 6. Fire the parent wake again → subtree resolved → parent auto-completes.
+    // Synth completion must enqueue a brand-new parent wake (not the gather one).
+    const wakeAfterSynth = await pool.query<{ id: string }>(
+      `SELECT id FROM scheduled_jobs WHERE task_id = $1 AND status = 'pending'`,
+      [parent.id],
+    );
+    expect(wakeAfterSynth.rows).toHaveLength(1);
+    const completionWakeId = wakeAfterSynth.rows[0]!.id;
+    expect(completionWakeId).not.toBe(parentWakeId);
+
+    // 6. Fire the fresh wake → subtree resolved → parent auto-completes.
     await bus.publish('system', createScheduleFired({
-      jobId: parentWakeId,
+      jobId: completionWakeId,
       agentId: 'coordinator',
       agentTaskId: parent.id,
       parentEventId: 'e2e-wake-2',
