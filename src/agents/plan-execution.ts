@@ -223,3 +223,109 @@ export function countMaterializationKinds(steps: readonly PlanStepInput[]): {
   }
   return { iterateLeaves, heterogeneousRows, lazySteps };
 }
+
+/** Extract note/description output from a completed child — no title fallback. */
+export function extractTaskWrittenOutput(task: {
+  description: string | null;
+  progress: Record<string, unknown>;
+}): string | null {
+  const notes = task.progress.notes;
+  if (Array.isArray(notes) && notes.length > 0) {
+    for (let i = notes.length - 1; i >= 0; i--) {
+      const entry = notes[i] as { note?: string } | null;
+      if (entry?.note && entry.note.trim().length > 0) return entry.note.trim();
+    }
+  }
+  if (task.description && task.description.trim().length > 0) return task.description.trim();
+  return null;
+}
+
+/** Extract the best available output text from a completed child task. */
+export function extractTaskOutputNote(task: {
+  title: string;
+  description: string | null;
+  progress: Record<string, unknown>;
+}): string {
+  const notes = task.progress.notes;
+  if (Array.isArray(notes) && notes.length > 0) {
+    for (let i = notes.length - 1; i >= 0; i--) {
+      const entry = notes[i] as { note?: string } | null;
+      if (entry?.note && entry.note.trim().length > 0) return entry.note.trim();
+    }
+  }
+  if (task.description && task.description.trim().length > 0) return task.description.trim();
+  return task.title;
+}
+
+/** Build the parent completion note from the deliverable step or a child-summary rollup. */
+export function resolvePlanCompletionNote(
+  plan: PlanProgressBlock,
+  children: ReadonlyMap<string, { title: string; description: string | null; progress: Record<string, unknown> }>,
+): string {
+  if (plan.deliverableStepId) {
+    const step = plan.steps.find((s) => s.id === plan.deliverableStepId);
+    const child = step?.taskId ? children.get(step.taskId) : undefined;
+    if (child) return extractTaskOutputNote(child);
+  }
+
+  const lines: string[] = [];
+  for (const step of plan.steps) {
+    if (!step.taskId) continue;
+    const child = children.get(step.taskId);
+    if (!child) continue;
+    lines.push(`${child.title}: ${extractTaskOutputNote(child)}`);
+  }
+  return lines.join('\n\n');
+}
+
+export interface PromotionChildSnapshot {
+  title: string;
+  description: string | null;
+  progress: Record<string, unknown>;
+  errorBudget?: Record<string, unknown>;
+}
+
+/**
+ * Text to promote into the KG on project completion — curated deliverable only.
+ * When a deliverable step is marked, uses that step's output exclusively. Otherwise
+ * rolls up non-resumable child summaries (skipping iterate-leaf worklogs).
+ */
+export function resolvePromotionText(
+  plan: PlanProgressBlock,
+  children: ReadonlyMap<string, PromotionChildSnapshot>,
+): string | null {
+  if (plan.deliverableStepId) {
+    const step = plan.steps.find((s) => s.id === plan.deliverableStepId);
+    const child = step?.taskId ? children.get(step.taskId) : undefined;
+    if (!child) return null;
+    return extractTaskWrittenOutput(child);
+  }
+
+  const lines: string[] = [];
+  for (const step of plan.steps) {
+    if (!step.taskId) continue;
+    const child = children.get(step.taskId);
+    if (!child) continue;
+    if (child.errorBudget?.['resumable'] === true) continue;
+    const note = extractTaskOutputNote(child);
+    if (note.trim().length === 0) continue;
+    lines.push(`${child.title}: ${note}`);
+  }
+  return lines.length > 0 ? lines.join('\n\n') : null;
+}
+
+/** True when every planned child is resolved and the deliverable step (if any) is done. */
+export function isPlanReadyForAutoComplete(
+  plan: PlanProgressBlock,
+  childStatusByTaskId: Readonly<Record<string, string>>,
+): boolean {
+  if (plan.done !== plan.total || plan.total === 0) return false;
+
+  if (plan.deliverableStepId) {
+    const step = plan.steps.find((s) => s.id === plan.deliverableStepId);
+    if (!step?.taskId) return false;
+    return childStatusByTaskId[step.taskId] === 'done';
+  }
+
+  return true;
+}

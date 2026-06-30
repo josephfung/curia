@@ -9,6 +9,7 @@ import type { Logger } from '../logger.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { TaskRow } from '../db/queries/tasks.js';
 import { getTaskById } from '../db/queries/tasks.js';
+import { readPlanBlock } from '../db/plan-progress.js';
 import { readResumableBlock } from '../db/resumable-progress.js';
 import { isResumableTask } from './resumable-task.js';
 
@@ -32,7 +33,14 @@ export type ScheduleResumableContinuationResult =
   | { scheduled: true; jobId: string; agentId: string; runAt: Date }
   | { scheduled: false; reason: 'task_not_found' | 'not_resumable' | 'no_checkpoint' | 'pending_wake_exists' };
 
-function isPgUniqueViolation(err: unknown): boolean {
+export type SchedulePlanParentWakeResult =
+  | { scheduled: true; jobId: string; agentId: string; runAt: Date }
+  | { scheduled: false; reason: 'task_not_found' | 'not_planned_parent' | 'pending_wake_exists' };
+
+const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled', 'failed']);
+
+/** True when a Postgres insert hit a unique-constraint violation (e.g. migration 067 wake dedup). */
+export function isPgUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
 }
 
@@ -60,6 +68,12 @@ export function resolveContinuationAgent(
   return fallbackAgentId;
 }
 
+/** Whether a planned parent is eligible for a frontier-advancement wake (#1238). */
+export function isPlanParentWakeEligible(task: TaskRow): boolean {
+  if (TERMINAL_TASK_STATUSES.has(task.status)) return false;
+  return readPlanBlock(task.progress) !== null;
+}
+
 /** Whether a task row is eligible for a resumable continuation wake. */
 export function isContinuationEligible(task: TaskRow): boolean {
   const bound = {
@@ -72,34 +86,28 @@ export function isContinuationEligible(task: TaskRow): boolean {
   return readResumableBlock(task.progress) !== null;
 }
 
-/**
- * Enqueue a single near-term continuation wake for a paused resumable task.
- * Idempotent while a pending/running wake already exists for the task.
- * Duplicate inserts are also blocked by migration 067's partial unique index.
- */
-export async function scheduleResumableContinuation(
-  opts: ScheduleResumableContinuationOptions,
-): Promise<ScheduleResumableContinuationResult> {
-  const { pool, schedulerService, logger, taskId, delaySeconds, eligibleAgents } = opts;
-  const fallbackAgentId = opts.fallbackAgentId ?? 'coordinator';
+interface EnqueueContinuationWakeOptions {
+  pool: Pool;
+  schedulerService: SchedulerService;
+  logger: Logger;
+  task: TaskRow;
+  taskId: string;
+  delaySeconds: number;
+  eligibleAgents: Set<string>;
+  fallbackAgentId: string;
+  logLabel: string;
+}
 
-  const task = await getTaskById(pool, taskId);
-  if (!task) {
-    logger.debug({ taskId }, 'Resumable continuation: task not found — skipping');
-    return { scheduled: false, reason: 'task_not_found' };
-  }
+async function enqueueContinuationWake(
+  opts: EnqueueContinuationWakeOptions,
+): Promise<
+  | { scheduled: true; jobId: string; agentId: string; runAt: Date }
+  | { scheduled: false; reason: 'pending_wake_exists' }
+> {
+  const { pool, schedulerService, logger, task, taskId, delaySeconds, eligibleAgents, fallbackAgentId, logLabel } = opts;
 
-  if (!isContinuationEligible(task)) {
-    logger.debug({ taskId }, 'Resumable continuation: task not resumable or has no checkpoint — skipping');
-    if (!isResumableTask({ errorBudget: task.errorBudget, tags: task.tags, progress: task.progress })) {
-      return { scheduled: false, reason: 'not_resumable' };
-    }
-    return { scheduled: false, reason: 'no_checkpoint' };
-  }
-
-  // Fast path — the DB unique index (067) is the atomic guarantee under concurrency.
   if (await taskHasPendingWake(pool, taskId)) {
-    logger.debug({ taskId }, 'Resumable continuation: pending wake already exists — skipping');
+    logger.debug({ taskId }, `${logLabel}: pending wake already exists — skipping`);
     return { scheduled: false, reason: 'pending_wake_exists' };
   }
 
@@ -119,15 +127,97 @@ export async function scheduleResumableContinuation(
 
     logger.info(
       { taskId, jobId, agentId, runAt: runAt.toISOString(), delaySeconds },
-      'Resumable continuation wake scheduled',
+      `${logLabel} wake scheduled`,
     );
 
     return { scheduled: true, jobId, agentId, runAt };
   } catch (err) {
     if (isPgUniqueViolation(err)) {
-      logger.debug({ taskId }, 'Resumable continuation: concurrent wake insert lost race — skipping');
+      logger.debug({ taskId }, `${logLabel}: concurrent wake insert lost race — skipping`);
       return { scheduled: false, reason: 'pending_wake_exists' };
     }
     throw err;
   }
+}
+
+/**
+ * Enqueue a single near-term continuation wake for a paused resumable task.
+ * Idempotent while a pending/running wake already exists for the task.
+ * Duplicate inserts are also blocked by migration 067's partial unique index.
+ */
+export async function scheduleResumableContinuation(
+  opts: ScheduleResumableContinuationOptions,
+): Promise<ScheduleResumableContinuationResult> {
+  const { pool, logger, taskId, delaySeconds, eligibleAgents } = opts;
+  const fallbackAgentId = opts.fallbackAgentId ?? 'coordinator';
+
+  const task = await getTaskById(pool, taskId);
+  if (!task) {
+    logger.debug({ taskId }, 'Resumable continuation: task not found — skipping');
+    return { scheduled: false, reason: 'task_not_found' };
+  }
+
+  if (!isContinuationEligible(task)) {
+    logger.debug({ taskId }, 'Resumable continuation: task not resumable or has no checkpoint — skipping');
+    if (!isResumableTask({ errorBudget: task.errorBudget, tags: task.tags, progress: task.progress })) {
+      return { scheduled: false, reason: 'not_resumable' };
+    }
+    return { scheduled: false, reason: 'no_checkpoint' };
+  }
+
+  const result = await enqueueContinuationWake({
+    pool,
+    schedulerService: opts.schedulerService,
+    logger,
+    task,
+    taskId,
+    delaySeconds,
+    eligibleAgents,
+    fallbackAgentId,
+    logLabel: 'Resumable continuation',
+  });
+
+  if (!result.scheduled) {
+    return { scheduled: false, reason: 'pending_wake_exists' };
+  }
+  return result;
+}
+
+/**
+ * Enqueue a single near-term parent wake when a planned child resolves (#1238).
+ * Reuses the continuation wake path and dedup index (067).
+ */
+export async function schedulePlanParentWake(
+  opts: ScheduleResumableContinuationOptions,
+): Promise<SchedulePlanParentWakeResult> {
+  const { pool, logger, taskId, delaySeconds, eligibleAgents } = opts;
+  const fallbackAgentId = opts.fallbackAgentId ?? 'coordinator';
+
+  const task = await getTaskById(pool, taskId);
+  if (!task) {
+    logger.debug({ taskId }, 'Plan parent wake: task not found — skipping');
+    return { scheduled: false, reason: 'task_not_found' };
+  }
+
+  if (!isPlanParentWakeEligible(task)) {
+    logger.debug({ taskId }, 'Plan parent wake: task has no plan block — skipping');
+    return { scheduled: false, reason: 'not_planned_parent' };
+  }
+
+  const result = await enqueueContinuationWake({
+    pool,
+    schedulerService: opts.schedulerService,
+    logger,
+    task,
+    taskId,
+    delaySeconds,
+    eligibleAgents,
+    fallbackAgentId,
+    logLabel: 'Plan parent wake',
+  });
+
+  if (!result.scheduled) {
+    return { scheduled: false, reason: 'pending_wake_exists' };
+  }
+  return result;
 }

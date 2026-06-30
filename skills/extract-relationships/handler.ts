@@ -29,7 +29,7 @@ const NODE_TYPES_LIST = NODE_TYPES.join(', ');
 
 export class ExtractRelationshipsHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    const { text, source } = ctx.input as { text?: string; source?: string };
+    const { text, source, max_stored } = ctx.input as { text?: string; source?: string; max_stored?: number };
 
     if (!text || typeof text !== 'string') {
       // Log only safe metadata — never log ctx.input directly (contains full transcript)
@@ -52,7 +52,16 @@ export class ExtractRelationshipsHandler implements SkillHandler {
     }
 
     try {
-    // -- Step 1: Classifier gate --
+      const maxStored = typeof max_stored === 'number' && Number.isFinite(max_stored) && max_stored >= 0
+        ? Math.floor(max_stored)
+        : undefined;
+
+      if (maxStored === 0) {
+        ctx.log.info({ extracted: 0, confirmed: 0, failed: 0 }, 'extract-relationships: complete');
+        return { success: true, data: { extracted: 0, confirmed: 0, failed: 0, skipped: false } };
+      }
+
+      // -- Step 1: Classifier gate --
     // Cheap fast-tier call — exits early on the majority of messages (scheduling,
     // email drafts, lookups) that contain no entity-to-entity relationships.
     const classifyResult = await ctx.infraLlm.classify(
@@ -196,6 +205,8 @@ ${text}`,
           ? Math.min(1, Math.max(0, triple.confidence))
           : 0.7;
 
+        if (maxStored !== undefined && extracted + confirmed >= maxStored) break;
+
         const { created } = await ctx.entityMemory.upsertEdge(
           subjectNode.id,
           objectNode.id,
@@ -210,6 +221,7 @@ ${text}`,
         } else {
           confirmed++;
         }
+        if (maxStored !== undefined && extracted + confirmed >= maxStored) break;
       } catch (err) {
         // Log at error (not warn) — persistence failures are infrastructure errors
         // (DB outage, connection loss) that must surface in Sentry, not soft warnings.

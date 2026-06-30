@@ -32,6 +32,8 @@ import {
   shouldSendCheckpointBudgetNudge,
   type BoundTaskContext,
 } from './resumable-task.js';
+import { readCircuitState, type ResumableCircuitState } from './resumable-circuit-breaker.js';
+import { computeResumableThroughput } from './resumable-throughput.js';
 import {
   applyPlanHarness,
   shouldOfferPlanSkill,
@@ -454,20 +456,39 @@ export class AgentRuntime {
     // Resumable-task harness (#1173): fixed-slot guidance + checkpoint resume for
     // iterate leaves. Injected per-turn when the bound task is resumable — not in
     // agent YAML. Composes with document-workspace tail manifest injection (#1209).
-    const boundTaskCtx = resolveBoundTaskContext(
+    let boundTaskCtx = resolveBoundTaskContext(
       taskEvent.payload.metadata as Record<string, unknown> | undefined,
       originalContent,
       taskEvent.payload.channelId,
     );
+
+    // Scheduler-bound task wakes carry metadata/content progress that can be empty or stale.
+    // Reload from the task row so harness guidance (plan rollup, checkpoint resume) is fresh (#1238).
+    if (boundTaskCtx && taskEvent.payload.channelId === 'scheduler' && this.config.taskRepo) {
+      const fresh = await this.config.taskRepo.getTask(boundTaskCtx.taskId);
+      if (fresh) {
+        boundTaskCtx = { ...boundTaskCtx, progress: fresh.progress };
+      }
+    }
+
     const resumableActive = boundTaskCtx !== null && isResumableTask(boundTaskCtx);
+    let resumableNudgeCtx: { resumable: ResumableProgressBlock; circuit: ResumableCircuitState } | null = null;
     if (resumableActive && boundTaskCtx) {
+      const existingCheckpoint = readResumableBlock(boundTaskCtx.progress ?? {});
+      const circuit = readCircuitState(boundTaskCtx.progress ?? {});
+      const throughputMetrics = existingCheckpoint
+        ? computeResumableThroughput(existingCheckpoint, circuit)
+        : null;
+      if (existingCheckpoint && circuit) {
+        resumableNudgeCtx = { resumable: existingCheckpoint, circuit };
+      }
       effectiveSystemPrompt += '\n\n' + buildResumableTaskGuidanceBlock({
         workspaceManifestPath: boundTaskCtx.workspaceManifestPath,
         workspaceManifestInjected,
+        throughputMetrics,
       });
-      const existingCheckpoint = readResumableBlock(boundTaskCtx.progress ?? {});
       if (existingCheckpoint) {
-        effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint);
+        effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint, { circuit });
       }
     }
 
@@ -823,16 +844,27 @@ export class AgentRuntime {
 
     const maybeAppendCheckpointBudgetNudge = (): void => {
       if (!resumableActive || checkpointBudgetNudgeSent) return;
-      if (!shouldSendCheckpointBudgetNudge(budget.turnsUsed, budget.maxTurns, checkpointBudgetNudgeSent)) {
+      if (!shouldSendCheckpointBudgetNudge(
+        budget.turnsUsed,
+        budget.maxTurns,
+        checkpointBudgetNudgeSent,
+        resumableNudgeCtx,
+      )) {
         return;
       }
       const remaining = budget.maxTurns - budget.turnsUsed;
+      const throughputMetrics = resumableNudgeCtx
+        ? computeResumableThroughput(resumableNudgeCtx.resumable, resumableNudgeCtx.circuit)
+        : null;
       messages.push({
         role: 'user',
-        content: buildCheckpointBudgetNudgeMessage(remaining, budget.maxTurns),
+        content: buildCheckpointBudgetNudgeMessage(remaining, budget.maxTurns, throughputMetrics),
       });
       checkpointBudgetNudgeSent = true;
-      logger.info({ agentId, remaining, maxTurns: budget.maxTurns }, 'Appended resumable-task checkpoint budget nudge');
+      logger.info(
+        { agentId, remaining, maxTurns: budget.maxTurns, throughputAware: throughputMetrics?.estimateAvailable ?? false },
+        'Appended resumable-task checkpoint budget nudge',
+      );
     };
 
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');

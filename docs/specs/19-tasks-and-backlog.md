@@ -349,6 +349,14 @@ config — the LLM handles nuance, config handles mechanics.
 
 ## 10. Deferred (post-v1)
 
+> **Update:** Durable multi-step projects with a weighted progress rollup and resumable
+> execution across budget boundaries shipped later as **[spec 20 — Resumable Tasks &
+> Projects](20-resumable-tasks-and-projects.md)** (the `plan` primitive, the
+> `progress.plan` "X of Y" rollup, the `paused`-as-success contract, and frontier
+> advancement). The items below that spec 20 does *not* cover — a first-class
+> `goals`/`commitments` entity, DAG dependencies beyond a single `blocked_by_task_id`, an
+> LLM groomer, and an interactive digest surface — remain deferred.
+
 Captured so future readers do not relitigate the scope decisions: a `goals` table and
 weighted progress rollup (tags carry us until a durable cluster appears); autonomous task
 generation from inferred needs; a first-class `commitments` entity (modeled today as a task
