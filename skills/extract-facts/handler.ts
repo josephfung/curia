@@ -62,6 +62,11 @@ export class ExtractFactsHandler implements SkillHandler {
         ? Math.floor(max_stored)
         : undefined;
 
+      if (maxStored === 0) {
+        ctx.log.info({ stored: 0, redirected: 0, failed: 0 }, 'extract-facts: complete');
+        return { success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 0 } };
+      }
+
       // -- Step 1: Classifier gate --
       // Cheap fast-tier call — exits early on messages that carry no facts about a
       // single entity (e.g. action requests, scheduling, relationship-only text).
@@ -260,6 +265,7 @@ ${text}`,
                 }
 
                 if (contact) {
+                  if (maxStored !== undefined && stored + redirected >= maxStored) break;
                   try {
                     await ctx.contactService.updateContactFields(contact.id, patch.fields);
                     ctx.log.info(
@@ -308,6 +314,8 @@ ${text}`,
               'extract-facts: memoryWriteSource not set — using input source fallback',
             );
           }
+
+          if (maxStored !== undefined && stored + redirected >= maxStored) break;
 
           const result = await ctx.entityMemory.storeFact({
             entityNodeId: entityNode.id,

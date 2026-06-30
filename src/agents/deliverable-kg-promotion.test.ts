@@ -186,19 +186,24 @@ describe('deliverable-kg-promotion (#1241)', () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
-  it('skips promotion when disabled via error_budget', async () => {
+  it('skips promotion when disabled via error_budget but still archives workspace docs', async () => {
     const invoke = vi.fn();
+    const archiveProjectWorkspaceDocs = vi.fn().mockResolvedValue(2);
     const result = await promoteDeliverableToKg({
       task: makeParent({ errorBudget: { kg_promotion: false } }),
       parentEventId: 'evt-parent',
-      taskRepo: { getTask: vi.fn() } as unknown as TaskRepo,
-      workingDocsRepo: { archiveProjectWorkspaceDocs: vi.fn() } as unknown as WorkingDocsRepo,
+      taskRepo: {
+        getTask: vi.fn(),
+        resolveProjectRootTaskId: vi.fn().mockResolvedValue(PARENT_ID),
+      } as unknown as TaskRepo,
+      workingDocsRepo: { archiveProjectWorkspaceDocs } as unknown as WorkingDocsRepo,
       executionLayer: { invoke } as unknown as ExecutionLayer,
       config: resolveKgPromotionConfig(),
       logger: makeLogger(),
     });
-    expect(result).toEqual({ promoted: false, reason: 'disabled' });
+    expect(result).toEqual({ promoted: false, reason: 'disabled', archivedDocs: 2 });
     expect(invoke).not.toHaveBeenCalled();
+    expect(archiveProjectWorkspaceDocs).toHaveBeenCalledWith(PARENT_ID);
   });
 
   describe('DeliverableKgPromotionSubscriber', () => {
@@ -250,7 +255,9 @@ describe('deliverable-kg-promotion (#1241)', () => {
       expect(handler).toBeDefined();
       await handler!(createTaskCompleted({ taskId: PARENT_ID, completionNote: 'Done', agentId: 'coordinator' }));
 
-      expect(invoke).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledTimes(2);
+      });
     });
 
     it('ignores task.completed without a plan block', async () => {

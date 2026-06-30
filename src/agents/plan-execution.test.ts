@@ -316,6 +316,24 @@ describe('resolvePromotionText (#1241)', () => {
     expect(resolvePromotionText(plan, children)).toBe('Audit complete — 42 flagged for review');
   });
 
+  it('returns null for a deliverable step with only a title fallback', () => {
+    const plan: PlanProgressBlock = {
+      steps: [{ id: 'deliverable', taskId: 'child-1' }],
+      deliverableStepId: 'deliverable',
+      done: 1,
+      total: 1,
+      next: 'Done',
+    };
+    const children = new Map([
+      ['child-1', {
+        title: 'Synthesis',
+        description: null,
+        progress: {},
+      }],
+    ]);
+    expect(resolvePromotionText(plan, children)).toBeNull();
+  });
+
   it('skips resumable iterate leaves when rolling up without a deliverable step', () => {
     const plan: PlanProgressBlock = {
       steps: [

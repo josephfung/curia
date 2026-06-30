@@ -113,86 +113,90 @@ export async function promoteDeliverableToKg(
   opts: PromoteDeliverableOptions,
 ): Promise<PromoteDeliverableResult> {
   const { task, config, logger } = opts;
-
-  if (isKgPromotionDisabled(task, config)) {
-    logger.debug({ taskId: task.id }, 'Deliverable KG promotion: disabled — skipping');
-    return { promoted: false, reason: 'disabled' };
-  }
+  const errors: string[] = [];
 
   const plan = readPlanBlock(task.progress);
   if (!plan) {
     return { promoted: false, reason: 'no_plan' };
   }
 
-  const children = await loadPlanChildren(opts.taskRepo, task);
-  const text = resolvePromotionText(plan, children);
-  if (!text) {
-    logger.debug({ taskId: task.id }, 'Deliverable KG promotion: no promotion text — skipping extraction');
-    return { promoted: false, reason: 'no_text' };
-  }
-
   const rootTaskId = (await opts.taskRepo.resolveProjectRootTaskId(task.id)) ?? task.id;
-  const source = promotionSource(task.id, rootTaskId);
-  const agentId = task.sourceAgentId ?? task.agentId ?? 'system';
-  const conversationId = task.conversationId ?? `task:${task.id}`;
-  const invokeOptions = {
-    agentId,
-    conversationId,
-    parentEventId: opts.parentEventId,
-    taskEventId: task.id,
-  };
-  const callerContext = {
-    contactId: 'system',
-    role: null as string | null,
-    channel: 'system',
-  };
-
-  const errors: string[] = [];
+  let promoted = false;
   let factsStored = 0;
   let relationshipsStored = 0;
+  let skipReason: PromoteDeliverableResult['reason'];
 
-  const skillResults = await Promise.allSettled([
-    opts.executionLayer.invoke(
-      'extract-relationships',
-      { text, source, max_stored: config.maxRelationships },
-      callerContext,
-      invokeOptions,
-    ),
-    opts.executionLayer.invoke(
-      'extract-facts',
-      { text, source, max_stored: config.maxFacts },
-      callerContext,
-      invokeOptions,
-    ),
-  ]);
+  if (isKgPromotionDisabled(task, config)) {
+    skipReason = 'disabled';
+    logger.debug({ taskId: task.id }, 'Deliverable KG promotion: disabled — skipping extraction');
+  } else {
+    const children = await loadPlanChildren(opts.taskRepo, task);
+    const text = resolvePromotionText(plan, children);
+    if (!text) {
+      skipReason = 'no_text';
+      logger.debug({ taskId: task.id }, 'Deliverable KG promotion: no promotion text — skipping extraction');
+    } else {
+      const source = promotionSource(task.id, rootTaskId);
+      const agentId = task.sourceAgentId ?? task.agentId ?? 'system';
+      const conversationId = task.conversationId ?? `task:${task.id}`;
+      const invokeOptions = {
+        agentId,
+        conversationId,
+        parentEventId: opts.parentEventId,
+        taskEventId: task.id,
+      };
+      const callerContext = {
+        contactId: 'system',
+        role: null as string | null,
+        channel: 'system',
+      };
 
-  for (const [index, result] of skillResults.entries()) {
-    const skillName = index === 0 ? 'extract-relationships' : 'extract-facts';
-    if (result.status === 'rejected') {
-      const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
-      errors.push(`${skillName}: ${message}`);
-      logger.error(
-        { err: result.reason as Error, taskId: task.id, skill: skillName },
-        'Deliverable KG promotion: skill threw unexpectedly',
-      );
-      continue;
-    }
-    const skillResult = result.value as SkillResult;
-    if (!skillResult.success) {
-      errors.push(`${skillName}: ${skillResult.error ?? 'unknown error'}`);
-      logger.warn(
-        { taskId: task.id, skill: skillName, error: skillResult.error },
-        'Deliverable KG promotion: skill returned failure',
-      );
-      continue;
-    }
-    if (skillName === 'extract-relationships' && skillResult.data) {
-      const data = skillResult.data as { extracted?: number; confirmed?: number };
-      relationshipsStored = (data.extracted ?? 0) + (data.confirmed ?? 0);
-    }
-    if (skillName === 'extract-facts' && skillResult.data) {
-      const data = skillResult.data as { stored?: number; redirected?: number };
-      factsStored = (data.stored ?? 0) + (data.redirected ?? 0);
+      const skillResults = await Promise.allSettled([
+        opts.executionLayer.invoke(
+          'extract-relationships',
+          { text, source, max_stored: config.maxRelationships },
+          callerContext,
+          invokeOptions,
+        ),
+        opts.executionLayer.invoke(
+          'extract-facts',
+          { text, source, max_stored: config.maxFacts },
+          callerContext,
+          invokeOptions,
+        ),
+      ]);
+
+      for (const [index, result] of skillResults.entries()) {
+        const skillName = index === 0 ? 'extract-relationships' : 'extract-facts';
+        if (result.status === 'rejected') {
+          const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          errors.push(`${skillName}: ${message}`);
+          logger.error(
+            { err: result.reason as Error, taskId: task.id, skill: skillName },
+            'Deliverable KG promotion: skill threw unexpectedly',
+          );
+          continue;
+        }
+        const skillResult = result.value as SkillResult;
+        if (!skillResult.success) {
+          errors.push(`${skillName}: ${skillResult.error ?? 'unknown error'}`);
+          logger.warn(
+            { taskId: task.id, skill: skillName, error: skillResult.error },
+            'Deliverable KG promotion: skill returned failure',
+          );
+          continue;
+        }
+        if (skillName === 'extract-relationships' && skillResult.data) {
+          const data = skillResult.data as { extracted?: number; confirmed?: number };
+          relationshipsStored = (data.extracted ?? 0) + (data.confirmed ?? 0);
+        }
+        if (skillName === 'extract-facts' && skillResult.data) {
+          const data = skillResult.data as { stored?: number; redirected?: number };
+          factsStored = (data.stored ?? 0) + (data.redirected ?? 0);
+        }
+      }
+
+      promoted = true;
     }
   }
 
@@ -210,6 +214,8 @@ export async function promoteDeliverableToKg(
       taskId: task.id,
       rootTaskId,
       deliverableStepId: plan.deliverableStepId,
+      promoted,
+      skipReason,
       factsStored,
       relationshipsStored,
       archivedDocs,
@@ -217,6 +223,15 @@ export async function promoteDeliverableToKg(
     },
     'Deliverable KG promotion complete',
   );
+
+  if (!promoted) {
+    return {
+      promoted: false,
+      reason: skipReason,
+      archivedDocs,
+      errors: errors.length > 0 ? errors : undefined,
+    };
+  }
 
   return {
     promoted: true,
@@ -251,7 +266,7 @@ export class DeliverableKgPromotionSubscriber {
         const task = await this.opts.taskRepo.getTask(taskId);
         if (!task || !readPlanBlock(task.progress)) return;
 
-        await promoteDeliverableToKg({
+        void promoteDeliverableToKg({
           task,
           parentEventId: completed.id,
           taskRepo: this.opts.taskRepo,
@@ -259,6 +274,11 @@ export class DeliverableKgPromotionSubscriber {
           executionLayer: this.opts.executionLayer,
           config: this.opts.config,
           logger: this.opts.logger,
+        }).catch((err) => {
+          this.opts.logger.error(
+            { err, taskId },
+            'Deliverable KG promotion: unexpected error in background task — parent completion unaffected',
+          );
         });
       } catch (err) {
         this.opts.logger.error(
