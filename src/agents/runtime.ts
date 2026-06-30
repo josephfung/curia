@@ -32,7 +32,8 @@ import {
   shouldSendCheckpointBudgetNudge,
   type BoundTaskContext,
 } from './resumable-task.js';
-import { readCircuitState } from './resumable-circuit-breaker.js';
+import { readCircuitState, type ResumableCircuitState } from './resumable-circuit-breaker.js';
+import { computeResumableThroughput } from './resumable-throughput.js';
 import {
   applyPlanHarness,
   shouldOfferPlanSkill,
@@ -471,14 +472,22 @@ export class AgentRuntime {
     }
 
     const resumableActive = boundTaskCtx !== null && isResumableTask(boundTaskCtx);
+    let resumableNudgeCtx: { resumable: ResumableProgressBlock; circuit: ResumableCircuitState } | null = null;
     if (resumableActive && boundTaskCtx) {
+      const existingCheckpoint = readResumableBlock(boundTaskCtx.progress ?? {});
+      const circuit = readCircuitState(boundTaskCtx.progress ?? {});
+      const throughputMetrics = existingCheckpoint
+        ? computeResumableThroughput(existingCheckpoint, circuit)
+        : null;
+      if (existingCheckpoint && circuit) {
+        resumableNudgeCtx = { resumable: existingCheckpoint, circuit };
+      }
       effectiveSystemPrompt += '\n\n' + buildResumableTaskGuidanceBlock({
         workspaceManifestPath: boundTaskCtx.workspaceManifestPath,
         workspaceManifestInjected,
+        throughputMetrics,
       });
-      const existingCheckpoint = readResumableBlock(boundTaskCtx.progress ?? {});
       if (existingCheckpoint) {
-        const circuit = readCircuitState(boundTaskCtx.progress ?? {});
         effectiveSystemPrompt += '\n\n' + buildResumableCheckpointResumeBlock(existingCheckpoint, { circuit });
       }
     }
@@ -835,16 +844,27 @@ export class AgentRuntime {
 
     const maybeAppendCheckpointBudgetNudge = (): void => {
       if (!resumableActive || checkpointBudgetNudgeSent) return;
-      if (!shouldSendCheckpointBudgetNudge(budget.turnsUsed, budget.maxTurns, checkpointBudgetNudgeSent)) {
+      if (!shouldSendCheckpointBudgetNudge(
+        budget.turnsUsed,
+        budget.maxTurns,
+        checkpointBudgetNudgeSent,
+        resumableNudgeCtx,
+      )) {
         return;
       }
       const remaining = budget.maxTurns - budget.turnsUsed;
+      const throughputMetrics = resumableNudgeCtx
+        ? computeResumableThroughput(resumableNudgeCtx.resumable, resumableNudgeCtx.circuit)
+        : null;
       messages.push({
         role: 'user',
-        content: buildCheckpointBudgetNudgeMessage(remaining, budget.maxTurns),
+        content: buildCheckpointBudgetNudgeMessage(remaining, budget.maxTurns, throughputMetrics),
       });
       checkpointBudgetNudgeSent = true;
-      logger.info({ agentId, remaining, maxTurns: budget.maxTurns }, 'Appended resumable-task checkpoint budget nudge');
+      logger.info(
+        { agentId, remaining, maxTurns: budget.maxTurns, throughputAware: throughputMetrics?.estimateAvailable ?? false },
+        'Appended resumable-task checkpoint budget nudge',
+      );
     };
 
     logger.info({ agentId, conversationId, historyLength: history.length }, 'Agent processing task');
