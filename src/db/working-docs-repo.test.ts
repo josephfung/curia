@@ -170,4 +170,27 @@ describe('WorkingDocsRepo (unit)', () => {
     const repo = new WorkingDocsRepo(pool, createSilentLogger());
     await expect(repo.purgeExpiredScratch(7)).resolves.toBe(0);
   });
+
+  it('archiveProjectWorkspaceDocs archives by task_id and project path prefix', async () => {
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const client = makeClient({
+      query: async (sql: string, params?: unknown[]) => {
+        queries.push({ sql, params });
+        if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [], rowCount: 0 } as unknown as QueryResult;
+        if (sql.includes('WITH archived AS')) {
+          return { rows: [{ archived_count: '3' }], rowCount: 1 } as QueryResult;
+        }
+        throw new Error(`unexpected sql: ${sql}`);
+      },
+    });
+    const { pool } = makePool(client);
+    const repo = new WorkingDocsRepo(pool, createSilentLogger());
+    const rootTaskId = '00000000-0000-4000-8000-000000000001';
+    const archived = await repo.archiveProjectWorkspaceDocs(rootTaskId);
+    expect(archived).toBe(3);
+    const archiveQuery = queries.find(q => q.sql.includes('WITH archived AS'));
+    expect(archiveQuery?.params?.[0]).toBe(rootTaskId);
+    expect(archiveQuery?.params?.[1]).toBe('/projects/00000000-0000-4000-8000-000000000001/%');
+    expect(archiveQuery?.sql).toContain('task_id = $1::uuid');
+  });
 });
