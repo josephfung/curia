@@ -274,20 +274,6 @@ export async function advancePlanFrontier(
     stepTitleById,
   });
 
-  const existingAdaptive = readPlanAdaptiveState(parent.progress);
-  const planAdaptiveState = {
-    planDepth: existingAdaptive?.planDepth ?? 1,
-    replanCount: existingAdaptive?.replanCount ?? 0,
-    pendingSignals: divergenceSignals,
-  };
-  await opts.taskRepo.persistPlanAdaptiveState(parent.id, planAdaptiveState);
-  if (divergenceSignals.length > 0) {
-    opts.logger.info(
-      { parentTaskId: parent.id, signalCount: divergenceSignals.length, reasons: divergenceSignals.map((s) => s.reason) },
-      'Plan frontier: divergence signals surfaced',
-    );
-  }
-
   let autoCompleted = false;
   if (isPlanReadyForAutoComplete(currentPlan, childStatuses)) {
     const completionNote = resolvePlanCompletionNote(currentPlan, children);
@@ -301,6 +287,22 @@ export async function advancePlanFrontier(
       opts.logger.info(
         { parentTaskId: parent.id, deliverableStepId: currentPlan.deliverableStepId },
         'Plan frontier: parent auto-completed',
+      );
+    }
+  }
+
+  if (!autoCompleted) {
+    const existingAdaptive = readPlanAdaptiveState(parent.progress);
+    const planAdaptiveState = {
+      planDepth: existingAdaptive?.planDepth ?? 1,
+      replanCount: existingAdaptive?.replanCount ?? 0,
+      pendingSignals: divergenceSignals,
+    };
+    await opts.taskRepo.persistPlanAdaptiveState(parent.id, planAdaptiveState);
+    if (divergenceSignals.length > 0) {
+      opts.logger.info(
+        { parentTaskId: parent.id, signalCount: divergenceSignals.length, reasons: divergenceSignals.map((s) => s.reason) },
+        'Plan frontier: divergence signals surfaced',
       );
     }
   }

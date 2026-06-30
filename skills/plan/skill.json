@@ -1,7 +1,7 @@
 {
   "name": "plan",
   "description": "Decompose a complex goal into child task steps with dependencies. Writes child rows directly (rows-direct) and persists progress.plan. Use for ~10 heterogeneous steps — not one row per item (use resumable iterate leaves for high-count homogeneous work). Re-runnable: reconciles by step id without duplicating children.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

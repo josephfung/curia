@@ -239,11 +239,18 @@ describe('advancePlanFrontier', () => {
   it('persists divergence signals when a child failed', async () => {
     const child1 = sampleChild({ id: CHILD_1, status: 'failed' });
     const parent = sampleParent({ status: 'in_progress' });
+    const updatedBlock = {
+      steps: parent.progress.plan!.steps,
+      deliverableStepId: 'step-3',
+      done: 1,
+      total: 3,
+      next: 'Run step 1',
+    };
 
     const persistPlanAdaptiveState = vi.fn().mockResolvedValue(undefined);
     const taskRepo = {
       getTask: vi.fn().mockResolvedValue(parent),
-      setPlanBlock: vi.fn(),
+      setPlanBlock: vi.fn().mockResolvedValue({ task: parent, block: updatedBlock }),
       completeTask: vi.fn().mockResolvedValue(null),
       persistPlanAdaptiveState,
     };

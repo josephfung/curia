@@ -112,6 +112,9 @@ export class PlanFrontierSubscriber {
         if (parentAfter) {
           const adaptive = readPlanAdaptiveState(parentAfter.progress);
           if (adaptive) {
+            // Defense-in-depth: the handler is the primary depth gate and refuses to persist
+            // a breaching depth, so this path is unreachable in normal operation unless state
+            // was hand-edited or predates the handler guard.
             const depthBreach = detectPlanAdaptiveBreach(
               adaptive,
               this.opts.resumableCeilings,

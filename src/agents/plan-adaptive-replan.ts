@@ -10,10 +10,11 @@ import type { Logger } from '../logger.js';
 import type { ResumableCeilingsConfig } from '../config.js';
 import type { TaskRow } from '../db/queries/tasks.js';
 import type { TaskRepo } from '../db/task-repo.js';
-import type { PlanStepDescriptor } from '../db/plan-progress.js';
+import { readPlanBlock, type PlanStepDescriptor } from '../db/plan-progress.js';
 import { readResumableBlock } from '../db/resumable-progress.js';
 import {
   readCircuitState,
+  resolveResumableCeilings,
   type ResumableCircuitState,
 } from './resumable-circuit-breaker.js';
 import { computeResumableThroughput } from './resumable-throughput.js';
@@ -51,8 +52,19 @@ export interface PlanAdaptiveBreach {
   replanCount: number;
 }
 
+const PLAN_ADAPTIVE_ESCALATION_TAGS = new Set(['plan-adaptive-breach', 'needs-attention']);
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Strip control chars / newlines from persisted text before prompt injection. */
+export function sanitizePlanAdaptiveText(value: string): string {
+  return value
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\r?\n/g, ' ')
+    .replace(/`/g, '\'')
+    .trim();
 }
 
 function parseSignal(raw: unknown): PlanDivergenceSignal | undefined {
@@ -109,30 +121,9 @@ export function mergePlanAdaptiveState(
   return { ...progress, [PROGRESS_KEY]: state };
 }
 
-/** Resolve per-task adaptive ceilings — error_budget overrides win over config (#1266). */
-export function resolvePlanAdaptiveCeilings(
-  config: ResumableCeilingsConfig,
-  errorBudget: Record<string, unknown>,
-): Pick<
-  ResumableCeilingsConfig,
-  'maxPlanDepth' | 'maxReplansPerSubtree' | 'blockedStepHours' | 'throughputDivergenceRatio'
-> {
-  const pick = (
-    key: 'maxPlanDepth' | 'maxReplansPerSubtree' | 'blockedStepHours' | 'throughputDivergenceRatio',
-    budgetKey: string,
-  ): number => {
-    const override = errorBudget[budgetKey];
-    if (typeof override === 'number' && Number.isFinite(override) && override > 0) {
-      return override;
-    }
-    return config[key];
-  };
-  return {
-    maxPlanDepth: pick('maxPlanDepth', 'max_plan_depth'),
-    maxReplansPerSubtree: pick('maxReplansPerSubtree', 'max_replans_per_subtree'),
-    blockedStepHours: pick('blockedStepHours', 'blocked_step_hours'),
-    throughputDivergenceRatio: pick('throughputDivergenceRatio', 'throughput_divergence_ratio'),
-  };
+export function isPlanAdaptiveEscalationComplete(task: Pick<TaskRow, 'status' | 'tags'>): boolean {
+  if (task.status !== 'failed') return false;
+  return task.tags.some((tag) => PLAN_ADAPTIVE_ESCALATION_TAGS.has(tag));
 }
 
 export interface DetectPlanDivergenceInput {
@@ -143,8 +134,13 @@ export interface DetectPlanDivergenceInput {
   now?: Date;
 }
 
-function stepLabel(stepId: string, stepTitleById?: ReadonlyMap<string, string>): string {
-  return stepTitleById?.get(stepId) ?? stepId;
+function childLabel(
+  child: Pick<TaskRow, 'title'>,
+  stepId: string,
+  stepTitleById?: ReadonlyMap<string, string>,
+): string {
+  const raw = child.title.trim() || stepTitleById?.get(stepId) || stepId;
+  return sanitizePlanAdaptiveText(raw) || stepId;
 }
 
 function hoursBlocked(updatedAt: string, now: Date): number {
@@ -169,18 +165,17 @@ function detectThroughputDivergence(
     return null;
   }
 
-  const adaptiveCeilings = resolvePlanAdaptiveCeilings(ceilings, child.errorBudget);
-  const iterationBudget = resolveResumableIterationBudget(ceilings, child.errorBudget);
+  const resolved = resolveResumableCeilings(ceilings, child.errorBudget);
   const iterationsUsed = circuit?.iterationCount ?? 0;
-  const remainingIterations = Math.max(iterationBudget - iterationsUsed, 1);
+  const remainingIterations = Math.max(resolved.maxIterations - iterationsUsed, 1);
   const remainingUnits = Math.max(resumable.total - resumable.done, 0);
   const impliedUnitsPerSlice = remainingUnits / remainingIterations;
 
   if (impliedUnitsPerSlice <= 0) return null;
   const paceRatio = metrics.unitsPerSlice / impliedUnitsPerSlice;
-  if (paceRatio >= adaptiveCeilings.throughputDivergenceRatio) return null;
+  if (paceRatio >= resolved.throughputDivergenceRatio) return null;
 
-  const label = child.title.trim() || stepLabel(stepId, stepTitleById);
+  const label = childLabel(child, stepId, stepTitleById);
   return {
     reason: 'throughput_below_estimate',
     stepId,
@@ -188,20 +183,9 @@ function detectThroughputDivergence(
     message:
       `Child "${label}" throughput ~${metrics.unitsPerSlice.toFixed(1)} units/slice `
       + `vs ~${impliedUnitsPerSlice.toFixed(1)} needed to finish within the iteration budget `
-      + `(ratio ${(paceRatio * 100).toFixed(0)}%, threshold ${(adaptiveCeilings.throughputDivergenceRatio * 100).toFixed(0)}%) `
+      + `(ratio ${(paceRatio * 100).toFixed(0)}%, threshold ${(resolved.throughputDivergenceRatio * 100).toFixed(0)}%) `
       + '— consider re-planning slice size or approach.',
   };
-}
-
-function resolveResumableIterationBudget(
-  ceilings: ResumableCeilingsConfig,
-  errorBudget: Record<string, unknown>,
-): number {
-  const override = errorBudget.max_iterations;
-  if (typeof override === 'number' && Number.isFinite(override) && override > 0) {
-    return override;
-  }
-  return ceilings.maxIterations;
 }
 
 /**
@@ -210,7 +194,6 @@ function resolveResumableIterationBudget(
  */
 export function detectPlanDivergence(input: DetectPlanDivergenceInput): PlanDivergenceSignal[] {
   const now = input.now ?? new Date();
-  const adaptiveCeilings = resolvePlanAdaptiveCeilings(input.ceilings, {});
   const signals: PlanDivergenceSignal[] = [];
   const seen = new Set<string>();
 
@@ -226,7 +209,7 @@ export function detectPlanDivergence(input: DetectPlanDivergenceInput): PlanDive
     const child = input.children.get(step.taskId);
     if (!child) continue;
 
-    const label = child.title.trim() || stepLabel(step.id, input.stepTitleById);
+    const label = childLabel(child, step.id, input.stepTitleById);
 
     if (child.status === 'failed') {
       push({
@@ -249,15 +232,16 @@ export function detectPlanDivergence(input: DetectPlanDivergenceInput): PlanDive
     }
 
     if (child.status === 'blocked') {
+      const resolved = resolveResumableCeilings(input.ceilings, child.errorBudget);
       const blockedHours = hoursBlocked(child.updatedAt, now);
-      if (blockedHours >= adaptiveCeilings.blockedStepHours) {
+      if (blockedHours >= resolved.blockedStepHours) {
         push({
           reason: 'step_over_blocked',
           stepId: step.id,
           childTaskId: child.id,
           message:
             `Step "${label}" has been blocked for ~${Math.round(blockedHours)}h `
-            + `(threshold ${adaptiveCeilings.blockedStepHours}h) — consider re-planning around the blocker.`,
+            + `(threshold ${resolved.blockedStepHours}h) — consider re-planning around the blocker.`,
         });
       }
     }
@@ -275,22 +259,25 @@ export function detectPlanDivergence(input: DetectPlanDivergenceInput): PlanDive
   return signals;
 }
 
-/** Resolve plan depth for a new or re-plan write. */
+/**
+ * Resolve plan depth for a new or re-plan write.
+ * Depth increments only through planned decomposition — bare delegation parentage does not count.
+ */
 export function resolvePlanDepthForWrite(
   parent: Pick<TaskRow, 'parentTaskId' | 'progress'>,
-  grandparent: Pick<TaskRow, 'progress'> | null,
+  immediateParent: Pick<TaskRow, 'progress'> | null,
   isReplan: boolean,
 ): number {
   const existing = readPlanAdaptiveState(parent.progress);
   if (isReplan && existing) return existing.planDepth;
-
   if (existing?.planDepth) return existing.planDepth;
-
   if (!parent.parentTaskId) return 1;
+  if (!immediateParent) return 1;
 
-  const grandAdaptive = grandparent ? readPlanAdaptiveState(grandparent.progress) : null;
-  const grandDepth = grandAdaptive?.planDepth ?? 1;
-  return grandDepth + 1;
+  const parentAdaptive = readPlanAdaptiveState(immediateParent.progress);
+  if (parentAdaptive?.planDepth) return parentAdaptive.planDepth + 1;
+  if (readPlanBlock(immediateParent.progress)) return 2;
+  return 1;
 }
 
 export function detectPlanAdaptiveBreach(
@@ -298,26 +285,26 @@ export function detectPlanAdaptiveBreach(
   ceilings: ResumableCeilingsConfig,
   errorBudget: Record<string, unknown> = {},
 ): PlanAdaptiveBreach | null {
-  const adaptive = resolvePlanAdaptiveCeilings(ceilings, errorBudget);
+  const resolved = resolveResumableCeilings(ceilings, errorBudget);
 
-  if (state.planDepth > adaptive.maxPlanDepth) {
+  if (state.planDepth > resolved.maxPlanDepth) {
     return {
       reason: 'max_plan_depth',
       planDepth: state.planDepth,
       replanCount: state.replanCount,
       message:
-        `Plan decomposition depth ${state.planDepth} exceeds limit ${adaptive.maxPlanDepth} `
+        `Plan decomposition depth ${state.planDepth} exceeds limit ${resolved.maxPlanDepth} `
         + '— progressive planning cannot recurse further.',
     };
   }
 
-  if (state.replanCount > adaptive.maxReplansPerSubtree) {
+  if (state.replanCount > resolved.maxReplansPerSubtree) {
     return {
       reason: 'max_replans',
       planDepth: state.planDepth,
       replanCount: state.replanCount,
       message:
-        `Re-plan count ${state.replanCount} exceeds limit ${adaptive.maxReplansPerSubtree} `
+        `Re-plan count ${state.replanCount} exceeds limit ${resolved.maxReplansPerSubtree} `
         + 'for this subtree — further re-decomposition is blocked.',
     };
   }
@@ -337,7 +324,7 @@ export function buildPlanDivergenceGuidanceBlock(signals: readonly PlanDivergenc
   ];
 
   for (const signal of signals) {
-    lines.push(`- ${signal.message}`);
+    lines.push(`- ${sanitizePlanAdaptiveText(signal.message)}`);
   }
 
   lines.push(
@@ -360,9 +347,16 @@ export interface EscalatePlanAdaptiveBreachOptions {
 
 /**
  * Fail the planned task and surface a richer escalation to coordinator + CEO backlog.
+ * Idempotent when the task was already failed after a prior breach escalation.
  */
 export async function escalatePlanAdaptiveBreach(opts: EscalatePlanAdaptiveBreachOptions): Promise<void> {
   const { task, breach, bus, taskRepo, logger, agentId } = opts;
+
+  if (isPlanAdaptiveEscalationComplete(task)) {
+    logger.debug({ taskId: task.id }, 'Plan adaptive breach: already escalated — skipping');
+    return;
+  }
+
   const progressNote = [
     breach.message,
     `Plan depth: ${breach.planDepth}, re-plans on this task: ${breach.replanCount}.`,
@@ -377,6 +371,7 @@ export async function escalatePlanAdaptiveBreach(opts: EscalatePlanAdaptiveBreac
     lastProgress: { done: 0, cursor: null },
   };
 
+  const wasAlreadyFailed = task.status === 'failed';
   const updated = await taskRepo.failResumableTask(task.id, {
     progressNote,
     circuitState,
@@ -385,6 +380,11 @@ export async function escalatePlanAdaptiveBreach(opts: EscalatePlanAdaptiveBreac
 
   if (!updated) {
     logger.warn({ taskId: task.id }, 'Plan adaptive breach escalation: task not found or already terminal');
+    return;
+  }
+
+  if (wasAlreadyFailed) {
+    logger.debug({ taskId: task.id }, 'Plan adaptive breach: task already failed — skipping duplicate notify');
     return;
   }
 

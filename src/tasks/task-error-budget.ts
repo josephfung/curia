@@ -25,15 +25,17 @@ export const FORBIDDEN_PER_INVOCATION_BUDGET_KEYS = new Set([
   'max_errors',
 ]);
 
-const NUMERIC_CEILING_KEYS = [
+const INTEGER_CEILING_KEYS = [
   'max_stalls',
   'max_iterations',
-  'max_wallclock_hours',
-  'max_cost_usd',
   'max_plan_depth',
   'max_replans_per_subtree',
+] as const;
+
+const POSITIVE_NUMBER_CEILING_KEYS = [
+  'max_wallclock_hours',
+  'max_cost_usd',
   'blocked_step_hours',
-  'throughput_divergence_ratio',
 ] as const;
 
 /**
@@ -72,12 +74,28 @@ export function validateTaskErrorBudget(errorBudget: unknown): string | null {
     return 'error_budget.resumable must be a boolean.';
   }
 
-  for (const key of NUMERIC_CEILING_KEYS) {
+  for (const key of INTEGER_CEILING_KEYS) {
+    if (key in budget) {
+      const value = budget[key];
+      if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+        return `error_budget.${key} must be a positive integer.`;
+      }
+    }
+  }
+
+  for (const key of POSITIVE_NUMBER_CEILING_KEYS) {
     if (key in budget) {
       const value = budget[key];
       if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
         return `error_budget.${key} must be a positive number.`;
       }
+    }
+  }
+
+  if ('throughput_divergence_ratio' in budget) {
+    const value = budget.throughput_divergence_ratio;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1) {
+      return 'error_budget.throughput_divergence_ratio must be in (0, 1].';
     }
   }
 

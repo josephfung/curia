@@ -16,6 +16,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Adaptive re-planning** — frontier wakes surface advisory divergence signals (failed/cancelled child, throughput below estimate, over-blocked step); plan depth and re-plan count are bounded with escalation on breach. (#1266)
+
+### Fixed
+
+- **Adaptive re-planning** — sanitize divergence prompt text; idempotent breach escalation; honor configured ceilings and per-task overrides in the plan handler; count failed children in plan rollup so parents can auto-complete. (#1266)
 - **Resumable throughput-informed slice sizing** — advisory target slice size from measured units/slice in resume guidance; throughput-aware budget nudge with cold-start fallback to the fixed turn fraction. (#1265)
 - **Resumable throughput telemetry** — derived units/slice, cost/unit, and ETA surfaced on resume and emitted to logs/audit on each pause. (#1264)
 - **Spec 20 — Resumable Tasks & Projects** — as-built design promoted to a permanent spec. (#1177)
