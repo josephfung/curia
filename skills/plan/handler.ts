@@ -9,7 +9,6 @@ import { DEFAULT_RESUMABLE_CEILINGS } from '../../src/config.js';
 import {
   detectPlanAdaptiveBreach,
   escalatePlanAdaptiveBreach,
-  isPlanAdaptiveEscalationComplete,
   readPlanAdaptiveState,
   resolvePlanDepthForWrite,
 } from '../../src/agents/plan-adaptive-replan.js';
@@ -124,10 +123,6 @@ export class PlanHandler implements SkillHandler {
       : null;
     const planDepth = resolvePlanDepthForWrite(parent, immediateParent, isReplan);
     const replanCount = (existingAdaptive?.replanCount ?? 0) + (isReplan ? 1 : 0);
-
-    if (isPlanAdaptiveEscalationComplete(parent)) {
-      return { success: false, error: 'Task already failed after a plan adaptive breach escalation' };
-    }
 
     const breach = detectPlanAdaptiveBreach(
       { planDepth, replanCount: isReplan ? replanCount : (existingAdaptive?.replanCount ?? 0) },
