@@ -148,7 +148,7 @@ The agent runtime exposes hooks at key lifecycle points. Hooks are used by the f
 
 ## Agent State Model
 
-**Stateful per-conversation, restart-safe.** Each inbound message carries a `conversation_id` — a deterministic UUID v5 generated from `channel:user_id:thread_id` (e.g., `signal:+15550001111:thread-789` → UUID). The agent loads conversation history from working memory (Postgres) on each invocation. No in-process state — restarts lose nothing.
+**Stateful per-conversation, restart-safe.** Each inbound message carries a `conversation_id` — a deterministic, human-readable key derived from the channel and its native thread/sender identity (e.g., `signal:+15550001111`, `email:<threadId>`, `cli:local:default`). It is deliberately *reversible*: outbound adapters parse it back to recover the reply target (thread id, phone number, group id). Stored as TEXT, not a UUID. See ADR-025. The agent loads conversation history from working memory (Postgres) on each invocation. No in-process state — restarts lose nothing.
 
 ---
 
