@@ -56,7 +56,9 @@ interface ChannelCredentialField {
 ```typescript
 interface InboundMessage {
   id: string;                  // UUID
-  conversation_id: string;     // deterministic UUID v5 from channel:user_id:thread_id
+  conversation_id: string;     // deterministic, reversible channel-scoped key, e.g. "email:<threadId>",
+                               // "signal:+1555...", "signal:group=<id>", "cli:local:default". NOT a UUID —
+                               // outbound adapters parse it back to recover the reply target. See ADR-025.
   channel_id: string;          // e.g., "email"
   sender_id: string;           // platform-specific user ID
   content: string;             // normalized text content

@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`contact_auth_overrides`** — partial unique index preserves grant→revoke→re-grant history instead of reactivating revoked rows. (#45)
 - **Per-task `error_budget.kg_promotion`** — validator now accepts the documented per-task KG-promotion opt-out. (#1286)
 - **`@types/node`** — pinned to the Node 24 type surface to match the runtime; Dependabot ignores major bumps. (#1258)
+- **`conversation_id` spec** — reconciled specs 01/02/04 to the real reversible TEXT key, not UUID v5; decision recorded in ADR-025. (#16)
 
 ### Fixed
 
