@@ -1832,12 +1832,12 @@ class PostgresContactBackend implements ContactServiceBackend {
       'contacts: creating auth override',
     );
     // Upsert: if an active override exists for this contact+permission, update it.
-    // The UNIQUE(contact_id, permission) constraint on the table supports this.
+    // Partial unique index contact_auth_overrides_active_unique supports this (#45).
     const q = client ?? this.pool;
     await q.query(
       `INSERT INTO contact_auth_overrides (id, contact_id, permission, granted, granted_by, created_at, revoked_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (contact_id, permission) DO UPDATE
+       ON CONFLICT (contact_id, permission) WHERE revoked_at IS NULL DO UPDATE
          SET granted = EXCLUDED.granted,
              granted_by = EXCLUDED.granted_by,
              created_at = EXCLUDED.created_at,

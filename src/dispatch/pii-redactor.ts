@@ -212,7 +212,7 @@ export class PiiRedactor {
     })).catch((err: unknown) => {
       this.logger.warn(
         { err, event: 'pii_redacted_bus_publish_failed', channelId },
-        'Failed to publish outbound.pii-redacted audit event',
+        'Failed to publish outbound.pii_redacted audit event',
       );
     });
 

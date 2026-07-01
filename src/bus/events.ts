@@ -686,7 +686,7 @@ export interface OutboundBlockedEvent extends BaseEvent {
 // an outbound message before delivery. The message is still sent (with redacted content).
 // No subscriber initially — event is available for future audit UI and alerting rules.
 export interface OutboundPiiRedactedEvent extends BaseEvent {
-  type: 'outbound.pii-redacted';
+  type: 'outbound.pii_redacted';
   sourceLayer: 'dispatch';
   payload: OutboundPiiRedactedPayload;
 }
@@ -1253,7 +1253,7 @@ export function createOutboundPiiRedacted(
   return {
     id: randomUUID(),
     timestamp: new Date(),
-    type: 'outbound.pii-redacted',
+    type: 'outbound.pii_redacted',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,

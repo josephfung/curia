@@ -21,6 +21,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Calendar principal-grant design** — memo for operating the calendar as the CEO (bind the calendar client to `ceo_nylas_grant_id`), fixing RSVP `omittedAttendeesSpecified`; implementation tracked in #1217.
 
+### Changed
+
+- **`outbound.pii_redacted`** — audit event type renamed from `outbound.pii-redacted` to underscore form; existing audit rows migrated. (#453)
+- **`contact_auth_overrides`** — partial unique index preserves grant→revoke→re-grant history instead of reactivating revoked rows. (#45)
+- **Per-task `error_budget.kg_promotion`** — validator now accepts the documented per-task KG-promotion opt-out. (#1286)
+- **`@types/node`** — pinned to the Node 24 type surface to match the runtime; Dependabot ignores major bumps. (#1258)
+
 ## [0.39.0] — 2026-07-01 — "Watney"
 
 > **Mark Watney** *(The Martian, Andy Weir, 2011)* — a botanist stranded on Mars who survives by breaking an impossible goal into steps, working the problem one sol at a time, and logging every result so the next day resumes where the last left off. This release gives Curia the same discipline: long tasks now checkpoint, pause, and resume across bursts, decompose into plans, and keep a persistent working document as they go.

@@ -189,7 +189,8 @@ per-item worklog) into the KG through the existing `extract-facts` / `extract-re
 gates — typed, source-attributed, and **capped per project** (`documentWorkspace.kgPromotion`:
 `maxFacts: 50`, `maxRelationships: 50`). Promotion is **best-effort and non-fatal**
 (fire-and-forget with a catch; it can never fail the parent's completion), is disableable
-globally (`documentWorkspace.kgPromotion.enabled: false`), and archives the project's
+globally (`documentWorkspace.kgPromotion.enabled: false`), disableable per task
+(`error_budget.kg_promotion: false`), and archives the project's
 workspace docs (`archived_at`) afterward.
 
 ## 8. Configuration
@@ -214,7 +215,7 @@ documentWorkspace:
     maxRelationships: 50
 ```
 
-Per-task overrides live in `tasks.error_budget` (`resumable`, `max_stalls`, `max_iterations`,
+Per-task overrides live in `tasks.error_budget` (`resumable`, `kg_promotion`, `max_stalls`, `max_iterations`,
 `max_wallclock_hours`, `max_cost_usd`, `max_plan_depth`, `max_replans_per_subtree`,
 `blocked_step_hours`, `throughput_divergence_ratio`) — the keys validated in
 `src/tasks/task-error-budget.ts`.

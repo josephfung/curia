@@ -34,6 +34,10 @@ updates:
       # hand. 8.x minor/patch updates still flow normally.
       - dependency-name: "nylas"
         update-types: ["version-update:semver-major"]
+      # @types/node major tracks the Node.js release line. Runtime is Node 24
+      # (engines + node:24-slim); block major bumps until Node itself is bumped.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions versions (checkout, setup-node, etc.)
   - package-ecosystem: "github-actions"
