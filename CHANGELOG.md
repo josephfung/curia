@@ -20,6 +20,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Resumable Phase 3 test coverage** — planned-parent + delegation escalation e2e tests, plus a `child_cancelled` divergence test. (#1178)
 - **Resumable Phase 1 test hardening** — runtime harness wiring, overflow negative paths, marker parsing, steady-state circuit breaker, heartbeat backstop, and bounded-retry delegation e2e. (#1278)
 
+### Changed
+
+- **Dependabot** — ignore `nylas` semver-major bumps; a stray `17.13.1` sits above the maintained 8.x `latest`. (#1273)
+
 ### Fixed
 
 - **`execution_paused` parser** — reject blank `next` strings (empty or whitespace-only) so partial markers are not misread as paused. (#1278)

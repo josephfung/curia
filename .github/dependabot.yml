@@ -24,6 +24,16 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # nylas published a stray, higher-numbered release (17.13.1, 2025-09-17)
+      # that is NOT the registry `latest` tag — the maintained line is 8.x
+      # (latest 8.4.0, 2026-06-24) and Nylas kept shipping 8.x *after* 17.13.1.
+      # Dependabot sees 17.13.1 > 8.4.0 by raw semver and proposes a "downgrade
+      # in disguise" onto stale, divergent SDK code (curia#1273). Block nylas
+      # majors; a genuine future major (a real 9.x) gets reviewed and bumped by
+      # hand. 8.x minor/patch updates still flow normally.
+      - dependency-name: "nylas"
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions versions (checkout, setup-node, etc.)
   - package-ecosystem: "github-actions"
