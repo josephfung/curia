@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Adaptive re-planning** — frontier wakes surface advisory divergence signals (failed/cancelled child, throughput below estimate, over-blocked step); plan depth and re-plan count are bounded with escalation on breach. (#1266)
 - **Resumable Phase 3 test coverage** — planned-parent + delegation escalation e2e tests, plus a `child_cancelled` divergence test. (#1178)
 - **Resumable Phase 1 test hardening** — runtime harness wiring, overflow negative paths, marker parsing, steady-state circuit breaker, heartbeat backstop, and bounded-retry delegation e2e. (#1278)
+- **Spec 21 — Agent Document Workspace (OKF)** — the document workspace is promoted to a permanent architecture spec (store #1208, `doc-*` skills #1209, accumulator spill #1210, KG distillation #1211, `/scratch` TTL sweep #1212); v0.39 docs sync also refreshed spec 20 for Phase 3, reconciled spec 15/04 with shipped code, documented the `documentWorkspace` config, and pruned shipped design memos from `docs/wip/`. (#1207)
 
 ### Changed
 

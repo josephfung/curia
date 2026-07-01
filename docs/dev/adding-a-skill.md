@@ -560,6 +560,8 @@ survives restarts and does not decay.
 
 See [Adding an Agent — Using config-store](adding-an-agent.md#using-config-store-for-persistent-agent-config) for the usage pattern.
 
+For **freeform working state that grows** — running notes, a draft, or a research dossier an agent builds up across a long task — reach for the document workspace instead (the `doc-*` skills; see [spec 21 — Agent Document Workspace](../specs/21-agent-document-workspace.md)). `config-store` remains the right home for small, bounded key/value settings.
+
 ---
 
 ## Checklist Before Opening a PR

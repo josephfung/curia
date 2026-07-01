@@ -101,7 +101,7 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - Uses signal-cli in JSON-RPC mode as a subprocess
 - **Conversation ID:** derived from Signal group or 1:1 conversation ID
 - Handles: text messages, attachments, reactions
-- Secrets: `signal_phone_number`
+- Secrets: `channel.signal.phone_number` — the canonical namespaced vault key (wired via `applyChannelVaultSecrets`, as above). The legacy flat `signal_phone_number` key was consolidated onto it and backfilled by migration; entering the phone number in the console alone now activates Signal (#1140).
 
 ### HTTP API
 - REST endpoints for programmatic access
