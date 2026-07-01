@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Channel registry** — reconcile no longer auto-installs toggleable channels from ambient credentials; operators install and enable `email`/`signal` explicitly (parity with skills/agents), and `uninstall()` is durable across restarts. Outbound egress is gated on the same registry enabled-state as inbound adapters. (#965, #966)
 - **`outbound.pii_redacted`** — audit event type standardized to the underscore form in code; legacy hyphen-form rows preserved as immutable audit history, not rewritten. (#453)
 - **`contact_auth_overrides`** — partial unique index preserves grant→revoke→re-grant history instead of reactivating revoked rows. (#45)
 - **Per-task `error_budget.kg_promotion`** — validator now accepts the documented per-task KG-promotion opt-out. (#1286)

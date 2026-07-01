@@ -3,7 +3,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { reconcileChannelRegistry } from './channel-reconcile.js';
 import type { IChannelRegistryRepo, ChannelRegistryRow } from './channel-registry-types.js';
 import type { ChannelDescriptor } from '../channels/catalog.js';
-import type { ChannelCredentialStatus } from '../channels/credential-resolver.js';
 import { createLogger } from '../logger.js';
 
 class FakeRepo implements IChannelRegistryRepo {
@@ -29,16 +28,12 @@ const CATALOG: ChannelDescriptor[] = [
   { name: 'cli', description: '', isToggleable: false, credentialFields: [], requiredSecretKeys: [] },
 ];
 
-// resolvable: only 'email'
-const statusFn = async (d: ChannelDescriptor): Promise<ChannelCredentialStatus> =>
-  ({ requiredResolvable: d.name === 'email' || !d.isToggleable, fields: [] });
-
 describe('reconcileChannelRegistry', () => {
   let repo: FakeRepo;
   beforeEach(() => { repo = new FakeRepo(); });
 
   it('always enrolls http and cli as enabled + non-toggleable', async () => {
-    await reconcileChannelRegistry({ repo, catalog: CATALOG, credentialStatus: statusFn, logger: silentLogger });
+    await reconcileChannelRegistry({ repo, catalog: CATALOG, logger: silentLogger });
     for (const name of ['http', 'cli']) {
       const row = repo.rows.get(name)!;
       expect(row.enabled).toBe(true);
@@ -46,21 +41,37 @@ describe('reconcileChannelRegistry', () => {
     }
   });
 
-  it('enrolls a toggleable channel as enabled only when its credentials resolve', async () => {
-    await reconcileChannelRegistry({ repo, catalog: CATALOG, credentialStatus: statusFn, logger: silentLogger });
-    expect(repo.rows.get('email')!.enabled).toBe(true);   // resolvable
-    expect(repo.rows.get('signal')).toBeUndefined();       // not resolvable → no row
+  it('leaves toggleable channels uninstalled on a fresh boot even when credentials would resolve', async () => {
+    await reconcileChannelRegistry({ repo, catalog: CATALOG, logger: silentLogger });
+    expect(repo.rows.get('email')).toBeUndefined();
+    expect(repo.rows.get('signal')).toBeUndefined();
   });
 
   it('respects existing admin state and does not overwrite it', async () => {
     await repo.install('email', 'admin', true); // installed but deliberately left disabled
-    await reconcileChannelRegistry({ repo, catalog: CATALOG, credentialStatus: statusFn, logger: silentLogger });
+    await reconcileChannelRegistry({ repo, catalog: CATALOG, logger: silentLogger });
     expect(repo.rows.get('email')!.enabled).toBe(false);   // left as-is
+  });
+
+  it('keeps a disabled toggleable channel disabled across restarts', async () => {
+    await repo.install('email', 'admin', true);
+    await repo.enable('email', 'admin');
+    await repo.disable('email', 'admin');
+    await reconcileChannelRegistry({ repo, catalog: CATALOG, logger: silentLogger });
+    expect(repo.rows.get('email')!.enabled).toBe(false);
+  });
+
+  it('does not re-install a toggleable channel after operator uninstall', async () => {
+    await repo.install('email', 'admin', true);
+    await repo.enable('email', 'admin');
+    await repo.uninstall('email');
+    await reconcileChannelRegistry({ repo, catalog: CATALOG, logger: silentLogger });
+    expect(repo.rows.get('email')).toBeUndefined();
   });
 
   it('re-enables http/cli if a prior run left them disabled (safeguard)', async () => {
     await repo.install('http', 'system', false); // disabled row exists
-    await reconcileChannelRegistry({ repo, catalog: CATALOG, credentialStatus: statusFn, logger: silentLogger });
+    await reconcileChannelRegistry({ repo, catalog: CATALOG, logger: silentLogger });
     expect(repo.rows.get('http')!.enabled).toBe(true);
   });
 });

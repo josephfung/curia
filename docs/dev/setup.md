@@ -184,7 +184,7 @@ NYLAS_SELF_EMAIL=curia@yourdomain.com \
 pnpm run seed-vault
 ```
 
-Restart Curia (`pnpm local`) — the email channel activates automatically when all three Nylas secrets are in the vault.
+Restart Curia (`pnpm local`), then **install and enable the email channel** in the console (**Settings → Channels → Email**). Credentials in the vault alone do not activate the channel — the registry requires an explicit install→enable, the same as skills and agents. See [configuration.md](configuration.md#skill-agent-and-channel-registry).
 
 > **Multiple email accounts:** Additional accounts are managed from the console after first boot — go to **Settings → Channels → Email → Email accounts**. Each account stores its Nylas grant in the vault at `channel.email.<name>.nylas_grant_id`. See [configuration.md](configuration.md#email-accounts) for details.
 
@@ -245,7 +245,7 @@ SIGNAL_PHONE_NUMBER=+12223334444 pnpm run seed-vault
 
 That's the E.164 number you registered via `signal-cli register` + `verify`. `SIGNAL_SOCKET_PATH` is managed by the deployment layer — do not set it in `.env`.
 
-Restart Curia — the Signal channel activates when `SIGNAL_PHONE_NUMBER` is set and the signal-data volume is populated.
+Restart Curia, then **install and enable the Signal channel** in the console (**Settings → Channels → Signal**). The phone number in the vault and a populated `signal-data` volume are prerequisites, but the channel still requires an explicit install→enable before it starts.
 
 ---
 
