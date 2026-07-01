@@ -1,6 +1,25 @@
--- #453: standardize PII redaction audit event type to underscore form.
--- Pre-fix rows used outbound.pii-redacted (hyphen).
-
-UPDATE audit_log
-SET event_type = 'outbound.pii_redacted'
-WHERE event_type = 'outbound.pii-redacted';
+-- #453: application code standardized the PII-redaction audit event type to the
+-- underscore form (outbound.pii_redacted). A handful of historical rows predate
+-- that fix and still carry the legacy hyphen form (outbound.pii-redacted).
+--
+-- An earlier revision of this migration rewrote those historical rows with
+-- `UPDATE audit_log SET event_type = 'outbound.pii_redacted' WHERE event_type =
+-- 'outbound.pii-redacted'`. That is intentionally reverted:
+--
+--   * audit_log is append-only by design. Migration 021 installs a BEFORE UPDATE
+--     OR DELETE trigger (audit_log_immutable) that RAISEs on any mutation except
+--     an acknowledged false->true flip. The UPDATE therefore throws P0001 during
+--     migration and crash-loops the container on boot -- but only on a database
+--     that actually holds legacy rows (the trigger is FOR EACH ROW, so it never
+--     fires when zero rows match). It passed CI on an empty DB and took down prod.
+--   * Rewriting historical audit rows to match a later naming convention would
+--     falsify the record of what the system actually emitted at the time. The
+--     legacy rows are deliberately preserved as immutable history.
+--
+-- No reader filters audit_log on the legacy hyphen value (application code emits
+-- and matches only the underscore form), so mixed historical spellings are safe.
+--
+-- This migration is kept in sequence as an intentional no-op so the migration
+-- history stays contiguous and the decision is recorded where the next engineer
+-- will look. Do NOT reintroduce the UPDATE.
+SELECT 1;
