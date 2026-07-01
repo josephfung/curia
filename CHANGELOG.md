@@ -21,6 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Spec 20 §1 failed-reason enum** — reconciled with shipped code: documents the executor-contract `ExecutorFailureReason` (`budget_max_turns`) vs the coordinator-facing `AgentResponseFailureReason` (`maxTurns`/`maxConsecutiveErrors`) and their mapping; design memo marked superseded. Doc-only. (#1277)
 - **Slice-sizing tolerance comment** — corrected to note it's an uncalibrated provisional default; real calibration deferred to #1275. (#1178)
 - **Adaptive re-planning** — sanitize divergence prompt text; idempotent breach escalation; honor configured ceilings and per-task overrides in the plan handler; count failed children in plan rollup so parents can auto-complete. (#1266)
 - **Resumable throughput-informed slice sizing** — advisory target slice size from measured units/slice in resume guidance; throughput-aware budget nudge with cold-start fallback to the fixed turn fraction. (#1265)

@@ -223,8 +223,15 @@ respond":
 - `failed{retryable:false}` → honor it; escalate honestly; **no blind re-delegation.**
 - `failed{retryable:true}` → bounded retry.
 
-This ends the confabulation: the coordinator now receives `failed{reason:
-budget_max_turns}` and reports the truth.
+This ends the confabulation: the coordinator now receives a real `failed` reason and
+reports the truth.
+
+> **Reason-enum spelling superseded by [spec 20 §1](../specs/20-resumable-tasks-and-projects.md).**
+> This memo's `budget_max_turns` is the executor-contract token (`ExecutorFailureReason`,
+> `src/agents/resumable-task.ts`). The reason the coordinator actually sees on the
+> `agent.response` event is `AgentResponseFailureReason` (`src/bus/events.ts`):
+> `maxTurns` for turn-budget exhaustion, plus `maxConsecutiveErrors`, `tool_error`,
+> `api_error`, `blocked`. See spec 20 §1 for the authoritative enums and their mapping.
 
 ### Completion & reconciliation
 
