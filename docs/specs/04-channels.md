@@ -78,7 +78,7 @@ interface OutboundMessage {
 
 ## Launch Channels
 
-Channels are not started merely by being configured — like skills and agents, they are tracked in the `channel_registry` with an install/enable lifecycle (restart-based). The `http` and `cli` channels are non-toggleable and always start; `email` and `signal` must be enabled in the registry.
+Channels are not started merely by being configured — like skills and agents, they are tracked in the `channel_registry` with an install/enable lifecycle (restart-based). The `http` and `cli` channels are non-toggleable and always start; `email` and `signal` must be installed and enabled in the registry (via **Settings → Channels**). Seeding channel credentials alone does not enroll a toggleable channel. Inbound adapters and outbound egress both derive from the same registry gate.
 
 ### CLI
 Interactive terminal for local dev and testing. Reads from stdin, writes to stdout. Simplest adapter — useful for testing agent logic without external services. **Non-toggleable** (`isToggleable: false`): always starts, cannot be disabled.

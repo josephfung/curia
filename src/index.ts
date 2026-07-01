@@ -143,6 +143,7 @@ import { channelCredentialStatus } from './channels/credential-resolver.js';
 import { ChannelRegistryRepo } from './registry/channel-registry-repo.js';
 import { ChannelRegistryService } from './registry/channel-registry-service.js';
 import { reconcileChannelRegistry } from './registry/channel-reconcile.js';
+import { gateOutboundClientsForRegistry, hasRegistryGatedOutboundClient } from './registry/channel-outbound-gate.js';
 import { McpRegistryRepo } from './registry/mcp-registry-repo.js';
 import { McpRegistryService } from './registry/mcp-registry-service.js';
 import { reconcileMcpRegistry } from './registry/mcp-reconcile.js';
@@ -1281,63 +1282,9 @@ async function main(): Promise<void> {
     logger.info('All startup readiness checks passed');
   }
 
-  // Outbound gateway — single choke-point for all outbound external communication.
-  // Runs blocked-contact checks and content filtering before any message leaves Curia.
-  //
-  // Initialization guard:
-  //   Production assumption: Nylas + Signal are always configured together.
-  //   The guard initializes the gateway when either client is available + outboundFilter
-  //   is ready. This keeps the gateway functional for Signal-only setups (e.g., during
-  //   initial deployment before Nylas credentials are added) and for testing scenarios.
-  //
-  //   TODO: If the system ever runs in a Signal-only mode in production (no Nylas), the
-  //   blocked-content CEO notification path will silently degrade (no email to send it on).
-  //   In that mode, log.error is the fallback — see OutboundGateway.send() comments.
-  //   For now we assume Nylas + Signal together, so this path is only for dev flexibility.
-  let outboundGateway: OutboundGateway | undefined;
-  const hasAnyOutboundClient = nylasClientMap.size > 0 || !!signalRpcClient;
-  // Defense-in-depth for setup-required mode: even though inbound email/Signal
-  // adapters are skipped (so no inbound traffic should be triggering outbound
-  // replies), the OutboundGateway is also used by notifiers (suspension, recovery,
-  // approval) and skills that send directly. Skipping the gateway construction
-  // here closes those non-reply send paths too — there is no email/Signal
-  // egress at all until the operator completes setup and restarts.
-  if (setupRequiredAtBoot && hasAnyOutboundClient) {
-    logger.warn(
-      'SETUP-REQUIRED mode: outbound gateway NOT initialized — no email/Signal egress (notifiers, autonomy alerts) until restart',
-    );
-  }
-  if (hasAnyOutboundClient && outboundFilter && !setupRequiredAtBoot) {
-    outboundGateway = new OutboundGateway({
-      nylasClients: nylasClientMap.size > 0 ? nylasClientMap : undefined,
-      signalClient: signalRpcClient,
-      signalPhoneNumber: config.signalPhoneNumber,
-      contactService,
-      contentFilter: outboundFilter,
-      bus,
-      // principalIdentities loaded from the DB at startup — used by isPrincipalRecipient()
-      // to bypass the autonomy gate for agent-to-principal communications.
-      principalIdentities,
-      logger,
-      autonomyService,
-      piiRedactor,
-      // Wire action log repo so the gateway can write autonomy_action_log rows on
-      // gated sends and support two-step draft linkage (#435).
-      actionLogRepo,
-      confidencePipeline,
-    });
-    logger.info({
-      emailAccounts: [...nylasClientMap.keys()],
-      hasSignal: !!signalRpcClient,
-    }, 'Outbound gateway initialized');
-  } else if (nylasClientMap.size > 0 && !outboundFilter) {
-    // Nylas clients are available but outboundFilter is missing (no coordinator config found).
-    // Email skills will be unavailable because they check ctx.outboundGateway before sending.
-    logger.warn('Outbound gateway NOT initialized — outboundFilter not ready (coordinator config missing?). Outbound send skills will be unavailable.');
-  }
-
   // ── Channel registry ───────────────────────────────────────────────────────
   // Decide which channels start, from DB lifecycle state + resolvable credentials.
+  // Reconcile runs before OutboundGateway so inbound and outbound share one gate.
   // Credentials resolve vault-first, then env, then config (multi-account email).
   const channelRegistryRepo = new ChannelRegistryRepo(pool);
 
@@ -1368,7 +1315,6 @@ async function main(): Promise<void> {
     await reconcileChannelRegistry({
       repo: channelRegistryRepo,
       catalog: CHANNEL_CATALOG,
-      credentialStatus: channelCredentialStatusFn,
       logger,
     });
   } catch (err) {
@@ -1401,6 +1347,63 @@ async function main(): Promise<void> {
     secretsService,
   );
   // ───────────────────────────────────────────────────────────────────────────
+
+  // Outbound gateway — single choke-point for all outbound external communication.
+  // Runs blocked-contact checks and content filtering before any message leaves Curia.
+  // Clients are gated on channelShouldStart so disabled/uninstalled channels cannot egress.
+  let outboundGateway: OutboundGateway | undefined;
+  const registryGatedOutbound = gateOutboundClientsForRegistry(
+    channelShouldStart,
+    nylasClientMap,
+    signalRpcClient,
+    config.signalPhoneNumber,
+  );
+  const hasAnyOutboundClient = hasRegistryGatedOutboundClient(registryGatedOutbound);
+  // Defense-in-depth for setup-required mode: even though inbound email/Signal
+  // adapters are skipped (so no inbound traffic should be triggering outbound
+  // replies), the OutboundGateway is also used by notifiers (suspension, recovery,
+  // approval) and skills that send directly. Skipping the gateway construction
+  // here closes those non-reply send paths too — there is no email/Signal
+  // egress at all until the operator completes setup and restarts.
+  if (setupRequiredAtBoot && hasAnyOutboundClient) {
+    logger.warn(
+      'SETUP-REQUIRED mode: outbound gateway NOT initialized — no email/Signal egress (notifiers, autonomy alerts) until restart',
+    );
+  }
+  if (hasAnyOutboundClient && outboundFilter && !setupRequiredAtBoot) {
+    outboundGateway = new OutboundGateway({
+      nylasClients: registryGatedOutbound.nylasClients,
+      signalClient: registryGatedOutbound.signalClient,
+      signalPhoneNumber: registryGatedOutbound.signalPhoneNumber,
+      contactService,
+      contentFilter: outboundFilter,
+      bus,
+      // principalIdentities loaded from the DB at startup — used by isPrincipalRecipient()
+      // to bypass the autonomy gate for agent-to-principal communications.
+      principalIdentities,
+      logger,
+      autonomyService,
+      piiRedactor,
+      // Wire action log repo so the gateway can write autonomy_action_log rows on
+      // gated sends and support two-step draft linkage (#435).
+      actionLogRepo,
+      confidencePipeline,
+    });
+    logger.info({
+      emailAccounts: registryGatedOutbound.nylasClients ? [...registryGatedOutbound.nylasClients.keys()] : [],
+      hasSignal: !!registryGatedOutbound.signalClient,
+      channelShouldStart: [...channelShouldStart],
+    }, 'Outbound gateway initialized');
+  } else if (nylasClientMap.size > 0 && !outboundFilter) {
+    // Nylas clients are available but outboundFilter is missing (no coordinator config found).
+    // Email skills will be unavailable because they check ctx.outboundGateway before sending.
+    logger.warn('Outbound gateway NOT initialized — outboundFilter not ready (coordinator config missing?). Outbound send skills will be unavailable.');
+  } else if ((nylasClientMap.size > 0 || signalRpcClient) && !hasAnyOutboundClient) {
+    logger.info(
+      { channelShouldStart: [...channelShouldStart] },
+      'Outbound gateway NOT initialized — toggleable channels with credentials are disabled or uninstalled in the registry',
+    );
+  }
 
   // Construct one EmailAdapter per resolved account (but don't start any yet —
   // adapters must not poll until the dispatcher is registered, otherwise inbound.message
