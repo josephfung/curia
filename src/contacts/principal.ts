@@ -41,7 +41,7 @@ export function capOriginatorToParent(
  * (acting *within* CEO-authorized work, inheritable at high trust via the ladder), but it is
  * NOT sufficient for the `elevated` gate — that requires a LIVE principal turn. Use
  * isLivePrincipalTurn() for "the CEO is exercising authority right now". See ADR-017 and
- * docs/wip/2026-06-22-woken-task-authorization-design.md §4.
+ * docs/specs/03-skills-and-execution.md (elevated = live principal turn).
  *
  * @param metadata  Task metadata (from ctx.taskMetadata or agent.task payload)
  */

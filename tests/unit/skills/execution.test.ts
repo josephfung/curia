@@ -171,7 +171,7 @@ describe('ExecutionLayer', () => {
     // a principal originator, and the invoke options must carry the dispatcher-stamped `liveTurn`
     // signal (a distinct off-bag field). The immediate caller.role is not consulted. System/agent
     // lineage and woken principal-lineage all fail.
-    // See docs/wip/2026-06-22-woken-task-authorization-design.md §4, ADR-017.
+    // See docs/specs/03-skills-and-execution.md (elevated = live principal turn) and ADR-017.
 
     it('allows elevated skill on a live principal turn (liveTurn + principal originator)', async () => {
       const handler: SkillHandler = {

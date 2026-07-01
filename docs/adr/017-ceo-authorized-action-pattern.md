@@ -110,7 +110,7 @@ legitimate CEO-directed sends.
 
 ## Update (#1126): "principal authority" sharpened to a *live* principal turn
 
-Two refinements land here, both tracked in `docs/wip/2026-06-22-woken-task-authorization-design.md` §4:
+Two refinements land here (now documented in `docs/specs/03-skills-and-execution.md` — the `elevated` = live-principal-turn gate — and `docs/specs/14-autonomy-engine.md` — effective standing):
 
 1. **The `legacy ceoInitiated` flag is gone.** Origination is now carried by `taskMetadata.originator` (a `TaskOriginator` with a `systemRole`), stamped exclusively by the dispatch layer from the contact resolver — never settable by the LLM or a channel. The "task-origin check" in this ADR is realized through that field.
 

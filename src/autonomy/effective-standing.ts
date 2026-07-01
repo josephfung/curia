@@ -10,7 +10,7 @@
 // standing is dangerous only at low trust, and gating it on the live score maps the hazard onto
 // "the CEO has signalled how freely Curia may act autonomously."
 //
-// See docs/wip/2026-06-22-woken-task-authorization-design.md.
+// See docs/specs/14-autonomy-engine.md (Effective standing / bypass ladder).
 
 import type { TaskOriginator } from '../contacts/types.js';
 
