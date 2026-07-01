@@ -13,67 +13,39 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+## [0.39.0] — 2026-07-01 — "Watney"
+
+> **Mark Watney** *(The Martian, Andy Weir, 2011)* — a botanist stranded on Mars who survives by breaking an impossible goal into steps, working the problem one sol at a time, and logging every result so the next day resumes where the last left off. This release gives Curia the same discipline: long tasks now checkpoint, pause, and resume across bursts, decompose into plans, and keep a persistent working document as they go.
+
 ### Added
 
-- **Principal-facing escalation UX** — stalled / ceiling / blocked-on-human / agent-incomplete escalations now carry a structured `progress.escalation` block and a rendered progress note, so the daily digest surfaces real detail (progress, throughput/ETA, suggested actions) instead of a bare backlog row. Adds optional `progress_note` / `escalation_json` inputs to the `task-create` manifest. (#1267)
-- **Adaptive re-planning** — frontier wakes surface advisory divergence signals (failed/cancelled child, throughput below estimate, over-blocked step); plan depth and re-plan count are bounded with escalation on breach. (#1266)
-- **Resumable Phase 3 test coverage** — planned-parent + delegation escalation e2e tests, plus a `child_cancelled` divergence test. (#1178)
-- **Resumable Phase 1 test hardening** — runtime harness wiring, overflow negative paths, marker parsing, steady-state circuit breaker, heartbeat backstop, and bounded-retry delegation e2e. (#1278)
-- **Spec 21 — Agent Document Workspace (OKF)** — the document workspace is promoted to a permanent architecture spec (store #1208, `doc-*` skills #1209, accumulator spill #1210, KG distillation #1211, `/scratch` TTL sweep #1212); v0.39 docs sync also refreshed spec 20 for Phase 3, reconciled spec 15/04 with shipped code, documented the `documentWorkspace` config, and pruned shipped design memos from `docs/wip/`. (#1207)
+- **Resumable tasks & projects (spec 20)** — long work checkpoints and resumes across bursts instead of failing when it runs out of budget: a paused task saves progress and schedules its own continuation, a progress-based circuit breaker escalates genuinely stuck work, and complex goals decompose into a `plan` of child steps that advance as dependencies clear and auto-complete into a deliverable. Adds the `checkpoint` and `plan` skills, throughput telemetry with advisory slice-sizing, and adaptive re-planning on divergence. (#1150, #691)
+- **Principal-facing escalation** — stuck tasks surface in the daily digest with the reason (stalled / hit-a-limit / blocked-on-a-person / couldn't-finish), progress, throughput/ETA, and suggested next actions, instead of a bare backlog row. (#1267)
+- **Agent document workspace (spec 21)** — a new OKF working-document store (`working_documents` + backlink index) with `doc-read` / `doc-list` / `doc-write` / `doc-search`, auto-pinned into task-management agents; resumable accumulators spill into it, completed deliverables distil into the knowledge graph, and expired `/scratch` docs are swept nightly. (#1207)
+- **Calendar scheduling rules** — the calendar agent loads the CEO's scheduling rules from `config-store` at task start, so preferences are reliably applied. (#1223)
 
 ### Changed
 
-- **Dependabot** — ignore `nylas` semver-major bumps; a stray `17.13.1` sits above the maintained 8.x `latest`. (#1273)
+- **Delegation honesty** — `delegate` honors `retryable: false` (no blind re-delegation) and propagates the real executor failure reason to the coordinator, ending confabulated "timeouts." (#1170, #1171)
+- **Per-task `error_budget`** — accepts resumable ceilings and rejects per-invocation turn-limit keys (those belong in agent config). (#883)
+- **`web-browser`** — waits through edge WAF challenge pages and resolves hidden custom form controls.
+- **Dependabot** — ignores `nylas` semver-major bumps (a stray `17.13.1` sits above the maintained 8.x `latest`). (#1273)
 
 ### Fixed
 
-- **`execution_paused` parser** — reject blank `next` strings (empty or whitespace-only) so partial markers are not misread as paused. (#1278)
-- **Spec 20 §1 failed-reason enum** — reconciled with shipped code: documents the executor-contract `ExecutorFailureReason` (`budget_max_turns`) vs the coordinator-facing `AgentResponseFailureReason` (`maxTurns`/`maxConsecutiveErrors`) and their mapping; design memo marked superseded. Doc-only. (#1277)
-- **Slice-sizing tolerance comment** — corrected to note it's an uncalibrated provisional default; real calibration deferred to #1275. (#1178)
-- **Adaptive re-planning** — sanitize divergence prompt text; idempotent breach escalation; honor configured ceilings and per-task overrides in the plan handler; count failed children in plan rollup so parents can auto-complete. (#1266)
-- **Resumable throughput-informed slice sizing** — advisory target slice size from measured units/slice in resume guidance; throughput-aware budget nudge with cold-start fallback to the fixed turn fraction. (#1265)
-- **Resumable throughput telemetry** — derived units/slice, cost/unit, and ETA surfaced on resume and emitted to logs/audit on each pause. (#1264)
-- **Spec 20 — Resumable Tasks & Projects** — as-built design promoted to a permanent spec. (#1177)
-- **Plan frontier advancement** — child completion wakes the parent, dispatches unblocked siblings. (#1238)
-- **Plan completion reconciliation** — terminal parents cancel open descendants and their wakes. (#1239)
-- **Plan auto-complete** — resolved plans finish using the deliverable output. (#1239)
-- **Plan deliverable surfacing** — parent result honors `deliverableStepId`, else child-summary rollup. (#1240)
-- **Deliverable KG promotion** — completed plans promote the curated deliverable, capped and non-fatal. (#1241)
-- **Plan frontier circuit breaker** — stalled planned parents escalate instead of looping. (#1239)
-- **`plan`** — rows-direct goal decomposition skill writing child task rows. (#1237)
-- **`progress.plan`** — typed plan block with an X-of-Y rollup helper. (#1236)
-- **Resumable circuit breaker** — stall counter and ceilings fail stuck tasks. (#1176)
-- **Resumable executor contract** — checkpointed budget-hit pauses instead of failing. (#1174)
-- **Resumable self-continuation** — paused tasks schedule a near-term continuation wake. (#1175)
-- **`checkpoint`** — resumable-task primitive writing `progress.resumable` with a budget nudge. (#1173)
-- **Calendar scheduling rules** — calendar agent loads CEO scheduling rules from `config-store` by key at task start, replacing semantic `memory-query`. (#1223)
-- **`progress.resumable`** — typed checkpoint block with bounded accumulator and spill. (#1172)
-- **Resumable accumulator spill** — inline overflow spills to a workspace doc pointer. (#1210)
-- **Document workspace** — `working_documents` / `working_document_links` Postgres store with `WorkingDocsRepo`, OKF frontmatter round-trip, backlink index, and optimistic concurrency (document + per-section). (#1208)
-- **`doc-read` / `doc-list` / `doc-write` / `doc-search`** — OKF workspace skills with harness-injected guidance, auto-pin on task-management agents, manifest-only tail injection, and `log.md` append on writes. (#1209)
-- **Document workspace scratch TTL** — DreamEngine nightly pass archives expired `/scratch/<conversation-id>/…` documents (`archived_at`); configurable `documentWorkspace.scratchTtlDays` with optional per-doc `ttl_days` frontmatter override. (#1212)
-
-### Changed
-
-- **Per-task error_budget** — rejects per-invocation turn-limit keys; keeps resumable ceilings. (#883)
-- **`delegate`** — honors `retryable: false`; blocks blind re-delegation and escalates. (#1171)
-- **`delegate`** — propagates structured failure `reason`/`retryable` to the coordinator. (#1170)
-- **`web-browser`** — waits through edge WAF challenge pages and resolves hidden custom form controls. (v1.5.0)
-
-### Fixed
-
-- **Plan reconciliation on failure** — circuit-breaker `failed` parents now cancel open children. (#1177)
-- **Signal phone number** — consolidated onto one canonical vault key (`channel.signal.phone_number`), backfilled by migration; console entry alone now activates Signal. (#1140)
-- **Outbound content filter** — Stage 2.5 escalation judge no longer calls the LLM for principal-tier recipients; `classifyDisclosure()` is fail-closed, so a transient provider failure was incorrectly blocking principal-bound emails (e.g. the daily recap) even though the policy unconditionally permits all disclosure classes for the principal. (#1225)
-- **Calendar free/busy** — `getFreeBusy` now calls the real Nylas v8 `calendars.getFreeBusy` endpoint; the previous call to a non-existent `calendars_free_busy` resource crashed every `calendar-check-conflicts` and `calendar-find-free-time` invocation. It also fails loud on a per-calendar free/busy *error* entry instead of treating that calendar as fully free (which could double-book the principal). (#1214)
-- **`ceo-inbox-update-folders`** — resolves label display names (e.g. "⏳ In Progress") to Gmail label IDs and creates missing labels before writing, so adds/removes no longer fail with "Invalid label" and "⏳ In Progress" can actually be cleared. (#1216)
-- **`ceo-inbox` scheduling consults** — a message parked for a calendar consult is no longer labeled "✍️ Drafted" before a draft exists, and the consult-timeout wake now keys off actual draft existence; parked scheduling replies get drafted instead of stranding the email as "In Progress + Drafted" with no draft. (#1215)
-- **Bullpen `close_after`** — closed-thread replies deliver to mentioned participants via read-and-act wakes; `close_after` with no mentions auto-mentions the thread opener; `ceo-inbox` loads the full thread before Branch A. (#1256)
+- **Outbound content filter** — the Stage 2.5 escalation judge no longer runs for principal-tier recipients, so a transient provider failure can't block principal-bound mail like the daily recap. (#1225)
+- **Calendar free/busy** — `getFreeBusy` now calls the real Nylas v8 endpoint (the old call crashed every conflict / free-time check) and fails loud on a per-calendar error instead of treating that calendar as free. (#1214)
+- **Signal setup** — consolidated onto one canonical vault key (`channel.signal.phone_number`); entering the phone number in the console alone now activates Signal. (#1140)
+- **CEO inbox scheduling** — parked scheduling consults are no longer mislabeled "Drafted" before a draft exists, and folder updates resolve Gmail label names to IDs, creating any missing labels. (#1215, #1216)
+- **Bullpen `close_after`** — closing a thread on reply now delivers the final message to participants, auto-mentioning the opener when there are no explicit mentions. (#1256)
 
 ### Security
 
-- **Dependabot cooldown** — all four ecosystems (npm, github-actions, docker ×2) now wait 7 days before proposing a bump, quarantining freshly-published (potentially compromised) versions at the PR-proposal layer. Clears Semgrep `dependabot-missing-cooldown` alerts.
-- **pnpm `minimumReleaseAge`** — `pnpm-workspace.yaml` now sets a 24h floor (1440 min), an in-tree backstop to the Dependabot cooldown that blocks installs of just-published versions across CI, local, and the prod image build. (Semgrep's `pnpm-minimum-release-age` rule wants 7 days/10080, which fails the current lockfile's frozen-install check; 24h is the build-compatible floor.)
+- **Supply-chain cooldowns** — all four Dependabot ecosystems wait 7 days before proposing a bump, and `pnpm-workspace.yaml` sets a 24h `minimumReleaseAge` floor — quarantining freshly-published versions at both the PR and install layers. (#1272, #1274)
+
+### Documentation
+
+- **Specs synced to shipped code** — new spec 21 (document workspace), spec 20 refreshed for Phase 3, specs 15/04 reconciled, `documentWorkspace` documented; shipped design memos pruned from `docs/wip/`. (#1285)
 
 ## [0.38.0] — 2026-06-26 — "Deckard"
 
