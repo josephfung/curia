@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **Memory poisoning research (#418)** — documented KG write paths from inbound email, assessed safeguards, and filed follow-up #1290 to gate checkpoint extraction and `memory-store` for untrusted senders.
+
 ### Added
 
 - **Calendar principal-grant design** — memo for operating the calendar as the CEO (bind the calendar client to `ceo_nylas_grant_id`), fixing RSVP `omittedAttendeesSpecified`; implementation tracked in #1217.
