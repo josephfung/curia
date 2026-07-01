@@ -4,6 +4,8 @@
 
 Four memory tiers + inter-agent discussion, all backed by PostgreSQL + pgvector. Memory is the framework's competitive advantage — it's what makes agents contextually aware across conversations, tasks, and time.
 
+> **Related:** agents also have a fifth, deliberately *ungated* working surface — the OKF document workspace (freeform, mutable working documents) — kept separate from these four validated tiers. See [spec 21 — Agent Document Workspace](21-agent-document-workspace.md).
+
 ---
 
 ## Tier 1: Working Memory (per-task ephemeral)

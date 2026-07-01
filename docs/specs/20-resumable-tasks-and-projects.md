@@ -1,7 +1,7 @@
 # 20 — Resumable Tasks & Projects
 
 **Date:** 2026-06-30
-**Status:** Shipped (Phases 0–2)
+**Status:** Shipped (Phases 0–3)
 **Builds on:** [spec 19 — Tasks & Backlog](19-tasks-and-backlog.md), [spec 07 — Scheduler](07-scheduler.md), [spec 14 — Autonomy Engine](14-autonomy-engine.md), [spec 01 — Memory System](01-memory-system.md)
 
 ## Overview
@@ -33,8 +33,7 @@ Two principles shaped it:
   becomes a real child row (dispatchable, blockable, schedulable). A high-count homogeneous
   step is one leaf with a cursor. One progress notion, one resume loop.
 
-**Companion design docs:** [2026-06-23-resumable-tasks-and-projects-design.md](../wip/2026-06-23-resumable-tasks-and-projects-design.md),
-[2026-06-26-agent-document-workspace-okf-design.md](../wip/2026-06-26-agent-document-workspace-okf-design.md),
+**Companion docs:** [spec 21 — Agent Document Workspace (OKF)](21-agent-document-workspace.md),
 [ADR-024 — `plan` writes rows directly](../adr/024-plan-rows-direct.md). Tracking epic: #1150.
 
 ---
@@ -78,7 +77,7 @@ migration), defined and bounded in `src/db/resumable-progress.ts`:
 - `cursor` (opaque, LLM-authored), `done` / `total`, `lastSliceUnits`, a one-line `next`,
   `checkpointedAt`, and an `accumulator`.
 - The accumulator is **bounded**: an inline cap (4 KB) and an overall block cap (8 KB). On
-  overflow it spills to the document workspace (`working_documents`, spec 01 / OKF design)
+  overflow it spills to the document workspace (`working_documents`, [spec 21](21-agent-document-workspace.md))
   and the block stores a `{ kind: 'document', path, section? }` pointer instead.
 
 `TaskRepo.getResumableBlock` / `setResumableBlock` are the only read/write path; writes
@@ -97,6 +96,13 @@ a `resumable` tag is present, or a checkpoint already exists (`isResumableTask`)
   `handleBudgetExceeded()` converts the budget-hit into `paused` from the last persisted
   checkpoint instead of emitting `BUDGET_EXCEEDED`. With no checkpoint, it is an honest
   `failed`. Correctness rests on the safety-net; the nudge is a latency optimization.
+- **Throughput-informed (#1264/#1265).** Each pause computes rolling throughput
+  (`computeResumableThroughput`, `src/agents/resumable-throughput.ts`) — units/slice,
+  cost/unit, and an ETA — and emits a `task.resumable_throughput` audit event
+  (`src/bus/events.ts`). The resume-guidance block and the budget nudge carry those
+  figures plus an **advisory** suggested slice size derived from the measured units/slice
+  (`suggestedSliceSize`; cold start falls back to the fixed turn fraction), so the next
+  continuation is sized from evidence rather than a guess.
 
 ## 4. The resume loop & circuit-breaker
 
@@ -147,7 +153,8 @@ The block is bounded; wide plans store references, never per-item data.
 
 ## 6. Frontier advancement, reconciliation, and the deliverable
 
-- **Frontier advancement** (`PlanFrontierSubscriber`, `src/agents/plan-frontier.ts`). When a
+- **Frontier advancement** (`PlanFrontierSubscriber`, `src/agents/plan-frontier-subscriber.ts`; the
+  advance logic is `advancePlanFrontier` in `src/agents/plan-frontier.ts`). When a
   child resolves, the subscriber wakes its planned parent (reusing the continuation wake +
   dedup) routed to the parent's `source_agent_id`. On the wake, `advancePlanFrontier`
   recomputes the rollup, dispatches newly-unblocked children, and re-evaluates the plan. The
@@ -164,6 +171,15 @@ The block is bounded; wide plans store references, never per-item data.
   deliverable is marked (`resolvePlanCompletionNote`, `src/agents/plan-execution.ts`).
   Synthesis is not special machinery — it is just the last planned step, surfaced through the
   existing completion path.
+- **Adaptive re-planning (#1266).** On each frontier wake, `detectPlanDivergence`
+  (`src/agents/plan-adaptive-replan.ts`) raises advisory divergence signals — a `child_failed`
+  or `child_cancelled` child, `throughput_below_estimate` (measured pace under
+  `throughputDivergenceRatio` of the implied pace), or a `step_over_blocked` child past
+  `blockedStepHours`. `buildPlanDivergenceGuidanceBlock` injects them into the planned-parent
+  harness (`src/agents/planned-task.ts`) as a **non-authoritative** hint for the LLM's next
+  `plan` call — the runtime never rewrites the plan itself. Re-planning is bounded:
+  `detectPlanAdaptiveBreach` / `escalatePlanAdaptiveBreach` escalate when a subtree exceeds
+  `maxPlanDepth` or `maxReplansPerSubtree`, so a diverging plan escalates instead of thrashing.
 
 ## 7. Promoting the deliverable to the knowledge graph
 
@@ -173,7 +189,7 @@ per-item worklog) into the KG through the existing `extract-facts` / `extract-re
 gates — typed, source-attributed, and **capped per project** (`documentWorkspace.kgPromotion`:
 `maxFacts: 50`, `maxRelationships: 50`). Promotion is **best-effort and non-fatal**
 (fire-and-forget with a catch; it can never fail the parent's completion), is disableable
-globally or per task (`error_budget.kg_promotion: false`), and archives the project's
+globally (`documentWorkspace.kgPromotion.enabled: false`), and archives the project's
 workspace docs (`archived_at`) afterward.
 
 ## 8. Configuration
@@ -186,6 +202,10 @@ tasks:
     maxIterations: 100               # hard cap on continuation slices
     maxWallclockHours: 24            # elapsed cap from first pause
     maxCostUsd: 10.00                # aggregate LLM cost cap across slices
+    maxPlanDepth: 3                  # max plan-decomposition depth per subtree (#1266)
+    maxReplansPerSubtree: 5          # max adaptive re-plans per planned subtree (#1266)
+    blockedStepHours: 48             # blocked-child hours before a divergence signal (#1266)
+    throughputDivergenceRatio: 0.5   # measured/implied pace floor before flagging (#1266)
 
 documentWorkspace:
   kgPromotion:
@@ -195,7 +215,9 @@ documentWorkspace:
 ```
 
 Per-task overrides live in `tasks.error_budget` (`resumable`, `max_stalls`, `max_iterations`,
-`max_wallclock_hours`, `max_cost_usd`, `kg_promotion`).
+`max_wallclock_hours`, `max_cost_usd`, `max_plan_depth`, `max_replans_per_subtree`,
+`blocked_step_hours`, `throughput_divergence_ratio`) — the keys validated in
+`src/tasks/task-error-budget.ts`.
 
 ## 9. Relationship to spec 19
 

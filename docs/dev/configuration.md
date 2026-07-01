@@ -93,6 +93,24 @@ workingMemory:
 
 ---
 
+### `documentWorkspace`
+
+Controls the agent document workspace — the OKF-serialized working-document store injected into task-management agents (spec §21-agent-document-workspace.md). Two independent knobs: how long ephemeral scratch documents live, and whether completed project deliverables are distilled into the knowledge graph.
+
+```yaml
+documentWorkspace:
+  scratchTtlDays: 7          # Default /scratch inactivity TTL. Positive integer ≤ 36500.
+  kgPromotion:
+    enabled: true            # Distil a completed plan's deliverable into the KG.
+    maxFacts: 50             # Per-project cap on promoted facts.
+    maxRelationships: 50     # Per-project cap on promoted relationships.
+```
+
+- **`scratchTtlDays`** — days of inactivity (measured from a document's `updated_at`) before the nightly DreamEngine pass purges a `/scratch/<conversation-id>/…` document. `/projects/…` documents are durable and never auto-purged. A per-document `ttl_days` in frontmatter overrides this (`0` opts out; `1`–`36500` sets an explicit window). Validated at startup as a positive integer ≤ 36500.
+- **`kgPromotion.enabled`** — when a planned parent completes, distil its curated deliverable into the knowledge graph through the `extract-*` gates (spec §20-resumable-tasks-and-projects.md). Set `false` to disable globally. `maxFacts` / `maxRelationships` cap how much a single project can promote (non-negative integers).
+
+---
+
 ### `skillOutput`
 
 Controls truncation of skill results before they're included in LLM context.
