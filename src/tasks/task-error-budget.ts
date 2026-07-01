@@ -7,6 +7,7 @@
 /** Keys that configure resumable tasks and aggregate ceilings — the only supported per-task fields. */
 export const ALLOWED_TASK_ERROR_BUDGET_KEYS = new Set([
   'resumable',
+  'kg_promotion',
   'max_stalls',
   'max_iterations',
   'max_wallclock_hours',
@@ -72,6 +73,10 @@ export function validateTaskErrorBudget(errorBudget: unknown): string | null {
 
   if ('resumable' in budget && typeof budget.resumable !== 'boolean') {
     return 'error_budget.resumable must be a boolean.';
+  }
+
+  if ('kg_promotion' in budget && typeof budget.kg_promotion !== 'boolean') {
+    return 'error_budget.kg_promotion must be a boolean.';
   }
 
   for (const key of INTEGER_CEILING_KEYS) {

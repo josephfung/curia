@@ -90,7 +90,7 @@ describe('PiiRedactor', () => {
     expect(mockBusPublish).not.toHaveBeenCalled();
   });
 
-  it('publishes outbound.pii-redacted event on redaction', async () => {
+  it('publishes outbound.pii_redacted event on redaction', async () => {
     await redactor.redact(
       'Card: 4111 1111 1111 1111',
       'email',
@@ -98,7 +98,7 @@ describe('PiiRedactor', () => {
     );
     expect(mockBusPublish).toHaveBeenCalledWith(
       'dispatch',
-      expect.objectContaining({ type: 'outbound.pii-redacted' }),
+      expect.objectContaining({ type: 'outbound.pii_redacted' }),
     );
   });
 

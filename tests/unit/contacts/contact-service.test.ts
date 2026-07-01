@@ -627,6 +627,17 @@ describe('ContactService', () => {
       expect(overrides[0]).toEqual({ permission: 'send_on_behalf', granted: false });
     });
 
+    it('re-grant after revoke inserts a new active override (#45)', async () => {
+      const contact = await service.createContact({ displayName: 'GrantCycle', source: 'test' });
+      await service.grantPermission(contact.id, 'schedule_meetings', true, 'primary-user');
+      await service.revokePermission(contact.id, 'schedule_meetings');
+      await service.grantPermission(contact.id, 'schedule_meetings', true, 'primary-user');
+
+      const overrides = await service.getAuthOverrides(contact.id);
+      expect(overrides).toHaveLength(1);
+      expect(overrides[0]).toEqual({ permission: 'schedule_meetings', granted: true });
+    });
+
     it('grantPermission throws for non-existent contact', async () => {
       await expect(service.grantPermission('non-existent', 'foo', true, 'primary-user')).rejects.toThrow('Contact not found');
     });

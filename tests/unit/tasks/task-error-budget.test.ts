@@ -18,6 +18,7 @@ describe('validateTaskErrorBudget', () => {
     expect(
       validateTaskErrorBudget({
         resumable: true,
+        kg_promotion: false,
         max_stalls: 5,
         max_iterations: 50,
         max_wallclock_hours: 12,
@@ -47,6 +48,12 @@ describe('validateTaskErrorBudget', () => {
     );
   });
 
+  it('rejects non-boolean kg_promotion', () => {
+    expect(validateTaskErrorBudget({ kg_promotion: 0 })).toBe(
+      'error_budget.kg_promotion must be a boolean.',
+    );
+  });
+
   it('rejects non-positive ceiling values', () => {
     expect(validateTaskErrorBudget({ max_iterations: 0 })).toBe(
       'error_budget.max_iterations must be a positive integer.',
@@ -66,6 +73,7 @@ describe('validateTaskErrorBudget', () => {
     const allowed = [...ALLOWED_TASK_ERROR_BUDGET_KEYS].sort();
     expect(allowed).toEqual([
       'blocked_step_hours',
+      'kg_promotion',
       'max_cost_usd',
       'max_iterations',
       'max_plan_depth',

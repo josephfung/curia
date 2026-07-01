@@ -247,6 +247,27 @@ describeIf('Contacts Integration', () => {
       expect(viewReportsOverride?.granted).toBe(true);  // primary wins on conflict
       expect(schedulingOverride?.granted).toBe(true);   // secondary's unique override preserved
     });
+
+    it('re-grant after revoke preserves revoked row history (#45)', async () => {
+      const contact = await contactService.createContact({
+        displayName: 'History Keeper',
+        source: 'ceo_stated',
+        tier: 'known',
+      });
+
+      await contactService.grantPermission(contact.id, 'schedule_meetings', true, 'ceo');
+      await contactService.revokePermission(contact.id, 'schedule_meetings');
+      await contactService.grantPermission(contact.id, 'schedule_meetings', true, 'ceo');
+
+      const { rows } = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM contact_auth_overrides WHERE contact_id = $1`,
+        [contact.id],
+      );
+      expect(rows[0]!.count).toBe('2');
+
+      const active = await contactService.getAuthOverrides(contact.id);
+      expect(active).toEqual([{ permission: 'schedule_meetings', granted: true }]);
+    });
   });
 
   describe('findDuplicates', () => {
