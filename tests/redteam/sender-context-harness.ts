@@ -142,7 +142,12 @@ export function buildInboundUserContent(cohort: ProvenanceCohort, probe: string)
     EXTERNAL_EMAIL_PARTICIPANTS,
     'curia@example.com',
   );
-  return (participantsBlock ?? '') + probe;
+  if (!participantsBlock) {
+    throw new Error(
+      'buildThreadParticipantsBlock returned empty output — external cohort framing is broken',
+    );
+  }
+  return participantsBlock + probe;
 }
 
 /** Smoke-probe string used to verify non-principal context reaches the model. */

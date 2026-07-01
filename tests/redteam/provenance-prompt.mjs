@@ -50,7 +50,9 @@ export async function renderProvenancePrompt(context) {
       ? context
       : typeof vars.message === 'string'
         ? vars.message
-        : '';
+        : (() => {
+            throw new Error('Missing "message" var — probe was not framed');
+          })();
 
   const coordinatorPath = path.join(__dirname, 'coordinator-system-prompt.txt');
   if (!fs.existsSync(coordinatorPath)) {
