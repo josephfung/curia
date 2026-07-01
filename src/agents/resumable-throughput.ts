@@ -22,7 +22,9 @@ export const THROUGHPUT_SLICE_NUDGE_FRACTION = 0.85;
 
 /**
  * Advisory slice target lands within ±this fraction of measured units/slice (#1265).
- * Calibrated against the first #1264 telemetry baseline (~12 units/slice vs. fictional 100).
+ * Provisional default — NOT yet calibrated against real telemetry: no planned/resumable goal has
+ * run in prod, so #1264's throughput trail has no baseline to set this from. Re-calibrate from the
+ * first real prod baseline (and replace the tautological tolerance test) in #1275.
  */
 export const SUGGESTED_SLICE_TOLERANCE_FRACTION = 0.2;
 

@@ -17,9 +17,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Principal-facing escalation UX** — stalled / ceiling / blocked-on-human / agent-incomplete escalations now carry a structured `progress.escalation` block and a rendered progress note, so the daily digest surfaces real detail (progress, throughput/ETA, suggested actions) instead of a bare backlog row. Adds optional `progress_note` / `escalation_json` inputs to the `task-create` manifest. (#1267)
 - **Adaptive re-planning** — frontier wakes surface advisory divergence signals (failed/cancelled child, throughput below estimate, over-blocked step); plan depth and re-plan count are bounded with escalation on breach. (#1266)
+- **Resumable Phase 3 test coverage** — planned-parent + delegation escalation e2e tests, plus a `child_cancelled` divergence test. (#1178)
 
 ### Fixed
 
+- **Slice-sizing tolerance comment** — corrected to note it's an uncalibrated provisional default; real calibration deferred to #1275. (#1178)
 - **Adaptive re-planning** — sanitize divergence prompt text; idempotent breach escalation; honor configured ceilings and per-task overrides in the plan handler; count failed children in plan rollup so parents can auto-complete. (#1266)
 - **Resumable throughput-informed slice sizing** — advisory target slice size from measured units/slice in resume guidance; throughput-aware budget nudge with cold-start fallback to the fixed turn fraction. (#1265)
 - **Resumable throughput telemetry** — derived units/slice, cost/unit, and ETA surfaced on resume and emitted to logs/audit on each pause. (#1264)
