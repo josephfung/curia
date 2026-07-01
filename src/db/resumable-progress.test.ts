@@ -144,6 +144,17 @@ describe('accumulator bounding', () => {
     expect(result.bytes).toBeGreaterThan(RESUMABLE_INLINE_ACCUMULATOR_MAX_BYTES);
   });
 
+  it('rejects block_overflow when a non-accumulator field exceeds the block cap', () => {
+    const result = prepareResumableBlock({
+      ...BASE_INPUT,
+      accumulator: ['did:plc:small'],
+      next: 'x'.repeat(RESUMABLE_BLOCK_MAX_BYTES),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok || result.code !== 'block_overflow') return;
+    expect(result.bytes).toBeGreaterThan(RESUMABLE_BLOCK_MAX_BYTES);
+  });
+
   it('allows a document pointer regardless of inline cap', () => {
     const pointer = documentAccumulatorPointer('/projects/audit/findings.md', 'flagged');
     expect(isDocumentPointer(pointer)).toBe(true);

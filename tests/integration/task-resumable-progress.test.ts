@@ -7,6 +7,7 @@ import { TaskRepo } from '../../src/db/task-repo.js';
 import { WorkingDocsRepo } from '../../src/db/working-docs-repo.js';
 import {
   RESUMABLE_BLOCK_MAX_BYTES,
+  RESUMABLE_INLINE_ACCUMULATOR_MAX_BYTES,
   documentAccumulatorPointer,
   isDocumentPointer,
   resumableBlockBytes,
@@ -195,6 +196,48 @@ describeIf('TaskRepo resumable progress (#1172, #1210)', () => {
     }
 
     expect(spilled).toBe(true);
+  });
+
+  it('returns inline_accumulator_overflow without silent truncate when spill is unavailable (#1172)', async () => {
+    const repoNoSpill = new TaskRepo(pool, noopBus, logger as never, 'UTC');
+    const task = await repoNoSpill.createTask({
+      agentId: 'social-media',
+      title: `${PREFIX} no-spill overflow`,
+      source: 'coordinator',
+    });
+
+    const big = 'x'.repeat(RESUMABLE_INLINE_ACCUMULATOR_MAX_BYTES + 100);
+    const result = await repoNoSpill.setResumableBlock(task.id, {
+      cursor: 'page:1',
+      done: 10,
+      total: 1300,
+      accumulator: [big],
+      lastSliceUnits: 10,
+      next: 'Continue paging',
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'inline_accumulator_overflow' });
+    expect(await repoNoSpill.getResumableBlock(task.id)).toBeNull();
+  });
+
+  it('returns block_overflow when a non-accumulator field exceeds the cap (#1172)', async () => {
+    const task = await repo.createTask({
+      agentId: 'social-media',
+      title: `${PREFIX} block overflow`,
+      source: 'coordinator',
+    });
+
+    const result = await repo.setResumableBlock(task.id, {
+      cursor: 'page:1',
+      done: 10,
+      total: 1300,
+      accumulator: ['did:plc:abc'],
+      lastSliceUnits: 10,
+      next: 'x'.repeat(RESUMABLE_BLOCK_MAX_BYTES),
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'block_overflow' });
+    expect(await repo.getResumableBlock(task.id)).toBeNull();
   });
 
   it('round-trip: child task spill, resume prefix, and continue from pointer', async () => {

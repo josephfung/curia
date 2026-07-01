@@ -80,4 +80,50 @@ describeIf('BacklogHeartbeat end-to-end', () => {
     expect(await hb.tick()).toBe(1);
     expect(await hb.tick()).toBe(0); // already has a pending wake
   });
+
+  it('re-surfaces a lost in_progress resumable task after the idle threshold (#1176)', async () => {
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000);
+    const taskId = await seedTask(pool, {
+      status: 'in_progress',
+      sourceAgentId: 'social-media',
+      updatedAt: hoursAgo(5),
+    });
+    await pool.query(
+      `UPDATE tasks
+          SET error_budget = $1::jsonb,
+              progress = $2::jsonb
+        WHERE id = $3`,
+      [
+        JSON.stringify({ resumable: true }),
+        JSON.stringify({
+          resumable: {
+            cursor: 'page:3',
+            done: 25,
+            total: 1300,
+            accumulator: [],
+            lastSliceUnits: 25,
+            next: 'Continue paging',
+          },
+        }),
+        taskId,
+      ],
+    );
+
+    const schedulerService = new SchedulerService(pool, { publish: vi.fn(), subscribe: vi.fn() } as never, logger, 'UTC');
+    const hb = new BacklogHeartbeat({
+      pool, logger, schedulerService,
+      eligibleAgents: new Set(['social-media', 'coordinator']),
+      intervalMinutes: 60, maxWakesPerTick: 5, idleThresholdHours: 4, staleWaitThresholdHours: 48,
+    });
+
+    expect(await hb.tick()).toBe(1);
+
+    const { rows } = await pool.query(
+      `SELECT task_id, agent_id, status FROM scheduled_jobs WHERE task_id = $1`,
+      [taskId],
+    );
+    expect(rows).toHaveLength(1);
+    expect((rows[0] as { agent_id: string; status: string }).agent_id).toBe('social-media');
+    expect((rows[0] as { status: string }).status).toBe('pending');
+  });
 });

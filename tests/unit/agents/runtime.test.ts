@@ -8,6 +8,7 @@ import { createLogger } from '../../../src/logger.js';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
 import { BullpenService } from '../../../src/memory/bullpen.js';
 import type { AgentError } from '../../../src/errors/types.js';
+import { delegationKey } from '../../../src/agents/delegation-guard.js';
 
 // Minimal provenance block for mock LLM responses — satisfies the required field
 // without tying tests to specific model names.
@@ -2179,6 +2180,158 @@ describe('AgentRuntime resumable budget safety-net (#1174)', () => {
   });
 });
 
+describe('AgentRuntime resumable harness wiring (#1173)', () => {
+  const webFetchToolDef = {
+    name: 'web-fetch',
+    description: 'Fetch',
+    input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+  };
+  const checkpointToolDef = {
+    name: 'checkpoint',
+    description: 'Save resumable checkpoint',
+    input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+  };
+
+  const resumableCheckpoint = {
+    cursor: 'page-2',
+    done: 25,
+    total: 1300,
+    accumulator: [] as string[],
+    lastSliceUnits: 25,
+    next: 'Continue paging',
+  };
+
+  const NUDGE_MARKER = '[Platform — resumable task budget nudge]';
+
+  function publishResumableSchedulerTask(bus: EventBus, taskId: string): Promise<void> {
+    return bus.publish('dispatch', createAgentTask({
+      agentId: 'social-media',
+      conversationId: 'conv-resumable-harness',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task_id: taskId }),
+      metadata: {
+        boundTask: {
+          taskId,
+          errorBudget: { resumable: true },
+          progress: { resumable: resumableCheckpoint },
+        },
+      },
+      parentEventId: 'parent-resumable-harness',
+    }));
+  }
+
+  function makeHarnessRuntime(provider: LLMProvider, maxTurns = 20) {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+      getToolDefinitions: vi.fn((names: string[]) => {
+        if (names.includes('checkpoint')) return [checkpointToolDef];
+        return [];
+      }),
+    } as unknown as ExecutionLayer;
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'social-media',
+      systemPrompt: 'You are a social media specialist.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [webFetchToolDef],
+      errorBudget: { maxTurns, maxConsecutiveErrors: 10 },
+    });
+    agent.register();
+
+    return { bus, provider, mockExecution, agentResponses };
+  }
+
+  it('injects guidance, checkpoint resume block, and pins checkpoint tool', async () => {
+    const provider = createMockProvider('Slice complete.');
+    const { bus, provider: chatProvider } = makeHarnessRuntime(provider);
+
+    await publishResumableSchedulerTask(bus, 'task-harness-1');
+
+    const firstCall = (chatProvider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+      tools?: Array<{ name: string }>;
+    };
+    const systemContent = firstCall.messages
+      .filter((m) => m.role === 'system')
+      .map((m) => m.content)
+      .join('\n');
+    expect(systemContent).toContain('## Resumable Task');
+    expect(systemContent).toContain('## Last Checkpoint (resume from here)');
+    expect(systemContent).toContain('25 / 1300');
+    expect(systemContent).not.toContain(NUDGE_MARKER);
+
+    const toolNames = (firstCall.tools ?? []).map((t) => t.name);
+    expect(toolNames).toContain('checkpoint');
+  });
+
+  it('appends budget nudge as a user tail message at most once across tool-loop turns', async () => {
+    let chatRound = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatRound += 1;
+        if (chatRound <= 17) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: `call-${chatRound}`, name: 'web-fetch', input: {} }],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Slice complete.',
+          usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const { bus, provider: chatProvider, agentResponses } = makeHarnessRuntime(provider, 20);
+    await publishResumableSchedulerTask(bus, 'task-harness-nudge');
+
+    const allCalls = (chatProvider.chat as ReturnType<typeof vi.fn>).mock.calls as Array<
+      [{ messages: Array<{ role: string; content: string }>; tools?: Array<{ name: string }> }]
+    >;
+
+    let prevNudgeCount = 0;
+    let sawNudge = false;
+    for (const [call] of allCalls) {
+      const systemBlob = call.messages
+        .filter((m) => m.role === 'system')
+        .map((m) => m.content)
+        .join('\n');
+      expect(systemBlob).not.toContain(NUDGE_MARKER);
+
+      const nudgeCount = call.messages.filter(
+        (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes(NUDGE_MARKER),
+      ).length;
+      expect(nudgeCount).toBeLessThanOrEqual(1);
+      if (nudgeCount > prevNudgeCount) {
+        expect(nudgeCount - prevNudgeCount).toBe(1);
+        sawNudge = true;
+      }
+      prevNudgeCount = nudgeCount;
+    }
+
+    expect(sawNudge).toBe(true);
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]!.payload.content).toBe('Slice complete.');
+  });
+});
+
 // -- Structured error injection test --
 
 describe('AgentRuntime structured error injection', () => {
@@ -3562,6 +3715,113 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const response = agentResponses[0]!;
     expect(response.payload.content).toContain('delegation_failure');
     expect(response.payload.content).toContain('maxTurns');
+    expect(response.payload.content).toContain('"escalated":true');
+  });
+
+  it('allows exactly two retryable delegate attempts then escalates (#1171)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const delegateInvokeCount = { n: 0 };
+    const taskCreateCount = { n: 0 };
+
+    const mockExecution = {
+      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (skillName === 'task-create') {
+          taskCreateCount.n += 1;
+          return { success: true, data: { task_id: 'escalation-task-retry' } };
+        }
+        if (skillName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          const dKey = delegationKey(delegateAgent, delegateTask);
+          const guard = options?.delegationGuard;
+          if (guard && !guard.canAttempt(dKey)) {
+            const prior = guard.getFailure(dKey);
+            return {
+              success: true,
+              data: {
+                agent: delegateAgent,
+                failed: true,
+                blocked: true,
+                reason: prior?.reason ?? 'blocked',
+                retryable: false,
+                message: prior?.message ?? `Re-delegation to '${delegateAgent}' is blocked for this task.`,
+                escalated: guard.isEscalated(dKey),
+              },
+            };
+          }
+          if (guard) {
+            guard.recordInvocation(dKey);
+          }
+          delegateInvokeCount.n += 1;
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'api_error',
+              retryable: true,
+              message: "Specialist 'social-media' timed out",
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let chatRound = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatRound += 1;
+        return {
+          type: 'tool_use' as const,
+          toolCalls: [
+            { id: `call-delegate-retry-${chatRound}`, name: 'delegate', input: { agent: 'social-media', task: 'Post to Bluesky' } },
+          ],
+          usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-delegate-retryable',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Post this to Bluesky',
+      parentEventId: 'inbound-delegate-retryable',
+    }));
+
+    expect(delegateInvokeCount.n).toBe(2);
+    expect(taskCreateCount.n).toBe(1);
+    expect(provider.chat).toHaveBeenCalledTimes(2);
+
+    expect(agentResponses).toHaveLength(1);
+    const response = agentResponses[0]!;
+    expect(response.payload.content).toContain('delegation_failure');
+    expect(response.payload.content).toContain('api_error');
     expect(response.payload.content).toContain('"escalated":true');
   });
 

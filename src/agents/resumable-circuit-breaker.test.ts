@@ -8,6 +8,7 @@ import {
   readCircuitState,
   resolveResumableCeilings,
   mergeCircuitState,
+  type ResumableCircuitState,
 } from './resumable-circuit-breaker.js';
 import { DEFAULT_RESUMABLE_CEILINGS } from '../config.js';
 import type { ExecutionPausedPayload } from './resumable-task.js';
@@ -229,5 +230,35 @@ describe('resumable-circuit-breaker (#1176)', () => {
       expect(result.action).toBe('continue');
       if (result.action === 'continue') expect(result.state.stallCount).toBe(0);
     });
+  });
+
+  it('never escalates across several progressing continuation slices', () => {
+    const startedAt = '2026-06-01T00:00:00.000Z';
+    let circuit: ResumableCircuitState = {
+      stallCount: 0,
+      iterationCount: 0,
+      startedAt,
+      totalCostUsd: 0,
+      lastProgress: { done: 0, cursor: null },
+    };
+
+    for (let slice = 1; slice <= 6; slice += 1) {
+      const done = slice * 25;
+      const result = processPausedSliceOutcome({
+        paused: paused({
+          done,
+          cursor: `page:${slice}`,
+          last_slice_units: 25,
+        }),
+        circuit,
+        ceilings: { ...DEFAULT_RESUMABLE_CEILINGS, maxStalls: 3 },
+        now: new Date(`2026-06-01T0${slice}:00:00.000Z`),
+      });
+      expect(result.action).toBe('continue');
+      if (result.action !== 'continue') return;
+      expect(result.state.stallCount).toBe(0);
+      expect(result.state.iterationCount).toBe(slice);
+      circuit = result.state;
+    }
   });
 });
