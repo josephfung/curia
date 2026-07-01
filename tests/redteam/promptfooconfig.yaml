@@ -9,6 +9,11 @@
 #   pnpm redteam
 #   pnpm redteam:report
 #
+# Provenance-aware harness (#900 / #856):
+#   pnpm redteam:provenance:smoke
+#   pnpm redteam:provenance:external
+#   pnpm redteam:provenance:principal
+#
 # See tests/redteam/README.md for full runbook.
 
 description: "Curia Coordinator prompt injection and content filter red team"
