@@ -329,7 +329,7 @@ export function parseExecutionPausedPayload(content: string, logger?: Logger): E
     const parsed = JSON.parse(content) as Record<string, unknown>;
     if (parsed['_curia_protocol'] !== EXECUTION_PAUSED_PROTOCOL) return null;
     if (typeof parsed['done'] !== 'number' || typeof parsed['total'] !== 'number') return null;
-    if (typeof parsed['next'] !== 'string') return null;
+    if (typeof parsed['next'] !== 'string' || parsed['next'].length === 0) return null;
     if (typeof parsed['last_slice_units'] !== 'number') return null;
     const cursor = parsed['cursor'];
     if (cursor !== null && typeof cursor !== 'string' && !isPlainObject(cursor)) return null;

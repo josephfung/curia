@@ -301,3 +301,39 @@ describe('executor outcome contract (#1174)', () => {
     expect(readResumableBlock(ctx!.progress ?? {})).not.toBeNull();
   });
 });
+
+describe('parseExecutionPausedPayload negative paths (#1174)', () => {
+  const basePayload = {
+    _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
+    done: 10,
+    total: 100,
+    cursor: 'page:1',
+    last_slice_units: 10,
+    next: 'Continue',
+  };
+
+  it.each([
+    ['invalid JSON', '{not valid json'],
+    ['wrong protocol', JSON.stringify({ ...basePayload, _curia_protocol: 'clarification_request' })],
+    ['missing total', JSON.stringify({ _curia_protocol: EXECUTION_PAUSED_PROTOCOL, done: 10, cursor: null, last_slice_units: 10, next: 'go' })],
+    ['empty next', JSON.stringify({ ...basePayload, next: '' })],
+    ['non-object cursor', JSON.stringify({ ...basePayload, cursor: 42 })],
+    ['missing last_slice_units', JSON.stringify({ ...basePayload, last_slice_units: undefined })],
+  ])('returns null for %s — treated as non-paused', (_label, content) => {
+    expect(parseExecutionPausedPayload(content)).toBeNull();
+  });
+
+  it('accepts a valid payload without task_id (optional field)', () => {
+    const content = JSON.stringify({
+      _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
+      done: 10,
+      total: 100,
+      cursor: null,
+      last_slice_units: 10,
+      next: 'Continue',
+    });
+    const parsed = parseExecutionPausedPayload(content);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.task_id).toBeUndefined();
+  });
+});

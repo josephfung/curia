@@ -128,4 +128,75 @@ describe('ResumableContinuationSubscriber', () => {
 
     expect(scheduleSpy).not.toHaveBeenCalled();
   });
+
+  it('skips continuation when task_id is missing (heartbeat backstop fallback)', async () => {
+    const scheduleSpy = vi.spyOn(continuation, 'scheduleResumableContinuation')
+      .mockResolvedValue({ scheduled: true, jobId: 'job-1', agentId: 'social-media', runAt: new Date() });
+    const warn = vi.fn();
+    const logger = { ...mockLogger(), warn };
+
+    const bus = new EventBus(logger as never);
+    const subscriber = new ResumableContinuationSubscriber({
+      pool: {} as never,
+      bus,
+      logger: logger as never,
+      schedulerService: {} as never,
+      taskRepo: {} as never,
+      eligibleAgents: new Set(['social-media']),
+      continuationDelaySeconds: 30,
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
+    });
+    subscriber.start();
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'social-media',
+      conversationId: 'conv-1',
+      content: JSON.stringify({
+        _curia_protocol: 'execution_paused',
+        done: 25,
+        total: 1300,
+        cursor: 'page:3',
+        last_slice_units: 25,
+        next: 'Review page 4',
+      }),
+      parentEventId: 'parent-1',
+    }));
+
+    expect(scheduleSpy).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'social-media' }),
+      'execution_paused response missing task_id — cannot schedule continuation',
+    );
+  });
+
+  it('ignores malformed execution_paused markers', async () => {
+    const scheduleSpy = vi.spyOn(continuation, 'scheduleResumableContinuation')
+      .mockResolvedValue({ scheduled: true, jobId: 'job-1', agentId: 'social-media', runAt: new Date() });
+
+    const bus = new EventBus(mockLogger() as never);
+    const subscriber = new ResumableContinuationSubscriber({
+      pool: {} as never,
+      bus,
+      logger: mockLogger() as never,
+      schedulerService: {} as never,
+      taskRepo: {} as never,
+      eligibleAgents: new Set(['social-media']),
+      continuationDelaySeconds: 30,
+      resumableCeilings: DEFAULT_RESUMABLE_CEILINGS,
+    });
+    subscriber.start();
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'social-media',
+      conversationId: 'conv-1',
+      content: JSON.stringify({
+        _curia_protocol: 'execution_paused',
+        done: 25,
+        next: 'missing total and last_slice_units',
+      }),
+      parentEventId: 'parent-1',
+    }));
+
+    expect(scheduleSpy).not.toHaveBeenCalled();
+  });
 });
