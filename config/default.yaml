@@ -442,7 +442,7 @@ tasks:
 #   < same_task        : woken & derived → downgrade to agent (propose-only)
 #   same_task–derived  : same-task heartbeat wake keeps lineage; derived child → agent
 #   >= derived_child   : same-task wake AND derived child keep lineage standing
-# See docs/wip/2026-06-22-woken-task-authorization-design.md (spec 14).
+# See docs/specs/14-autonomy-engine.md (Effective standing / bypass ladder).
 autonomy:
   bypass_ladder:
     same_task: 70      # posture B floor — must not drop below 60

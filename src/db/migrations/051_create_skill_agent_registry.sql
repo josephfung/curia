@@ -1,6 +1,6 @@
 -- Up Migration
 -- Database-backed registry that gates skill/agent loading on an install/enable
--- lifecycle (spec: docs/wip/2026-06-09-skill-agent-registry-design.md, #541).
+-- lifecycle (epic #541).
 -- Stores only enabled + timestamps; the uninstalled/installed/enabled/ghost states
 -- are derived in app code by cross-referencing these rows against on-disk manifests.
 

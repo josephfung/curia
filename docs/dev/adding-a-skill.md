@@ -118,7 +118,7 @@ A skill can be invoked not only from a live turn but from a **woken** task (a sc
 - The **elevated gate** ignores lineage entirely: only a live principal turn passes it (above). A woken task with CEO lineage can never invoke an elevated skill.
 - For `"normal"` + `action_risk` skills, autonomy's **principal-bypass** uses lineage, but only through a score-keyed *bypass ladder* that can downgrade inherited standing, never grant it. A woken/derived task's effective standing is floored to `agent` (propose-only) unless its live autonomy score clears the configured threshold (`autonomy.bypass_ladder`). A task whose score is momentarily unreadable fails **closed** on non-read actions.
 
-Don't design a skill assuming a woken task inherits the CEO's authority. If a skill must act on the CEO's behalf without a live turn, it goes through the normal autonomy + approval path. See [14-autonomy-engine.md](../specs/14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks) and `docs/wip/2026-06-22-woken-task-authorization-design.md`.
+Don't design a skill assuming a woken task inherits the CEO's authority. If a skill must act on the CEO's behalf without a live turn, it goes through the normal autonomy + approval path. See [14-autonomy-engine.md](../specs/14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks).
 
 #### `allowed_callers` (optional)
 

@@ -36,6 +36,6 @@ The five band names  are human-readable aliases for score ranges, documented in 
 
 ## Update (#1125 / #1126): the score also governs inherited standing
 
-The bypass ladder (#1125) extends this ADR's thesis: the live autonomy score now also governs how much *standing* a woken/derived task inherits from its chain's lineage. The score can only ever **downgrade** inherited standing to `agent` (propose-only) for a non-live execution — never grant standing the lineage didn't have. See `docs/specs/14-autonomy-engine.md` (Effective standing) and `docs/wip/2026-06-22-woken-task-authorization-design.md`.
+The bypass ladder (#1125) extends this ADR's thesis: the live autonomy score now also governs how much *standing* a woken/derived task inherits from its chain's lineage. The score can only ever **downgrade** inherited standing to `agent` (propose-only) for a non-live execution — never grant standing the lineage didn't have. See `docs/specs/14-autonomy-engine.md` (Effective standing).
 
 PR #1126 completed the picture by decomposing the overloaded `elevated` sensitivity: CEO-authority primitives stay `elevated` (require a live principal turn — see ADR-017), while consequential autonomous actions move to `normal` + `action_risk`, governed by *this* engine and inheriting the ADR-018 approval flow. The practical effect: `system` standing now confers no gate power, and the ladder governs exactly one thing — whether a woken/derived `normal`-skill execution inherits the principal-bypass of Gates A and B.
