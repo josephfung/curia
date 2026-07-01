@@ -31,7 +31,7 @@ function childRow(overrides: Partial<TaskRow> = {}): Pick<TaskRow, 'id' | 'statu
 describe('plan-adaptive-replan (#1266)', () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it('detects failed/cancelled children and over-blocked steps', () => {
+  it('detects failed children and over-blocked steps', () => {
     const now = new Date('2026-06-10T00:00:00Z');
     const children = new Map([
       [CHILD_1, childRow({ status: 'failed' })],
@@ -55,6 +55,28 @@ describe('plan-adaptive-replan (#1266)', () => {
 
     expect(signals.some((s) => s.reason === 'child_failed')).toBe(true);
     expect(signals.some((s) => s.reason === 'step_over_blocked')).toBe(true);
+  });
+
+  // The cancelled-child trigger (plan-adaptive-replan.ts) mirrors the failed-child branch but is
+  // a distinct divergence reason — a child cancelled out from under the plan may need a re-plan if
+  // it was unexpected. Covered separately so the trigger set in AC#1 is fully exercised (#1266).
+  it('detects a cancelled child as divergence', () => {
+    const children = new Map([
+      [CHILD_1, childRow({ status: 'cancelled', title: 'Vendor outreach' })],
+    ]);
+
+    const signals = detectPlanDivergence({
+      steps: [{ id: 'step-1', taskId: CHILD_1 }],
+      children,
+      ceilings: DEFAULT_RESUMABLE_CEILINGS,
+    });
+
+    const cancelled = signals.find((s) => s.reason === 'child_cancelled');
+    expect(cancelled).toBeDefined();
+    expect(cancelled?.childTaskId).toBe(CHILD_1);
+    expect(cancelled?.stepId).toBe('step-1');
+    // A cancelled child must not also masquerade as a failed-child signal.
+    expect(signals.some((s) => s.reason === 'child_failed')).toBe(false);
   });
 
   it('honours per-child blocked_step_hours override', () => {
