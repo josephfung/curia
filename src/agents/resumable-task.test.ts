@@ -317,6 +317,7 @@ describe('parseExecutionPausedPayload negative paths (#1174)', () => {
     ['wrong protocol', JSON.stringify({ ...basePayload, _curia_protocol: 'clarification_request' })],
     ['missing total', JSON.stringify({ _curia_protocol: EXECUTION_PAUSED_PROTOCOL, done: 10, cursor: null, last_slice_units: 10, next: 'go' })],
     ['empty next', JSON.stringify({ ...basePayload, next: '' })],
+    ['whitespace-only next', JSON.stringify({ ...basePayload, next: '   ' })],
     ['non-object cursor', JSON.stringify({ ...basePayload, cursor: 42 })],
     ['missing last_slice_units', JSON.stringify({ ...basePayload, last_slice_units: undefined })],
   ])('returns null for %s — treated as non-paused', (_label, content) => {

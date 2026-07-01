@@ -2278,9 +2278,13 @@ describe('AgentRuntime resumable harness wiring (#1173)', () => {
 
   it('appends budget nudge as a user tail message at most once across tool-loop turns', async () => {
     let chatRound = 0;
+    const chatSnapshots: Array<{ messages: Array<{ role: string; content: string }> }> = [];
     const provider: LLMProvider = {
       id: 'mock',
-      chat: vi.fn(async () => {
+      chat: vi.fn(async (params) => {
+        chatSnapshots.push({
+          messages: structuredClone(params.messages) as Array<{ role: string; content: string }>,
+        });
         chatRound += 1;
         if (chatRound <= 17) {
           return {
@@ -2299,16 +2303,12 @@ describe('AgentRuntime resumable harness wiring (#1173)', () => {
       }),
     };
 
-    const { bus, provider: chatProvider, agentResponses } = makeHarnessRuntime(provider, 20);
+    const { bus, agentResponses } = makeHarnessRuntime(provider, 20);
     await publishResumableSchedulerTask(bus, 'task-harness-nudge');
-
-    const allCalls = (chatProvider.chat as ReturnType<typeof vi.fn>).mock.calls as Array<
-      [{ messages: Array<{ role: string; content: string }>; tools?: Array<{ name: string }> }]
-    >;
 
     let prevNudgeCount = 0;
     let sawNudge = false;
-    for (const [call] of allCalls) {
+    for (const call of chatSnapshots) {
       const systemBlob = call.messages
         .filter((m) => m.role === 'system')
         .map((m) => m.content)
@@ -2327,6 +2327,7 @@ describe('AgentRuntime resumable harness wiring (#1173)', () => {
     }
 
     expect(sawNudge).toBe(true);
+    expect(chatSnapshots.length).toBeGreaterThan(17);
     expect(agentResponses).toHaveLength(1);
     expect(agentResponses[0]!.payload.content).toBe('Slice complete.');
   });
