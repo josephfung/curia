@@ -47,7 +47,7 @@ An executor invocation returns one of three outcomes (`src/agents/resumable-task
 |---|---|---|
 | `done` | Work complete | Task → `done`; carries the final summary/deliverable |
 | `paused` | Real progress made, more remains | Task stays `in_progress`; checkpoint persisted; continuation scheduled. **Success at the delegation layer, not a timeout.** |
-| `failed` | Genuine error | Carries a structured `reason` (`budget_max_turns`, `tool_error`, `api_error`, `blocked`) and `retryable: bool`, propagated honestly upward |
+| `failed` | Genuine error | Carries a structured `reason` (the executor-contract `ExecutorFailureReason`: `budget_max_turns`, `tool_error`, `api_error`, `blocked`) and `retryable: bool`, propagated honestly upward |
 
 `paused` **reuses the existing `in_progress` status** — no new task status, no schema churn.
 It is signalled through the `EXECUTION_PAUSED_PROTOCOL` marker on the `agent.response`
@@ -55,7 +55,20 @@ It is signalled through the `EXECUTION_PAUSED_PROTOCOL` marker on the `agent.res
 `paused` as success (no re-delegation); `failed{retryable:false}` escalates without blind
 retry; `failed{retryable:true}` gets a bounded retry then escalates (`DelegationGuard`,
 `src/agents/delegation-guard.ts`). This ends the confabulation: the coordinator now receives
-`failed{reason: budget_max_turns}` and reports the truth.
+a real failure `reason` (e.g. `maxTurns` for turn-budget exhaustion) and reports the truth.
+
+> **Two `reason` vocabularies — mind which surface you're reading.** The `failed`
+> reason is spelled differently on the two surfaces it crosses, and the coordinator
+> sees the second one:
+>
+> - **Executor contract** — `ExecutorFailureReason` = `budget_max_turns | tool_error | api_error | blocked` (`src/agents/resumable-task.ts`). The outcome-contract token on `ExecutorOutcome.failed`.
+> - **Coordinator-facing** — `AgentResponseFailureReason` = `maxTurns | maxConsecutiveErrors | tool_error | api_error | blocked` (`src/bus/events.ts`). What actually rides the `agent.response` event to the coordinator / delegate skill; the runtime derives it from the classified `AgentError` (`mapAgentErrorToResponseFields`, #1170).
+>
+> Mapping between them: the executor's `budget_max_turns` corresponds to the
+> coordinator-facing `maxTurns` (turn-budget exhaustion); `tool_error`, `api_error`,
+> and `blocked` are shared verbatim. `maxConsecutiveErrors` is an *additional*
+> coordinator-facing reason (the consecutive-error ceiling was hit) with no distinct
+> executor-contract token.
 
 ## 2. Resumable state — the `progress.resumable` block
 
