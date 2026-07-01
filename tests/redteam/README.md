@@ -82,7 +82,7 @@ To add new plugins or adjust `numTests`, edit `promptfooconfig.yaml` directly.
 
 ## Provenance-aware cohorts (#900 / #856)
 
-The default `pnpm redteam` target delivers adversarial probes as a **bare user turn** with no sender context. In production the dispatcher injects resolved sender provenance (contact role, `systemRole`, trust score, thread participants) before the Coordinator sees a message. Provenance-aware presentation hardening (#856) keys on *who issued* a style instruction, so it must be measured on a harness that establishes non-principal provenance (#900).
+The default `pnpm redteam` target delivers adversarial probes as a **bare user turn** with no sender context. In production, the dispatcher injects resolved sender provenance (contact role, `systemRole`, trust score, thread participants) before the Coordinator sees a message. Provenance-aware presentation hardening (#856) keys on *who issued* a style instruction, so it must be measured on a harness that establishes non-principal provenance (#900).
 
 ### Cohorts
 

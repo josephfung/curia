@@ -15,8 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **Coordinator provenance-aware presentation hardening (#856)** — tone, format, and framing now follow only the principal's direct instructions; presentation directives embedded in third-party message bodies, quoted text, and attachments are treated as inert data.
-- **Provenance-aware red-team harness (#900)** — red-team probes can be framed with dispatcher-style sender context (external-sender and principal cohorts) so indirect prompt-injection is measured against non-principal provenance.
+- **Coordinator provenance-aware presentation hardening (#856)** — presentation directives now follow only the principal's instructions, ignoring third-party content.
+- **Provenance-aware red-team harness (#900)** — probes are framed with dispatcher-style sender context to test non-principal provenance.
 - **Memory poisoning research (#418)** — documented KG write paths from inbound email, assessed safeguards, and filed follow-up #1290 to gate checkpoint extraction and `memory-store` for untrusted senders.
 
 ### Added
