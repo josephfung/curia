@@ -35,8 +35,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Task-wake CEO questions** — outbound sends from bound task wakes now auto-register `delegation_hint` / `task_id` metadata (7-day TTL), and the dispatcher persists the CEO's reply onto the originating task before the coordinator runs so subsequent wakes do not re-ask. (#1299)
-- **Past-due milestone subtasks** — `task-create` with a `due_at` already in the past schedules an immediate wake instead of leaving a gap; `task-complete` rejects marking such subtasks done within five minutes of creation. (#1299)
+- **Task-wake CEO questions** — replies now bind back to the originating task (7-day TTL) so wakes stop re-asking. (#1299)
+- **Past-due milestone subtasks** — past-due tasks wake immediately instead of being auto-completed. (#1299)
 - **Migration 070** — now a no-op; the `UPDATE audit_log` data-fix tripped the append-only trigger and crash-looped boot on prod. (#453)
 
 ## [0.39.0] — 2026-07-01 — "Watney"
