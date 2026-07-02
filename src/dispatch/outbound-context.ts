@@ -78,7 +78,7 @@ export interface OutboundContextCapability {
   release(entryId: string): Promise<void>;
   /** Release by entry id only — conversation-agnostic (task-wake bindings span channels). */
   releaseEntry(entryId: string): Promise<void>;
-  /** Load one active entry by id (conversation-agnostic — for task-record-reply). */
+  /** Load one active entry by id (conversation-agnostic — for context-bridge-release). */
   getEntry(entryId: string): Promise<OutboundContextRow | null>;
   /** Release every active entry whose metadata subject matches one of `subjects`. */
   clearBySubjects(subjects: string[]): Promise<SubjectClearResult>;
