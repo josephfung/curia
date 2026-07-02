@@ -27,8 +27,7 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
         .type('text/html; charset=utf-8')
         .send(
           '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Curia</title></head>' +
-          '<body style="font-family:system-ui;padding:2rem">' +
-          '<p>Console not built. Run: <code>pnpm build:console</code></p></body></html>',
+          '<body><p>Console not built. Run: <code>pnpm build:console</code></p></body></html>',
         );
     });
     return;
