@@ -90,8 +90,17 @@ export async function persistInboundTaskWakeReply(options: {
 
   const boundEntries = options.activeEntries.filter((entry) => isTaskWakeReplyBinding(entry.metadata));
   if (boundEntries.length === 0) return { persisted: false };
+  if (boundEntries.length > 1) {
+    options.logger.warn(
+      {
+        count: boundEntries.length,
+        taskIds: boundEntries.map((e) => e.metadata?.[TASK_WAKE_TASK_ID_KEY]),
+      },
+      'task-wake reply: multiple open bindings — refusing to guess which task the reply belongs to',
+    );
+    return { persisted: false };
+  }
 
-  // activeEntries are newest-first — bind to the most recent task-wake ask.
   const entry = boundEntries[0]!;
   const taskId = entry.metadata![TASK_WAKE_TASK_ID_KEY] as string;
 

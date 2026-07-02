@@ -164,4 +164,80 @@ describeIf('task-wake reply binding (#1299)', () => {
     expect(coordinatorTask).toBeDefined();
     expect(coordinatorTask!.payload.content).not.toContain('ACTIVE OUTBOUND CONTEXT');
   });
+
+  it('does not auto-bind when multiple task-wake asks are outstanding', async () => {
+    const ambiguousTaskA = randomUUID();
+    const ambiguousTaskB = randomUUID();
+    const convA = `scheduler:ambig-${runId}-a`;
+    const convB = `scheduler:ambig-${runId}-b`;
+    const logger = createSilentLogger();
+
+    for (const [id, title] of [[ambiguousTaskA, 'Ask A'], [ambiguousTaskB, 'Ask B']] as const) {
+      await pool.query(
+        `INSERT INTO tasks (
+           id, agent_id, source_agent_id, created_by, title, intent_anchor, status, owner, source,
+           progress, error_budget, tags, updated_at
+         ) VALUES ($1, 'coordinator', 'coordinator', 'coordinator', $2, $2, 'waiting', 'ceo', 'agent',
+                   '{}'::jsonb, '{}'::jsonb, '{}', now())`,
+        [id, `${title} ${runId}`],
+      );
+    }
+
+    const makeScoped = (conversationId: string) => ({
+      register: (entry: Parameters<OutboundContextService['register']>[0]) =>
+        outboundContext.register({ ...entry, conversationId }),
+      release: (entryId: string) => outboundContext.release(entryId),
+      clearBySubjects: (subjects: string[]) => outboundContext.clearBySubjects(subjects),
+      defaultExpiryHours: outboundContext.defaultExpiryHours,
+      explicitExpiryHours: outboundContext.explicitExpiryHours,
+    });
+
+    await registerOutboundContext(makeScoped(convA), undefined, {
+      channelId: 'signal',
+      content: 'Please confirm the camp session dates for Evan.',
+      agentId: 'coordinator',
+      log: logger,
+      boundTask: { taskId: ambiguousTaskA },
+    });
+    await registerOutboundContext(makeScoped(convB), undefined, {
+      channelId: 'signal',
+      content: 'What time should we leave for the airport?',
+      agentId: 'coordinator',
+      log: logger,
+      boundTask: { taskId: ambiguousTaskB },
+    });
+
+    capturedTasks.length = 0;
+
+    await bus.publish('channel', createInboundMessage({
+      channelId: 'signal',
+      conversationId: `signal:ambig-${runId}`,
+      senderId: '+15551234567',
+      content: 'July 26 through August 22.',
+    }));
+
+    const taskA = await taskRepo.getTask(ambiguousTaskA);
+    const taskB = await taskRepo.getTask(ambiguousTaskB);
+    expect((taskA?.progress?.notes ?? [])).toHaveLength(0);
+    expect((taskB?.progress?.notes ?? [])).toHaveLength(0);
+
+    const { rows: activeBindings } = await pool.query<{ id: string }>(
+      `SELECT id FROM outbound_context
+       WHERE metadata->>'bind_reply' = 'true'
+         AND conversation_id IN ($1, $2)
+         AND released = false`,
+      [convA, convB],
+    );
+    expect(activeBindings).toHaveLength(2);
+
+    const coordinatorTask = capturedTasks.find((e) => e.payload.agentId === 'coordinator');
+    expect(coordinatorTask).toBeDefined();
+    expect(coordinatorTask!.payload.content).toContain('ACTIVE OUTBOUND CONTEXT');
+
+    await pool.query(
+      `DELETE FROM outbound_context WHERE conversation_id IN ($1, $2)`,
+      [convA, convB],
+    );
+    await pool.query('DELETE FROM tasks WHERE id IN ($1, $2)', [ambiguousTaskA, ambiguousTaskB]);
+  });
 });

@@ -133,5 +133,54 @@ describe('task-wake-reply', () => {
       expect(result.persisted).toBe(false);
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
     });
+
+    it('refuses to bind when multiple task-wake entries are open', async () => {
+      const result = await persistInboundTaskWakeReply({
+        principalReply: 'Some answer',
+        activeEntries: [
+          makeEntry({ id: 'entry-1', metadata: { bind_reply: true, task_id: 'task-a' } }),
+          makeEntry({ id: 'entry-2', metadata: { bind_reply: true, task_id: 'task-b' } }),
+        ],
+        taskRepo,
+        outboundContextService,
+        logger,
+        isPrincipal: true,
+      });
+
+      expect(result.persisted).toBe(false);
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+      expect(outboundContextService.release).not.toHaveBeenCalled();
+    });
+
+    it('releases the entry and does not persist when the bound task no longer exists', async () => {
+      (taskRepo.getTask as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      const result = await persistInboundTaskWakeReply({
+        principalReply: 'Some answer',
+        activeEntries: [makeEntry()],
+        taskRepo,
+        outboundContextService,
+        logger,
+        isPrincipal: true,
+      });
+
+      expect(result.persisted).toBe(false);
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+      expect(outboundContextService.release).toHaveBeenCalledWith('entry-1');
+    });
+
+    it('returns persisted: false when the repo throws', async () => {
+      (taskRepo.getTask as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+      const result = await persistInboundTaskWakeReply({
+        principalReply: 'Some answer',
+        activeEntries: [makeEntry()],
+        taskRepo,
+        outboundContextService,
+        logger,
+        isPrincipal: true,
+      });
+
+      expect(result.persisted).toBe(false);
+      expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    });
   });
 });

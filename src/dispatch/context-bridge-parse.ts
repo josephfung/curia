@@ -6,7 +6,7 @@
 import type { BoundTaskContext } from '../agents/resumable-task.js';
 import type { Logger } from '../logger.js';
 import type { OutboundContextCapability } from './outbound-context.js';
-import { buildTaskWakeAutoBridge } from './task-wake-reply.js';
+import { buildTaskWakeAutoBridge, TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY } from './task-wake-reply.js';
 
 export interface ContextBridgeInput {
   agent_id: string;
@@ -107,13 +107,13 @@ export async function registerOutboundContext(
         messageContent: content,
       });
       log.debug({ taskId: boundTask.taskId }, 'outbound context: auto-bound task-wake reply');
-    } else if (bridge && boundTask && !bridge.metadata?.task_id) {
+    } else if (bridge && boundTask && !bridge.metadata?.[TASK_WAKE_TASK_ID_KEY]) {
       bridge = {
         ...bridge,
         metadata: {
           ...(bridge.metadata ?? {}),
-          bind_reply: true,
-          task_id: boundTask.taskId,
+          [TASK_WAKE_BIND_REPLY_KEY]: true,
+          [TASK_WAKE_TASK_ID_KEY]: boundTask.taskId,
         },
       };
     }
