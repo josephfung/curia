@@ -13,7 +13,7 @@ import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
 import type { Sensitivity } from '../memory/types.js';
 import { SENSITIVITY_LEVELS } from '../memory/types.js';
-import { isConfidentialOrAbove, isRestricted, sensitivityRank } from '../memory/sensitivity.js';
+import { isConfidentialOrAbove, isRestricted, maxSensitivity, sensitivityRank } from '../memory/sensitivity.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -280,6 +280,22 @@ function parseSensitivity(value: string | undefined): Sensitivity | undefined {
     : undefined;
 }
 
+/**
+ * Merge caller-supplied sensitivity with the kg_nodes authoritative value.
+ * Explicit overrides may only ratchet upward (never downgrade) — matching
+ * entity-memory's sensitivity ratchet in sensitivity.ts.
+ */
+export function resolveItemSensitivity(
+  explicit: Sensitivity | undefined,
+  fromDb: Sensitivity | undefined,
+): Sensitivity {
+  const dbLevel = fromDb ?? 'internal';
+  if (explicit === undefined) {
+    return fromDb ?? 'internal';
+  }
+  return maxSensitivity(explicit, dbLevel);
+}
+
 function countRows(raw: unknown): number {
   if (!Array.isArray(raw)) return 0;
   return raw.length;
@@ -431,6 +447,11 @@ export class ExportControlService {
   /**
    * Resolve raw export item inputs to fully-tagged ExportItems, looking up
    * kg_nodes.sensitivity for any node IDs present.
+   *
+   * Items without node_id default to `internal` unless the caller supplies an
+   * explicit sensitivity in export_items — that self-attestation is trusted
+   * (no KG lookup to contradict it). Items with node_id always ratchet
+   * explicit sensitivity upward against the DB value, never downward.
    */
   async resolveItems(rawItems: RawExportItemInput[]): Promise<ExportItem[]> {
     if (rawItems.length === 0) return [];
@@ -445,9 +466,10 @@ export class ExportControlService {
       const nodeId = raw.node_id ?? raw.nodeId;
       const fromDb = nodeId ? nodeMap.get(nodeId) : undefined;
       const explicitSensitivity = parseSensitivity(raw.sensitivity);
-      const sensitivity: Sensitivity = explicitSensitivity
-        ?? fromDb?.sensitivity
-        ?? 'internal';
+      const sensitivity = resolveItemSensitivity(
+        explicitSensitivity,
+        fromDb?.sensitivity,
+      );
       const label = raw.label?.trim()
         || fromDb?.label
         || (nodeId ? `node ${nodeId}` : `item ${index + 1}`);
