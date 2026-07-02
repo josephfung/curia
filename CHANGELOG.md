@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`delegate` timeout storm** — timeouts now return structured, retry-capped failures instead of triggering duplicate re-delegations. Closes #1288.
+
 ### Security
 
 - **Console CSP (#130)** — strict `Content-Security-Policy` and `X-Frame-Options: DENY` on HTML responses; scripts locked to same-origin bundles (legacy KG Tailwind CDN removed with the React console).

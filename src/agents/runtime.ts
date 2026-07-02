@@ -50,6 +50,7 @@ import {
   parseDelegateFailureData,
   type DelegationFailureInfo,
 } from './delegation-guard.js';
+import { computeDelegateTimeoutMs } from './delegate-timeout.js';
 import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import {
@@ -1048,16 +1049,13 @@ export class AgentRuntime {
               }
 
               if (durationSeconds !== undefined) {
-                const timeoutMs = durationSeconds * 1000;
-                // Guard against non-integer results from floating-point expectedDurationSeconds
-                // stored via out-of-band DB writes — the delegate handler would silently fall back,
-                // but we log here so the root cause is visible in audit logs.
-                if (Number.isInteger(timeoutMs) && timeoutMs > 0) {
+                try {
+                  const timeoutMs = computeDelegateTimeoutMs(durationSeconds);
                   skillInput = { ...inputRecord, timeout_ms: timeoutMs };
-                } else {
+                } catch (err) {
                   logger.warn(
-                    { agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds, computedTimeoutMs: timeoutMs },
-                    'Computed timeout_ms from expectedDurationSeconds is not a valid positive integer — skipping injection; delegate will use default timeout',
+                    { err, agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds },
+                    'Could not compute delegate timeout from expectedDurationSeconds — skipping injection; delegate will use default timeout',
                   );
                 }
               }
@@ -1360,6 +1358,7 @@ export class AgentRuntime {
           retryable: false,
           message: pendingDelegationEscalation.message,
           escalated: pendingDelegationEscalation.escalated,
+          ...(pendingDelegationEscalation.possiblySucceeded === true && { possibly_succeeded: true }),
         });
 
         if (memory) {

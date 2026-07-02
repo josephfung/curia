@@ -23,6 +23,56 @@ function makeCtx(
 describe('DelegateHandler', () => {
   const handler = new DelegateHandler();
 
+  it('returns structured retryable failure when specialist wait times out (#1288)', async () => {
+    const { vi } = await import('vitest');
+    vi.useFakeTimers();
+
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('slow-specialist', { role: 'specialist', description: 'Slow' });
+    const bus = new EventBus(logger);
+
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'slow-specialist') {
+        await new Promise((resolve) => setTimeout(resolve, 60_000));
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'slow-specialist',
+          conversationId: event.payload.conversationId,
+          content: 'Done after delay',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    const executePromise = handler.execute(makeCtx(
+      { agent: 'slow-specialist', task: 'Long reconciliation', timeout_ms: 1000 },
+      { bus, agentRegistry },
+    ));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await executePromise;
+    vi.useRealTimers();
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as {
+        agent: string;
+        failed: boolean;
+        reason: string;
+        retryable: boolean;
+        possibly_succeeded?: boolean;
+        message: string;
+      };
+      expect(data.failed).toBe(true);
+      expect(data.agent).toBe('slow-specialist');
+      expect(data.reason).toBe('timeout');
+      expect(data.retryable).toBe(false);
+      expect(data.possibly_succeeded).toBe(true);
+      expect(data.message).toContain('did not respond');
+    }
+  });
+
   it('returns failure when bus is not available', async () => {
     const result = await handler.execute(makeCtx({ agent: 'research-analyst', task: 'do something' }));
     expect(result.success).toBe(false);

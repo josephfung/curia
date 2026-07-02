@@ -17,6 +17,19 @@ describe('DelegationGuard', () => {
     expect(guard.shouldEscalate(key)).toBe(true);
   });
 
+  it('blocks immediately after a timeout failure', () => {
+    const guard = new DelegationGuard();
+    guard.recordInvocation(key);
+    guard.recordFailure(key, {
+      agent: 'social-media',
+      reason: 'timeout',
+      retryable: false,
+      message: 'delegate wait timed out',
+    });
+    expect(guard.canAttempt(key)).toBe(false);
+    expect(guard.shouldEscalate(key)).toBe(true);
+  });
+
   it('allows one retry for retryable failures then blocks', () => {
     const guard = new DelegationGuard();
     guard.recordInvocation(key);

@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.11.2"
+version: "0.11.5"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -304,6 +304,13 @@ system_prompt: |
      on synchronous channels.
   3. Treat `paused` differently from `failed` — never confabulate an external cause
      (API timeout, service outage) when the reason is budget exhaustion with progress.
+
+  ### Handling delegate wait timeouts (possibly still running)
+  Delegate wait timeouts are non-retryable: the platform blocks, escalates, and short-circuits
+  your turn immediately — you do not get a follow-up round to re-delegate or message the CEO
+  about the timeout yourself. When the outbound `agent.response` carries
+  `delegation_failure` with `possibly_succeeded: true`, the specialist may still be running;
+  the `message` field has the principal-facing wording to use.
 
   ## What I Do Directly
 

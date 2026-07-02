@@ -2804,7 +2804,7 @@ describe('AgentRuntime chatWithRetry', () => {
       // Verify the execution layer received the injected timeout_ms
       expect(mockExecution.invoke).toHaveBeenCalledWith(
         'delegate',
-        expect.objectContaining({ timeout_ms: 600000 }),
+        expect.objectContaining({ timeout_ms: 750_000 }),
         undefined,
         expect.any(Object),
       );
@@ -2929,10 +2929,69 @@ describe('AgentRuntime chatWithRetry', () => {
       });
       await bus.publish('dispatch', task);
 
-      // Scheduler's 120s (120000ms) must win over agent YAML's 600s (600000ms)
+      // Scheduler's 120s (+25% headroom = 150s) must win over agent YAML's 600s
       expect(mockExecution.invoke).toHaveBeenCalledWith(
         'delegate',
-        expect.objectContaining({ timeout_ms: 120000 }),
+        expect.objectContaining({ timeout_ms: 150_000 }),
+        undefined,
+        expect.any(Object),
+      );
+    });
+
+    it('clamps injected timeout_ms below delegate skill outer timeout (#1288)', async () => {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              type: 'tool_use' as const,
+              toolCalls: [{ id: 'call-delegate-clamp', name: 'delegate', input: { agent: 'essay-editor', task: 'long job' } }],
+              usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
+            };
+          }
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
+        }),
+      };
+
+      const { AgentRegistry } = await import('../../../src/agents/agent-registry.js');
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('essay-editor', { role: 'specialist', description: 'Essay editor', expectedDurationSeconds: 800 });
+
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: { response: 'Done', agent: 'essay-editor' } }),
+      } as unknown as ExecutionLayer;
+
+      const agent = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [{ name: 'delegate', description: 'Delegate', input_schema: { type: 'object' as const, properties: { agent: { type: 'string' }, task: { type: 'string' } }, required: ['agent', 'task'] } }],
+        agentRegistry,
+      });
+      agent.register();
+
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-timeout-clamp',
+        channelId: 'cli',
+        senderId: 'user',
+        content: 'Run long job',
+        parentEventId: 'parent-timeout-clamp',
+      }));
+
+      expect(mockExecution.invoke).toHaveBeenCalledWith(
+        'delegate',
+        expect.objectContaining({ timeout_ms: 895_000 }),
         undefined,
         expect.any(Object),
       );
@@ -3054,7 +3113,7 @@ describe('AgentRuntime chatWithRetry', () => {
       // AND the injected timeout_ms (proving registry lookup worked after stripping @)
       expect(mockExecution.invoke).toHaveBeenCalledWith(
         'delegate',
-        expect.objectContaining({ agent: 'essay-editor', timeout_ms: 600000 }),
+        expect.objectContaining({ agent: 'essay-editor', timeout_ms: 750_000 }),
         undefined,
         expect.any(Object),
       );
@@ -3823,6 +3882,115 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const response = agentResponses[0]!;
     expect(response.payload.content).toContain('delegation_failure');
     expect(response.payload.content).toContain('api_error');
+    expect(response.payload.content).toContain('"escalated":true');
+  });
+
+  it('records delegate timeout as non-retryable failure and escalates immediately (#1288)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const delegateInvokeCount = { n: 0 };
+    const taskCreateCount = { n: 0 };
+
+    const mockExecution = {
+      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (skillName === 'task-create') {
+          taskCreateCount.n += 1;
+          return { success: true, data: { task_id: 'escalation-task-timeout' } };
+        }
+        if (skillName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          const dKey = delegationKey(delegateAgent, delegateTask);
+          const guard = options?.delegationGuard;
+          if (guard && !guard.canAttempt(dKey)) {
+            const prior = guard.getFailure(dKey);
+            return {
+              success: true,
+              data: {
+                agent: delegateAgent,
+                failed: true,
+                blocked: true,
+                reason: prior?.reason ?? 'blocked',
+                retryable: false,
+                message: prior?.message ?? `Re-delegation to '${delegateAgent}' is blocked for this task.`,
+                escalated: guard.isEscalated(dKey),
+              },
+            };
+          }
+          if (guard) {
+            guard.recordInvocation(dKey);
+          }
+          delegateInvokeCount.n += 1;
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'timeout',
+              retryable: false,
+              possibly_succeeded: true,
+              message: "Specialist 'T2125-expense-tracker' did not respond within the delegate wait window — the task may still be running",
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let chatRound = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatRound += 1;
+        return {
+          type: 'tool_use' as const,
+          toolCalls: [
+            { id: `call-delegate-timeout-${chatRound}`, name: 'delegate', input: { agent: 'T2125-expense-tracker', task: 'Run June reconciliation' } },
+          ],
+          usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-delegate-timeout',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Run June reconciliation',
+      parentEventId: 'inbound-delegate-timeout',
+    }));
+
+    expect(delegateInvokeCount.n).toBe(1);
+    expect(taskCreateCount.n).toBe(1);
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+
+    expect(agentResponses).toHaveLength(1);
+    const response = agentResponses[0]!;
+    expect(response.payload.content).toContain('delegation_failure');
+    expect(response.payload.content).toContain('timeout');
+    expect(response.payload.content).toContain('"possibly_succeeded":true');
     expect(response.payload.content).toContain('"escalated":true');
   });
 
