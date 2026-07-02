@@ -26,7 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Bulk export controls** — item-count threshold, non-contact destination allowlisting, and restricted sensitivity ceiling for email attachments (OutboundGateway) and Google Workspace MCP exports (`create_drive_file`, `create_sheet`, `append_table_rows`). CEO approval notifications include the export item list. Closes #201.
+- **Bulk export controls** — item-count threshold, non-contact destination allowlisting (confidential+ only), and restricted sensitivity ceiling for email attachments (OutboundGateway) and Google Workspace MCP exports (`create_drive_file`, `create_sheet`, `append_table_rows`). Skills accept `export_items` / per-attachment `node_id` for sensitivity resolution; CEO approval notifications include the export item list. Closes #201.
 - **Jobs console** — schedule-type and agent filters, human-readable schedule summaries, and linked task titles with `/tasks?task=` deep links. (#1304)
 - **`approval notifications`** — CEO approval emails now include the pending action's recipient and message/content when the notification goes to the principal, so approvals are informed rather than blind. (#1300)
 - **Calendar principal-grant design** — memo for operating the calendar as the CEO (bind the calendar client to `ceo_nylas_grant_id`), fixing RSVP `omittedAttendeesSpecified`; implementation tracked in #1217.

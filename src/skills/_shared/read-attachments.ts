@@ -17,6 +17,10 @@ export interface OutboundAttachmentInput {
   filename: string;
   /** MIME type (e.g. "application/pdf"). */
   contentType: string;
+  /** Optional KG node ID — resolves sensitivity for bulk-export gates (#201). */
+  nodeId?: string;
+  /** Optional explicit sensitivity override (normally resolved from node_id). */
+  sensitivity?: string;
 }
 
 /** Resolved attachment ready for transport — URL replaced with raw bytes. */

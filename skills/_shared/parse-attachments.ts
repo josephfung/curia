@@ -32,6 +32,8 @@ export function parseAttachmentInputs(raw: unknown): OutboundAttachmentInput[] |
     const fileUrl = obj['file_url'];
     const filename = obj['filename'];
     const contentType = obj['content_type'];
+    const nodeId = obj['node_id'];
+    const sensitivity = obj['sensitivity'];
 
     if (typeof fileUrl !== 'string' || !fileUrl) {
       return `attachments[${i}].file_url must be a non-empty string (got ${JSON.stringify(fileUrl)})`;
@@ -42,8 +44,20 @@ export function parseAttachmentInputs(raw: unknown): OutboundAttachmentInput[] |
     if (typeof contentType !== 'string' || !contentType) {
       return `attachments[${i}].content_type must be a non-empty string (got ${JSON.stringify(contentType)})`;
     }
+    if (nodeId !== undefined && typeof nodeId !== 'string') {
+      return `attachments[${i}].node_id must be a string when provided`;
+    }
+    if (sensitivity !== undefined && typeof sensitivity !== 'string') {
+      return `attachments[${i}].sensitivity must be a string when provided`;
+    }
 
-    result.push({ fileUrl, filename, contentType });
+    result.push({
+      fileUrl,
+      filename,
+      contentType,
+      ...(typeof nodeId === 'string' && nodeId ? { nodeId } : {}),
+      ...(typeof sensitivity === 'string' && sensitivity ? { sensitivity } : {}),
+    });
   }
 
   return result;

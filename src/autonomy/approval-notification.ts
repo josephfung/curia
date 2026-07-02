@@ -190,8 +190,26 @@ export const SKILL_DETAIL_FIXTURES: Array<{
 // Pure helpers — exported for testing
 // ---------------------------------------------------------------------------
 
-function formatFieldValue(value: unknown): string | null {
+function formatExportItemsValue(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const lines = value
+    .map((item) => {
+      if (typeof item !== 'object' || item === null) return null;
+      const obj = item as Record<string, unknown>;
+      const label = typeof obj['label'] === 'string' ? obj['label'].trim() : '';
+      const sensitivity = typeof obj['sensitivity'] === 'string' ? obj['sensitivity'] : '';
+      if (!label && !sensitivity) return null;
+      return sensitivity ? `${label || 'item'} [${sensitivity}]` : label;
+    })
+    .filter((line): line is string => Boolean(line));
+  return lines.length ? lines.join('; ') : null;
+}
+
+function formatFieldValue(value: unknown, fieldKey?: string): string | null {
   if (value === null || value === undefined) return null;
+  if (fieldKey === 'export_items') {
+    return formatExportItemsValue(value);
+  }
   if (typeof value === 'string') {
     const trimmed = value.trim();
     return trimmed ? trimmed : null;
@@ -201,25 +219,6 @@ function formatFieldValue(value: unknown): string | null {
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return null;
-    // export_items arrays — render label + sensitivity per item (#201).
-    if (
-      value.every((item) => typeof item === 'object' && item !== null)
-      && value.some((item) => {
-        const obj = item as Record<string, unknown>;
-        return typeof obj['label'] === 'string' || typeof obj['sensitivity'] === 'string';
-      })
-    ) {
-      const lines = value
-        .map((item) => {
-          const obj = item as Record<string, unknown>;
-          const label = typeof obj['label'] === 'string' ? obj['label'].trim() : '';
-          const sensitivity = typeof obj['sensitivity'] === 'string' ? obj['sensitivity'] : '';
-          if (!label && !sensitivity) return null;
-          return sensitivity ? `${label || 'item'} [${sensitivity}]` : label;
-        })
-        .filter((line): line is string => Boolean(line));
-      return lines.length ? lines.join('; ') : null;
-    }
     const parts = value
       .map((item) => {
         if (typeof item === 'string') {
@@ -288,7 +287,7 @@ export function buildApprovalDetails(
 
   for (const { key, label } of specs) {
     if (seenLabels.has(label)) continue;
-    const raw = formatFieldValue(payload[key]);
+    const raw = formatFieldValue(payload[key], key);
     if (!raw) continue;
 
     const sanitized = sanitizeOutput(raw, { maxLength: MAX_DETAIL_FIELD_LENGTH });

@@ -40,6 +40,21 @@ describe('parseAttachmentInputs', () => {
     expect(result).toContain('content_type');
   });
 
+  it('parses optional node_id on attachments', () => {
+    const result = parseAttachmentInputs([
+      {
+        file_url: 'file:///tmp/a.pdf',
+        filename: 'a.pdf',
+        content_type: 'application/pdf',
+        node_id: '550e8400-e29b-41d4-a716-446655440000',
+      },
+    ]);
+    expect(Array.isArray(result)).toBe(true);
+    if (Array.isArray(result)) {
+      expect(result[0]?.nodeId).toBe('550e8400-e29b-41d4-a716-446655440000');
+    }
+  });
+
   it('returns a valid OutboundAttachmentInput[] for well-formed input', () => {
     const result = parseAttachmentInputs([
       { file_url: 'file:///tmp/a.pdf', filename: 'a.pdf', content_type: 'application/pdf' },
