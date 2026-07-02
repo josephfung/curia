@@ -149,6 +149,21 @@ export class EmailReplyHandler implements SkillHandler {
       }, {
         taskEventId: ctx.taskEventId,
         conversationId: ctx.conversationId,
+        humanApproved: ctx.humanApproved,
+        ...(attachmentsParsed.length > 0
+          ? {
+            reExecRecipe: {
+              skillName: 'email-reply',
+              partialPayload: ctx.input,
+              description: `Send email reply with ${attachmentsParsed.length} attachment(s)`,
+            },
+            exportContext: {
+              skillName: 'email-reply',
+              agentId: ctx.agentId,
+              exportItems: (ctx.input as Record<string, unknown>)['export_items'],
+            },
+          }
+          : {}),
       });
 
       if (!result.success) {

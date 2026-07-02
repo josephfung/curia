@@ -51,6 +51,17 @@ import type { InfraLlmService } from './infra-llm.js';
 import { OutboundContextService, ScopedOutboundContext } from '../dispatch/outbound-context.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import { DEFAULT_RESUMABLE_CEILINGS, type ResumableCeilingsConfig } from '../config.js';
+import type { ExportControlService } from '../security/export-controls.js';
+import {
+  MCP_EXPORT_SKILLS,
+  GATEWAY_ATTACHMENT_SKILLS,
+  ExportControlService as ExportControlServiceClass,
+  extractDestinationFromInput,
+  extractExportItemsFromInput,
+  formatDestination,
+  maxItemSensitivity,
+} from '../security/export-controls.js';
+import { createExportDelivered } from '../bus/events.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -183,6 +194,8 @@ export class ExecutionLayer {
   private resumableCeilings: ResumableCeilingsConfig;
   /** Principal verified channel identities — used by Gate C for structural recipient checks (#1301). */
   private principalIdentities: readonly ChannelIdentity[];
+  /** Bulk export gates for MCP and attachment exports (#201). */
+  private exportControlService?: ExportControlService;
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -223,6 +236,8 @@ export class ExecutionLayer {
     resumableCeilings?: ResumableCeilingsConfig;
     /** Verified principal channel identities for Gate C principal-only carve-out (#1301). */
     principalIdentities?: readonly ChannelIdentity[];
+    /** Bulk export gate service (#201). */
+    exportControlService?: ExportControlService;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -261,6 +276,7 @@ export class ExecutionLayer {
     this.bypassLadder = options?.bypassLadder ?? DEFAULT_BYPASS_LADDER;
     this.resumableCeilings = options?.resumableCeilings ?? DEFAULT_RESUMABLE_CEILINGS;
     this.principalIdentities = options?.principalIdentities ?? [];
+    this.exportControlService = options?.exportControlService;
   }
 
   /**
@@ -417,6 +433,60 @@ export class ExecutionLayer {
     }
 
     return baseMsg + `No approval request was created — the CEO must authorize this action manually.`;
+  }
+
+  /**
+   * Build the advisory error for bulk export gate blocks (#201).
+   * Restricted bulk blocks do not create approval rows.
+   */
+  private async buildExportGateError(
+    skillName: string,
+    input: Record<string, unknown>,
+    message: string,
+    items: import('../security/export-controls.js').ExportItem[],
+    actionRisk: string | number,
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): Promise<string> {
+    const itemSummary = ExportControlServiceClass.formatItemSummary(items);
+    const baseMsg = `${message}\n\nItems:\n${itemSummary}\n`;
+
+    if (this.approvalTrigger && options?.taskEventId) {
+      try {
+        const result = await this.approvalTrigger.request({
+          taskId: options.taskEventId,
+          conversationId: options.conversationId,
+          skillName,
+          actionRisk: String(actionRisk),
+          input: { ...input, export_items: items.map((i) => ({
+            node_id: i.nodeId,
+            label: i.label,
+            sensitivity: i.sensitivity,
+          })) },
+          currentScore: 0,
+          requiredScore: 0,
+          reason: `${message}\n\n${itemSummary}`,
+        });
+        if (!result.created) {
+          return (
+            baseMsg +
+            `An approval request for this export is already pending (ref: ${result.existingShortRef}).`
+          );
+        }
+        if (result.notificationSent) {
+          return baseMsg + `An approval request has been sent to the CEO (ref: ${result.shortRef}).`;
+        }
+        return (
+          baseMsg +
+          `An approval request was created (ref: ${result.shortRef}) but ` +
+          `notification could not be delivered — the CEO will see it in the next digest.`
+        );
+      } catch (err) {
+        skillLogger.warn({ err, skillName }, 'export gate approval trigger failed');
+      }
+    }
+
+    return baseMsg + 'No approval request was created.';
   }
 
   /**
@@ -893,6 +963,41 @@ export class ExecutionLayer {
       }
     }
 
+    // Export control gate — MCP bulk exports and email attachments (#201).
+    // humanApproved bypasses threshold and destination gates but NOT restricted bulk blocks.
+    const isExportSkill = MCP_EXPORT_SKILLS.has(skillName)
+      || (GATEWAY_ATTACHMENT_SKILLS.has(skillName) && Array.isArray(input['attachments']) && input['attachments'].length > 0);
+    if (this.exportControlService && isExportSkill) {
+      const exportGate = await this.exportControlService.evaluateSkillExport({
+        skillName,
+        input,
+        humanApproved: options?.humanApproved,
+      });
+      if (exportGate && exportGate.action === 'block') {
+        skillLogger.info(
+          { skillName, code: exportGate.code, itemCount: exportGate.items.length },
+          'export gate: bulk restricted export blocked',
+        );
+        return { success: false, error: this.wrapSkillError(exportGate.message) };
+      }
+      if (exportGate && exportGate.action === 'approval_required') {
+        skillLogger.info(
+          { skillName, code: exportGate.code, itemCount: exportGate.items.length },
+          'export gate: export requires CEO approval',
+        );
+        const gateError = await this.buildExportGateError(
+          skillName,
+          input,
+          exportGate.message,
+          exportGate.items,
+          manifest.action_risk,
+          options,
+          skillLogger,
+        );
+        return { success: false, error: this.wrapSkillError(gateError) };
+      }
+    }
+
     // Build the sandboxed context — secret access is restricted to
     // only the secrets declared in the skill's manifest
     const declaredSecrets = new Set(manifest.secrets);
@@ -996,6 +1101,7 @@ export class ExecutionLayer {
       agentId: options?.agentId,
       taskEventId: options?.taskEventId,
       conversationId: options?.conversationId,
+      humanApproved: options?.humanApproved,
       channelId: options?.channelId,
       // Pre-construct the memory write source key so skills pass a rate-limit-compatible
       // source to entityMemory.storeFact(). This key matches the format that
@@ -1345,6 +1451,32 @@ export class ExecutionLayer {
         handler.execute(ctx),
         timeoutPromise,
       ]);
+
+      // MCP export audit trail (#201) — publish after successful bulk record export.
+      if (result.success && this.exportControlService && MCP_EXPORT_SKILLS.has(skillName) && this.bus) {
+        const destination = extractDestinationFromInput(skillName, input);
+        const rawItems = await this.exportControlService.resolveItems(
+          extractExportItemsFromInput(skillName, input),
+        );
+        if (rawItems.length > 0 && destination) {
+          this.bus.publish('execution', createExportDelivered({
+              skillName,
+              agentId: options?.agentId,
+              taskEventId: options?.taskEventId,
+              conversationId: options?.conversationId,
+              destination: formatDestination(destination),
+              items: rawItems.map((i) => ({
+                nodeId: i.nodeId,
+                label: i.label,
+                sensitivity: i.sensitivity,
+              })),
+              maxSensitivity: maxItemSensitivity(rawItems),
+              parentEventId: options?.parentEventId,
+            })).catch((err) => {
+              skillLogger.warn({ err, skillName }, 'export gate: failed to publish export.delivered event');
+            });
+        }
+      }
 
       // Sanitize successful output before returning.
       // Strips dangerous tags, redacts secrets, and truncates to the configured limit.

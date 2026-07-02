@@ -157,6 +157,22 @@
         }
       }
     },
+    "exportControls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "confidentialThreshold": { "type": "integer", "minimum": 1 },
+        "allowedDestinations": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "driveFolderIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "urls": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "filePaths": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    },
     "intentDrift": {
       "type": "object",
       "additionalProperties": false,

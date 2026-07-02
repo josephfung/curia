@@ -185,6 +185,15 @@ security:
     data_export: 0.8          # sharing files, forwarding records
     financial: 0.8            # payments, financial commitments
 
+# Bulk export controls (#201) — item-count threshold, destination allowlisting, and
+# sensitivity ceiling for attachments (OutboundGateway) and MCP Drive/Sheets exports.
+exportControls:
+  confidentialThreshold: 10
+  allowedDestinations:
+    driveFolderIds: []
+    urls: []
+    filePaths: []
+
 pii:
   # Additional PII patterns to scrub from LLM-facing error strings.
   # Each entry: { regex: "...", replacement: "[PLACEHOLDER]" } — gi flags applied.

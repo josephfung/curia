@@ -28,12 +28,30 @@ export interface SensitivityRule {
 }
 
 // Precedence order: higher index = higher sensitivity (restricted wins over confidential, etc.)
-const SENSITIVITY_ORDER: Record<Sensitivity, number> = {
+export const SENSITIVITY_RANK: Record<Sensitivity, number> = {
   public: 0,
   internal: 1,
   confidential: 2,
   restricted: 3,
 };
+
+/** @deprecated internal alias — use SENSITIVITY_RANK */
+const SENSITIVITY_ORDER = SENSITIVITY_RANK;
+
+/** Numeric rank for comparing sensitivity levels (higher = more restrictive). */
+export function sensitivityRank(level: Sensitivity): number {
+  return SENSITIVITY_RANK[level];
+}
+
+/** True when level is `confidential` or `restricted`. */
+export function isConfidentialOrAbove(level: Sensitivity): boolean {
+  return sensitivityRank(level) >= sensitivityRank('confidential');
+}
+
+/** True when level is `restricted`. */
+export function isRestricted(level: Sensitivity): boolean {
+  return level === 'restricted';
+}
 
 /**
  * Return whichever sensitivity level is more restrictive.

@@ -182,6 +182,8 @@ export interface SkillContext {
   /** Conversation ID from the originating task event. Used by skills that need to
    *  thread this through to other system events (e.g. outbound delivery audit). */
   conversationId?: string;
+  /** True when re-invoked after CEO approval via approve-action (ADR-018, #201). */
+  humanApproved?: boolean;
   /** Channel ID from the originating task event (e.g. "http", "internal", "signal").
    *  Used with agentId and taskEventId to construct the memory write source key. */
   channelId?: string;

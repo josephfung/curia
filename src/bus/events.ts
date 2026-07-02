@@ -153,6 +153,25 @@ interface OutboundDeliveredPayload {
   /** Provider message ID — Nylas message ID for email, absent for
    *  signal-cli (the RPC call returns no ID). */
   messageId?: string;
+  /** Bulk-export audit fields (#201) — populated when attachments leave the system. */
+  exportAudit?: {
+    destination: string;
+    items: Array<{ nodeId?: string; label: string; sensitivity: string }>;
+    skillName?: string;
+    agentId?: string;
+  };
+}
+
+// ExportDeliveredPayload — emitted by ExecutionLayer after a successful MCP
+// bulk-record export (Drive/Sheets). Mirrors outbound.delivered for non-channel sinks.
+interface ExportDeliveredPayload {
+  skillName: string;
+  agentId?: string;
+  taskEventId?: string;
+  conversationId?: string;
+  destination: string;
+  items: Array<{ nodeId?: string; label: string; sensitivity: string }>;
+  maxSensitivity: string;
 }
 
 // OutboundPiiRedactedPayload — emitted by the dispatch layer (via PiiRedactor)
@@ -673,6 +692,12 @@ export interface OutboundDeliveredEvent extends BaseEvent {
   payload: OutboundDeliveredPayload;
 }
 
+export interface ExportDeliveredEvent extends BaseEvent {
+  type: 'export.delivered';
+  sourceLayer: 'execution';
+  payload: ExportDeliveredPayload;
+}
+
 // OutboundBlockedEvent — published by the dispatch layer when the content filter
 // intercepts and blocks an outbound message. Channel adapters subscribe to this so
 // they can surface a failure signal to the user (e.g., "message could not be sent").
@@ -1120,6 +1145,7 @@ export type BusEvent =
   | MessageRejectedEvent  // Unknown sender policy: message rejected, signals HTTP adapter to return 403
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
   | OutboundDeliveredEvent // Outbound delivery: wire-level send succeeded (#729)
+  | ExportDeliveredEvent   // MCP bulk export: Drive/Sheets record export succeeded (#201)
   | OutboundPiiRedactedEvent // Outbound PII redaction: PII scrubbed before delivery (#249)
   | OutboundSuppressedDuplicateEvent  // #847: duplicate reply suppressed by reply-lock
   | OutboundNotificationEvent // System notifications routed through safety pipeline (#206)
@@ -1225,6 +1251,20 @@ export function createOutboundDelivered(
     timestamp: new Date(),
     type: 'outbound.delivered',
     sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createExportDelivered(
+  payload: ExportDeliveredPayload & { parentEventId?: string },
+): ExportDeliveredEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'export.delivered',
+    sourceLayer: 'execution',
     payload: rest,
     parentEventId,
   };
