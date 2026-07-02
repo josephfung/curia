@@ -11,6 +11,7 @@ import {
   maxItemSensitivity,
   isUrlPrefixAllowed,
   isPathPrefixAllowed,
+  resolveItemSensitivity,
 } from './export-controls.js';
 import type { ExportItem } from './export-controls.js';
 
@@ -213,6 +214,29 @@ describe('allowlist prefix boundaries', () => {
   it('rejects path prefix bypass', () => {
     expect(isPathPrefixAllowed('/exports-secret', '/exports')).toBe(false);
     expect(isPathPrefixAllowed('/exports/reports', '/exports/')).toBe(true);
+  });
+});
+
+describe('resolveItemSensitivity', () => {
+  it('uses DB sensitivity when no explicit override', () => {
+    expect(resolveItemSensitivity(undefined, 'restricted')).toBe('restricted');
+  });
+
+  it('defaults to internal when neither explicit nor DB value', () => {
+    expect(resolveItemSensitivity(undefined, undefined)).toBe('internal');
+  });
+
+  it('ratchets explicit upward against DB — cannot downgrade', () => {
+    expect(resolveItemSensitivity('internal', 'restricted')).toBe('restricted');
+    expect(resolveItemSensitivity('confidential', 'restricted')).toBe('restricted');
+  });
+
+  it('allows explicit to ratchet upward when DB is lower', () => {
+    expect(resolveItemSensitivity('confidential', 'internal')).toBe('confidential');
+  });
+
+  it('honours self-attested sensitivity when no DB value', () => {
+    expect(resolveItemSensitivity('confidential', undefined)).toBe('confidential');
   });
 });
 

@@ -356,6 +356,10 @@ Every data export is audit-logged with:
 - Who requested it (sender, channel, trust level)
 - Which agent and skill performed the export
 
+**Sensitivity resolution.** Items tagged with a `node_id` resolve sensitivity from `kg_nodes`; an agent-supplied `sensitivity` field may only ratchet upward, never downgrade the DB value. Items without `node_id` (typical for row-count MCP exports) rely on self-declared sensitivity in `export_items` and default to `internal` when omitted.
+
+**Audit limitations.** `create_sheet` exports are logged at gate time with destination `sheets:(new)` because the real spreadsheet ID is assigned by Google only after the tool returns; post-hoc enrichment is not wired today.
+
 Even if all preventive layers fail, the audit trail enables full post-incident forensic analysis.
 
 ---
