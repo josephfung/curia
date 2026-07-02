@@ -67,6 +67,8 @@ function formatStructuredFailureMessage(agent: string, reason: AgentResponseFail
       return `Specialist '${agent}' failed due to an API error`;
     case 'blocked':
       return `Specialist '${agent}' was blocked from completing the task`;
+    case 'timeout':
+      return `Specialist '${agent}' did not respond within the delegate wait window — the task may still be running`;
     default:
       return `Specialist '${agent}' could not complete the task`;
   }
@@ -306,7 +308,12 @@ export class DelegateHandler implements SkillHandler {
       timeoutHandle = setTimeout(() => {
         if (!settled) {
           settled = true;
-          reject(new Error(`Specialist '${agent}' did not respond within ${specialistTimeoutMs}ms`));
+          reject({
+            __structuredDelegateFailure: true,
+            agent,
+            reason: 'timeout',
+            retryable: true,
+          } satisfies StructuredDelegateFailure);
         }
       }, specialistTimeoutMs);
 
@@ -493,6 +500,7 @@ export class DelegateHandler implements SkillHandler {
             retryable: err.retryable,
             ...(err.errorType !== undefined && { errorType: err.errorType }),
             message,
+            ...(err.reason === 'timeout' && { possibly_succeeded: true }),
           },
         };
       }

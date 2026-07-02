@@ -1,7 +1,7 @@
 {
   "name": "delegate",
   "description": "Delegate a task to a specialist agent. Use this when the user's request requires specialized expertise (research, expense tracking, etc.). Provide the specialist's name and a clear task description.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -24,11 +24,12 @@
     "retryable": "boolean?",
     "errorType": "string?",
     "message": "string?",
+    "possibly_succeeded": "boolean?",
     "escalated": "boolean?"
   },
   "permissions": [],
   "secrets": [],
-  "timeout": 660000,
+  "timeout": 900000,
   "capabilities": [
     "bus",
     "agentRegistry"
