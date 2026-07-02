@@ -8,6 +8,11 @@ describe('computeDelegateTimeoutMs', () => {
     expect(computeDelegateTimeoutMs(120)).toBe(150_000);
   });
 
+  it('caps headroom at three minutes for long expected durations', () => {
+    // 0.25 * 3000 = 750s of headroom, which exceeds the 180s cap.
+    expect(computeDelegateTimeoutMs(3000)).toBe((3000 + 180) * 1000);
+  });
+
   it('covers representative reconciliation duration with a 10-minute expected hint', () => {
     const nineMinutesMs = 9 * 60 * 1000;
     expect(computeDelegateTimeoutMs(600)).toBeGreaterThanOrEqual(nineMinutesMs);
