@@ -2,7 +2,7 @@
 //
 // Task-wake questions are sent from a scheduler conversation but replies arrive on
 // Signal/email. Auto-registration on send attaches durable task binding metadata;
-// the coordinator calls task-record-reply after judging relevance (not the dispatcher).
+// the coordinator persists via context-bridge-release(reply) after judging relevance.
 
 import type { Logger } from '../logger.js';
 import type { TaskRepo } from '../db/task-repo.js';
@@ -54,18 +54,19 @@ export interface TaskWakeReplyPersistResult {
   error?: string;
 }
 
-type OutboundContextLookup = Pick<OutboundContextCapability, 'getEntry' | 'releaseEntry'>;
+type OutboundContextRelease = Pick<OutboundContextCapability, 'releaseEntry'>;
 
 /**
- * Record a CEO reply against a specific task-wake binding. Called by the coordinator
- * via task-record-reply after judging that the inbound message answers the question.
+ * Persist a CEO reply on the task bound in entry metadata, then release the entry.
+ * task_id is read from metadata — not from the coordinator. Called by
+ * context-bridge-release when reply is provided for a task-wake binding.
  */
 export async function recordTaskWakeReply(options: {
   reply: string;
-  taskId: string;
   entryId: string;
+  entry: OutboundContextRow;
   taskRepo: TaskRepo;
-  outboundContext: OutboundContextLookup;
+  outboundContext: OutboundContextRelease;
   logger: Logger;
 }): Promise<TaskWakeReplyPersistResult> {
   const reply = options.reply.trim();
@@ -73,34 +74,18 @@ export async function recordTaskWakeReply(options: {
     return { persisted: false, error: 'reply must be non-empty' };
   }
 
-  let entry: OutboundContextRow | null;
-  try {
-    entry = await options.outboundContext.getEntry(options.entryId);
-  } catch (err) {
-    options.logger.error({ err, entryId: options.entryId }, 'task-wake reply: failed to load outbound entry');
-    return { persisted: false, error: 'failed to load outbound context entry' };
-  }
-
-  if (!entry) {
-    return { persisted: false, error: 'outbound context entry not found or already released' };
-  }
-  if (!isTaskWakeReplyBinding(entry.metadata)) {
+  if (!isTaskWakeReplyBinding(options.entry.metadata)) {
     return { persisted: false, error: 'outbound context entry is not a task-wake binding' };
   }
-  const boundTaskId = entry.metadata![TASK_WAKE_TASK_ID_KEY] as string;
-  if (boundTaskId !== options.taskId) {
-    return {
-      persisted: false,
-      error: `entry task_id ${boundTaskId} does not match requested task_id ${options.taskId}`,
-    };
-  }
+
+  const taskId = options.entry.metadata![TASK_WAKE_TASK_ID_KEY] as string;
 
   try {
-    const task = await options.taskRepo.getTask(options.taskId);
+    const task = await options.taskRepo.getTask(taskId);
     if (!task) {
-      options.logger.warn({ taskId: options.taskId, entryId: options.entryId }, 'task-wake reply: bound task not found — releasing entry');
+      options.logger.warn({ taskId, entryId: options.entryId }, 'task-wake reply: bound task not found — releasing entry');
       await options.outboundContext.releaseEntry(options.entryId);
-      return { persisted: false, error: `task not found: ${options.taskId}` };
+      return { persisted: false, error: `task not found: ${taskId}` };
     }
 
     const progressNote = `CEO replied: ${reply.slice(0, 1500)}`;
@@ -113,18 +98,18 @@ export async function recordTaskWakeReply(options: {
       updates.status = 'in_progress';
     }
 
-    await options.taskRepo.updateTask(options.taskId, updates, 'coordinator');
+    await options.taskRepo.updateTask(taskId, updates, 'coordinator');
     await options.outboundContext.releaseEntry(options.entryId);
 
     options.logger.info(
-      { taskId: options.taskId, entryId: options.entryId },
+      { taskId, entryId: options.entryId },
       'task-wake reply recorded on originating task',
     );
 
-    return { persisted: true, taskId: options.taskId, entryId: options.entryId };
+    return { persisted: true, taskId, entryId: options.entryId };
   } catch (err) {
     options.logger.error(
-      { err, taskId: options.taskId, entryId: options.entryId },
+      { err, taskId, entryId: options.entryId },
       'task-wake reply persistence failed',
     );
     return { persisted: false, error: 'failed to persist task-wake reply' };

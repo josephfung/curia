@@ -1,19 +1,22 @@
 {
   "name": "context-bridge-release",
-  "description": "Mark an outbound context bridge entry as released — stop expecting replies for this outbound message. Use this when a delegated conversation is complete or when you want to clear stale context. The entry_id is shown in the [ACTIVE OUTBOUND CONTEXT] block.",
-  "version": "1.1.0",
+  "description": "Mark an outbound context bridge entry as released — stop expecting replies for this outbound message. Use when a delegated conversation is complete or to clear stale context. The entry_id is shown in the [ACTIVE OUTBOUND CONTEXT] block. For task-wake bindings (context metadata bind_reply + task_id), pass reply with the CEO's answer verbatim to persist it on the originating task and release in one call.",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
-    "entry_id": "string"
+    "entry_id": "string",
+    "reply": "string"
   },
   "outputs": {
-    "released": "string"
+    "released": "string",
+    "task_id": "string"
   },
   "permissions": [],
   "secrets": [],
   "timeout": 10000,
   "capabilities": [
-    "outboundContext"
+    "outboundContext",
+    "taskRepo"
   ]
 }

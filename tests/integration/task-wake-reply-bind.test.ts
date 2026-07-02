@@ -1,7 +1,7 @@
 // tests/integration/task-wake-reply-bind.test.ts
 //
 // Regression for #1299: task-wake questions bind CEO replies back to the originating task
-// when the coordinator calls task-record-reply after judging relevance.
+// when the coordinator calls context-bridge-release with reply after judging relevance.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
@@ -16,7 +16,7 @@ import type { AgentTaskEvent } from '../../src/bus/events.js';
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
 import { createSilentLogger } from '../../src/logger.js';
-import { TaskRecordReplyHandler } from '../../skills/task-record-reply/handler.js';
+import { ContextBridgeReleaseHandler } from '../../skills/context-bridge-release/handler.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -171,10 +171,9 @@ describeIf('task-wake reply binding (#1299)', () => {
     expect(coordinatorTask!.payload.content).toContain('ACTIVE OUTBOUND CONTEXT');
   });
 
-  it('persists CEO reply via task-record-reply from a different conversation', async () => {
-    const result = await new TaskRecordReplyHandler().execute({
+  it('persists CEO reply via context-bridge-release with reply from a different conversation', async () => {
+    const result = await new ContextBridgeReleaseHandler().execute({
       input: {
-        task_id: taskId,
         entry_id: entryId,
         reply: 'Four full weeks — July 26 through August 22. Paperwork is done.',
       },

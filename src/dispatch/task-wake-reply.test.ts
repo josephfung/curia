@@ -80,7 +80,7 @@ describe('task-wake-reply', () => {
         updateTask: vi.fn().mockResolvedValue({ id: TASK_ID }),
       } as unknown as TaskRepo;
       outboundContext = {
-        getEntry: vi.fn().mockResolvedValue(makeEntry()),
+        getEntry: vi.fn(),
         releaseEntry: vi.fn().mockResolvedValue(undefined),
         register: vi.fn(),
         release: vi.fn(),
@@ -90,11 +90,11 @@ describe('task-wake-reply', () => {
       };
     });
 
-    it('records CEO reply to bound task and releases the outbound entry', async () => {
+    it('records CEO reply using task_id from entry metadata and releases', async () => {
       const result = await recordTaskWakeReply({
         reply: 'Four weeks, July 26 to August 22.',
-        taskId: TASK_ID,
         entryId: ENTRY_ID,
+        entry: makeEntry(),
         taskRepo,
         outboundContext,
         logger,
@@ -113,34 +113,11 @@ describe('task-wake-reply', () => {
       expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
     });
 
-    it('rejects when entry task_id does not match requested task_id', async () => {
-      (outboundContext.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeEntry({ metadata: { bind_reply: true, task_id: 'other-task' } }),
-      );
-
-      const result = await recordTaskWakeReply({
-        reply: 'Yes',
-        taskId: TASK_ID,
-        entryId: ENTRY_ID,
-        taskRepo,
-        outboundContext,
-        logger,
-      });
-
-      expect(result.persisted).toBe(false);
-      expect(taskRepo.updateTask).not.toHaveBeenCalled();
-      expect(outboundContext.releaseEntry).not.toHaveBeenCalled();
-    });
-
     it('rejects entries without task-wake binding metadata', async () => {
-      (outboundContext.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeEntry({ metadata: { subject: 'standup' } }),
-      );
-
       const result = await recordTaskWakeReply({
         reply: 'Yes',
-        taskId: TASK_ID,
         entryId: ENTRY_ID,
+        entry: makeEntry({ metadata: { subject: 'standup' } }),
         taskRepo,
         outboundContext,
         logger,
@@ -154,8 +131,8 @@ describe('task-wake-reply', () => {
       (taskRepo.getTask as ReturnType<typeof vi.fn>).mockResolvedValue(null);
       const result = await recordTaskWakeReply({
         reply: 'Some answer',
-        taskId: TASK_ID,
         entryId: ENTRY_ID,
+        entry: makeEntry(),
         taskRepo,
         outboundContext,
         logger,
@@ -170,8 +147,8 @@ describe('task-wake-reply', () => {
       (taskRepo.getTask as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
       const result = await recordTaskWakeReply({
         reply: 'Some answer',
-        taskId: TASK_ID,
         entryId: ENTRY_ID,
+        entry: makeEntry(),
         taskRepo,
         outboundContext,
         logger,
@@ -179,6 +156,7 @@ describe('task-wake-reply', () => {
 
       expect(result.persisted).toBe(false);
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
+      expect(outboundContext.releaseEntry).not.toHaveBeenCalled();
     });
   });
 });
