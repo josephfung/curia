@@ -1049,25 +1049,13 @@ export class AgentRuntime {
               }
 
               if (durationSeconds !== undefined) {
-                let timeoutMs: number;
                 try {
-                  timeoutMs = computeDelegateTimeoutMs(durationSeconds);
+                  const timeoutMs = computeDelegateTimeoutMs(durationSeconds);
+                  skillInput = { ...inputRecord, timeout_ms: timeoutMs };
                 } catch (err) {
                   logger.warn(
                     { err, agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds },
                     'Could not compute delegate timeout from expectedDurationSeconds — skipping injection; delegate will use default timeout',
-                  );
-                  timeoutMs = NaN;
-                }
-                // Guard against non-integer results from floating-point expectedDurationSeconds
-                // stored via out-of-band DB writes — the delegate handler would silently fall back,
-                // but we log here so the root cause is visible in audit logs.
-                if (Number.isInteger(timeoutMs) && timeoutMs > 0) {
-                  skillInput = { ...inputRecord, timeout_ms: timeoutMs };
-                } else if (Number.isFinite(timeoutMs)) {
-                  logger.warn(
-                    { agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds, computedTimeoutMs: timeoutMs },
-                    'Computed timeout_ms from expectedDurationSeconds is not a valid positive integer — skipping injection; delegate will use default timeout',
                   );
                 }
               }

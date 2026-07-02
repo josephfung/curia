@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`delegate` timeout storm** — delegate wait timeouts now return a structured `failed{reason:timeout,retryable:true,possibly_succeeded:true}` result so `DelegationGuard` caps identical re-delegations; runtime injects headroom when computing `timeout_ms` from `expected_duration_seconds`; delegate skill outer timeout raised to 15 min. Closes #1288.
+- **`delegate` timeout storm** — timeouts now return structured, retry-capped failures instead of triggering duplicate re-delegations. Closes #1288.
 
 ### Security
 
