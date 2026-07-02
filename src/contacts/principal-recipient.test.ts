@@ -74,6 +74,7 @@ describe('principal-recipient', () => {
   describe('resolvePrincipalIsSoleRecipientFromSkillInput', () => {
     it('detects signal-send to the principal only', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'signal-send',
         { recipient: '+15551234567', message: 'heads up' },
         PRINCIPAL_IDENTITIES,
       )).toBe(true);
@@ -81,6 +82,7 @@ describe('principal-recipient', () => {
 
     it('rejects signal group sends', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'signal-send',
         { recipient: '+15551234567', group_id: 'group-abc', message: 'hi' },
         PRINCIPAL_IDENTITIES,
       )).toBe(false);
@@ -88,6 +90,7 @@ describe('principal-recipient', () => {
 
     it('detects email-send to the principal only', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-send',
         { to: 'ceo@example.com', subject: 'x', body: 'y' },
         PRINCIPAL_IDENTITIES,
       )).toBe(true);
@@ -95,14 +98,56 @@ describe('principal-recipient', () => {
 
     it('rejects mixed principal + cc recipient set', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-send',
         { to: 'ceo@example.com', cc: 'other@example.com', subject: 'x', body: 'y' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
+    it('rejects comma-joined to with principal and a third party', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-send',
+        { to: 'ceo@example.com, other@example.com', subject: 'x', body: 'y' },
         PRINCIPAL_IDENTITIES,
       )).toBe(false);
     });
 
     it('rejects spoofed display name in to field', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-send',
         { to: 'CEO', subject: 'x', body: 'y' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
+    it('fails closed when email-send input includes unparsed bcc', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-send',
+        { to: 'ceo@example.com', bcc: 'other@example.com', subject: 'x', body: 'y' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
+    it('fails closed when email-send to is an array', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-send',
+        { to: ['ceo@example.com'], subject: 'x', body: 'y' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
+    it('fails closed for skills not on the allowlist even when to matches the principal', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'custom-notify',
+        { to: 'ceo@example.com' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
+    it('fails closed when signal-send input includes unparsed recipients key', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'signal-send',
+        { recipient: '+15551234567', recipients: ['+15559999999'], message: 'hi' },
         PRINCIPAL_IDENTITIES,
       )).toBe(false);
     });
