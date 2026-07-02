@@ -156,6 +156,21 @@ export class EmailSendHandler implements SkillHandler {
       }, {
         taskEventId: ctx.taskEventId,
         conversationId: ctx.conversationId,
+        humanApproved: ctx.humanApproved,
+        ...(attachmentsParsed.length > 0
+          ? {
+            reExecRecipe: {
+              skillName: 'email-send',
+              partialPayload: ctx.input,
+              description: `Send email with ${attachmentsParsed.length} attachment(s) to ${toAddresses[0]}`,
+            },
+            exportContext: {
+              skillName: 'email-send',
+              agentId: ctx.agentId,
+              exportItems: (ctx.input as Record<string, unknown>)['export_items'],
+            },
+          }
+          : {}),
       });
 
       if (!result.success) {

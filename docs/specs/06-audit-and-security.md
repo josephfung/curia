@@ -388,7 +388,7 @@ These are non-negotiable for launch.
 | Unknown sender → coordinator low-trust routing (auto-created `tier='unknown'` contact); no hold queue | Done |
 | Trust-gated action thresholds use `messageTrustScore` numeric values, enforced via Coordinator system prompt | Done |
 | Data sensitivity tags on knowledge graph entities | Done |
-| Bulk export gates active for confidential+ data | Not Done |
+| Bulk export gates active for confidential+ data | Done |
 | `human.decision` audit events populate `deciderId` and `deciderChannel` for every decision | Done |
 | Auth boundary — case-insensitive role lookup in authorization checks | Done |
 | Auth boundary — `tier_defaults` fallback (in `config/role-defaults.yaml`) when a contact's role has no explicit entry | Done |

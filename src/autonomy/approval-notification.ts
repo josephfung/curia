@@ -95,6 +95,17 @@ const SKILL_DETAIL_FIELDS: Array<{ test: (name: string) => boolean; fields: Deta
       { key: 'job_id', label: 'Job' },
     ],
   },
+  {
+    test: (n) =>
+      n === 'create_drive_file' || n === 'create_sheet' || n === 'append_table_rows'
+      || n === 'email-send' || n === 'email-reply',
+    fields: [
+      { key: 'export_items', label: 'Export items' },
+      { key: 'folder_id', label: 'Drive folder' },
+      { key: 'spreadsheet_id', label: 'Spreadsheet' },
+      { key: 'to', label: 'To' },
+    ],
+  },
 ];
 
 const GENERIC_DETAIL_FIELDS: DetailFieldSpec[] = [
@@ -190,6 +201,25 @@ function formatFieldValue(value: unknown): string | null {
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return null;
+    // export_items arrays — render label + sensitivity per item (#201).
+    if (
+      value.every((item) => typeof item === 'object' && item !== null)
+      && value.some((item) => {
+        const obj = item as Record<string, unknown>;
+        return typeof obj['label'] === 'string' || typeof obj['sensitivity'] === 'string';
+      })
+    ) {
+      const lines = value
+        .map((item) => {
+          const obj = item as Record<string, unknown>;
+          const label = typeof obj['label'] === 'string' ? obj['label'].trim() : '';
+          const sensitivity = typeof obj['sensitivity'] === 'string' ? obj['sensitivity'] : '';
+          if (!label && !sensitivity) return null;
+          return sensitivity ? `${label || 'item'} [${sensitivity}]` : label;
+        })
+        .filter((line): line is string => Boolean(line));
+      return lines.length ? lines.join('; ') : null;
+    }
     const parts = value
       .map((item) => {
         if (typeof item === 'string') {

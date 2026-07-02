@@ -47,6 +47,13 @@ import {
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { scrubPii } from '../pii/scrubber.js';
+import type { ExportControlService } from '../security/export-controls.js';
+import {
+  ExportControlService as ExportControlServiceClass,
+  extractDestinationFromEmailRequest,
+  formatDestination,
+} from '../security/export-controls.js';
+import type { ExportItem } from '../security/export-controls.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -222,6 +229,12 @@ export interface OutboundGatewayConfig {
    * every successful outbound send. Replaces the setTrustLevel('high') band-aid.
    */
   confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
+
+  /**
+   * Bulk export gate service (#201) — enforces item-count threshold, destination
+   * allowlisting, and restricted sensitivity ceiling on email attachments.
+   */
+  exportControlService?: ExportControlService;
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +314,7 @@ export class OutboundGateway {
   private readonly piiRedactor?: PiiRedactor;
   private readonly actionLogRepo?: ActionLogRepo;
   private readonly confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
+  private readonly exportControlService?: ExportControlService;
 
   constructor(config: OutboundGatewayConfig) {
     this.nylasClients = config.nylasClients ?? new Map();
@@ -316,6 +330,7 @@ export class OutboundGateway {
     this.piiRedactor = config.piiRedactor;
     this.actionLogRepo = config.actionLogRepo;
     this.confidencePipeline = config.confidencePipeline;
+    this.exportControlService = config.exportControlService;
   }
 
   /**
@@ -381,6 +396,12 @@ export class OutboundGateway {
          * row (visible via list-pending-actions) and the CEO notification body.
          */
         description: string;
+      };
+      /** Export gate context for attachment bulk-export audit and approval (#201). */
+      exportContext?: {
+        skillName: string;
+        agentId?: string;
+        exportItems?: unknown;
       };
     },
   ): Promise<OutboundSendResult> {
@@ -672,6 +693,124 @@ export class OutboundGateway {
     }
 
     // ------------------------------------------------------------------
+    // Step 1.25: Bulk export controls — attachments only (#201)
+    // ------------------------------------------------------------------
+    let exportAuditItems: ExportItem[] | undefined;
+    if (
+      this.exportControlService
+      && request.channel === 'email'
+      && request.attachments
+      && request.attachments.length > 0
+    ) {
+      const rawExportItems = Array.isArray(options?.exportContext?.exportItems)
+        ? options.exportContext.exportItems as Array<Record<string, unknown>>
+        : undefined;
+      const exportGate = await this.exportControlService.evaluateGatewayAttachments({
+        attachments: request.attachments.map((a) => ({
+          filename: a.filename,
+          nodeId: (a as { nodeId?: string }).nodeId,
+        })),
+        destination: extractDestinationFromEmailRequest(request.to),
+        exportItems: rawExportItems?.map((e) => ({
+          node_id: typeof e['node_id'] === 'string' ? e['node_id'] : undefined,
+          label: typeof e['label'] === 'string' ? e['label'] : undefined,
+          sensitivity: typeof e['sensitivity'] === 'string' ? e['sensitivity'] : undefined,
+        })),
+        humanApproved: options?.humanApproved,
+      });
+
+      if (exportGate && exportGate.action === 'block') {
+        this.log.warn(
+          { channel: request.channel, recipientId: redactId(recipientId), code: exportGate.code },
+          'outbound-gateway: export blocked — restricted bulk export',
+        );
+        return { success: false, blockedReason: exportGate.message };
+      }
+
+      if (exportGate && exportGate.action === 'approval_required') {
+        this.log.info(
+          { channel: request.channel, code: exportGate.code, itemCount: exportGate.items.length },
+          'outbound-gateway: export requires CEO approval',
+        );
+        const itemSummary = ExportControlServiceClass.formatItemSummary(exportGate.items);
+        let actionRef: string | undefined;
+        if (this.actionLogRepo && options?.taskEventId && options?.reExecRecipe) {
+          const recipe = options.reExecRecipe;
+          const candidateRef = generateShortRef();
+          try {
+            await this.actionLogRepo.insert({
+              taskId: options.taskEventId,
+              conversationId: options.conversationId ?? undefined,
+              skillName: recipe.skillName,
+              actionRisk: 'medium',
+              outcome: 'pending_approval',
+              shortRef: candidateRef,
+              description: recipe.description,
+              payload: recipe.partialPayload ?? {},
+              expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+            });
+            actionRef = candidateRef;
+          } catch (err) {
+            this.log.error({ err }, 'outbound-gateway: failed to write export-gate action_log row');
+          }
+        }
+        const principalEmail = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
+        if (principalEmail && options?.reExecRecipe) {
+          const recipe = options.reExecRecipe;
+          const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+          const recipientTier = await resolveNotificationRecipientTier(
+            this.contactService,
+            principalEmail,
+            this.log,
+          );
+          await this.sendNotification({
+            notificationType: 'approval_requested',
+            ceoEmail: principalEmail,
+            subject: `Approval needed — ${recipe.description}`,
+            body: buildApprovalNotificationBody({
+              preamble: exportGate.message,
+              shortRef: actionRef ?? 'pending',
+              expiresAt,
+              skillName: recipe.skillName,
+              payload: {
+                ...(recipe.partialPayload ?? {}),
+                export_items: exportGate.items.map((i) => ({
+                  node_id: i.nodeId,
+                  label: i.label,
+                  sensitivity: i.sensitivity,
+                })),
+              },
+              recipientTier,
+              logger: this.log,
+              ceoEmail: principalEmail,
+              extraLines: [`Items:\n${itemSummary}`],
+              callToAction:
+                'Reply with the reference to approve, deny, or dismiss this request.',
+            }),
+          }, options?.parentEventId);
+        }
+        return {
+          success: false,
+          gated: true,
+          actionRef,
+          blockedReason: `${exportGate.message}\n\n${itemSummary}`,
+        };
+      }
+
+      if (!exportGate || exportGate.action === 'allow') {
+        const rawItems = rawExportItems?.map((e) => ({
+          node_id: typeof e['node_id'] === 'string' ? e['node_id'] : undefined,
+          label: typeof e['label'] === 'string' ? e['label'] : undefined,
+          sensitivity: typeof e['sensitivity'] === 'string' ? e['sensitivity'] : undefined,
+        })) ?? request.attachments.map((a) => ({
+          label: a.filename,
+          node_id: (a as { nodeId?: string }).nodeId,
+        }));
+        exportAuditItems = await this.exportControlService.resolveItems(rawItems);
+      }
+    }
+
+    // ------------------------------------------------------------------
     // Step 1.5: PII redaction — strip PII from message body before the content
     // filter sees it. This ensures the filter operates on clean content and that
     // any PII-containing message that slips past detection doesn't reach the wire.
@@ -911,6 +1050,16 @@ export class OutboundGateway {
           taskEventId: options?.taskEventId,
           messageId: result.messageId,
           parentEventId: options?.parentEventId,
+          ...(exportAuditItems && exportAuditItems.length > 0
+            ? {
+              exportAudit: {
+                destination: formatDestination(extractDestinationFromEmailRequest(request.to)),
+                items: exportAuditItems,
+                skillName: options?.exportContext?.skillName,
+                agentId: options?.exportContext?.agentId,
+              },
+            }
+            : {}),
         });
       }
       return result;
@@ -989,9 +1138,32 @@ export class OutboundGateway {
     taskEventId?: string;
     messageId?: string;
     parentEventId?: string;
+    exportAudit?: {
+      destination: string;
+      items: ExportItem[];
+      skillName?: string;
+      agentId?: string;
+    };
   }): Promise<void> {
     try {
-      await this.bus.publish('dispatch', createOutboundDelivered(payload));
+      const { exportAudit, ...rest } = payload;
+      await this.bus.publish('dispatch', createOutboundDelivered({
+        ...rest,
+        ...(exportAudit
+          ? {
+            exportAudit: {
+              destination: exportAudit.destination,
+              items: exportAudit.items.map((i) => ({
+                nodeId: i.nodeId,
+                label: i.label,
+                sensitivity: i.sensitivity,
+              })),
+              skillName: exportAudit.skillName,
+              agentId: exportAudit.agentId,
+            },
+          }
+          : {}),
+      }));
     } catch (err) {
       this.log.error(
         { err, channel: payload.channel, recipientId: redactId(payload.recipientId) },

@@ -365,6 +365,15 @@ export interface YamlConfig {
       failMode?: 'split' | 'open' | 'closed';
     };
   };
+  /** Bulk export gates for attachments and MCP record exports (#201). */
+  exportControls?: {
+    confidentialThreshold?: number;
+    allowedDestinations?: {
+      driveFolderIds?: string[];
+      urls?: string[];
+      filePaths?: string[];
+    };
+  };
   /**
    * Escalation-line policy judge (issue #948).
    * Classifies disclosure sensitivity and action consequence, then maps
