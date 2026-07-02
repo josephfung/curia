@@ -67,7 +67,7 @@ describe('DelegateHandler', () => {
       expect(data.failed).toBe(true);
       expect(data.agent).toBe('slow-specialist');
       expect(data.reason).toBe('timeout');
-      expect(data.retryable).toBe(true);
+      expect(data.retryable).toBe(false);
       expect(data.possibly_succeeded).toBe(true);
       expect(data.message).toContain('did not respond');
     }
