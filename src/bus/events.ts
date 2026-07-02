@@ -75,7 +75,8 @@ export type AgentResponseFailureReason =
   | 'maxConsecutiveErrors'
   | 'tool_error'
   | 'api_error'
-  | 'blocked';
+  | 'blocked'
+  | 'timeout';
 
 interface AgentResponsePayload {
   agentId: string;
