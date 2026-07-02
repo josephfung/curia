@@ -1,0 +1,21 @@
+{
+  "name": "task-record-reply",
+  "description": "Record the CEO's answer to a task-wake question on the originating task and release the outbound context binding. Call only after judging that the inbound message answers the matched [ACTIVE OUTBOUND CONTEXT] entry (metadata bind_reply + task_id). Pass entry_id from the injection block, task_id from context metadata, and reply as the CEO's answer verbatim.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "task_id": "string",
+    "entry_id": "string",
+    "reply": "string"
+  },
+  "outputs": {
+    "task_id": "string",
+    "entry_id": "string",
+    "recorded": "boolean"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["taskRepo", "outboundContext"]
+}

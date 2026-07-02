@@ -163,11 +163,12 @@ describe('TaskCompleteHandler', () => {
     expect(taskRepo.completeTask).not.toHaveBeenCalled();
   });
 
-  it('rejects completing a past-due-at-creation milestone within five minutes (#1299)', async () => {
+  it('rejects completing a past-due-at-creation milestone subtask within five minutes (#1299)', async () => {
     const now = Date.now();
     const taskRepo = makeTaskRepo({
       getTask: vi.fn().mockResolvedValue(makeTaskRow({
         status: 'open',
+        parentTaskId: '00000000-0000-0000-0000-000000000099',
         createdAt: new Date(now - 60_000).toISOString(),
         dueAt: new Date(now - 86_400_000).toISOString(),
       })),
@@ -177,8 +178,26 @@ describe('TaskCompleteHandler', () => {
     const result = await new TaskCompleteHandler().execute(ctx);
 
     expect(result.success).toBe(false);
-    expect((result as { success: false; error: string }).error).toMatch(/past at creation/);
+    expect((result as { success: false; error: string }).error).toMatch(/milestone subtask/);
     expect(taskRepo.completeTask).not.toHaveBeenCalled();
+  });
+
+  it('allows completing a top-level past-due-at-creation task within five minutes', async () => {
+    const now = Date.now();
+    const taskRepo = makeTaskRepo({
+      getTask: vi.fn().mockResolvedValue(makeTaskRow({
+        status: 'open',
+        parentTaskId: null,
+        createdAt: new Date(now - 60_000).toISOString(),
+        dueAt: new Date(now - 86_400_000).toISOString(),
+      })),
+    });
+    const ctx = makeCtx({ input: { task_id: VALID_UUID }, taskRepo });
+
+    const result = await new TaskCompleteHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(taskRepo.completeTask).toHaveBeenCalled();
   });
 
   it('returns displayTimezone in the result', async () => {

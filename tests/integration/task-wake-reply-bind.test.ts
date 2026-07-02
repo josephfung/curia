@@ -1,7 +1,7 @@
 // tests/integration/task-wake-reply-bind.test.ts
 //
 // Regression for #1299: task-wake questions bind CEO replies back to the originating task
-// even when the reply arrives on a different conversation than the scheduler send.
+// when the coordinator calls task-record-reply after judging relevance.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
@@ -16,6 +16,7 @@ import type { AgentTaskEvent } from '../../src/bus/events.js';
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
 import { createSilentLogger } from '../../src/logger.js';
+import { TaskRecordReplyHandler } from '../../skills/task-record-reply/handler.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -29,6 +30,7 @@ describeIf('task-wake reply binding (#1299)', () => {
   let taskRepo: TaskRepo;
   let runId: string;
   let taskId: string;
+  let entryId: string;
   let schedulerConvId: string;
   let signalConvId: string;
   const capturedTasks: AgentTaskEvent[] = [];
@@ -74,7 +76,6 @@ describeIf('task-wake reply binding (#1299)', () => {
       logger,
       contactResolver: principalResolver,
       outboundContextService: outboundContext,
-      taskRepo,
     });
     dispatcher.register();
 
@@ -90,7 +91,9 @@ describeIf('task-wake reply binding (#1299)', () => {
     const scopedOutbound = {
       register: (entry: Parameters<OutboundContextService['register']>[0]) =>
         outboundContext.register({ ...entry, conversationId: schedulerConvId }),
-      release: (entryId: string) => outboundContext.release(entryId),
+      release: (id: string) => outboundContext.release(id),
+      releaseEntry: (id: string) => outboundContext.releaseEntry(id),
+      getEntry: (id: string) => outboundContext.getEntry(id),
       clearBySubjects: (subjects: string[]) => outboundContext.clearBySubjects(subjects),
       defaultExpiryHours: outboundContext.defaultExpiryHours,
       explicitExpiryHours: outboundContext.explicitExpiryHours,
@@ -103,6 +106,12 @@ describeIf('task-wake reply binding (#1299)', () => {
       log: logger,
       boundTask: { taskId },
     });
+
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM outbound_context WHERE conversation_id = $1`,
+      [schedulerConvId],
+    );
+    entryId = rows[0]!.id;
   });
 
   afterAll(async () => {
@@ -129,23 +138,54 @@ describeIf('task-wake reply binding (#1299)', () => {
 
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
-    expect(row.delegation_hint).toContain('task-wake reply');
+    expect(row.delegation_hint).toBeNull();
     expect(row.expected_reply).toContain('camp session dates');
     expect(row.metadata).toMatchObject({ bind_reply: true, task_id: taskId });
     expect(row.expires_at.getTime()).toBeGreaterThan(Date.now() + 6 * 60 * 60 * 1000);
   });
 
-  it('persists CEO reply from a different conversation onto the originating task', async () => {
+  it('does not auto-persist unrelated principal inbound while one binding is open', async () => {
     capturedTasks.length = 0;
 
-    const inbound = createInboundMessage({
+    await bus.publish('channel', createInboundMessage({
       channelId: 'signal',
       conversationId: signalConvId,
       senderId: '+15551234567',
-      content: 'Four full weeks — July 26 through August 22. Paperwork is done.',
-    });
+      content: 'Add a 3pm meeting with Dana tomorrow.',
+    }));
 
-    await bus.publish('channel', inbound);
+    const task = await taskRepo.getTask(taskId);
+    expect(task).not.toBeNull();
+    expect((task!.progress?.notes ?? [])).toHaveLength(0);
+    expect(task!.owner).toBe('ceo');
+    expect(task!.status).toBe('waiting');
+
+    const { rows: binding } = await pool.query<{ released: boolean }>(
+      `SELECT released FROM outbound_context WHERE id = $1`,
+      [entryId],
+    );
+    expect(binding[0]?.released).toBe(false);
+
+    const coordinatorTask = capturedTasks.find((e) => e.payload.agentId === 'coordinator');
+    expect(coordinatorTask).toBeDefined();
+    expect(coordinatorTask!.payload.content).toContain('ACTIVE OUTBOUND CONTEXT');
+  });
+
+  it('persists CEO reply via task-record-reply from a different conversation', async () => {
+    const result = await new TaskRecordReplyHandler().execute({
+      input: {
+        task_id: taskId,
+        entry_id: entryId,
+        reply: 'Four full weeks — July 26 through August 22. Paperwork is done.',
+      },
+      secret: () => 'unused',
+      log: createSilentLogger(),
+      agentId: 'coordinator',
+      taskRepo,
+      outboundContext,
+    } as never);
+
+    expect(result.success).toBe(true);
 
     const task = await taskRepo.getTask(taskId);
     expect(task).not.toBeNull();
@@ -155,17 +195,13 @@ describeIf('task-wake reply binding (#1299)', () => {
     expect(task!.status).toBe('in_progress');
 
     const { rows: released } = await pool.query<{ released: boolean }>(
-      `SELECT released FROM outbound_context WHERE conversation_id = $1`,
-      [schedulerConvId],
+      `SELECT released FROM outbound_context WHERE id = $1`,
+      [entryId],
     );
     expect(released[0]?.released).toBe(true);
-
-    const coordinatorTask = capturedTasks.find((e) => e.payload.agentId === 'coordinator');
-    expect(coordinatorTask).toBeDefined();
-    expect(coordinatorTask!.payload.content).not.toContain('ACTIVE OUTBOUND CONTEXT');
   });
 
-  it('does not auto-bind when multiple task-wake asks are outstanding', async () => {
+  it('does not auto-persist when multiple task-wake asks are outstanding', async () => {
     const ambiguousTaskA = randomUUID();
     const ambiguousTaskB = randomUUID();
     const convA = `scheduler:ambig-${runId}-a`;
@@ -186,7 +222,9 @@ describeIf('task-wake reply binding (#1299)', () => {
     const makeScoped = (conversationId: string) => ({
       register: (entry: Parameters<OutboundContextService['register']>[0]) =>
         outboundContext.register({ ...entry, conversationId }),
-      release: (entryId: string) => outboundContext.release(entryId),
+      release: (id: string) => outboundContext.release(id),
+      releaseEntry: (id: string) => outboundContext.releaseEntry(id),
+      getEntry: (id: string) => outboundContext.getEntry(id),
       clearBySubjects: (subjects: string[]) => outboundContext.clearBySubjects(subjects),
       defaultExpiryHours: outboundContext.defaultExpiryHours,
       explicitExpiryHours: outboundContext.explicitExpiryHours,

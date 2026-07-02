@@ -10,6 +10,8 @@ function makeCap(overrides?: Partial<OutboundContextCapability>): OutboundContex
   return {
     register: vi.fn().mockResolvedValue('entry-id'),
     release: vi.fn().mockResolvedValue(undefined),
+    releaseEntry: vi.fn().mockResolvedValue(undefined),
+    getEntry: vi.fn().mockResolvedValue(null),
     clearBySubjects: vi.fn().mockResolvedValue({ totalReleased: 0, perSubject: [], unmatched: [] }),
     defaultExpiryHours: 6,
     explicitExpiryHours: 24,
@@ -54,7 +56,6 @@ describe('registerOutboundContext', () => {
     expect(cap.register).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: 'test-agent',
-        delegationHint: 'coordinator task-wake reply — persist to task',
         expectedReply: expect.stringContaining("CEO's reply to:"),
         metadata: {
           bind_reply: true,
