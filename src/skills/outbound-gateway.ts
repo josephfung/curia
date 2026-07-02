@@ -948,18 +948,11 @@ export class OutboundGateway {
    * loaded from the database at startup.
    */
   private isPrincipalRecipient(request: OutboundSendRequest): boolean {
-    if (this.principalIdentities.length === 0) return false;
-
     if (request.channel === 'email' && request.to) {
-      const normalized = request.to.toLowerCase();
-      return this.principalIdentities.some(
-        (id) => id.channel === 'email' && id.channelIdentifier.toLowerCase() === normalized,
-      );
+      return checkPrincipalEmail(request.to, this.principalIdentities);
     }
     if (request.channel === 'signal' && 'recipient' in request && request.recipient) {
-      return this.principalIdentities.some(
-        (id) => id.channel === 'signal' && id.channelIdentifier === request.recipient,
-      );
+      return checkPrincipalSignal(request.recipient, this.principalIdentities);
     }
     return false;
   }

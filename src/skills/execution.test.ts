@@ -1201,6 +1201,42 @@ describe('autonomy gates', () => {
       expect(classifyAction).not.toHaveBeenCalled();
     });
 
+    it('escalates when a non-allowlisted skill targets the principal (parser fails closed)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('custom-notify', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'custom-notify',
+        { to: 'ceo@example.com' },
+        undefined,
+        originatorMeta('known'),
+      );
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
+    it('escalates email-send with unparsed bcc even when to is the principal', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: 'ceo@example.com', bcc: 'other@example.com', subject: 'x', body: 'y' },
+        undefined,
+        originatorMeta('known'),
+      );
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
     it('rejects spoofed principal display name in to field (still escalates via judge)', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);

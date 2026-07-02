@@ -806,6 +806,7 @@ export class ExecutionLayer {
           if (initiatingTier !== null && manifest.action_risk !== 'none') {
             const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
             const isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
+              skillName,
               input,
               this.principalIdentities,
             );
