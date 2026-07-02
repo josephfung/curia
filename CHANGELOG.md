@@ -21,6 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Jobs console** — schedule-type and agent filters, human-readable schedule summaries, and linked task titles with `/tasks?task=` deep links. (#1304)
 - **Calendar principal-grant design** — memo for operating the calendar as the CEO (bind the calendar client to `ceo_nylas_grant_id`), fixing RSVP `omittedAttendeesSpecified`; implementation tracked in #1217.
 
 ### Changed

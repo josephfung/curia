@@ -158,6 +158,9 @@ const jobsRoute = createRoute({
 const tasksRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/tasks',
+  validateSearch: (search: Record<string, unknown>) => ({
+    task: typeof search['task'] === 'string' ? search['task'] : undefined,
+  }),
   component: TasksPage,
 });
 

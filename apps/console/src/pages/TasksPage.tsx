@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useNavigate, useSearch } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
@@ -492,6 +493,8 @@ type StatusFilter = typeof STATUS_FILTERS[number];
 type OwnerFilter = 'all' | TaskOwner;
 
 export default function TasksPage() {
+  const navigate = useNavigate();
+  const { task: taskIdFromUrl } = useSearch({ strict: false }) as { task?: string };
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -525,6 +528,15 @@ export default function TasksPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!taskIdFromUrl || tasks.length === 0) return;
+    const target = tasks.find(t => t.id === taskIdFromUrl);
+    if (target) {
+      setCreating(false);
+      setEditing(target);
+    }
+  }, [taskIdFromUrl, tasks]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: tasks.length };
@@ -611,6 +623,14 @@ export default function TasksPage() {
     if (target) {
       setCreating(false);
       setEditing(target);
+    }
+  }
+
+  function handleCloseDrawer() {
+    setEditing(null);
+    setCreating(false);
+    if (taskIdFromUrl) {
+      void navigate({ to: '/tasks', search: { task: undefined }, replace: true });
     }
   }
 
@@ -791,7 +811,7 @@ export default function TasksPage() {
                     key={editing ? `${editing.id}-${editing.updatedAt}` : 'new'}
                     task={editing}
                     creating={creating}
-                    onClose={() => { setEditing(null); setCreating(false); }}
+                    onClose={handleCloseDrawer}
                     onSaved={handleSaved}
                     onDeleted={handleDeleted}
                     lookupTask={lookupTask}
