@@ -85,6 +85,8 @@ export interface DelegationEscalationInput {
   message: string;
   /** The original delegated task text. */
   task: string;
+  /** Delegate wait timed out but the specialist may still be running (#1288). */
+  possiblySucceeded?: boolean;
 }
 
 function ceilingFailureMode(reason: CircuitBreachReason): EscalationFailureMode {
@@ -234,7 +236,16 @@ export function buildDelegationEscalation(input: DelegationEscalationInput): Tas
 
   const headline = failureMode === 'blocked_on_human'
     ? `Blocked on a person: ${input.agent} cannot proceed without input — ${input.message}`
-    : `${input.agent} could not finish the delegated work (${input.reason}).`;
+    : input.reason === 'timeout' && input.possiblySucceeded
+      ? input.message
+      : `${input.agent} could not finish the delegated work (${input.reason}).`;
+
+  const suggested = input.reason === 'timeout' && input.possiblySucceeded
+    ? [
+      'The specialist may still be running — check whether it already delivered before taking further action.',
+      'Do not re-delegate the same work; the original run may still be in flight.',
+    ]
+    : suggestedActions(failureMode, input.reason, { agent: input.agent });
 
   return {
     failureMode,
@@ -243,7 +254,7 @@ export function buildDelegationEscalation(input: DelegationEscalationInput): Tas
     headline,
     // The agent is the "blocker" for an incomplete; a human-block has no structured "who".
     blocker: failureMode === 'agent_incomplete' ? input.agent : undefined,
-    suggestedActions: suggestedActions(failureMode, input.reason, { agent: input.agent }),
+    suggestedActions: suggested,
   };
 }
 

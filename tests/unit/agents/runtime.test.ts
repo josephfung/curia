@@ -2991,7 +2991,7 @@ describe('AgentRuntime chatWithRetry', () => {
 
       expect(mockExecution.invoke).toHaveBeenCalledWith(
         'delegate',
-        expect.objectContaining({ timeout_ms: 899_999 }),
+        expect.objectContaining({ timeout_ms: 895_000 }),
         undefined,
         expect.any(Object),
       );
@@ -3990,6 +3990,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const response = agentResponses[0]!;
     expect(response.payload.content).toContain('delegation_failure');
     expect(response.payload.content).toContain('timeout');
+    expect(response.payload.content).toContain('"possibly_succeeded":true');
     expect(response.payload.content).toContain('"escalated":true');
   });
 

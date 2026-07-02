@@ -18,6 +18,8 @@ export interface DelegationFailureInfo {
   reason: AgentResponseFailureReason | string;
   retryable: boolean;
   message: string;
+  /** Set when a delegate wait timed out but the specialist may still be running (#1288). */
+  possiblySucceeded?: boolean;
 }
 
 interface DelegationEntry {
@@ -115,6 +117,7 @@ export function parseDelegateFailureData(data: unknown, logger?: Logger): Delega
     message: record['message'],
     ...(record['blocked'] === true && { blocked: true }),
     ...(record['escalated'] === true && { escalated: true }),
+    ...(record['possibly_succeeded'] === true && { possiblySucceeded: true }),
   };
 }
 
@@ -135,6 +138,7 @@ export async function escalateDelegationFailure(
     retryable: failure.retryable,
     message: failure.message,
     task: failure.task,
+    ...(failure.possiblySucceeded === true && { possiblySucceeded: true }),
   });
   const rendered = renderEscalation(escalation);
   const title = escalation.failureMode === 'blocked_on_human'

@@ -1358,6 +1358,7 @@ export class AgentRuntime {
           retryable: false,
           message: pendingDelegationEscalation.message,
           escalated: pendingDelegationEscalation.escalated,
+          ...(pendingDelegationEscalation.possiblySucceeded === true && { possibly_succeeded: true }),
         });
 
         if (memory) {
