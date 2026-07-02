@@ -13,10 +13,13 @@ import { createSilentLogger } from '../logger.js';
 
 describe('buildApprovalDetails', () => {
   it.each(SKILL_DETAIL_FIXTURES)(
-    'renders a non-empty block for $skillName fixture payload',
-    ({ skillName, payload }) => {
+    'renders expected labels for $skillName fixture payload',
+    ({ skillName, payload, expectedLabels }) => {
       const details = buildApprovalDetails(skillName, payload);
       expect(details.trim().length).toBeGreaterThan(0);
+      for (const label of expectedLabels) {
+        expect(details).toContain(label);
+      }
     },
   );
 

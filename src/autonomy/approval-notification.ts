@@ -80,11 +80,19 @@ const SKILL_DETAIL_FIELDS: Array<{ test: (name: string) => boolean; fields: Deta
     ],
   },
   {
-    test: (n) => n.startsWith('schedule-'),
+    test: (n) => n === 'scheduler-create',
     fields: [
-      { key: 'name', label: 'Job' },
-      { key: 'when', label: 'When' },
-      { key: 'description', label: 'Description' },
+      { key: 'task', label: 'Task' },
+      { key: 'cron_expr', label: 'Schedule' },
+      { key: 'run_at', label: 'Run at' },
+      { key: 'agent_id', label: 'Agent' },
+      { key: 'intent_anchor', label: 'Intent' },
+    ],
+  },
+  {
+    test: (n) => n === 'scheduler-cancel',
+    fields: [
+      { key: 'job_id', label: 'Job' },
     ],
   },
 ];
@@ -114,22 +122,28 @@ const GENERIC_DETAIL_FIELDS: DetailFieldSpec[] = [
 export const SKILL_DETAIL_FIXTURES: Array<{
   skillName: string;
   payload: Record<string, unknown>;
+  /** Skill-specific labels that must appear when the fixture payload is rendered. */
+  expectedLabels: string[];
 }> = [
   {
     skillName: 'signal-send',
     payload: { recipient: '+15550142', message: 'Confirming Thursday at 3pm.' },
+    expectedLabels: ['To:', 'Message:'],
   },
   {
     skillName: 'email-reply',
     payload: { reply_to_message_id: 'msg-abc', body: 'Thanks — Thursday works.' },
+    expectedLabels: ['Reply to:', 'Message:'],
   },
   {
     skillName: 'email-draft-save',
     payload: { to: 'dana@example.com', subject: 'Re: Budget', body: 'Draft body text.' },
+    expectedLabels: ['To:', 'Subject:', 'Body:'],
   },
   {
     skillName: 'send-draft',
     payload: { to: 'dana@example.com', subject: 'Re: Budget', body: 'Approved send body.' },
+    expectedLabels: ['To:', 'Subject:', 'Body:'],
   },
   {
     skillName: 'calendar-create-event',
@@ -138,14 +152,26 @@ export const SKILL_DETAIL_FIXTURES: Array<{
       start: '2026-07-02T15:00:00Z',
       end: '2026-07-02T16:00:00Z',
     },
+    expectedLabels: ['Title:', 'Start:', 'End:'],
   },
   {
     skillName: 'store-fact',
     payload: { label: 'Dana prefers mornings', value: 'true' },
+    expectedLabels: ['Label:', 'Value:'],
   },
   {
     skillName: 'scheduler-create',
-    payload: { name: 'nightly-sweep', when: '2026-07-03T02:00:00Z' },
+    payload: {
+      task: 'nightly-sweep',
+      cron_expr: '0 2 * * *',
+      agent_id: 'coordinator',
+    },
+    expectedLabels: ['Task:', 'Schedule:', 'Agent:'],
+  },
+  {
+    skillName: 'scheduler-cancel',
+    payload: { job_id: 'job-abc-123' },
+    expectedLabels: ['Job:'],
   },
 ];
 
