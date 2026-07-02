@@ -21,6 +21,7 @@ import type { AutonomyService, AutonomyConfig } from '../autonomy/autonomy-servi
 import type { SecretsService } from '../secrets/secrets-service.js';
 import type { ApprovalTriggerService, ApprovalRequestResult } from '../autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
+import type { ChannelIdentity } from '../contacts/types.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -926,12 +927,46 @@ describe('autonomy gates', () => {
   // ---------------------------------------------------------------------------
 
   describe('Gate C — contact-tier gate', () => {
-    function makeLayerWithScore100(bus?: EventBus, escalationJudge?: EscalationJudge) {
+    const TEST_PRINCIPAL_IDENTITIES: ChannelIdentity[] = [
+      {
+        id: 'id-email',
+        contactId: 'principal-1',
+        channel: 'email',
+        channelIdentifier: 'ceo@example.com',
+        label: null,
+        verified: true,
+        verifiedAt: new Date(),
+        status: 'active',
+        source: 'ceo_stated',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: 'id-signal',
+        contactId: 'principal-1',
+        channel: 'signal',
+        channelIdentifier: '+15551234567',
+        label: null,
+        verified: true,
+        verifiedAt: new Date(),
+        status: 'active',
+        source: 'ceo_stated',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ];
+
+    function makeLayerWithScore100(
+      bus?: EventBus,
+      escalationJudge?: EscalationJudge,
+      principalIdentities: readonly ChannelIdentity[] = TEST_PRINCIPAL_IDENTITIES,
+    ) {
       const registry = new SkillRegistry();
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(100),
         bus,
         escalationJudge,
+        principalIdentities,
       });
       return { registry, layer };
     }
@@ -1140,6 +1175,80 @@ describe('autonomy gates', () => {
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
 
       const result = await layer.invoke('email-send', { to: 'stranger@example.com' }, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    // -- Principal-only carve-out (#1301): heads-up to the CEO is not third-party-facing ----
+
+    it('allows signal-send to the principal from a known contact without consulting the judge', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('signal-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'signal-send',
+        { recipient: '+15551234567', message: 'account notification heads-up' },
+        undefined,
+        originatorMeta('known'),
+      );
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('rejects spoofed principal display name in to field (still escalates via judge)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: 'CEO', subject: 'x', body: 'y' },
+        undefined,
+        originatorMeta('known'),
+      );
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
+    it('escalates principal + non-principal mixed recipient set', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: 'ceo@example.com', cc: 'other@example.com', subject: 'x', body: 'y' },
+        undefined,
+        originatorMeta('known'),
+      );
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
+    it('still escalates irreversible actions to the principal only', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('irreversible-action', 'critical'), handler);
+
+      const result = await layer.invoke(
+        'irreversible-action',
+        { to: 'ceo@example.com' },
+        undefined,
+        originatorMeta('known'),
+      );
 
       expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
