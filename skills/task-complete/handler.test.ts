@@ -49,9 +49,10 @@ function makeTaskRow(overrides: Partial<TaskRow> = {}): TaskRow {
 }
 
 function makeTaskRepo(overrides: Partial<TaskRepo> = {}): TaskRepo {
+  const openTask = makeTaskRow({ status: 'open' });
   return {
     createTask: vi.fn(),
-    getTask: vi.fn(),
+    getTask: vi.fn().mockResolvedValue(openTask),
     listTasks: vi.fn(),
     updateTask: vi.fn(),
     completeTask: vi.fn().mockResolvedValue(makeTaskRow()),
@@ -96,6 +97,7 @@ describe('TaskCompleteHandler', () => {
 
   it('propagates already-terminal error when trying to complete a done task', async () => {
     const taskRepo = makeTaskRepo({
+      getTask: vi.fn().mockResolvedValue(makeTaskRow({ status: 'done' })),
       completeTask: vi.fn().mockRejectedValue(
         new Error("Cannot complete task — it is already in terminal state 'done'."),
       ),
@@ -110,6 +112,7 @@ describe('TaskCompleteHandler', () => {
 
   it('propagates error when trying to complete a cancelled task', async () => {
     const taskRepo = makeTaskRepo({
+      getTask: vi.fn().mockResolvedValue(makeTaskRow({ status: 'cancelled' })),
       completeTask: vi.fn().mockRejectedValue(
         new Error("Cannot complete task — it is already in terminal state 'cancelled'."),
       ),
@@ -150,13 +153,32 @@ describe('TaskCompleteHandler', () => {
   });
 
   it('returns task-not-found error when TaskRepo returns null', async () => {
-    const taskRepo = makeTaskRepo({ completeTask: vi.fn().mockResolvedValue(null) });
+    const taskRepo = makeTaskRepo({ getTask: vi.fn().mockResolvedValue(null) });
     const ctx = makeCtx({ input: { task_id: VALID_UUID }, taskRepo });
 
     const result = await new TaskCompleteHandler().execute(ctx);
 
     expect(result.success).toBe(false);
     expect((result as { success: false; error: string }).error).toMatch(/not found/);
+    expect(taskRepo.completeTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects completing a past-due-at-creation milestone within five minutes (#1299)', async () => {
+    const now = Date.now();
+    const taskRepo = makeTaskRepo({
+      getTask: vi.fn().mockResolvedValue(makeTaskRow({
+        status: 'open',
+        createdAt: new Date(now - 60_000).toISOString(),
+        dueAt: new Date(now - 86_400_000).toISOString(),
+      })),
+    });
+    const ctx = makeCtx({ input: { task_id: VALID_UUID }, taskRepo });
+
+    const result = await new TaskCompleteHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/past at creation/);
+    expect(taskRepo.completeTask).not.toHaveBeenCalled();
   });
 
   it('returns displayTimezone in the result', async () => {
