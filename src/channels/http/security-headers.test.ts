@@ -5,7 +5,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import { registerSecurityHeaders } from './security-headers.js';
+import { registerSecurityHeaders, CONSOLE_CONTENT_SECURITY_POLICY } from './security-headers.js';
 
 let app: FastifyInstance | undefined;
 
@@ -27,6 +27,9 @@ async function build(): Promise<FastifyInstance> {
   // onRequest hook short-circuits the response (e.g. an auth 401).
   registerSecurityHeaders(instance);
   instance.get('/ok', async () => ({ ok: true }));
+  instance.get('/html', async (_req, reply) => {
+    return reply.type('text/html; charset=utf-8').send('<!doctype html><html><body>ok</body></html>');
+  });
   // A hook that 401s before the handler — proves the header lands on short-circuited
   // responses (the case that matters for the API's auth gate).
   instance.get('/blocked', {
@@ -104,5 +107,28 @@ describe('registerSecurityHeaders', () => {
     // @fastify/cors replies to the preflight directly (204 No Content).
     expect([200, 204]).toContain(res.statusCode);
     expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('does not set Content-Security-Policy on JSON responses', async () => {
+    app = await build();
+    const res = await app.inject({ method: 'GET', url: '/ok' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-security-policy']).toBeUndefined();
+    expect(res.headers['x-frame-options']).toBeUndefined();
+  });
+
+  it('sets Content-Security-Policy and X-Frame-Options on HTML responses', async () => {
+    app = await build();
+    const res = await app.inject({ method: 'GET', url: '/html' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-security-policy']).toBe(CONSOLE_CONTENT_SECURITY_POLICY);
+    expect(res.headers['x-frame-options']).toBe('DENY');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('locks script-src to self in the console CSP', async () => {
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain("script-src 'self'");
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('cdn.tailwindcss.com');
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
   });
 });

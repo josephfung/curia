@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Console CSP (#130)** — strict `Content-Security-Policy` and `X-Frame-Options: DENY` on HTML responses; scripts locked to same-origin bundles (legacy KG Tailwind CDN removed with the React console).
 - **Coordinator provenance-aware presentation hardening (#856)** — presentation directives now follow only the principal's instructions, ignoring third-party content.
 - **Provenance-aware red-team harness (#900)** — probes are framed with dispatcher-style sender context to test non-principal provenance.
 - **Memory poisoning research (#418)** — documented KG write paths from inbound email, assessed safeguards, and filed follow-up #1290 to gate checkpoint extraction and `memory-store` for untrusted senders.
