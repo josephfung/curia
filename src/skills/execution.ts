@@ -451,6 +451,12 @@ export class ExecutionLayer {
 
     // Obvious: the third-party-facing axis doesn't change the outcome → no judge needed.
     if (decisionIfReplyToSender === decisionIfThirdParty) {
+      if (isPrincipalSoleRecipient && decisionIfReplyToSender === 'allow') {
+        skillLogger.info(
+          { skillName, initiatingTier, actionClass, isPrincipalSoleRecipient },
+          'autonomy gate: Gate C allowed — recipient set is exclusively the verified principal (#1301)',
+        );
+      }
       return decisionIfReplyToSender;
     }
 
