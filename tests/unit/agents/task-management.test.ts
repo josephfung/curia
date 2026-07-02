@@ -30,7 +30,7 @@ describe('applyTaskManagement', () => {
     expect(r.heartbeatEligible).toBe(false);
   });
 
-  it('appends the block, adds the four skills, and marks eligible when true', () => {
+  it('appends the block, adds the task skills, and marks eligible when true', () => {
     const r = applyTaskManagement(cfg({ enable_task_management: true }), 'BASE PROMPT', ['x']);
     expect(r.systemPrompt).toBe(`BASE PROMPT\n\n${TASK_MANAGEMENT_BLOCK}`);
     expect(r.pinnedSkills).toEqual(['x', ...TASK_MANAGEMENT_SKILLS]);
@@ -40,13 +40,26 @@ describe('applyTaskManagement', () => {
   it('does not duplicate skills already pinned', () => {
     const base = ['task-list', 'other'];
     const r = applyTaskManagement(cfg({ enable_task_management: true }), 'P', base);
-    // task-list kept once, the other three appended
+    // task-list kept once, the other task skills appended
     expect(r.pinnedSkills.filter((s) => s === 'task-list')).toHaveLength(1);
-    expect(r.pinnedSkills).toEqual(['task-list', 'other', 'task-create', 'task-update', 'task-complete']);
+    expect(r.pinnedSkills).toEqual([
+      'task-list',
+      'other',
+      'task-create',
+      'task-update',
+      'task-complete',
+      'task-record-reply',
+    ]);
   });
 
-  it('exposes exactly the four task skills', () => {
-    expect([...TASK_MANAGEMENT_SKILLS]).toEqual(['task-create', 'task-list', 'task-update', 'task-complete']);
+  it('exposes exactly the task management skills', () => {
+    expect([...TASK_MANAGEMENT_SKILLS]).toEqual([
+      'task-create',
+      'task-list',
+      'task-update',
+      'task-complete',
+      'task-record-reply',
+    ]);
   });
 
   it('produces exactly the four task skills when starting from an empty pinned list', () => {

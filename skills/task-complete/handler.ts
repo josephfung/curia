@@ -47,7 +47,7 @@ export class TaskCompleteHandler implements SkillHandler {
       }
 
       // Reject skipping past-due milestone subtasks immediately after creation (#1299).
-      if (existing.dueAt) {
+      if (existing.parentTaskId && existing.dueAt) {
         const dueMs = new Date(existing.dueAt).getTime();
         const createdMs = new Date(existing.createdAt).getTime();
         if (dueMs < createdMs && Date.now() - createdMs < 5 * 60 * 1000) {

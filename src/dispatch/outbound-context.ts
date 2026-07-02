@@ -76,6 +76,10 @@ export interface OutboundContextCapability {
   readonly explicitExpiryHours: number;
   register(entry: Omit<OutboundContextEntry, 'conversationId'>): Promise<string>;
   release(entryId: string): Promise<void>;
+  /** Release by entry id only — conversation-agnostic (task-wake bindings span channels). */
+  releaseEntry(entryId: string): Promise<void>;
+  /** Load one active entry by id (conversation-agnostic — for task-record-reply). */
+  getEntry(entryId: string): Promise<OutboundContextRow | null>;
   /** Release every active entry whose metadata subject matches one of `subjects`. */
   clearBySubjects(subjects: string[]): Promise<SubjectClearResult>;
 }
@@ -206,6 +210,22 @@ export class OutboundContextService {
     );
 
     return result.rows.map(mapRow);
+  }
+
+  /** Load one active (non-released, non-expired) entry by id. Conversation-agnostic. */
+  async getEntry(entryId: string): Promise<OutboundContextRow | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM outbound_context
+       WHERE id = $1 AND released = false AND expires_at > now()`,
+      [entryId],
+    );
+    const row = result.rows[0];
+    return row ? mapRow(row) : null;
+  }
+
+  /** Release by entry id only — conversation-agnostic (task-wake bindings span channels). */
+  async releaseEntry(entryId: string): Promise<void> {
+    return this.release(entryId);
   }
 
   /** Mark an entry as released — stop expecting replies. */
@@ -375,6 +395,14 @@ export class ScopedOutboundContext implements OutboundContextCapability {
 
   async release(entryId: string): Promise<void> {
     return this.service.release(entryId, this.conversationId);
+  }
+
+  async releaseEntry(entryId: string): Promise<void> {
+    return this.service.release(entryId);
+  }
+
+  async getEntry(entryId: string): Promise<OutboundContextRow | null> {
+    return this.service.getEntry(entryId);
   }
 
   async clearBySubjects(subjects: string[]): Promise<SubjectClearResult> {

@@ -1,11 +1,12 @@
 import type { AgentYamlConfig } from './loader.js';
 
-/** The four skills every task-management-enabled agent can call. */
+/** The task skills every task-management-enabled agent can call. */
 export const TASK_MANAGEMENT_SKILLS = [
   'task-create',
   'task-list',
   'task-update',
   'task-complete',
+  'task-record-reply',
 ] as const;
 
 /** Single source of truth for the executor-discipline block injected into every
@@ -34,6 +35,15 @@ export const TASK_MANAGEMENT_BLOCK = [
   '**Past-due milestones.** Never `task-complete` a subtask whose milestone `due_at` was',
   'already in the past when you created it — run its work immediately (the platform will',
   'wake it now) or escalate. Do not mark it done with a "past due, auto-completed" note.',
+  '',
+  '**Task-wake CEO answers.** When [ACTIVE OUTBOUND CONTEXT] shows an entry whose',
+  '`context` metadata includes `bind_reply: true` and a `task_id`, and the inbound',
+  'message plausibly answers that question, call `task-record-reply` with that `task_id`,',
+  'the `entry_id` from the block, and `reply` as the CEO\'s answer verbatim — before',
+  'you respond conversationally. Do not call `context-bridge-release` separately;',
+  '`task-record-reply` releases the binding. If the message does not answer the question',
+  '(even when only one binding is open), do not call `task-record-reply`. When several',
+  'task-wake asks are outstanding, match by content and record only the entry answered.',
   '',
   '**Never promise without a task.** Before you send anything that commits to a future',
   'action ("I\'ll follow up with X", "we\'ll send that over"), make sure a task backs that',

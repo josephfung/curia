@@ -6,7 +6,7 @@
 import type { BoundTaskContext } from '../agents/resumable-task.js';
 import type { Logger } from '../logger.js';
 import type { OutboundContextCapability } from './outbound-context.js';
-import { buildTaskWakeAutoBridge, TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY } from './task-wake-reply.js';
+import { buildTaskWakeAutoBridge, TASK_WAKE_BIND_REPLY_KEY, TASK_WAKE_TASK_ID_KEY, TASK_WAKE_REPLY_TTL_HOURS } from './task-wake-reply.js';
 
 export interface ContextBridgeInput {
   agent_id: string;
@@ -115,6 +115,7 @@ export async function registerOutboundContext(
           [TASK_WAKE_BIND_REPLY_KEY]: true,
           [TASK_WAKE_TASK_ID_KEY]: boundTask.taskId,
         },
+        expires_in_hours: bridge.expires_in_hours ?? TASK_WAKE_REPLY_TTL_HOURS,
       };
     }
 

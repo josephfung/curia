@@ -4,30 +4,31 @@ import pino from 'pino';
 import {
   buildTaskWakeAutoBridge,
   isTaskWakeReplyBinding,
-  persistInboundTaskWakeReply,
+  recordTaskWakeReply,
   TASK_WAKE_BIND_REPLY_KEY,
-  TASK_WAKE_DELEGATION_HINT,
   TASK_WAKE_REPLY_TTL_HOURS,
   TASK_WAKE_TASK_ID_KEY,
 } from './task-wake-reply.js';
 import type { OutboundContextRow } from './outbound-context.js';
 import type { TaskRepo } from '../db/task-repo.js';
-import type { OutboundContextService } from './outbound-context.js';
+import type { OutboundContextCapability } from './outbound-context.js';
 
 const logger = pino({ level: 'silent' });
+const TASK_ID = '00000000-0000-4000-8000-000000000001';
+const ENTRY_ID = '00000000-0000-4000-8000-000000000002';
 
 function makeEntry(overrides: Partial<OutboundContextRow> = {}): OutboundContextRow {
   return {
-    id: 'entry-1',
+    id: ENTRY_ID,
     conversationId: 'scheduler:job:run',
     channelId: 'signal',
     agentId: 'coordinator',
     contentPreview: 'What are the confirmed camp dates?',
     expectedReply: "CEO's reply to: What are the confirmed camp dates?",
-    delegationHint: TASK_WAKE_DELEGATION_HINT,
+    delegationHint: null,
     metadata: {
       [TASK_WAKE_BIND_REPLY_KEY]: true,
-      [TASK_WAKE_TASK_ID_KEY]: 'task-abc',
+      [TASK_WAKE_TASK_ID_KEY]: TASK_ID,
     },
     createdAt: new Date(),
     expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
@@ -50,7 +51,7 @@ describe('task-wake-reply', () => {
   });
 
   describe('buildTaskWakeAutoBridge', () => {
-    it('includes delegation hint, expected reply, metadata, and long TTL', () => {
+    it('includes expected reply, metadata, and long TTL without delegation hint', () => {
       const bridge = buildTaskWakeAutoBridge({
         taskId: 'f9e9a0d9',
         agentId: 'coordinator',
@@ -58,58 +59,50 @@ describe('task-wake-reply', () => {
       });
 
       expect(bridge.agent_id).toBe('coordinator');
-      expect(bridge.delegation_hint).toBe(TASK_WAKE_DELEGATION_HINT);
+      expect(bridge.delegation_hint).toBeUndefined();
       expect(bridge.expected_reply).toContain('camp session dates');
       expect(bridge.metadata).toEqual({ bind_reply: true, task_id: 'f9e9a0d9' });
       expect(bridge.expires_in_hours).toBe(TASK_WAKE_REPLY_TTL_HOURS);
     });
   });
 
-  describe('persistInboundTaskWakeReply', () => {
+  describe('recordTaskWakeReply', () => {
     let taskRepo: TaskRepo;
-    let outboundContextService: OutboundContextService;
+    let outboundContext: OutboundContextCapability;
 
     beforeEach(() => {
       taskRepo = {
         getTask: vi.fn().mockResolvedValue({
-          id: 'task-abc',
+          id: TASK_ID,
           status: 'waiting',
           owner: 'ceo',
         }),
-        updateTask: vi.fn().mockResolvedValue({ id: 'task-abc' }),
+        updateTask: vi.fn().mockResolvedValue({ id: TASK_ID }),
       } as unknown as TaskRepo;
-      outboundContextService = {
-        release: vi.fn().mockResolvedValue(undefined),
-      } as unknown as OutboundContextService;
+      outboundContext = {
+        getEntry: vi.fn().mockResolvedValue(makeEntry()),
+        releaseEntry: vi.fn().mockResolvedValue(undefined),
+        register: vi.fn(),
+        release: vi.fn(),
+        clearBySubjects: vi.fn(),
+        defaultExpiryHours: 6,
+        explicitExpiryHours: 24,
+      };
     });
 
-    it('no-ops for non-principal senders', async () => {
-      const result = await persistInboundTaskWakeReply({
-        principalReply: 'July 26 to August 22',
-        activeEntries: [makeEntry()],
+    it('records CEO reply to bound task and releases the outbound entry', async () => {
+      const result = await recordTaskWakeReply({
+        reply: 'Four weeks, July 26 to August 22.',
+        taskId: TASK_ID,
+        entryId: ENTRY_ID,
         taskRepo,
-        outboundContextService,
+        outboundContext,
         logger,
-        isPrincipal: false,
       });
 
-      expect(result.persisted).toBe(false);
-      expect(taskRepo.updateTask).not.toHaveBeenCalled();
-    });
-
-    it('persists CEO reply to bound task and releases the outbound entry', async () => {
-      const result = await persistInboundTaskWakeReply({
-        principalReply: 'Four weeks, July 26 to August 22.',
-        activeEntries: [makeEntry()],
-        taskRepo,
-        outboundContextService,
-        logger,
-        isPrincipal: true,
-      });
-
-      expect(result).toEqual({ persisted: true, taskId: 'task-abc', entryId: 'entry-1' });
+      expect(result).toEqual({ persisted: true, taskId: TASK_ID, entryId: ENTRY_ID });
       expect(taskRepo.updateTask).toHaveBeenCalledWith(
-        'task-abc',
+        TASK_ID,
         expect.objectContaining({
           progressNote: expect.stringContaining('Four weeks'),
           owner: 'curia',
@@ -117,66 +110,71 @@ describe('task-wake-reply', () => {
         }),
         'coordinator',
       );
-      expect(outboundContextService.release).toHaveBeenCalledWith('entry-1');
+      expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
     });
 
-    it('ignores entries without task-wake binding metadata', async () => {
-      const result = await persistInboundTaskWakeReply({
-        principalReply: 'Yes',
-        activeEntries: [makeEntry({ metadata: { subject: 'standup' } })],
+    it('rejects when entry task_id does not match requested task_id', async () => {
+      (outboundContext.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeEntry({ metadata: { bind_reply: true, task_id: 'other-task' } }),
+      );
+
+      const result = await recordTaskWakeReply({
+        reply: 'Yes',
+        taskId: TASK_ID,
+        entryId: ENTRY_ID,
         taskRepo,
-        outboundContextService,
+        outboundContext,
         logger,
-        isPrincipal: true,
       });
 
       expect(result.persisted).toBe(false);
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
+      expect(outboundContext.releaseEntry).not.toHaveBeenCalled();
     });
 
-    it('refuses to bind when multiple task-wake entries are open', async () => {
-      const result = await persistInboundTaskWakeReply({
-        principalReply: 'Some answer',
-        activeEntries: [
-          makeEntry({ id: 'entry-1', metadata: { bind_reply: true, task_id: 'task-a' } }),
-          makeEntry({ id: 'entry-2', metadata: { bind_reply: true, task_id: 'task-b' } }),
-        ],
+    it('rejects entries without task-wake binding metadata', async () => {
+      (outboundContext.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeEntry({ metadata: { subject: 'standup' } }),
+      );
+
+      const result = await recordTaskWakeReply({
+        reply: 'Yes',
+        taskId: TASK_ID,
+        entryId: ENTRY_ID,
         taskRepo,
-        outboundContextService,
+        outboundContext,
         logger,
-        isPrincipal: true,
       });
 
       expect(result.persisted).toBe(false);
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
-      expect(outboundContextService.release).not.toHaveBeenCalled();
     });
 
     it('releases the entry and does not persist when the bound task no longer exists', async () => {
       (taskRepo.getTask as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-      const result = await persistInboundTaskWakeReply({
-        principalReply: 'Some answer',
-        activeEntries: [makeEntry()],
+      const result = await recordTaskWakeReply({
+        reply: 'Some answer',
+        taskId: TASK_ID,
+        entryId: ENTRY_ID,
         taskRepo,
-        outboundContextService,
+        outboundContext,
         logger,
-        isPrincipal: true,
       });
 
       expect(result.persisted).toBe(false);
       expect(taskRepo.updateTask).not.toHaveBeenCalled();
-      expect(outboundContextService.release).toHaveBeenCalledWith('entry-1');
+      expect(outboundContext.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
     });
 
     it('returns persisted: false when the repo throws', async () => {
       (taskRepo.getTask as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
-      const result = await persistInboundTaskWakeReply({
-        principalReply: 'Some answer',
-        activeEntries: [makeEntry()],
+      const result = await recordTaskWakeReply({
+        reply: 'Some answer',
+        taskId: TASK_ID,
+        entryId: ENTRY_ID,
         taskRepo,
-        outboundContextService,
+        outboundContext,
         logger,
-        isPrincipal: true,
       });
 
       expect(result.persisted).toBe(false);
