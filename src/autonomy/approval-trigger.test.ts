@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { generateShortRef, buildDescription, ApprovalTriggerService } from './approval-trigger.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
+import type { ContactService } from '../contacts/contact-service.js';
 import { createSilentLogger } from '../logger.js';
 
 describe('generateShortRef', () => {
@@ -96,6 +97,29 @@ function makeMockGateway(overrides?: Partial<OutboundGateway>): OutboundGateway 
   } as unknown as OutboundGateway;
 }
 
+function makeMockContactService(tier: 'principal' | 'trusted' | 'known' | null = 'principal'): ContactService {
+  return {
+    resolveByChannelIdentity: vi.fn().mockResolvedValue(
+      tier ? { tier } : null,
+    ),
+  } as unknown as ContactService;
+}
+
+function makeService(
+  repo: ActionLogRepo,
+  gateway: OutboundGateway | undefined,
+  ceoEmail?: string,
+  contactService?: ContactService,
+): ApprovalTriggerService {
+  return new ApprovalTriggerService(
+    repo,
+    gateway,
+    createSilentLogger(),
+    ceoEmail,
+    contactService,
+  );
+}
+
 const BASE_OPTS = {
   taskId: 'task-1',
   conversationId: 'conv-1',
@@ -110,7 +134,8 @@ describe('ApprovalTriggerService.request()', () => {
   it('creates row, generates short_ref, sends notification, returns created: true', async () => {
     const repo = makeMockRepo();
     const gateway = makeMockGateway();
-    const service = new ApprovalTriggerService(repo, gateway, createSilentLogger(), 'ceo@example.com');
+    const contactService = makeMockContactService('principal');
+    const service = makeService(repo, gateway, 'ceo@example.com', contactService);
 
     const result = await service.request(BASE_OPTS);
 
@@ -133,6 +158,47 @@ describe('ApprovalTriggerService.request()', () => {
     }
     expect(notifPayload.body).toMatch(/Expires:/);          // expiry line
     expect(notifPayload.body).toContain('Reply to approve'); // call to action
+  });
+
+  it('includes action detail in notification body for principal recipient', async () => {
+    const repo = makeMockRepo();
+    const gateway = makeMockGateway();
+    const contactService = makeMockContactService('principal');
+    const service = makeService(repo, gateway, 'ceo@example.com', contactService);
+
+    await service.request({
+      ...BASE_OPTS,
+      skillName: 'signal-send',
+      input: {
+        recipient: '+15550142',
+        message: 'Confirming Thursday at 3pm.',
+      },
+    });
+
+    const notifPayload = (gateway.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(notifPayload.body).toContain('To: +15550142');
+    expect(notifPayload.body).toContain('Message: Confirming Thursday at 3pm.');
+  });
+
+  it('omits action detail when notification recipient is below principal tier', async () => {
+    const repo = makeMockRepo();
+    const gateway = makeMockGateway();
+    const contactService = makeMockContactService('trusted');
+    const service = makeService(repo, gateway, 'ceo@example.com', contactService);
+
+    await service.request({
+      ...BASE_OPTS,
+      skillName: 'signal-send',
+      input: {
+        recipient: '+15550142',
+        message: 'Secret message body',
+      },
+    });
+
+    const notifPayload = (gateway.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(notifPayload.body).not.toContain('Secret message body');
+    expect(notifPayload.body).not.toContain('To: +15550142');
+    expect(notifPayload.body).toContain('Reference:');
   });
 
   it('returns duplicate when matching pending row exists', async () => {

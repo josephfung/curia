@@ -33,6 +33,10 @@ import { createOutboundBlocked, createOutboundDelivered, createOutboundNotificat
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import { generateShortRef } from '../autonomy/approval-trigger.js';
+import {
+  buildApprovalNotificationBody,
+  resolveNotificationRecipientTier,
+} from '../autonomy/approval-notification.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { scrubPii } from '../pii/scrubber.js';
@@ -484,19 +488,27 @@ export class OutboundGateway {
           // discard the fact that the insert (and the notification delivery) succeeded.
           const principalEmail = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
           if (rowId !== undefined && principalEmail) {
+            const recipientTier = await resolveNotificationRecipientTier(
+              this.contactService,
+              principalEmail,
+            );
             const sent = await this.sendNotification({
               notificationType: 'approval_requested',
               ceoEmail: principalEmail,
               subject: `Approval needed — ${recipe.description}`,
-              body: [
-                recipe.description,
-                '',
-                `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
-                `Reference: ${candidateRef}`,
-                `Expires: ${expiresAt.toISOString()}`,
-                '',
-                `Reply with the reference to approve, deny, or dismiss this request.`,
-              ].join('\n'),
+              body: buildApprovalNotificationBody({
+                preamble: recipe.description,
+                shortRef: candidateRef,
+                expiresAt,
+                skillName: recipe.skillName,
+                payload: recipe.partialPayload ?? {},
+                recipientTier,
+                extraLines: [
+                  `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
+                ],
+                callToAction:
+                  'Reply with the reference to approve, deny, or dismiss this request.',
+              }),
             });
             if (sent) {
               try {
