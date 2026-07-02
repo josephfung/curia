@@ -3,8 +3,13 @@
 // Used by ApprovalTriggerService and OutboundGateway so the two notification
 // paths cannot drift. Detail rendering is gated on the notification recipient
 // meeting principal tier (issue #1300).
+//
+// OutboundGateway may pass incomplete partialPayload at gate time (e.g. send-draft
+// before draft_id is linked). Call enrichGatewayApprovalPayload() with the live
+// send request so recipient/content fields are available in the notification.
 
 import type { ContactService } from '../contacts/contact-service.js';
+import type { Logger } from '../logger.js';
 import { meetsMinimumTier, type ContactTier } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 
@@ -14,16 +19,6 @@ import { sanitizeOutput } from '../skills/sanitize.js';
 
 export const MAX_DETAIL_FIELD_LENGTH = 500;
 export const MAX_DETAIL_TOTAL_LENGTH = 2000;
-
-const INTERNAL_PAYLOAD_KEYS = new Set([
-  'context_bridge',
-  'attachments',
-  'account',
-  'calendarId',
-  'colorId',
-  'reminders',
-  'conferencing',
-]);
 
 // ---------------------------------------------------------------------------
 // Field allowlists — extend alongside VERB_RULES in approval-trigger.ts
@@ -60,6 +55,10 @@ const SKILL_DETAIL_FIELDS: Array<{ test: (name: string) => boolean; fields: Deta
     test: (n) => n === 'send-draft',
     fields: [
       { key: 'draft_id', label: 'Draft' },
+      // partialPayload at gate time may omit draft_id; merge live send fields below.
+      { key: 'to', label: 'To' },
+      { key: 'subject', label: 'Subject' },
+      { key: 'body', label: 'Body' },
     ],
   },
   {
@@ -111,14 +110,48 @@ const GENERIC_DETAIL_FIELDS: DetailFieldSpec[] = [
   { key: 'label', label: 'Label' },
 ];
 
+/** Representative payloads for allowlisted skills — used by tests to catch silent misses. */
+export const SKILL_DETAIL_FIXTURES: Array<{
+  skillName: string;
+  payload: Record<string, unknown>;
+}> = [
+  {
+    skillName: 'signal-send',
+    payload: { recipient: '+15550142', message: 'Confirming Thursday at 3pm.' },
+  },
+  {
+    skillName: 'email-reply',
+    payload: { reply_to_message_id: 'msg-abc', body: 'Thanks — Thursday works.' },
+  },
+  {
+    skillName: 'email-draft-save',
+    payload: { to: 'dana@example.com', subject: 'Re: Budget', body: 'Draft body text.' },
+  },
+  {
+    skillName: 'send-draft',
+    payload: { to: 'dana@example.com', subject: 'Re: Budget', body: 'Approved send body.' },
+  },
+  {
+    skillName: 'calendar-create-event',
+    payload: {
+      title: 'Board sync',
+      start: '2026-07-02T15:00:00Z',
+      end: '2026-07-02T16:00:00Z',
+    },
+  },
+  {
+    skillName: 'store-fact',
+    payload: { label: 'Dana prefers mornings', value: 'true' },
+  },
+  {
+    skillName: 'scheduler-create',
+    payload: { name: 'nightly-sweep', when: '2026-07-03T02:00:00Z' },
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Pure helpers — exported for testing
 // ---------------------------------------------------------------------------
-
-function truncateDetailField(s: string, maxLen: number): string {
-  if (s.length <= maxLen) return s;
-  return s.slice(0, maxLen - 1) + '…';
-}
 
 function formatFieldValue(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -150,23 +183,13 @@ function formatFieldValue(value: unknown): string | null {
           if (email) return email;
           if (name) return name;
         }
-        try {
-          return JSON.stringify(item);
-        } catch {
-          return String(item);
-        }
+        return null;
       })
       .filter((part): part is string => Boolean(part));
     return parts.length ? parts.join(', ') : null;
   }
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-  }
-  return String(value);
+  // Skip plain objects — avoid leaking internal JSON shape into CEO notifications.
+  return null;
 }
 
 function fieldSpecsForSkill(skillName: string): DetailFieldSpec[] {
@@ -174,6 +197,24 @@ function fieldSpecsForSkill(skillName: string): DetailFieldSpec[] {
     if (rule.test(skillName)) return rule.fields;
   }
   return GENERIC_DETAIL_FIELDS;
+}
+
+/**
+ * Merge live outbound-send fields into a partial gate-time payload.
+ * partialPayload wins when a key is already set (e.g. draft_id linked later).
+ */
+export function enrichGatewayApprovalPayload(
+  partialPayload: Record<string, unknown>,
+  sendFields: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...partialPayload };
+  for (const [key, value] of Object.entries(sendFields)) {
+    if (merged[key] !== undefined) continue;
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'string' && value.trim().length === 0) continue;
+    merged[key] = value;
+  }
+  return merged;
 }
 
 /**
@@ -190,7 +231,6 @@ export function buildApprovalDetails(
   let totalLength = 0;
 
   for (const { key, label } of specs) {
-    if (INTERNAL_PAYLOAD_KEYS.has(key)) continue;
     if (seenLabels.has(label)) continue;
     const raw = formatFieldValue(payload[key]);
     if (!raw) continue;
@@ -200,7 +240,7 @@ export function buildApprovalDetails(
     if (totalLength + line.length > MAX_DETAIL_TOTAL_LENGTH) {
       const remaining = MAX_DETAIL_TOTAL_LENGTH - totalLength;
       if (remaining <= label.length + 2) break;
-      lines.push(truncateDetailField(line, remaining));
+      lines.push(sanitizeOutput(line, { maxLength: remaining }));
       break;
     }
     lines.push(line);
@@ -223,6 +263,18 @@ export interface BuildApprovalNotificationBodyOpts {
   /** Optional lines between preamble and reference block (e.g. autonomy score). */
   extraLines?: string[];
   callToAction?: string;
+  /** When set, logs a warn if the detail block is omitted or empty. */
+  logger?: Logger;
+  /** Included in omission warnings for correlation. */
+  ceoEmail?: string;
+}
+
+function logDetailOmission(
+  logger: Logger | undefined,
+  reason: string,
+  context: Record<string, unknown>,
+): void {
+  logger?.warn(context, `approval notification: detail block omitted — ${reason}`);
 }
 
 /**
@@ -236,11 +288,27 @@ export function buildApprovalNotificationBody(opts: BuildApprovalNotificationBod
     lines.push(...opts.extraLines, '');
   }
 
-  if (opts.recipientTier && meetsMinimumTier(opts.recipientTier, 'principal')) {
+  const includeDetail = Boolean(
+    opts.recipientTier && meetsMinimumTier(opts.recipientTier, 'principal'),
+  );
+
+  if (includeDetail) {
     const details = buildApprovalDetails(opts.skillName, opts.payload);
     if (details) {
       lines.push(details, '');
+    } else {
+      logDetailOmission(opts.logger, 'no renderable fields in payload', {
+        skillName: opts.skillName,
+        ceoEmail: opts.ceoEmail,
+        payloadKeys: Object.keys(opts.payload),
+      });
     }
+  } else if (opts.ceoEmail) {
+    logDetailOmission(opts.logger, 'recipient tier below principal or unresolved', {
+      skillName: opts.skillName,
+      ceoEmail: opts.ceoEmail,
+      recipientTier: opts.recipientTier,
+    });
   }
 
   lines.push(
@@ -260,12 +328,22 @@ export function buildApprovalNotificationBody(opts: BuildApprovalNotificationBod
 export async function resolveNotificationRecipientTier(
   contactService: ContactService | undefined,
   ceoEmail: string,
+  logger?: Logger,
 ): Promise<ContactTier | null> {
-  if (!contactService || !ceoEmail) return null;
+  if (!ceoEmail) return null;
+  if (!contactService) {
+    logDetailOmission(logger, 'contactService not configured', { ceoEmail });
+    return null;
+  }
   try {
     const resolved = await contactService.resolveByChannelIdentity('email', ceoEmail);
-    return resolved?.tier ?? null;
-  } catch {
+    if (!resolved?.tier) {
+      logDetailOmission(logger, 'recipient not found in contacts', { ceoEmail });
+      return null;
+    }
+    return resolved.tier;
+  } catch (err) {
+    logDetailOmission(logger, 'tier lookup failed', { err, ceoEmail });
     return null;
   }
 }
