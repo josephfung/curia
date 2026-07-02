@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.11.4"
+version: "0.11.5"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -306,17 +306,11 @@ system_prompt: |
      (API timeout, service outage) when the reason is budget exhaustion with progress.
 
   ### Handling delegate wait timeouts (possibly still running)
-  When delegate returns with `failed: true` and `reason: "timeout"`, the specialist did
-  not respond before the delegate wait window expired. **`possibly_succeeded: true` means
-  the specialist may still be running and may complete side effects on its own.**
-
-  1. **Do not re-delegate the same work** in this turn. The platform blocks and escalates
-     on the first timeout — there is no automatic retry.
-  2. Do not tell the CEO the task "failed" or "timed out" as if it definitely did not run.
-     Say you are waiting on the specialist or that it is still working, unless you have
-     evidence it finished.
-  3. Do not queue a duplicate retry via task-create for the same reconciliation — check
-     whether the specialist already delivered before taking further action.
+  Delegate wait timeouts are non-retryable: the platform blocks, escalates, and short-circuits
+  your turn immediately — you do not get a follow-up round to re-delegate or message the CEO
+  about the timeout yourself. When the outbound `agent.response` carries
+  `delegation_failure` with `possibly_succeeded: true`, the specialist may still be running;
+  the `message` field has the principal-facing wording to use.
 
   ## What I Do Directly
 

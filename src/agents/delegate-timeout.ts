@@ -8,8 +8,11 @@
 // (skills/delegate/skill.json "timeout") so the handler can emit a structured failure
 // before the execution layer kills the invocation.
 
-/** Must stay in sync with skills/delegate/skill.json "timeout". */
+/** Must stay in sync with skills/delegate/skill.json "timeout" — enforced by test. */
 export const DELEGATE_SKILL_OUTER_TIMEOUT_MS = 900_000;
+
+/** Margin below the outer skill timeout so the inner wait resolves first under load. */
+export const DELEGATE_SKILL_OUTER_TIMEOUT_MARGIN_MS = 5_000;
 
 /** Maximum extra wait beyond expected_duration_seconds. */
 const DELEGATE_TIMEOUT_HEADROOM_CAP_SECONDS = 180;
@@ -21,11 +24,15 @@ const DELEGATE_TIMEOUT_HEADROOM_CAP_SECONDS = 180;
 export function clampDelegateWaitTimeoutMs(
   timeoutMs: number,
   outerTimeoutMs: number = DELEGATE_SKILL_OUTER_TIMEOUT_MS,
+  marginMs: number = DELEGATE_SKILL_OUTER_TIMEOUT_MARGIN_MS,
 ): number {
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
     throw new RangeError('timeoutMs must be a positive integer');
   }
-  return Math.min(timeoutMs, outerTimeoutMs - 1);
+  if (!Number.isInteger(marginMs) || marginMs <= 0 || marginMs >= outerTimeoutMs) {
+    throw new RangeError('marginMs must be a positive integer less than outerTimeoutMs');
+  }
+  return Math.min(timeoutMs, outerTimeoutMs - marginMs);
 }
 
 /**

@@ -148,6 +148,23 @@ describe('buildDelegationEscalation (#1267)', () => {
     expect(e.reason).toBe('maxTurns');
     expect(e.blocker).toBe('research');
   });
+
+  it('uses the delegate message and cautious actions when timeout possibly succeeded (#1288)', () => {
+    const message = "Specialist 'T2125-expense-tracker' did not respond within the delegate wait window — the task may still be running";
+    const e = buildDelegationEscalation({
+      agent: 'T2125-expense-tracker',
+      reason: 'timeout',
+      retryable: false,
+      message,
+      task: 'Run June reconciliation',
+      possiblySucceeded: true,
+    });
+
+    expect(e.failureMode).toBe('agent_incomplete');
+    expect(e.headline).toBe(message);
+    expect(e.suggestedActions.join(' ')).toContain('may still be running');
+    expect(e.suggestedActions.join(' ')).toContain('Do not re-delegate');
+  });
 });
 
 describe('renderEscalation (#1267)', () => {
