@@ -35,6 +35,7 @@ import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import { generateShortRef } from '../autonomy/approval-trigger.js';
 import {
   buildApprovalNotificationBody,
+  enrichGatewayApprovalPayload,
   resolveNotificationRecipientTier,
 } from '../autonomy/approval-notification.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
@@ -491,6 +492,13 @@ export class OutboundGateway {
             const recipientTier = await resolveNotificationRecipientTier(
               this.contactService,
               principalEmail,
+              this.log,
+            );
+            const notificationPayload = enrichGatewayApprovalPayload(
+              recipe.partialPayload ?? {},
+              request.channel === 'email'
+                ? { to: request.to, subject: request.subject, body: request.body }
+                : { recipient: request.recipient, message: request.message },
             );
             const sent = await this.sendNotification({
               notificationType: 'approval_requested',
@@ -501,8 +509,10 @@ export class OutboundGateway {
                 shortRef: candidateRef,
                 expiresAt,
                 skillName: recipe.skillName,
-                payload: recipe.partialPayload ?? {},
+                payload: notificationPayload,
                 recipientTier,
+                logger: this.log,
+                ceoEmail: principalEmail,
                 extraLines: [
                   `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
                 ],

@@ -224,6 +224,7 @@ export class ApprovalTriggerService {
       const recipientTier = await resolveNotificationRecipientTier(
         this.contactService,
         this.ceoEmail,
+        this.logger,
       );
       const notificationBody = buildApprovalNotificationBody({
         preamble: opts.reason ?? defaultBody,
@@ -232,6 +233,8 @@ export class ApprovalTriggerService {
         skillName,
         payload: input,
         recipientTier,
+        logger: this.logger,
+        ceoEmail: this.ceoEmail,
       });
       const sent = await this.outboundGateway.sendNotification({
         notificationType: 'approval_requested',
