@@ -41,6 +41,23 @@ export class TaskCompleteHandler implements SkillHandler {
     ctx.log.info({ taskId: input.task_id }, 'Completing task');
 
     try {
+      const existing = await ctx.taskRepo.getTask(input.task_id);
+      if (!existing) {
+        return { success: false, error: `Task not found: ${input.task_id}` };
+      }
+
+      // Reject skipping past-due milestone subtasks immediately after creation (#1299).
+      if (existing.dueAt) {
+        const dueMs = new Date(existing.dueAt).getTime();
+        const createdMs = new Date(existing.createdAt).getTime();
+        if (dueMs < createdMs && Date.now() - createdMs < 5 * 60 * 1000) {
+          return {
+            success: false,
+            error: 'Cannot complete a milestone subtask whose due date was already past at creation without doing its work first. Advance the task or escalate instead of marking it done.',
+          };
+        }
+      }
+
       const completed = await ctx.taskRepo.completeTask(
         input.task_id,
         input.completion_note,

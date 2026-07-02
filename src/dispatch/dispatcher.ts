@@ -12,6 +12,7 @@ import type { DbPool } from '../db/connection.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
 import { parseEmailMetadata, sanitizeNylasMessageId, buildCcPreamble, buildThreadParticipantsBlock } from './email-metadata.js';
+import { persistInboundTaskWakeReply } from './task-wake-reply.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
 function redactSenderId(value: string): string {
@@ -74,6 +75,8 @@ export interface DispatcherConfig {
   /** Outbound context service — v2 context bridging. When present, replaces
    *  the working-memory-based context memo injection. */
   outboundContextService?: import('./outbound-context.js').OutboundContextService;
+  /** Task repo — persists CEO replies to task-wake questions (#1299). */
+  taskRepo?: import('../db/task-repo.js').TaskRepo;
   /** Contact service for automatic tier elevation (issue #951).
    *  When absent, all elevation paths are silently skipped. */
   contactService?: import('../contacts/contact-service.js').ContactService;
@@ -127,6 +130,8 @@ export class Dispatcher {
   private selfEmail?: string;
   /** Outbound context service — v2 context bridging (replaces working-memory memo read path). */
   private _outboundContextService?: import('./outbound-context.js').OutboundContextService;
+  /** Task repo — persists CEO replies to task-wake questions (#1299). */
+  private taskRepo?: import('../db/task-repo.js').TaskRepo;
   /** Contact service for automatic tier elevation (issue #951). */
   private contactService?: import('../contacts/contact-service.js').ContactService;
 
@@ -144,6 +149,7 @@ export class Dispatcher {
     this.confidencePipeline = config.confidencePipeline;
     this.selfEmail = config.selfEmail;
     this._outboundContextService = config.outboundContextService;
+    this.taskRepo = config.taskRepo;
     this.contactService = config.contactService;
   }
 
@@ -559,7 +565,21 @@ export class Dispatcher {
     // Best-effort: failure is logged but does not block message routing.
     if (this._outboundContextService) {
       try {
-        const activeEntries = await this._outboundContextService.getActive();
+        let activeEntries = await this._outboundContextService.getActive();
+
+        // Persist CEO replies to bound task-wake questions before the coordinator runs (#1299).
+        if (this.taskRepo && senderContext?.resolved && senderContext.systemRole === 'principal') {
+          await persistInboundTaskWakeReply({
+            principalReply: payload.content,
+            activeEntries,
+            taskRepo: this.taskRepo,
+            outboundContextService: this._outboundContextService,
+            logger: this.logger,
+            isPrincipal: true,
+          });
+          activeEntries = await this._outboundContextService.getActive();
+        }
+
         const preamble = this._outboundContextService.formatInjectionBlock(activeEntries, taskContent);
         if (preamble !== null) {
           taskContent = preamble;

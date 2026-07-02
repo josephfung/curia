@@ -13,6 +13,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
+import { boundTaskFromSendContext } from '../../src/dispatch/task-wake-reply.js';
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
@@ -148,6 +149,7 @@ export class SignalSendHandler implements SkillHandler {
           content: message,
           agentId: ctx.agentId ?? 'coordinator',
           log: ctx.log,
+          boundTask: boundTaskFromSendContext(ctx.taskMetadata),
         });
 
         return { success: true, data: { delivered_to: group_id, channel: 'signal' } };
@@ -185,6 +187,7 @@ export class SignalSendHandler implements SkillHandler {
         content: message,
         agentId: ctx.agentId ?? 'coordinator',
         log: ctx.log,
+        boundTask: boundTaskFromSendContext(ctx.taskMetadata),
       });
 
       return {
