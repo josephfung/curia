@@ -1,10 +1,11 @@
-// escalation-policy.test.ts — unit tests for mapActionRiskToConsequenceClass.
+// escalation-policy.test.ts — unit tests for mapActionRiskToConsequenceClass and applyActionPolicy.
 //
-// The action/disclosure policy tables themselves are exercised via escalation-judge.test.ts;
-// this file pins the manifest action_risk → consequence-class mapping, which Gate C relies on.
+// The disclosure policy table is exercised via escalation-judge.test.ts;
+// this file pins the manifest action_risk → consequence-class mapping and Gate C policy carve-outs.
 
 import { describe, it, expect } from 'vitest';
-import { mapActionRiskToConsequenceClass } from './escalation-policy.js';
+import { mapActionRiskToConsequenceClass, applyActionPolicy } from './escalation-policy.js';
+import type { ContactTier } from '../contacts/types.js';
 
 describe('mapActionRiskToConsequenceClass', () => {
   it('maps each named action_risk label to its consequence class', () => {
@@ -28,5 +29,32 @@ describe('mapActionRiskToConsequenceClass', () => {
     // Defensive: not reachable through the typed ActionRisk union, but guards against a
     // widened/loosened input type silently allowing an action.
     expect(mapActionRiskToConsequenceClass('bogus' as unknown as 'none')).toBe('irreversible');
+  });
+});
+
+describe('applyActionPolicy — principal-only carve-out (#1301)', () => {
+  it('allows known-tier reversible-external to principal even when third-party-facing', () => {
+    expect(applyActionPolicy('known', 'reversible-external', true, true)).toBe('allow');
+  });
+
+  it('still escalates irreversible actions to the principal', () => {
+    expect(applyActionPolicy('known', 'irreversible', false, true)).toBe('escalate');
+    expect(applyActionPolicy('trusted', 'irreversible', false, true)).toBe('escalate');
+  });
+
+  it('still escalates mixed recipient sets (third-party-facing, not principal-only)', () => {
+    expect(applyActionPolicy('known', 'reversible-external', true, false)).toBe('escalate');
+  });
+
+  it('still escalates unknown-tier external sends to the principal (not a third-party carve-out)', () => {
+    expect(applyActionPolicy('unknown', 'reversible-external', false, true)).toBe('escalate');
+  });
+
+  it('does not affect none/internal actions', () => {
+    const tiers: ContactTier[] = ['unknown', 'known', 'trusted'];
+    for (const tier of tiers) {
+      expect(applyActionPolicy(tier, 'none', true, true)).toBe('allow');
+      expect(applyActionPolicy(tier, 'reversible-internal', true, true)).toBe('allow');
+    }
   });
 });

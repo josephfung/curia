@@ -108,6 +108,10 @@ export function applyDisclosurePolicy(
  *                             inviting a new attendee, emailing someone new, committing
  *                             on the principal's behalf to external parties). A plain reply
  *                             to the sender is false.
+ * @param isPrincipalSoleRecipient - When true, the action's recipient set is exclusively
+ *                                   the structurally-verified principal. Heads-up comms to
+ *                                   the CEO are not third-party-facing (#1301). Irreversible
+ *                                   actions still escalate.
  *
  * Policy (issue #948 resolved section):
  *   blocked   — nothing; blocked contacts cannot initiate tasks.
@@ -183,6 +187,7 @@ export function applyActionPolicy(
   initiatingTier: ContactTier,
   actionClass: ActionConsequenceClass,
   isThirdPartyFacing: boolean,
+  isPrincipalSoleRecipient = false,
 ): EscalationDecision {
   // Belt-and-suspenders: unrecognized tier → fail closed (mirrors applyDisclosurePolicy guard).
   // TIER_RANK is the canonical tier registry; a tier absent from it is not a valid ContactTier.
@@ -202,6 +207,8 @@ export function applyActionPolicy(
     case 'reversible-external':
       if (meetsMinimumTier(initiatingTier, 'trusted')) return 'allow';
       if (meetsMinimumTier(initiatingTier, 'known')) {
+        // Delivery exclusively to the principal is not third-party-facing (#1301).
+        if (isPrincipalSoleRecipient) return 'allow';
         // Known contacts: reply to the sender is fine; third-party-facing escalates.
         return isThirdPartyFacing ? 'escalate' : 'allow';
       }

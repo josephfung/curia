@@ -20,6 +20,8 @@
 import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition, SkillManifest } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
+import { resolvePrincipalIsSoleRecipientFromSkillInput } from '../contacts/principal-recipient.js';
+import type { ChannelIdentity } from '../contacts/types.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -179,6 +181,8 @@ export class ExecutionLayer {
   private bypassLadder: BypassLadderConfig;
   /** Resumable / plan-adaptive ceiling defaults from tasks.resumableCeilings (#1266). */
   private resumableCeilings: ResumableCeilingsConfig;
+  /** Principal verified channel identities — used by Gate C for structural recipient checks (#1301). */
+  private principalIdentities: readonly ChannelIdentity[];
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -217,6 +221,8 @@ export class ExecutionLayer {
     httpPort?: number;
     bypassLadder?: BypassLadderConfig;
     resumableCeilings?: ResumableCeilingsConfig;
+    /** Verified principal channel identities for Gate C principal-only carve-out (#1301). */
+    principalIdentities?: readonly ChannelIdentity[];
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -254,6 +260,7 @@ export class ExecutionLayer {
     this.httpPort = options?.httpPort;
     this.bypassLadder = options?.bypassLadder ?? DEFAULT_BYPASS_LADDER;
     this.resumableCeilings = options?.resumableCeilings ?? DEFAULT_RESUMABLE_CEILINGS;
+    this.principalIdentities = options?.principalIdentities ?? [];
   }
 
   /**
@@ -437,9 +444,10 @@ export class ExecutionLayer {
     input: Record<string, unknown>,
     options: InvokeOptions | undefined,
     skillLogger: Logger,
+    isPrincipalSoleRecipient: boolean,
   ): Promise<EscalationDecision> {
-    const decisionIfReplyToSender = applyActionPolicy(initiatingTier, actionClass, false);
-    const decisionIfThirdParty = applyActionPolicy(initiatingTier, actionClass, true);
+    const decisionIfReplyToSender = applyActionPolicy(initiatingTier, actionClass, false, isPrincipalSoleRecipient);
+    const decisionIfThirdParty = applyActionPolicy(initiatingTier, actionClass, true, isPrincipalSoleRecipient);
 
     // Obvious: the third-party-facing axis doesn't change the outcome → no judge needed.
     if (decisionIfReplyToSender === decisionIfThirdParty) {
@@ -468,7 +476,12 @@ export class ExecutionLayer {
       }
       // Clamp the consequence class up to the manifest floor before applying the policy.
       const effectiveClass = moreSevereConsequence(actionClass, verdict.actionClass ?? actionClass);
-      const decision = applyActionPolicy(initiatingTier, effectiveClass, verdict.isThirdPartyFacing);
+      const decision = applyActionPolicy(
+        initiatingTier,
+        effectiveClass,
+        verdict.isThirdPartyFacing,
+        isPrincipalSoleRecipient,
+      );
       skillLogger.info(
         {
           skillName,
@@ -477,6 +490,7 @@ export class ExecutionLayer {
           judgedClass: verdict.actionClass,
           effectiveClass,
           isThirdPartyFacing: verdict.isThirdPartyFacing,
+          isPrincipalSoleRecipient,
           decision,
           reason: verdict.reason,
         },
@@ -785,8 +799,13 @@ export class ExecutionLayer {
           const initiatingTier = getInitiatingTier(effectiveTaskMetadata);
           if (initiatingTier !== null && manifest.action_risk !== 'none') {
             const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
+            const isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
+              input,
+              this.principalIdentities,
+            );
             const tierDecision = await this.resolveTierGateDecision(
               initiatingTier, actionClass, skillName, manifest, input, options, skillLogger,
+              isPrincipalSoleRecipient,
             );
             if (tierDecision === 'escalate') {
               skillLogger.info(

@@ -25,6 +25,11 @@ import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { ContactTier, ChannelIdentity } from '../contacts/types.js';
+import {
+  isPrincipalEmail as checkPrincipalEmail,
+  isPrincipalSignal as checkPrincipalSignal,
+  computePrincipalIsSoleRecipient,
+} from '../contacts/principal-recipient.js';
 import type { OutboundContentFilter, FilterRecipient } from '../dispatch/outbound-filter.js';
 import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
@@ -964,11 +969,7 @@ export class OutboundGateway {
    * Used by sendEmailDraft() for the autonomy bypass.
    */
   private isPrincipalEmail(email: string | undefined | null): boolean {
-    if (!email || this.principalIdentities.length === 0) return false;
-    const normalized = email.toLowerCase();
-    return this.principalIdentities.some(
-      (id) => id.channel === 'email' && id.channelIdentifier.toLowerCase() === normalized,
-    );
+    return checkPrincipalEmail(email, this.principalIdentities);
   }
 
   /**
@@ -978,10 +979,7 @@ export class OutboundGateway {
    * reply would be mis-tagged as a third party and lose its private-channel skip.
    */
   private isPrincipalSignal(identifier: string | undefined | null): boolean {
-    if (!identifier || this.principalIdentities.length === 0) return false;
-    return this.principalIdentities.some(
-      (id) => id.channel === 'signal' && id.channelIdentifier === identifier,
-    );
+    return checkPrincipalSignal(identifier, this.principalIdentities);
   }
 
   /**
@@ -1053,7 +1051,9 @@ export class OutboundGateway {
       recipients.push(r);
     }
     const principalIncluded = recipients.some((r) => r.isPrincipal);
-    const principalIsSoleRecipient = recipients.length === 1 && recipients[0]!.isPrincipal;
+    const principalIsSoleRecipient = computePrincipalIsSoleRecipient(
+      recipients.map((r) => ({ identifier: r.email, isPrincipal: r.isPrincipal })),
+    );
     return { recipients, principalIncluded, principalIsSoleRecipient };
   }
 
