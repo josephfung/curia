@@ -26,6 +26,7 @@ import { createAgentTask, type AgentResponseEvent, type AgentResponseFailureReas
 // future format change can't silently desync this handler from runtime.ts and the resume subscriber.
 import { decodeResumeToken, RESUME_TOKEN_VERSION } from '../../src/agents/resume-token.js';
 import { delegationKey } from '../../src/agents/delegation-guard.js';
+import { clampDelegateWaitTimeoutMs } from '../../src/agents/delegate-timeout.js';
 import {
   EXECUTION_PAUSED_PROTOCOL,
   formatPausedProgressMessage,
@@ -101,7 +102,9 @@ export class DelegateHandler implements SkillHandler {
       Number.isInteger(timeout_ms) &&
       timeout_ms > 0 &&
       Number.isFinite(timeout_ms);
-    const specialistTimeoutMs = isValidTimeout ? (timeout_ms as number) : (ctx.defaultDelegateTimeoutMs ?? DEFAULT_SPECIALIST_TIMEOUT_MS);
+    const specialistTimeoutMs = clampDelegateWaitTimeoutMs(
+      isValidTimeout ? (timeout_ms as number) : (ctx.defaultDelegateTimeoutMs ?? DEFAULT_SPECIALIST_TIMEOUT_MS),
+    );
 
     if (timeout_ms !== undefined && !isValidTimeout) {
       ctx.log.warn(
@@ -312,7 +315,11 @@ export class DelegateHandler implements SkillHandler {
             __structuredDelegateFailure: true,
             agent,
             reason: 'timeout',
-            retryable: true,
+            // Non-retryable: the specialist may still be running (possibly_succeeded below).
+            // A second delegation risks concurrent duplicate side effects — worse than
+            // escalating a task that turned out dead. Auto-retry would only help the rare
+            // "specialist actually died" case at the cost of duplicate emails in prod.
+            retryable: false,
           } satisfies StructuredDelegateFailure);
         }
       }, specialistTimeoutMs);
