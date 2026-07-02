@@ -7,8 +7,13 @@
 import { randomBytes } from 'node:crypto';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
+import type { ContactService } from '../contacts/contact-service.js';
 import type { Logger } from '../logger.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
+import {
+  buildApprovalNotificationBody,
+  resolveNotificationRecipientTier,
+} from './approval-notification.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -101,6 +106,8 @@ export class ApprovalTriggerService {
     private readonly outboundGateway: OutboundGateway | undefined,
     private readonly logger: Logger,
     private readonly ceoEmail?: string,
+    // Optional — used to resolve the notification recipient's tier for detail gating.
+    private readonly contactService?: ContactService,
   ) {}
 
   /**
@@ -214,11 +221,18 @@ export class ApprovalTriggerService {
       const defaultBody =
         `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
         `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).`;
-      const notificationBody =
-        `${opts.reason ?? defaultBody}\n\n` +
-        `Reference: ${shortRef}\n` +
-        `Expires: ${expiresAt.toISOString()}\n\n` +
-        `Reply to approve, deny, or dismiss this request.`;
+      const recipientTier = await resolveNotificationRecipientTier(
+        this.contactService,
+        this.ceoEmail,
+      );
+      const notificationBody = buildApprovalNotificationBody({
+        preamble: opts.reason ?? defaultBody,
+        shortRef,
+        expiresAt,
+        skillName,
+        payload: input,
+        recipientTier,
+      });
       const sent = await this.outboundGateway.sendNotification({
         notificationType: 'approval_requested',
         ceoEmail: this.ceoEmail,

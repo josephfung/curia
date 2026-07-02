@@ -1651,7 +1651,7 @@ async function main(): Promise<void> {
   // outboundGateway and ceoEmail are optional: if absent, the row is created but
   // notification is skipped (CEO will see it in the next digest, #429).
   const approvalTrigger = new ApprovalTriggerService(
-    actionLogRepo, outboundGateway, logger, principalEmail || undefined,
+    actionLogRepo, outboundGateway, logger, principalEmail || undefined, contactService,
   );
 
   // Temp file store — secure tmpfs-backed storage for binary attachment handoff.
