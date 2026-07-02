@@ -57,7 +57,6 @@ import {
   GATEWAY_ATTACHMENT_SKILLS,
   ExportControlService as ExportControlServiceClass,
   extractDestinationFromInput,
-  extractExportItemsFromInput,
   formatDestination,
   maxItemSensitivity,
 } from '../security/export-controls.js';
@@ -967,34 +966,43 @@ export class ExecutionLayer {
     // humanApproved bypasses threshold and destination gates but NOT restricted bulk blocks.
     const isExportSkill = MCP_EXPORT_SKILLS.has(skillName)
       || (GATEWAY_ATTACHMENT_SKILLS.has(skillName) && Array.isArray(input['attachments']) && input['attachments'].length > 0);
+    let resolvedMcpExportAudit: { items: import('../security/export-controls.js').ExportItem[]; destination: import('../security/export-controls.js').ExportDestination } | undefined;
     if (this.exportControlService && isExportSkill) {
-      const exportGate = await this.exportControlService.evaluateSkillExport({
+      const exportEval = await this.exportControlService.evaluateSkillExport({
         skillName,
         input,
         humanApproved: options?.humanApproved,
       });
-      if (exportGate && exportGate.action === 'block') {
-        skillLogger.info(
-          { skillName, code: exportGate.code, itemCount: exportGate.items.length },
-          'export gate: bulk restricted export blocked',
-        );
-        return { success: false, error: this.wrapSkillError(exportGate.message) };
-      }
-      if (exportGate && exportGate.action === 'approval_required') {
-        skillLogger.info(
-          { skillName, code: exportGate.code, itemCount: exportGate.items.length },
-          'export gate: export requires CEO approval',
-        );
-        const gateError = await this.buildExportGateError(
-          skillName,
-          input,
-          exportGate.message,
-          exportGate.items,
-          manifest.action_risk,
-          options,
-          skillLogger,
-        );
-        return { success: false, error: this.wrapSkillError(gateError) };
+      if (exportEval) {
+        const { outcome, items } = exportEval;
+        const destination = extractDestinationFromInput(skillName, input)
+          ?? { kind: 'email' as const, address: '(implicit reply)' };
+        if (outcome.action === 'block') {
+          skillLogger.info(
+            { skillName, code: outcome.code, itemCount: items.length },
+            'export gate: bulk restricted export blocked',
+          );
+          return { success: false, error: this.wrapSkillError(outcome.message) };
+        }
+        if (outcome.action === 'approval_required') {
+          skillLogger.info(
+            { skillName, code: outcome.code, itemCount: items.length },
+            'export gate: export requires CEO approval',
+          );
+          const gateError = await this.buildExportGateError(
+            skillName,
+            input,
+            outcome.message,
+            items,
+            manifest.action_risk,
+            options,
+            skillLogger,
+          );
+          return { success: false, error: this.wrapSkillError(gateError) };
+        }
+        if (MCP_EXPORT_SKILLS.has(skillName)) {
+          resolvedMcpExportAudit = { items, destination };
+        }
       }
     }
 
@@ -1452,30 +1460,25 @@ export class ExecutionLayer {
         timeoutPromise,
       ]);
 
-      // MCP export audit trail (#201) — publish after successful bulk record export.
-      if (result.success && this.exportControlService && MCP_EXPORT_SKILLS.has(skillName) && this.bus) {
-        const destination = extractDestinationFromInput(skillName, input);
-        const rawItems = await this.exportControlService.resolveItems(
-          extractExportItemsFromInput(skillName, input),
-        );
-        if (rawItems.length > 0 && destination) {
-          this.bus.publish('execution', createExportDelivered({
-              skillName,
-              agentId: options?.agentId,
-              taskEventId: options?.taskEventId,
-              conversationId: options?.conversationId,
-              destination: formatDestination(destination),
-              items: rawItems.map((i) => ({
-                nodeId: i.nodeId,
-                label: i.label,
-                sensitivity: i.sensitivity,
-              })),
-              maxSensitivity: maxItemSensitivity(rawItems),
-              parentEventId: options?.parentEventId,
-            })).catch((err) => {
-              skillLogger.warn({ err, skillName }, 'export gate: failed to publish export.delivered event');
-            });
-        }
+      // MCP export audit trail (#201) — reuse items resolved at gate time.
+      if (result.success && resolvedMcpExportAudit && this.bus) {
+        const { items, destination } = resolvedMcpExportAudit;
+        this.bus.publish('execution', createExportDelivered({
+          skillName,
+          agentId: options?.agentId,
+          taskEventId: options?.taskEventId,
+          conversationId: options?.conversationId,
+          destination: formatDestination(destination),
+          items: items.map((i) => ({
+            nodeId: i.nodeId,
+            label: i.label,
+            sensitivity: i.sensitivity,
+          })),
+          maxSensitivity: maxItemSensitivity(items),
+          parentEventId: options?.parentEventId,
+        })).catch((err) => {
+          skillLogger.warn({ err, skillName }, 'export gate: failed to publish export.delivered event');
+        });
       }
 
       // Sanitize successful output before returning.

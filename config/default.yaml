@@ -187,6 +187,8 @@ security:
 
 # Bulk export controls (#201) — item-count threshold, destination allowlisting, and
 # sensitivity ceiling for attachments (OutboundGateway) and MCP Drive/Sheets exports.
+# Destination allowlisting applies only to confidential+ exports; internal/public
+# Workspace exports proceed without CEO approval unless another control fires.
 exportControls:
   confidentialThreshold: 10
   allowedDestinations:

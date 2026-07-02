@@ -1,7 +1,7 @@
 {
   "name": "email-send",
   "description": "Send a new email. Provide comma-separated recipient email addresses, subject, and body. Emails are sent from the agent's configured email address.",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
@@ -10,7 +10,8 @@
     "subject": "string",
     "body": "string",
     "reply_to_message_id": "string? (Nylas message ID — when set, the original message is quoted below the reply and the send is threaded)",
-    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from email-download-attachment or similar. Max 10 attachments, 20 MB total.)",
+    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string, node_id?: string}. file_url must be a file:// URL from email-download-attachment or similar. When the attachment contains KG-sourced data, set node_id to the kg_nodes UUID so export gates can resolve sensitivity. Max 10 attachments, 20 MB total.)",
+    "export_items": "object[]? (parallel to attachments — array of {node_id: string, label: string} tagging each attachment's KG source for bulk-export gates. Required when sending confidential+ attachments; one entry per attachment in the same order.)",
     "context_bridge": "string? (JSON — optional context bridge registration that adds a delegation hint so the agent can route any reply faster; every outbound is auto-tracked even without it. Shape: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?}. Example: {\"agent_id\":\"coordinator\",\"delegation_hint\":\"calendar-specialist\",\"expected_reply\":\"confirmation or reschedule request\"})"
   },
   "outputs": {

@@ -92,6 +92,12 @@ export type ExportGateOutcome =
   | { action: 'block'; code: 'restricted_bulk'; message: string; items: ExportItem[] }
   | { action: 'approval_required'; code: 'confidential_threshold' | 'restricted_single' | 'unknown_destination'; message: string; items: ExportItem[]; destination: string };
 
+/** Outcome of export gate evaluation, always carrying resolved items for audit. */
+export interface ExportEvaluation {
+  outcome: ExportGateOutcome;
+  items: ExportItem[];
+}
+
 // Skills that export countable records via MCP (second enforcement point).
 export const MCP_EXPORT_SKILLS = new Set([
   'create_drive_file',
@@ -160,7 +166,12 @@ export function evaluateExportGate(opts: {
     };
   }
 
-  if (!humanApproved && isNonContactSink(destination) && !isDestinationAllowlisted(destination, config)) {
+  if (
+    !humanApproved
+    && isNonContactSink(destination)
+    && !isDestinationAllowlisted(destination, config)
+    && (confidentialCount > 0 || restrictedCount > 0)
+  ) {
     return {
       action: 'approval_required',
       code: 'unknown_destination',
@@ -211,12 +222,28 @@ function isDestinationAllowlisted(
       // Treat spreadsheet IDs like Drive folder IDs for allowlist purposes.
       return allowed.driveFolderIds.includes(destination.spreadsheetId);
     case 'url':
-      return allowed.urls.some((u) => destination.url === u || destination.url.startsWith(u));
+      return allowed.urls.some((entry) => isUrlPrefixAllowed(destination.url, entry));
     case 'file_path':
-      return allowed.filePaths.some((p) => destination.path === p || destination.path.startsWith(p));
+      return allowed.filePaths.some((entry) => isPathPrefixAllowed(destination.path, entry));
     default:
       return true;
   }
+}
+
+/** Exact match, or prefix only at a URL path/query boundary (no substring bypass). */
+export function isUrlPrefixAllowed(url: string, allowEntry: string): boolean {
+  if (url === allowEntry) return true;
+  if (!url.startsWith(allowEntry)) return false;
+  const rest = url.slice(allowEntry.length);
+  return rest === '' || rest.startsWith('/') || rest.startsWith('?') || rest.startsWith('#');
+}
+
+/** Exact match, or prefix only when the allow entry ends at a path segment boundary. */
+export function isPathPrefixAllowed(path: string, allowEntry: string): boolean {
+  if (path === allowEntry) return true;
+  if (!path.startsWith(allowEntry)) return false;
+  const rest = path.slice(allowEntry.length);
+  return allowEntry.endsWith('/') || rest.startsWith('/');
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +286,47 @@ function countRows(raw: unknown): number {
 }
 
 /**
+ * Merge per-attachment export metadata with optional top-level export_items.
+ * export_items[i] wins for node_id/sensitivity when both are present; filename
+ * always comes from the attachment when available.
+ */
+export function extractAttachmentExportItems(input: Record<string, unknown>): RawExportItemInput[] {
+  const attachments = input['attachments'];
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return parseRawExportItems(input['export_items']);
+  }
+
+  const exportByIndex = parseRawExportItems(input['export_items']);
+  return attachments.map((att, i) => {
+    const fromExport = exportByIndex[i];
+    if (typeof att !== 'object' || att === null) {
+      return fromExport ?? { label: `attachment[${i}]` };
+    }
+    const obj = att as Record<string, unknown>;
+    const filename = typeof obj['filename'] === 'string' ? obj['filename'] : `attachment[${i}]`;
+    return {
+      node_id:
+        fromExport?.node_id
+        ?? fromExport?.nodeId
+        ?? (typeof obj['node_id'] === 'string' ? obj['node_id'] : undefined),
+      label: fromExport?.label ?? filename,
+      sensitivity:
+        fromExport?.sensitivity
+        ?? (typeof obj['sensitivity'] === 'string' ? obj['sensitivity'] : undefined),
+    };
+  });
+}
+
+function extractMcpRowItems(input: Record<string, unknown>, rowLabel: string): RawExportItemInput[] {
+  const explicit = parseRawExportItems(input['export_items']);
+  if (explicit.length > 0) return explicit;
+
+  const rowCount = countRows(input['values']) || countRows(input['rows']);
+  if (rowCount === 0) return [];
+  return Array.from({ length: rowCount }, (_, i) => ({ label: `${rowLabel} ${i + 1}` }));
+}
+
+/**
  * Extract export items from a skill input. Uses explicit `export_items` when present;
  * otherwise derives a count from attachments / table rows with default `internal` sensitivity.
  */
@@ -266,23 +334,12 @@ export function extractExportItemsFromInput(
   skillName: string,
   input: Record<string, unknown>,
 ): RawExportItemInput[] {
+  if (GATEWAY_ATTACHMENT_SKILLS.has(skillName)) {
+    return extractAttachmentExportItems(input);
+  }
+
   const explicit = parseRawExportItems(input['export_items']);
   if (explicit.length > 0) return explicit;
-
-  if (GATEWAY_ATTACHMENT_SKILLS.has(skillName)) {
-    const attachments = input['attachments'];
-    if (!Array.isArray(attachments)) return [];
-    return attachments.map((att, i) => {
-      if (typeof att !== 'object' || att === null) {
-        return { label: `attachment[${i}]` };
-      }
-      const obj = att as Record<string, unknown>;
-      const filename = typeof obj['filename'] === 'string' ? obj['filename'] : `attachment[${i}]`;
-      const nodeId = typeof obj['node_id'] === 'string' ? obj['node_id'] : undefined;
-      const sensitivity = typeof obj['sensitivity'] === 'string' ? obj['sensitivity'] : undefined;
-      return { label: filename, node_id: nodeId, sensitivity };
-    });
-  }
 
   if (skillName === 'create_drive_file') {
     const fileName = typeof input['file_name'] === 'string'
@@ -294,14 +351,14 @@ export function extractExportItemsFromInput(
   }
 
   if (skillName === 'create_sheet') {
+    const rowItems = extractMcpRowItems(input, 'row');
+    if (rowItems.length > 0) return rowItems;
     const title = typeof input['title'] === 'string' ? input['title'] : 'new sheet';
     return [{ label: title }];
   }
 
   if (skillName === 'append_table_rows') {
-    const rowCount = countRows(input['values']) || countRows(input['rows']);
-    if (rowCount === 0) return [];
-    return Array.from({ length: rowCount }, (_, i) => ({ label: `row ${i + 1}` }));
+    return extractMcpRowItems(input, 'row');
   }
 
   return [];
@@ -344,6 +401,9 @@ export function extractDestinationFromInput(
     const spreadsheetId = input['spreadsheet_id'] ?? input['spreadsheetId'];
     if (typeof spreadsheetId === 'string' && spreadsheetId.trim()) {
       return { kind: 'spreadsheet', spreadsheetId: spreadsheetId.trim() };
+    }
+    if (skillName === 'create_sheet') {
+      return { kind: 'spreadsheet', spreadsheetId: '(new)' };
     }
     return null;
   }
@@ -399,7 +459,7 @@ export class ExportControlService {
     skillName: string;
     input: Record<string, unknown>;
     humanApproved?: boolean;
-  }): Promise<ExportGateOutcome | null> {
+  }): Promise<ExportEvaluation | null> {
     if (!MCP_EXPORT_SKILLS.has(opts.skillName) && !GATEWAY_ATTACHMENT_SKILLS.has(opts.skillName)) {
       return null;
     }
@@ -407,26 +467,17 @@ export class ExportControlService {
     const rawItems = extractExportItemsFromInput(opts.skillName, opts.input);
     if (rawItems.length === 0) return null;
 
-    const destination = extractDestinationFromInput(opts.skillName, opts.input);
-    if (!destination) {
-      // No destination to gate (e.g. email-reply) — item-count / restricted checks still apply
-      // with a placeholder destination for audit messaging.
-      const items = await this.resolveItems(rawItems);
-      return evaluateExportGate({
-        items,
-        destination: { kind: 'email', address: '(implicit reply)' },
-        config: this.config,
-        humanApproved: opts.humanApproved,
-      });
-    }
-
     const items = await this.resolveItems(rawItems);
-    return evaluateExportGate({
+    const destination = extractDestinationFromInput(opts.skillName, opts.input)
+      ?? { kind: 'email' as const, address: '(implicit reply)' };
+
+    const outcome = evaluateExportGate({
       items,
       destination,
       config: this.config,
       humanApproved: opts.humanApproved,
     });
+    return { outcome, items };
   }
 
   async evaluateGatewayAttachments(opts: {
@@ -434,7 +485,7 @@ export class ExportControlService {
     destination: ExportDestination;
     exportItems?: RawExportItemInput[];
     humanApproved?: boolean;
-  }): Promise<ExportGateOutcome | null> {
+  }): Promise<ExportEvaluation | null> {
     const rawItems = opts.exportItems && opts.exportItems.length > 0
       ? opts.exportItems
       : opts.attachments.map((a) => ({
@@ -446,12 +497,13 @@ export class ExportControlService {
     if (rawItems.length === 0) return null;
 
     const items = await this.resolveItems(rawItems);
-    return evaluateExportGate({
+    const outcome = evaluateExportGate({
       items,
       destination: opts.destination,
       config: this.config,
       humanApproved: opts.humanApproved,
     });
+    return { outcome, items };
   }
 
   /** Build a CEO-readable summary of export items for approval notifications. */

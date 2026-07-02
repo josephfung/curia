@@ -705,10 +705,11 @@ export class OutboundGateway {
       const rawExportItems = Array.isArray(options?.exportContext?.exportItems)
         ? options.exportContext.exportItems as Array<Record<string, unknown>>
         : undefined;
-      const exportGate = await this.exportControlService.evaluateGatewayAttachments({
+      const exportEval = await this.exportControlService.evaluateGatewayAttachments({
         attachments: request.attachments.map((a) => ({
           filename: a.filename,
-          nodeId: (a as { nodeId?: string }).nodeId,
+          nodeId: a.nodeId,
+          sensitivity: a.sensitivity,
         })),
         destination: extractDestinationFromEmailRequest(request.to),
         exportItems: rawExportItems?.map((e) => ({
@@ -719,94 +720,97 @@ export class OutboundGateway {
         humanApproved: options?.humanApproved,
       });
 
-      if (exportGate && exportGate.action === 'block') {
-        this.log.warn(
-          { channel: request.channel, recipientId: redactId(recipientId), code: exportGate.code },
-          'outbound-gateway: export blocked — restricted bulk export',
-        );
-        return { success: false, blockedReason: exportGate.message };
-      }
+      if (exportEval) {
+        const { outcome, items } = exportEval;
 
-      if (exportGate && exportGate.action === 'approval_required') {
-        this.log.info(
-          { channel: request.channel, code: exportGate.code, itemCount: exportGate.items.length },
-          'outbound-gateway: export requires CEO approval',
-        );
-        const itemSummary = ExportControlServiceClass.formatItemSummary(exportGate.items);
-        let actionRef: string | undefined;
-        if (this.actionLogRepo && options?.taskEventId && options?.reExecRecipe) {
-          const recipe = options.reExecRecipe;
-          const candidateRef = generateShortRef();
-          try {
-            await this.actionLogRepo.insert({
-              taskId: options.taskEventId,
-              conversationId: options.conversationId ?? undefined,
-              skillName: recipe.skillName,
-              actionRisk: 'medium',
-              outcome: 'pending_approval',
-              shortRef: candidateRef,
-              description: recipe.description,
-              payload: recipe.partialPayload ?? {},
-              expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
-            });
-            actionRef = candidateRef;
-          } catch (err) {
-            this.log.error({ err }, 'outbound-gateway: failed to write export-gate action_log row');
-          }
-        }
-        const principalEmail = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
-        if (principalEmail && options?.reExecRecipe) {
-          const recipe = options.reExecRecipe;
-          const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-          const recipientTier = await resolveNotificationRecipientTier(
-            this.contactService,
-            principalEmail,
-            this.log,
+        if (outcome.action === 'block') {
+          this.log.warn(
+            { channel: request.channel, recipientId: redactId(recipientId), code: outcome.code },
+            'outbound-gateway: export blocked — restricted bulk export',
           );
-          await this.sendNotification({
-            notificationType: 'approval_requested',
-            ceoEmail: principalEmail,
-            subject: `Approval needed — ${recipe.description}`,
-            body: buildApprovalNotificationBody({
-              preamble: exportGate.message,
-              shortRef: actionRef ?? 'pending',
-              expiresAt,
-              skillName: recipe.skillName,
-              payload: {
-                ...(recipe.partialPayload ?? {}),
-                export_items: exportGate.items.map((i) => ({
-                  node_id: i.nodeId,
-                  label: i.label,
-                  sensitivity: i.sensitivity,
-                })),
-              },
-              recipientTier,
-              logger: this.log,
-              ceoEmail: principalEmail,
-              extraLines: [`Items:\n${itemSummary}`],
-              callToAction:
-                'Reply with the reference to approve, deny, or dismiss this request.',
-            }),
-          }, options?.parentEventId);
+          return { success: false, blockedReason: outcome.message };
         }
-        return {
-          success: false,
-          gated: true,
-          actionRef,
-          blockedReason: `${exportGate.message}\n\n${itemSummary}`,
-        };
-      }
 
-      if (!exportGate || exportGate.action === 'allow') {
-        const rawItems = rawExportItems?.map((e) => ({
-          node_id: typeof e['node_id'] === 'string' ? e['node_id'] : undefined,
-          label: typeof e['label'] === 'string' ? e['label'] : undefined,
-          sensitivity: typeof e['sensitivity'] === 'string' ? e['sensitivity'] : undefined,
-        })) ?? request.attachments.map((a) => ({
-          label: a.filename,
-          node_id: (a as { nodeId?: string }).nodeId,
-        }));
-        exportAuditItems = await this.exportControlService.resolveItems(rawItems);
+        if (outcome.action === 'approval_required') {
+          this.log.info(
+            { channel: request.channel, code: outcome.code, itemCount: items.length },
+            'outbound-gateway: export requires CEO approval',
+          );
+          const itemSummary = ExportControlServiceClass.formatItemSummary(items);
+          let actionRef: string | undefined;
+          if (this.actionLogRepo && options?.taskEventId && options?.reExecRecipe) {
+            const recipe = options.reExecRecipe;
+            const candidateRef = generateShortRef();
+            try {
+              await this.actionLogRepo.insert({
+                taskId: options.taskEventId,
+                conversationId: options.conversationId ?? undefined,
+                skillName: recipe.skillName,
+                actionRisk: 'medium',
+                outcome: 'pending_approval',
+                shortRef: candidateRef,
+                description: recipe.description,
+                payload: recipe.partialPayload ?? {},
+                expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+              });
+              actionRef = candidateRef;
+            } catch (err) {
+              this.log.error({ err }, 'outbound-gateway: failed to write export-gate action_log row');
+            }
+          }
+          const principalEmail = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
+          if (principalEmail && options?.reExecRecipe) {
+            const recipe = options.reExecRecipe;
+            const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+            try {
+              const recipientTier = await resolveNotificationRecipientTier(
+                this.contactService,
+                principalEmail,
+                this.log,
+              );
+              await this.sendNotification({
+                notificationType: 'approval_requested',
+                ceoEmail: principalEmail,
+                subject: `Approval needed — ${recipe.description}`,
+                body: buildApprovalNotificationBody({
+                  preamble: outcome.message,
+                  shortRef: actionRef ?? 'pending',
+                  expiresAt,
+                  skillName: recipe.skillName,
+                  payload: {
+                    ...(recipe.partialPayload ?? {}),
+                    export_items: items.map((i) => ({
+                      node_id: i.nodeId,
+                      label: i.label,
+                      sensitivity: i.sensitivity,
+                    })),
+                  },
+                  recipientTier,
+                  logger: this.log,
+                  ceoEmail: principalEmail,
+                  extraLines: [`Items:\n${itemSummary}`],
+                  callToAction:
+                    'Reply with the reference to approve, deny, or dismiss this request.',
+                }),
+              }, options?.parentEventId);
+            } catch (err) {
+              this.log.error(
+                { err, channel: request.channel, taskEventId: options?.taskEventId },
+                'outbound-gateway: export-gate approval notification failed — send still blocked',
+              );
+            }
+          }
+          return {
+            success: false,
+            gated: true,
+            actionRef,
+            blockedReason: `${outcome.message}\n\n${itemSummary}`,
+          };
+        }
+
+        if (outcome.action === 'allow') {
+          exportAuditItems = items;
+        }
       }
     }
 

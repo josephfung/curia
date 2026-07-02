@@ -333,7 +333,7 @@ Default sensitivity for new data is `internal`. Financial data defaults to `conf
 Skills that export data (Google Drive MCP, email-send with attachments) enforce:
 
 1. **Item count threshold** — exporting more than 10 items tagged `confidential` or higher in a single invocation triggers a human approval gate
-2. **Destination allowlisting** — external destinations (Drive folder IDs, email addresses, URLs) can be allowlisted in config. Unknown destinations trigger approval: "You're asking me to send financial data to a destination I haven't seen before. Can you confirm?"
+2. **Destination allowlisting** — external destinations (Drive folder IDs, email addresses, URLs) can be allowlisted in config. Unknown destinations trigger approval for **confidential+ exports only**: "You're asking me to send financial data to a destination I haven't seen before. Can you confirm?"
 3. **Sensitivity ceiling** — `restricted` data cannot be bulk-exported regardless of approval. Individual items can be shared with explicit per-item confirmation.
 
 ### Coordinator Awareness
