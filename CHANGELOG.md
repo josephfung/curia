@@ -42,7 +42,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Gate C principal carve-out (#1301)** — outbound actions whose recipient set is exclusively the structurally-verified principal no longer escalate on the third-party-facing axis; irreversible actions and mixed recipient sets still escalate. Parser is allowlisted to `email-send`/`signal-send` and fails closed on unknown recipient shapes. Spam backpressure deferred to #1320.
-
+- **Outbound gateway** — email sends whose recipients are all no-reply/automated addresses are now hard-blocked with an audit note instead of dispatched to a dead-end address. (#1302)
 - **Task-wake CEO questions** — task-wake sends register durable bindings (7-day TTL); the coordinator persists answers via `context-bridge-release` with `reply` after judging relevance (not structural auto-bind). When several asks are outstanding, the coordinator must match by content. (#1299)
 - **Past-due milestone subtasks** — past-due tasks wake immediately instead of being auto-completed. (#1299)
 - **Migration 070** — now a no-op; the `UPDATE audit_log` data-fix tripped the append-only trigger and crash-looped boot on prod. (#453)

@@ -355,6 +355,125 @@ describe('OutboundGateway', () => {
     expect(delivered!.parentEventId).toBe('outbound-msg-1');
   });
 
+  // ------------------------------------------------------------------
+  // No-reply / automated recipient guard (#1302)
+  // ------------------------------------------------------------------
+  // Regression: the coordinator's implicit reply to an inbound automated
+  // notification was auto-addressed back to the noreply@ sender, carrying
+  // principal-directed status ("pending approval on your end"). A no-reply
+  // address is a dead-end *recipient* problem — the gateway hard-blocks the send
+  // (like a blocked contact) instead of delivering to a dead address, and does so
+  // before the (expensive) content-filter LLM call.
+  describe('no-reply / automated recipient guard (#1302)', () => {
+    function makeGateway() {
+      return new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+    }
+
+    it('blocks an email whose sole recipient is a no-reply address, without hitting Nylas or the filter', async () => {
+      const gateway = makeGateway();
+
+      const result = await gateway.send({
+        channel: 'email',
+        to: 'noreply@external-service.com',
+        subject: 'Re: your account',
+        body: 'The system put a hold on that. Pending approval on your end.',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.blockedReason).toBe(
+        'Recipient is a no-reply/automated address; message not deliverable',
+      );
+      // Hard block, not a content-rewrite affordance: no blockedRules for the agent
+      // to retry against (the recipient is immutable — retrying would be futile).
+      expect(result.blockedRules).toBeUndefined();
+      // Dropped before the transport and before the content-filter LLM call.
+      expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+      expect(mocks.contentFilter.check).not.toHaveBeenCalled();
+    });
+
+    it('records an outbound.blocked audit event but does NOT send the CEO an FYI notification', async () => {
+      const gateway = makeGateway();
+
+      await gateway.send({
+        channel: 'email',
+        to: 'noreply@external-service.com',
+        subject: 'Re: your account',
+        body: 'principal-directed status narration',
+      });
+
+      const publishedTypes = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c) => (c[1] as BusEvent).type,
+      );
+      // Audit note required by the #1302 acceptance criteria.
+      expect(publishedTypes).toContain('outbound.blocked');
+      // Routine automated notifications: a per-drop CEO alert would be noise. No FYI.
+      expect(publishedTypes).not.toContain('outbound.notification');
+
+      const blocked = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => c[1] as BusEvent)
+        .find((e) => e.type === 'outbound.blocked');
+      expect(blocked).toBeDefined();
+      if (blocked && blocked.type === 'outbound.blocked') {
+        expect(blocked.payload.reason).toBe('no_reply_recipient');
+        expect(blocked.payload.findings[0]!.rule).toBe('no-reply-recipient');
+      }
+    });
+
+    it.each([
+      'donotreply@service.com',
+      'do-not-reply@service.com',
+      'mailer-daemon@service.com',
+      'notifications@service.com',
+      'alerts@service.com',
+      'updates@service.com',
+      'bounces@service.com',
+    ])('blocks the full automated-classifier breadth: %s', async (address) => {
+      const gateway = makeGateway();
+
+      const result = await gateway.send({ channel: 'email', to: address, subject: 'x', body: 'y' });
+
+      expect(result.success).toBe(false);
+      expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('does NOT block a normal human recipient (falls through to filter + dispatch)', async () => {
+      const gateway = makeGateway();
+
+      const result = await gateway.send({
+        channel: 'email',
+        to: 'jane.doe@example.com',
+        subject: 'Hello',
+        body: 'Hi there',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mocks.contentFilter.check).toHaveBeenCalledOnce();
+      expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+    });
+
+    it('does NOT block a mixed send that merely CCs a no-reply address (a human is still on it)', async () => {
+      const gateway = makeGateway();
+
+      const result = await gateway.send({
+        channel: 'email',
+        to: 'jane.doe@example.com',
+        cc: ['noreply@external-service.com'],
+        subject: 'Hello',
+        body: 'Hi there',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mocks.nylasClient.sendMessage).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('content filter', () => {
     it('blocks when filter rejects and does not call nylasClient for the original message', async () => {
       // The filter returns a blocked result — the gateway must stop here

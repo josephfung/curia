@@ -24,6 +24,7 @@ import type { NylasClient, NylasMessage, NylasFolder, ListMessagesOptions, SendE
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput } from './_shared/read-attachments.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
+import { classifyEmailSender } from '../contacts/contact-service.js';
 import type { ContactTier, ChannelIdentity } from '../contacts/types.js';
 import {
   isPrincipalEmail as checkPrincipalEmail,
@@ -574,6 +575,63 @@ export class OutboundGateway {
 
     // The message body field differs between channel types.
     const messageBody = request.channel === 'email' ? request.body : request.message;
+
+    // ------------------------------------------------------------------
+    // Step 0.5: No-reply / automated recipient guard (email only, #1302)
+    // ------------------------------------------------------------------
+    // A no-reply address is a dead end: replying there is undeliverable, and it was a
+    // recurring source of mis-addressed sends — the coordinator narrating principal-
+    // directed status ("pending approval on your end") back down an automated-
+    // notification thread, auto-routed to the noreply@ sender (#1302).
+    //
+    // This is a *recipient* problem, not a *content* problem: the address cannot be
+    // fixed by rewriting, so we hard-block (like the Step-1 blocked-contact check
+    // below) rather than returning a rewrite-and-retry reason to the agent — which
+    // would only invite futile retries against an immutable recipient. We still record
+    // an outbound.blocked audit event so the suppression is visible, but we deliberately
+    // do NOT send the CEO an FYI (these automated notifications are routine; a per-drop
+    // alert would be noise — the audit log is the record).
+    //
+    // Predicate: block only when EVERY recipient classifies as automated (no deliverable
+    // human anywhere on the envelope). A normal send that merely CCs a noreply address
+    // still reaches its human recipients and is not blocked. Signal is exempt —
+    // recipients are phone numbers / group IDs, where "no-reply" has no meaning.
+    if (request.channel === 'email') {
+      const emailRecipients = this.buildFilterRecipients(request).recipients;
+      if (
+        emailRecipients.length > 0 &&
+        emailRecipients.every((r) => classifyEmailSender(r.email) === 'automated')
+      ) {
+        this.log.warn(
+          { channel: request.channel, recipientId: redactId(recipientId), rule: 'no-reply-recipient' },
+          'outbound-gateway: send blocked — all recipients are no-reply/automated addresses',
+        );
+        const blockId = `block_${randomUUID()}`;
+        try {
+          // scrubPii() because we run before Step 1.5 PII redaction — the audit event
+          // must never carry raw PII, matching the fail-closed redactor-error path below.
+          await this.bus.publish('dispatch', createOutboundBlocked({
+            blockId,
+            conversationId: '',
+            channelId: request.channel,
+            content: scrubPii(messageBody),
+            recipientId,
+            reason: 'no_reply_recipient',
+            findings: [{ rule: 'no-reply-recipient', detail: 'All recipients classify as automated/no-reply; message not deliverable' }],
+            parentEventId: '',
+          }));
+        } catch (publishErr) {
+          this.log.warn(
+            { publishErr, blockId },
+            'outbound-gateway: failed to publish outbound.blocked event for no-reply recipient — message is still blocked',
+          );
+        }
+        // Terse, terminal result — no blockedRules (that field is the content filter's
+        // "here is what to rewrite" affordance; omitting it signals a non-fixable
+        // recipient problem, discouraging retry loops).
+        return { success: false, blockedReason: 'Recipient is a no-reply/automated address; message not deliverable' };
+      }
+    }
 
     // ------------------------------------------------------------------
     // Step 1: Contact blocked check + trust level capture
