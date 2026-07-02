@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Link } from '@tanstack/react-router';
+import cronstrue from 'cronstrue';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
@@ -25,6 +27,7 @@ interface Job {
   createdAt: string;
   timezone: string;
   agentTaskId: string | null;
+  taskTitle: string | null;
   intentAnchor: string | null;
   progress: Record<string, unknown> | null;
   runStartedAt: string | null;
@@ -59,6 +62,76 @@ function formatSchedule(job: Job): string {
   if (job.cronExpr) return job.cronExpr;
   if (job.runAt) return formatDate(job.runAt);
   return '—';
+}
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function formatClockTime(hour: number, minute: number): string {
+  const period = hour >= 12 ? 'pm' : 'am';
+  const h12 = hour % 12 || 12;
+  if (minute === 0) return `${h12}${period}`;
+  return `${h12}:${minute.toString().padStart(2, '0')}${period}`;
+}
+
+function parseCronNumber(value: string): number | null {
+  return /^\d+$/.test(value) ? parseInt(value, 10) : null;
+}
+
+function weeklyDayLabel(dayOfWeek: string): string | null {
+  const dow = parseCronNumber(dayOfWeek);
+  if (dow === null || dow < 0 || dow > 7) return null;
+  const index = dow === 7 ? 0 : dow;
+  if (index < 0 || index > 6) return null;
+  return `${DAY_NAMES[index]}s`;
+}
+
+function humanizeSchedule(job: Job): string {
+  if (job.runAt) return formatDate(job.runAt);
+  if (!job.cronExpr) return '—';
+
+  const expr = job.cronExpr.trim();
+  const parts = expr.split(/\s+/);
+  if (parts.length !== 5) {
+    try {
+      return cronstrue.toString(expr, { use24HourTimeFormat: false });
+    } catch {
+      return expr;
+    }
+  }
+
+  const [minField, hourField, domField, monthField, dowField] = parts as [string, string, string, string, string];
+
+  const everyMinMatch = minField.match(/^\*\/(\d+)$/);
+  if (everyMinMatch && hourField === '*' && domField === '*' && monthField === '*' && dowField === '*') {
+    const n = parseInt(everyMinMatch[1]!, 10);
+    return n === 1 ? 'Every minute' : `Every ${n} minutes`;
+  }
+
+  const minute = parseCronNumber(minField);
+  const hour = parseCronNumber(hourField);
+
+  if (minute !== null && hourField === '*' && domField === '*' && monthField === '*' && dowField === '*') {
+    return minute === 0 ? 'Hourly' : `Hourly at :${minute.toString().padStart(2, '0')}`;
+  }
+
+  if (minute !== null && hour !== null && domField === '*' && monthField === '*') {
+    const time = formatClockTime(hour, minute);
+
+    if (dowField === '1-5' || dowField.toUpperCase() === 'MON-FRI') {
+      return `Weekdays at ${time}`;
+    }
+
+    const weeklyDay = weeklyDayLabel(dowField);
+    if (weeklyDay) return `Weekly on ${weeklyDay}`;
+
+    if (dowField === '*') return `Daily at ${time}`;
+  }
+
+  try {
+    return cronstrue.toString(expr, { use24HourTimeFormat: false });
+  } catch {
+    return expr;
+  }
 }
 
 async function errorMessage(res: Response): Promise<string> {
@@ -453,8 +526,10 @@ function JobEditDrawer({ job, creating, onClose, onSaved, onDeleted }: DrawerPro
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 type StatusFilter = 'all' | JobStatus;
+type ScheduleTypeFilter = 'all' | 'recurring' | 'one_time';
 
 const ALL_STATUSES: JobStatus[] = ['pending', 'running', 'suspended', 'paused', 'completed', 'cancelled', 'failed'];
+const SCHEDULE_TYPE_FILTERS: ScheduleTypeFilter[] = ['all', 'recurring', 'one_time'];
 
 export default function JobsPage() {
   const [theme, setTheme] = useTheme();
@@ -464,6 +539,8 @@ export default function JobsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
+  const [scheduleTypeFilter, setScheduleTypeFilter] = useState<ScheduleTypeFilter>('all');
+  const [agentFilter, setAgentFilter] = useState('all');
   const [sort, setSort] = useState<{ key: keyof Job; dir: 'asc' | 'desc' }>({ key: 'createdAt', dir: 'desc' });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -499,9 +576,23 @@ export default function JobsPage() {
     return c;
   }, [jobs]);
 
+  const scheduleTypeCounts = useMemo(() => ({
+    all: jobs.length,
+    recurring: jobs.filter(j => j.cronExpr != null).length,
+    one_time: jobs.filter(j => j.runAt != null).length,
+  }), [jobs]);
+
+  const agentIds = useMemo(() => {
+    const ids = new Set(jobs.map(j => j.agentId));
+    return [...ids].sort();
+  }, [jobs]);
+
   const filtered = useMemo(() => {
     let rows = jobs;
     if (statusFilter !== 'all') rows = rows.filter(j => j.status === statusFilter);
+    if (scheduleTypeFilter === 'recurring') rows = rows.filter(j => j.cronExpr != null);
+    if (scheduleTypeFilter === 'one_time') rows = rows.filter(j => j.runAt != null);
+    if (agentFilter !== 'all') rows = rows.filter(j => j.agentId === agentFilter);
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(j =>
@@ -523,7 +614,7 @@ export default function JobsPage() {
       return 0;
     });
     return rows;
-  }, [jobs, statusFilter, search, sort]);
+  }, [jobs, statusFilter, scheduleTypeFilter, agentFilter, search, sort]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -628,6 +719,39 @@ export default function JobsPage() {
                 </div>
               </div>
 
+              <div className="records-toolbar">
+                <div className="records-toolbar-left">
+                  {SCHEDULE_TYPE_FILTERS.map(v => (
+                    <button
+                      key={v}
+                      className={`records-filter-chip${scheduleTypeFilter === v ? ' active' : ''}`}
+                      onClick={() => { setScheduleTypeFilter(v); setPage(1); }}
+                    >
+                      {v === 'all' ? 'All' : v === 'recurring' ? 'Recurring' : 'One-time'}
+                      <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, opacity: 0.7 }}>
+                        {scheduleTypeCounts[v]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="records-toolbar-right">
+                  <label htmlFor="jobs-agent-filter" style={{ fontSize: 12, color: 'var(--app-fg-muted)' }}>
+                    Agent
+                  </label>
+                  <select
+                    id="jobs-agent-filter"
+                    className="records-filter-select"
+                    value={agentFilter}
+                    onChange={e => { setAgentFilter(e.target.value); setPage(1); }}
+                  >
+                    <option value="all">All agents</option>
+                    {agentIds.map(id => (
+                      <option key={id} value={id}>{id}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div className="records-layout">
                 <div className="records-main">
                   <div className="records-table-wrap">
@@ -664,7 +788,7 @@ export default function JobsPage() {
                               Created <span className="sort-arrow">{sortArrow('createdAt')}</span>
                             </button>
                           </th>
-                          <th>Task ID</th>
+                          <th>Task</th>
                           <th style={{ textAlign: 'right' }}>Actions</th>
                         </tr>
                       </thead>
@@ -681,7 +805,7 @@ export default function JobsPage() {
                             <td>
                               <span className={`status-pill ${j.status}`}>{j.status}</span>
                             </td>
-                            <td className="cell-mono">{formatSchedule(j)}</td>
+                            <td title={j.cronExpr ?? undefined}>{humanizeSchedule(j)}</td>
                             <td className="cell-mono col-updated">{formatDate(j.nextRunAt)}</td>
                             <td>
                               {j.lastRunOutcome
@@ -690,8 +814,20 @@ export default function JobsPage() {
                               }
                             </td>
                             <td className="cell-mono col-updated">{formatDate(j.createdAt)}</td>
-                            <td className="cell-mono" style={{ fontSize: 11 }}>
-                              {j.agentTaskId ? j.agentTaskId.slice(0, 8) + '…' : <span className="cell-muted">—</span>}
+                            <td>
+                              {j.agentTaskId && j.taskTitle ? (
+                                <Link
+                                  to="/tasks"
+                                  search={{ task: j.agentTaskId }}
+                                  className="job-task-link"
+                                  title={j.taskTitle}
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  {j.taskTitle}
+                                </Link>
+                              ) : (
+                                <span className="cell-muted">—</span>
+                              )}
                             </td>
                             <td>
                               <div className="cell-actions" onClick={e => e.stopPropagation()}>

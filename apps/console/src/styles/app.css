@@ -1181,6 +1181,20 @@ table.records-table tbody tr.active td { background: transparent; }
    Use --app-fg instead to meet WCAG AA at 13px. */
 [data-theme="dark"] .task-related-link { color: var(--app-fg); }
 
+/* Linked task title in the jobs table */
+.job-task-link {
+  display: block;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--app-teal);
+  text-decoration: none;
+  font-size: 13px;
+}
+.job-task-link:hover { text-decoration: underline; }
+[data-theme="dark"] .job-task-link { color: var(--app-fg); }
+
 /* Responsive adjustments for records views */
 @media (max-width: 768px) {
   .drawer {
