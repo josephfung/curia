@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
@@ -509,6 +509,7 @@ export default function TasksPage() {
   const [pageSize, setPageSize] = useState(10);
   const [editing, setEditing] = useState<Task | null>(null);
   const [creating, setCreating] = useState(false);
+  const appliedUrlTaskRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
@@ -531,8 +532,10 @@ export default function TasksPage() {
 
   useEffect(() => {
     if (!taskIdFromUrl || tasks.length === 0) return;
+    if (appliedUrlTaskRef.current === taskIdFromUrl) return;
     const target = tasks.find(t => t.id === taskIdFromUrl);
     if (target) {
+      appliedUrlTaskRef.current = taskIdFromUrl;
       setCreating(false);
       setEditing(target);
     }
@@ -630,6 +633,7 @@ export default function TasksPage() {
     setEditing(null);
     setCreating(false);
     if (taskIdFromUrl) {
+      appliedUrlTaskRef.current = undefined;
       void navigate({ to: '/tasks', search: { task: undefined }, replace: true });
     }
   }
