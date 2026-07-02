@@ -183,6 +183,21 @@ export class TaskCreateHandler implements SkillHandler {
       }
     }
 
+    // Past-due milestones at creation should run immediately, not be silently skipped (#1299).
+    let pastDueNote: string | undefined;
+    let extraTags = input.tags ?? [];
+    if (dueAt && dueAt.getTime() < Date.now()) {
+      if (!wakeAt) {
+        wakeAt = new Date();
+      }
+      pastDueNote = 'Milestone was past at creation — running immediately instead of auto-completing.';
+      if (!extraTags.includes('past-due-at-creation')) {
+        extraTags = [...extraTags, 'past-due-at-creation'];
+      }
+    }
+
+    const seededProgressNote = [input.progress_note, pastDueNote].filter(Boolean).join(' ').trim() || undefined;
+
     ctx.log.info(
       { title: input.title, owner: input.owner ?? 'curia', owningAgentId, creatorAgentId },
       'Creating task',
@@ -201,7 +216,7 @@ export class TaskCreateHandler implements SkillHandler {
         priority: input.priority,
         dueAt,
         wakeAt,
-        tags: input.tags,
+        tags: extraTags,
         waitingOnContactId: input.waiting_on_contact_id,
         waitingOnText: input.waiting_on_text,
         intentAnchor: input.intent_anchor,
@@ -216,7 +231,7 @@ export class TaskCreateHandler implements SkillHandler {
         resumable: input.resumable === true,
         // Seed the first progress note + structured escalation block (#1267) so the row's
         // last_progress_note is non-empty and the digest renders real content.
-        progressNote: input.progress_note,
+        progressNote: seededProgressNote,
         escalation,
       });
 

@@ -43,6 +43,28 @@ describe('registerOutboundContext', () => {
     });
   });
 
+  it('auto-binds task-wake sends when boundTask is present without context_bridge (#1299)', async () => {
+    const cap = makeCap();
+    await registerOutboundContext(cap, undefined, {
+      ...baseOpts,
+      boundTask: { taskId: 'f9e9a0d9-0000-4000-8000-000000000001' },
+    });
+
+    expect(cap.register).toHaveBeenCalledOnce();
+    expect(cap.register).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'test-agent',
+        delegationHint: 'coordinator task-wake reply — persist to task',
+        expectedReply: expect.stringContaining("CEO's reply to:"),
+        metadata: {
+          bind_reply: true,
+          task_id: 'f9e9a0d9-0000-4000-8000-000000000001',
+        },
+        expiresInHours: 168,
+      }),
+    );
+  });
+
   it('registers with explicit metadata and explicitExpiryHours when context_bridge is valid JSON', async () => {
     const cap = makeCap();
     const bridge = JSON.stringify({

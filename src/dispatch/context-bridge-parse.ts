@@ -3,8 +3,10 @@
 // Shared utility for parsing the context_bridge JSON input in send skills.
 // Extracted to avoid duplication across signal-send, email-send, email-reply.
 
+import type { BoundTaskContext } from '../agents/resumable-task.js';
 import type { Logger } from '../logger.js';
 import type { OutboundContextCapability } from './outbound-context.js';
+import { buildTaskWakeAutoBridge } from './task-wake-reply.js';
 
 export interface ContextBridgeInput {
   agent_id: string;
@@ -86,14 +88,35 @@ export async function registerOutboundContext(
     content: string;
     agentId: string;
     log: Logger;
+    /** When present (task-wake turns), auto-bind CEO replies to this task (#1299). */
+    boundTask?: BoundTaskContext | null;
   },
 ): Promise<void> {
   if (!outboundContext) return;
 
-  const { channelId, content, agentId, log } = opts;
+  const { channelId, content, agentId, log, boundTask } = opts;
 
   try {
-    const bridge = parseContextBridge(contextBridgeRaw, log);
+    let bridge = parseContextBridge(contextBridgeRaw, log);
+
+    if (!bridge && boundTask) {
+      // Task-wake send without explicit context_bridge — attach durable task binding.
+      bridge = buildTaskWakeAutoBridge({
+        taskId: boundTask.taskId,
+        agentId,
+        messageContent: content,
+      });
+      log.debug({ taskId: boundTask.taskId }, 'outbound context: auto-bound task-wake reply');
+    } else if (bridge && boundTask && !bridge.metadata?.task_id) {
+      bridge = {
+        ...bridge,
+        metadata: {
+          ...(bridge.metadata ?? {}),
+          bind_reply: true,
+          task_id: boundTask.taskId,
+        },
+      };
+    }
 
     if (bridge) {
       // Explicit registration — skill provided structured context_bridge metadata.

@@ -8,6 +8,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
+import { boundTaskFromSendContext } from '../../src/dispatch/task-wake-reply.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
 import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 
@@ -167,6 +168,7 @@ export class EmailSendHandler implements SkillHandler {
         content: body,
         agentId: ctx.agentId ?? 'coordinator',
         log: ctx.log,
+        boundTask: boundTaskFromSendContext(ctx.taskMetadata),
       });
 
       return {
