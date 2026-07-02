@@ -104,9 +104,11 @@ describe('ContextBridgeReleaseHandler', () => {
   });
 
   it('ignores reply on non-task-wake entries and releases normally', async () => {
+    const logDebug = vi.fn();
     const ctx = makeCtx(
       { entry_id: ENTRY_ID, reply: 'some reply' },
       {
+        log: pino({ level: 'silent' }),
         outboundContext: {
           register: vi.fn(),
           release: vi.fn(),
@@ -121,11 +123,16 @@ describe('ContextBridgeReleaseHandler', () => {
         },
       },
     );
+    ctx.log.debug = logDebug;
 
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
     expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    expect(logDebug).toHaveBeenCalledWith(
+      { entryId: ENTRY_ID },
+      'reply ignored — entry is not a task-wake binding',
+    );
   });
 
   it('returns error when reply is provided for a task-wake binding but taskRepo is missing', async () => {

@@ -1,6 +1,6 @@
 //
 // Marks an outbound context bridge entry as released — stops expecting replies
-// for that outbound message. Coordinator-only (enforced by allowed_callers).
+// for that outbound message. Coordinator-only in practice (pinned on the coordinator).
 //
 // When `reply` is provided and the entry is a task-wake binding (bind_reply +
 // task_id in metadata), persists the CEO answer on the bound task first, then
@@ -58,6 +58,10 @@ export class ContextBridgeReleaseHandler implements SkillHandler {
             data: { released: entryId, task_id: result.taskId },
           };
         }
+        ctx.log.debug(
+          { entryId },
+          'reply ignored — entry is not a task-wake binding',
+        );
         // Reply on a non-task-wake entry — ignore reply and release normally.
       }
 
