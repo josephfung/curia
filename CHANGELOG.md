@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Ant Farm AF-1** — `AuditLogRepo.findTimeline` returns paginated `TimelinePage` (`hasMore`, keyset `after` cursor) with scoped-query guard; timeline indexes on task id and `(conversation_id, timestamp)`. Closes #1314.
+- **Ant Farm AF-1** — `AuditLogRepo.findTimeline` / `findByEventTypes` return paginated `TimelinePage` (`hasMore`, keyset `after` cursor) with scoped-query guard; task filter uses `payload->>'taskId'` (index-aligned). Closes #1314.
 
 ### Fixed
 

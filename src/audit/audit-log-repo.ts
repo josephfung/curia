@@ -30,7 +30,13 @@ export interface TimelineAuditQuery {
   conversationId?: string;
   taskId?: string;
   limit?: number;
-  /** Keyset cursor — fetch rows strictly after this (timestamp, id) pair. */
+  /**
+   * Keyset cursor — fetch rows strictly after this (timestamp, id) pair.
+   * Timestamps are compared at millisecond precision: all current audit writers
+   * insert ms-aligned `Date` values. Sub-ms rows (e.g. from `now()` default on
+   * a raw INSERT) could duplicate or skip at page boundaries until write-side
+   * truncation is enforced.
+   */
   after?: { timestamp: Date; id: string };
 }
 
@@ -55,9 +61,51 @@ function assertTimelineScope(query: TimelineAuditQuery): void {
   }
 }
 
-/** Match task id on the indexed column when populated, else payload (historical rows). */
-function taskIdCondition(paramIndex: number): string {
-  return `COALESCE(task_id, payload->>'taskId') = $${paramIndex}`;
+/** Uses idx_audit_log_payload_task_id — expression must match the migration exactly. */
+function payloadTaskIdCondition(paramIndex: number): string {
+  return `payload->>'taskId' = $${paramIndex}`;
+}
+
+function applyTimelineFilters(
+  query: TimelineAuditQuery,
+  params: unknown[],
+  conditions: string[],
+): void {
+  if (query.from) {
+    params.push(query.from);
+    conditions.push(`timestamp >= $${params.length}`);
+  }
+  if (query.to) {
+    params.push(query.to);
+    conditions.push(`timestamp < $${params.length}`);
+  }
+  if (query.conversationId) {
+    params.push(query.conversationId);
+    conditions.push(`conversation_id = $${params.length}`);
+  }
+  if (query.taskId) {
+    params.push(query.taskId);
+    conditions.push(payloadTaskIdCondition(params.length));
+  }
+  if (query.after) {
+    params.push(query.after.timestamp);
+    const tsParam = params.length;
+    params.push(query.after.id);
+    conditions.push(`(timestamp, id) > ($${tsParam}, $${params.length})`);
+  }
+}
+
+function pageFromRows(mapped: AuditLogRow[], limit: number): TimelinePage {
+  const hasMore = mapped.length > limit;
+  const rows = hasMore ? mapped.slice(0, limit) : mapped;
+  const last = rows[rows.length - 1];
+  return {
+    rows,
+    hasMore,
+    nextCursor: hasMore && last !== undefined
+      ? { timestamp: last.timestamp, id: last.id }
+      : undefined,
+  };
 }
 
 export class AuditLogRepo {
@@ -119,30 +167,8 @@ export class AuditLogRepo {
     const params: unknown[] = [];
     const conditions: string[] = [];
 
-    if (query.from) {
-      params.push(query.from);
-      conditions.push(`timestamp >= $${params.length}`);
-    }
-    if (query.to) {
-      params.push(query.to);
-      conditions.push(`timestamp < $${params.length}`);
-    }
-    if (query.conversationId) {
-      params.push(query.conversationId);
-      conditions.push(`conversation_id = $${params.length}`);
-    }
-    if (query.taskId) {
-      params.push(query.taskId);
-      conditions.push(taskIdCondition(params.length));
-    }
-    if (query.after) {
-      params.push(query.after.timestamp);
-      const tsParam = params.length;
-      params.push(query.after.id);
-      conditions.push(`(timestamp, id) > ($${tsParam}, $${params.length})`);
-    }
+    applyTimelineFilters(query, params, conditions);
 
-    // Fetch one extra row to detect truncation without a separate COUNT query.
     params.push(limit + 1);
     const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
@@ -156,58 +182,35 @@ export class AuditLogRepo {
       params,
     );
 
-    const mapped = result.rows.map(mapRow);
-    const hasMore = mapped.length > limit;
-    const rows = hasMore ? mapped.slice(0, limit) : mapped;
-    const last = rows[rows.length - 1];
+    const page = pageFromRows(result.rows.map(mapRow), limit);
 
     this.logger.debug(
-      { count: rows.length, hasMore, from: query.from, to: query.to },
+      { count: page.rows.length, hasMore: page.hasMore, from: query.from, to: query.to },
       'audit-log-repo: findTimeline',
     );
 
-    return {
-      rows,
-      hasMore,
-      nextCursor: hasMore && last !== undefined
-        ? { timestamp: last.timestamp, id: last.id }
-        : undefined,
-    };
+    return page;
   }
 
   /**
    * Return audit rows matching any of the given event types within an optional window.
+   * Same pagination contract as {@link findTimeline}; scoped by the event-type list.
    */
   async findByEventTypes(
     eventTypes: string[],
     query: EventTypesAuditQuery = {},
-  ): Promise<AuditLogRow[]> {
+  ): Promise<TimelinePage> {
     if (eventTypes.length === 0) {
-      return [];
+      return { rows: [], hasMore: false };
     }
 
     const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
     const params: unknown[] = [eventTypes];
     const conditions: string[] = [`event_type = ANY($1::text[])`];
 
-    if (query.from) {
-      params.push(query.from);
-      conditions.push(`timestamp >= $${params.length}`);
-    }
-    if (query.to) {
-      params.push(query.to);
-      conditions.push(`timestamp < $${params.length}`);
-    }
-    if (query.conversationId) {
-      params.push(query.conversationId);
-      conditions.push(`conversation_id = $${params.length}`);
-    }
-    if (query.taskId) {
-      params.push(query.taskId);
-      conditions.push(taskIdCondition(params.length));
-    }
+    applyTimelineFilters(query, params, conditions);
 
-    params.push(limit);
+    params.push(limit + 1);
 
     const result = await this.pool.query(
       `SELECT id, timestamp, event_type, source_layer, source_id,
@@ -219,12 +222,13 @@ export class AuditLogRepo {
       params,
     );
 
-    const rows = result.rows.map(mapRow);
+    const page = pageFromRows(result.rows.map(mapRow), limit);
+
     this.logger.debug(
-      { count: rows.length, eventTypes },
+      { count: page.rows.length, hasMore: page.hasMore, eventTypes },
       'audit-log-repo: findByEventTypes',
     );
-    return rows;
+    return page;
   }
 }
 
