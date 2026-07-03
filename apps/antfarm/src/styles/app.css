@@ -1,0 +1,190 @@
+:root {
+  color-scheme: dark;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  background: #1a1f16;
+  color: #e8f0dc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.shell {
+  min-height: 100vh;
+  padding: 1rem 1.5rem 2rem;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.subtitle {
+  margin: 0.25rem 0 1rem;
+  opacity: 0.7;
+}
+
+.window-controls,
+.transport,
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.transport {
+  background: #252d1f;
+  padding: 0.75rem;
+  border-radius: 8px;
+}
+
+.scrubber {
+  flex: 1;
+  min-width: 200px;
+}
+
+.main {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 1rem;
+}
+
+.office {
+  background: #2a3224;
+  border-radius: 12px;
+  padding: 1rem;
+  min-height: 360px;
+}
+
+.office-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: center;
+}
+
+.boss-row {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px dashed #4a5a3a;
+}
+
+.desk {
+  width: 96px;
+  padding: 0.5rem;
+  border: 2px solid #5a6a4a;
+  border-radius: 8px;
+  text-align: center;
+  background: #1e2618;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.desk.active {
+  transform: translateY(-4px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+
+.desk.boss {
+  width: 120px;
+}
+
+.desk-avatar {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 0.5rem;
+  border-radius: 6px;
+}
+
+.desk-label {
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+
+.office-meta {
+  margin-top: 1rem;
+  display: flex;
+  gap: 1rem;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.active-beat {
+  color: #c8e6a0;
+}
+
+.bookmarks {
+  background: #252d1f;
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.bookmarks-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.bookmarks ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+
+.bookmarks li {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.bookmark-load {
+  flex: 1;
+  text-align: left;
+}
+
+.error {
+  color: #f5a097;
+}
+
+button {
+  cursor: pointer;
+  background: #3d4a32;
+  color: inherit;
+  border: 1px solid #5a6a4a;
+  border-radius: 6px;
+  padding: 0.35rem 0.65rem;
+}
+
+button.active {
+  background: #5a7a42;
+}
+
+input {
+  background: #1a1f16;
+  border: 1px solid #4a5a3a;
+  color: inherit;
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+}
+
+a {
+  color: #c8e6a0;
+}
+
+@media (max-width: 800px) {
+  .main {
+    grid-template-columns: 1fr;
+  }
+}
