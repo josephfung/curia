@@ -1,5 +1,3 @@
-import type { Logger } from '../../logger.js';
-
 /**
  * Resolve the Nylas grant the calendar client operates as.
  *
@@ -10,24 +8,26 @@ import type { Logger } from '../../logger.js';
  * made Curia a third-party delegate, and Google rejected RSVPs with
  * `omittedAttendeesSpecified` (#1217).
  *
- * Fail closed: with no `ceo_nylas_grant_id` configured there is no principal to act
- * as, so this returns `undefined` and the calendar client is left unconstructed
- * (calendar skills then return a clean "not configured" result). We deliberately do
- * NOT fall back to the primary email account grant — that fallback is exactly the
- * delegate-identity bug this change removes.
+ * Fail closed: returns `undefined` when `ceo_nylas_grant_id` is genuinely absent
+ * (missing, blank, or whitespace-only) — the calendar client is then left
+ * unconstructed and calendar skills return a clean "not configured" result. We
+ * deliberately do NOT fall back to the primary email account grant — that fallback is
+ * exactly the delegate-identity bug this change removes.
+ *
+ * A vault READ failure is different from absence and is NOT swallowed here: a DB error
+ * or a decrypt failure (wrong `SECRET_ENCRYPTION_KEY` / corrupt row) propagates so the
+ * caller can surface it loudly. `SecretsService.get` returns `null` for a missing
+ * secret but deliberately lets decrypt failures throw ("a real, loud problem"); masking
+ * that here would make a whole-system encryption-key misconfiguration look like "the
+ * grant simply isn't set". The boot caller (src/index.ts) catches to degrade calendar
+ * without crashing boot, but logs the failure at `error` and distinguishes it from
+ * genuine absence.
  */
 export async function resolvePrincipalCalendarGrant(
   secrets: { get(name: string): Promise<string | null> },
-  logger: Logger,
 ): Promise<string | undefined> {
-  let grant: string | null;
-  try {
-    grant = await secrets.get('ceo_nylas_grant_id');
-  } catch (err) {
-    // A vault read failure must not crash boot; calendar degrades to disabled.
-    logger.warn({ err }, 'ceo_nylas_grant_id lookup failed — calendar will be disabled this boot');
-    return undefined;
-  }
+  // May throw on a DB / decrypt failure — intentionally propagated (see above).
+  const grant = await secrets.get('ceo_nylas_grant_id');
   // Coalesce null -> '' before trimming so a missing entry and a whitespace-only
   // value both resolve to "not configured" rather than a grant that fails auth.
   const trimmed = (grant ?? '').trim();
