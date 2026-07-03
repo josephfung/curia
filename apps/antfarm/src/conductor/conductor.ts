@@ -104,9 +104,12 @@ export class Conductor {
   }
 
   getSnapshot(): ConductorSnapshot {
+    // Return stable array references — directives/schedule only change on
+    // load/append/merge, not on tick. Avoids downstream React memos churning
+    // every animation frame during playback.
     return {
-      directives: [...this.directives],
-      schedule: [...this.schedule],
+      directives: this.directives,
+      schedule: this.schedule,
       currentLogicalTs: animationToLogicalMs(this.animationMs, this.schedule),
       animationMs: this.animationMs,
       velocity: this.velocity,

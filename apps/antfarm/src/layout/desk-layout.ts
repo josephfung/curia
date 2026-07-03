@@ -56,3 +56,22 @@ export function ensureAgentDesk(
   const floorCount = layout.filter((s) => s.row === 'floor').length;
   return [...layout, { agentId, row: 'floor', column: floorCount }];
 }
+
+/** Stable key for comparing desk rosters (agent ids + positions). */
+export function deskLayoutKey(desks: DeskSlot[]): string {
+  return desks
+    .map((d) => `${d.agentId}:${d.row}:${d.column}`)
+    .sort()
+    .join('|');
+}
+
+/** Stable key for the union of registry + directive agent ids. */
+export function agentRosterKey(
+  registryAgents: RegistryAgent[],
+  directiveAgentIds: Iterable<string>,
+): string {
+  const ids = new Set<string>();
+  for (const agent of registryAgents) ids.add(agent.name);
+  for (const id of directiveAgentIds) ids.add(id);
+  return [...ids].sort().join('\0');
+}

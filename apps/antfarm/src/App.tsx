@@ -19,6 +19,7 @@ import {
 } from './bookmarks/bookmarks.js';
 import {
   agentIdsFromDirectives,
+  agentRosterKey,
   buildDeskLayout,
   ensureAgentDesk,
   type RegistryAgent,
@@ -84,13 +85,20 @@ export function App() {
     return filterDirectives(base, filterConversation, filterAgent, filterKind);
   }, [snapshot.directives, filterConversation, filterAgent, filterKind]);
 
+  const rosterKey = useMemo(
+    () => agentRosterKey(registryAgents, agentIdsFromDirectives(filteredDirectives)),
+    [registryAgents, filteredDirectives],
+  );
+
   const desks = useMemo(() => {
-    let layout = buildDeskLayout(registryAgents, agentIdsFromDirectives(filteredDirectives));
-    for (const id of agentIdsFromDirectives(filteredDirectives)) {
+    const directiveIds = agentIdsFromDirectives(filteredDirectives);
+    let layout = buildDeskLayout(registryAgents, directiveIds);
+    for (const id of directiveIds) {
       layout = ensureAgentDesk(layout, id);
     }
     return layout;
-  }, [registryAgents, filteredDirectives]);
+  // rosterKey captures registry + directive agent set; avoid deps that churn each frame.
+  }, [registryAgents, rosterKey]);
 
   const openOverlay = useCallback((detail: OverlayDetail) => {
     const mode = conductor.getMode();

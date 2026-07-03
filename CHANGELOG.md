@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Ant Farm** — code review follow-ups: fail-closed session check, conductor live/scrub fixes, incremental live merge, per-agent overlay context, timeline cursor paging, safe `busEventToAuditRow` payload guard, `schedule.fired` task_id normalization.
+- **Ant Farm** — fix playback flicker: stable desk roster + conductor snapshot refs so Phaser scene is not restarted every animation frame.
 
 ### Fixed
 
