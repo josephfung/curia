@@ -154,3 +154,30 @@ Confirmed with Joseph before implementing (#1217):
   restart") is operational, tracked as a separate follow-up.
 - **Follow-ups (out of scope here):** (1) warn when a registry enable takes effect only
   after a restart; (2) a `curia-docs` note that calendar requires `ceo_nylas_grant_id`.
+
+## Cutover steps (operator, post-merge)
+
+Nylas calendar IDs are **grant-scoped**: the CEO's existing `contact_calendars` row points
+at a calendar ID visible under the OLD grant (Curia's mailbox), which does not resolve
+under `ceo_nylas_grant_id`. Re-register it once, after deploy:
+
+1. **Confirm the grant is set.** `ceo_nylas_grant_id` must be in the vault. After restart,
+   the boot log line `Nylas calendar client initialized (bound to the CEO/principal Nylas
+   grant)` confirms calendar came up; the warning `Calendar disabled — ceo_nylas_grant_id
+   is not configured` means it did not.
+2. **Restart** the container so boot rebinds the calendar client to the new grant (the
+   client is constructed once at boot).
+3. **Find the CEO's primary calendar ID under the new grant.** `calendar-list-calendars`
+   now enumerates the CEO's own calendars; note the `isPrimary: true` one.
+4. **Re-point the registration.** The CEO's current `contact_calendars` row holds the old
+   grant's (shared) calendar ID. Either:
+   - `calendar-register` the new ID to `${principal_contact_id}` with `is_primary: true`
+     (resolve the unique-constraint against the existing primary first), or
+   - a parameterized SQL one-off updating the existing row's `nylas_calendar_id` to the
+     new ID, run via `docker exec curia-curia-1` per the prod one-off runbook.
+5. **Orphaned holds.** HOLD (TBC) events created under the old grant's calendar ID orphan
+   after the flip. `calendar-holds-sweep` tolerates staleness; optionally clear them at
+   cutover.
+
+Exact commands (calendar IDs, SQL) to be produced at cutover time — run step by step with
+Joseph.
