@@ -62,6 +62,7 @@ import { ContactResolver } from './contacts/contact-resolver.js';
 import { createContactDuplicateDetected, createContactElevated, createContactMerged } from './bus/events.js';
 import { NylasClient } from './channels/email/nylas-client.js';
 import { NylasCalendarClient } from './channels/calendar/nylas-calendar-client.js';
+import { resolvePrincipalCalendarGrant } from './channels/calendar/resolve-calendar-grant.js';
 import { EmailAdapter } from './channels/email/email-adapter.js';
 import { EmailAccountsRepo } from './channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from './channels/email/resolve-email-accounts.js';
@@ -773,14 +774,27 @@ async function main(): Promise<void> {
     logger.warn('Signal socket path or phone number not configured — Signal channel disabled. Set them in the console (Settings → Channels → Signal), or via the SIGNAL_SOCKET_PATH / SIGNAL_PHONE_NUMBER env fallbacks.');
   }
 
-  // Calendar client — uses the primary email account's Nylas credentials.
-  // For multi-account deployments the calendar is always associated with the first
-  // (primary) account; a future spec can extend this to per-account calendars.
+  // Calendar client — operates as the PRINCIPAL (the CEO), not as Curia's mailbox.
+  // RSVP is first-person: Nylas/Google records the response of the attendee whose
+  // identity matches the authenticated grant. So the calendar client binds to the
+  // CEO's OWN grant (ceo_nylas_grant_id) — the same identity ceo-inbox uses. Binding
+  // to Curia's mailbox grant made Curia a third-party delegate, and Google rejected
+  // RSVPs with `omittedAttendeesSpecified` (#1217).
+  //
+  // Fail closed: with no CEO grant configured there is no principal to act as, so the
+  // client is left undefined and calendar skills return a clean "not configured"
+  // result via their existing `if (!ctx.nylasCalendarClient)` guard. We deliberately
+  // do NOT fall back to the email account grant — that is the delegate-identity bug
+  // this change removes.
+  const principalCalendarGrant = await resolvePrincipalCalendarGrant(secretsService, logger);
   let nylasCalendarClient: NylasCalendarClient | undefined;
-  if (config.nylasApiKey && primaryNylasClient && resolvedEmailAccounts.length > 0) {
-    const primaryAccount = resolvedEmailAccounts[0]!;
-    nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, primaryAccount.nylasGrantId, logger);
-    logger.info('Nylas calendar client initialized');
+  if (config.nylasApiKey && principalCalendarGrant) {
+    nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger);
+    logger.info('Nylas calendar client initialized (bound to the CEO/principal Nylas grant)');
+  } else if (config.nylasApiKey) {
+    logger.warn(
+      'Calendar disabled — ceo_nylas_grant_id is not configured. Set the CEO Nylas grant to enable calendar (RSVP/holds/events run as the CEO).',
+    );
   }
 
   // Browser service — warm Playwright Chromium instance for the web-browser skill.
