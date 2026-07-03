@@ -3773,9 +3773,11 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(agentResponses).toHaveLength(1);
     const response = agentResponses[0]!;
-    expect(response.payload.content).toContain('delegation_failure');
-    expect(response.payload.content).toContain('maxTurns');
-    expect(response.payload.content).toContain('"escalated":true');
+    // Must be human-readable — no protocol JSON leaking to the principal (#1329)
+    expect(response.payload.content).not.toContain('_curia_protocol');
+    expect(response.payload.content).not.toContain('delegation_failure');
+    expect(response.payload.content).toContain('social-media');
+    expect(response.payload.content).toMatch(/follow.?up|logged/i);
   });
 
   it('allows exactly two retryable delegate attempts then escalates (#1171)', async () => {
@@ -3880,9 +3882,11 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(agentResponses).toHaveLength(1);
     const response = agentResponses[0]!;
-    expect(response.payload.content).toContain('delegation_failure');
-    expect(response.payload.content).toContain('api_error');
-    expect(response.payload.content).toContain('"escalated":true');
+    // Must be human-readable — no protocol JSON leaking to the principal (#1329)
+    expect(response.payload.content).not.toContain('_curia_protocol');
+    expect(response.payload.content).not.toContain('delegation_failure');
+    expect(response.payload.content).toContain('social-media');
+    expect(response.payload.content).toMatch(/follow.?up|logged/i);
   });
 
   it('records delegate timeout as non-retryable failure and escalates immediately (#1288)', async () => {
@@ -3988,10 +3992,12 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(agentResponses).toHaveLength(1);
     const response = agentResponses[0]!;
-    expect(response.payload.content).toContain('delegation_failure');
-    expect(response.payload.content).toContain('timeout');
-    expect(response.payload.content).toContain('"possibly_succeeded":true');
-    expect(response.payload.content).toContain('"escalated":true');
+    // Must be human-readable — no protocol JSON leaking to the principal (#1329)
+    expect(response.payload.content).not.toContain('_curia_protocol');
+    expect(response.payload.content).not.toContain('delegation_failure');
+    expect(response.payload.content).toContain('T2125-expense-tracker');
+    expect(response.payload.content).toMatch(/background|completing|still/i);
+    expect(response.payload.content).toMatch(/follow.?up|logged/i);
   });
 
   it('humanizes delegation failure for the top-level coordinator — no _curia_protocol in output (#1329)', async () => {
@@ -4059,7 +4065,6 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       executionLayer: mockExecution,
       pinnedSkills: ['delegate'],
       skillToolDefs: [delegateToolDef],
-      isCoordinator: true,
     });
     agent.register();
 
