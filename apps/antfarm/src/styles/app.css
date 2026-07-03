@@ -55,6 +55,29 @@ body {
   gap: 1rem;
 }
 
+.stage-column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.phaser-office {
+  background: #2a3224;
+  border-radius: 12px;
+  overflow: hidden;
+  min-height: 360px;
+}
+
+.phaser-canvas-host {
+  width: 100%;
+  min-height: 360px;
+}
+
+.phaser-canvas-host canvas {
+  display: block;
+  margin: 0 auto;
+}
+
 .office {
   background: #2a3224;
   border-radius: 12px;
@@ -181,6 +204,71 @@ label {
 
 a {
   color: #c8e6a0;
+}
+
+.credits-footer {
+  font-size: 0.7rem;
+  opacity: 0.75;
+  line-height: 1.4;
+}
+
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.overlay-panel {
+  background: #252d1f;
+  border: 2px solid #5a6a4a;
+  border-radius: 12px;
+  max-width: 520px;
+  width: 90%;
+  max-height: 70vh;
+  overflow: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.overlay-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #4a5a3a;
+}
+
+.overlay-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.overlay-close {
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+}
+
+.overlay-body {
+  padding: 1rem;
+}
+
+.overlay-json {
+  font-size: 0.75rem;
+  overflow-x: auto;
+  background: #1a1f16;
+  padding: 0.75rem;
+  border-radius: 6px;
+  margin: 0;
+}
+
+.overlay-causal {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  opacity: 0.85;
 }
 
 @media (max-width: 800px) {
