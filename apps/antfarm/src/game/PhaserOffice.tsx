@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import Phaser from 'phaser';
 import type { SceneDirective } from '@curia/shared-types';
 import type { DeskSlot } from '../layout/desk-layout.js';
+import { deskLayoutKey } from '../layout/desk-layout.js';
 import type { ScheduledDirective } from '../conductor/types.js';
 import { OfficeScene, type OfficeSceneCallbacks } from './OfficeScene.js';
 import { STAGE_HEIGHT, STAGE_WIDTH } from './world-layout.js';
@@ -24,6 +25,7 @@ export function PhaserOffice({
   const containerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
   const lastFiredRef = useRef(-1);
+  const lastDeskKeyRef = useRef('');
   const callbacksRef = useRef<OfficeSceneCallbacks>({ onAgentClick, onDirectiveClick });
   const desksRef = useRef(desks);
 
@@ -69,6 +71,9 @@ export function PhaserOffice({
   useEffect(() => {
     const game = gameRef.current;
     if (!game?.scene.isActive('OfficeScene')) return;
+    const key = deskLayoutKey(desks);
+    if (key === lastDeskKeyRef.current) return;
+    lastDeskKeyRef.current = key;
     const scene = game.scene.getScene('OfficeScene') as OfficeScene;
     scene.updateLayout(desks);
   }, [desks]);
