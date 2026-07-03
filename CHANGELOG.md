@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Ant Farm AF-1** — `AuditLogRepo.findTimeline` and timeline indexes on `payload->>'taskId'` and `(conversation_id, timestamp)` for replay queries. Closes #1314.
+
 ### Fixed
 
 - **`delegate` timeout storm** — timeouts now return structured, retry-capped failures instead of triggering duplicate re-delegations. Closes #1288.
