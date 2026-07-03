@@ -1,14 +1,14 @@
 {
   "name": "calendar-respond-to-invite",
   "description": "Accept, decline, or tentatively accept an existing calendar invitation as the authenticated principal attendee. Uses Nylas sendRsvp so only the principal's own RSVP status changes and the organizer receives the provider-standard RSVP notification. On accept, optional holdMatchCriteria can release Curia HOLD (TBC) events for the same scheduling conversation.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
     "calendarId": "string (Nylas calendar ID containing the invite)",
     "eventId": "string (Nylas event ID to RSVP to)",
     "response": "string (accept | decline | tentative)",
-    "account": "string? (named account hint; currently informational because the calendar client is bound to the configured principal grant)",
+    "account": "string? (named account hint; informational — the calendar client is bound to the CEO's own Nylas grant (ceo_nylas_grant_id), so RSVP always runs as the CEO regardless of this hint)",
     "comment": "string? (optional RSVP comment; currently returned as a warning if provided because Nylas sendRsvp only accepts status in this SDK)",
     "holdMatchCriteria": "object? ({ subject?, contactDomain?, contactId?, sourceRef?, threadRef? } used only when response is accept to release matching Curia holds)",
     "holdSearchStart": "timestamp? (start of hold cleanup search window; defaults around the invite time)",
