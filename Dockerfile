@@ -17,11 +17,14 @@ RUN corepack enable
 # Copy all workspace manifests so pnpm installs the full workspace in one shot.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/console/package.json ./apps/console/
+COPY apps/antfarm/package.json ./apps/antfarm/
+COPY packages/shared-types/package.json ./packages/shared-types/
 RUN pnpm install --frozen-lockfile
 
 # Build backend
 COPY src/ ./src/
 COPY tsconfig.json ./
+COPY packages/ ./packages/
 # Skip --dts: type declarations are for library consumers, not the runtime image.
 # tsup's DTS build also trips a TS 6.0 deprecation error on any tsconfig with baseUrl.
 RUN pnpm exec tsup src/index.ts --format esm --no-dts
@@ -29,6 +32,10 @@ RUN pnpm exec tsup src/index.ts --format esm --no-dts
 # Build console frontend — output lands in apps/console/dist/
 COPY apps/console/ ./apps/console/
 RUN pnpm --filter @curia/console run build
+
+# Build Ant Farm frontend — output lands in apps/antfarm/dist/
+COPY apps/antfarm/ ./apps/antfarm/
+RUN pnpm --filter @curia/antfarm run build
 
 # Production stage: minimal runtime image.
 # Same node:24-slim digest pin as the build stage above (see that comment for the
@@ -99,6 +106,9 @@ COPY --from=build /app/dist ./dist
 
 # Copy console static bundle — served by Fastify at runtime
 COPY --from=build /app/apps/console/dist ./apps/console/dist
+
+# Copy Ant Farm static bundle — served under /antfarm/
+COPY --from=build /app/apps/antfarm/dist ./apps/antfarm/dist
 
 # Copy runtime data files loaded at startup
 # Full src/ is needed because skill handlers import from src/ (e.g., bus/events.ts)
