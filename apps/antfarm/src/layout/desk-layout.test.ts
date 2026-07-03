@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SceneDirective } from '@curia/shared-types';
-import { agentIdsFromDirectives, buildDeskLayout, ensureAgentDesk } from './desk-layout.js';
+import { agentIdsFromDirectives, agentRosterKey, buildDeskLayout, deskLayoutKey, ensureAgentDesk } from './desk-layout.js';
 
 describe('desk layout', () => {
   it('places coordinator in the boss row and others on the floor', () => {
@@ -34,5 +34,20 @@ describe('desk layout', () => {
     const base = buildDeskLayout([{ name: 'coordinator', metadata: { role: 'coordinator' } }], []);
     const extended = ensureAgentDesk(base, 'new-agent');
     expect(extended.some((s) => s.agentId === 'new-agent')).toBe(true);
+  });
+
+  it('agentRosterKey is stable when directive order changes', () => {
+    const registry = [{ name: 'coordinator', metadata: { role: 'coordinator' } }];
+    const a = agentRosterKey(registry, ['calendar', 'research']);
+    const b = agentRosterKey(registry, ['research', 'calendar']);
+    expect(a).toBe(b);
+  });
+
+  it('deskLayoutKey ignores desk array identity', () => {
+    const desks = [
+      { agentId: 'coordinator', row: 'boss' as const, column: 0 },
+      { agentId: 'calendar', row: 'floor' as const, column: 0 },
+    ];
+    expect(deskLayoutKey(desks)).toBe(deskLayoutKey([...desks]));
   });
 });
