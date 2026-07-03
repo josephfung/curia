@@ -33,6 +33,7 @@ import { healthRoutes } from './routes/health.js';
 import { agentRoutes } from './routes/agents.js';
 import { jobRoutes } from './routes/jobs.js';
 import { antfarmRoutes } from './routes/antfarm.js';
+import { antfarmStaticRoutes } from './routes/antfarm-static.js';
 import { messageRoutes } from './routes/messages.js';
 import { consoleRoutes } from './routes/console.js';
 import { knowledgeGraphRoutes } from './routes/kg.js';
@@ -501,6 +502,10 @@ export class HttpAdapter implements Channel {
         bus,
       });
     }
+
+    // Ant Farm SPA — registered before the console wildcard so /antfarm/* resolves
+    // to this static bundle instead of the console /* fallback.
+    await this.app.register(antfarmStaticRoutes);
 
     // Console app — registered last so all explicit API/KG routes above take priority
     // over its /* wildcard. The React app handles auth client-side via session cookie.
