@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Ant Farm AF-1** — `AuditLogRepo.findTimeline` and timeline indexes on `payload->>'taskId'` and `(conversation_id, timestamp)` for replay queries. Closes #1314.
+
 ### Fixed
 
 - **Calendar operates as the CEO** — binds the calendar client to `ceo_nylas_grant_id`, fixing RSVP `omittedAttendeesSpecified`; fails closed when unset. Closes #1217.

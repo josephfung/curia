@@ -78,6 +78,9 @@ export class AuditLogger {
     const conversationId =
       typeof payload.conversationId === 'string' ? payload.conversationId : null;
 
+    // Populate task_id when present in payload (additive — no backfill of historical rows).
+    const taskId = typeof payload.taskId === 'string' ? payload.taskId : null;
+
     // Sanitize before the DB write in a separate try/catch so a sanitization
     // failure is logged with its own distinct message — not conflated with a
     // DB connectivity or schema error from the INSERT below.
@@ -94,10 +97,9 @@ export class AuditLogger {
     try {
       await this.pool.query(
         // All columns are explicitly listed so schema additions don't silently
-        // shift positional parameters. task_id is omitted here (Phase 1 has no
-        // task concept yet) and will default to NULL.
-        `INSERT INTO audit_log (id, timestamp, event_type, source_layer, source_id, payload, conversation_id, parent_event_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        // shift positional parameters.
+        `INSERT INTO audit_log (id, timestamp, event_type, source_layer, source_id, payload, conversation_id, task_id, parent_event_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           event.id,
           event.timestamp,
@@ -106,6 +108,7 @@ export class AuditLogger {
           sourceId,
           serializedPayload,
           conversationId,
+          taskId,
           event.parentEventId ?? null,
         ],
       );
