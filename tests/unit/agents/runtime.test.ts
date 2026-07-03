@@ -3994,6 +3994,100 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).toContain('"escalated":true');
   });
 
+  it('humanizes delegation failure for the top-level coordinator — no _curia_protocol in output (#1329)', async () => {
+    // When isCoordinator=true the runtime must emit plain language instead of the
+    // _curia_protocol JSON signal. The signal has no parent above the coordinator to
+    // interpret it, so raw JSON must never reach the principal's channel.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const taskCreateCount = { n: 0 };
+
+    const mockExecution = {
+      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (skillName === 'task-create') {
+          taskCreateCount.n += 1;
+          return { success: true, data: { task_id: 'escalation-humanize-1' } };
+        }
+        if (skillName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          const dKey = delegationKey(delegateAgent, delegateTask);
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(dKey);
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'timeout',
+              retryable: false,
+              possibly_succeeded: true,
+              message: "Specialist 'calendar' did not respond within the delegate wait window — the task may still be running",
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'tool_use' as const,
+        toolCalls: [
+          { id: 'call-delegate-humanize', name: 'delegate', input: { agent: 'calendar', task: 'Check my afternoon' } },
+        ],
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      }),
+    };
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+      isCoordinator: true,
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-delegate-humanize',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Check my afternoon',
+      parentEventId: 'inbound-delegate-humanize',
+    }));
+
+    expect(taskCreateCount.n).toBe(1);
+    expect(agentResponses).toHaveLength(1);
+    const response = agentResponses[0]!;
+
+    // Must not contain the internal protocol signal
+    expect(response.payload.content).not.toContain('_curia_protocol');
+    expect(response.payload.content).not.toContain('delegation_failure');
+
+    // Must convey the timeout nuance in plain language
+    expect(response.payload.content).toMatch(/calendar/i);
+    expect(response.payload.content).toMatch(/background|completing|still/i);
+
+    // Must convey escalation in plain language
+    expect(response.payload.content).toMatch(/follow.?up|logged|backlog/i);
+  });
+
   it('does not escalate or block when delegate returns paused (#1174)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);

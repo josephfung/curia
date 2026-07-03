@@ -119,6 +119,12 @@ export interface AgentConfig {
    *  identity for self-directed lookups. Passed only for the coordinator (specialists use
    *  the ${agent_contact_id} bootstrap placeholder). */
   agentContactId?: string;
+  /** Whether this agent is the top-level coordinator (no parent agent above it).
+   *  When true, non-retryable delegation failure responses are humanized before being
+   *  sent to the principal — the _curia_protocol JSON signal has no parent to interpret
+   *  it, so raw JSON must not reach the user. Specialists leave this false/absent:
+   *  their delegation_failure signal is consumed by the coordinator via the delegate skill. */
+  isCoordinator?: boolean;
   /** The principal's verified channel identities (email, phone, Signal), loaded from
    *  contact_channel_identities at startup. When provided and non-empty, a
    *  "## Principal Contact Details" block is appended to the system prompt on every task
@@ -1351,15 +1357,36 @@ export class AgentRuntime {
       // (or exhausted retryable attempts), emit a deterministic protocol response so the
       // coordinator reports the honest reason instead of confabulating or re-delegating.
       if (pendingDelegationEscalation) {
-        const escalationContent = JSON.stringify({
-          _curia_protocol: 'delegation_failure',
-          agent: pendingDelegationEscalation.agent,
-          reason: pendingDelegationEscalation.reason,
-          retryable: false,
-          message: pendingDelegationEscalation.message,
-          escalated: pendingDelegationEscalation.escalated,
-          ...(pendingDelegationEscalation.possiblySucceeded === true && { possibly_succeeded: true }),
-        });
+        // When this agent IS the top-level coordinator, there is no parent to consume the
+        // _curia_protocol signal — the response goes directly to the principal's channel.
+        // Humanize the content so the user sees plain language, not raw JSON (#1329).
+        // Specialists leave isCoordinator false/absent: their signal is consumed by the
+        // coordinator via the delegate skill tool result.
+        let escalationContent: string;
+        if (this.config.isCoordinator) {
+          const esc = pendingDelegationEscalation;
+          const parts: string[] = [];
+          if (esc.reason === 'timeout') {
+            parts.push(`I wasn't able to get a response from the ${esc.agent} specialist in time.`);
+            if (esc.possiblySucceeded) parts.push('The request may still be completing in the background.');
+          } else if (esc.reason === 'blocked') {
+            parts.push(`The ${esc.agent} specialist was blocked and couldn't complete the task.`);
+          } else {
+            parts.push(`The ${esc.agent} specialist wasn't able to complete the task.`);
+          }
+          if (esc.escalated) parts.push("I've logged a follow-up task to review the outcome.");
+          escalationContent = parts.join(' ');
+        } else {
+          escalationContent = JSON.stringify({
+            _curia_protocol: 'delegation_failure',
+            agent: pendingDelegationEscalation.agent,
+            reason: pendingDelegationEscalation.reason,
+            retryable: false,
+            message: pendingDelegationEscalation.message,
+            escalated: pendingDelegationEscalation.escalated,
+            ...(pendingDelegationEscalation.possiblySucceeded === true && { possibly_succeeded: true }),
+          });
+        }
 
         if (memory) {
           await memory.addTurn(conversationId, agentId, { role: 'assistant', content: escalationContent });
