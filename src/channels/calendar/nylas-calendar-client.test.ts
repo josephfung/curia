@@ -112,6 +112,12 @@ describe('NylasCalendarClient — RSVP plumbing', () => {
       queryParams: { calendar_id: 'cal_1' },
       requestBody: { status: 'yes' },
     });
+    // Pin the body shape: sendRsvp must carry ONLY { status } — never a participants
+    // array or any attendee data (that would risk changing another attendee's state,
+    // and is the class of request Google rejects). Fails if attendee data leaks in.
+    const call = sendRsvp.mock.calls[0]![0];
+    expect(Object.keys(call.requestBody)).toEqual(['status']);
+    expect(call.requestBody).not.toHaveProperty('participants');
     expect(result).toEqual({ requestId: 'req_123', sendIcsError: null });
   });
 
