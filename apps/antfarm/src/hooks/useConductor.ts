@@ -20,7 +20,8 @@ export function useConductor(initialDirectives: SceneDirective[] = []) {
     let frame = 0;
     const loop = (now: number) => {
       const fired = conductorRef.current!.tick(now);
-      if (fired.length > 0 || conductorRef.current!.getMode() === 'playing') {
+      const mode = conductorRef.current!.getMode();
+      if (fired.length > 0 || mode === 'playing' || mode === 'live') {
         setSnapshot(conductorRef.current!.getSnapshot());
       }
       frame = requestAnimationFrame(loop);

@@ -22,15 +22,20 @@ export class Conductor {
     this.directives = dedupeById(script.directives);
     this.rebuildSchedule();
     this.firedIndex = -1;
-    if (this.directives.length > 0) {
-      this.animationMs = 0;
-    }
+    this.animationMs = 0;
   }
 
   appendDirectives(incoming: SceneDirective[]): void {
     if (incoming.length === 0) return;
+    const prevFired = this.firedIndex;
     this.directives = dedupeById([...this.directives, ...incoming]);
-    this.rebuildSchedule();
+    this.schedule = buildAnimationSchedule(this.directives, DEFAULT_MIN_ANIMATION_GAP_MS);
+    if (this.mode === 'live') {
+      // Preserve playhead — tick() collects newly appended beats.
+      this.firedIndex = prevFired;
+    } else {
+      this.syncFiredIndex();
+    }
   }
 
   mergeLiveBuffer(replay: SceneDirective[], liveBuffer: SceneDirective[], streamOpenTs: number): void {
@@ -39,6 +44,7 @@ export class Conductor {
   }
 
   setVelocity(velocity: number): void {
+    if (!Number.isFinite(velocity)) return;
     this.velocity = Math.min(MAX_VELOCITY, Math.max(MIN_VELOCITY, velocity));
   }
 
@@ -80,7 +86,7 @@ export class Conductor {
       return [];
     }
 
-    if (this.lastTickAt !== null && this.mode === 'playing') {
+    if (this.mode === 'playing' && this.lastTickAt !== null) {
       const delta = (nowMs - this.lastTickAt) * this.velocity;
       this.animationMs += delta;
       const max = totalAnimationDurationMs(this.schedule);
@@ -88,6 +94,9 @@ export class Conductor {
         this.animationMs = max;
         this.mode = 'paused';
       }
+    } else if (this.mode === 'live') {
+      // Pin playhead to the live edge so appended directives fire immediately.
+      this.animationMs = totalAnimationDurationMs(this.schedule);
     }
     this.lastTickAt = nowMs;
 

@@ -38,7 +38,7 @@ export class OfficeScene extends Phaser.Scene {
   private taskCards = new Map<string, Phaser.GameObjects.Image>();
   private badgeGroup!: Phaser.GameObjects.Container;
   private callbacks!: OfficeSceneCallbacks;
-  private lastDirective: SceneDirective | null = null;
+  private lastDirectiveByAgent = new Map<string, SceneDirective>();
 
   constructor() {
     super({ key: 'OfficeScene' });
@@ -59,15 +59,36 @@ export class OfficeScene extends Phaser.Scene {
     this.spawnDesks();
     this.spawnAgents(desks);
     this.badgeGroup = this.add.container(0, 0);
+
+    const pending = this.registry.get('pendingReplay') as SceneDirective[] | undefined;
+    if (pending?.length) {
+      this.registry.remove('pendingReplay');
+      for (const directive of pending) {
+        this.playDirective(directive);
+      }
+    }
   }
 
   updateLayout(desks: DeskSlot[]): void {
     this.registry.set('desks', desks);
+    this.agents.clear();
+    this.taskCards.clear();
+    this.lastDirectiveByAgent.clear();
+    this.scene.restart({ desks, callbacks: this.callbacks });
+  }
+
+  /** Reset scene state and replay directives up to the current scrub position. */
+  resyncPlayback(directives: SceneDirective[], desks: DeskSlot[]): void {
+    this.registry.set('desks', desks);
+    this.registry.set('pendingReplay', directives);
+    this.agents.clear();
+    this.taskCards.clear();
+    this.lastDirectiveByAgent.clear();
     this.scene.restart({ desks, callbacks: this.callbacks });
   }
 
   playDirective(directive: SceneDirective): void {
-    this.lastDirective = directive;
+    this.recordDirectiveAgents(directive);
     switch (directive.kind) {
       case 'claw.deliver':
         this.animateClawDeliver(directive);
@@ -127,7 +148,7 @@ export class OfficeScene extends Phaser.Scene {
       const img = this.add.image(desk.x, desk.y + 20, key).setScale(2);
       img.setInteractive({ useHandCursor: true });
       img.on('pointerdown', () => {
-        this.callbacks.onAgentClick(desk.agentId, this.lastDirective);
+        this.callbacks.onAgentClick(desk.agentId, this.directiveForAgent(desk.agentId));
       });
       this.add
         .text(desk.x, desk.y + 36, desk.agentId, { fontSize: '10px', color: '#e8f0dc' })
@@ -153,7 +174,7 @@ export class OfficeScene extends Phaser.Scene {
     const body = this.add.image(0, 0, texKey).setScale(2);
     body.setInteractive({ useHandCursor: true });
     body.on('pointerdown', () => {
-      this.callbacks.onAgentClick(agentId, this.lastDirective);
+      this.callbacks.onAgentClick(agentId, this.directiveForAgent(agentId));
     });
 
     container.add(body);
@@ -362,5 +383,18 @@ export class OfficeScene extends Phaser.Scene {
       duration: 500,
       onComplete: () => badge.destroy(),
     });
+  }
+
+  private directiveForAgent(agentId: string): SceneDirective | null {
+    return this.lastDirectiveByAgent.get(agentId) ?? null;
+  }
+
+  private recordDirectiveAgents(directive: SceneDirective): void {
+    if ('agentId' in directive && typeof directive.agentId === 'string') {
+      this.lastDirectiveByAgent.set(directive.agentId, directive);
+    }
+    if (directive.kind === 'agent.walk') {
+      this.lastDirectiveByAgent.set(directive.targetAgentId, directive);
+    }
   }
 }

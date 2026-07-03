@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { SceneDirective } from '@curia/shared-types';
+import type { ActivityScript, SceneDirective } from '@curia/shared-types';
 import { apiFetch, checkSession } from './api.js';
+import { clientWarn } from './client-log.js';
 import { PhaserOffice } from './game/PhaserOffice.js';
 import { DetailOverlay, type OverlayDetail } from './components/DetailOverlay.js';
 import { CreditsFooter } from './components/CreditsFooter.js';
@@ -49,6 +50,8 @@ export function App() {
   const [liveMode, setLiveMode] = useState(false);
   const [overlayDetail, setOverlayDetail] = useState<OverlayDetail | null>(null);
   const savedModeRef = useRef<PlaybackMode>('paused');
+  const mergedLiveCountRef = useRef(0);
+  const lastScriptRef = useRef<ActivityScript | null>(null);
 
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -61,11 +64,19 @@ export function App() {
   const { snapshot, conductor, refresh } = useConductor();
 
   useEffect(() => {
-    void checkSession().then(setAuthed);
+    void checkSession()
+      .then(setAuthed)
+      .catch((err) => {
+        clientWarn('session check failed', err);
+        setAuthed(false);
+      });
     void apiFetch('/api/registry/agents')
       .then((res) => res.ok ? res.json() : { agents: [] })
       .then((data: { agents?: RegistryAgent[] }) => setRegistryAgents(data.agents ?? []))
-      .catch(() => setRegistryAgents([]));
+      .catch((err) => {
+        clientWarn('failed to load registry agents', err);
+        setRegistryAgents([]);
+      });
   }, []);
 
   const filteredDirectives = useMemo(() => {
@@ -102,37 +113,47 @@ export function App() {
   }, [conductor, refresh]);
 
   const loadWindow = useCallback(async (windowFrom: string, windowTo: string, conv?: string) => {
+    mergedLiveCountRef.current = 0;
     if (liveMode && live.streamOpenTs !== null) {
-      const replay = await fetchTimeline({
+      await fetchTimeline({
         from: windowFrom || undefined,
         to: new Date(live.streamOpenTs).toISOString(),
         conversationId: conv,
       });
-      conductor.mergeLiveBuffer(replay.directives, live.buffer, live.streamOpenTs);
     } else {
-      const data = await fetchTimeline({
+      await fetchTimeline({
         from: windowFrom || undefined,
         to: windowTo || undefined,
         conversationId: conv,
       });
-      conductor.loadScript(data);
+    }
+  }, [fetchTimeline, live.streamOpenTs, liveMode]);
+
+  // Single source of truth: sync conductor when timeline script changes.
+  useEffect(() => {
+    if (!script) return;
+
+    if (script !== lastScriptRef.current) {
+      mergedLiveCountRef.current = 0;
+      lastScriptRef.current = script;
+    }
+
+    if (liveMode && live.streamOpenTs !== null) {
+      if (live.buffer.length === 0) {
+        conductor.loadScript(script);
+      } else if (mergedLiveCountRef.current === 0) {
+        conductor.mergeLiveBuffer(script.directives, live.buffer, live.streamOpenTs);
+        mergedLiveCountRef.current = live.buffer.length;
+      } else if (live.buffer.length > mergedLiveCountRef.current) {
+        const newSlice = live.buffer.slice(mergedLiveCountRef.current);
+        conductor.appendDirectives(newSlice);
+        mergedLiveCountRef.current = live.buffer.length;
+      }
+    } else if (!liveMode) {
+      conductor.loadScript(script);
     }
     refresh();
-  }, [conductor, fetchTimeline, live.buffer, live.streamOpenTs, liveMode, refresh]);
-
-  useEffect(() => {
-    if (script && !liveMode) {
-      conductor.loadScript(script);
-      refresh();
-    }
-  }, [script, liveMode, conductor, refresh]);
-
-  useEffect(() => {
-    if (liveMode && live.streamOpenTs && live.buffer.length > 0 && script) {
-      conductor.mergeLiveBuffer(script.directives, live.buffer, live.streamOpenTs);
-      refresh();
-    }
-  }, [liveMode, live.buffer, live.streamOpenTs, script, conductor, refresh]);
+  }, [script, liveMode, live.buffer, live.streamOpenTs, conductor, refresh]);
 
   const scrubPct = useMemo(() => {
     const total = totalAnimationDurationMs(snapshot.schedule);
@@ -206,6 +227,7 @@ export function App() {
         onPause={() => { conductor.setMode('paused'); refresh(); }}
         onLive={() => {
           setLiveMode(true);
+          mergedLiveCountRef.current = 0;
           conductor.setMode('live');
           refresh();
         }}

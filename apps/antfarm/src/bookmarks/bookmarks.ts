@@ -1,3 +1,5 @@
+import { clientWarn } from '../client-log.js';
+
 export interface AntfarmBookmark {
   from: string;
   to: string;
@@ -16,7 +18,8 @@ export function loadBookmarks(): AntfarmBookmark[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as AntfarmBookmark[];
     return Array.isArray(parsed) ? parsed : [];
-  } catch {
+  } catch (err) {
+    clientWarn('failed to load bookmarks from localStorage', err);
     return [];
   }
 }

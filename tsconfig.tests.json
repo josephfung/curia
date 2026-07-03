@@ -27,6 +27,6 @@
   },
   // Covers all test source files. Test handlers import from ../../src (or ../src),
   // so tsc follows those references automatically.
-  "include": ["tests/**/*.ts", "packages/**/*.ts", "src/**/*.test.ts"],
+  "include": ["tests/**/*.ts", "src/**/*.test.ts", "apps/**/*.test.ts"],
   "exclude": ["node_modules", "dist"]
 }
