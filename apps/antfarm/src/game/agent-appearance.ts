@@ -9,7 +9,7 @@ export interface AgentAppearance {
   variant: number;
 }
 
-function hashAgentId(agentId: string): number {
+export function hashAgentId(agentId: string): number {
   let hash = 0;
   for (let i = 0; i < agentId.length; i++) {
     hash = (hash * 31 + agentId.charCodeAt(i)) | 0;
