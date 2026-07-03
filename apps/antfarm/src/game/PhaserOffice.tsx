@@ -77,13 +77,17 @@ export function PhaserOffice({
     const game = gameRef.current;
     if (!game) return;
 
-    if (firedIndex < lastFiredRef.current) {
-      lastFiredRef.current = firedIndex;
-    }
-    if (firedIndex <= lastFiredRef.current) return;
-
     const scene = game.scene.getScene('OfficeScene') as OfficeScene | undefined;
     if (!scene?.scene.isActive()) return;
+
+    if (firedIndex < lastFiredRef.current) {
+      const replay = schedule.slice(0, firedIndex + 1).map((entry) => entry.directive);
+      scene.resyncPlayback(replay, desksRef.current);
+      lastFiredRef.current = firedIndex;
+      return;
+    }
+
+    if (firedIndex <= lastFiredRef.current) return;
 
     for (let i = lastFiredRef.current + 1; i <= firedIndex; i++) {
       const entry = schedule[i];

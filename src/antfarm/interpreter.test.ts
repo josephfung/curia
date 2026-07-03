@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { AuditEventRow } from '@curia/shared-types';
-import { buildScript, interpretEvent } from './interpreter.js';
+import { buildScript, busEventToAuditRow, interpretEvent } from './interpreter.js';
 
 function row(overrides: Partial<AuditEventRow> & Pick<AuditEventRow, 'eventType'>): AuditEventRow {
   return {
@@ -232,5 +232,30 @@ describe('buildScript', () => {
     expect(script.directives).toHaveLength(2);
     expect(script.directives[0]!.kind).toBe('agent.walk');
     expect(script.directives[1]!.kind).toBe('agent.speak');
+  });
+});
+
+describe('busEventToAuditRow', () => {
+  it('handles null payload without throwing', () => {
+    const row = busEventToAuditRow({
+      id: 'evt-null',
+      timestamp: new Date('2026-07-02T12:00:00.000Z'),
+      type: 'heartbeat',
+      sourceLayer: 'system',
+      payload: null,
+    });
+    expect(row.sourceId).toBe('system');
+    expect(row.payload).toEqual({});
+  });
+
+  it('extracts agentId from object payload', () => {
+    const row = busEventToAuditRow({
+      id: 'evt-1',
+      timestamp: new Date('2026-07-02T12:00:00.000Z'),
+      type: 'agent.task',
+      sourceLayer: 'agent',
+      payload: { agentId: 'calendar' },
+    });
+    expect(row.sourceId).toBe('calendar');
   });
 });

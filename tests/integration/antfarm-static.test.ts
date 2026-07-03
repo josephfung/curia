@@ -28,7 +28,7 @@ describe('Ant Farm static routes', () => {
     await app.register(antfarmStaticRoutes);
     await app.register(antfarmRoutes, {
       auditLogRepo: null as never,
-      eventRouter: { addAntFarmClient: () => {}, removeAntFarmClient: () => {} } as never,
+      eventRouter: { addAntfarmClient: () => () => {} } as never,
       webAppBootstrapSecret: 'secret',
       sessions: new Map(),
       logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,

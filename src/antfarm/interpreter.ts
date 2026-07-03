@@ -194,7 +194,11 @@ export function busEventToAuditRow(event: {
   parentEventId?: string | null;
   payload: unknown;
 }): AuditEventRow {
-  const payload = event.payload as unknown as Record<string, unknown>;
+  const rawPayload = event.payload;
+  const payload: Record<string, unknown> =
+    typeof rawPayload === 'object' && rawPayload !== null && !Array.isArray(rawPayload)
+      ? (rawPayload as unknown as Record<string, unknown>)
+      : {};
   const sourceId =
     typeof payload.agentId === 'string'
       ? payload.agentId
@@ -209,9 +213,6 @@ export function busEventToAuditRow(event: {
     sourceId,
     conversationId: typeof payload.conversationId === 'string' ? payload.conversationId : null,
     parentEventId: event.parentEventId ?? null,
-    payload:
-      typeof payload === 'object' && payload !== null && !Array.isArray(payload)
-        ? payload
-        : {},
+    payload,
   };
 }
