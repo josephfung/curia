@@ -1,6 +1,6 @@
---- a/deploy/compose/Dockerfile.curia
-+++ b/deploy/compose/Dockerfile.curia
-@@ -16,6 +16,8 @@ RUN corepack enable
+--- a/deploy/compose/Dockerfile.curia	2026-07-03 17:07:30.612210697 +0000
++++ b/deploy/compose/Dockerfile.curia	2026-07-03 17:07:30.636210648 +0000
+@@ -17,11 +17,14 @@
  # Copy all workspace manifests so pnpm installs the full workspace in one shot.
  COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
  COPY apps/console/package.json ./apps/console/
@@ -15,7 +15,7 @@
  # Skip --dts: type declarations are for library consumers, not the runtime image.
  # tsup's DTS build also trips a TS 6.0 deprecation error on any tsconfig with baseUrl.
  RUN pnpm exec tsup src/index.ts --format esm --no-dts
-@@ -28,6 +30,13 @@ RUN pnpm exec tsup src/index.ts --format esm --no-dts
+@@ -30,6 +33,12 @@
  COPY apps/console/ ./apps/console/
  RUN pnpm --filter @curia/console run build
  
@@ -28,7 +28,7 @@
  # Production stage: minimal runtime image.
  # Same node:24-slim digest pin as the build stage above (see that comment for the
  # Scorecard / Dependabot rationale). Both stages must stay on the same digest.
-@@ -98,6 +107,9 @@ RUN rm -rf /root/.cache/node/corepack /root/.cache/corepack
+@@ -100,6 +109,9 @@
  # Copy console static bundle — served by Fastify at runtime
  COPY --from=build /app/apps/console/dist ./apps/console/dist
  
