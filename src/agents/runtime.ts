@@ -1358,7 +1358,8 @@ export class AgentRuntime {
         const esc = pendingDelegationEscalation;
         // Guard against an empty agent name (external payload field); fallback avoids
         // a confusing blank in the user-facing message ("from the  specialist").
-        const agentLabel = esc.agent || 'a specialist';
+        // No article prefix — templates below unconditionally prepend "the ".
+        const agentLabel = esc.agent || 'specialist';
         if (!esc.agent) {
           logger.warn(
             { agentId, conversationId },
