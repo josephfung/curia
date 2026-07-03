@@ -2253,6 +2253,7 @@ async function main(): Promise<void> {
     entityMemory,
     // Powers GET /api/health with real probes and canary state (#434).
     healthService,
+    auditLogRepo,
   });
 
   try {
