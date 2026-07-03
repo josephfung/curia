@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Ant Farm AF-1** — `AuditLogRepo.findTimeline` / `findByEventTypes` return paginated `TimelinePage` (`hasMore`, keyset `after` cursor) with scoped-query guard; task filter uses `payload->>'taskId'` (index-aligned). Closes #1314.
+- **Ant Farm AF-3** — `@curia/shared-types` contract package and server-side event→directive interpreter for the pixel-art office visualization. Closes #1316.
 
 ### Fixed
 
