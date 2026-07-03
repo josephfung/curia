@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Calendar operates as the CEO** — the calendar client now binds to `ceo_nylas_grant_id` (the same identity as the CEO's inbox), fixing RSVP failures (`omittedAttendeesSpecified`) caused by acting as a third-party delegate; fails closed when no CEO grant is configured. Closes #1217.
 - **`delegate` timeout storm** — timeouts now return structured, retry-capped failures instead of triggering duplicate re-delegations. Closes #1288.
 
 ### Security

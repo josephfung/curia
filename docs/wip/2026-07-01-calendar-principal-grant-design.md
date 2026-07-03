@@ -40,11 +40,19 @@ delegated grant. Reading the invite under one grant and RSVPing under another is
 skills unchanged.** Resolve the calendar grant at boot as:
 
 ```
-principalCalendarGrant = (await secretsService.get('ceo_nylas_grant_id'))
-                         ?? resolvedEmailAccounts[0]?.nylasGrantId
+principalCalendarGrant = (await secretsService.get('ceo_nylas_grant_id')) || undefined
 ```
 
-and construct `new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger)`.
+and construct `new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger)`
+only when `principalCalendarGrant` is set.
+
+> **Decision update (2026-07-02):** the original draft fell back to
+> `resolvedEmailAccounts[0]?.nylasGrantId` when no CEO grant was configured. That
+> fallback is dropped — it re-admits the exact delegate identity this change removes
+> (a two-identity deployment that forgets `ceo_nylas_grant_id` would silently run
+> calendar as Curia's mailbox again). Calendar now **fails closed**: no CEO grant → no
+> calendar client → calendar skills return a clean "not configured" result. See
+> "Implementation decisions (2026-07-02)" below.
 
 Consequences:
 
@@ -107,8 +115,10 @@ independently, without disturbing this single-identity model.
   stable than a shared-calendar ID.
 - **Orphaned holds:** holds created under the old grant's calendar ID orphan after the flip.
   `holds-sweep` tolerates staleness; a manual sweep can clear them at cutover.
-- **Deployments without a CEO grant:** the fallback preserves today's behavior (primary
-  account), so single-identity / self-host setups are unaffected.
+- **Deployments without a CEO grant:** calendar is **disabled** (fail closed) — there is
+  no email-account fallback. Single-identity / self-host deployments must set
+  `ceo_nylas_grant_id` (the one account's grant) to enable calendar. Boot logs a warning
+  when `nylas_api_key` is present but `ceo_nylas_grant_id` is not.
 
 ## Verification / open items to confirm at implementation
 
@@ -122,3 +132,25 @@ independently, without disturbing this single-identity model.
 - If the Nylas **SDK** `sendRsvp` still misbehaves under the CEO grant (e.g. it PATCHes the
   full event rather than hitting the dedicated send-rsvp endpoint), fall back to a raw
   `fetch` RSVP mirroring the `CeoNylasClient` approach.
+
+## Implementation decisions (2026-07-02)
+
+Confirmed with Joseph before implementing (#1217):
+
+- **Minimal re-source, not per-skill secrets.** We keep the existing
+  `nylasCalendarClient` capability injection and change only the grant the
+  boot-constructed client binds to (`ceo_nylas_grant_id`). We considered converting all
+  10 calendar skill manifests to `secrets: [nylas_api_key, ceo_nylas_grant_id]` (a literal
+  mirror of ceo-inbox) but chose the smaller change: the calendar *identity* is unified
+  onto the CEO grant either way, and the minimal shape avoids touching 10 handlers +
+  manifests + tests. Grant resolution lives in
+  `src/channels/calendar/resolve-calendar-grant.ts` (`resolvePrincipalCalendarGrant`).
+- **Fail closed, no email fallback** (see the Decision update above).
+- **`config/registry-defaults.yaml` is NOT modified.** The `calendar-*` skills stay
+  credential-gated. Adding them there would (a) contradict the gating design, (b) be a
+  no-op for the existing prod deployment (registry rows already exist — reconciliation
+  never overrides them), and (c) be inert on a fresh install, where the calendar *agent*
+  stays excluded so nothing pins these skills. The real prod gap ("enable in DB then
+  restart") is operational, tracked as a separate follow-up.
+- **Follow-ups (out of scope here):** (1) warn when a registry enable takes effect only
+  after a restart; (2) a `curia-docs` note that calendar requires `ceo_nylas_grant_id`.
