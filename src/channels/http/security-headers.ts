@@ -25,10 +25,53 @@ export const CONSOLE_CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'none'",
 ].join('; ');
 
+/**
+ * CSP for the Ant Farm page (`/antfarm/*`, served as text/html).
+ *
+ * Identical to the console policy except `img-src` also allows `data:`. The Ant Farm
+ * visualization runs Phaser, which loads its internal boot textures (`__DEFAULT`,
+ * `__MISSING`, `__WHITE`) from embedded base64 `data:` PNG URIs on startup. Under the
+ * console's `img-src 'self'` the browser blocks those and the WebGL canvas fails to
+ * render — the procedural office art (built via `textures.addCanvas`) is itself CSP-safe,
+ * but Phaser's own boot images are not, and `__WHITE` backs all tinting/graphics.
+ *
+ * `data:` in `img-src` cannot execute script, so `script-src 'self'` — the XSS mitigation
+ * that motivated #130 — is unchanged. Only image sources are relaxed, and only on this page.
+ */
+export const ANTFARM_CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' https://fonts.googleapis.com",
+  "style-src-attr 'unsafe-inline'",
+  "font-src https://fonts.gstatic.com",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
 function isHtmlResponse(reply: { getHeader(name: string): unknown }): boolean {
   const raw = reply.getHeader('content-type');
   const value = Array.isArray(raw) ? raw[0] : raw;
   return typeof value === 'string' && value.toLowerCase().includes('text/html');
+}
+
+/**
+ * True when the request targets the Ant Farm SPA. Match only the `/antfarm/` prefix (with
+ * the trailing slash) — that is exactly what the antfarm-static plugin serves (`prefix:
+ * '/antfarm/'` plus the `/antfarm/*` fallback), and deep links into the SPA all carry it.
+ *
+ * Bare `/antfarm` (no slash) is deliberately NOT matched: no Ant Farm route handles it, so
+ * it falls through to the console's `/*` wildcard and is served the *console* index.html.
+ * Matching it here would hand that console page the relaxed `data:` CSP — the exact leak
+ * this scoping exists to prevent. Fastify's `request.url` is the raw, un-decoded path and
+ * includes any query string, so strip the query and compare the path only.
+ */
+function isAntfarmRequest(url: string): boolean {
+  // split always yields at least one element, so [0] is guaranteed present.
+  const path = url.split('?', 1)[0]!;
+  return path.startsWith('/antfarm/');
 }
 
 /**
@@ -48,13 +91,18 @@ function isHtmlResponse(reply: { getHeader(name: string): unknown }): boolean {
  * DAST baseline finding for rule 10021 (X-Content-Type-Options Header Missing). See #568.
  *
  * HTML document responses (the console SPA and its fallback pages) also receive a strict
- * Content-Security-Policy and `X-Frame-Options: DENY`. See #130.
+ * Content-Security-Policy and `X-Frame-Options: DENY`. See #130. The Ant Farm page gets a
+ * near-identical policy that additionally allows `img-src ... data:` for Phaser's base64
+ * boot textures; every other HTML response keeps the stricter console policy.
  */
 export function registerSecurityHeaders(app: FastifyInstance): void {
-  app.addHook('onSend', async (_request, reply, payload) => {
+  app.addHook('onSend', async (request, reply, payload) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     if (isHtmlResponse(reply)) {
-      reply.header('Content-Security-Policy', CONSOLE_CONTENT_SECURITY_POLICY);
+      const csp = isAntfarmRequest(request.url)
+        ? ANTFARM_CONTENT_SECURITY_POLICY
+        : CONSOLE_CONTENT_SECURITY_POLICY;
+      reply.header('Content-Security-Policy', csp);
       reply.header('X-Frame-Options', 'DENY');
     }
     return payload;
