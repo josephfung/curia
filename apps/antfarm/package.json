@@ -1,0 +1,25 @@
+{
+  "name": "@curia/antfarm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@curia/shared-types": "workspace:*",
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react-oxc": "^0.4.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.0"
+  }
+}
