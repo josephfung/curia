@@ -4093,6 +4093,234 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).toMatch(/follow.?up|logged|backlog/i);
   });
 
+  it('humanizes delegation failure with blocked reason — plain language, no protocol JSON', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const mockExecution = {
+      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (skillName === 'task-create') return { success: true, data: { task_id: 'escalation-humanize-blocked' } };
+        if (skillName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const dKey = delegationKey(delegateAgent, typeof input['task'] === 'string' ? input['task'] : '');
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(dKey);
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'blocked',
+              retryable: false,
+              message: "Specialist 'calendar' was blocked",
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'tool_use' as const,
+        toolCalls: [
+          { id: 'call-delegate-blocked', name: 'delegate', input: { agent: 'calendar', task: 'Check my afternoon' } },
+        ],
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      }),
+    };
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-delegate-blocked',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Check my afternoon',
+      parentEventId: 'inbound-delegate-blocked',
+    }));
+
+    expect(agentResponses).toHaveLength(1);
+    const response = agentResponses[0]!;
+    expect(response.payload.content).not.toContain('_curia_protocol');
+    expect(response.payload.content).not.toContain('delegation_failure');
+    expect(response.payload.content).toMatch(/calendar/i);
+    expect(response.payload.content).toMatch(/blocked|couldn't|couldn't/i);
+  });
+
+  it('humanizes delegation failure with generic reason (tool_error) — plain language, no protocol JSON', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const mockExecution = {
+      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (skillName === 'task-create') return { success: true, data: { task_id: 'escalation-humanize-tool-error' } };
+        if (skillName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const dKey = delegationKey(delegateAgent, typeof input['task'] === 'string' ? input['task'] : '');
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(dKey);
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'tool_error',
+              retryable: false,
+              message: "Specialist 'calendar' encountered a tool error",
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'tool_use' as const,
+        toolCalls: [
+          { id: 'call-delegate-tool-error', name: 'delegate', input: { agent: 'calendar', task: 'Check my afternoon' } },
+        ],
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      }),
+    };
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-delegate-tool-error',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Check my afternoon',
+      parentEventId: 'inbound-delegate-tool-error',
+    }));
+
+    expect(agentResponses).toHaveLength(1);
+    const response = agentResponses[0]!;
+    expect(response.payload.content).not.toContain('_curia_protocol');
+    expect(response.payload.content).not.toContain('delegation_failure');
+    expect(response.payload.content).toMatch(/calendar/i);
+    // Generic fallback path — "wasn't able to complete"
+    expect(response.payload.content).toMatch(/wasn't able|wasn't able|complete/i);
+  });
+
+  it('humanizes delegation failure with empty agent name — uses fallback label without double article', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const mockExecution = {
+      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (skillName === 'task-create') return { success: true, data: { task_id: 'escalation-humanize-empty-agent' } };
+        if (skillName === 'delegate') {
+          const dKey = delegationKey('', typeof input['task'] === 'string' ? input['task'] : '');
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(dKey);
+          return {
+            success: true,
+            data: {
+              agent: '',
+              failed: true,
+              reason: 'timeout',
+              retryable: false,
+              possibly_succeeded: false,
+              message: 'Delegate did not respond in time',
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'tool_use' as const,
+        toolCalls: [
+          { id: 'call-delegate-empty-agent', name: 'delegate', input: { agent: '', task: 'Check my afternoon' } },
+        ],
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      }),
+    };
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedSkills: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-delegate-empty-agent',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Check my afternoon',
+      parentEventId: 'inbound-delegate-empty-agent',
+    }));
+
+    expect(agentResponses).toHaveLength(1);
+    const response = agentResponses[0]!;
+    expect(response.payload.content).not.toContain('_curia_protocol');
+    expect(response.payload.content).not.toContain('delegation_failure');
+    // Fallback label must not produce "the a specialist" double-article grammar
+    expect(response.payload.content).not.toMatch(/the a specialist/i);
+    // Should still be a readable sentence
+    expect(response.payload.content).toMatch(/specialist/i);
+  });
+
   it('does not escalate or block when delegate returns paused (#1174)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
