@@ -11,6 +11,7 @@ import {
   ensureTintedTexture,
   registerPlaceholderTextures,
 } from './placeholder-textures.js';
+import { OFFICE_TILESET, ROOM_BUILDER, OFFICE_REGIONS } from './asset-manifest.js';
 
 export interface OfficeSceneCallbacks {
   onAgentClick: (agentId: string, directive: SceneDirective | null) => void;
@@ -39,6 +40,9 @@ export class OfficeScene extends Phaser.Scene {
   private badgeGroup!: Phaser.GameObjects.Container;
   private callbacks!: OfficeSceneCallbacks;
   private lastDirectiveByAgent = new Map<string, SceneDirective>();
+  // Keys of asset loads that errored (e.g. open-core build with no licensed art).
+  // Anything in here keeps its procedural placeholder — never a hard failure.
+  private failedLoads = new Set<string>();
 
   constructor() {
     super({ key: 'OfficeScene' });
@@ -48,8 +52,23 @@ export class OfficeScene extends Phaser.Scene {
     this.callbacks = data.callbacks;
   }
 
+  preload(): void {
+    // Record load failures instead of throwing; absent licensed art is the normal
+    // open-core path and must fall back cleanly to procedural placeholders.
+    this.load.on('loaderror', (file: Phaser.Loader.File) => {
+      this.failedLoads.add(file.key);
+      // Expected when licensed art is absent — info, never error (no console errors).
+      console.info(`[antfarm] licensed asset not loaded (using placeholder): ${file.key}`);
+    });
+
+    this.load.image(OFFICE_TILESET.key, OFFICE_TILESET.url);
+    this.load.image(ROOM_BUILDER.key, ROOM_BUILDER.url);
+    // Character sheets are loaded here too (added in Task 5).
+  }
+
   create(): void {
     registerPlaceholderTextures(this);
+    this.swapOfficeTextures(); // overwrite office placeholder keys with real art when present
 
     const desks = this.registry.get('desks') as DeskSlot[] ?? [];
     this.layout = buildWorldLayout(desks);
@@ -130,6 +149,35 @@ export class OfficeScene extends Phaser.Scene {
       }
     }
     this.add.rectangle(400, 30, 680, 4, 0x6a6a72).setOrigin(0.5);
+  }
+
+  /** Overwrite an existing texture key with a cropped region of a loaded source image.
+   *  Call-sites that reference `newKey` (e.g. this.add.image(x,y,'desk')) then get real art
+   *  with zero changes. Uses a canvas texture so the crop is a standalone key. */
+  private cropToTexture(srcKey: string, newKey: string, sx: number, sy: number, sw: number, sh: number): void {
+    const src = this.textures.get(srcKey).getSourceImage() as HTMLImageElement | HTMLCanvasElement;
+    const canvas = document.createElement('canvas');
+    canvas.width = sw;
+    canvas.height = sh;
+    const ctx = canvas.getContext('2d')!;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+    if (this.textures.exists(newKey)) this.textures.remove(newKey); // drop the placeholder
+    this.textures.addCanvas(newKey, canvas);
+  }
+
+  /** Swap office placeholder textures for real LimeZu tileset regions, where loaded. */
+  private swapOfficeTextures(): void {
+    for (const region of OFFICE_REGIONS) {
+      // Skip if the source sheet failed to load or isn't registered (open-core → placeholders).
+      if (this.failedLoads.has(region.from) || !this.textures.exists(region.from)) continue;
+      try {
+        this.cropToTexture(region.from, region.placeholderKey, region.sx, region.sy, region.sw, region.sh);
+      } catch (err) {
+        // Never hard-fail on a bad region — keep the placeholder and note it.
+        console.warn(`[antfarm] failed to swap ${region.placeholderKey}; keeping placeholder`, err);
+      }
+    }
   }
 
   private spawnFixedProps(): void {
