@@ -80,13 +80,36 @@ RUN npm install -g npm@11.17.0
 
 # Copy manifest and lockfile, then install production deps only
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# Copy the @curia/shared-types workspace package (source-only: package.json +
+# index.ts) so the workspace graph is internally consistent. The root package.json
+# declares `@curia/shared-types: "workspace:*"` as a prod dependency and
+# pnpm-workspace.yaml declares `packages: [apps/*, packages/*]`; the `pnpm add tsx`
+# below re-resolves the FULL workspace and aborts with ERR_PNPM_WORKSPACE_PKG_NOT_FOUND
+# if the member isn't on disk. (--frozen-lockfile tolerates a dangling link; `pnpm add`
+# does a strict re-resolution.) shared-types is imported type-only (erased at build), so
+# it isn't required at runtime, but shipping the member keeps the manifest honest.
+COPY --from=build /app/packages/shared-types ./packages/shared-types
 RUN pnpm install --frozen-lockfile --prod
 
 # tsx is needed at runtime: skill handlers are .ts files loaded via dynamic
 # import(), and they use ESM .js extension mapping (e.g., import from './foo.js'
 # resolving to foo.ts). Node's --experimental-strip-types doesn't handle this;
 # tsx does, and it's already used for dev (pnpm dev).
-RUN pnpm add tsx
+#
+# Three flags are load-bearing (verified against pnpm 11.7.0, the pinned pkg mgr).
+# Since packages/shared-types made this a real workspace, this dir is now a workspace
+# ROOT and a bare `pnpm add tsx` fails a chain of guards:
+#   -w: without it, a `pnpm add` at a workspace root is rejected with
+#     ERR_PNPM_ADDING_TO_ROOT. tsx is a genuine root-level runtime dep, so the root is
+#     the correct target (the shared-types member copied above lets it re-resolve).
+#   --prod: the frozen install above ran with --prod, so node_modules/.modules.yaml
+#     records a prod-only include set; a bare `pnpm add` also wants devDependencies,
+#     which pnpm 11 rejects with ERR_PNPM_INCLUDED_DEPS_CONFLICT. --prod keeps the add
+#     prod-only so the include sets match.
+#   --save-prod: tsx is declared as a *devDependency* in package.json, so --prod alone
+#     would leave it there and never install it — no ./node_modules/.bin/tsx, which the
+#     CMD below invokes. --save-prod promotes tsx into `dependencies` so it installs.
+RUN pnpm add -w --save-prod --prod tsx
 
 # Remove corepack's cached pnpm tarballs. Node 24's bundled corepack pre-caches
 # pnpm@11.0.8 (the version shipped with Node 24) during `corepack enable`, even
