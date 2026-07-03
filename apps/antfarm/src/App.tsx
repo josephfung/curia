@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SceneDirective } from '@curia/shared-types';
 import { apiFetch, checkSession } from './api.js';
-import { OfficeView } from './components/OfficeView.js';
+import { PhaserOffice } from './game/PhaserOffice.js';
+import { DetailOverlay, type OverlayDetail } from './components/DetailOverlay.js';
+import { CreditsFooter } from './components/CreditsFooter.js';
 import { TransportBar } from './components/TransportBar.js';
 import { BookmarkPanel } from './components/BookmarkPanel.js';
 import { useTimeline } from './hooks/useTimeline.js';
 import { useLiveStream } from './hooks/useLiveStream.js';
 import { useConductor } from './hooks/useConductor.js';
+import type { PlaybackMode } from './conductor/types.js';
 import {
   addBookmark,
   loadBookmarks,
@@ -31,13 +34,7 @@ function filterDirectives(
     if (kind && d.kind !== kind) return false;
     if (agentId && 'agentId' in d && d.agentId !== agentId) return false;
     if (conversationId) {
-      const conv =
-        ('conversationId' in d && d.conversationId === conversationId)
-        || false;
-      if (!conv && agentId === '' && kind === '') {
-        // conversation filter only applies to tube directives
-        if (d.kind === 'tube.in' || d.kind === 'tube.out') return false;
-      } else if (conversationId && (d.kind === 'tube.in' || d.kind === 'tube.out')) {
+      if (d.kind === 'tube.in' || d.kind === 'tube.out') {
         if ('conversationId' in d && d.conversationId !== conversationId) return false;
       }
     }
@@ -50,6 +47,8 @@ export function App() {
   const [registryAgents, setRegistryAgents] = useState<RegistryAgent[]>([]);
   const [bookmarks, setBookmarks] = useState<AntfarmBookmark[]>(() => loadBookmarks());
   const [liveMode, setLiveMode] = useState(false);
+  const [overlayDetail, setOverlayDetail] = useState<OverlayDetail | null>(null);
+  const savedModeRef = useRef<PlaybackMode>('paused');
 
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -82,7 +81,25 @@ export function App() {
     return layout;
   }, [registryAgents, filteredDirectives]);
 
-  const activeDirective = snapshot.schedule[snapshot.firedIndex]?.directive ?? null;
+  const openOverlay = useCallback((detail: OverlayDetail) => {
+    const mode = conductor.getMode();
+    if (mode === 'playing' || mode === 'live') {
+      savedModeRef.current = mode;
+      conductor.setMode('paused');
+      refresh();
+    }
+    setOverlayDetail(detail);
+  }, [conductor, refresh]);
+
+  const closeOverlay = useCallback(() => {
+    setOverlayDetail(null);
+    const restore = savedModeRef.current;
+    if (restore === 'playing' || restore === 'live') {
+      conductor.setMode(restore);
+      refresh();
+    }
+    savedModeRef.current = 'paused';
+  }, [conductor, refresh]);
 
   const loadWindow = useCallback(async (windowFrom: string, windowTo: string, conv?: string) => {
     if (liveMode && live.streamOpenTs !== null) {
@@ -204,11 +221,28 @@ export function App() {
       />
 
       <div className="main">
-        <OfficeView
-          desks={desks}
-          activeDirective={activeDirective}
-          firedCount={snapshot.firedIndex + 1}
-        />
+        <div className="stage-column">
+          <PhaserOffice
+            desks={desks}
+            schedule={snapshot.schedule}
+            firedIndex={snapshot.firedIndex}
+            onAgentClick={(agentId, directive) => {
+              openOverlay({ type: 'agent', agentId, directive });
+            }}
+            onDirectiveClick={(directive) => {
+              openOverlay({ type: 'directive', directive });
+            }}
+          />
+          <div className="office-meta">
+            <span>{snapshot.firedIndex + 1} beats played</span>
+            {snapshot.schedule[snapshot.firedIndex]?.directive && (
+              <span className="active-beat">
+                {snapshot.schedule[snapshot.firedIndex]!.directive.kind}
+              </span>
+            )}
+          </div>
+          <CreditsFooter />
+        </div>
         <BookmarkPanel
           bookmarks={bookmarks}
           onSave={handleSaveBookmark}
@@ -223,6 +257,8 @@ export function App() {
           onRemove={(index) => setBookmarks(removeBookmark(index))}
         />
       </div>
+
+      <DetailOverlay detail={overlayDetail} onClose={closeOverlay} />
     </div>
   );
 }
