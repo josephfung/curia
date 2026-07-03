@@ -410,6 +410,9 @@ export class EventRouter {
   }
 
   private broadcastAntfarmFromBusEvent(event: BusEvent): void {
+    if (this.antfarmClients.size === 0) {
+      return;
+    }
     const mapped = interpretEvent(busEventToAuditRow(event));
     if (mapped === null) {
       return;

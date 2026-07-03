@@ -86,4 +86,32 @@ describe('Conductor', () => {
     const ids = conductor.getSnapshot().directives.map((d) => d.id);
     expect(ids).toEqual(['hist', 'dup', 'live']);
   });
+
+  it('resets animationMs when loading an empty script', () => {
+    const conductor = new Conductor();
+    conductor.loadScript({ directives: [badge('a', 0)] });
+    conductor.scrubToAnimationMs(800);
+    conductor.loadScript({ directives: [] });
+    expect(conductor.getSnapshot().animationMs).toBe(0);
+    expect(conductor.getSnapshot().firedIndex).toBe(-1);
+  });
+
+  it('ignores non-finite velocity', () => {
+    const conductor = new Conductor();
+    conductor.setVelocity(2);
+    conductor.setVelocity(Number.NaN);
+    expect(conductor.getVelocity()).toBe(2);
+  });
+
+  it('fires appended directives in live mode', () => {
+    const conductor = new Conductor();
+    conductor.loadScript({ directives: [badge('a', 0)] });
+    conductor.setMode('live');
+    conductor.tick(0);
+    expect(conductor.getSnapshot().firedIndex).toBe(0);
+
+    conductor.appendDirectives([badge('b', 1000)]);
+    const fired = conductor.tick(100);
+    expect(fired.some((d) => d.id === 'b')).toBe(true);
+  });
 });

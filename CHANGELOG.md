@@ -24,6 +24,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Ant Farm** — code review follow-ups: fail-closed session check, conductor live/scrub fixes, incremental live merge, per-agent overlay context, timeline cursor paging, safe `busEventToAuditRow` payload guard, `schedule.fired` task_id normalization.
+
+### Fixed
+
 - **Calendar operates as the CEO** — binds the calendar client to `ceo_nylas_grant_id`, fixing RSVP `omittedAttendeesSpecified`; fails closed when unset. Closes #1217.
 - **`delegate` timeout storm** — timeouts now return structured, retry-capped failures instead of triggering duplicate re-delegations. Closes #1288.
 - **Delegation failure raw JSON** — non-retryable specialist failures no longer surface `_curia_protocol` JSON to the principal; the coordinator emits a human-readable message instead. Closes #1329.

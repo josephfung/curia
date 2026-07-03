@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AntFarmSseEnvelope, SceneDirective } from '@curia/shared-types';
+import { clientWarn } from '../client-log.js';
 
 export interface LiveStreamState {
   connected: boolean;
@@ -42,13 +43,15 @@ export function useLiveStream(enabled: boolean) {
     source.onmessage = (event: MessageEvent<string>) => {
       try {
         const envelope = JSON.parse(event.data) as AntFarmSseEnvelope;
+        if (envelope.type === 'heartbeat') return;
         if (envelope.type !== 'directive' || !envelope.directive) return;
         setState((prev) => ({
           ...prev,
           buffer: [...prev.buffer, envelope.directive!],
         }));
-      } catch {
-        // Ignore malformed frames (heartbeats use comment lines, not message events).
+      } catch (err) {
+        clientWarn('dropped malformed SSE frame', err);
+        setState((prev) => ({ ...prev, error: 'Malformed live-stream frame' }));
       }
     };
 

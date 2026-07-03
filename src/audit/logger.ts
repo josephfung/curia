@@ -79,7 +79,13 @@ export class AuditLogger {
       typeof payload.conversationId === 'string' ? payload.conversationId : null;
 
     // Populate task_id when present in payload (additive — no backfill of historical rows).
-    const taskId = typeof payload.taskId === 'string' ? payload.taskId : null;
+    // schedule.fired emits agentTaskId; normalize to the canonical taskId key.
+    const taskId =
+      typeof payload.taskId === 'string'
+        ? payload.taskId
+        : typeof payload.agentTaskId === 'string'
+          ? payload.agentTaskId
+          : null;
 
     // Sanitize before the DB write in a separate try/catch so a sanitization
     // failure is logged with its own distinct message — not conflated with a

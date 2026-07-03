@@ -55,6 +55,23 @@ function parseOptionalDate(value: string | undefined): Date | undefined {
   return parsed;
 }
 
+function parseAfterCursor(value: string | undefined): { timestamp: Date; id: string } | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as { timestamp?: string; id?: string };
+    if (typeof parsed.timestamp !== 'string' || typeof parsed.id !== 'string') {
+      return undefined;
+    }
+    const timestamp = new Date(parsed.timestamp);
+    if (Number.isNaN(timestamp.getTime())) {
+      return undefined;
+    }
+    return { timestamp, id: parsed.id };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function antfarmRoutes(
   app: FastifyInstance,
   options: AntfarmRouteOptions,
@@ -70,6 +87,7 @@ export async function antfarmRoutes(
       conversationId?: string;
       taskId?: string;
       limit?: string;
+      after?: string;
     };
 
     const from = parseOptionalDate(query.from);
@@ -86,6 +104,11 @@ export async function antfarmRoutes(
       ? Math.min(Math.max(parsedLimit, 1), MAX_TIMELINE_LIMIT)
       : DEFAULT_TIMELINE_LIMIT;
 
+    const after = parseAfterCursor(query.after);
+    if (query.after && !after) {
+      return reply.status(400).send({ error: 'Invalid after cursor' });
+    }
+
     try {
       const page = await auditLogRepo.findTimeline({
         from,
@@ -93,6 +116,7 @@ export async function antfarmRoutes(
         conversationId: query.conversationId,
         taskId: query.taskId,
         limit,
+        after,
       });
       const script = buildScript(page.rows.map(auditLogRowToEventRow));
       return reply.send({
