@@ -34,6 +34,7 @@ import { agentRoutes } from './routes/agents.js';
 import { jobRoutes } from './routes/jobs.js';
 import { antfarmRoutes } from './routes/antfarm.js';
 import { antfarmStaticRoutes } from './routes/antfarm-static.js';
+import { antfarmAssetsRoutes } from './routes/antfarm-assets.js';
 import { messageRoutes } from './routes/messages.js';
 import { consoleRoutes } from './routes/console.js';
 import { knowledgeGraphRoutes } from './routes/kg.js';
@@ -344,6 +345,13 @@ export class HttpAdapter implements Channel {
         logger,
       });
     }
+
+    // Licensed Ant Farm art — auth-gated so LimeZu sheets are never world-downloadable.
+    // Independent of auditLogRepo: art serving does not need the timeline data source.
+    await this.app.register(antfarmAssetsRoutes, {
+      webAppBootstrapSecret,
+      sessions,
+    });
 
     // Identity routes — only registered when the bootstrap secret is configured.
     // Uses the same auth pattern as KG routes (x-web-bootstrap-secret header).
