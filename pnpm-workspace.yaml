@@ -2,6 +2,7 @@
 # deps of each app are installed by the root pnpm install.
 packages:
   - 'apps/*'
+  - 'packages/*'
 
 # Explicitly declare pnpm v11 default: prevent transitive (indirect) dependencies
 # from being resolved via exotic sources (git repos, direct tarball URLs).
