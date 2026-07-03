@@ -255,6 +255,8 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
 
   it('bumps calendar agent version for scheduling-rules capability', async () => {
     const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
-    expect(config.version).toBe('0.6.0');
+    // Exact-version tripwire: bump this alongside `agents/calendar.yaml`'s version on any
+    // meaningful prompt/capability change. 0.6.1 = collapse to single CEO-calendar identity (#1217).
+    expect(config.version).toBe('0.6.1');
   });
 });
