@@ -30,18 +30,35 @@ export interface TimelineAuditQuery {
   conversationId?: string;
   taskId?: string;
   limit?: number;
+  /** Keyset cursor — fetch rows strictly after this (timestamp, id) pair. */
+  after?: { timestamp: Date; id: string };
 }
 
-export interface EventTypesAuditQuery {
-  from?: Date;
-  to?: Date;
-  conversationId?: string;
-  taskId?: string;
-  limit?: number;
+/** Same filter shape as {@link TimelineAuditQuery}. */
+export type EventTypesAuditQuery = TimelineAuditQuery;
+
+export interface TimelinePage {
+  rows: AuditLogRow[];
+  hasMore: boolean;
+  /** Set when {@link TimelinePage.hasMore} is true — pass as `after` for the next page. */
+  nextCursor?: { timestamp: Date; id: string };
 }
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
+
+function assertTimelineScope(query: TimelineAuditQuery): void {
+  if (!query.from && !query.to && !query.conversationId && !query.taskId) {
+    throw new Error(
+      'findTimeline requires at least one scope filter: from, to, conversationId, or taskId',
+    );
+  }
+}
+
+/** Match task id on the indexed column when populated, else payload (historical rows). */
+function taskIdCondition(paramIndex: number): string {
+  return `COALESCE(task_id, payload->>'taskId') = $${paramIndex}`;
+}
 
 export class AuditLogRepo {
   constructor(
@@ -92,9 +109,12 @@ export class AuditLogRepo {
 
   /**
    * Return audit rows in a time window, optionally filtered by conversation or task.
-   * Task filtering uses payload->>'taskId' because the task_id column is often NULL.
+   * Requires at least one scope filter. Returns a page with {@link TimelinePage.hasMore}
+   * so callers know when the cap truncated results; use {@link TimelineAuditQuery.after}
+   * for keyset pagination on `(timestamp, id)`.
    */
-  async findTimeline(query: TimelineAuditQuery): Promise<AuditLogRow[]> {
+  async findTimeline(query: TimelineAuditQuery): Promise<TimelinePage> {
+    assertTimelineScope(query);
     const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
     const params: unknown[] = [];
     const conditions: string[] = [];
@@ -113,28 +133,46 @@ export class AuditLogRepo {
     }
     if (query.taskId) {
       params.push(query.taskId);
-      conditions.push(`payload->>'taskId' = $${params.length}`);
+      conditions.push(taskIdCondition(params.length));
+    }
+    if (query.after) {
+      params.push(query.after.timestamp);
+      const tsParam = params.length;
+      params.push(query.after.id);
+      conditions.push(`(timestamp, id) > ($${tsParam}, $${params.length})`);
     }
 
-    params.push(limit);
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    // Fetch one extra row to detect truncation without a separate COUNT query.
+    params.push(limit + 1);
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
     const result = await this.pool.query(
       `SELECT id, timestamp, event_type, source_layer, source_id,
               conversation_id, parent_event_id, payload
        FROM audit_log
        ${whereClause}
-       ORDER BY timestamp ASC
+       ORDER BY timestamp ASC, id ASC
        LIMIT $${params.length}`,
       params,
     );
 
-    const rows = result.rows.map(mapRow);
+    const mapped = result.rows.map(mapRow);
+    const hasMore = mapped.length > limit;
+    const rows = hasMore ? mapped.slice(0, limit) : mapped;
+    const last = rows[rows.length - 1];
+
     this.logger.debug(
-      { count: rows.length, from: query.from, to: query.to },
+      { count: rows.length, hasMore, from: query.from, to: query.to },
       'audit-log-repo: findTimeline',
     );
-    return rows;
+
+    return {
+      rows,
+      hasMore,
+      nextCursor: hasMore && last !== undefined
+        ? { timestamp: last.timestamp, id: last.id }
+        : undefined,
+    };
   }
 
   /**
@@ -166,7 +204,7 @@ export class AuditLogRepo {
     }
     if (query.taskId) {
       params.push(query.taskId);
-      conditions.push(`payload->>'taskId' = $${params.length}`);
+      conditions.push(taskIdCondition(params.length));
     }
 
     params.push(limit);
@@ -176,7 +214,7 @@ export class AuditLogRepo {
               conversation_id, parent_event_id, payload
        FROM audit_log
        WHERE ${conditions.join(' AND ')}
-       ORDER BY timestamp ASC
+       ORDER BY timestamp ASC, id ASC
        LIMIT $${params.length}`,
       params,
     );
