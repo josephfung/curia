@@ -1976,6 +1976,9 @@ async function main(): Promise<void> {
       // Use role (same predicate as interpolateRuntimeContext above) so both
       // branches stay in sync if the coordinator YAML is ever reconfigured.
       autonomyService: agentConfig.role === 'coordinator' ? autonomyService : undefined,
+      // Top-level coordinator flag — humanizes delegation_failure responses so the
+      // _curia_protocol JSON signal never surfaces to the principal (#1329).
+      isCoordinator: agentConfig.role === 'coordinator',
       // All agents receive per-turn time block injection so the current date/time
       // and timezone are always accurate. Specialists need this too — scheduled
       // agents in particular make time-sensitive decisions (backoff gates, date
