@@ -1365,14 +1365,28 @@ export class AgentRuntime {
         let escalationContent: string;
         if (this.config.isCoordinator) {
           const esc = pendingDelegationEscalation;
+          // Guard against an empty agent name (external payload field); fallback avoids
+          // a confusing blank in the user-facing message ("from the  specialist").
+          const agentLabel = esc.agent || 'a specialist';
+          if (!esc.agent) {
+            logger.warn(
+              { agentId, conversationId },
+              'pendingDelegationEscalation has empty agent name — humanized message using fallback label',
+            );
+          }
           const parts: string[] = [];
           if (esc.reason === 'timeout') {
-            parts.push(`I wasn't able to get a response from the ${esc.agent} specialist in time.`);
+            parts.push(`I wasn't able to get a response from the ${agentLabel} in time.`);
             if (esc.possiblySucceeded) parts.push('The request may still be completing in the background.');
           } else if (esc.reason === 'blocked') {
-            parts.push(`The ${esc.agent} specialist was blocked and couldn't complete the task.`);
+            parts.push(`The ${agentLabel} was blocked and couldn't complete the task.`);
           } else {
-            parts.push(`The ${esc.agent} specialist wasn't able to complete the task.`);
+            // maxTurns, maxConsecutiveErrors, tool_error, api_error, or unknown reason.
+            logger.info(
+              { agentId, conversationId, targetAgent: esc.agent, reason: esc.reason },
+              'Humanizing coordinator delegation failure with generic message',
+            );
+            parts.push(`The ${agentLabel} wasn't able to complete the task.`);
           }
           if (esc.escalated) parts.push("I've logged a follow-up task to review the outcome.");
           escalationContent = parts.join(' ');
