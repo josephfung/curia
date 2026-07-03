@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Ant Farm AF-1** — `AuditLogRepo.findTimeline` / `findByEventTypes` return paginated `TimelinePage` (`hasMore`, keyset `after` cursor) with scoped-query guard; task filter uses `payload->>'taskId'` (index-aligned). Closes #1314.
+
 ### Fixed
 
 - **Calendar operates as the CEO** — binds the calendar client to `ceo_nylas_grant_id`, fixing RSVP `omittedAttendeesSpecified`; fails closed when unset. Closes #1217.
