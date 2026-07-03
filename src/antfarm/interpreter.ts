@@ -184,3 +184,34 @@ export function buildScript(rows: AuditEventRow[]): ActivityScript {
   }
   return { directives };
 }
+
+/** Convert a live bus event to the audit row shape the interpreter expects. */
+export function busEventToAuditRow(event: {
+  id: string;
+  timestamp: Date;
+  type: string;
+  sourceLayer: string;
+  parentEventId?: string | null;
+  payload: unknown;
+}): AuditEventRow {
+  const payload = event.payload as unknown as Record<string, unknown>;
+  const sourceId =
+    typeof payload.agentId === 'string'
+      ? payload.agentId
+      : typeof payload.channelId === 'string'
+        ? payload.channelId
+        : event.sourceLayer;
+  return {
+    id: event.id,
+    timestamp: event.timestamp,
+    eventType: event.type,
+    sourceLayer: event.sourceLayer,
+    sourceId,
+    conversationId: typeof payload.conversationId === 'string' ? payload.conversationId : null,
+    parentEventId: event.parentEventId ?? null,
+    payload:
+      typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? payload
+        : {},
+  };
+}

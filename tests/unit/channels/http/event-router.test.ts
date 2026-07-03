@@ -28,13 +28,22 @@ function createLogger(): Logger {
 // A fake bus that captures the EventRouter's subscribers so a test can emit
 // events directly into them without standing up the real EventBus.
 function createBus(): { bus: EventBus; emit: (event: BusEvent) => void } {
-  const handlers = new Map<string, (event: BusEvent) => void>();
+  const handlers = new Map<string, Array<(event: BusEvent) => void>>();
   const bus = {
     subscribe: (type: string, _layer: string, handler: (event: BusEvent) => void) => {
-      handlers.set(type, handler);
+      const list = handlers.get(type) ?? [];
+      list.push(handler);
+      handlers.set(type, list);
     },
   } as unknown as EventBus;
-  return { bus, emit: (event: BusEvent) => handlers.get(event.type)?.(event) };
+  return {
+    bus,
+    emit: (event: BusEvent) => {
+      for (const handler of handlers.get(event.type) ?? []) {
+        handler(event);
+      }
+    },
+  };
 }
 
 function makeRouter(): { router: EventRouter; emit: (event: BusEvent) => void } {
@@ -170,5 +179,60 @@ describe('EventRouter SSE — outbound.message html rendering', () => {
     expect(frame).toBeDefined();
     const payload = JSON.parse(frame!.slice('data: '.length).trim()) as { html: string | null };
     expect(payload.html).toBeNull();
+  });
+});
+
+describe('EventRouter Ant Farm SSE', () => {
+  it('delivers interpreted directives only to antfarm clients, not messages SSE clients', () => {
+    const { router, emit } = makeRouter();
+    const messageWrites: string[] = [];
+    const antfarmWrites: string[] = [];
+
+    router.addSseClient({
+      res: { write: (chunk: string) => { messageWrites.push(chunk); return true; } } as unknown as ServerResponse,
+    });
+    router.addAntfarmClient({
+      res: { write: (chunk: string) => { antfarmWrites.push(chunk); return true; } } as unknown as ServerResponse,
+    });
+
+    emit({
+      id: 'evt-task',
+      type: 'task.created',
+      sourceLayer: 'execution',
+      timestamp: new Date('2026-07-02T12:00:00.000Z'),
+      payload: { taskId: 't-live', title: 'Live' },
+    } as unknown as BusEvent);
+
+    expect(messageWrites.some((w) => w.includes('task.appear'))).toBe(false);
+    expect(antfarmWrites.some((w) => w.includes('task.appear'))).toBe(true);
+  });
+
+  it('drops a slow antfarm client when its pending buffer is full', () => {
+    const { router } = makeRouter();
+    let writeCount = 0;
+    const res = {
+      write: (_chunk: string, _cb?: () => void) => {
+        writeCount += 1;
+        return true;
+      },
+    };
+
+    router.addAntfarmClient({ res: res as unknown as ServerResponse });
+
+    const directives = Array.from({ length: 60 }, (_, i) => ({
+      id: `d-${i}`,
+      logicalTs: i,
+      causedBy: null,
+      kind: 'badge' as const,
+      badgeKind: 'human.decision' as const,
+      label: 'test',
+    }));
+
+    router.broadcastToAntfarm(directives);
+    expect(writeCount).toBeLessThanOrEqual(60);
+    const firstPassWrites = writeCount;
+
+    router.broadcastToAntfarm(directives);
+    expect(writeCount).toBe(firstPassWrites);
   });
 });

@@ -32,6 +32,7 @@ import { DEFAULT_HEALTH_CONFIG } from '../../config.js';
 import { healthRoutes } from './routes/health.js';
 import { agentRoutes } from './routes/agents.js';
 import { jobRoutes } from './routes/jobs.js';
+import { antfarmRoutes } from './routes/antfarm.js';
 import { messageRoutes } from './routes/messages.js';
 import { consoleRoutes } from './routes/console.js';
 import { knowledgeGraphRoutes } from './routes/kg.js';
@@ -51,6 +52,7 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import type { AutonomyService } from '../../autonomy/autonomy-service.js';
 import { type SessionStore } from './session-auth.js';
 import type { Channel } from '../channel.js';
+import type { AuditLogRepo } from '../../audit/audit-log-repo.js';
 
 /**
  * Minimal HealthService for boot paths where a full HealthService wasn't provided
@@ -128,6 +130,8 @@ export interface HttpAdapterConfig {
    * (timezone/email/name writes still succeed).
    */
   entityMemory?: import('../../memory/entity-memory.js').EntityMemory;
+  /** Backs GET /api/antfarm/timeline (replay window queries). */
+  auditLogRepo?: AuditLogRepo;
 }
 
 export class HttpAdapter implements Channel {
@@ -220,6 +224,7 @@ export class HttpAdapter implements Channel {
         routeUrl.startsWith('/api/identity') ||
         routeUrl.startsWith('/api/executive') ||
         routeUrl.startsWith('/api/jobs') ||
+        routeUrl.startsWith('/api/antfarm') ||
         routeUrl.startsWith('/api/autonomy') ||
         routeUrl.startsWith('/api/registry') ||
         routeUrl.startsWith('/api/vault') ||
@@ -325,6 +330,16 @@ export class HttpAdapter implements Channel {
         sessions,
         // Needed so console-created jobs carry principal lineage (#1127).
         contactService: this.config.contactService,
+        logger,
+      });
+    }
+
+    if (this.config.auditLogRepo) {
+      await this.app.register(antfarmRoutes, {
+        auditLogRepo: this.config.auditLogRepo,
+        eventRouter: this.eventRouter,
+        webAppBootstrapSecret,
+        sessions,
         logger,
       });
     }

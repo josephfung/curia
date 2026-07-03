@@ -13,6 +13,8 @@ import type { EventBus } from '../../bus/bus.js';
 import type { BusEvent } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
 import type { ServerResponse } from 'node:http';
+import type { SceneDirective } from '@curia/shared-types';
+import { busEventToAuditRow, interpretEvent } from '../../antfarm/interpreter.js';
 import { markdownToHtml } from '../../format/markdown-to-html.js';
 
 /**
@@ -113,6 +115,36 @@ export interface SseClient {
   conversationId?: string; // Optional filter
 }
 
+/** Event types forwarded to Ant Farm live stream (interpreter catalog superset). */
+export const ANT_FARM_EVENT_TYPES = [
+  'schedule.fired',
+  'agent.task',
+  'skill.invoke',
+  'skill.result',
+  'agent.discuss',
+  'inbound.message',
+  'outbound.message',
+  'outbound.delivered',
+  'task.created',
+  'task.completed',
+  'agent.error',
+  'human.decision',
+  'autonomy.skill_blocked',
+  'autonomy.send_blocked',
+] as const;
+
+/** Per-client pending SSE frames before a slow consumer is dropped. */
+export const ANT_FARM_MAX_CLIENT_BUFFER = 50;
+/** Max interpreted directives delivered to one client per second (coalesce guard). */
+export const ANT_FARM_MAX_DIRECTIVES_PER_SECOND = 60;
+
+export interface AntfarmClient {
+  res: ServerResponse;
+  pendingWrites: number;
+  directivesThisSecond: number;
+  secondWindowStart: number;
+}
+
 /**
  * EventRouter registers shared bus subscribers and dispatches to HTTP clients.
  * Call setupSubscriptions() once at startup, then use the add/remove methods
@@ -124,6 +156,8 @@ export class EventRouter {
   private pendingResponses = new Map<string, PendingResponse>();
   /** Active SSE connections */
   private sseClients = new Set<SseClient>();
+  /** Ant Farm live-stream clients — separate from messages SSE (no cross-talk). */
+  private antfarmClients = new Set<AntfarmClient>();
 
   constructor(logger: Logger) {
     this.logger = logger;
@@ -270,6 +304,12 @@ export class EventRouter {
       this.broadcastToSseClients(sseData);
     });
 
+    for (const eventType of ANT_FARM_EVENT_TYPES) {
+      bus.subscribe(eventType, 'system', (event: BusEvent) => {
+        if (event.type !== eventType) return;
+        this.broadcastAntfarmFromBusEvent(event);
+      });
+    }
 
     this.logger.info('HTTP event router subscriptions registered');
   }
@@ -351,5 +391,72 @@ export class EventRouter {
       this.sseClients.delete(client);
       this.logger.debug({ conversationId: client.conversationId }, 'SSE client disconnected');
     };
+  }
+
+  /** Register an Ant Farm SSE client. Returns a cleanup function. */
+  addAntfarmClient(client: Pick<AntfarmClient, 'res'>): () => void {
+    const entry: AntfarmClient = {
+      res: client.res,
+      pendingWrites: 0,
+      directivesThisSecond: 0,
+      secondWindowStart: Date.now(),
+    };
+    this.antfarmClients.add(entry);
+    this.logger.debug('Ant Farm SSE client connected');
+    return () => {
+      this.antfarmClients.delete(entry);
+      this.logger.debug('Ant Farm SSE client disconnected');
+    };
+  }
+
+  private broadcastAntfarmFromBusEvent(event: BusEvent): void {
+    const mapped = interpretEvent(busEventToAuditRow(event));
+    if (mapped === null) {
+      return;
+    }
+    const directives = Array.isArray(mapped) ? mapped : [mapped];
+    this.broadcastToAntfarm(directives);
+  }
+
+  /**
+   * Deliver interpreted directives to Ant Farm clients. Slow clients with a full
+   * pending-write buffer are dropped so dispatch never blocks on a single consumer.
+   */
+  broadcastToAntfarm(directives: SceneDirective[]): void {
+    if (directives.length === 0 || this.antfarmClients.size === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    for (const client of [...this.antfarmClients]) {
+      for (const directive of directives) {
+        if (client.pendingWrites >= ANT_FARM_MAX_CLIENT_BUFFER) {
+          this.antfarmClients.delete(client);
+          this.logger.warn('Dropped slow Ant Farm SSE client — pending buffer full');
+          break;
+        }
+
+        if (now - client.secondWindowStart >= 1000) {
+          client.secondWindowStart = now;
+          client.directivesThisSecond = 0;
+        }
+        if (client.directivesThisSecond >= ANT_FARM_MAX_DIRECTIVES_PER_SECOND) {
+          continue;
+        }
+
+        const envelope = JSON.stringify({ type: 'directive', directive });
+        try {
+          client.pendingWrites += 1;
+          client.res.write(`data: ${envelope}\n\n`, () => {
+            client.pendingWrites = Math.max(0, client.pendingWrites - 1);
+          });
+          client.directivesThisSecond += 1;
+        } catch (err) {
+          this.antfarmClients.delete(client);
+          this.logger.debug({ err }, 'Removed dead Ant Farm SSE client');
+          break;
+        }
+      }
+    }
   }
 }
