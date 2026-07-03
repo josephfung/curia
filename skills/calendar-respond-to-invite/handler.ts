@@ -70,7 +70,7 @@ export class CalendarRespondToInviteHandler implements SkillHandler {
 
     const warnings: string[] = [];
     if (input.account) {
-      warnings.push("account is informational; RSVP ran under the CEO's own Nylas grant (ceo_nylas_grant_id)");
+      warnings.push("account is informational; RSVP runs under the CEO's own Nylas grant (ceo_nylas_grant_id)");
     }
     if (input.comment) {
       warnings.push('comment was not sent because the installed Nylas sendRsvp SDK accepts RSVP status only');

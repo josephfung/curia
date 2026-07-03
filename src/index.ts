@@ -786,33 +786,40 @@ async function main(): Promise<void> {
   // result via their existing `if (!ctx.nylasCalendarClient)` guard. We deliberately
   // do NOT fall back to the email account grant — that is the delegate-identity bug
   // this change removes.
-  // Read the CEO grant. Absence -> undefined (calendar simply not set up). A DB or
-  // decrypt failure THROWS (SecretsService lets those propagate); catch it here so a
-  // single channel's secret read can't crash boot, but log it at `error` with the real
-  // cause — a wrong SECRET_ENCRYPTION_KEY breaks every secret, and must not be mistaken
-  // for "the grant isn't set". Keep the two causes distinct so the warn below only fires
-  // on genuine absence.
-  let principalCalendarGrant: string | undefined;
-  let grantReadFailed = false;
-  try {
-    principalCalendarGrant = await resolvePrincipalCalendarGrant(secretsService);
-  } catch (err) {
-    grantReadFailed = true;
-    logger.error(
-      { err },
-      'Failed to read ceo_nylas_grant_id — calendar disabled this boot. Check the database and SECRET_ENCRYPTION_KEY (a wrong key breaks all secrets, not just calendar).',
-    );
-  }
+  // Every disabled path logs exactly once — none is silent. Guard on the API key first so
+  // we don't read the grant (or log a spurious read error) when Nylas isn't configured at all.
   let nylasCalendarClient: NylasCalendarClient | undefined;
-  if (config.nylasApiKey && principalCalendarGrant) {
-    nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger);
-    logger.info('Nylas calendar client initialized (bound to the CEO/principal Nylas grant)');
-  } else if (config.nylasApiKey && !grantReadFailed) {
-    // Reached only when the grant is genuinely absent (the read-failure path logged its
-    // own error above and set grantReadFailed).
-    logger.warn(
-      'Calendar disabled — ceo_nylas_grant_id is not configured. Set the CEO Nylas grant to enable calendar (RSVP/holds/events run as the CEO).',
-    );
+  if (!config.nylasApiKey) {
+    // Calendar shares the Nylas API key with email; its absence is already reported as a
+    // warning by the email-channel bootstrap above. Logged at debug here to keep this path
+    // non-silent without duplicating that warning for the common "no Nylas at all" case.
+    logger.debug('Calendar disabled — no Nylas API key configured');
+  } else {
+    // Read the CEO grant. Absence -> undefined (calendar simply not set up). A DB or decrypt
+    // failure THROWS (SecretsService lets those propagate); catch it here so a single
+    // channel's secret read can't crash boot, but log at `error` with the real cause — a
+    // wrong SECRET_ENCRYPTION_KEY breaks every secret, and must not be mistaken for "the
+    // grant isn't set". Keep the causes distinct so the warn below only fires on genuine absence.
+    let principalCalendarGrant: string | undefined;
+    let grantReadFailed = false;
+    try {
+      principalCalendarGrant = await resolvePrincipalCalendarGrant(secretsService);
+    } catch (err) {
+      grantReadFailed = true;
+      logger.error(
+        { err },
+        'Failed to read ceo_nylas_grant_id — calendar disabled this boot. Check the database and SECRET_ENCRYPTION_KEY (a wrong key breaks all secrets, not just calendar).',
+      );
+    }
+    if (principalCalendarGrant) {
+      nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger);
+      logger.info('Nylas calendar client initialized (bound to the CEO/principal Nylas grant)');
+    } else if (!grantReadFailed) {
+      // Genuine absence (the read-failure path logged its own error above).
+      logger.warn(
+        'Calendar disabled — ceo_nylas_grant_id is not configured. Set the CEO Nylas grant to enable calendar (RSVP/holds/events run as the CEO).',
+      );
+    }
   }
 
   // Browser service — warm Playwright Chromium instance for the web-browser skill.
