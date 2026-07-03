@@ -195,7 +195,7 @@ describeIf('audit-log timeline query', () => {
     await seedRow({ timestamp: '2026-07-01T15:01:00.000Z', eventType: 'task.completed', conversationId: 'conv-types' });
     await seedRow({ timestamp: '2026-07-01T15:02:00.000Z', eventType: 'agent.task', conversationId: 'conv-types' });
 
-    const rows = await repo.findByEventTypes(
+    const page = await repo.findByEventTypes(
       ['task.created', 'task.completed'],
       {
         from: new Date('2026-07-01T14:59:00.000Z'),
@@ -204,7 +204,7 @@ describeIf('audit-log timeline query', () => {
       },
     );
 
-    expect(rows.length).toBeGreaterThanOrEqual(2);
-    expect(rows.every((r) => r.eventType === 'task.created' || r.eventType === 'task.completed')).toBe(true);
+    expect(page.rows.length).toBeGreaterThanOrEqual(2);
+    expect(page.rows.every((r) => r.eventType === 'task.created' || r.eventType === 'task.completed')).toBe(true);
   });
 });
