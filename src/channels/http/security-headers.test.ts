@@ -5,7 +5,11 @@ import { describe, it, expect, afterEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import { registerSecurityHeaders, CONSOLE_CONTENT_SECURITY_POLICY } from './security-headers.js';
+import {
+  registerSecurityHeaders,
+  CONSOLE_CONTENT_SECURITY_POLICY,
+  ANTFARM_CONTENT_SECURITY_POLICY,
+} from './security-headers.js';
 
 let app: FastifyInstance | undefined;
 
@@ -29,6 +33,19 @@ async function build(): Promise<FastifyInstance> {
   instance.get('/ok', async () => ({ ok: true }));
   instance.get('/html', async (_req, reply) => {
     return reply.type('text/html; charset=utf-8').send('<!doctype html><html><body>ok</body></html>');
+  });
+  // Ant Farm SPA routes (served as HTML) — deep links resolve to the same index.html.
+  instance.get('/antfarm/', async (_req, reply) => {
+    return reply.type('text/html; charset=utf-8').send('<!doctype html><html><body>antfarm</body></html>');
+  });
+  instance.get('/antfarm/deep/link', async (_req, reply) => {
+    return reply.type('text/html; charset=utf-8').send('<!doctype html><html><body>antfarm</body></html>');
+  });
+  // Bare /antfarm (no trailing slash) is NOT served by the antfarm bundle in prod — it
+  // falls through to the console wildcard and returns console HTML. Model that here so the
+  // test proves it keeps the strict console CSP, not the relaxed antfarm one.
+  instance.get('/antfarm', async (_req, reply) => {
+    return reply.type('text/html; charset=utf-8').send('<!doctype html><html><body>console</body></html>');
   });
   // A hook that 401s before the handler — proves the header lands on short-circuited
   // responses (the case that matters for the API's auth gate).
@@ -130,5 +147,50 @@ describe('registerSecurityHeaders', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain("script-src 'self'");
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('cdn.tailwindcss.com');
     expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
+  });
+
+  it('does not allow data: images in the strict console CSP', async () => {
+    // Regression guard: the console must not inherit the Ant Farm relaxation.
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).toContain("img-src 'self'");
+    expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('data:');
+  });
+
+  it('serves the Ant Farm CSP (img-src data:) on /antfarm/ HTML responses', async () => {
+    app = await build();
+    const res = await app.inject({ method: 'GET', url: '/antfarm/' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-security-policy']).toBe(ANTFARM_CONTENT_SECURITY_POLICY);
+    expect(res.headers['content-security-policy']).toContain("img-src 'self' data:");
+    expect(res.headers['x-frame-options']).toBe('DENY');
+  });
+
+  it('serves the Ant Farm CSP on deep-linked /antfarm/* HTML (SPA fallback)', async () => {
+    app = await build();
+    const res = await app.inject({ method: 'GET', url: '/antfarm/deep/link?t=1' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-security-policy']).toBe(ANTFARM_CONTENT_SECURITY_POLICY);
+  });
+
+  it('keeps the strict console CSP on non-Ant-Farm HTML', async () => {
+    app = await build();
+    const res = await app.inject({ method: 'GET', url: '/html' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-security-policy']).toBe(CONSOLE_CONTENT_SECURITY_POLICY);
+  });
+
+  it('keeps the strict console CSP on bare /antfarm (served by the console wildcard)', async () => {
+    // Regression guard: bare /antfarm (no trailing slash) resolves to console HTML in prod,
+    // so it must NOT receive the relaxed img-src data: policy.
+    app = await build();
+    const res = await app.inject({ method: 'GET', url: '/antfarm' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-security-policy']).toBe(CONSOLE_CONTENT_SECURITY_POLICY);
+    expect(res.headers['content-security-policy']).not.toContain('data:');
+  });
+
+  it('keeps script-src strict in the Ant Farm CSP (only images are relaxed)', async () => {
+    expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("script-src 'self'");
+    expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
+    expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("img-src 'self' data:");
   });
 });
