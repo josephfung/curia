@@ -9,6 +9,15 @@ interface TransportBarProps {
   onVelocityChange: (v: number) => void;
   onScrub: (pct: number) => void;
   scrubPct: number;
+  // Time-window controls — merged into the transport bar so the date pickers,
+  // scrubber, and filters all share a single horizontal row.
+  from: string;
+  to: string;
+  loading: boolean;
+  error: string | null;
+  onFrom: (v: string) => void;
+  onTo: (v: string) => void;
+  onLoadWindow: () => void;
   filterConversation: string;
   filterAgent: string;
   filterKind: string;
@@ -26,6 +35,13 @@ export function TransportBar({
   onVelocityChange,
   onScrub,
   scrubPct,
+  from,
+  to,
+  loading,
+  error,
+  onFrom,
+  onTo,
+  onLoadWindow,
   filterConversation,
   filterAgent,
   filterKind,
@@ -35,6 +51,20 @@ export function TransportBar({
 }: TransportBarProps) {
   return (
     <div className="transport">
+      <div className="window-controls">
+        <label>
+          From
+          <input type="datetime-local" value={from} onChange={(e) => onFrom(e.target.value)} />
+        </label>
+        <label>
+          To
+          <input type="datetime-local" value={to} onChange={(e) => onTo(e.target.value)} />
+        </label>
+        <button type="button" disabled={loading} onClick={onLoadWindow}>
+          {loading ? 'Loading…' : 'Load window'}
+        </button>
+        {error && <span className="error">{error}</span>}
+      </div>
       <div className="transport-controls">
         <button type="button" onClick={onPlay} disabled={mode === 'playing'}>Play</button>
         <button type="button" onClick={onPause} disabled={mode === 'paused'}>Pause</button>
