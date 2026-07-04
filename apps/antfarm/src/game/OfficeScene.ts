@@ -72,9 +72,13 @@ export class OfficeScene extends Phaser.Scene {
   // Keys of asset loads that errored (e.g. open-core build with no licensed art).
   // Anything in here keeps its procedural placeholder — never a hard failure.
   private failedLoads = new Set<string>();
-  // True once the singles-based office art (desks/chairs/computers/monitors) is composed.
-  // When false (open-core / clean dev), spawnDesks falls back to procedural placeholder desks.
-  private officeArtReady = false;
+  // Single all-or-nothing gate: true only when EVERY licensed asset the scene needs (office
+  // singles, floor/board source sheets, and all required character sheets) loaded. Drives the
+  // office art, the desk stations, AND the character-sprite choice + seating together, so a
+  // partial/mispackaged licensed drop degrades to the FULL procedural experience rather than a
+  // broken hybrid (real characters on placeholder desks, mixed real/placeholder agents, etc.).
+  // When false (open-core / clean dev / incomplete drop), everything falls back to placeholders.
+  private realArtReady = false;
 
   constructor() {
     super({ key: 'OfficeScene' });
@@ -112,10 +116,16 @@ export class OfficeScene extends Phaser.Scene {
 
   create(): void {
     registerPlaceholderTextures(this);
-    this.swapOfficeTextures(); // overwrite office placeholder keys (floor, board) with real art
-    this.buildOfficeArt();     // compose the singles-based desks/chairs/computers when present
 
     const desks = this.registry.get('desks') as DeskSlot[] ?? [];
+    // All-or-nothing: only render real art when EVERY licensed asset loaded. Compose the desk
+    // textures first; only if that succeeds do we swap the floor/board too, so the room is never
+    // half-reskinned. Any missing asset (or a canvas failure) leaves the full placeholder scene.
+    if (this.licensedAssetsPresent(desks) && this.buildOfficeArt()) {
+      this.swapOfficeTextures();
+      this.realArtReady = true;
+    }
+
     this.layout = buildWorldLayout(desks);
 
     this.drawRoom();
@@ -231,17 +241,25 @@ export class OfficeScene extends Phaser.Scene {
     this.textures.addCanvas(key, canvas);
   }
 
-  /** Compose the singles-based office art (desks, chairs, computer, monitors). Sets
-   *  officeArtReady=true only when every needed single loaded; otherwise the scene keeps its
-   *  procedural placeholder desks (open-core / clean dev fallback — never a hard failure). */
-  private buildOfficeArt(): void {
-    const missing = OFFICE_SINGLES.some(
-      (n) => this.failedLoads.has(officeSingleKey(n)) || !this.textures.exists(officeSingleKey(n)),
-    );
-    if (missing) {
-      this.officeArtReady = false;
-      return;
-    }
+  private loadedOk(key: string): boolean {
+    return this.textures.exists(key) && !this.failedLoads.has(key);
+  }
+
+  /** True only when every licensed asset the scene needs is present: the office singles, the
+   *  floor/board source sheets, AND every character sheet the current desks require. This is
+   *  the single gate for all-or-nothing real-art rendering. */
+  private licensedAssetsPresent(desks: DeskSlot[]): boolean {
+    const singlesOk = OFFICE_SINGLES.every((n) => this.loadedOk(officeSingleKey(n)));
+    const regionsOk = this.loadedOk(OFFICE_TILESET.key) && this.loadedOk(ROOM_BUILDER.key);
+    const sheetIndices = new Set(desks.map((d) => characterSheetIndexForAgent(d.agentId)));
+    const charactersOk = [...sheetIndices].every((idx) => this.loadedOk(characterSheetKey(idx)));
+    return singlesOk && regionsOk && charactersOk;
+  }
+
+  /** Compose the singles-based office art (desks, chairs, computer, monitors). Assumes the
+   *  singles are present (callers gate on licensedAssetsPresent). Returns false on an
+   *  unexpected canvas failure so the caller falls back to the full placeholder scene. */
+  private buildOfficeArt(): boolean {
     try {
       for (const [color, group] of Object.entries(DESK_COLOR_GROUPS)) {
         this.composeDeskTexture(this.deskTextureKey(color), group);
@@ -256,11 +274,11 @@ export class OfficeScene extends Phaser.Scene {
       this.cropSingle('deskart-mon-125', 125, DESK_TILE_W, 32, 0);
       this.cropSingle('deskart-mon-126', 126, DESK_TILE_W, 42, 0);
       this.cropSingle('deskart-mon-127', 127, DESK_TILE_W, 52, 0);
-      this.officeArtReady = true;
+      return true;
     } catch (err) {
-      // Never hard-fail — fall back to placeholder desks.
-      console.warn('[antfarm] failed to compose office art; using placeholder desks', err);
-      this.officeArtReady = false;
+      // Never hard-fail — fall back to placeholder desks (and placeholder characters).
+      console.warn('[antfarm] failed to compose office art; using placeholders', err);
+      return false;
     }
   }
 
@@ -314,7 +332,7 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private spawnDesks(): void {
-    if (this.officeArtReady) {
+    if (this.realArtReady) {
       this.spawnStations();
       return;
     }
@@ -394,11 +412,13 @@ export class OfficeScene extends Phaser.Scene {
     const pos = deskPositionForAgent(this.layout, agentId);
     const sheetIdx = characterSheetIndexForAgent(agentId);
     const sheetKey = characterSheetKey(sheetIdx);
-    const hasReal = this.textures.exists(sheetKey) && !this.failedLoads.has(sheetKey);
+    // Tied to the single all-or-nothing gate: realArtReady already guarantees every character
+    // sheet loaded, so agents are never a mix of real sprites and placeholder blobs.
+    const hasReal = this.realArtReady;
 
     // With real office art the agent is seated behind its desk (desk draws in front to occlude
     // the legs); the higher seat + agent depth produce the "at the desk" look.
-    const seatedY = this.officeArtReady ? pos.y - 35 : pos.y - 10;
+    const seatedY = this.realArtReady ? pos.y - 35 : pos.y - 10;
     const container = this.add.container(pos.x, seatedY);
     container.setDepth(DEPTH.agent);
     let body: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
