@@ -17,6 +17,7 @@
 import type { ContactTier } from '../contacts/types.js';
 import { meetsMinimumTier } from '../contacts/types.js';
 import type { Logger } from '../logger.js';
+import { normalizeFragmentText } from './prompt-exfiltration-markers.js';
 import type { OutboundJudge, JudgeInput } from './outbound-judge.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 
@@ -252,8 +253,11 @@ export class OutboundContentFilter {
   /**
    * Rule: system-prompt-fragment
    *
-   * Checks if any configured marker phrase appears in the content.
-   * Case-insensitive — the agent might reproduce markers in any casing.
+   * Checks if any configured marker phrase appears in the content. Matching is
+   * whitespace- and markdown-insensitive (see normalizeFragmentText): a leaking
+   * agent reproduces the words of its prompt but re-wraps lines and drops markdown
+   * decoration, so raw verbatim matching against the hard-wrapped source would
+   * miss real leaks.
    *
    * Principal bypass: the principal configured the system prompt and can read it
    * at any time. Blocking principal-bound messages for identity phrasing is worse
@@ -265,10 +269,13 @@ export class OutboundContentFilter {
     principalIsSoleRecipient: boolean,
   ): FilterFinding[] {
     const findings: FilterFinding[] = [];
-    const lower = content.toLowerCase();
+    const normalizedContent = normalizeFragmentText(content);
 
     for (const marker of this.config.systemPromptMarkers) {
-      if (lower.includes(marker.toLowerCase())) {
+      const normalizedMarker = normalizeFragmentText(marker);
+      // A marker that normalizes to empty would match everything — skip it defensively.
+      if (!normalizedMarker) continue;
+      if (normalizedContent.includes(normalizedMarker)) {
         findings.push({
           rule: 'system-prompt-fragment',
           detail: `Content contains system prompt marker: "${marker}"`,

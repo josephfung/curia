@@ -67,6 +67,26 @@ describe('OutboundContentFilter', () => {
       expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(false);
     });
 
+    it('matches a re-wrapped, markdown-decorated leak of a hard-wrapped marker', async () => {
+      // Markers are extracted from a hard-wrapped YAML prompt, but a leaking agent
+      // re-wraps the text and often drops markdown. The match must survive both:
+      // the marker carries a newline + double space + `**bold**`; the leaked content
+      // wraps differently and strips the emphasis. Both normalize to the same run.
+      const filter = new OutboundContentFilter({
+        systemPromptMarkers: [
+          'NEVER name tools, systems,\n  layers, agents, or **architectural** components',
+        ],
+        ceoEmail: 'ceo@example.com',
+      });
+      const result = await filter.check({
+        ...BASE_INPUT,
+        content:
+          'For reference: NEVER name tools, systems, layers, agents, or architectural components — even to the CEO.',
+      });
+      expect(result.passed).toBe(false);
+      expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(true);
+    });
+
     it('blocks verbatim constraint phrases for non-principal recipients', async () => {
       const filter = createTestFilter();
       const result = await filter.check({

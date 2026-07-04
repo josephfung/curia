@@ -1072,7 +1072,16 @@ async function main(): Promise<void> {
 
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
-    const systemPromptMarkers = extractPromptExfiltrationMarkers(officeIdentity);
+    // Extract exfiltration markers from BOTH the office identity (name, constraints,
+    // preferences — injected into the prompt at runtime) AND the coordinator's raw
+    // system prompt template (the provenance/never-name-internals/transfer-ownership
+    // instructions — the highest-value exfiltration target). Deriving from the live
+    // prompt means the markers track any operator customization instead of drifting
+    // from a hardcoded guess.
+    const systemPromptMarkers = extractPromptExfiltrationMarkers(
+      officeIdentity,
+      coordinatorConfig.system_prompt,
+    );
     // The principal's email — used to allow their address in outbound content without
     // triggering the contact-data-leak rule. Resolved from the principal contact (#1049),
     // not from config. Must NOT be Curia's own Nylas address (nylasSelfEmail): using
@@ -1082,8 +1091,14 @@ async function main(): Promise<void> {
     if (!ceoEmail) {
       logger.warn('Outbound content filter initialized without principal email (no verified principal email on file) — contact-data-leak rule may produce false positives');
     }
+    // Canary: with markers now derived from the identity AND the coordinator prompt,
+    // an empty list means extraction produced nothing — either the identity has no
+    // name/constraints and the prompt is empty, or extraction broke. Either way the
+    // system-prompt-fragment rule is silently disabled, so warn loudly. (The static
+    // fallback markers that previously kept this array non-empty — masking this exact
+    // condition — were removed because they matched no real prompt text.)
     if (systemPromptMarkers.length === 0) {
-      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that office identity has a name configured.');
+      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that the office identity has a name configured and the coordinator system prompt is non-empty.');
     }
     // Stage 2 LLM judge (issue #547). Constructed only when enabled. Routes through a
     // model→provider router so any registered model works. The judge model is validated
