@@ -16,6 +16,7 @@
 
 import type { ContactTier } from '../contacts/types.js';
 import { meetsMinimumTier } from '../contacts/types.js';
+import type { Logger } from '../logger.js';
 import type { OutboundJudge, JudgeInput } from './outbound-judge.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 
@@ -79,6 +80,8 @@ export interface OutboundContentFilterConfig {
    * When absent, Stage 2.5 is a no-op pass.
    */
   escalationJudge?: EscalationJudge;
+  /** Optional logger for principal-bypass audit trails on Stage 1 rules. */
+  logger?: Logger;
 }
 
 // Bus event type names that should never appear in outbound messages.
@@ -165,11 +168,13 @@ export class OutboundContentFilter {
   private config: OutboundContentFilterConfig;
   private judge?: OutboundJudge;
   private escalationJudge?: EscalationJudge;
+  private logger?: Logger;
 
   constructor(config: OutboundContentFilterConfig) {
     this.config = config;
     this.judge = config.judge;
     this.escalationJudge = config.escalationJudge;
+    this.logger = config.logger;
   }
 
   /**
@@ -259,8 +264,6 @@ export class OutboundContentFilter {
     content: string,
     principalIsSoleRecipient: boolean,
   ): FilterFinding[] {
-    if (principalIsSoleRecipient) return [];
-
     const findings: FilterFinding[] = [];
     const lower = content.toLowerCase();
 
@@ -273,7 +276,7 @@ export class OutboundContentFilter {
       }
     }
 
-    return findings;
+    return this.applyPrincipalBypass('system-prompt-fragment', findings, principalIsSoleRecipient);
   }
 
   /**
@@ -296,8 +299,6 @@ export class OutboundContentFilter {
     content: string,
     principalIsSoleRecipient: boolean,
   ): FilterFinding[] {
-    if (principalIsSoleRecipient) return [];
-
     const findings: FilterFinding[] = [];
     // Lowercase once for the bus event type sub-check; the BUS_EVENT_TYPE_NAMES
     // are already lowercase so a single toLower on content is sufficient.
@@ -332,7 +333,27 @@ export class OutboundContentFilter {
       }
     }
 
-    return findings;
+    return this.applyPrincipalBypass('internal-structure', findings, principalIsSoleRecipient);
+  }
+
+  /**
+   * Principal sole recipients bypass Stage 1 identity/structure blocks. When
+   * findings would have fired, emit a debug log so incident forensics can see
+   * the rule was intentionally skipped rather than clean.
+   */
+  private applyPrincipalBypass(
+    rule: string,
+    findings: FilterFinding[],
+    principalIsSoleRecipient: boolean,
+  ): FilterFinding[] {
+    if (!principalIsSoleRecipient) return findings;
+    if (findings.length > 0) {
+      this.logger?.debug(
+        { rule, suppressedFindings: findings.length },
+        'Stage 1 rule bypassed for principal sole recipient',
+      );
+    }
+    return [];
   }
 
   /**

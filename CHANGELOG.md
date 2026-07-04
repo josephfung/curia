@@ -39,7 +39,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **Outbound filter** — Stage 1 `system-prompt-fragment` detection now uses constraints, behavioral preferences, and instruction-prefix patterns (not email signatures); principal sole recipients bypass identity/structure blocks. Closes #1334.
+- **Outbound filter** — Stage 1 fixes a signature false-positive and adds a principal-recipient bypass for identity/structure rules. Closes #1334.
 
 - **Console CSP (#130)** — strict `Content-Security-Policy` and `X-Frame-Options: DENY` on HTML responses; scripts locked to same-origin bundles (legacy KG Tailwind CDN removed with the React console).
 - **Coordinator provenance-aware presentation hardening (#856)** — presentation directives now follow only the principal's instructions, ignoring third-party content.
