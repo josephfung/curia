@@ -15,6 +15,8 @@ describe('Ant Farm licensed-asset routes', () => {
     await mkdir(ASSETS_DIR, { recursive: true });
     // 1x1 PNG bytes are fine — we only assert content-type + status, not decode.
     await writeFile(join(ASSETS_DIR, 'office.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    // A disallowed extension present on disk — the strict content-type allowlist must still refuse it.
+    await writeFile(join(ASSETS_DIR, 'evil.html'), '<script>alert(1)</script>');
     process.chdir(FIXTURE_ROOT);
     app = Fastify();
     await app.register(antfarmAssetsRoutes, { webAppBootstrapSecret: 'secret', sessions: new Map() });
@@ -40,6 +42,18 @@ describe('Ant Farm licensed-asset routes', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('image/png');
+    // Defense-in-depth against MIME sniffing (Semgrep direct-response-write / XSS).
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('refuses a disallowed extension even when the file exists (strict allowlist)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/antfarm/assets/limezu/evil.html',
+      headers: { 'x-web-bootstrap-secret': 'secret' },
+    });
+    // Must NOT be served as text/html — the allowlist 404s anything but png/json.
+    expect(res.statusCode).toBe(404);
   });
 
   it('returns 404 for a missing asset (open-core has no art)', async () => {
