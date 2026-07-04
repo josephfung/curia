@@ -3,7 +3,11 @@
 // RecoveryNotifier and SuspensionNotifier bypass the LLM pipeline; this module supplies
 // human-readable job objective, recurrence, and console deep-link fields from scheduled_jobs.
 
-import type { JobRow } from './scheduler-service.js';
+import type { Logger } from '../logger.js';
+import { classifyError } from '../errors/classify.js';
+import type { JobRow, SchedulerService } from './scheduler-service.js';
+
+const MAX_OBJECTIVE_LENGTH = 200;
 
 /** Format an ISO timestamp as a UTC wall-clock string for notification bodies. */
 export function formatUtcTimestamp(iso: string): string {
@@ -16,21 +20,27 @@ export function formatUtcTimestamp(iso: string): string {
   return `${y}-${mo}-${day} ${h}:${min} UTC`;
 }
 
+function truncateObjective(text: string): string {
+  return text.length > MAX_OBJECTIVE_LENGTH
+    ? `${text.slice(0, MAX_OBJECTIVE_LENGTH - 1)}…`
+    : text;
+}
+
 /**
  * Derive a short human-readable objective for a scheduled job.
  * Prefers last_run_summary; otherwise intent_anchor / task title / task_payload fields.
  */
 export function deriveJobObjective(job: JobRow): string {
   const summary = job.lastRunSummary?.trim();
-  if (summary) return summary;
+  if (summary) return truncateObjective(summary);
 
   const anchor = job.intentAnchor?.trim();
-  if (anchor) return anchor;
+  if (anchor) return truncateObjective(anchor);
 
   const title = job.taskTitle?.trim();
-  if (title) return title;
+  if (title) return truncateObjective(title);
 
-  return deriveObjectiveFromPayload(job.taskPayload);
+  return truncateObjective(deriveObjectiveFromPayload(job.taskPayload));
 }
 
 /** Parse task_payload defensively for a human-readable intent string. */
@@ -84,7 +94,7 @@ export function buildJobConsoleUrl(
   httpPort: number,
   jobId: string,
 ): string {
-  const origin = (appOrigin ?? `http://localhost:${httpPort}`).replace(/\/+$/, '');
+  const origin = (appOrigin?.trim() ? appOrigin : `http://localhost:${httpPort}`).replace(/\/+$/, '');
   return `${origin}/jobs/${jobId}`;
 }
 
@@ -105,4 +115,30 @@ export function buildJobNotificationContext(
     recurrence: formatJobRecurrence(job),
     consoleUrl: buildJobConsoleUrl(appOrigin, httpPort, job.id),
   };
+}
+
+/**
+ * Load job context for CEO notification emails. Fail-open: a lookup error must not
+ * block the underlying recovery/suspension notification from reaching the CEO.
+ */
+export async function loadJobNotificationContext(
+  schedulerService: Pick<SchedulerService, 'getJob'>,
+  appOrigin: string | undefined,
+  httpPort: number,
+  jobId: string,
+  logger: Logger,
+  source: string,
+): Promise<JobNotificationContext> {
+  const consoleUrl = buildJobConsoleUrl(appOrigin, httpPort, jobId);
+  try {
+    const job = await schedulerService.getJob(jobId);
+    if (!job) {
+      return { objective: '(job not found)', recurrence: '(unknown)', consoleUrl };
+    }
+    return buildJobNotificationContext(job, appOrigin, httpPort);
+  } catch (err: unknown) {
+    const agentErr = classifyError(err, source);
+    logger.warn({ err: agentErr, jobId }, `${source}: failed to load job context for notification`);
+    return { objective: '(unavailable)', recurrence: '(unknown)', consoleUrl };
+  }
 }

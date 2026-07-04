@@ -16,8 +16,7 @@ import type { ScheduleSuspendedEvent, BusEvent } from '../bus/events.js';
 import { classifyError } from '../errors/classify.js';
 import type { SchedulerService } from './scheduler-service.js';
 import {
-  buildJobNotificationContext,
-  buildJobConsoleUrl,
+  loadJobNotificationContext,
 } from './job-notification-context.js';
 
 export interface SuspensionNotifierConfig {
@@ -57,7 +56,14 @@ export class SuspensionNotifier {
   private async handle(event: ScheduleSuspendedEvent): Promise<void> {
     const { jobId, agentId, lastError, consecutiveFailures } = event.payload;
 
-    const jobContext = await this.loadJobContext(jobId);
+    const jobContext = await loadJobNotificationContext(
+      this.config.schedulerService,
+      this.config.appOrigin,
+      this.config.httpPort,
+      jobId,
+      this.log,
+      'suspension-notifier',
+    );
 
     const subject = `Scheduled job suspended: ${agentId}`;
     const body = [
@@ -89,34 +95,6 @@ export class SuspensionNotifier {
         { jobId, agentId, consecutiveFailures, lastError },
         'SuspensionNotifier: failed to publish notification — suspension already recorded in audit log',
       );
-    }
-  }
-
-  /** Lightweight DB lookup for notification context; falls back gracefully on missing rows. */
-  private async loadJobContext(jobId: string): Promise<{
-    objective: string;
-    recurrence: string;
-    consoleUrl: string;
-  }> {
-    const consoleUrl = buildJobConsoleUrl(this.config.appOrigin, this.config.httpPort, jobId);
-    try {
-      const job = await this.config.schedulerService.getJob(jobId);
-      if (!job) {
-        return {
-          objective: '(job not found)',
-          recurrence: '(unknown)',
-          consoleUrl,
-        };
-      }
-      return buildJobNotificationContext(job, this.config.appOrigin, this.config.httpPort);
-    } catch (err: unknown) {
-      const agentErr = classifyError(err, 'suspension-notifier');
-      this.log.warn({ err: agentErr, jobId }, 'SuspensionNotifier: failed to load job context for notification');
-      return {
-        objective: '(unavailable)',
-        recurrence: '(unknown)',
-        consoleUrl,
-      };
     }
   }
 }

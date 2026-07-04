@@ -87,6 +87,14 @@ describe('deriveJobObjective', () => {
     const job = makeJob({ taskPayload: { task: 'Morning brief' } });
     expect(deriveJobObjective(job)).toBe('Morning brief');
   });
+
+  it('truncates long objectives', () => {
+    const longSummary = 'x'.repeat(250);
+    const job = makeJob({ lastRunSummary: longSummary });
+    const objective = deriveJobObjective(job);
+    expect(objective.length).toBe(200);
+    expect(objective.endsWith('…')).toBe(true);
+  });
 });
 
 describe('formatJobRecurrence', () => {
@@ -116,6 +124,11 @@ describe('buildJobConsoleUrl', () => {
 
   it('falls back to localhost when appOrigin is unset', () => {
     expect(buildJobConsoleUrl(undefined, 4521, 'job-1')).toBe('http://localhost:4521/jobs/job-1');
+  });
+
+  it('falls back to localhost when appOrigin is blank', () => {
+    expect(buildJobConsoleUrl('', 4521, 'job-1')).toBe('http://localhost:4521/jobs/job-1');
+    expect(buildJobConsoleUrl('   ', 4521, 'job-1')).toBe('http://localhost:4521/jobs/job-1');
   });
 });
 

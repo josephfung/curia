@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RecoveryNotifier } from '../../../src/scheduler/recovery-notifier.js';
 import type { ScheduleRecoveredEvent } from '../../../src/bus/events.js';
-import type { JobRow } from '../../../src/scheduler/scheduler-service.js';
+import { makeJob, mockSchedulerService } from './notifier-fixtures.js';
 
 // -- Mock helpers --
 
@@ -25,43 +25,6 @@ function mockLogger() {
 function mockOutboundGateway() {
   return {
     sendNotification: vi.fn(),
-  };
-}
-
-function mockSchedulerService(job: JobRow | null = null) {
-  return {
-    getJob: vi.fn().mockResolvedValue(job),
-  };
-}
-
-function makeJob(overrides: Partial<JobRow> = {}): JobRow {
-  return {
-    id: 'job-abc123',
-    agentId: 'coordinator',
-    cronExpr: '0 8 * * *',
-    runAt: null,
-    taskPayload: { task: 'Send daily digest' },
-    status: 'pending',
-    lastRunAt: null,
-    nextRunAt: null,
-    lastError: null,
-    consecutiveFailures: 0,
-    createdBy: 'system',
-    createdAt: '2026-06-01T00:00:00.000Z',
-    timezone: 'UTC',
-    agentTaskId: null,
-    intentAnchor: null,
-    progress: null,
-    taskErrorBudget: null,
-    taskTags: null,
-    taskTitle: null,
-    runStartedAt: null,
-    expectedDurationSeconds: null,
-    lastRunOutcome: null,
-    lastRunSummary: 'Compiled the daily digest.',
-    lastRunContext: null,
-    originator: null,
-    ...overrides,
   };
 }
 
@@ -98,7 +61,11 @@ describe('RecoveryNotifier', () => {
   beforeEach(() => {
     bus = mockBus();
     gateway = mockOutboundGateway();
-    schedulerService = mockSchedulerService(makeJob());
+    schedulerService = mockSchedulerService(makeJob({
+      cronExpr: '0 8 * * *',
+      runAt: null,
+      lastRunSummary: 'Compiled the daily digest.',
+    }));
     logger = mockLogger();
     notifier = new RecoveryNotifier({
       bus: bus as never,
