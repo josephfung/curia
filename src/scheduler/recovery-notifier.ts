@@ -21,12 +21,20 @@ import type { Logger } from '../logger.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 import type { ScheduleRecoveredEvent, BusEvent } from '../bus/events.js';
 import { classifyError } from '../errors/classify.js';
+import type { SchedulerService } from './scheduler-service.js';
+import {
+  buildJobNotificationContext,
+  buildJobConsoleUrl,
+} from './job-notification-context.js';
 
 export interface RecoveryNotifierConfig {
   bus: EventBus;
   outboundGateway: OutboundGateway;
+  schedulerService: SchedulerService;
   ceoEmail: string;
   logger: Logger;
+  appOrigin?: string;
+  httpPort: number;
 }
 
 export class RecoveryNotifier {
@@ -66,16 +74,20 @@ export class RecoveryNotifier {
       ? formatStuckDuration(event.timestamp, new Date(runStartedAt))
       : `at least ${formatMinutes(timeoutSeconds)} (start time unknown — pre-migration row)`;
 
+    const jobContext = await this.loadJobContext(jobId);
+
     const subject = `Scheduled job recovered from stuck state: ${agentId}`;
     const body = [
       'Scheduled job was stuck and has been auto-recovered (reset to pending).',
       '',
-      `Agent:     ${agentId}`,
-      `Stuck for: ${stuckDescription}`,
-      `Timeout:   ${formatMinutes(timeoutSeconds)}`,
-      `Failures:  ${consecutiveFailures} consecutive`,
+      `Agent:      ${agentId}`,
+      `Objective:  ${jobContext.objective}`,
+      `Recurrence: ${jobContext.recurrence}`,
+      `Stuck for:  ${stuckDescription}`,
+      `Timeout:    ${formatMinutes(timeoutSeconds)}`,
+      `Failures:   ${consecutiveFailures} consecutive`,
       '',
-      `Job ID: ${jobId}`,
+      `View job: ${jobContext.consoleUrl}`,
       '',
       'The job has been rescheduled automatically and will run again on its next trigger.',
     ].join('\n');
@@ -95,6 +107,34 @@ export class RecoveryNotifier {
         { jobId, agentId, consecutiveFailures, stuckDescription },
         'RecoveryNotifier: failed to publish notification — recovery already recorded in audit log',
       );
+    }
+  }
+
+  /** Lightweight DB lookup for notification context; falls back gracefully on missing rows. */
+  private async loadJobContext(jobId: string): Promise<{
+    objective: string;
+    recurrence: string;
+    consoleUrl: string;
+  }> {
+    const consoleUrl = buildJobConsoleUrl(this.config.appOrigin, this.config.httpPort, jobId);
+    try {
+      const job = await this.config.schedulerService.getJob(jobId);
+      if (!job) {
+        return {
+          objective: '(job not found)',
+          recurrence: '(unknown)',
+          consoleUrl,
+        };
+      }
+      return buildJobNotificationContext(job, this.config.appOrigin, this.config.httpPort);
+    } catch (err: unknown) {
+      const agentErr = classifyError(err, 'recovery-notifier');
+      this.log.warn({ err: agentErr, jobId }, 'RecoveryNotifier: failed to load job context for notification');
+      return {
+        objective: '(unavailable)',
+        recurrence: '(unknown)',
+        consoleUrl,
+      };
     }
   }
 }

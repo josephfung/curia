@@ -1633,8 +1633,11 @@ async function main(): Promise<void> {
     const suspensionNotifier = new SuspensionNotifier({
       bus,
       outboundGateway,
+      schedulerService,
       ceoEmail: principalEmail,
       logger,
+      appOrigin: config.appOrigin,
+      httpPort: config.httpPort,
     });
     suspensionNotifier.register();
   } else {
@@ -1652,8 +1655,11 @@ async function main(): Promise<void> {
     const recoveryNotifier = new RecoveryNotifier({
       bus,
       outboundGateway,
+      schedulerService,
       ceoEmail: principalEmail,
       logger,
+      appOrigin: config.appOrigin,
+      httpPort: config.httpPort,
     });
     recoveryNotifier.register();
   } else {
