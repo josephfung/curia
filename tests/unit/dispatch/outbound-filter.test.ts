@@ -3,6 +3,7 @@ import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js'
 import type { OutboundJudge } from '../../../src/dispatch/outbound-judge.js';
 import type { FilterRecipient } from '../../../src/dispatch/outbound-filter.js';
 import type { EscalationJudge, EscalationVerdict } from '../../../src/autonomy/escalation-judge.js';
+import { createSilentLogger } from '../../../src/logger.js';
 
 const armin: FilterRecipient = { email: 'armin@external.com', isPrincipal: false };
 const principalRcpt: FilterRecipient = { email: 'ceo@example.com', isPrincipal: true };
@@ -143,6 +144,29 @@ describe('OutboundContentFilter', () => {
       expect(result.passed).toBe(false);
       expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(false);
       expect(result.findings.some((f) => f.rule === 'secret-pattern')).toBe(true);
+    });
+
+    it('logs when principal bypass suppresses system-prompt-fragment findings', async () => {
+      const logger = createSilentLogger();
+      const debugSpy = vi.spyOn(logger, 'debug');
+      const filter = new OutboundContentFilter({
+        systemPromptMarkers: ['You are Nathan Curia'],
+        ceoEmail: 'ceo@example.com',
+        logger,
+      });
+      const result = await filter.check({
+        content: 'You are Nathan Curia',
+        recipientEmail: 'ceo@example.com',
+        conversationId: 'conv-principal',
+        channelId: 'email',
+        recipientTier: 'principal',
+        principalIsSoleRecipient: true,
+      });
+      expect(result.passed).toBe(true);
+      expect(debugSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ rule: 'system-prompt-fragment', suppressedFindings: 1 }),
+        'Stage 1 rule bypassed for principal sole recipient',
+      );
     });
   });
 

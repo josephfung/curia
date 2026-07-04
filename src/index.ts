@@ -1138,6 +1138,7 @@ async function main(): Promise<void> {
       systemPromptMarkers,
       ceoEmail,
       judge: outboundJudge,
+      logger,
     });
     logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
   }
