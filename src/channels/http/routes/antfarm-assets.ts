@@ -72,6 +72,13 @@ export const antfarmAssetsRoutes: FastifyPluginAsync<AntfarmAssetsOptions> = asy
     reply.header('X-Content-Type-Options', 'nosniff');
     // Licensed art is immutable per build; let authenticated browsers cache it.
     reply.header('Cache-Control', 'private, max-age=86400');
+    // Semgrep direct-response-write flags streaming a user-derived path to the response as XSS.
+    // Not applicable here: this streams binary image bytes (never templated HTML), the path is
+    // traversal-guarded and constrained to build-shipped licensed art, the request is session-
+    // authed, the Content-Type is a strict png/json allowlist (never text/html), and nosniff is
+    // set above so the body can't be sniffed into an executable type. `resp.render()` (the rule's
+    // suggested fix) is for HTML templates and does not apply to a binary file stream.
+    // nosemgrep: javascript.express.security.audit.xss.direct-response-write.direct-response-write
     return reply.send(createReadStream(absPath));
   });
 };
