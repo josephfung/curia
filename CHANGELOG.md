@@ -40,6 +40,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Ant Farm asset route hardening** — `/api/antfarm/assets/*` now serves a strict content-type allowlist (png/json only, 404 otherwise) and sets `X-Content-Type-Options: nosniff`, closing the MIME-sniffing/XSS class on direct file streaming. (#1335)
 - **Outbound filter** — Stage 1 fixes a signature false-positive, derives prompt-exfiltration markers from the live coordinator prompt (whitespace/markdown-robust) instead of hardcoded phrases, and adds a principal-recipient bypass for identity/structure rules. Closes #1334.
 
 - **Console CSP (#130)** — strict `Content-Security-Policy` and `X-Frame-Options: DENY` on HTML responses; scripts locked to same-origin bundles (legacy KG Tailwind CDN removed with the React console).

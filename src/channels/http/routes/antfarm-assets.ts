@@ -19,7 +19,11 @@ export interface AntfarmAssetsOptions {
   sessions: SessionStore;
 }
 
-// Only image/JSON are ever served; anything else falls through to octet-stream.
+// Strict allowlist: these are the ONLY content types this route will ever emit. Any other
+// extension 404s (see below) rather than being served as a guessable/sniffable stream. This is
+// the primary defense against the XSS class Semgrep flags here (direct-response-write): the byte
+// stream can never be labelled text/html, and paired with the X-Content-Type-Options: nosniff
+// header on the response, the browser can't sniff it into one either.
 const CONTENT_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.json': 'application/json',
@@ -57,8 +61,15 @@ export const antfarmAssetsRoutes: FastifyPluginAsync<AntfarmAssetsOptions> = asy
       throw err;
     }
 
-    const type = CONTENT_TYPES[extname(absPath).toLowerCase()] ?? 'application/octet-stream';
+    // Strict allowlist — only known-safe types are served. Unknown extensions 404 rather than
+    // falling back to octet-stream, so the response body is never a stream of unknown provenance.
+    const type = CONTENT_TYPES[extname(absPath).toLowerCase()];
+    if (!type) return reply.status(404).send({ error: 'Not found' });
     reply.type(type);
+    // Defense-in-depth against MIME sniffing: forbid the browser from re-interpreting the body
+    // (e.g. sniffing a PNG's bytes as text/html and executing embedded script). This is the
+    // response-side half of the XSS mitigation for direct-response-write.
+    reply.header('X-Content-Type-Options', 'nosniff');
     // Licensed art is immutable per build; let authenticated browsers cache it.
     reply.header('Cache-Control', 'private, max-age=86400');
     return reply.send(createReadStream(absPath));
