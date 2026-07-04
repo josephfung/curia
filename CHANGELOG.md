@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **CI Node version drift** — `ci.yml` and `dast.yml` now read `node-version-file: .nvmrc` instead of a hardcoded `"22"`, so CI runs on Node 24 in lockstep with `engines` (`>=24`) and the `node:24` Docker image. Previously CI validated on a version that did not satisfy the project's own engines constraint.
 - **Ant Farm** — code review follow-ups: fail-closed session check, conductor live/scrub fixes, incremental live merge, per-agent overlay context, timeline cursor paging, safe `busEventToAuditRow` payload guard, `schedule.fired` task_id normalization.
 - **Ant Farm** — fix playback flicker: stable desk roster + conductor snapshot refs so Phaser scene is not restarted every animation frame.
 - **Runtime image pnpm workspace** — the Dockerfile runtime stage now copies the `@curia/shared-types` member and runs `pnpm add -w --save-prod --prod tsx`, fixing a latent build-break chain (ADDING_TO_ROOT → WORKSPACE_PKG_NOT_FOUND → INCLUDED_DEPS_CONFLICT) that surfaces once curia is a real pnpm workspace.
