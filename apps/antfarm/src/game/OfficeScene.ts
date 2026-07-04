@@ -11,7 +11,8 @@ import {
   ensureTintedTexture,
   registerPlaceholderTextures,
 } from './placeholder-textures.js';
-import { OFFICE_TILESET, ROOM_BUILDER, OFFICE_REGIONS } from './asset-manifest.js';
+import { OFFICE_TILESET, ROOM_BUILDER, OFFICE_REGIONS, CHARACTER_FRAME, CHARACTER_ANIM, characterSheetUrl, type Direction } from './asset-manifest.js';
+import { characterSheetIndexForAgent, characterSheetKey, characterSheetFile } from './character-sheets.js';
 
 export interface OfficeSceneCallbacks {
   onAgentClick: (agentId: string, directive: SceneDirective | null) => void;
@@ -25,11 +26,15 @@ export interface OfficeSceneData {
 
 interface AgentSprite {
   container: Phaser.GameObjects.Container;
-  body: Phaser.GameObjects.Image;
+  body: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
   agentId: string;
   thinkBubble: Phaser.GameObjects.Image | null;
   speechBubble: Phaser.GameObjects.Text | null;
   stateTint: 'normal' | 'active' | 'error';
+  /** Phaser texture key for the loaded character sheet, or null if using placeholder. */
+  sheetKey: string | null;
+  /** True when a real premade sprite sheet loaded successfully and is in use. */
+  hasReal: boolean;
 }
 
 export class OfficeScene extends Phaser.Scene {
@@ -64,6 +69,14 @@ export class OfficeScene extends Phaser.Scene {
     this.load.image(OFFICE_TILESET.key, OFFICE_TILESET.url);
     this.load.image(ROOM_BUILDER.key, ROOM_BUILDER.url);
     // Character sheets are loaded here too (added in Task 5).
+    const desks = this.registry.get('desks') as DeskSlot[] ?? [];
+    const sheetIndices = new Set(desks.map((d) => characterSheetIndexForAgent(d.agentId)));
+    for (const idx of sheetIndices) {
+      this.load.spritesheet(characterSheetKey(idx), characterSheetUrl(characterSheetFile(idx)), {
+        frameWidth: CHARACTER_FRAME.width,
+        frameHeight: CHARACTER_FRAME.height,
+      });
+    }
   }
 
   create(): void {
@@ -215,28 +228,45 @@ export class OfficeScene extends Phaser.Scene {
     if (existing) return existing;
 
     const pos = deskPositionForAgent(this.layout, agentId);
-    const appearance = appearanceForAgent(agentId);
-    const texKey = ensureTintedTexture(this, 'character', appearance.outfitColor);
+    const sheetIdx = characterSheetIndexForAgent(agentId);
+    const sheetKey = characterSheetKey(sheetIdx);
+    const hasReal = this.textures.exists(sheetKey) && !this.failedLoads.has(sheetKey);
 
     const container = this.add.container(pos.x, pos.y - 10);
-    const body = this.add.image(0, 0, texKey).setScale(2);
+    let body: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
+    if (hasReal) {
+      this.ensureCharacterAnims(sheetKey);
+      // Frame is 32×64 (tall). Scale 1.3 → ~42×83 on screen, proportionate to the 64px
+      // office tiles; origin biased downward so the character's feet sit near the desk pos
+      // (the sprite's body occupies the lower ~2/3 of the 64px frame). Both are tunable.
+      const sprite = this.add.sprite(0, 0, sheetKey, CHARACTER_ANIM.idle.down.start)
+        .setOrigin(0.5, 0.66)
+        .setScale(1.3);
+      sprite.play(`${sheetKey}-idle-down`);
+      body = sprite;
+    } else {
+      const appearance = appearanceForAgent(agentId);
+      const texKey = ensureTintedTexture(this, 'character', appearance.outfitColor);
+      body = this.add.image(0, 0, texKey).setScale(2);
+    }
     body.setInteractive({ useHandCursor: true });
     body.on('pointerdown', () => {
       this.callbacks.onAgentClick(agentId, this.directiveForAgent(agentId));
     });
-
     container.add(body);
 
-    const sprite: AgentSprite = {
+    const agentSprite: AgentSprite = {
       container,
       body,
       agentId,
       thinkBubble: null,
       speechBubble: null,
       stateTint: 'normal',
+      sheetKey: hasReal ? sheetKey : null,
+      hasReal,
     };
-    this.agents.set(agentId, sprite);
-    return sprite;
+    this.agents.set(agentId, agentSprite);
+    return agentSprite;
   }
 
   private animateClawDeliver(directive: SceneDirective & { kind: 'claw.deliver' }): void {
@@ -287,9 +317,10 @@ export class OfficeScene extends Phaser.Scene {
       agent.body.setTint(0xff6666);
     } else {
       agent.body.clearTint();
-      const appearance = appearanceForAgent(agentId);
-      ensureTintedTexture(this, 'character', appearance.outfitColor);
-      agent.body.setTexture(ensureTintedTexture(this, 'character', appearance.outfitColor));
+      if (!agent.hasReal) {
+        const appearance = appearanceForAgent(agentId);
+        agent.body.setTexture(ensureTintedTexture(this, 'character', appearance.outfitColor));
+      }
     }
     this.tweens.add({
       targets: agent.container,
@@ -300,15 +331,52 @@ export class OfficeScene extends Phaser.Scene {
     });
   }
 
+  /** Register idle/walk × 4-direction anims for a loaded character sheet (idempotent). */
+  private ensureCharacterAnims(sheetKey: string): void {
+    for (const kind of ['idle', 'walk'] as const) {
+      for (const dir of ['down', 'up', 'left', 'right'] as const) {
+        const animKey = `${sheetKey}-${kind}-${dir}`;
+        if (this.anims.exists(animKey)) continue;
+        const spec = CHARACTER_ANIM[kind][dir];
+        this.anims.create({
+          key: animKey,
+          frames: this.anims.generateFrameNumbers(sheetKey, {
+            start: spec.start,
+            end: spec.start + spec.length - 1,
+          }),
+          frameRate: spec.frameRate,
+          repeat: -1,
+        });
+      }
+    }
+  }
+
+  private facing(dx: number, dy: number): Direction {
+    if (Math.abs(dx) > Math.abs(dy)) return dx < 0 ? 'left' : 'right';
+    return dy < 0 ? 'up' : 'down';
+  }
+
   private animateWalk(directive: SceneDirective & { kind: 'agent.walk' }): void {
     const agent = this.ensureAgent(directive.agentId);
     const target = deskPositionForAgent(this.layout, directive.targetAgentId);
+    const destX = target.x - 20;
+    const destY = target.y - 10;
+    const dir = this.facing(destX - agent.container.x, destY - agent.container.y);
+    const sprite = agent.body;
+    if (agent.hasReal && agent.sheetKey && sprite instanceof Phaser.GameObjects.Sprite) {
+      sprite.play(`${agent.sheetKey}-walk-${dir}`, true);
+    }
     this.tweens.add({
       targets: agent.container,
-      x: target.x - 20,
-      y: target.y - 10,
+      x: destX,
+      y: destY,
       duration: 700,
       ease: 'Linear',
+      onComplete: () => {
+        if (agent.hasReal && agent.sheetKey && sprite instanceof Phaser.GameObjects.Sprite) {
+          sprite.play(`${agent.sheetKey}-idle-${dir}`, true);
+        }
+      },
     });
   }
 
