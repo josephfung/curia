@@ -31,7 +31,7 @@ Non-goal restatement (from the epic): this is *not* npm/brew distribution of the
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| D1 | Publish `curia/Dockerfile` to GHCR as the **single source of truth**. | Kills the two-Dockerfile drift. |
+| D1 | Publish `curia/Dockerfile` to **GHCR** (`ghcr.io/josephfung/curia`) as the **single source of truth**. | GHCR chosen over Docker Hub: same GitHub identity → cosign keyless/OIDC "just works", no separate account, and **no anonymous pull rate limits** (Docker Hub throttles hard — a real self-host papercut). Kills the two-Dockerfile drift. |
 | D2 | Tags: **`vX.Y.Z` + `latest`** on release published; **`edge`** on every push to main. | `edge` preserves fast merge→deploy cadence without cutting a release; `vX.Y.Z`/`latest` are the stable self-host tags. |
 | D3 | Multi-arch **`linux/amd64` + `linux/arm64`** via buildx. | Covers cloud VPS (amd64) and Apple Silicon / ARM self-hosters. |
 | D4 | **cosign keyless-sign** the image + **SPDX SBOM attestation**. | Matches `release.yml`'s existing OIDC-identity posture; provenance for the self-host credibility goal. |
@@ -48,9 +48,13 @@ Non-goal restatement (from the epic): this is *not* npm/brew distribution of the
 
 ### Deferred / out of scope (recorded, not built)
 
-- **Web onboarding** (boot degraded without an Anthropic key → enter it in a browser setup wizard). This is the true zero-secret-env path but belongs to #771: the app currently fatal-exits without a key and the setup wizard doesn't accept API keys. Captured as the follow-on.
-- **Volume-mount custom layering** (epic #3's alternative). We use the downstream-image path, which our Chrome/atproto *system* deps require anyway. This resolves the epic's open question: downstream-image is the blessed path.
-- **Extension-contract versioning** (#4), **docs page** (#5), migrate-idempotency hardening beyond what exists (#1344).
+- **Browser Anthropic-key entry** (boot degraded without a key → paste it in the web wizard → seed over HTTP). This is the true zero-secret-env path. **Note:** #771 (in-app onboarding) is **already shipped (v0.32)** — it built setup-required boot mode + name-only principal + wizard, but *not* API-key entry (the key is still seeded pre-boot). Our interactive `install.sh` gives a clean key-entry path, so browser entry is a nice-to-have for shell-less installs (one-click PaaS). Filed as backlog **#1345** (P5, non-blocking).
+- **Volume-mount custom layering** (epic item 3's alternative). We use the downstream-image path, which our Chrome/atproto *system* deps require anyway. **The epic #1281 open question has been updated to record downstream-image as the blessed path.**
+- **Extension-contract versioning** (epic item 4), **docs page** (epic item 5), migrate-idempotency hardening beyond what exists (#1344).
+
+### Registry choice & OSSF Scorecard
+
+GHCR is chosen on its own merits (see D1). Note it will **not reliably satisfy the Scorecard "Packaging" check** — that check is GitHub-only, binary, and self-describes as blind to non-recognized methods ("a project that fulfills this criterion with other tools may still receive a low score"); it hunts for language-hub publish actions (npm/PyPI), not `docker/build-push-action` → GHCR. Packaging is Medium-risk and a known false-negative here; we accept it rather than reverse-engineer the registry choice around a flaky heuristic.
 
 ## 4. Components & changes
 
@@ -66,21 +70,23 @@ Non-goal restatement (from the epic): this is *not* npm/brew distribution of the
 - **New:** `docker-compose.yml` — image-based:
   - `curia`: `image: ghcr.io/josephfung/curia:${CURIA_IMAGE_TAG:-latest}`, port `3000:3000`, `depends_on: postgres (healthy)`, healthcheck on `/api/health`, named volumes for runtime state, env from `.env`.
   - `postgres`: `pgvector/pgvector:pg16`, named volume `curia-pgdata`, healthcheck `pg_isready`.
-  - No Caddy in the minimal file (TLS is a documented production add-on).
+  - No Caddy in the **base** file — base exposes `:3000` so localhost/eval and bring-your-own-proxy (nginx/Traefik/Cloudflare Tunnel) both work.
+- **New:** `docker-compose.tls.yml` — an **optional** Caddy overlay (automatic Let's Encrypt HTTPS, `DOMAIN` env). Operators with a public domain add it: `docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d`. Generalizes the pattern already in `curia-deploy/compose.production.yaml`. TLS matters because Curia auth (bootstrap secret, API token, session cookies) must not cross the wire in cleartext on a public host.
 - **New:** `.env.example` — the vault-unlock set (`DB_USER`, `DB_PASSWORD`, `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) + non-secret config (`DOMAIN`, `HTTP_PORT`, `TIMEZONE`, `LOG_LEVEL`, `CURIA_IMAGE_TAG`), with the encryption-key one-liner documented. This is the template `install.sh` renders and the standalone reference for hand-configurers.
 - **New:** `docker-compose.dev.yml` — a build-context override so the developer/source path builds locally instead of pulling.
 
 ### 4.3 curia repo — installers
 - **New:** `install.sh` (root) — the everyday operator entry (image-based, interactive). Responsibilities:
   1. Prereq check: **Docker + docker compose + curl** only.
-  2. Fetch version-pinned `docker-compose.yml` (+ `.env.example`) if absent.
-  3. Prompt for the Anthropic key (validated `sk-ant-…`).
-  4. Resolve `.env`: create from template if absent, else append/update; preserve an existing `SECRET_ENCRYPTION_KEY`, generate one if missing.
-  5. Generate `API_TOKEN`, `WEB_APP_BOOTSTRAP_SECRET`.
-  6. `docker compose up -d postgres` → wait healthy.
-  7. **One-shot migrate in-container:** `docker compose run --rm curia ./node_modules/.bin/tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql` (DATABASE_URL from compose env).
-  8. **Seed vault in-container:** `docker compose run --rm -e ANTHROPIC_API_KEY -e API_TOKEN -e WEB_APP_BOOTSTRAP_SECRET -e SEED_VAULT_VERIFY=1 curia ./node_modules/.bin/tsx scripts/seed-vault.ts`.
-  9. `docker compose up -d` → poll `/api/health` → print summary box (show the web login secret once).
+  2. **Source-checkout sanity check:** if it detects it's running inside the Curia source tree (`.git/` + `src/` + `package.json` whose `name` is `curia`), ask the operator whether they want to (a) pull & run the **published image** [continue] or (b) build & run from **this source** — for (b), point them to `pnpm run setup` and exit. Prevents a confused "I cloned the repo, why is it pulling an image?" install.
+  3. Fetch version-pinned `docker-compose.yml` (+ `.env.example` template + optional `docker-compose.tls.yml`) if absent.
+  4. Prompt for the Anthropic key (validated `sk-ant-…`).
+  5. Resolve `.env`: create from template if absent, else append/update; preserve an existing `SECRET_ENCRYPTION_KEY`, generate one if missing.
+  6. Generate `API_TOKEN`, `WEB_APP_BOOTSTRAP_SECRET`.
+  7. `docker compose up -d postgres` → wait healthy.
+  8. **One-shot migrate in-container:** `docker compose run --rm curia ./node_modules/.bin/tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql` (DATABASE_URL from compose env).
+  9. **Seed vault in-container:** `docker compose run --rm -e ANTHROPIC_API_KEY -e API_TOKEN -e WEB_APP_BOOTSTRAP_SECRET -e SEED_VAULT_VERIFY=1 curia ./node_modules/.bin/tsx scripts/seed-vault.ts`.
+  10. `docker compose up -d` → poll `/api/health` → print summary box (show the web login secret once).
 - **Refactor:** `scripts/setup.sh` (dev/source) — keep behavior; its host-side migrate + seed logic stays for the source path. Extract shared prompt/gen/health-poll/summary into:
 - **New:** `scripts/setup-common.sh` — sourced by both `setup.sh` and `install.sh`.
 
@@ -123,8 +129,13 @@ A bare core self-hoster therefore gets a working Curia **without** the browser o
 - **Registry outage blocks deploy/pull.** *Mitigation:* pinning `CURIA_IMAGE_TAG` to a `vX.Y.Z` that's already local avoids re-pull; GHCR availability is acceptable for this stage.
 - **`.env` secret at-rest.** `SECRET_ENCRYPTION_KEY` stays out of the DB/volume; operator is advised to back it up. Full-host-compromise is out of scope (equivalent for any .env-based app).
 
-## 8. Open questions for review
+## 8. Resolved questions (from review 2026-07-04)
 
-- Should `docker-compose.yml` include an **optional Caddy TLS overlay** now (as a separate `docker-compose.tls.yml`), or leave TLS entirely to docs?
-- Confirm the GHCR image name: `ghcr.io/josephfung/curia` (owner `josephfung`).
-- `curia-deploy` currently builds the thin layer on the VPS. Is a `docker pull`-only future (private registry) worth a follow-up, or is on-VPS build the durable answer?
+- **Caddy TLS** → ship an **optional `docker-compose.tls.yml`** overlay; base stays HTTP-on-:3000. (§4.2)
+- **GHCR image name** → confirmed `ghcr.io/josephfung/curia`.
+- **Thin-layer build location** → **on the VPS** is the durable answer for now (keeps private code + licensed art off any registry). A private-registry pull future is optional, not planned.
+- **Dev script name** → keep `pnpm run setup` for the source path; `install.sh` is the operator path. No rename.
+- **`#771`** → already shipped (v0.32); browser API-key entry filed as backlog **#1345**.
+- **Epic #1281 open question (volume-mount vs downstream-image)** → resolved in the epic: downstream-image is the blessed path.
+
+No open questions remain blocking the implementation plan.
