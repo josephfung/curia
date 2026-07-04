@@ -39,11 +39,36 @@ export interface TileRegion {
 //   - scheduler   : the clock-machine is a custom kitbash (SOURCE.md: "no pack covers these").
 //   - claw, tube  : overhead claw + vacuum tubes are custom; no pack equivalent.
 export const OFFICE_REGIONS: TileRegion[] = [
-  // Gray office floor tile (room-builder interior fill, no border).
-  { placeholderKey: 'office-floor', from: ROOM_BUILDER.key, sx: 32, sy: 256, sw: 32, sh: 32 },
+  // Floor: a base tile (from the Room Builder sheet) plus 4 variants (from the Modern Office
+  // tileset) sprinkled in (~FLOOR_VARIANT_CHANCE of cells) so the floor isn't perfectly uniform.
+  // All 32×32 crops; drawRoom picks among these keys per cell.
+  { placeholderKey: 'office-floor',   from: ROOM_BUILDER.key,  sx: 352, sy: 192, sw: 32, sh: 32 },
+  { placeholderKey: 'office-floor-b', from: OFFICE_TILESET.key, sx: 416, sy: 128, sw: 32, sh: 32 },
+  { placeholderKey: 'office-floor-c', from: OFFICE_TILESET.key, sx: 448, sy: 128, sw: 32, sh: 32 },
+  { placeholderKey: 'office-floor-d', from: OFFICE_TILESET.key, sx: 416, sy: 160, sw: 32, sh: 32 },
+  { placeholderKey: 'office-floor-e', from: OFFICE_TILESET.key, sx: 448, sy: 160, sw: 32, sh: 32 },
   // Wall board displaying a chart — stands in for the tasks board.
   { placeholderKey: 'tasks-board', from: OFFICE_TILESET.key, sx: 286, sy: 390, sw: 66, sh: 44 },
+  // Room walls (Room Builder sheet) — overlaid at the office edges in real-art mode (drawWalls).
+  // Top wall is two stacked rows; each side has a corner cap plus a repeating vertical tile.
+  { placeholderKey: 'wall-top-a',        from: ROOM_BUILDER.key, sx: 32,  sy: 288, sw: 32, sh: 32 },
+  { placeholderKey: 'wall-top-b',        from: ROOM_BUILDER.key, sx: 256, sy: 320, sw: 32, sh: 32 },
+  { placeholderKey: 'wall-left-corner',  from: ROOM_BUILDER.key, sx: 64,  sy: 64,  sw: 32, sh: 32 },
+  { placeholderKey: 'wall-left',         from: ROOM_BUILDER.key, sx: 128, sy: 0,   sw: 32, sh: 32 },
+  { placeholderKey: 'wall-right-corner', from: ROOM_BUILDER.key, sx: 32,  sy: 64,  sw: 32, sh: 32 },
+  { placeholderKey: 'wall-right',        from: ROOM_BUILDER.key, sx: 96,  sy: 0,   sw: 32, sh: 32 },
+  { placeholderKey: 'wall-bottom',       from: ROOM_BUILDER.key, sx: 256, sy: 32,  sw: 32, sh: 32 },
+  // Wall-cast floor shadow (Room Builder sheet) — overlaid on the row just below the top wall,
+  // above the floor but below the walls/furniture/agents (see drawShadows).
+  { placeholderKey: 'wall-shadow',       from: ROOM_BUILDER.key, sx: 448, sy: 32, sw: 32, sh: 32 },
 ];
+
+/** Floor tiling (see OfficeScene.drawRoom). The base tile fills most cells; roughly
+ *  FLOOR_VARIANT_CHANCE of cells use a random variant instead. The variant textures only
+ *  exist with real art (swapped from OFFICE_REGIONS); placeholder mode uses the base key only. */
+export const FLOOR_BASE_KEY = 'office-floor';
+export const FLOOR_VARIANT_KEYS = ['office-floor-b', 'office-floor-c', 'office-floor-d', 'office-floor-e'] as const;
+export const FLOOR_VARIANT_CHANCE = 0.2;
 
 // ---------------------------------------------------------------------------
 // Singles-based desks (Modern Office "singles/32x32"). A desk is composed from a

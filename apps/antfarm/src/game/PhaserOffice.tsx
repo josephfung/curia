@@ -55,7 +55,12 @@ export function PhaserOffice({
     });
 
     gameRef.current = game;
+    // Callbacks go in the registry (like desks) so the scene can read them from init() on EVERY
+    // boot/restart. Passing them only via scene.start data loses them across the config auto-start
+    // and the restarts in updateLayout/resyncPlayback, leaving this.callbacks undefined — the
+    // pointer handlers then throw and no detail overlay opens.
     game.registry.set('desks', desksRef.current);
+    game.registry.set('callbacks', callbacks);
 
     game.events.once('ready', () => {
       game.scene.start('OfficeScene', { desks: desksRef.current, callbacks });
