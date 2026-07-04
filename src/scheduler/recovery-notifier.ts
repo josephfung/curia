@@ -23,8 +23,7 @@ import type { ScheduleRecoveredEvent, BusEvent } from '../bus/events.js';
 import { classifyError } from '../errors/classify.js';
 import type { SchedulerService } from './scheduler-service.js';
 import {
-  buildJobNotificationContext,
-  buildJobConsoleUrl,
+  loadJobNotificationContext,
 } from './job-notification-context.js';
 
 export interface RecoveryNotifierConfig {
@@ -74,7 +73,14 @@ export class RecoveryNotifier {
       ? formatStuckDuration(event.timestamp, new Date(runStartedAt))
       : `at least ${formatMinutes(timeoutSeconds)} (start time unknown — pre-migration row)`;
 
-    const jobContext = await this.loadJobContext(jobId);
+    const jobContext = await loadJobNotificationContext(
+      this.config.schedulerService,
+      this.config.appOrigin,
+      this.config.httpPort,
+      jobId,
+      this.log,
+      'recovery-notifier',
+    );
 
     const subject = `Scheduled job recovered from stuck state: ${agentId}`;
     const body = [
@@ -107,34 +113,6 @@ export class RecoveryNotifier {
         { jobId, agentId, consecutiveFailures, stuckDescription },
         'RecoveryNotifier: failed to publish notification — recovery already recorded in audit log',
       );
-    }
-  }
-
-  /** Lightweight DB lookup for notification context; falls back gracefully on missing rows. */
-  private async loadJobContext(jobId: string): Promise<{
-    objective: string;
-    recurrence: string;
-    consoleUrl: string;
-  }> {
-    const consoleUrl = buildJobConsoleUrl(this.config.appOrigin, this.config.httpPort, jobId);
-    try {
-      const job = await this.config.schedulerService.getJob(jobId);
-      if (!job) {
-        return {
-          objective: '(job not found)',
-          recurrence: '(unknown)',
-          consoleUrl,
-        };
-      }
-      return buildJobNotificationContext(job, this.config.appOrigin, this.config.httpPort);
-    } catch (err: unknown) {
-      const agentErr = classifyError(err, 'recovery-notifier');
-      this.log.warn({ err: agentErr, jobId }, 'RecoveryNotifier: failed to load job context for notification');
-      return {
-        objective: '(unavailable)',
-        recurrence: '(unknown)',
-        consoleUrl,
-      };
     }
   }
 }

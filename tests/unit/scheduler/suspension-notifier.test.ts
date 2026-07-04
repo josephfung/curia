@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SuspensionNotifier } from '../../../src/scheduler/suspension-notifier.js';
 import type { ScheduleSuspendedEvent } from '../../../src/bus/events.js';
-import type { JobRow } from '../../../src/scheduler/scheduler-service.js';
+import { makeJob, mockSchedulerService } from './notifier-fixtures.js';
 
 // -- Mock helpers --
 
@@ -25,43 +25,6 @@ function mockLogger() {
 function mockOutboundGateway() {
   return {
     sendNotification: vi.fn(),
-  };
-}
-
-function mockSchedulerService(job: JobRow | null = null) {
-  return {
-    getJob: vi.fn().mockResolvedValue(job),
-  };
-}
-
-function makeJob(overrides: Partial<JobRow> = {}): JobRow {
-  return {
-    id: 'job-abc123',
-    agentId: 'ceo-inbox',
-    cronExpr: null,
-    runAt: '2026-07-03T08:00:00.000Z',
-    taskPayload: { task: 'Process inbox' },
-    status: 'suspended',
-    lastRunAt: null,
-    nextRunAt: null,
-    lastError: null,
-    consecutiveFailures: 3,
-    createdBy: 'system',
-    createdAt: '2026-06-01T00:00:00.000Z',
-    timezone: 'UTC',
-    agentTaskId: null,
-    intentAnchor: 'Process inbox daily',
-    progress: null,
-    taskErrorBudget: null,
-    taskTags: null,
-    taskTitle: null,
-    runStartedAt: null,
-    expectedDurationSeconds: null,
-    lastRunOutcome: null,
-    lastRunSummary: null,
-    lastRunContext: null,
-    originator: null,
-    ...overrides,
   };
 }
 
@@ -91,7 +54,12 @@ describe('SuspensionNotifier', () => {
   beforeEach(() => {
     bus = mockBus();
     gateway = mockOutboundGateway();
-    schedulerService = mockSchedulerService(makeJob());
+    schedulerService = mockSchedulerService(makeJob({
+      agentId: 'ceo-inbox',
+      status: 'suspended',
+      intentAnchor: 'Process inbox daily',
+      consecutiveFailures: 3,
+    }));
     logger = mockLogger();
     notifier = new SuspensionNotifier({
       bus: bus as never,

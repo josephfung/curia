@@ -574,6 +574,7 @@ export default function JobsPage() {
 
   useEffect(() => {
     if (!jobIdFromUrl) return;
+    if (appliedUrlJobRef.current === jobIdFromUrl) return;
 
     const openFromUrl = async () => {
       let target = jobs.find(j => j.id === jobIdFromUrl);
@@ -602,7 +603,6 @@ export default function JobsPage() {
         }
       }
 
-      if (appliedUrlJobRef.current === jobIdFromUrl && editing?.id === jobIdFromUrl) return;
       appliedUrlJobRef.current = jobIdFromUrl;
       setStatusFilter('all');
       setScheduleTypeFilter('all');
@@ -613,7 +613,7 @@ export default function JobsPage() {
     };
 
     void openFromUrl();
-  }, [jobIdFromUrl, jobs, editing?.id]);
+  }, [jobIdFromUrl, jobs]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: jobs.length };
