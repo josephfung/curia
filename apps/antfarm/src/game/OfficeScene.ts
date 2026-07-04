@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import type { SceneDirective } from '@curia/shared-types';
 import type { DeskSlot } from '../layout/desk-layout.js';
-import { appearanceForAgent } from './agent-appearance.js';
+import { appearanceForAgent, hashAgentId } from './agent-appearance.js';
 import {
   buildWorldLayout,
   deskPositionForAgent,
@@ -11,8 +11,32 @@ import {
   ensureTintedTexture,
   registerPlaceholderTextures,
 } from './placeholder-textures.js';
-import { OFFICE_TILESET, ROOM_BUILDER, OFFICE_REGIONS, CHARACTER_FRAME, CHARACTER_ANIM, characterSheetUrl, type Direction } from './asset-manifest.js';
+import {
+  OFFICE_TILESET, ROOM_BUILDER, OFFICE_REGIONS, CHARACTER_FRAME, CHARACTER_ANIM,
+  characterSheetUrl, type Direction,
+  OFFICE_SINGLES, officeSingleUrl, officeSingleKey,
+  DESK_COLOR_GROUPS, AGENT_DESK_COLORS, COORD_DESK_GROUP,
+  AGENT_COMPUTER, COORD_CHAIR, AGENT_CHAIRS,
+} from './asset-manifest.js';
 import { characterSheetIndexForAgent, characterSheetKey, characterSheetFile } from './character-sheets.js';
+
+// Explicit render-order bands. Desks draw IN FRONT of seated characters (so the desk front
+// occludes their legs), with chairs behind and on-desk devices in front; overlays sit on top.
+const DEPTH = {
+  wall: 1,      // wall-mounted fixed props (board, scheduler, wastebasket, tubes)
+  chair: 5,
+  agent: 10,
+  desk: 15,     // real-art composed desks (in front of the seated agent)
+  device: 18,   // computers / monitors sitting on the desk
+  claw: 22,
+  overlay: 40,  // speech / think bubbles, task cards, badges, desk labels
+} as const;
+
+// Compose/crop geometry for the singles-based desks (pinned visually with the art director).
+const DESK_TILE_W = 32;   // width of each desk tile's cropped content
+const DESK_TILE_H = 48;   // desk graphic occupies the lower-left 32×48 of its 64×96 single
+const CHAIR_H = 40;       // chair art sits ~10px up from the frame bottom
+const CHAIR_BOTTOM_OFFSET = 10;
 
 export interface OfficeSceneCallbacks {
   onAgentClick: (agentId: string, directive: SceneDirective | null) => void;
@@ -48,6 +72,9 @@ export class OfficeScene extends Phaser.Scene {
   // Keys of asset loads that errored (e.g. open-core build with no licensed art).
   // Anything in here keeps its procedural placeholder — never a hard failure.
   private failedLoads = new Set<string>();
+  // True once the singles-based office art (desks/chairs/computers/monitors) is composed.
+  // When false (open-core / clean dev), spawnDesks falls back to procedural placeholder desks.
+  private officeArtReady = false;
 
   constructor() {
     super({ key: 'OfficeScene' });
@@ -68,6 +95,10 @@ export class OfficeScene extends Phaser.Scene {
 
     this.load.image(OFFICE_TILESET.key, OFFICE_TILESET.url);
     this.load.image(ROOM_BUILDER.key, ROOM_BUILDER.url);
+    // Office desk singles (desks, chairs, monitors, computer) — composed in buildOfficeArt().
+    for (const n of OFFICE_SINGLES) {
+      this.load.image(officeSingleKey(n), officeSingleUrl(n));
+    }
     // Character sheets are loaded here too (added in Task 5).
     const desks = this.registry.get('desks') as DeskSlot[] ?? [];
     const sheetIndices = new Set(desks.map((d) => characterSheetIndexForAgent(d.agentId)));
@@ -81,7 +112,8 @@ export class OfficeScene extends Phaser.Scene {
 
   create(): void {
     registerPlaceholderTextures(this);
-    this.swapOfficeTextures(); // overwrite office placeholder keys with real art when present
+    this.swapOfficeTextures(); // overwrite office placeholder keys (floor, board) with real art
+    this.buildOfficeArt();     // compose the singles-based desks/chairs/computers when present
 
     const desks = this.registry.get('desks') as DeskSlot[] ?? [];
     this.layout = buildWorldLayout(desks);
@@ -90,7 +122,7 @@ export class OfficeScene extends Phaser.Scene {
     this.spawnFixedProps();
     this.spawnDesks();
     this.spawnAgents(desks);
-    this.badgeGroup = this.add.container(0, 0);
+    this.badgeGroup = this.add.container(0, 0).setDepth(DEPTH.overlay);
 
     const pending = this.registry.get('pendingReplay') as SceneDirective[] | undefined;
     if (pending?.length) {
@@ -158,10 +190,88 @@ export class OfficeScene extends Phaser.Scene {
   private drawRoom(): void {
     for (let x = 0; x < 800; x += 32) {
       for (let y = 60; y < 480; y += 32) {
-        this.add.image(x + 16, y + 16, 'office-floor').setScale(2);
+        this.add.image(x + 16, y + 16, 'office-floor').setScale(2).setDepth(0);
       }
     }
-    this.add.rectangle(400, 30, 680, 4, 0x6a6a72).setOrigin(0.5);
+    this.add.rectangle(400, 30, 680, 4, 0x6a6a72).setOrigin(0.5).setDepth(DEPTH.wall);
+  }
+
+  /** Texture key for a composed desk (per color, or the coordinator desk). */
+  private deskTextureKey(name: string): string {
+    return `deskart-desk-${name}`;
+  }
+
+  /** Compose N desk tiles (lower-left 32×48 of each single) side by side into one texture. */
+  private composeDeskTexture(key: string, group: number[]): void {
+    if (this.textures.exists(key)) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = group.length * DESK_TILE_W;
+    canvas.height = DESK_TILE_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('[antfarm] composeDeskTexture: no 2d canvas context');
+    ctx.imageSmoothingEnabled = false;
+    for (let i = 0; i < group.length; i++) {
+      const src = this.textures.get(officeSingleKey(group[i]!)).getSourceImage() as HTMLImageElement;
+      ctx.drawImage(src, 0, src.height - DESK_TILE_H, DESK_TILE_W, DESK_TILE_H, i * DESK_TILE_W, 0, DESK_TILE_W, DESK_TILE_H);
+    }
+    this.textures.addCanvas(key, canvas);
+  }
+
+  /** Crop a cw×ch region from a single's lower-left (measured up from the bottom by bottomOff). */
+  private cropSingle(key: string, single: number, cw: number, ch: number, bottomOff: number): void {
+    if (this.textures.exists(key)) return;
+    const src = this.textures.get(officeSingleKey(single)).getSourceImage() as HTMLImageElement;
+    const canvas = document.createElement('canvas');
+    canvas.width = cw;
+    canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('[antfarm] cropSingle: no 2d canvas context');
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(src, 0, src.height - ch - bottomOff, cw, ch, 0, 0, cw, ch);
+    this.textures.addCanvas(key, canvas);
+  }
+
+  /** Compose the singles-based office art (desks, chairs, computer, monitors). Sets
+   *  officeArtReady=true only when every needed single loaded; otherwise the scene keeps its
+   *  procedural placeholder desks (open-core / clean dev fallback — never a hard failure). */
+  private buildOfficeArt(): void {
+    const missing = OFFICE_SINGLES.some(
+      (n) => this.failedLoads.has(officeSingleKey(n)) || !this.textures.exists(officeSingleKey(n)),
+    );
+    if (missing) {
+      this.officeArtReady = false;
+      return;
+    }
+    try {
+      for (const [color, group] of Object.entries(DESK_COLOR_GROUPS)) {
+        this.composeDeskTexture(this.deskTextureKey(color), group);
+      }
+      this.composeDeskTexture(this.deskTextureKey('coord'), COORD_DESK_GROUP);
+      this.cropSingle('deskart-computer', AGENT_COMPUTER, DESK_TILE_W, DESK_TILE_H, 0);
+      this.cropSingle('deskart-chair-coord', COORD_CHAIR, DESK_TILE_W, CHAIR_H, CHAIR_BOTTOM_OFFSET);
+      for (const n of AGENT_CHAIRS) {
+        this.cropSingle(`deskart-chair-${n}`, n, DESK_TILE_W, CHAIR_H, CHAIR_BOTTOM_OFFSET);
+      }
+      // Monitors were top-cropped at a flat 32px; give 126 +10px and 127 +20px of top height.
+      this.cropSingle('deskart-mon-125', 125, DESK_TILE_W, 32, 0);
+      this.cropSingle('deskart-mon-126', 126, DESK_TILE_W, 42, 0);
+      this.cropSingle('deskart-mon-127', 127, DESK_TILE_W, 52, 0);
+      this.officeArtReady = true;
+    } catch (err) {
+      // Never hard-fail — fall back to placeholder desks.
+      console.warn('[antfarm] failed to compose office art; using placeholder desks', err);
+      this.officeArtReady = false;
+    }
+  }
+
+  /** Deterministic desk color for a specialist agent (grey excluded — coordinator only). */
+  private agentDeskColor(agentId: string): string {
+    return AGENT_DESK_COLORS[(hashAgentId(agentId) >> 6) % AGENT_DESK_COLORS.length]!;
+  }
+
+  /** Deterministic chair single for a specialist agent. */
+  private agentChair(agentId: string): number {
+    return AGENT_CHAIRS[hashAgentId(agentId) % AGENT_CHAIRS.length]!;
   }
 
   /** Overwrite an existing texture key with a cropped region of a loaded source image.
@@ -194,26 +304,80 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private spawnFixedProps(): void {
-    this.add.image(this.layout.tasksBoard.x, this.layout.tasksBoard.y, 'tasks-board').setScale(2);
-    this.add.image(this.layout.scheduler.x, this.layout.scheduler.y, 'scheduler').setScale(2);
-    this.add.image(this.layout.wastebasket.x, this.layout.wastebasket.y, 'wastebasket').setScale(2);
-    this.add.image(this.layout.tubeIn.x, this.layout.tubeIn.y, 'tube').setScale(2).setTint(0x6a9a6a);
-    this.add.image(this.layout.tubeOut.x, this.layout.tubeOut.y, 'tube').setScale(2).setTint(0x9a6a6a);
+    this.add.image(this.layout.tasksBoard.x, this.layout.tasksBoard.y, 'tasks-board').setScale(2).setDepth(DEPTH.wall);
+    this.add.image(this.layout.scheduler.x, this.layout.scheduler.y, 'scheduler').setScale(2).setDepth(DEPTH.wall);
+    this.add.image(this.layout.wastebasket.x, this.layout.wastebasket.y, 'wastebasket').setScale(2).setDepth(DEPTH.wall);
+    this.add.image(this.layout.tubeIn.x, this.layout.tubeIn.y, 'tube').setScale(2).setTint(0x6a9a6a).setDepth(DEPTH.wall);
+    this.add.image(this.layout.tubeOut.x, this.layout.tubeOut.y, 'tube').setScale(2).setTint(0x9a6a6a).setDepth(DEPTH.wall);
 
-    this.claw = this.add.image(this.layout.clawTrack.idleX, this.layout.clawTrack.y, 'claw').setScale(2);
+    this.claw = this.add.image(this.layout.clawTrack.idleX, this.layout.clawTrack.y, 'claw').setScale(2).setDepth(DEPTH.claw);
   }
 
   private spawnDesks(): void {
+    if (this.officeArtReady) {
+      this.spawnStations();
+      return;
+    }
+    this.spawnPlaceholderDesks();
+  }
+
+  /** Procedural fallback: a single placeholder desk per agent, drawn BEHIND the agent (the
+   *  original AF-5 look). Used when the singles-based office art is absent. */
+  private spawnPlaceholderDesks(): void {
     for (const desk of this.layout.desks) {
       const key = desk.row === 'boss' ? 'desk-boss' : 'desk';
-      const img = this.add.image(desk.x, desk.y + 20, key).setScale(2);
+      const img = this.add.image(desk.x, desk.y + 20, key).setScale(2).setDepth(DEPTH.chair);
       img.setInteractive({ useHandCursor: true });
       img.on('pointerdown', () => {
         this.callbacks.onAgentClick(desk.agentId, this.directiveForAgent(desk.agentId));
       });
       this.add
         .text(desk.x, desk.y + 36, desk.agentId, { fontSize: '10px', color: '#e8f0dc' })
-        .setOrigin(0.5);
+        .setOrigin(0.5)
+        .setDepth(DEPTH.overlay);
+    }
+  }
+
+  /** Real-art station: layered chair → (agent, added in spawnAgents) → desk → on-desk devices.
+   *  The desk draws in front of the seated agent so the desk front occludes their legs.
+   *  Coordinator gets the wide grey desk + three monitors; specialists a colored desk + a
+   *  computer. Pixel offsets were tuned in a standalone Phaser harness with the art director
+   *  and may want a light refinement pass against the live scene. */
+  private spawnStations(): void {
+    for (const desk of this.layout.desks) {
+      const isCoord = desk.row === 'boss' || desk.agentId === this.layout.coordinatorId;
+      const cy = desk.y + 20; // desk vertical centre
+
+      const chairKey = isCoord ? 'deskart-chair-coord' : `deskart-chair-${this.agentChair(desk.agentId)}`;
+      this.add.image(desk.x, cy - 54, chairKey).setScale(2).setDepth(DEPTH.chair);
+
+      const deskKey = isCoord
+        ? this.deskTextureKey('coord')
+        : this.deskTextureKey(this.agentDeskColor(desk.agentId));
+      const deskImg = this.add.image(desk.x, cy, deskKey).setScale(2).setDepth(DEPTH.desk);
+      deskImg.setInteractive({ useHandCursor: true });
+      deskImg.on('pointerdown', () => {
+        this.callbacks.onAgentClick(desk.agentId, this.directiveForAgent(desk.agentId));
+      });
+
+      if (isCoord) {
+        // Three monitors across the wide desk; bottom-anchored so the taller crops show fully.
+        const monitors: Array<[string, number, number]> = [
+          ['deskart-mon-125', -64, 25],
+          ['deskart-mon-126', 0, 32],
+          ['deskart-mon-127', 64, 32],
+        ];
+        for (const [key, dx, dy] of monitors) {
+          this.add.image(desk.x + dx, cy - 24 + dy, key).setOrigin(0.5, 1).setScale(2).setDepth(DEPTH.device);
+        }
+      } else {
+        this.add.image(desk.x, cy - 14, 'deskart-computer').setScale(2).setDepth(DEPTH.device);
+      }
+
+      this.add
+        .text(desk.x, cy + 40, desk.agentId, { fontSize: '10px', color: '#e8f0dc' })
+        .setOrigin(0.5)
+        .setDepth(DEPTH.overlay);
     }
   }
 
@@ -232,7 +396,11 @@ export class OfficeScene extends Phaser.Scene {
     const sheetKey = characterSheetKey(sheetIdx);
     const hasReal = this.textures.exists(sheetKey) && !this.failedLoads.has(sheetKey);
 
-    const container = this.add.container(pos.x, pos.y - 10);
+    // With real office art the agent is seated behind its desk (desk draws in front to occlude
+    // the legs); the higher seat + agent depth produce the "at the desk" look.
+    const seatedY = this.officeArtReady ? pos.y - 35 : pos.y - 10;
+    const container = this.add.container(pos.x, seatedY);
+    container.setDepth(DEPTH.agent);
     let body: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
     if (hasReal) {
       this.ensureCharacterAnims(sheetKey);
@@ -280,7 +448,7 @@ export class OfficeScene extends Phaser.Scene {
       duration: 600,
       ease: 'Sine.easeInOut',
       onComplete: () => {
-        const card = this.add.image(tasksX, this.layout.tasksBoard.y - 20, 'task-card').setScale(2);
+        const card = this.add.image(tasksX, this.layout.tasksBoard.y - 20, 'task-card').setScale(2).setDepth(DEPTH.overlay);
         this.tweens.add({
           targets: this.claw,
           x: target.x,
@@ -393,7 +561,8 @@ export class OfficeScene extends Phaser.Scene {
         backgroundColor: '#ffffff',
         padding: { x: 4, y: 2 },
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5)
+      .setDepth(DEPTH.overlay);
     agent.speechBubble.setInteractive({ useHandCursor: true });
     agent.speechBubble.on('pointerdown', () => {
       this.callbacks.onDirectiveClick(directive);
@@ -414,20 +583,22 @@ export class OfficeScene extends Phaser.Scene {
     agent.thinkBubble?.destroy();
     agent.thinkBubble = this.add
       .image(agent.container.x + 20, agent.container.y - 30, 'think-bubble')
-      .setScale(1.5);
+      .setScale(1.5)
+      .setDepth(DEPTH.overlay);
     if (directive.skillName) {
       this.add
         .text(agent.container.x + 20, agent.container.y - 30, directive.skillName.slice(0, 8), {
           fontSize: '8px',
           color: '#333',
         })
-        .setOrigin(0.5);
+        .setOrigin(0.5)
+        .setDepth(DEPTH.overlay);
     }
   }
 
   private animateTube(direction: 'in' | 'out'): void {
     const pos = direction === 'in' ? this.layout.tubeIn : this.layout.tubeOut;
-    const particle = this.add.circle(pos.x, pos.y, 6, direction === 'in' ? 0x6a9a6a : 0x9a6a6a);
+    const particle = this.add.circle(pos.x, pos.y, 6, direction === 'in' ? 0x6a9a6a : 0x9a6a6a).setDepth(DEPTH.overlay);
     const targetX = direction === 'in'
       ? (this.layout.coordinatorId
         ? deskPositionForAgent(this.layout, this.layout.coordinatorId).x
@@ -449,6 +620,7 @@ export class OfficeScene extends Phaser.Scene {
     const card = this.add
       .image(this.layout.tasksBoard.x, this.layout.tasksBoard.y - 30, 'task-card')
       .setScale(2)
+      .setDepth(DEPTH.overlay)
       .setInteractive({ useHandCursor: true });
     card.on('pointerdown', () => {
       this.callbacks.onDirectiveClick(directive);
@@ -456,7 +628,8 @@ export class OfficeScene extends Phaser.Scene {
     if (directive.title) {
       this.add
         .text(card.x, card.y, directive.title.slice(0, 12), { fontSize: '8px', color: '#1a1f16' })
-        .setOrigin(0.5);
+        .setOrigin(0.5)
+        .setDepth(DEPTH.overlay);
     }
     this.taskCards.set(directive.taskId, card);
     this.tweens.add({ targets: card, y: card.y - 10, yoyo: true, duration: 300 });

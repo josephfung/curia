@@ -30,7 +30,9 @@ export interface TileRegion {
   sh: number;
 }
 
-// Office props with real-art coverage. Coordinates pinned by measurement (see file header).
+// Tileset/room-builder-sourced props: floor tile + the wall tasks board. Desks are NOT
+// here — they are composed from individual Modern Office "singles" (see below), which give
+// clean pre-cropped desk tiles instead of fragile tileset pixel-crops.
 //
 // Deliberately left PROCEDURAL (no clean pack match — matches the AF-7 scope decision):
 //   - wastebasket : no dedicated trash-can sprite in the Modern Office pack.
@@ -39,13 +41,54 @@ export interface TileRegion {
 export const OFFICE_REGIONS: TileRegion[] = [
   // Gray office floor tile (room-builder interior fill, no border).
   { placeholderKey: 'office-floor', from: ROOM_BUILDER.key, sx: 32, sy: 256, sw: 32, sh: 32 },
-  // Wood floor desk (lower furniture section).
-  { placeholderKey: 'desk', from: OFFICE_TILESET.key, sx: 150, sy: 636, sw: 76, sh: 48 },
-  // Large executive desk for the boss row.
-  { placeholderKey: 'desk-boss', from: OFFICE_TILESET.key, sx: 192, sy: 8, sw: 64, sh: 88 },
   // Wall board displaying a chart — stands in for the tasks board.
   { placeholderKey: 'tasks-board', from: OFFICE_TILESET.key, sx: 286, sy: 390, sw: 66, sh: 44 },
 ];
+
+// ---------------------------------------------------------------------------
+// Singles-based desks (Modern Office "singles/32x32"). A desk is composed from a
+// horizontal group of tiles; each tile's desk graphic sits in its lower-left, so we crop
+// the lower-left 32×48 of each and place them side by side. Chairs, monitors, and the
+// on-desk computer are individual singles cropped the same way. Numbers pinned visually.
+// ---------------------------------------------------------------------------
+
+export const OFFICE_SINGLE_BASE = `${ASSET_BASE}/office/Modern_Office_Singles_32x32_`;
+export const officeSingleUrl = (n: number): string => `${OFFICE_SINGLE_BASE}${n}.png`;
+/** Phaser texture key for a loaded office single. */
+export const officeSingleKey = (n: number): string => `office-single-${n}`;
+
+/** Desk color groups — left/middle/right tiles. Grey is reserved for the coordinator. */
+export const DESK_COLOR_GROUPS: Record<string, [number, number, number]> = {
+  tan: [210, 211, 212],
+  grey: [213, 214, 215],
+  lav: [216, 217, 218],
+  lwood: [219, 220, 221],
+  wood: [222, 223, 224],
+};
+/** Desk colors specialist agents draw from (grey excluded — reserved for the coordinator). */
+export const AGENT_DESK_COLORS = ['tan', 'lav', 'lwood', 'wood'] as const;
+/** Coordinator desk: grey with an extra middle segment (4 tiles wide, busier command desk). */
+export const COORD_DESK_GROUP: number[] = [213, 214, 214, 215];
+/** Three monitors laid across the coordinator's desk. */
+export const COORD_MONITORS = [125, 126, 127] as const;
+/** On-desk computer for specialist agents. */
+export const AGENT_COMPUTER = 122;
+/** Coordinator chair. */
+export const COORD_CHAIR = 101;
+/** Specialist agent chairs (assigned deterministically per agent). */
+export const AGENT_CHAIRS = [329, 330, 331, 332, 333, 334, 335, 336] as const;
+
+/** Every office single the loader must fetch (deduped) for the composed desks. */
+export const OFFICE_SINGLES: number[] = Array.from(
+  new Set<number>([
+    ...Object.values(DESK_COLOR_GROUPS).flat(),
+    ...COORD_DESK_GROUP,
+    ...COORD_MONITORS,
+    AGENT_COMPUTER,
+    COORD_CHAIR,
+    ...AGENT_CHAIRS,
+  ]),
+);
 
 /** Premade character sheet frame geometry (Modern Interiors 32x32 pack).
  *  MEASURED: each frame is 32 wide × 64 tall (1 tile wide, 2 tiles tall — humans span two
