@@ -28,15 +28,22 @@ export const CONSOLE_CONTENT_SECURITY_POLICY = [
 /**
  * CSP for the Ant Farm page (`/antfarm/*`, served as text/html).
  *
- * Identical to the console policy except `img-src` also allows `data:`. The Ant Farm
- * visualization runs Phaser, which loads its internal boot textures (`__DEFAULT`,
- * `__MISSING`, `__WHITE`) from embedded base64 `data:` PNG URIs on startup. Under the
- * console's `img-src 'self'` the browser blocks those and the WebGL canvas fails to
- * render — the procedural office art (built via `textures.addCanvas`) is itself CSP-safe,
- * but Phaser's own boot images are not, and `__WHITE` backs all tinting/graphics.
+ * Identical to the console policy except `img-src` also allows `data:` and `blob:`. The
+ * Ant Farm visualization runs Phaser, which needs both:
+ *   - `data:` — Phaser loads its internal boot textures (`__DEFAULT`, `__MISSING`,
+ *     `__WHITE`) from embedded base64 `data:` PNG URIs on startup. `__WHITE` backs all
+ *     tinting/graphics, so without this the WebGL canvas fails to render at all.
+ *   - `blob:` — Phaser's file loader fetches real image assets (the licensed LimeZu
+ *     tilesets/singles/character sheets served from `/api/antfarm/assets/*`) via XHR and
+ *     hands the response to an `Image` element as an `URL.createObjectURL(blob)` `blob:`
+ *     URL. Same-origin `'self'` does NOT cover the `blob:` scheme, so without this every
+ *     real-art load is blocked ("Loading the image 'blob:…' violates … img-src") → the
+ *     loader errors → the office silently falls back to procedural placeholders. This is
+ *     the half the #1337 boot-texture fix missed; the office renders but stays placeholder.
  *
- * `data:` in `img-src` cannot execute script, so `script-src 'self'` — the XSS mitigation
- * that motivated #130 — is unchanged. Only image sources are relaxed, and only on this page.
+ * Neither `data:` nor `blob:` in `img-src` can execute script, so `script-src 'self'` —
+ * the XSS mitigation that motivated #130 — is unchanged. Only image sources are relaxed,
+ * and only on this page.
  */
 export const ANTFARM_CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -44,7 +51,7 @@ export const ANTFARM_CONTENT_SECURITY_POLICY = [
   "style-src 'self' https://fonts.googleapis.com",
   "style-src-attr 'unsafe-inline'",
   "font-src https://fonts.gstatic.com",
-  "img-src 'self' data:",
+  "img-src 'self' data: blob:",
   "connect-src 'self'",
   "base-uri 'self'",
   "form-action 'self'",
