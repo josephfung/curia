@@ -108,25 +108,34 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   preload(): void {
+    // The LoaderPlugin instance is reused across scene.restart() (updateLayout/resyncPlayback),
+    // so re-registering the listener each preload would stack duplicate handlers. Clear any prior
+    // loaderror listener first, then attach exactly one.
     // Record load failures instead of throwing; absent licensed art is the normal
     // open-core path and must fall back cleanly to procedural placeholders.
+    this.load.off('loaderror');
     this.load.on('loaderror', (file: Phaser.Loader.File) => {
       this.failedLoads.add(file.key);
       // Expected when licensed art is absent — info, never error (no console errors).
       console.info(`[antfarm] licensed asset not loaded (using placeholder): ${file.key}`);
     });
 
-    this.load.image(OFFICE_TILESET.key, OFFICE_TILESET.url);
-    this.load.image(ROOM_BUILDER.key, ROOM_BUILDER.url);
+    // Textures persist across restarts, so skip any key already loaded — re-queuing it is
+    // redundant loader work and would re-fire loaderror for assets that are legitimately absent.
+    if (!this.textures.exists(OFFICE_TILESET.key)) this.load.image(OFFICE_TILESET.key, OFFICE_TILESET.url);
+    if (!this.textures.exists(ROOM_BUILDER.key)) this.load.image(ROOM_BUILDER.key, ROOM_BUILDER.url);
     // Office desk singles (desks, chairs, monitors, computer) — composed in buildOfficeArt().
     for (const n of OFFICE_SINGLES) {
-      this.load.image(officeSingleKey(n), officeSingleUrl(n));
+      const key = officeSingleKey(n);
+      if (!this.textures.exists(key)) this.load.image(key, officeSingleUrl(n));
     }
     // Character sheets are loaded here too (added in Task 5).
     const desks = this.registry.get('desks') as DeskSlot[] ?? [];
     const sheetIndices = new Set(desks.map((d) => characterSheetIndexForAgent(d.agentId)));
     for (const idx of sheetIndices) {
-      this.load.spritesheet(characterSheetKey(idx), characterSheetUrl(characterSheetFile(idx)), {
+      const key = characterSheetKey(idx);
+      if (this.textures.exists(key)) continue;
+      this.load.spritesheet(key, characterSheetUrl(characterSheetFile(idx)), {
         frameWidth: CHARACTER_FRAME.width,
         frameHeight: CHARACTER_FRAME.height,
       });
@@ -390,7 +399,8 @@ export class OfficeScene extends Phaser.Scene {
     const canvas = document.createElement('canvas');
     canvas.width = sw;
     canvas.height = sh;
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('[antfarm] cropToTexture: no 2d canvas context'); // swapOfficeTextures keeps the placeholder
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
     if (this.textures.exists(newKey)) this.textures.remove(newKey); // drop the placeholder
