@@ -50,6 +50,10 @@ export const antfarmAssetsRoutes: FastifyPluginAsync<AntfarmAssetsOptions> = asy
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return reply.status(404).send({ error: 'Not found' });
       }
+      // Anything else (EACCES, EMFILE, …) is a real fault, not the open-core absent-art path:
+      // log with context before propagating so Fastify's error handler can turn it into a 500
+      // that's actually diagnosable on-call, instead of an anonymous stack trace.
+      req.log.error({ err, absPath }, 'antfarm-assets: unexpected fs error serving licensed asset');
       throw err;
     }
 

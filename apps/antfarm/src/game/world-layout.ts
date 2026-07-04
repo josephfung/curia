@@ -9,8 +9,9 @@ export const STAGE_HEIGHT = 960;
 // collide with the coordinator's desk above. A composed desk renders ~192px wide
 // on the world canvas (3 tiles × 32px × the ×2 sprite scale), and a full station
 // (monitors above, chair/label below) is ~180px tall — so spacing must clear the
-// width and the rows must sit well below the coordinator (y:110). Tune freely.
-const FLOOR_ROW1_Y = 340;        // first specialist row — clears the coordinator below y~160
+// width and the rows must sit well below the coordinator (boss desk at y:200,
+// see buildWorldLayout). Tune freely.
+const FLOOR_ROW1_Y = 340;        // first specialist row — clears the coordinator's station (~y:200 + ~90 below)
 const FLOOR_ROW2_Y = 560;        // second row — clears row 1's bottom (~390)
 const FLOOR_MARGIN = 100;        // min gap from the stage's left/right edges
 const FLOOR_MAX_SPACING = 240;   // center-to-center cap: 192px desk + ~48px breathing room
