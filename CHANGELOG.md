@@ -22,6 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Ant Farm AF-4** — `@curia/antfarm` scaffold with Conductor (playback, velocity, scrub, replay↔live merge), transport bar, bookmarks, and dynamic desk layout. Closes #1317.
 - **Ant Farm AF-5** — Phaser `OfficeScene` rendering all AF-3 directive metaphors, React-DOM detail overlays (pause on open), deterministic per-agent character variants, CC0 placeholder art + LimeZu credits. Closes #1318.
 - **Ant Farm AF-6** — Docker image builds both SPAs; `antfarm-static` route serves `/antfarm/*` before the console wildcard. Closes #1319.
+- **Ant Farm real art** — the office renders licensed LimeZu tiles/furniture and animated premade character sprites when present, served only behind session auth (`/api/antfarm/assets/*`); falls back to procedural placeholders when absent. (#1335)
 
 ### Fixed
 
