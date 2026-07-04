@@ -155,12 +155,15 @@ describe('registerSecurityHeaders', () => {
     expect(CONSOLE_CONTENT_SECURITY_POLICY).not.toContain('data:');
   });
 
-  it('serves the Ant Farm CSP (img-src data:) on /antfarm/ HTML responses', async () => {
+  it('serves the Ant Farm CSP (img-src data: blob:) on /antfarm/ HTML responses', async () => {
     app = await build();
     const res = await app.inject({ method: 'GET', url: '/antfarm/' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-security-policy']).toBe(ANTFARM_CONTENT_SECURITY_POLICY);
-    expect(res.headers['content-security-policy']).toContain("img-src 'self' data:");
+    // Both schemes are required: data: for Phaser's base64 boot textures, blob: for the
+    // loader-fetched licensed art (XHR → URL.createObjectURL). Missing blob: silently
+    // degrades the office to placeholders even though the assets serve fine.
+    expect(res.headers['content-security-policy']).toContain("img-src 'self' data: blob:");
     expect(res.headers['x-frame-options']).toBe('DENY');
   });
 
@@ -191,6 +194,6 @@ describe('registerSecurityHeaders', () => {
   it('keeps script-src strict in the Ant Farm CSP (only images are relaxed)', async () => {
     expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("script-src 'self'");
     expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
-    expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("img-src 'self' data:");
+    expect(ANTFARM_CONTENT_SECURITY_POLICY).toContain("img-src 'self' data: blob:");
   });
 });
