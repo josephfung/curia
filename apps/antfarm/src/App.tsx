@@ -6,17 +6,10 @@ import { PhaserOffice } from './game/PhaserOffice.js';
 import { DetailOverlay, type OverlayDetail } from './components/DetailOverlay.js';
 import { CreditsFooter } from './components/CreditsFooter.js';
 import { TransportBar } from './components/TransportBar.js';
-import { BookmarkPanel } from './components/BookmarkPanel.js';
 import { useTimeline } from './hooks/useTimeline.js';
 import { useLiveStream } from './hooks/useLiveStream.js';
 import { useConductor } from './hooks/useConductor.js';
 import type { PlaybackMode } from './conductor/types.js';
-import {
-  addBookmark,
-  loadBookmarks,
-  removeBookmark,
-  type AntfarmBookmark,
-} from './bookmarks/bookmarks.js';
 import {
   agentIdsFromDirectives,
   agentRosterKey,
@@ -44,10 +37,15 @@ function filterDirectives(
   });
 }
 
+/** Format a Date as a datetime-local input value (local wall-clock, 'YYYY-MM-DDTHH:mm'). */
+function toDatetimeLocal(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [registryAgents, setRegistryAgents] = useState<RegistryAgent[]>([]);
-  const [bookmarks, setBookmarks] = useState<AntfarmBookmark[]>(() => loadBookmarks());
   const [liveMode, setLiveMode] = useState(false);
   const [overlayDetail, setOverlayDetail] = useState<OverlayDetail | null>(null);
   const savedModeRef = useRef<PlaybackMode>('paused');
@@ -137,6 +135,25 @@ export function App() {
     }
   }, [fetchTimeline, live.streamOpenTs, liveMode]);
 
+  // Preload the last-24h window on arrival so the page lands ready to play (just hit Play).
+  // Runs once after auth succeeds. The input fields get local wall-clock strings for display;
+  // the fetch uses ISO timestamps so the server parses absolute instants regardless of its tz.
+  const didPreload = useRef(false);
+  useEffect(() => {
+    if (authed !== true || didPreload.current) return;
+    didPreload.current = true;
+    const now = new Date();
+    const start = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    setFrom(toDatetimeLocal(start));
+    setTo(toDatetimeLocal(now));
+    // fetchTimeline already surfaces failures via `error` (shown in the control bar); catch here
+    // so the rejection isn't unhandled. Intentionally do NOT reset didPreload — a failed preload
+    // shows the error and waits for a manual "Load window" rather than auto-retrying every render.
+    loadWindow(start.toISOString(), now.toISOString()).catch((err) => {
+      clientWarn('24h preload failed; error shown in control bar', err);
+    });
+  }, [authed, loadWindow]);
+
   // Single source of truth: sync conductor when timeline script changes.
   useEffect(() => {
     if (!script) return;
@@ -175,19 +192,6 @@ export function App() {
     refresh();
   };
 
-  const handleSaveBookmark = () => {
-    if (!from || !to) return;
-    const next = addBookmark({
-      from,
-      to,
-      label: `${from.slice(0, 16)}…`,
-      conversationId: filterConversation || undefined,
-      agentId: filterAgent || undefined,
-      eventKind: filterKind || undefined,
-    });
-    setBookmarks(next);
-  };
-
   if (authed === null) {
     return <div className="shell">Checking session…</div>;
   }
@@ -204,30 +208,6 @@ export function App() {
 
   return (
     <div className="shell">
-      <header className="header">
-        <h1>Ant Farm</h1>
-        <p className="subtitle">DVR for the office — replay and live monitoring</p>
-      </header>
-
-      <div className="window-controls">
-        <label>
-          From
-          <input type="datetime-local" value={from} onChange={(e) => setFrom(e.target.value)} />
-        </label>
-        <label>
-          To
-          <input type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)} />
-        </label>
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => void loadWindow(from, to, filterConversation || undefined)}
-        >
-          {loading ? 'Loading…' : 'Load window'}
-        </button>
-        {error && <span className="error">{error}</span>}
-      </div>
-
       <TransportBar
         mode={snapshot.mode}
         velocity={snapshot.velocity}
@@ -242,6 +222,13 @@ export function App() {
         onVelocityChange={(v) => { conductor.setVelocity(v); refresh(); }}
         onScrub={handleScrub}
         scrubPct={scrubPct}
+        from={from}
+        to={to}
+        loading={loading}
+        error={error}
+        onFrom={setFrom}
+        onTo={setTo}
+        onLoadWindow={() => void loadWindow(from, to, filterConversation || undefined)}
         filterConversation={filterConversation}
         filterAgent={filterAgent}
         filterKind={filterKind}
@@ -273,19 +260,6 @@ export function App() {
           </div>
           <CreditsFooter />
         </div>
-        <BookmarkPanel
-          bookmarks={bookmarks}
-          onSave={handleSaveBookmark}
-          onLoad={(b) => {
-            setFrom(b.from.slice(0, 16));
-            setTo(b.to.slice(0, 16));
-            setFilterConversation(b.conversationId ?? '');
-            setFilterAgent(b.agentId ?? '');
-            setFilterKind(b.eventKind ?? '');
-            void loadWindow(b.from, b.to, b.conversationId);
-          }}
-          onRemove={(index) => setBookmarks(removeBookmark(index))}
-        />
       </div>
 
       <DetailOverlay detail={overlayDetail} onClose={closeOverlay} />
