@@ -155,6 +155,12 @@ const jobsRoute = createRoute({
   component: JobsPage,
 });
 
+const jobDetailRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/jobs/$jobId',
+  component: JobsPage,
+});
+
 const tasksRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/tasks',
@@ -205,6 +211,7 @@ const routeTree = rootRoute.addChildren([
     setupRoute,
     contactsRoute,
     jobsRoute,
+    jobDetailRoute,
     tasksRoute,
     skillsRoute,
     agentsRoute,

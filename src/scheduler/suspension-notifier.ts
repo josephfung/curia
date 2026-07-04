@@ -14,12 +14,20 @@ import type { Logger } from '../logger.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 import type { ScheduleSuspendedEvent, BusEvent } from '../bus/events.js';
 import { classifyError } from '../errors/classify.js';
+import type { SchedulerService } from './scheduler-service.js';
+import {
+  buildJobNotificationContext,
+  buildJobConsoleUrl,
+} from './job-notification-context.js';
 
 export interface SuspensionNotifierConfig {
   bus: EventBus;
   outboundGateway: OutboundGateway;
+  schedulerService: SchedulerService;
   ceoEmail: string;
   logger: Logger;
+  appOrigin?: string;
+  httpPort: number;
 }
 
 export class SuspensionNotifier {
@@ -49,17 +57,21 @@ export class SuspensionNotifier {
   private async handle(event: ScheduleSuspendedEvent): Promise<void> {
     const { jobId, agentId, lastError, consecutiveFailures } = event.payload;
 
+    const jobContext = await this.loadJobContext(jobId);
+
     const subject = `Scheduled job suspended: ${agentId}`;
     const body = [
       'Scheduled job suspended.',
       '',
-      `Agent:    ${agentId}`,
-      `Failures: ${consecutiveFailures}`,
-      `Error:    ${lastError}`,
+      `Agent:      ${agentId}`,
+      `Objective:  ${jobContext.objective}`,
+      `Recurrence: ${jobContext.recurrence}`,
+      `Failures:   ${consecutiveFailures}`,
+      `Error:      ${lastError}`,
       '',
-      `Job ID: ${jobId}`,
+      `View job: ${jobContext.consoleUrl}`,
       '',
-      'To resume this job, open the web app and navigate to Scheduler → Jobs.',
+      'To resume this job, open the link above and click Resume.',
     ].join('\n');
 
     // sendNotification() catches its own errors and returns false on failure —
@@ -77,6 +89,34 @@ export class SuspensionNotifier {
         { jobId, agentId, consecutiveFailures, lastError },
         'SuspensionNotifier: failed to publish notification — suspension already recorded in audit log',
       );
+    }
+  }
+
+  /** Lightweight DB lookup for notification context; falls back gracefully on missing rows. */
+  private async loadJobContext(jobId: string): Promise<{
+    objective: string;
+    recurrence: string;
+    consoleUrl: string;
+  }> {
+    const consoleUrl = buildJobConsoleUrl(this.config.appOrigin, this.config.httpPort, jobId);
+    try {
+      const job = await this.config.schedulerService.getJob(jobId);
+      if (!job) {
+        return {
+          objective: '(job not found)',
+          recurrence: '(unknown)',
+          consoleUrl,
+        };
+      }
+      return buildJobNotificationContext(job, this.config.appOrigin, this.config.httpPort);
+    } catch (err: unknown) {
+      const agentErr = classifyError(err, 'suspension-notifier');
+      this.log.warn({ err: agentErr, jobId }, 'SuspensionNotifier: failed to load job context for notification');
+      return {
+        objective: '(unavailable)',
+        recurrence: '(unknown)',
+        consoleUrl,
+      };
     }
   }
 }

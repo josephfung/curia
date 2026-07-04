@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RecoveryNotifier } from '../../../src/scheduler/recovery-notifier.js';
 import type { ScheduleRecoveredEvent } from '../../../src/bus/events.js';
+import type { JobRow } from '../../../src/scheduler/scheduler-service.js';
 
 // -- Mock helpers --
 
@@ -24,6 +25,43 @@ function mockLogger() {
 function mockOutboundGateway() {
   return {
     sendNotification: vi.fn(),
+  };
+}
+
+function mockSchedulerService(job: JobRow | null = null) {
+  return {
+    getJob: vi.fn().mockResolvedValue(job),
+  };
+}
+
+function makeJob(overrides: Partial<JobRow> = {}): JobRow {
+  return {
+    id: 'job-abc123',
+    agentId: 'coordinator',
+    cronExpr: '0 8 * * *',
+    runAt: null,
+    taskPayload: { task: 'Send daily digest' },
+    status: 'pending',
+    lastRunAt: null,
+    nextRunAt: null,
+    lastError: null,
+    consecutiveFailures: 0,
+    createdBy: 'system',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    timezone: 'UTC',
+    agentTaskId: null,
+    intentAnchor: null,
+    progress: null,
+    taskErrorBudget: null,
+    taskTags: null,
+    taskTitle: null,
+    runStartedAt: null,
+    expectedDurationSeconds: null,
+    lastRunOutcome: null,
+    lastRunSummary: 'Compiled the daily digest.',
+    lastRunContext: null,
+    originator: null,
+    ...overrides,
   };
 }
 
@@ -53,18 +91,23 @@ function makeEvent(overrides: Partial<ScheduleRecoveredEvent['payload']> = {}): 
 describe('RecoveryNotifier', () => {
   let bus: ReturnType<typeof mockBus>;
   let gateway: ReturnType<typeof mockOutboundGateway>;
+  let schedulerService: ReturnType<typeof mockSchedulerService>;
   let logger: ReturnType<typeof mockLogger>;
   let notifier: RecoveryNotifier;
 
   beforeEach(() => {
     bus = mockBus();
     gateway = mockOutboundGateway();
+    schedulerService = mockSchedulerService(makeJob());
     logger = mockLogger();
     notifier = new RecoveryNotifier({
       bus: bus as never,
       outboundGateway: gateway as never,
+      schedulerService: schedulerService as never,
       ceoEmail: 'ceo@example.com',
       logger: logger as never,
+      appOrigin: 'https://curia.example.com',
+      httpPort: 3000,
     });
   });
 
@@ -90,15 +133,18 @@ describe('RecoveryNotifier', () => {
     await (notifier as never as { handle(e: ScheduleRecoveredEvent): Promise<void> })
       .handle(makeEvent());
 
+    expect(schedulerService.getJob).toHaveBeenCalledWith('job-abc123');
     expect(gateway.sendNotification).toHaveBeenCalledOnce();
     const call = gateway.sendNotification.mock.calls[0][0];
     expect(call.notificationType).toBe('schedule_recovered');
     expect(call.ceoEmail).toBe('ceo@example.com');
     expect(call.subject).toContain('coordinator');        // agentId in subject
     expect(call.body).toContain('coordinator');           // agentId in body
-    expect(call.body).toContain('job-abc123');            // jobId
+    expect(call.body).toContain('Compiled the daily digest.'); // objective from last_run_summary
+    expect(call.body).toContain('Recurring (cron: `0 8 * * *`)');
     expect(call.body).toContain('~20 min');              // stuck duration (now - runStartedAt)
     expect(call.body).toContain('15 min');               // timeout threshold (900s)
+    expect(call.body).toContain('https://curia.example.com/jobs/job-abc123');
     expect(call.body).toContain('rescheduled automatically'); // outcome
   });
 
@@ -145,5 +191,17 @@ describe('RecoveryNotifier', () => {
     ).resolves.toBeUndefined();
 
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  it('falls back gracefully when the job row is missing', async () => {
+    schedulerService.getJob.mockResolvedValue(null);
+    gateway.sendNotification.mockResolvedValue(true);
+
+    await (notifier as never as { handle(e: ScheduleRecoveredEvent): Promise<void> })
+      .handle(makeEvent());
+
+    const call = gateway.sendNotification.mock.calls[0][0];
+    expect(call.body).toContain('(job not found)');
+    expect(call.body).toContain('https://curia.example.com/jobs/job-abc123');
   });
 });

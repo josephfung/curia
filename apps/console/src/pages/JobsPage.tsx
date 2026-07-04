@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Link } from '@tanstack/react-router';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import cronstrue from 'cronstrue';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
@@ -532,6 +532,8 @@ const ALL_STATUSES: JobStatus[] = ['pending', 'running', 'suspended', 'paused', 
 const SCHEDULE_TYPE_FILTERS: ScheduleTypeFilter[] = ['all', 'recurring', 'one_time'];
 
 export default function JobsPage() {
+  const navigate = useNavigate();
+  const { jobId: jobIdFromUrl } = useParams({ strict: false }) as { jobId?: string };
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -546,6 +548,8 @@ export default function JobsPage() {
   const [pageSize, setPageSize] = useState(10);
   const [editing, setEditing] = useState<Job | null>(null);
   const [creating, setCreating] = useState(false);
+  const appliedUrlJobRef = useRef<string | undefined>(undefined);
+  const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
 
   useEffect(() => {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
@@ -567,6 +571,49 @@ export default function JobsPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!jobIdFromUrl) return;
+
+    const openFromUrl = async () => {
+      let target = jobs.find(j => j.id === jobIdFromUrl);
+      if (!target) {
+        try {
+          const res = await apiFetch(`/api/jobs/${jobIdFromUrl}`);
+          if (!res.ok) return;
+          const data = await res.json() as { job: Job };
+          target = data.job;
+          setJobs(prev => {
+            const idx = prev.findIndex(j => j.id === target!.id);
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = target!;
+              return next;
+            }
+            return [...prev, target!];
+          });
+          setStatusFilter('all');
+          setScheduleTypeFilter('all');
+          setAgentFilter('all');
+          setSearch('');
+        } catch (err) {
+          console.error('[JobsPage] failed to load job from URL:', err);
+          return;
+        }
+      }
+
+      if (appliedUrlJobRef.current === jobIdFromUrl && editing?.id === jobIdFromUrl) return;
+      appliedUrlJobRef.current = jobIdFromUrl;
+      setStatusFilter('all');
+      setScheduleTypeFilter('all');
+      setAgentFilter('all');
+      setSearch('');
+      setCreating(false);
+      setEditing(target);
+    };
+
+    void openFromUrl();
+  }, [jobIdFromUrl, jobs, editing?.id]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: jobs.length };
@@ -620,6 +667,29 @@ export default function JobsPage() {
   const safePage = Math.min(page, totalPages);
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
+  useEffect(() => {
+    if (!jobIdFromUrl || !editing || editing.id !== jobIdFromUrl) return;
+    const idx = filtered.findIndex(j => j.id === editing.id);
+    if (idx >= 0) {
+      const targetPage = Math.floor(idx / pageSize) + 1;
+      if (targetPage !== safePage) setPage(targetPage);
+    }
+  }, [jobIdFromUrl, editing, filtered, pageSize, safePage]);
+
+  useEffect(() => {
+    if (!jobIdFromUrl || !editing || editing.id !== jobIdFromUrl) return;
+    rowRefs.current.get(editing.id)?.scrollIntoView({ block: 'nearest' });
+  }, [editing, jobIdFromUrl, safePage, pageRows.length]);
+
+  function handleCloseDrawer() {
+    setEditing(null);
+    setCreating(false);
+    if (jobIdFromUrl) {
+      appliedUrlJobRef.current = undefined;
+      void navigate({ to: '/jobs', replace: true });
+    }
+  }
+
   function toggleSort(key: keyof Job) {
     setSort(s => s.key === key
       ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
@@ -645,8 +715,7 @@ export default function JobsPage() {
 
   function handleDeleted(id: string) {
     setJobs(prev => prev.filter(j => j.id !== id));
-    setEditing(null);
-    setCreating(false);
+    handleCloseDrawer();
   }
 
   return (
@@ -796,6 +865,10 @@ export default function JobsPage() {
                         {pageRows.map(j => (
                           <tr
                             key={j.id}
+                            ref={(el) => {
+                              if (el) rowRefs.current.set(j.id, el);
+                              else rowRefs.current.delete(j.id);
+                            }}
                             className={editing?.id === j.id ? 'active' : ''}
                             onClick={() => { setCreating(false); setEditing(j); }}
                           >
@@ -869,7 +942,7 @@ export default function JobsPage() {
                     key={editing?.id ?? 'new'}
                     job={editing}
                     creating={creating}
-                    onClose={() => { setEditing(null); setCreating(false); }}
+                    onClose={handleCloseDrawer}
                     onSaved={handleSaved}
                     onDeleted={handleDeleted}
                   />
