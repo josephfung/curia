@@ -72,6 +72,7 @@ import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
+import { extractPromptExfiltrationMarkers } from './dispatch/prompt-exfiltration-markers.js';
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
 import type { JudgeConfig } from './dispatch/outbound-judge.js';
 import { EscalationJudge } from './autonomy/escalation-judge.js';
@@ -1071,7 +1072,7 @@ async function main(): Promise<void> {
 
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
-    const systemPromptMarkers = extractIdentityMarkers(officeIdentity);
+    const systemPromptMarkers = extractPromptExfiltrationMarkers(officeIdentity);
     // The principal's email — used to allow their address in outbound content without
     // triggering the contact-data-leak rule. Resolved from the principal contact (#1049),
     // not from config. Must NOT be Curia's own Nylas address (nylasSelfEmail): using
@@ -1082,7 +1083,7 @@ async function main(): Promise<void> {
       logger.warn('Outbound content filter initialized without principal email (no verified principal email on file) — contact-data-leak rule may produce false positives');
     }
     if (systemPromptMarkers.length === 0) {
-      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that office identity has a name and title configured.');
+      logger.warn('No system prompt markers extracted — system-prompt-fragment rule will not detect prompt leakage. Check that office identity has a name configured.');
     }
     // Stage 2 LLM judge (issue #547). Constructed only when enabled. Routes through a
     // model→provider router so any registered model works. The judge model is validated
@@ -2426,34 +2427,6 @@ async function main(): Promise<void> {
     cli.prompt();
   }
 }
-
-/**
- * Extract distinctive marker phrases from the office identity that would
- * indicate system prompt leakage if they appeared in an outbound email.
- * These are identity-specific strings that wouldn't occur in normal business writing.
- *
- * @TODO: The current markers only cover name and title. The full system prompt contains
- * many more distinctive instruction phrases, but extracting arbitrary sentences risks
- * false positives. This gap is intentionally left for the Stage 2 LLM-as-judge to cover.
- */
-function extractIdentityMarkers(
-  identity: import('./identity/types.js').OfficeIdentity,
-): string[] {
-  const markers: string[] = [];
-
-  // Full instruction phrases — distinctive enough to not appear in business email.
-  // We use the full instruction form ("You are X") rather than just the name
-  // to avoid false positives on email signatures.
-  if (identity.assistant.name) {
-    markers.push(`You are ${identity.assistant.name}`);
-  }
-  if (identity.assistant.name && identity.assistant.title) {
-    markers.push(`${identity.assistant.name}, ${identity.assistant.title}`);
-  }
-
-  return markers;
-}
-
 // Pre-logger fallback — if main() throws during config loading (before the
 // proper logger is constructed), pino may not be initialized. We create a
 // minimal error-level logger here so fatal startup errors are still structured

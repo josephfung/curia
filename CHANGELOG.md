@@ -39,7 +39,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **Bulk export controls** — `resolveItems` now ratchets sensitivity upward only (`max(explicit, db)`); agent-supplied tags can no longer downgrade authoritative `kg_nodes` values and bypass restricted gates.
+- **Outbound filter** — Stage 1 `system-prompt-fragment` detection now uses constraints, behavioral preferences, and instruction-prefix patterns (not email signatures); principal sole recipients bypass identity/structure blocks. Closes #1334.
+
 - **Console CSP (#130)** — strict `Content-Security-Policy` and `X-Frame-Options: DENY` on HTML responses; scripts locked to same-origin bundles (legacy KG Tailwind CDN removed with the React console).
 - **Coordinator provenance-aware presentation hardening (#856)** — presentation directives now follow only the principal's instructions, ignoring third-party content.
 - **Provenance-aware red-team harness (#900)** — probes are framed with dispatcher-style sender context to test non-principal provenance.
