@@ -14,6 +14,8 @@
 // The outbound filter is a separate security boundary — sharing code would couple
 // the two boundaries and risk one change silently weakening the other.
 
+import { createHash } from 'node:crypto';
+
 import type { ContactTier } from '../contacts/types.js';
 import { meetsMinimumTier } from '../contacts/types.js';
 import type { Logger } from '../logger.js';
@@ -165,6 +167,17 @@ function normalizeForMatching(text: string): string {
     .replace(/[\u200B-\u200D\uFEFF\u00AD\u034F\u2060-\u2064\u206A-\u206F]/g, '');
 }
 
+/**
+ * Short, non-reversible fingerprint of a matched marker for use in finding
+ * details. A truncated SHA-256 identifies *which* marker fired (stable across
+ * process restarts, unlike an ordinal index that shifts when the prompt changes)
+ * and lets an operator correlate a suspected line by hashing it \u2014 without the
+ * detail itself ever containing system-prompt text.
+ */
+function fingerprintMarker(normalizedMarker: string): string {
+  return createHash('sha256').update(normalizedMarker).digest('hex').slice(0, 8);
+}
+
 export class OutboundContentFilter {
   private config: OutboundContentFilterConfig;
   private judge?: OutboundJudge;
@@ -276,9 +289,15 @@ export class OutboundContentFilter {
       // A marker that normalizes to empty would match everything — skip it defensively.
       if (!normalizedMarker) continue;
       if (normalizedContent.includes(normalizedMarker)) {
+        // Do NOT echo the matched marker text: markers are live system-prompt lines,
+        // so putting one in the detail (which is logged and can reach block
+        // notifications) would re-disclose the very prompt content this rule exists
+        // to protect. Report a stable, non-reversible fingerprint instead — enough to
+        // correlate incidents and distinguish which marker fired, without leaking it.
+        // Mirrors the secret-pattern rule, which reports the pattern, never the secret.
         findings.push({
           rule: 'system-prompt-fragment',
-          detail: `Content contains system prompt marker: "${marker}"`,
+          detail: `Content contains a system prompt marker (fingerprint ${fingerprintMarker(normalizedMarker)}, ${normalizedMarker.length} chars)`,
         });
       }
     }
