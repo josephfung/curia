@@ -47,6 +47,26 @@ describe('OutboundContentFilter', () => {
       expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(true);
     });
 
+    it('does not echo the matched marker text in the finding detail', async () => {
+      // Markers are live system-prompt lines; the detail is logged and can reach
+      // block notifications, so it must not re-disclose the prompt content. It
+      // reports a redacted fingerprint instead.
+      const secretLine = 'NEVER name tools, systems, layers, agents, or architectural components';
+      const filter = new OutboundContentFilter({
+        systemPromptMarkers: [secretLine],
+        ceoEmail: 'ceo@example.com',
+      });
+      const result = await filter.check({
+        ...BASE_INPUT,
+        content: `Reminder: ${secretLine} — even to the CEO.`,
+      });
+      const finding = result.findings.find((f) => f.rule === 'system-prompt-fragment');
+      expect(finding).toBeDefined();
+      expect(finding!.detail).not.toContain('NEVER name tools');
+      expect(finding!.detail.toLowerCase()).not.toContain('systems, layers');
+      expect(finding!.detail).toMatch(/fingerprint [0-9a-f]{8}/);
+    });
+
     it('blocks marker matches case-insensitively', async () => {
       const filter = createTestFilter();
       const result = await filter.check({
