@@ -599,37 +599,46 @@ Loads each in-use premade sheet as a spritesheet, registers idle + 4-direction w
 - Changes `AgentSprite.body` from `Phaser.GameObjects.Image` to `Phaser.GameObjects.Image | Phaser.GameObjects.Sprite` (Sprite is a subclass of Image, so `.setTint/.setScale/.setInteractive/.setTexture` all still typecheck).
 - Produces: `private ensureCharacterAnims(sheetKey: string): void`, `private facing(dx: number, dy: number): 'down'|'up'|'left'|'right'`.
 
-- [ ] **Step 1: Pin character frame layout with the slicer.** Point `/tmp/af-slicer.html` `SRC` at
-`…/modern-interiors/premade-characters/32x32/Premade_Character_32x32_01.png`, set `CELL = 32`, `SCALE = 3`, reload, screenshot, and `Read` it. Also open `…/modern-interiors/Spritesheet_animations_GUIDE.png` (labels each animation row: `idle`, `walk`, …). Determine, for **idle** and **walk**, the 0-based global frame indices (row-major, 56 frames per row) for each of the 4 directions (down/up/left/right) — identify direction by which way the character faces (front = face visible, back = hair only, side = profile). Record the first frame + frame count per direction.
+- [x] **Step 1: Pin character frame layout (DONE — measured by the controller).** The frame layout was measured against `Premade_Character_32x32_10.png` with a browser canvas slicer: frames are **32w × 64h**; walk is 6 frames/direction on 64px-row 1 (up 56–61, left 62–67, right 68–73, down 74–79); idle reuses each direction's walk-start frame. These values are baked into Step 2 below — the implementer uses them verbatim and does NOT need to re-measure. (Left/right assignment is verified in the browser in Task 8.)
 
 - [ ] **Step 2: Add character constants to `asset-manifest.ts`** using the pinned values (example shape; replace indices with measured):
 
 ```typescript
-/** Premade character sheet frame geometry (Modern Interiors 32x32 pack). */
-export const CHARACTER_FRAME = { width: 32, height: 32 } as const;
+/** Premade character sheet frame geometry (Modern Interiors 32x32 pack).
+ *  MEASURED: each frame is 32 wide × 64 tall (1 tile wide, 2 tiles tall — humans span two
+ *  32px rows). The sheet is 1792×1312 → 56 columns × 20 full 64px rows (last 32px is spare).
+ *  Phaser generateFrameNumbers with frameHeight:64 indexes frame = row*56 + col. */
+export const CHARACTER_FRAME = { width: 32, height: 64 } as const;
 
 export type Direction = 'down' | 'up' | 'left' | 'right';
 
 /** First-frame index + length for each animation/direction, PINNED by measurement
- *  (Task 5 Step 1). Global frame index = sheetRow*56 + column. */
+ *  (Task 5 Step 1) against Premade_Character_32x32_10.png. Global frame index = row*56 + col.
+ *  Walk = 6 frames/direction on 64px-row 1 (frames 56–79). Idle reuses each walk
+ *  direction's first frame as a single static pose (the dedicated idle row is too sparse to
+ *  map cleanly, and reusing the walk anchor guarantees the idle facing matches the walk).
+ *  NOTE: up=56 (pure back) and down=74 (faces visible) are certain; left/right (62/68) are the
+ *  two side blocks and their L/R assignment is verified/swapped in the browser (Task 8). */
 export interface AnimSpec { start: number; length: number; frameRate: number }
 export const CHARACTER_ANIM: Record<'idle' | 'walk', Record<Direction, AnimSpec>> = {
   idle: {
-    down:  { start: 0,  length: 6, frameRate: 4 },
-    up:    { start: 6,  length: 6, frameRate: 4 },
-    left:  { start: 12, length: 6, frameRate: 4 },
-    right: { start: 18, length: 6, frameRate: 4 },
+    down:  { start: 74, length: 1, frameRate: 1 },
+    up:    { start: 56, length: 1, frameRate: 1 },
+    left:  { start: 62, length: 1, frameRate: 1 },
+    right: { start: 68, length: 1, frameRate: 1 },
   },
   walk: {
-    down:  { start: 112, length: 6, frameRate: 8 },
-    up:    { start: 118, length: 6, frameRate: 8 },
-    left:  { start: 124, length: 6, frameRate: 8 },
-    right: { start: 130, length: 6, frameRate: 8 },
+    down:  { start: 74, length: 6, frameRate: 8 },
+    up:    { start: 56, length: 6, frameRate: 8 },
+    left:  { start: 62, length: 6, frameRate: 8 },
+    right: { start: 68, length: 6, frameRate: 8 },
   },
 };
 
 export const characterSheetUrl = (file: string): string => `${ASSET_BASE}/characters/${file}`;
 ```
+
+Note: a single-frame idle animation is valid in Phaser (`generateFrameNumbers` with `start === end`); `repeat: -1` on a 1-frame anim just holds the frame.
 
 - [ ] **Step 3: Load in-use sheets in `preload()`.** In `OfficeScene.preload()`, after the office loads, add the character-sheet loads. Compute the distinct sheets the current desks need:
 
@@ -690,7 +699,12 @@ import { CHARACTER_FRAME, CHARACTER_ANIM, characterSheetUrl, type Direction } fr
     let body: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
     if (hasReal) {
       this.ensureCharacterAnims(sheetKey);
-      const sprite = this.add.sprite(0, 0, sheetKey, CHARACTER_ANIM.idle.down.start).setScale(1.5);
+      // Frame is 32×64 (tall). Scale 1.3 → ~42×83 on screen, proportionate to the 64px
+      // office tiles; origin biased downward so the character's feet sit near the desk pos
+      // (the sprite's body occupies the lower ~2/3 of the 64px frame). Both are tunable.
+      const sprite = this.add.sprite(0, 0, sheetKey, CHARACTER_ANIM.idle.down.start)
+        .setOrigin(0.5, 0.66)
+        .setScale(1.3);
       sprite.play(`${sheetKey}-idle-down`);
       body = sprite;
     } else {
