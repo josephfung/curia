@@ -71,22 +71,26 @@ GHCR is chosen on its own merits (see D1). Note it will **not reliably satisfy t
   - `curia`: `image: ghcr.io/josephfung/curia:${CURIA_IMAGE_TAG:-latest}`, port `3000:3000`, `depends_on: postgres (healthy)`, healthcheck on `/api/health`, named volumes for runtime state, env from `.env`.
   - `postgres`: `pgvector/pgvector:pg16`, named volume `curia-pgdata`, healthcheck `pg_isready`.
   - No Caddy in the **base** file — base exposes `:3000` so localhost/eval and bring-your-own-proxy (nginx/Traefik/Cloudflare Tunnel) both work.
-- **New:** `docker-compose.tls.yml` — an **optional** Caddy overlay (automatic Let's Encrypt HTTPS, `DOMAIN` env). Operators with a public domain add it: `docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d`. Generalizes the pattern already in `curia-deploy/compose.production.yaml`. TLS matters because Curia auth (bootstrap secret, API token, session cookies) must not cross the wire in cleartext on a public host.
-- **New:** `.env.example` — the vault-unlock set (`DB_USER`, `DB_PASSWORD`, `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) + non-secret config (`DOMAIN`, `HTTP_PORT`, `TIMEZONE`, `LOG_LEVEL`, `CURIA_IMAGE_TAG`), with the encryption-key one-liner documented. This is the template `install.sh` renders and the standalone reference for hand-configurers.
+- **New:** `docker-compose.tls.yml` — an **optional** Caddy overlay (automatic Let's Encrypt HTTPS, `DOMAIN` env). Generalizes the pattern already in `curia-deploy/compose.production.yaml`. TLS matters because Curia auth (bootstrap secret, API token, session cookies) must not cross the wire in cleartext on a public host. The overlay is selected **durably** via the `COMPOSE_FILE` env var in `.env` (see §4.3) — not by remembering to pass `-f` each time.
+- **New:** `.env.example` — the vault-unlock set (`DB_USER`, `DB_PASSWORD`, `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) + non-secret config (`DOMAIN`, `HTTP_PORT`, `TIMEZONE`, `LOG_LEVEL`, `CURIA_IMAGE_TAG`, and a commented `COMPOSE_FILE` for the TLS overlay), with the encryption-key one-liner documented. This is the template `install.sh` renders and the standalone reference for hand-configurers.
 - **New:** `docker-compose.dev.yml` — a build-context override so the developer/source path builds locally instead of pulling.
 
 ### 4.3 curia repo — installers
 - **New:** `install.sh` (root) — the everyday operator entry (image-based, interactive). Responsibilities:
   1. Prereq check: **Docker + docker compose + curl** only.
   2. **Source-checkout sanity check:** if it detects it's running inside the Curia source tree (`.git/` + `src/` + `package.json` whose `name` is `curia`), ask the operator whether they want to (a) pull & run the **published image** [continue] or (b) build & run from **this source** — for (b), point them to `pnpm run setup` and exit. Prevents a confused "I cloned the repo, why is it pulling an image?" install.
-  3. Fetch version-pinned `docker-compose.yml` (+ `.env.example` template + optional `docker-compose.tls.yml`) if absent.
+  3. Fetch version-pinned `docker-compose.yml` (+ `.env.example` template + `docker-compose.tls.yml`) if absent.
   4. Prompt for the Anthropic key (validated `sk-ant-…`).
-  5. Resolve `.env`: create from template if absent, else append/update; preserve an existing `SECRET_ENCRYPTION_KEY`, generate one if missing.
-  6. Generate `API_TOKEN`, `WEB_APP_BOOTSTRAP_SECRET`.
-  7. `docker compose up -d postgres` → wait healthy.
-  8. **One-shot migrate in-container:** `docker compose run --rm curia ./node_modules/.bin/tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql` (DATABASE_URL from compose env).
-  9. **Seed vault in-container:** `docker compose run --rm -e ANTHROPIC_API_KEY -e API_TOKEN -e WEB_APP_BOOTSTRAP_SECRET -e SEED_VAULT_VERIFY=1 curia ./node_modules/.bin/tsx scripts/seed-vault.ts`.
-  10. `docker compose up -d` → poll `/api/health` → print summary box (show the web login secret once).
+  5. **Deployment topology / TLS prompt** — ask how the operator will reach Curia:
+     - **Local / eval** → HTTP on `:3000`, no TLS.
+     - **Public domain + automatic HTTPS** → prompt for `DOMAIN`; best-effort check that it resolves (warn, don't block, if not); set `DOMAIN` and `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml` in `.env` so **every future bare `docker compose` command includes the Caddy overlay** (durable, no `-f` to remember). Caddy binds 80/443 and issues via Let's Encrypt.
+     - **Public IP / behind my own reverse proxy** → HTTP on `:3000`, no bundled TLS; note to terminate TLS upstream.
+  6. Resolve `.env`: create from template if absent, else append/update; preserve an existing `SECRET_ENCRYPTION_KEY`, generate one if missing; write `DOMAIN`/`COMPOSE_FILE` per step 5.
+  7. Generate `API_TOKEN`, `WEB_APP_BOOTSTRAP_SECRET`.
+  8. `docker compose up -d postgres` → wait healthy.
+  9. **One-shot migrate in-container:** `docker compose run --rm curia ./node_modules/.bin/tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql` (DATABASE_URL from compose env).
+  10. **Seed vault in-container:** `docker compose run --rm -e ANTHROPIC_API_KEY -e API_TOKEN -e WEB_APP_BOOTSTRAP_SECRET -e SEED_VAULT_VERIFY=1 curia ./node_modules/.bin/tsx scripts/seed-vault.ts`.
+  11. `docker compose up -d` → poll `/api/health` → print summary box: the correct URL (`https://$DOMAIN` or `http://localhost:3000`), the web login secret (once), and — on the TLS path — a "if the cert doesn't appear, check `docker compose logs caddy` and confirm DNS/ports 80,443" hint.
 - **Refactor:** `scripts/setup.sh` (dev/source) — keep behavior; its host-side migrate + seed logic stays for the source path. Extract shared prompt/gen/health-poll/summary into:
 - **New:** `scripts/setup-common.sh` — sourced by both `setup.sh` and `install.sh`.
 
