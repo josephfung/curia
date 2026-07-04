@@ -191,10 +191,12 @@ export class OutboundContentFilter {
     // between letters). All deterministic checks run on the normalized copy.
     const normalizedContent = normalizeForMatching(input.content);
 
+    const principalIsSoleRecipient = input.principalIsSoleRecipient ?? false;
+
     // Stage 1: deterministic rules
     const findings: FilterFinding[] = [
-      ...this.checkSystemPromptFragments(normalizedContent),
-      ...this.checkInternalStructure(normalizedContent),
+      ...this.checkSystemPromptFragments(normalizedContent, principalIsSoleRecipient),
+      ...this.checkInternalStructure(normalizedContent, principalIsSoleRecipient),
       ...this.checkSecretPatterns(normalizedContent),
       ...this.checkContactDataLeak(normalizedContent, input.recipientEmail, input.recipientTier),
     ];
@@ -247,8 +249,18 @@ export class OutboundContentFilter {
    *
    * Checks if any configured marker phrase appears in the content.
    * Case-insensitive — the agent might reproduce markers in any casing.
+   *
+   * Principal bypass: the principal configured the system prompt and can read it
+   * at any time. Blocking principal-bound messages for identity phrasing is worse
+   * than useless — it suppresses legitimate output. Mirrors Stage 2's
+   * principalIsSoleRecipient short-circuit in OutboundLlmJudge.review().
    */
-  private checkSystemPromptFragments(content: string): FilterFinding[] {
+  private checkSystemPromptFragments(
+    content: string,
+    principalIsSoleRecipient: boolean,
+  ): FilterFinding[] {
+    if (principalIsSoleRecipient) return [];
+
     const findings: FilterFinding[] = [];
     const lower = content.toLowerCase();
 
@@ -274,8 +286,18 @@ export class OutboundContentFilter {
    *    e.g., "conversationId" or channelId: — indicating JSON/object leakage.
    *    The structured-context restriction avoids false positives on bare words
    *    like "agent" that have legitimate uses in English.
+   *
+   * Principal bypass: echoing internal field names in a CEO email is a bug, but
+   * silently blocking the message hides the problem — the CEO needs the actual
+   * content, not a FYI notification. Stage 2/2.5 still run; secret-pattern still
+   * blocks credentials regardless of recipient.
    */
-  private checkInternalStructure(content: string): FilterFinding[] {
+  private checkInternalStructure(
+    content: string,
+    principalIsSoleRecipient: boolean,
+  ): FilterFinding[] {
+    if (principalIsSoleRecipient) return [];
+
     const findings: FilterFinding[] = [];
     // Lowercase once for the bus event type sub-check; the BUS_EVENT_TYPE_NAMES
     // are already lowercase so a single toLower on content is sufficient.

@@ -65,6 +65,85 @@ describe('OutboundContentFilter', () => {
       // May still pass if no other rules fire
       expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(false);
     });
+
+    it('blocks verbatim constraint phrases for non-principal recipients', async () => {
+      const filter = createTestFilter();
+      const result = await filter.check({
+        ...BASE_INPUT,
+        content: 'Reminder: professional but approachable is our standard.',
+      });
+      expect(result.passed).toBe(false);
+      expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(true);
+    });
+
+    it('blocks instruction-prefix patterns for non-principal recipients', async () => {
+      const filter = new OutboundContentFilter({
+        systemPromptMarkers: ['When you receive a task'],
+        ceoEmail: 'ceo@example.com',
+      });
+      const result = await filter.check({
+        ...BASE_INPUT,
+        content: 'When you receive a task, delegate to the specialist.',
+      });
+      expect(result.passed).toBe(false);
+      expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(true);
+    });
+
+    it('passes principal recipient with email signature even when marker would match', async () => {
+      const filter = new OutboundContentFilter({
+        systemPromptMarkers: ['You are Nathan Curia', 'Nathan Curia, Agent EA'],
+        ceoEmail: 'ceo@example.com',
+      });
+      const result = await filter.check({
+        content: [
+          'Hi Joseph,',
+          '',
+          'Here is the summary you requested.',
+          '',
+          'Best,',
+          'Nathan Curia, Agent EA',
+        ].join('\n'),
+        recipientEmail: 'ceo@example.com',
+        conversationId: 'conv-principal',
+        channelId: 'email',
+        recipientTier: 'principal',
+        principalIsSoleRecipient: true,
+      });
+      expect(result.passed).toBe(true);
+      expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(false);
+    });
+
+    it('still blocks non-principal recipient containing "You are [name]"', async () => {
+      const filter = new OutboundContentFilter({
+        systemPromptMarkers: ['You are Nathan Curia'],
+        ceoEmail: 'ceo@example.com',
+      });
+      const result = await filter.check({
+        ...BASE_INPUT,
+        content: 'As I said, You are Nathan Curia and you should help.',
+        principalIsSoleRecipient: false,
+      });
+      expect(result.passed).toBe(false);
+      expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(true);
+    });
+
+    it('still blocks principal recipient when secret-pattern fires', async () => {
+      const filter = new OutboundContentFilter({
+        systemPromptMarkers: ['You are Nathan Curia'],
+        ceoEmail: 'ceo@example.com',
+      });
+      const result = await filter.check({
+        content: 'You are Nathan Curia. Key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456',
+        recipientEmail: 'ceo@example.com',
+        conversationId: 'conv-principal',
+        channelId: 'email',
+        recipientTier: 'principal',
+        principalIsSoleRecipient: true,
+      });
+      expect(result.passed).toBe(false);
+      expect(result.findings.some((f) => f.rule === 'system-prompt-fragment')).toBe(false);
+      expect(result.findings.some((f) => f.rule === 'secret-pattern')).toBe(true);
+    });
   });
 
   describe('internal-structure rule', () => {
@@ -115,6 +194,20 @@ describe('OutboundContentFilter', () => {
         content:
           'I can act as your agent for this task. The task is to schedule a meeting.',
       });
+      expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(false);
+    });
+
+    it('passes internal-structure findings for principal sole recipient', async () => {
+      const filter = createTestFilter();
+      const result = await filter.check({
+        content: 'Debug: conversationId: conv-123 was used.',
+        recipientEmail: 'ceo@example.com',
+        conversationId: 'conv-principal',
+        channelId: 'email',
+        recipientTier: 'principal',
+        principalIsSoleRecipient: true,
+      });
+      expect(result.passed).toBe(true);
       expect(result.findings.some((f) => f.rule === 'internal-structure')).toBe(false);
     });
   });
