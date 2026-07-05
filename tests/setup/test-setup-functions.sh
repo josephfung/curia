@@ -5,8 +5,14 @@ PASS=0
 FAIL=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Capture the test dir before sourcing setup.sh, which re-assigns SCRIPT_DIR to scripts/.
+TEST_DIR="$SCRIPT_DIR"
 # Source the script under test without running main (guarded by BASH_SOURCE check at script bottom)
 source "$SCRIPT_DIR/../../scripts/setup.sh"
+# Source the shared helpers explicitly so this file documents its direct dependency.
+# setup.sh already sources setup-common.sh at load time, so this is a no-op in practice;
+# we use TEST_DIR here because SCRIPT_DIR was re-assigned by setup.sh's sourcing.
+source "$TEST_DIR/../../scripts/setup-common.sh"
 
 # --- Helpers ---
 
@@ -323,6 +329,16 @@ _assert_output "contains password manager instruction"      "save this to a pass
 _assert_output "contains login instruction"                 "Enter it on the login page"
 _assert_output "contains box top-left corner"               "╔"
 _assert_output "contains box bottom-right corner"           "╝"
+
+# --- setup-common: secret generator tests ---
+
+echo ""
+echo "=== setup-common: secret generators ==="
+key_b64="$(gen_secret_b64)"
+# base64 of 32 bytes is 44 chars ending in '='
+if [[ "${#key_b64}" -eq 44 ]]; then echo "  ✓ gen_secret_b64 length 44"; PASS=$((PASS+1)); else echo "  ✗ gen_secret_b64 length ${#key_b64}"; FAIL=$((FAIL+1)); fi
+key_hex="$(gen_secret_hex)"
+if [[ "${#key_hex}" -eq 64 ]]; then echo "  ✓ gen_secret_hex length 64"; PASS=$((PASS+1)); else echo "  ✗ gen_secret_hex length ${#key_hex}"; FAIL=$((FAIL+1)); fi
 
 # --- Results ---
 

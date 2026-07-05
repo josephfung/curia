@@ -1,26 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Colors ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BOLD='\033[1m'
-GREY='\033[0;37m'
-RESET='\033[0m'
-
-# --- Output helpers ---
-info()    { echo -e "${BOLD}==> $*${RESET}"; }
-success() { echo -e "${GREEN}✓${RESET}  $*"; }
-warn()    { echo -e "${YELLOW}⚠${RESET}  $*" >&2; }
-error()   { echo -e "${RED}✗${RESET}  $*" >&2; }
-hint()    { echo -e "${GREY}   $*${RESET}" >&2; }
-
 # --- Paths ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env"
 ENV_EXAMPLE="$REPO_ROOT/.env.example"
+
+# Load shared installer helpers (colors, output, secret generators, wait_*, print_summary).
+# setup-common.sh must be sourced after REPO_ROOT is set — the wait_* helpers reference it.
+source "$SCRIPT_DIR/setup-common.sh"
+
+# Compose flags for the dev (build-from-source) path. The base docker-compose.yml
+# defines the service topology; docker-compose.dev.yml overlays the build: context so
+# the stack builds the local image rather than pulling a published one.
+DEV_COMPOSE=(-f docker-compose.yml -f docker-compose.dev.yml)
+
+# The wait_* helpers in setup-common.sh read COMPOSE_FLAGS (array) for extra compose
+# file flags. Point them at the dev override so they query the correct project.
+COMPOSE_FLAGS=("${DEV_COMPOSE[@]}")
 
 # Global: set by handle_existing_env to control main() flow
 SETUP_MODE="full"  # "full" | "resume"
@@ -31,8 +29,9 @@ PRESERVED_ENCRYPTION_KEY=""
 # seed the vault (#911). Empty on the resume path (vault already seeded on first run).
 SEED_ANTHROPIC_KEY=""
 
-# Verifies docker, docker compose, node >= 24, pnpm, and openssl are available.
+# Verifies docker, docker compose, node >= 24, and pnpm are available.
 # Exits 1 with an install link on the first missing tool.
+# (openssl check removed — secret generation now uses /dev/urandom via gen_secret_b64/hex)
 check_prerequisites() {
     if ! docker info &>/dev/null; then
         error "docker not found or not running."
@@ -64,65 +63,20 @@ check_prerequisites() {
         hint "Install at: https://pnpm.io/installation"
         exit 1
     fi
-
-    if ! command -v openssl &>/dev/null; then
-        error "openssl not found (required for secret generation)."
-        hint "Install via your system package manager (e.g. brew install openssl)"
-        exit 1
-    fi
 }
 
-# Returns 0 if key matches sk-ant-... format, 1 otherwise.
-validate_anthropic_key() {
-    local key="$1"
-    [[ "$key" =~ ^sk-ant-[A-Za-z0-9_-]+$ ]]
-}
-
-# Prompts for an Anthropic API key, validates format, retries up to 3 times.
-# Prints the key to stdout on success. Exits 1 after 3 failed attempts.
-prompt_anthropic_key() {
-    local key=""
-    local attempts=0
-    local max_attempts=3
-
-    echo "" >&2
-    echo "Curia needs an Anthropic API key to run its agents." >&2
-    hint "Get one at: https://console.anthropic.com"
-    echo "" >&2
-
-    while [[ $attempts -lt $max_attempts ]]; do
-        read -rsp "Paste your key: " key || true
-        echo "" >&2
-        if validate_anthropic_key "$key"; then
-            echo "$key"
-            return 0
-        fi
-        attempts=$((attempts + 1))
-        local remaining=$((max_attempts - attempts))
-        if [[ $remaining -gt 0 ]]; then
-            error "Key must start with 'sk-ant-' followed by letters, numbers, hyphens, or underscores. Try again ($remaining attempt(s) remaining):"
-        else
-            error "Key must start with 'sk-ant-' followed by letters, numbers, hyphens, or underscores."
-        fi
-    done
-
-    error "Failed to get a valid Anthropic API key after $max_attempts attempts."
-    hint "Get your key at: https://console.anthropic.com"
-    exit 1
-}
-
-# Populates global secret variables using openssl CSPRNG.
+# Populates global secret variables using /dev/urandom (no openssl dependency).
 generate_secrets() {
     DB_USER="curia"
-    DB_PASSWORD=$(openssl rand -hex 32)
-    API_TOKEN=$(openssl rand -hex 32)
-    WEB_APP_BOOTSTRAP_SECRET=$(openssl rand -hex 32)
+    DB_PASSWORD=$(gen_secret_hex)
+    API_TOKEN=$(gen_secret_hex)
+    WEB_APP_BOOTSTRAP_SECRET=$(gen_secret_hex)
     # Reuse a preserved key if one exists (full reset keeps Postgres data, so the
     # vault key must stay the same or existing encrypted rows become unreadable).
     if [[ -n "${PRESERVED_ENCRYPTION_KEY:-}" ]]; then
         SECRET_ENCRYPTION_KEY="$PRESERVED_ENCRYPTION_KEY"
     else
-        SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)
+        SECRET_ENCRYPTION_KEY=$(gen_secret_b64)
     fi
     # DATABASE_URL is consumed by host-side `pnpm migrate` (against the postgres
     # container's published port), so the port here must match POSTGRES_PORT.
@@ -182,7 +136,7 @@ handle_existing_env() {
             # User chose to start stack manually — exit setup
             info "Starting the stack..."
             hint "You can also run this directly: docker compose up -d"
-            docker compose --project-directory "$REPO_ROOT" up -d
+            docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d
             success "Stack is up."
             exit 0
             ;;
@@ -213,149 +167,6 @@ handle_existing_env() {
     esac
 }
 
-# Polls docker for Postgres healthy status every 2s, up to 60s. Exits 1 on timeout.
-wait_for_postgres() {
-    local max_wait=60
-    local elapsed=0
-
-    info "Waiting for Postgres to be ready..."
-    while [[ $elapsed -lt $max_wait ]]; do
-        local container_id ps_err
-        # Distinguish "container not started yet" (empty output, exit 0) from docker failures.
-        if ! ps_err=$(docker compose --project-directory "$REPO_ROOT" ps -q postgres 2>&1); then
-            error "docker compose ps failed: $ps_err"
-            hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs postgres"
-            exit 1
-        fi
-        container_id="$ps_err"
-        if [[ -n "$container_id" ]]; then
-            local health inspect_err
-            # Container may exit between ps and inspect — treat that as not-healthy yet.
-            if inspect_err=$(docker inspect --format='{{.State.Health.Status}}' "$container_id" 2>&1); then
-                health="$inspect_err"
-                if [[ "$health" == "healthy" ]]; then
-                    success "Postgres is ready"
-                    return 0
-                fi
-            fi
-        fi
-        sleep 2
-        elapsed=$((elapsed + 2))
-        echo -e "${GREY}   ... still waiting (${elapsed}s)${RESET}"
-    done
-
-    error "Postgres did not become healthy within ${max_wait}s."
-    hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs postgres"
-    exit 1
-}
-
-# Polls docker for Curia healthy status every 2s, up to 120s. Returns 0 on healthy,
-# 1 on timeout or detected failure. Does not exit — caller decides what to do
-# (typically: print a red failure and exit, so the operator doesn't see a green
-# success banner against a container that's actually in a restart loop).
-#
-# 120s is generous: Curia's HEALTHCHECK has start_period=60s + interval=30s, so the
-# first probe lands at ~60s and a healthy verdict needs at least one successful
-# probe. 120s = first probe + one retry window + slack for slow hosts.
-#
-# Failure detection beyond timeout:
-#  - Once the container has been observed at least once, an empty `ps -q` result
-#    means it was removed (crash without restart, or `docker rm`). Bail rather
-#    than wait the full 120s with a misleading "did not become healthy" message.
-#  - `.State.Status == exited` with a non-zero exit code or rising restart count
-#    means the container is in a fast crash-loop. Bail immediately.
-#  - `.State.Health.Status` is validated against {starting, healthy, unhealthy}.
-#    Any other value (e.g. `<no value>` when no healthcheck is defined, or the
-#    field being missing) is treated as a configuration error, not a "wait longer".
-wait_for_curia() {
-    local max_wait=120
-    local elapsed=0
-    local ever_seen=0   # 0 until we observe a container id at least once
-    local last_seen_id=""
-
-    info "Waiting for Curia to become healthy (up to ${max_wait}s)..."
-    while [[ $elapsed -lt $max_wait ]]; do
-        local container_id ps_err
-        if ! ps_err=$(docker compose --project-directory "$REPO_ROOT" ps -q curia 2>&1); then
-            error "docker compose ps failed: $ps_err"
-            hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs curia"
-            return 1
-        fi
-        container_id="$ps_err"
-
-        if [[ -z "$container_id" ]]; then
-            if [[ "$ever_seen" -eq 1 ]]; then
-                # Container existed earlier in this loop and is gone now — Docker
-                # removed it (e.g. it crashed and the restart policy isn't bringing
-                # it back, or someone ran `docker rm`). Don't wait the full timeout.
-                error "Curia container disappeared (last seen: ${last_seen_id:0:12}) — likely a crash without restart."
-                hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs curia"
-                return 1
-            fi
-            # Not seen yet — keep waiting. Compose may still be creating the container.
-        else
-            ever_seen=1
-            last_seen_id="$container_id"
-
-            # Read State.Status and RestartCount alongside Health.Status so we can
-            # bail on a clear failure rather than wait the full timeout. Format
-            # uses a sentinel separator that's unlikely to appear in any value.
-            local inspect_out inspect_err
-            if ! inspect_out=$(docker inspect \
-                --format='{{.State.Status}}|{{.RestartCount}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}NO_HEALTHCHECK{{end}}' \
-                "$container_id" 2>&1); then
-                inspect_err="$inspect_out"
-                # The container may have been removed between `ps -q` and `inspect` —
-                # let the next loop iteration handle that via the empty-id branch.
-                echo -e "${GREY}   ... inspect transient error: ${inspect_err}${RESET}"
-            else
-                local state restarts health
-                state="${inspect_out%%|*}"
-                local rest="${inspect_out#*|}"
-                restarts="${rest%%|*}"
-                health="${rest#*|}"
-
-                if [[ "$state" == "exited" || "$state" == "dead" ]] && [[ "${restarts:-0}" -ge 1 ]]; then
-                    error "Curia container is in a crash loop (state=${state}, restarts=${restarts})."
-                    hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs curia"
-                    return 1
-                fi
-
-                case "$health" in
-                    healthy)
-                        success "Curia is healthy"
-                        return 0
-                        ;;
-                    starting|unhealthy)
-                        # Both are transient; keep polling. The Dockerfile's retries
-                        # let an unhealthy container recover within a probe or two.
-                        ;;
-                    NO_HEALTHCHECK)
-                        error "Curia container has no healthcheck — cannot verify install."
-                        hint "Was the Dockerfile rebuilt? Expected HEALTHCHECK on /api/health."
-                        return 1
-                        ;;
-                    *)
-                        # Unknown value — flag rather than silently keep waiting.
-                        error "Unexpected Health.Status value: '$health' (expected starting/healthy/unhealthy)."
-                        hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs curia"
-                        return 1
-                        ;;
-                esac
-            fi
-        fi
-
-        sleep 2
-        elapsed=$((elapsed + 2))
-        echo -e "${GREY}   ... still waiting (${elapsed}s)${RESET}"
-    done
-
-    error "Curia did not become healthy within ${max_wait}s."
-    hint "The container may be slow or stuck — check logs:"
-    hint "  docker compose --project-directory \"$REPO_ROOT\" logs curia"
-    return 1
-}
-
 # Starts Postgres, runs migrations, starts the full stack, writes SETUP_COMPLETE marker.
 # Parses .env to get DATABASE_URL and HTTP_PORT for use at runtime. The bootstrap secret
 # is no longer stored in .env (#911) — it lives in the vault; only the full-setup path
@@ -377,7 +188,7 @@ run_infra() {
     done < "$ENV_FILE"
 
     info "Starting Postgres..."
-    docker compose --project-directory "$REPO_ROOT" up -d postgres
+    docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d postgres
 
     wait_for_postgres
 
@@ -433,7 +244,7 @@ run_infra() {
     success "Secrets vault seeded"
 
     info "Starting Curia..."
-    if ! docker compose --project-directory "$REPO_ROOT" up -d; then
+    if ! docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d; then
         error "Failed to start Curia stack."
         hint "Check logs: docker compose --project-directory \"$REPO_ROOT\" logs"
         exit 1
@@ -455,40 +266,6 @@ run_infra() {
     # On the resume path the bootstrap secret is not in-shell (not in .env anymore,
     # not regenerated), so pass it defensively — print_summary degrades gracefully.
     print_summary "${WEB_APP_BOOTSTRAP_SECRET:-}"
-}
-
-# Prints the final summary box with login URL and bootstrap secret.
-# $1 = WEB_APP_BOOTSTRAP_SECRET (plain hex, no formatting)
-print_summary() {
-    local secret="$1"
-    local port="${HTTP_PORT:-3000}"
-    local W=70  # inner box width; wide enough for a 64-char hex secret + padding
-    local border
-    border=$(printf '═%.0s' $(seq 1 $W))
-
-    echo ""
-    printf "╔%s╗\n" "$border"
-    printf "║%-${W}s║\n" ""
-    printf "║   %-$((W-3))s║\n" "Curia is running."
-    printf "║%-${W}s║\n" ""
-    printf "║   %-$((W-3))s║\n" "Open:    http://localhost:${port}"
-    printf "║%-${W}s║\n" ""
-    if [[ -n "$secret" ]]; then
-        # Full setup — the freshly generated secret is in hand; show it once.
-        printf "║   %-$((W-3))s║\n" "Bootstrap secret (save this to a password manager):"
-        printf "║   %-$((W-3))s║\n" "${secret}"
-        printf "║%-${W}s║\n" ""
-        printf "║   %-$((W-3))s║\n" "Enter it on the login page to create your account."
-        printf "║   %-$((W-3))s║\n" "You won't be shown it again here."
-    else
-        # Resume — the secret now lives in the vault, not .env, and isn't retrievable
-        # here. It was shown during the initial setup run.
-        printf "║   %-$((W-3))s║\n" "Bootstrap secret: stored in the encrypted vault."
-        printf "║   %-$((W-3))s║\n" "(Shown once during initial setup; not retrievable here.)"
-    fi
-    printf "║%-${W}s║\n" ""
-    printf "╚%s╝\n" "$border"
-    echo ""
 }
 
 main() {
