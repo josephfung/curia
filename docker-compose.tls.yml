@@ -1,0 +1,24 @@
+# Optional HTTPS overlay. Enable by adding this file to COMPOSE_FILE in .env
+# (install.sh does this for you when you choose the public-domain option):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
+# Requires DOMAIN set and an A record pointing at this host (ports 80/443 open).
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      curia:
+        condition: service_healthy
+
+volumes:
+  caddy-data:
+  caddy-config:
