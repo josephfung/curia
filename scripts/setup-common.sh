@@ -73,6 +73,12 @@ prompt_anthropic_key() {
 
 # Polls docker for Postgres healthy status every 2s, up to 60s. Exits 1 on timeout.
 # Callers may set COMPOSE_FLAGS (array) for extra compose file flags; defaults to empty.
+#
+# TODO: asymmetry hazard — wait_for_postgres uses `exit 1` on failure while
+# wait_for_curia uses `return 1`. This is intentional today (wait_for_postgres is
+# always called unconditionally; wait_for_curia's return lets the caller decide),
+# but if wait_for_curia is ever called inside a conditional (which disables set -e),
+# a bare `return 1` propagates cleanly. Be mindful if you ever swap their call sites.
 wait_for_postgres() {
     local max_wait=60
     local elapsed=0

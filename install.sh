@@ -188,6 +188,8 @@ main() {
 
   set_env_var "$env" DB_USER curia
   set_env_var "$env" DB_PASSWORD "$db_pass"
+  # "postgres" here is the Docker Compose service name, not localhost — migrate/seed
+  # run inside the container on the compose network where that hostname resolves.
   set_env_var "$env" DATABASE_URL "postgres://curia:${db_pass}@postgres:5432/curia"
 
   # Preserve a previously-generated encryption key so that existing encrypted
