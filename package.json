@@ -18,6 +18,7 @@
     "build": "tsup src/index.ts --format esm --dts",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "test:shell": "bash tests/setup/test-setup-functions.sh",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.skills.json && tsc --noEmit -p tsconfig.tests.json && pnpm --filter @curia/antfarm run typecheck",
     "lint": "eslint src/ tests/",
