@@ -17,4 +17,10 @@ RUN apt-get update \
 # not just on first init. Handles the existing-volume case where initdb.d scripts
 # were skipped because the data directory already existed.
 COPY docker/postgres-verify-pgaudit.sh /usr/local/bin/verify-pgaudit.sh
+
+# Bake the pgAudit init script into the image so a source-free self-host stack
+# (no repo checkout to volume-mount) still runs it on first DB init. The compose
+# volume mount is removed in lockstep (see docker-compose.yml).
+COPY docker/postgres-init-pgaudit.sql /docker-entrypoint-initdb.d/10-pgaudit.sql
+
 ENTRYPOINT ["verify-pgaudit.sh"]
