@@ -1,0 +1,5 @@
+# Automatic HTTPS for Curia via Caddy + Let's Encrypt. DOMAIN is injected from
+# the environment. Caddy terminates TLS and reverse-proxies to the curia service.
+{$DOMAIN} {
+	reverse_proxy curia:3000
+}
