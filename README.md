@@ -96,15 +96,32 @@ Skills come in two flavours (local handlers and MCP servers) behind a single int
 
 ## Quickstart
 
-**Prerequisites:** [Docker](https://docs.docker.com/get-docker/), Node >= 24, pnpm, and an [Anthropic API key](https://console.anthropic.com).
+### Operator install (image)
+
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/) and an [Anthropic API key](https://console.anthropic.com). No Node or pnpm required.
+
+```bash
+mkdir curia && cd curia
+curl -fsSL https://raw.githubusercontent.com/josephfung/curia/<vX.Y.Z>/install.sh -o install.sh
+# Review the script, then:
+bash install.sh
+```
+
+Replace `<vX.Y.Z>` with the latest release tag (check [releases](https://github.com/josephfung/curia/releases)). The installer pulls the published image, generates secrets, runs migrations inside the container, and prints your bootstrap secret. Curia will be running at `http://localhost:3000`.
+
+Save the bootstrap secret to a password manager and use it on the login page to create your account.
+
+**To update:** `docker compose pull && docker compose up -d`
+
+### Developer install (source)
+
+For contributing or hacking on the code. Requires Node >= 24 and pnpm.
 
 ```bash
 git clone https://github.com/josephfung/curia.git
 cd curia
 pnpm run setup
 ```
-
-Curia will be running at `http://localhost:3000`. The setup script prints your bootstrap secret — save it to a password manager and use it on the login page to create your account.
 
 **[→ Full installation guide](https://docs.meetcuria.com/get-started/installation)**  
 (channels, production deploy, configuration reference)
