@@ -1,0 +1,13 @@
+# Developer/source override: restores local image builds instead of pulling
+# published GHCR images. Used by `pnpm run setup` (scripts/setup.sh) and any
+# contributor running from a source checkout:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
+  curia:
+    build:
+      context: .
+      dockerfile: Dockerfile

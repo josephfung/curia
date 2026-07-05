@@ -1,8 +1,6 @@
 services:
   postgres:
-    build:
-      context: .
-      dockerfile: docker/postgres.Dockerfile
+    image: ghcr.io/josephfung/curia-postgres:${CURIA_POSTGRES_TAG:-pg16}
     restart: unless-stopped
     # POSTGRES_PORT is parameterized so a second stack can coexist on the same
     # host (e.g. testing a fresh `pnpm run setup` against a sibling clone while
@@ -11,8 +9,6 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # pgAudit init script runs on first database creation only
-      - ./docker/postgres-init-pgaudit.sql:/docker-entrypoint-initdb.d/10-pgaudit.sql:ro
     environment:
       POSTGRES_DB: curia
       POSTGRES_USER: ${DB_USER:-your-db-user}
@@ -36,9 +32,7 @@ services:
       retries: 5
 
   curia:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/josephfung/curia:${CURIA_IMAGE_TAG:-latest}
     # No explicit container_name — Docker Compose generates `<project>-curia-1`,
     # which is namespaced by COMPOSE_PROJECT_NAME. The previous `container_name: curia`
     # was global to the Docker daemon and made it impossible to run a second curia
