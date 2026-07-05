@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`install.sh` operator installer** — interactive, image-based entry point for self-hosted operators; fetches the compose bundle, generates secrets, runs migrations and vault-seed inside the pulled container (tsx direct, no host pnpm), prompts for topology/TLS, and prints a bootstrap secret summary. No Node/pnpm/openssl required on the host. (#1343)
 - **Stuck-job recovery notifications** — recovery and suspension emails now include job objective, recurrence, and a console deep-link; `/jobs/:jobId` opens the job drawer directly. Closes #1332.
 - **Ant Farm AF-1** — `AuditLogRepo.findTimeline` / `findByEventTypes` return paginated `TimelinePage` (`hasMore`, keyset `after` cursor) with scoped-query guard; task filter uses `payload->>'taskId'` (index-aligned). Closes #1314.
 - **Ant Farm AF-3** — `@curia/shared-types` contract package and server-side event→directive interpreter for the pixel-art office visualization. Closes #1316.

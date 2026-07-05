@@ -340,6 +340,106 @@ if [[ "${#key_b64}" -eq 44 ]]; then echo "  ✓ gen_secret_b64 length 44"; PASS=
 key_hex="$(gen_secret_hex)"
 if [[ "${#key_hex}" -eq 64 ]]; then echo "  ✓ gen_secret_hex length 64"; PASS=$((PASS+1)); else echo "  ✗ gen_secret_hex length ${#key_hex}"; FAIL=$((FAIL+1)); fi
 
+# --- install.sh: source-checkout detection ---
+# Source install.sh (guarded: defines functions, does not run main).
+# Suppress setup-common.sh re-sourcing output; the helpers are already loaded.
+source "$TEST_DIR/../../install.sh" 2>/dev/null
+
+echo ""
+echo "=== install.sh: detect_source_checkout ==="
+
+# A directory with .git + src/ + package.json naming the curia project.
+tmp_src=$(mktemp -d)
+mkdir -p "$tmp_src/src" "$tmp_src/.git"
+printf '{"name":"curia"}' > "$tmp_src/package.json"
+if detect_source_checkout "$tmp_src"; then
+    echo "  ✓ detects a curia source tree"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ missed a curia source tree"
+    FAIL=$((FAIL+1))
+fi
+
+# A bare directory: no .git, no src/, no package.json.
+tmp_bare=$(mktemp -d)
+if ! detect_source_checkout "$tmp_bare"; then
+    echo "  ✓ bare dir is not a source tree"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ false-positive on bare dir"
+    FAIL=$((FAIL+1))
+fi
+
+# A directory with .git + src but a different package name (not curia).
+tmp_other=$(mktemp -d)
+mkdir -p "$tmp_other/src" "$tmp_other/.git"
+printf '{"name":"other-project"}' > "$tmp_other/package.json"
+if ! detect_source_checkout "$tmp_other"; then
+    echo "  ✓ non-curia package.json is not a source tree"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ false-positive on non-curia package.json"
+    FAIL=$((FAIL+1))
+fi
+
+rm -rf "$tmp_src" "$tmp_bare" "$tmp_other"
+
+# --- install.sh: set_env_var ---
+
+echo ""
+echo "=== install.sh: set_env_var ==="
+
+# set_env_var replaces an existing uncommented key.
+_sv_env=$(mktemp)
+printf 'FOO=old\nBAR=keep\n' > "$_sv_env"
+set_env_var "$_sv_env" FOO new_value
+if grep -qF "FOO=new_value" "$_sv_env"; then
+    echo "  ✓ replaces existing key"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ did not replace existing key"
+    FAIL=$((FAIL+1))
+fi
+if grep -qF "BAR=keep" "$_sv_env"; then
+    echo "  ✓ preserves unrelated key"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ unrelated key was clobbered"
+    FAIL=$((FAIL+1))
+fi
+# Old value must not remain.
+if ! grep -qF "FOO=old" "$_sv_env"; then
+    echo "  ✓ old value removed"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ old value still present"
+    FAIL=$((FAIL+1))
+fi
+
+# set_env_var replaces a commented-out key (e.g. # FOO=placeholder).
+printf '# FOO=placeholder\nBAR=keep\n' > "$_sv_env"
+set_env_var "$_sv_env" FOO activated
+if grep -qF "FOO=activated" "$_sv_env"; then
+    echo "  ✓ activates commented key"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ did not activate commented key"
+    FAIL=$((FAIL+1))
+fi
+
+# set_env_var appends when the key is entirely absent.
+printf 'BAR=keep\n' > "$_sv_env"
+set_env_var "$_sv_env" NEWKEY newval
+if grep -qF "NEWKEY=newval" "$_sv_env"; then
+    echo "  ✓ appends missing key"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ did not append missing key"
+    FAIL=$((FAIL+1))
+fi
+
+rm -f "$_sv_env"
+
 # --- Results ---
 
 echo ""
