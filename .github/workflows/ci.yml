@@ -77,3 +77,6 @@ jobs:
         env:
           DATABASE_URL: postgres://curia:curia_test@localhost:5432/curia_test
           LOG_LEVEL: error
+
+      - name: Shell setup/install tests
+        run: pnpm run test:shell

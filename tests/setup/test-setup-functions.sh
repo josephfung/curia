@@ -94,12 +94,7 @@ NODE_EOF
 exit 0
 PNPM_EOF
 
-    cat > "$tmp_bin/openssl" <<'OPENSSL_EOF'
-#!/usr/bin/env bash
-exit 0
-OPENSSL_EOF
-
-    chmod +x "$tmp_bin/docker" "$tmp_bin/node" "$tmp_bin/pnpm" "$tmp_bin/openssl"
+    chmod +x "$tmp_bin/docker" "$tmp_bin/node" "$tmp_bin/pnpm"
 
     local rc
     set +e
