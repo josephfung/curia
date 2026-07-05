@@ -1,0 +1,106 @@
+name: docker-publish
+
+# Build, push, sign, and SBOM-attest the Curia app + Postgres images to GHCR.
+# - release published -> semver + latest (app), pg16 + latest (postgres)
+# - push to main      -> edge (both), for dogfood / curia-deploy pulls
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)publish, e.g. v0.40.0"
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write   # keyless cosign via GitHub OIDC
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # Validate a workflow_dispatch tag input against strict semver to avoid
+  # injection (mirrors release.yml). No-op on release/push triggers.
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate dispatch tag
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        # Pass the input through an env var so the shell never sees raw
+        # expression output — prevents injection if the value contains
+        # shell metacharacters (mirrors the pattern in release.yml).
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$' \
+            || { echo "Invalid tag format"; exit 1; }
+
+  build:
+    needs: guard
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: curia
+            image: curia
+            dockerfile: Dockerfile
+            # App tags: semver+latest on release, edge on main.
+            tags: |
+              type=semver,pattern=v{{version}}
+              type=semver,pattern=v{{major}}.{{minor}}
+              type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+              type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+          - name: curia-postgres
+            image: curia-postgres
+            dockerfile: docker/postgres.Dockerfile
+            # DB is versioned by pg major, not app semver.
+            tags: |
+              type=raw,value=pg16
+              type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+              type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags & labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: ${{ matrix.tags }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign the pushed image by digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
