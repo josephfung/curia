@@ -36,6 +36,7 @@ Non-goal restatement (from the epic): this is *not* npm/brew distribution of the
 | D3 | Multi-arch **`linux/amd64` + `linux/arm64`** via buildx. | Covers cloud VPS (amd64) and Apple Silicon / ARM self-hosters. |
 | D4 | **cosign keyless-sign** the image + **SPDX SBOM attestation**. | Matches `release.yml`'s existing OIDC-identity posture; provenance for the self-host credibility goal. |
 | D5 | GHCR package is **public** (anonymous pull). | The point of the epic. One-time package-visibility setting. |
+| D15 | Publish a **second image** `ghcr.io/josephfung/curia-postgres:pg16` from `docker/postgres.Dockerfile` (pgvector+pgAudit), with the init SQL **baked in** (not volume-mounted). The shared root compose references both curia + postgres by `image:`. | pgAudit (spec 10 hardening) is defense-in-depth (not a boot dep) but we want it source-free for self-hosters *and* unified with prod — publishing it keeps dev/self-host/prod on one hardened DB with no compose fork. |
 | D6 | Everyday operator installs via an **interactive, image-based `install.sh`** (download one file, run it). | A detached `docker compose up -d` container cannot prompt (no TTY); an interactive installer can. Keeps the excellent setup.sh UX but retargets it to the pulled image. |
 | D7 | `install.sh` runs **migrate + seed-vault *inside the pulled image*** (`docker compose run --rm curia …`), not host-side. | Operator has no source/Node/pnpm. The image already contains the migration runner, `scripts/seed-vault.ts`, and `node_modules`. Invoke `tsx` directly (the runtime image deliberately avoids corepack). |
 | D8 | **No change to core secret-handling.** The vault is seeded by `install.sh` *before* boot, so the container always boots against a populated vault (as prod does today). | Smallest blast radius on core — no `bootstrapSecretsFromEnv` in `src/index.ts`. |
@@ -63,17 +64,20 @@ GHCR is chosen on its own merits (see D1). Note it will **not reliably satisfy t
 
 - Triggers: `release: [published]` and `push: [main]` (and `workflow_dispatch` for manual/backfill).
 - Auth: `GITHUB_TOKEN` with `packages: write`, `id-token: write` (OIDC for cosign), `contents: read`.
-- Steps: `docker/setup-qemu-action` + `docker/setup-buildx-action` → `docker/login-action` (ghcr.io) → `docker/metadata-action` (derive tags: `vX.Y.Z`+`latest` from the release tag, or `edge` from main) → `docker/build-push-action` (`platforms: linux/amd64,linux/arm64`, `provenance: true`, `push: true`) → `cosign sign` (keyless) → `anchore/sbom-action` + `cosign attest` SBOM.
+- **Two images**, each its own build-push job (or a matrix): `ghcr.io/josephfung/curia` (from `Dockerfile`) and `ghcr.io/josephfung/curia-postgres` (from `docker/postgres.Dockerfile`). The postgres image is tagged `pg16` (+ `latest`); curia is tagged per D2.
+- Steps per image: `docker/setup-qemu-action` + `docker/setup-buildx-action` → `docker/login-action` (ghcr.io) → `docker/metadata-action` (derive tags: `vX.Y.Z`+`latest` from the release tag, or `edge` from main) → `docker/build-push-action` (`platforms: linux/amd64,linux/arm64`, `provenance: true`, `push: true`) → `cosign sign` (keyless) → `anchore/sbom-action` + `cosign attest` SBOM.
 - Tag-name validation mirrors `release.yml`'s injection guard (strict semver regex on the release tag).
 
 ### 4.2 curia repo — self-host bundle (repo root)
-- **New:** `docker-compose.yml` — image-based:
-  - `curia`: `image: ghcr.io/josephfung/curia:${CURIA_IMAGE_TAG:-latest}`, port `3000:3000`, `depends_on: postgres (healthy)`, healthcheck on `/api/health`, named volumes for runtime state, env from `.env`.
-  - `postgres`: `pgvector/pgvector:pg16`, named volume `curia-pgdata`, healthcheck `pg_isready`.
+> **Note:** `docker-compose.yml` and `.env.example` **already exist** (build-context based) and are **modified**, not created. `docker/postgres.Dockerfile` exists and is **modified**.
+- **Modify:** `docker-compose.yml` — swap build contexts for published images:
+  - `curia`: `build:` → `image: ghcr.io/josephfung/curia:${CURIA_IMAGE_TAG:-latest}`. Keep existing ports/env_file/DATABASE_URL override/healthcheck/volumes/tmpfs.
+  - `postgres`: `build: docker/postgres.Dockerfile` → `image: ghcr.io/josephfung/curia-postgres:${CURIA_POSTGRES_TAG:-pg16}`. Keep the `command:` (shared_preload_libraries=pgaudit …) and healthcheck. **Remove** the `./docker/postgres-init-pgaudit.sql` volume mount (now baked into the image).
   - No Caddy in the **base** file — base exposes `:3000` so localhost/eval and bring-your-own-proxy (nginx/Traefik/Cloudflare Tunnel) both work.
+- **Modify:** `docker/postgres.Dockerfile` — add `COPY docker/postgres-init-pgaudit.sql /docker-entrypoint-initdb.d/10-pgaudit.sql` so the init runs on first-boot without a source mount.
 - **New:** `docker-compose.tls.yml` — an **optional** Caddy overlay (automatic Let's Encrypt HTTPS, `DOMAIN` env). Generalizes the pattern already in `curia-deploy/compose.production.yaml`. TLS matters because Curia auth (bootstrap secret, API token, session cookies) must not cross the wire in cleartext on a public host. The overlay is selected **durably** via the `COMPOSE_FILE` env var in `.env` (see §4.3) — not by remembering to pass `-f` each time.
-- **New:** `.env.example` — the vault-unlock set (`DB_USER`, `DB_PASSWORD`, `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`) + non-secret config (`DOMAIN`, `HTTP_PORT`, `TIMEZONE`, `LOG_LEVEL`, `CURIA_IMAGE_TAG`, and a commented `COMPOSE_FILE` for the TLS overlay), with the encryption-key one-liner documented. This is the template `install.sh` renders and the standalone reference for hand-configurers.
-- **New:** `docker-compose.dev.yml` — a build-context override so the developer/source path builds locally instead of pulling.
+- **Modify:** `.env.example` — add `CURIA_IMAGE_TAG`, `CURIA_POSTGRES_TAG`, `DOMAIN`, and a commented `COMPOSE_FILE` (TLS overlay). Existing vars (`DB_USER`, `DB_PASSWORD`, `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`, `HTTP_PORT`, `POSTGRES_PORT`, `TIMEZONE`, `LOG_LEVEL`) stay. It remains the template `install.sh`/`setup.sh` render and the standalone reference.
+- **New:** `docker-compose.dev.yml` — a build-context override (restores `build:` for `curia` and `postgres`) so the developer/source path builds locally instead of pulling. `scripts/setup.sh` (dev) uses `-f docker-compose.yml -f docker-compose.dev.yml`.
 
 ### 4.3 curia repo — installers
 - **New:** `install.sh` (root) — the everyday operator entry (image-based, interactive). Responsibilities:
@@ -109,6 +113,7 @@ Note the chicken-and-egg the one-shot migrate solves: `seed-vault` needs the `se
 | Backend build (tsup), console + antfarm (vite) | ✅ | inherited |
 | Base deps, uv/uvx (workspace-mcp), tsx, non-root user | ✅ | inherited |
 | Migrations, seed-vault script, scripts/ | ✅ | inherited |
+| Postgres (pgvector + pgAudit) — separate `curia-postgres` image | ✅ (own image) | uses same image |
 | Chrome / patchright (web-browser skill) | ❌ | ✅ |
 | atproto-mcp, `@atproto/api` (Bluesky) | ❌ | ✅ |
 | Licensed LimeZu art | ❌ (license) | ✅ (built on VPS only) |
