@@ -451,13 +451,16 @@ else
     FAIL=$((FAIL+1))
 fi
 
-# Returns true (0) when .env has a real (non-placeholder, non-empty) DB_PASSWORD.
+# Returns false (1) when .env has a real DB_PASSWORD but NO marker: this is a
+# partial/interrupted install (DB creds written, vault not yet seeded). It must
+# route through fresh_install (which preserves the DB password) so the missing
+# vault secrets still get seeded — not the verify-only upgrade path.
 printf 'DB_PASSWORD=realhexvalue0011aabbccdd\n' > "$_ic_env"
-if install_is_complete "$_ic_env"; then
-    echo "  ✓ real DB_PASSWORD (no marker) → complete"
+if ! install_is_complete "$_ic_env"; then
+    echo "  ✓ real DB_PASSWORD, no marker → not complete (partial install)"
     PASS=$((PASS+1))
 else
-    echo "  ✗ real DB_PASSWORD with no marker should also return complete"
+    echo "  ✗ real DB_PASSWORD without marker should NOT be treated as complete"
     FAIL=$((FAIL+1))
 fi
 
