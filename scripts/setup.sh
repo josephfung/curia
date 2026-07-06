@@ -135,7 +135,7 @@ handle_existing_env() {
         1)
             # User chose to start stack manually — exit setup
             info "Starting the stack..."
-            hint "You can also run this directly: docker compose up -d"
+            hint "You can also run this directly: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d"
             docker compose --project-directory "$REPO_ROOT" "${DEV_COMPOSE[@]}" up -d
             success "Stack is up."
             exit 0

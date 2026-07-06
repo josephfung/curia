@@ -98,7 +98,7 @@ Skills come in two flavours (local handlers and MCP servers) behind a single int
 
 ### Operator install (image)
 
-**Prerequisites:** [Docker](https://docs.docker.com/get-docker/) and an [Anthropic API key](https://console.anthropic.com). No Node or pnpm required.
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/) (with the Compose plugin), `curl`, and an [Anthropic API key](https://console.anthropic.com). No Node or pnpm required.
 
 ```bash
 mkdir curia && cd curia
@@ -115,7 +115,7 @@ Save the bootstrap secret to a password manager and use it on the login page to 
 
 ### Developer install (source)
 
-For contributing or hacking on the code. Requires Node >= 24 and pnpm.
+For contributing or hacking on the code. Requires Node >= 24, pnpm, and [Docker](https://docs.docker.com/get-docker/) (with the Compose plugin) for the Postgres container.
 
 ```bash
 git clone https://github.com/josephfung/curia.git

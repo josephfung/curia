@@ -106,9 +106,10 @@ for you:
 5. Starts the Postgres container, waits for it to be healthy, and applies
    all database migrations.
 6. **Seeds the encrypted secrets vault** from the values it just generated
-   and prompted for. Secrets resolve from the vault only (no `.env`
-   fallback; see [ADR-021](../adr/021-vault-only-secret-resolution.md)),
-   so this runs before first boot to avoid an empty-vault failure.
+   and prompted for. Most secrets resolve from the vault only (see
+   [ADR-021](../adr/021-vault-only-secret-resolution.md); `TAVILY_API_KEY` is
+   the documented env-fallback exception), so this runs before first boot to
+   avoid an empty-vault failure.
 7. Runs `pnpm install --frozen-lockfile` if `node_modules/` is missing
    (skipped on re-runs).
 8. Brings up the full stack (`docker compose up -d`) and polls Curia's
@@ -181,9 +182,11 @@ full design is documented in
 ## Adding secrets after setup
 
 Tiers 2 and 3 add credentials (Nylas, OpenAI, Tavily, Signal). These are
-**secrets**, and secrets resolve from the encrypted vault only (no `.env`
-fallback; see [ADR-021](../adr/021-vault-only-secret-resolution.md)).
-Setting a key in `.env` alone has no effect.
+**secrets**, and most of them resolve from the encrypted vault only (see
+[ADR-021](../adr/021-vault-only-secret-resolution.md)) — setting the key in
+`.env` alone has no effect. The one documented exception is `TAVILY_API_KEY`,
+which the web-search resolver reads vault-first but with an env-var fallback
+(see the Tavily section below).
 
 To add or update a secret, pass it as a transient env var to the seeder:
 

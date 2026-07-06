@@ -96,36 +96,20 @@ set_env_var() {
   fi
 }
 
-# Returns 0 (true) if the install at env file $1 is considered complete.
-# Detection: the SETUP_COMPLETE marker written at the end of a fresh install,
-# OR a real (non-placeholder, non-empty) DB_PASSWORD value. This covers both
-# the new-style marker and any pre-marker install where the operator re-runs
-# the script against an already-working DB volume.
-# Returns 1 (false) for a fresh/placeholder .env that hasn't been through setup.
+# Returns 0 (true) only if the install at env file $1 is fully COMPLETE — i.e.
+# a prior fresh install ran all the way through migrations, vault seeding, a
+# healthy container, and wrote the SETUP_COMPLETE marker as its last step.
+#
+# A "real DB_PASSWORD but no marker" state is deliberately NOT treated as
+# complete: it means a fresh install was interrupted after writing DB creds but
+# before the vault was seeded. That state must route back through fresh_install
+# (which preserves the existing DB password so the Postgres volume still
+# authenticates) so the missing vault secrets still get generated and seeded.
+# Routing it to the verify-only upgrade path would leave it stuck with an
+# unseeded vault. See fresh_install's DB-password preservation below.
 install_is_complete() {
   local env="$1"
-  # Fastest check: marker line added at the end of every successful fresh install.
-  if grep -q "^# SETUP_COMPLETE" "$env" 2>/dev/null; then
-    return 0
-  fi
-  # Fallback: a real DB_PASSWORD (non-empty, non-placeholder) means Postgres was
-  # already initialised with these creds. Regenerating would break auth against
-  # the existing volume.
-  local db_pass
-  db_pass="$(grep -E "^DB_PASSWORD=" "$env" 2>/dev/null | cut -d= -f2-)"
-  if [[ -z "$db_pass" ]]; then
-    return 1
-  fi
-  # Treat any value that starts with "replace-" as a placeholder — the template
-  # ships with "replace-with-a-strong-password" style defaults.
-  case "$db_pass" in
-    replace-*|"")
-      return 1
-      ;;
-    *)
-      return 0
-      ;;
-  esac
+  grep -q "^# SETUP_COMPLETE" "$env" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -203,7 +187,15 @@ fresh_install() {
   # postgres container and migration runner to consume them). api_token and
   # boot_secret are passed only as transient env vars to the seed-vault container.
   local db_pass api_token boot_secret
-  db_pass="$(gen_secret_hex)"
+  # Preserve an existing real DB password. This path also handles a partial
+  # install (DB creds written on a prior interrupted run but the vault never
+  # seeded): the Postgres volume was already initialised with that password, so
+  # regenerating it would break authentication. Only generate when the value is
+  # absent or the shipped placeholder.
+  db_pass="$(grep -E '^DB_PASSWORD=' "$env" 2>/dev/null | cut -d= -f2-)"
+  case "$db_pass" in
+    ""|replace-*) db_pass="$(gen_secret_hex)" ;;
+  esac
   api_token="$(gen_secret_hex)"
   boot_secret="$(gen_secret_hex)"
 
@@ -234,10 +226,17 @@ fresh_install() {
   topology="$(choose_topology)"
   case "$topology" in
     domain)
-      read -rp "Domain (e.g. curia.example.com): " dom
+      # Require a non-empty domain — the TLS overlay and the summary URL are
+      # both useless without one, and Caddy cannot request a certificate.
+      local dom=""
+      while [[ -z "$dom" ]]; do
+        read -rp "Domain (e.g. curia.example.com): " dom
+        [[ -n "$dom" ]] || error "A domain is required for the HTTPS topology."
+      done
       set_env_var "$env" DOMAIN "$dom"
       set_env_var "$env" COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
       # Expose DOMAIN as a shell variable so print_summary can build the HTTPS URL.
+      # shellcheck disable=SC2034  # read by print_summary (sourced from setup-common.sh)
       DOMAIN="$dom"
       # Best-effort DNS warning; never blocks the install.
       if ! getent hosts "$dom" >/dev/null 2>&1; then
@@ -360,10 +359,17 @@ existing_install() {
     exit 1
   fi
 
-  # If the existing install used the domain topology, load DOMAIN into the shell
-  # so print_summary can show the correct HTTPS URL instead of localhost.
+  # Load the URL-shaping values from .env so print_summary shows the right
+  # address for this existing install: DOMAIN (HTTPS topology) and a custom
+  # HTTP_PORT (local/proxy topology). Both are read by print_summary, which is
+  # sourced from setup-common.sh — hence the shellcheck disables.
+  # shellcheck disable=SC2034
   if grep -qE '^DOMAIN=.+' "$env" 2>/dev/null; then
     DOMAIN="$(grep -E '^DOMAIN=' "$env" | cut -d= -f2-)"
+  fi
+  # shellcheck disable=SC2034
+  if grep -qE '^HTTP_PORT=.+' "$env" 2>/dev/null; then
+    HTTP_PORT="$(grep -E '^HTTP_PORT=' "$env" | cut -d= -f2-)"
   fi
 
   # Pass empty string: print_summary then shows the "secret is stored in the
