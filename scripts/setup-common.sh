@@ -229,19 +229,29 @@ wait_for_curia() {
 
 # Prints the final summary box with login URL and bootstrap secret.
 # $1 = WEB_APP_BOOTSTRAP_SECRET (plain hex, no formatting)
+# Reads DOMAIN from the environment: when set, shows https://$DOMAIN;
+# otherwise falls back to http://localhost:$HTTP_PORT.
 print_summary() {
     local secret="$1"
     local port="${HTTP_PORT:-3000}"
     local W=70  # inner box width; wide enough for a 64-char hex secret + padding
-    local border
+    local border url
     border=$(printf '═%.0s' $(seq 1 $W))
+
+    # Use the public HTTPS URL when the operator chose the domain topology;
+    # fall back to localhost for local and behind-proxy installs.
+    if [[ -n "${DOMAIN:-}" ]]; then
+        url="https://${DOMAIN}"
+    else
+        url="http://localhost:${port}"
+    fi
 
     echo ""
     printf "╔%s╗\n" "$border"
     printf "║%-${W}s║\n" ""
     printf "║   %-$((W-3))s║\n" "Curia is running."
     printf "║%-${W}s║\n" ""
-    printf "║   %-$((W-3))s║\n" "Open:    http://localhost:${port}"
+    printf "║   %-$((W-3))s║\n" "Open:    $url"
     printf "║%-${W}s║\n" ""
     if [[ -n "$secret" ]]; then
         # Full setup — the freshly generated secret is in hand; show it once.

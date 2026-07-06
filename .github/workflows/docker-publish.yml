@@ -27,6 +27,8 @@ jobs:
   # injection (mirrors release.yml). No-op on release/push triggers.
   guard:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Validate dispatch tag
         if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
