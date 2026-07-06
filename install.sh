@@ -237,6 +237,8 @@ fresh_install() {
       read -rp "Domain (e.g. curia.example.com): " dom
       set_env_var "$env" DOMAIN "$dom"
       set_env_var "$env" COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+      # Expose DOMAIN as a shell variable so print_summary can build the HTTPS URL.
+      DOMAIN="$dom"
       # Best-effort DNS warning; never blocks the install.
       if ! getent hosts "$dom" >/dev/null 2>&1; then
         if command -v host >/dev/null 2>&1; then
@@ -252,14 +254,22 @@ fresh_install() {
 
   # Start Postgres and wait for it to be ready before running migrations.
   info "Starting Postgres..."
-  docker compose --project-directory "$INSTALL_DIR" up -d postgres
+  if ! docker compose --project-directory "$INSTALL_DIR" up -d postgres; then
+    error "Failed to start the Postgres container."
+    hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs postgres"
+    exit 1
+  fi
   wait_for_postgres  # from setup-common.sh; uses $REPO_ROOT
 
   # Run migrations inside the pulled image (tsx direct — no host pnpm needed).
   info "Applying database migrations (in-container)..."
-  docker compose --project-directory "$INSTALL_DIR" run --rm curia \
+  if ! docker compose --project-directory "$INSTALL_DIR" run --rm curia \
     ./node_modules/.bin/tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up \
-    --migrations-dir src/db/migrations --migration-file-language sql
+    --migrations-dir src/db/migrations --migration-file-language sql; then
+    error "Database migration failed."
+    hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
+    exit 1
+  fi
 
   # Seed the encrypted vault with the freshly generated secrets. Secrets are
   # passed as transient env vars so they never land on disk in plaintext.
@@ -267,17 +277,29 @@ fresh_install() {
   # non-zero if any are missing — so a partial seed fails loudly here rather
   # than booting a half-configured instance with auth disabled.
   info "Seeding secrets vault (in-container)..."
-  docker compose --project-directory "$INSTALL_DIR" run --rm \
+  if ! docker compose --project-directory "$INSTALL_DIR" run --rm \
     -e "ANTHROPIC_API_KEY=$anthropic" \
     -e "API_TOKEN=$api_token" \
     -e "WEB_APP_BOOTSTRAP_SECRET=$boot_secret" \
     -e SEED_VAULT_VERIFY=1 \
-    curia ./node_modules/.bin/tsx scripts/seed-vault.ts
+    curia ./node_modules/.bin/tsx scripts/seed-vault.ts; then
+    error "Vault seeding failed."
+    hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
+    exit 1
+  fi
 
   # Bring the full stack up and wait for the app to become healthy.
   info "Starting Curia..."
-  docker compose --project-directory "$INSTALL_DIR" up -d
-  wait_for_curia  # from setup-common.sh; uses $REPO_ROOT
+  if ! docker compose --project-directory "$INSTALL_DIR" up -d; then
+    error "Failed to start the Curia stack."
+    hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs"
+    exit 1
+  fi
+  if ! wait_for_curia; then
+    error "Curia did not become healthy — refusing to print a success banner."
+    hint "Check logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
+    exit 1
+  fi
 
   # Mark setup as complete. On subsequent re-runs, install_is_complete() sees
   # this marker and takes the upgrade path instead of rotating secrets.
@@ -297,12 +319,20 @@ existing_install() {
   # Re-apply migrations idempotently. node-pg-migrate skips already-applied
   # migrations, so this is safe on every re-run.
   info "Applying database migrations (in-container)..."
-  docker compose --project-directory "$INSTALL_DIR" up -d postgres
+  if ! docker compose --project-directory "$INSTALL_DIR" up -d postgres; then
+    error "Failed to start the Postgres container."
+    hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs postgres"
+    exit 1
+  fi
   wait_for_postgres
 
-  docker compose --project-directory "$INSTALL_DIR" run --rm curia \
+  if ! docker compose --project-directory "$INSTALL_DIR" run --rm curia \
     ./node_modules/.bin/tsx node_modules/node-pg-migrate/bin/node-pg-migrate.js up \
-    --migrations-dir src/db/migrations --migration-file-language sql
+    --migrations-dir src/db/migrations --migration-file-language sql; then
+    error "Database migration failed."
+    hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
+    exit 1
+  fi
 
   # Verify-only vault seed: pass NO secret env vars so seed-vault does not
   # rotate any existing row. SEED_VAULT_VERIFY=1 confirms the required rows
@@ -310,13 +340,31 @@ existing_install() {
   # decryptable. If any are missing the re-run fails loudly — the operator
   # should run a fresh install from a clean install dir in that case.
   info "Verifying secrets vault (in-container)..."
-  docker compose --project-directory "$INSTALL_DIR" run --rm \
+  if ! docker compose --project-directory "$INSTALL_DIR" run --rm \
     -e SEED_VAULT_VERIFY=1 \
-    curia ./node_modules/.bin/tsx scripts/seed-vault.ts
+    curia ./node_modules/.bin/tsx scripts/seed-vault.ts; then
+    error "Vault verification failed — required secrets may be missing."
+    hint "Re-run a fresh install from a clean directory if secrets were lost."
+    exit 1
+  fi
 
   info "Starting Curia..."
-  docker compose --project-directory "$INSTALL_DIR" up -d
-  wait_for_curia
+  if ! docker compose --project-directory "$INSTALL_DIR" up -d; then
+    error "Failed to start the Curia stack."
+    hint "Check Docker logs: docker compose --project-directory \"$INSTALL_DIR\" logs"
+    exit 1
+  fi
+  if ! wait_for_curia; then
+    error "Curia did not become healthy — refusing to print a success banner."
+    hint "Check logs: docker compose --project-directory \"$INSTALL_DIR\" logs curia"
+    exit 1
+  fi
+
+  # If the existing install used the domain topology, load DOMAIN into the shell
+  # so print_summary can show the correct HTTPS URL instead of localhost.
+  if grep -qE '^DOMAIN=.+' "$env" 2>/dev/null; then
+    DOMAIN="$(grep -E '^DOMAIN=' "$env" | cut -d= -f2-)"
+  fi
 
   # Pass empty string: print_summary then shows the "secret is stored in the
   # vault — use the console to retrieve it" branch rather than printing a
