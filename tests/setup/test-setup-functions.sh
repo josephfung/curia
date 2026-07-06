@@ -435,6 +435,64 @@ fi
 
 rm -f "$_sv_env"
 
+# --- install.sh: install_is_complete ---
+
+echo ""
+echo "=== install.sh: install_is_complete ==="
+
+# Returns true (0) when .env has the SETUP_COMPLETE marker.
+_ic_env=$(mktemp)
+printf 'DB_PASSWORD=abc123\n# SETUP_COMPLETE\n' > "$_ic_env"
+if install_is_complete "$_ic_env"; then
+    echo "  ✓ SETUP_COMPLETE marker → complete"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ SETUP_COMPLETE marker should return complete"
+    FAIL=$((FAIL+1))
+fi
+
+# Returns true (0) when .env has a real (non-placeholder, non-empty) DB_PASSWORD.
+printf 'DB_PASSWORD=realhexvalue0011aabbccdd\n' > "$_ic_env"
+if install_is_complete "$_ic_env"; then
+    echo "  ✓ real DB_PASSWORD (no marker) → complete"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ real DB_PASSWORD with no marker should also return complete"
+    FAIL=$((FAIL+1))
+fi
+
+# Returns false (1) for a brand-new .env with the placeholder DB_PASSWORD.
+printf 'DB_PASSWORD=replace-with-a-strong-password\n' > "$_ic_env"
+if ! install_is_complete "$_ic_env"; then
+    echo "  ✓ placeholder DB_PASSWORD → not complete"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ placeholder DB_PASSWORD should return not complete"
+    FAIL=$((FAIL+1))
+fi
+
+# Returns false (1) when DB_PASSWORD is absent entirely.
+printf 'DB_USER=curia\n' > "$_ic_env"
+if ! install_is_complete "$_ic_env"; then
+    echo "  ✓ absent DB_PASSWORD → not complete"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ absent DB_PASSWORD should return not complete"
+    FAIL=$((FAIL+1))
+fi
+
+# Returns false (1) when DB_PASSWORD is empty (key present, value blank).
+printf 'DB_PASSWORD=\n' > "$_ic_env"
+if ! install_is_complete "$_ic_env"; then
+    echo "  ✓ empty DB_PASSWORD → not complete"
+    PASS=$((PASS+1))
+else
+    echo "  ✗ empty DB_PASSWORD should return not complete"
+    FAIL=$((FAIL+1))
+fi
+
+rm -f "$_ic_env"
+
 # --- Results ---
 
 echo ""
