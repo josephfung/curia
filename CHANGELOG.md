@@ -44,6 +44,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`docker-publish.yml` least-privilege token** — `packages:write`/`id-token:write` scoped to the `build` job. Clears alert #197.
 - **Ant Farm asset route hardening** — `/api/antfarm/assets/*` now serves a strict content-type allowlist (png/json only, 404 otherwise) and sets `X-Content-Type-Options: nosniff`, closing the MIME-sniffing/XSS class on direct file streaming. (#1335)
 - **Outbound filter** — Stage 1 fixes a signature false-positive, derives prompt-exfiltration markers from the live coordinator prompt (whitespace/markdown-robust) instead of hardcoded phrases, and adds a principal-recipient bypass for identity/structure rules. Closes #1334.
 

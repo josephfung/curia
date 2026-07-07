@@ -14,10 +14,12 @@ on:
         description: "Release tag to (re)publish, e.g. v0.40.0"
         required: false
 
+# Least privilege at the workflow level; jobs opt into the scopes they need
+# (mirrors release.yml). Only the `build` job touches GHCR / OIDC, so the
+# `packages: write` + `id-token: write` scopes live there, not here — the
+# `guard` job (which only validates a tag string) never receives them.
 permissions:
   contents: read
-  packages: write
-  id-token: write   # keyless cosign via GitHub OIDC
 
 env:
   REGISTRY: ghcr.io
@@ -44,6 +46,10 @@ jobs:
   build:
     needs: guard
     runs-on: ubuntu-latest
+    permissions:
+      contents: read    # actions/checkout
+      packages: write   # push + sign images in GHCR
+      id-token: write   # keyless cosign via GitHub OIDC
     strategy:
       fail-fast: false
       matrix:
