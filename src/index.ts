@@ -27,6 +27,7 @@ import { EventBus } from './bus/bus.js';
 import { AuditLogger } from './audit/logger.js';
 import { AnthropicProvider } from './agents/llm/anthropic.js';
 import { OpenRouterProvider } from './agents/llm/openrouter.js';
+import { BedrockMistralProvider } from './agents/llm/bedrock-mistral.js';
 import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
@@ -396,25 +397,23 @@ async function main(): Promise<void> {
   }
   const modelRegistry = new ModelRegistry(logger);
 
-  // 5. LLM provider — hard fail early rather than discovering the missing
-  // key only when the first user message arrives.
-  // modelRegistry must be instantiated first (above) — the provider uses it
-  // to look up maxOutputTokens per model rather than using a hardcoded constant.
-  if (!config.anthropicApiKey) {
-    logger.fatal('ANTHROPIC_API_KEY is required');
-    process.exit(1);
-  }
-  const llmProvider = new AnthropicProvider(config.anthropicApiKey, logger, modelRegistry);
-  // estimateCostUsd is a closure pre-wired with the model registry. Passed to
-  // AgentRuntime as config (dependency injection) so the runtime stays testable
-  // without importing pricing.ts directly.
-  // Pass the configured standard tier model as the fallback so cost estimates
-  // for unrecognised models track operator routing rather than hardcoding Sonnet.
+  // 5. LLM providers — registered conditionally on which credentials are present.
+  // No provider is unconditionally required at this point; the tier-mapped-model
+  // validation loop below is what actually enforces "the models this deployment
+  // is configured to use must have a registered provider" — fail fast there
+  // instead of hardcoding one vendor as mandatory here.
+  // modelRegistry must be instantiated first (above) — providers use it to look
+  // up maxOutputTokens per model rather than using a hardcoded constant.
   const estimateCostUsd = createEstimateCostUsd(modelRegistry, modelRoutingConfig.tiers.standard.model);
   const modelRouter = new ModelRouter(modelRoutingConfig, modelRegistry, logger);
-  const providerRegistry = new Map<string, LLMProvider>([
-    ['anthropic', llmProvider],
-  ]);
+  const providerRegistry = new Map<string, LLMProvider>();
+
+  // Anthropic — optional. Only instantiated when ANTHROPIC_API_KEY is present.
+  if (config.anthropicApiKey) {
+    const anthropicProvider = new AnthropicProvider(config.anthropicApiKey, logger, modelRegistry);
+    providerRegistry.set('anthropic', anthropicProvider);
+    logger.info('Anthropic provider registered');
+  }
 
   // OpenRouter — optional second provider for non-Claude models.
   // Only instantiated when OPENROUTER_API_KEY is present. If absent, OpenRouter
@@ -424,6 +423,27 @@ async function main(): Promise<void> {
     const openrouterProvider = new OpenRouterProvider(config.openrouterApiKey, logger, modelRegistry);
     providerRegistry.set('openrouter', openrouterProvider);
     logger.info('OpenRouter provider registered — non-Claude models available');
+  }
+
+  // AWS Bedrock (Mistral models) — optional. Only instantiated when both the vault-
+  // resolved AWS credentials and a region are present. Credentials are vault-only
+  // (ADR-021); region/timeout are non-secret operational config from env.
+  if (config.awsAccessKeyId && config.awsSecretAccessKey && config.awsRegion) {
+    const bedrockProvider = new BedrockMistralProvider(
+      config.awsAccessKeyId,
+      config.awsSecretAccessKey,
+      config.awsRegion,
+      config.awsBedrockTimeoutMs,
+      logger,
+      modelRegistry,
+    );
+    providerRegistry.set('bedrock', bedrockProvider);
+    logger.info({ region: config.awsRegion }, 'AWS Bedrock provider registered — Mistral models available');
+  } else if (config.awsAccessKeyId || config.awsSecretAccessKey) {
+    // Partial config (one of the two vault secrets present, or region missing) is
+    // almost certainly a misconfiguration — warn loudly rather than silently
+    // leaving Bedrock unavailable with no explanation.
+    logger.warn('AWS Bedrock credentials are incomplete (need aws_access_key_id + aws_secret_access_key in the vault, and AWS_REGION set) — Bedrock provider not registered');
   }
 
   // Validate that every model mapped to a tier has a registered provider.

@@ -30,6 +30,8 @@ export const SEED_SECRET_NAMES = [
   'nylas_grant_id',
   'nylas_self_email',
   'signal_phone_number',
+  'aws_access_key_id',
+  'aws_secret_access_key',
   // skill-scoped (resolved at call time by ctx.secret)
   'ceo_nylas_grant_id',
   'ceo_self_email',
@@ -37,14 +39,21 @@ export const SEED_SECRET_NAMES = [
 ] as const;
 
 // The subset of secrets that MUST exist in the vault for a working install. Their
-// absence is not "feature off" — it's a broken deploy: anthropic_api_key powers all
-// agents, api_token gates HTTP auth (a missing token disables auth entirely, see
-// src/channels/http/auth.ts and the boot guard in src/index.ts), and
-// web_app_bootstrap_secret gates web login. setup.sh runs verifyRequiredSecrets() after
-// seeding so a partial/failed seed fails loudly instead of producing a half-configured
-// (and possibly auth-disabled) install (#911).
+// absence is not "feature off" — it's a broken deploy: api_token gates HTTP auth
+// (a missing token disables auth entirely, see src/channels/http/auth.ts and the
+// boot guard in src/index.ts), and web_app_bootstrap_secret gates web login.
+// setup.sh runs verifyRequiredSecrets() after seeding so a partial/failed seed
+// fails loudly instead of producing a half-configured (and possibly auth-disabled)
+// install (#911).
+//
+// LLM provider keys (anthropic_api_key, openrouter_api_key, aws_access_key_id/
+// aws_secret_access_key) are deliberately NOT in this list — no single provider
+// is unconditionally required. src/index.ts validates at boot that every model
+// referenced by model_routing.tiers in config/default.yaml has a registered
+// provider, and fails loudly there if the deployment's chosen provider's
+// credentials are missing. Which provider(s) a given install needs depends on
+// how those tiers are configured, which this script doesn't know about.
 export const REQUIRED_SECRET_NAMES = [
-  'anthropic_api_key',
   'api_token',
   'web_app_bootstrap_secret',
 ] as const;

@@ -44,6 +44,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [020](020-secrets-vault.md) | Application-layer AES-256-GCM secrets vault in PostgreSQL — structural typing, per-invocation pre-warm cache, env-var fallback for incremental migration | Accepted |
 | [021](021-vault-only-secret-resolution.md) | Vault-only secret resolution — remove the env fallback; only the four vault-bootstrap values stay in `.env`, everything else seeds via `seed-vault` | Accepted |
 | [022](022-skill-agent-registry.md) | DB-gated skill/agent registry — install/enable lifecycle with startup reconciliation and restart-based enforcement | Accepted |
+| [023](023-aws-bedrock-mistral-llm-provider.md) | AWS Bedrock as the configured LLM provider — third `LLMProvider` adapter via the Converse API (Mixtral fast tier, Claude 3 Sonnet standard/powerful after a live model search ruled out several candidates for unreliable/absent tool-calling); Anthropic no longer unconditionally required at boot | Accepted |
 
 ## Adding new ADRs
 

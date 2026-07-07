@@ -213,11 +213,14 @@ Multi-provider from day one:
 
 ```
 src/agents/llm/
-  provider.ts      # common interface
-  anthropic.ts     # Claude API (Anthropic)
-  openrouter.ts    # OpenRouter API (Gemini Flash, DeepSeek V3, GPT-4o, etc.)
-  ollama.ts        # local models
-  model-registry.ts # ModelRegistry — centralized model metadata
+  provider.ts        # common interface
+  anthropic.ts       # Claude API (Anthropic)
+  openrouter.ts      # OpenRouter API (Gemini Flash, DeepSeek V3, GPT-4o, etc.)
+  bedrock-mistral.ts # AWS Bedrock via the Converse API (Mistral, Claude, or any
+                      # other Converse-compatible Bedrock model — filename predates
+                      # the model choice; the class itself is not Mistral-specific)
+  ollama.ts          # local models
+  model-registry.ts  # ModelRegistry — centralized model metadata
 ```
 
 Each provider implements:
@@ -306,6 +309,7 @@ All agents receive a `## Current Date & Time` block in their system prompt on ev
 | LLM provider abstraction (`LLMProvider` interface, `provider.ts`) | Done |
 | Anthropic provider | Done |
 | OpenRouter provider (Gemini Flash, DeepSeek V3, GPT-4o via `OPENROUTER_API_KEY`) | Done |
+| AWS Bedrock provider (Converse API — Mistral, Claude, or any Converse-compatible model) | Done |
 | Model registry — centralized pricing, context windows, capabilities for all models | Done |
 | Ollama (local model) provider | Not Done |
 | Fallback provider (`model.fallback` in agent config) | Not Done |

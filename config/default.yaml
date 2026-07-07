@@ -5,11 +5,15 @@
 model_routing:
   tiers:
     fast:
-      model: claude-haiku-4-5
+      model: mistral.mixtral-8x7b-instruct-v0:1
+    # standard/powerful: mistral-large-2402 silently narrates tool calls as text
+    # instead of invoking them under the coordinator's real prompt/tool-count
+    # load (see docs/adr/023) — Claude 3 Sonnet via Bedrock confirmed 6/6 real
+    # tool_use under the same load and needs no extra IAM/Marketplace grant.
     standard:
-      model: claude-sonnet-4-6
+      model: anthropic.claude-3-sonnet-20240229-v1:0
     powerful:
-      model: claude-opus-4-6
+      model: anthropic.claude-3-sonnet-20240229-v1:0
   default_tier: standard
 
 channels:
@@ -291,14 +295,16 @@ intentDrift:
 filter:
   llmJudge:
     enabled: true
-    # Default works out of the box (claude-haiku-4-5 — smaller/cheaper than the opus coordinator).
-    #
     # >>> STRONGLY RECOMMENDED <<<: point this at a DIFFERENT vendor/family than the
     # fast/standard/powerful agent tiers above (e.g. an OpenRouter Gemini or DeepSeek
     # model such as 'google/gemini-3.1-flash-lite'). Model diversity is the security
-    # value here: an attack crafted to fool the Claude coordinator should not also fool
+    # value here: an attack crafted to fool the coordinator should not also fool
     # the reviewer. Requires the corresponding provider API key (e.g. OPENROUTER_API_KEY).
-    model: claude-haiku-4-5
+    #
+    # Pinned to Mixtral (fast tier) — a genuinely different model family from the
+    # standard/powerful tier's Claude 3 Sonnet, so this still satisfies the
+    # diversity property above despite both running on the same Bedrock account.
+    model: mistral.mixtral-8x7b-instruct-v0:1
     timeout_ms: 5000
     # split (default) | open | closed. See src/config.ts for semantics.
     failMode: split
@@ -316,7 +322,11 @@ filter:
 escalation:
   judge:
     enabled: true
-    model: claude-haiku-4-5
+    # Pinned to Mixtral (fast tier) — a genuinely different model family from the
+    # standard/powerful tier's Claude 3 Sonnet, so this still satisfies the
+    # diversity property recommended above despite both running on the same
+    # Bedrock account.
+    model: mistral.mixtral-8x7b-instruct-v0:1
     timeout_ms: 5000
 
 # Dream engine — background knowledge graph maintenance (issue #27).

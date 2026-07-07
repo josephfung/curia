@@ -23,6 +23,8 @@ export async function applyVaultSecrets(
     nylasGrantId,
     nylasSelfEmail,
     signalPhoneNumber,
+    awsAccessKeyId,
+    awsSecretAccessKey,
   ] = await Promise.all([
     secrets.get('anthropic_api_key'),
     secrets.get('openai_api_key'),
@@ -33,6 +35,8 @@ export async function applyVaultSecrets(
     secrets.get('nylas_grant_id'),
     secrets.get('nylas_self_email'),
     secrets.get('signal_phone_number'),
+    secrets.get('aws_access_key_id'),
+    secrets.get('aws_secret_access_key'),
   ]);
 
   // Normalize each vault value: trim surrounding whitespace (copy-paste artifacts) and
@@ -59,6 +63,8 @@ export async function applyVaultSecrets(
   // `process.env.NYLAS_SELF_EMAIL ?? ''` behavior, not an env read.
   config.nylasSelfEmail = clean(nylasSelfEmail) ?? '';
   config.signalPhoneNumber = clean(signalPhoneNumber);
+  config.awsAccessKeyId = clean(awsAccessKeyId);
+  config.awsSecretAccessKey = clean(awsSecretAccessKey);
 
   // Names only — never values. Lets an operator confirm what the vault supplied
   // vs. what's absent (feature-disabled), which is the whole debuggability win.
@@ -74,6 +80,8 @@ export async function applyVaultSecrets(
     nylas_grant_id: clean(nylasGrantId) !== undefined,
     nylas_self_email: clean(nylasSelfEmail) !== undefined,
     signal_phone_number: clean(signalPhoneNumber) !== undefined,
+    aws_access_key_id: clean(awsAccessKeyId) !== undefined,
+    aws_secret_access_key: clean(awsSecretAccessKey) !== undefined,
   };
   logger.info({ present }, 'Resolved bootstrap secrets from vault (vault-only, no env fallback)');
 }

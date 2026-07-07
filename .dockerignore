@@ -1,4 +1,8 @@
 node_modules
+# macOS AppleDouble sidecar files (created on exFAT/FAT external drives) — Docker's
+# build context loader fails outright on these (xattr operation not permitted),
+# unlike git which just needed the .gitignore entry.
+**/._*
 dist
 .env
 .env.*

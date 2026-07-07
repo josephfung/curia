@@ -13,6 +13,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **AWS Bedrock LLM provider** — `BedrockMistralProvider` adds a third `LLMProvider` (alongside Anthropic and OpenRouter) via Bedrock's Converse API. Fast tier runs Mixtral 8x7B; standard/powerful run Claude 3 Sonnet via Bedrock, chosen after live load testing showed a candidate Mistral Large model silently narrating tool calls as text instead of invoking them under real prompt/tool-count load. Anthropic is no longer unconditionally required at boot — provider requirements now follow from which models `config/default.yaml`'s `model_routing` tiers actually reference. AWS credentials resolve from the secrets vault (ADR-021), not `.env`. A new `pnpm run smoke:bedrock-tools` script guards against this failure mode regressing. (ADR-023)
+
+### Fixed
+
+- **Bedrock: malformed conversation history crashed every subsequent turn** — a conversation that had accumulated orphaned turns (from earlier failed LLM calls not persisting an assistant reply) or a mid-history summarization turn could violate Bedrock Converse's strict "starts with user, strictly alternates" requirement, throwing `ValidationException` on every message. `BedrockMistralProvider` now normalizes the sequence (drops leading non-user messages, merges consecutive same-role turns) before sending it. The underlying gap in `AgentRuntime`/`WorkingMemory` — not persisting an assistant turn after a failed call, and not hoisting mid-history system turns — still needs its own fix; this is a defensive mitigation in the Bedrock adapter only. (ADR-023)
+
 ### Changed
 
 - **Coordinator Drive moves** — pinned `update_drive_file` to the coordinator and documented reparenting (`add_parents`/`remove_parents`), so "move this doc into a folder" requests are performed instead of declined. (#1062)

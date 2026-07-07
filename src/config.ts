@@ -66,6 +66,14 @@ export interface Config {
   //   that was registered via `signal-cli register` + `signal-cli verify`.
   signalSocketPath: string | undefined;
   signalPhoneNumber: string | undefined;
+  // AWS Bedrock (Mistral models) — credentials are vault-only (ADR-021), resolved
+  // by applyVaultSecrets() after the vault is constructed, same as anthropicApiKey.
+  awsAccessKeyId: string | undefined;
+  awsSecretAccessKey: string | undefined;
+  // Region and timeout are non-secret operational config — read directly from env,
+  // same as TIMEZONE/HTTP_PORT.
+  awsRegion: string | undefined;
+  awsBedrockTimeoutMs: number;
 }
 
 export interface TasksConfig {
@@ -985,6 +993,14 @@ export function loadConfig(): Config {
     throw new Error(`Invalid TIMEZONE configuration: "${timezone}" is not a recognized IANA timezone`);
   }
 
+  // AWS_BEDROCK_TIMEOUT is expressed in seconds (matching how it reads in .env,
+  // e.g. "120"), converted to ms for the AWS SDK request abort timer.
+  const awsBedrockTimeoutSeconds = parseInt(process.env.AWS_BEDROCK_TIMEOUT ?? '120', 10);
+  if (isNaN(awsBedrockTimeoutSeconds) || awsBedrockTimeoutSeconds < 1) {
+    throw new Error(`AWS_BEDROCK_TIMEOUT must be a positive number of seconds, got: ${process.env.AWS_BEDROCK_TIMEOUT}`);
+  }
+  const awsBedrockTimeoutMs = awsBedrockTimeoutSeconds * 1000;
+
   return {
     databaseUrl,
     // Bootstrap/config secrets are resolved from the vault by applyVaultSecrets()
@@ -1015,5 +1031,11 @@ export function loadConfig(): Config {
     // Signal adapter with a bogus socket path or phone number.
     signalSocketPath: process.env.SIGNAL_SOCKET_PATH?.trim() || undefined,
     signalPhoneNumber: undefined,
+    // AWS Bedrock credentials are vault-only (ADR-021) — resolved by
+    // applyVaultSecrets() after the vault is constructed, same as anthropicApiKey.
+    awsAccessKeyId: undefined,
+    awsSecretAccessKey: undefined,
+    awsRegion: process.env.AWS_REGION?.trim() || undefined,
+    awsBedrockTimeoutMs,
   };
 }

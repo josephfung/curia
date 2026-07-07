@@ -27,6 +27,10 @@ function baseConfig(): Config {
     ceoSignalNumber: undefined,
     signalSocketPath: undefined,
     signalPhoneNumber: undefined,
+    awsAccessKeyId: undefined,
+    awsSecretAccessKey: undefined,
+    awsRegion: undefined,
+    awsBedrockTimeoutMs: 120000,
   };
 }
 
@@ -68,5 +72,18 @@ describe('applyVaultSecrets', () => {
     const config = baseConfig();
     await applyVaultSecrets(config, fakeSecrets({}), logger);
     expect(config.nylasSelfEmail).toBe('');
+  });
+
+  it('resolves AWS Bedrock credentials from the vault', async () => {
+    const config = baseConfig();
+    const secrets = fakeSecrets({
+      aws_access_key_id: 'AKIA-vault',
+      aws_secret_access_key: 'secret-vault',
+    });
+
+    await applyVaultSecrets(config, secrets, logger);
+
+    expect(config.awsAccessKeyId).toBe('AKIA-vault');
+    expect(config.awsSecretAccessKey).toBe('secret-vault');
   });
 });

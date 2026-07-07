@@ -130,6 +130,61 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
     maxOutputTokens: 16_384,
   },
 
+  // AWS Bedrock — models reachable via the Converse API (bedrock-mistral.ts;
+  // despite the filename, the provider class works for any Converse-compatible
+  // Bedrock model, not just Mistral — see docs/adr/023 for the model search
+  // that led here).
+  //
+  //
+  // mistral-large-2402 is kept registered (usable, real) but is no longer the
+  // coordinator's tier — see the Claude 3 Sonnet entry below for why.
+  'mistral.mixtral-8x7b-instruct-v0:1': {
+    provider: 'bedrock',
+    contextWindow: 32_000,
+    pricing: {
+      inputPerMToken: 0.52,
+      outputPerMToken: 0.81,
+    },
+    capabilities: ['coding'],
+  },
+  'mistral.mistral-large-2402-v1:0': {
+    provider: 'bedrock',
+    contextWindow: 32_000,
+    pricing: {
+      inputPerMToken: 4.60,
+      outputPerMToken: 13.80,
+    },
+    capabilities: ['reasoning', 'coding'],
+  },
+  // Claude 3 Sonnet via Bedrock — the standard/powerful tiers' model.
+  // Chosen after mistral-large-2402 was confirmed (via scripts/smoke-bedrock-tool-use.ts
+  // and manual load testing) to silently narrate tool calls as text instead of
+  // invoking them once the coordinator's real system prompt + full tool count are
+  // in play. This model was confirmed 6/6 across a no-load call plus 5 repeated
+  // calls under the exact same production-shaped load (large system prompt + 47
+  // tools) — 100% real tool_use, no narrated-call failures.
+  //
+  // Deliberately the *original* Claude 3 Sonnet (2024-02-29), not a newer Claude
+  // version: newer Claude models on Bedrock in this account/region require a
+  // cross-region inference profile gated behind an additional AWS Marketplace
+  // subscription permission (aws-marketplace:ViewSubscriptions/Subscribe) beyond
+  // plain bedrock:InvokeModel — this older model is a native on-demand foundation
+  // model with no such gate.
+  //
+  // Pricing (3.00/15.00 per M input/output tokens) matches AWS's long-published
+  // on-demand rate for this model — higher confidence than the Mistral entries
+  // above, but still worth reconfirming against the current Bedrock pricing page
+  // if this stops matching your invoice.
+  'anthropic.claude-3-sonnet-20240229-v1:0': {
+    provider: 'bedrock',
+    contextWindow: 200_000,
+    pricing: {
+      inputPerMToken: 3.00,
+      outputPerMToken: 15.00,
+    },
+    capabilities: ['vision', 'reasoning', 'coding'],
+  },
+
   // OpenAI embedding model — used by EmbeddingService for semantic search and entity resolution.
   // inputPerMToken matches current OpenAI pricing for text-embedding-3-small.
   // outputPerMToken is 0: embeddings produce no billed output tokens.
