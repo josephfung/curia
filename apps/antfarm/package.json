@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@curia/shared-types": "workspace:*",
-    "phaser": "^3.90.0"
+    "phaser": "^4.2.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
