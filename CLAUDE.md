@@ -242,10 +242,17 @@ Use these sections as needed:
 - **Security** — security fixes or hardening
 
 One bullet per logical change. Lead with the **feature name in bold**, then a brief description.
-Aim for one clause — what changed and the key consequence. Cut implementation detail; if it
-needs more than ~15 words after the em-dash, it's too long. For example:
+
+**Hard cap: 15 words maximum after the em-dash. A limit, not a target — count them.**
+Say only *what* changed and its key consequence. The mechanism, root cause, and "how"
+belong in the PR and commit body, never here. If it won't fit in 15 words, you're
+keeping implementation detail — cut it. For example:
 
 - **`extract-facts`** — programming errors in the per-fact loop now re-throw instead of silently incrementing `failed`. (#493)
+
+Too long → trimmed:
+- ✗ "…`verify-pgaudit.sh` probed the socket-only temp init server, racing `CREATE DATABASE`… so a fresh volume never created `curia`…"
+- ✓ "…probe the real server over TCP so fresh volumes create `curia` instead of crash-looping."
 
 Reference spec numbers where relevant (e.g. "spec 14").
 
