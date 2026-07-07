@@ -15,21 +15,37 @@ PG_PID=$!
 trap 'kill -TERM "$PG_PID"' TERM INT
 trap 'kill -QUIT "$PG_PID"' QUIT
 
-# Wait for Postgres to be ready (up to 30s)
-for i in $(seq 1 30); do
-  if pg_isready -U "${POSTGRES_USER:-curia}" -q 2>/dev/null; then
+# Wait for the REAL server over TCP — never the temporary init server (curia#1350).
+#
+# On a fresh volume the standard entrypoint first runs a *temporary* server that
+# is socket-only (listen_addresses='') to run initdb, CREATE DATABASE, and the
+# initdb.d scripts, then stops it and starts the real server. Probing that temp
+# server over the local socket (as this script used to) is broken two ways: it
+# races CREATE DATABASE (connecting to a DB that does not exist yet), and its
+# connections interfere with the temp server's shutdown so the real server never
+# starts — leaving the container dead mid-init with `curia` never created.
+#
+# The real server listens on TCP; the socket-only temp server does not. So a TCP
+# probe (-h 127.0.0.1) only succeeds once the real server is up — by which point
+# initdb has finished and "$POSTGRES_DB" exists — and never touches the temp
+# server. pg_isready only pings (no auth), so no password is needed here.
+PGHOST=127.0.0.1
+for i in $(seq 1 60); do
+  if pg_isready -h "$PGHOST" -U "${POSTGRES_USER:-curia}" -q 2>/dev/null; then
     break
   fi
   sleep 1
 done
 
-if ! pg_isready -U "${POSTGRES_USER:-curia}" -q 2>/dev/null; then
-  echo "ERROR: Postgres did not become ready in 30s" >&2
+if ! pg_isready -h "$PGHOST" -U "${POSTGRES_USER:-curia}" -q 2>/dev/null; then
+  echo "ERROR: Postgres did not become ready in 60s" >&2
   exit 1
 fi
 
 # Verify pgAudit setup. If anything is missing, create it (idempotent).
 # This handles the existing-volume case where initdb.d scripts were skipped.
+# Connect over the local socket (trust auth) — the real server is up on both the
+# socket and TCP by now, and the socket path needs no password.
 psql -U "${POSTGRES_USER:-curia}" -d "${POSTGRES_DB:-curia}" -v ON_ERROR_STOP=1 <<'SQL'
   -- Ensure extension exists (safe to run repeatedly)
   CREATE EXTENSION IF NOT EXISTS pgaudit;

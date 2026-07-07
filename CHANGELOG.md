@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`curia-postgres` fresh-init crash-loop** — `verify-pgaudit.sh` probed the socket-only temporary init server, racing `CREATE DATABASE` and hanging its shutdown so a fresh volume never created the `curia` DB and crash-looped. It now waits for the real server over TCP (never the temp server), and `CMD ["postgres"]` is restored so the image is self-sufficient. Fixes #1350.
 - **CI Node version drift** — `ci.yml` and `dast.yml` now read `node-version-file: .nvmrc` instead of a hardcoded `"22"`, so CI runs on Node 24 in lockstep with `engines` (`>=24`) and the `node:24` Docker image. Previously CI validated on a version that did not satisfy the project's own engines constraint.
 - **Ant Farm** — code review follow-ups: fail-closed session check, conductor live/scrub fixes, incremental live merge, per-agent overlay context, timeline cursor paging, safe `busEventToAuditRow` payload guard, `schedule.fired` task_id normalization.
 - **Ant Farm** — fix playback flicker: stable desk roster + conductor snapshot refs so Phaser scene is not restarted every animation frame.

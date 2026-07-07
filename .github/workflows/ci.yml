@@ -80,3 +80,15 @@ jobs:
 
       - name: Shell setup/install tests
         run: pnpm run test:shell
+
+  postgres-image:
+    # Builds the real curia-postgres image and boots it on fresh volumes to guard
+    # against curia#1350 (fresh-init crash-loop in verify-pgaudit.sh). The `ci` job's
+    # postgres service uses the stock pgvector image, so the custom image is
+    # otherwise never exercised on PRs — which is exactly how #1350 shipped.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Build + boot curia-postgres (fresh-init regression)
+        run: bash tests/docker/test-postgres-init.sh

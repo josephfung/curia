@@ -23,4 +23,10 @@ COPY docker/postgres-verify-pgaudit.sh /usr/local/bin/verify-pgaudit.sh
 # volume mount is removed in lockstep (see docker-compose.yml).
 COPY docker/postgres-init-pgaudit.sql /docker-entrypoint-initdb.d/10-pgaudit.sql
 
+# Setting ENTRYPOINT above resets the base image's `CMD ["postgres"]` to null, so
+# without this the image would run `verify-pgaudit.sh` with no server command and
+# never start Postgres. Restore the default. When the compose files provide their
+# own `command:` (which starts with `postgres`), it replaces this CMD entirely and
+# the wrapper receives `postgres -c ...` either way.
 ENTRYPOINT ["verify-pgaudit.sh"]
+CMD ["postgres"]
