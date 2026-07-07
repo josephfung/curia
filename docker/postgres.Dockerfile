@@ -29,4 +29,12 @@ COPY docker/postgres-init-pgaudit.sql /docker-entrypoint-initdb.d/10-pgaudit.sql
 # own `command:` (which starts with `postgres`), it replaces this CMD entirely and
 # the wrapper receives `postgres -c ...` either way.
 ENTRYPOINT ["verify-pgaudit.sh"]
+# No `USER` instruction is intentional. The Postgres entrypoint must start as root
+# to run initdb and chown a fresh (root-owned) data volume on first boot, then it
+# drops to the non-root `postgres` user via `gosu` to run the server itself
+# (docker-entrypoint.sh: `exec gosu postgres ...`). Adding `USER postgres` here
+# breaks first-time init on a fresh volume — the very failure #1350 fixes. So the
+# running server is non-root despite the absence of a USER instruction; Semgrep's
+# generic missing-user heuristic can't see the runtime gosu drop.
+# nosemgrep: dockerfile.security.missing-user.missing-user
 CMD ["postgres"]
