@@ -29,7 +29,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **`postgres.Dockerfile` missing-USER suppression** — corrected the ineffective `nosemgrep` (wrong rule id and line) so the intentional root-then-gosu design no longer trips Semgrep's `missing-user-entrypoint` rule. (alert #200)
+- **`postgres.Dockerfile` missing-USER suppression** — fix the ineffective `nosemgrep` so the intentional root-then-gosu design stops tripping Semgrep. (alert #200)
+- **CodeQL `js/missing-rate-limiting` false positives** — excluded the query; it cannot model `@fastify/rate-limit`, which already covers all routes globally. (alerts #201, #202)
 
 ### Fixed
 
