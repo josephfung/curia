@@ -9,6 +9,19 @@ paths-ignore:
 # invariant, so every instance is a false positive. Inline suppression comments
 # (// codeql[...]) were tried but ignored by the analyzer. Disabling the query
 # avoids permanent whack-a-mole with new alert numbers on every scan.
+#
+# js/missing-rate-limiting flags our Fastify file-serving routes (e.g.
+# antfarm-assets, antfarm-static) as un-rate-limited. They are NOT: @fastify/rate-limit
+# is registered globally at src/channels/http/http-adapter.ts (max 200/min per IP),
+# and root-level Fastify hooks propagate to every child route context. CodeQL's
+# query only models Express-family limiters (express-rate-limit/brute/limiter) — its
+# Fastify framework model (Fastify.qll) has NO rate-limit modeling at all, so it can
+# never recognize @fastify/rate-limit in any form (global or per-route config). This
+# repo is Fastify-only, so every alert this query raises here is a false positive by
+# construction and no code change can clear it. Disable it rather than dismiss each
+# new fs/db-accessing route's alert one by one.
 query-filters:
   - exclude:
       id: js/incomplete-multi-character-sanitization
+  - exclude:
+      id: js/missing-rate-limiting
