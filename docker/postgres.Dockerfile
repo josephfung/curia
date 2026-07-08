@@ -28,6 +28,13 @@ COPY docker/postgres-init-pgaudit.sql /docker-entrypoint-initdb.d/10-pgaudit.sql
 # never start Postgres. Restore the default. When the compose files provide their
 # own `command:` (which starts with `postgres`), it replaces this CMD entirely and
 # the wrapper receives `postgres -c ...` either way.
+#
+# The missing-USER finding anchors on this ENTRYPOINT line, so its suppression must
+# live here (Semgrep only honours nosemgrep on the finding's own line or the line
+# directly above). This is the intentional-root case justified below: the server
+# drops to non-root `postgres` via gosu at runtime. Note the *entrypoint* rule id —
+# distinct from the CMD-anchored `missing-user` variant suppressed further down.
+# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
 ENTRYPOINT ["verify-pgaudit.sh"]
 # No `USER` instruction is intentional. The Postgres entrypoint must start as root
 # to run initdb and chown a fresh (root-owned) data volume on first boot, then it
