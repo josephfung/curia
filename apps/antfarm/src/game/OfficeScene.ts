@@ -22,19 +22,33 @@ import {
   FLOOR_BASE_KEY, FLOOR_VARIANT_KEYS, FLOOR_VARIANT_CHANCE,
 } from './asset-manifest.js';
 import { characterSheetIndexForAgent, characterSheetKey, characterSheetFile } from './character-sheets.js';
+import { DECOR_PROPS, DECOR_SINGLES, decorTextureKey } from './decor.js';
 
 // Explicit render-order bands. Desks draw IN FRONT of seated characters (so the desk front
 // occludes their legs), with chairs behind and on-desk devices in front; overlays sit on top.
 const DEPTH = {
   shadow: 1,    // wall-cast floor shadow — above the floor, below the walls
   wall: 2,      // room walls + wall-mounted fixed props (board, scheduler, wastebasket, tubes)
+  decorWall: 3, // decorative art hung on the back wall (above the wall, behind furniture/agents)
+  decorFloor: 4,// decorative props standing on the floor strip (above shadow, behind chairs/agents)
   chair: 5,
   agent: 10,
   desk: 15,     // real-art composed desks (in front of the seated agent)
   device: 18,   // computers / monitors sitting on the desk
-  claw: 22,
   overlay: 40,  // speech / think bubbles, task cards, badges, desk labels
+  clawCard: 49, // a job card gripped by the descending grabber (above the office, below the mechanism)
+  clawTrack: 50,// the overhead claw-track rail — mounted in front of the whole office (top layer)
+  clawMech: 51, // the chain + grabber that hang/descend below the runner
+  claw: 52,     // the claw runner/arm riding the rail — top layer, above track/chain/grabber
 } as const;
+
+// Claw grabber vertical travel — the placeholder grabber descends off the runner to "grab" a job
+// at the scheduler and again to deposit it on a desk, then retracts. A chain tile fills the gap
+// between the runner and the grabber while it's lowered. Pixel values tuned against live render.
+const CLAW_REST_OFFSET = 28;      // grabber's retracted y below the runner's track y (tucked under it)
+const CLAW_CHAIN_TOP_OFFSET = 12; // chain top y below the track y (just under the runner)
+const CLAW_LEG_MS = 420;          // one descend or ascend leg
+const CLAW_SLIDE_MS = 700;        // horizontal slide between stations
 
 // Compose/crop geometry for the singles-based desks (pinned visually with the art director).
 const DESK_TILE_W = 32;   // width of each desk tile's cropped content
@@ -78,6 +92,10 @@ export class OfficeScene extends Phaser.Scene {
   private layout!: WorldLayout;
   private agents = new Map<string, AgentSprite>();
   private claw!: Phaser.GameObjects.Image;
+  private clawGrabber!: Phaser.GameObjects.Image;
+  private clawChain!: Phaser.GameObjects.TileSprite;
+  // A job card currently gripped by the grabber; positioned to follow the grabber each frame.
+  private carriedCard: Phaser.GameObjects.Image | null = null;
   private taskCards = new Map<string, Phaser.GameObjects.Image>();
   private badgeGroup!: Phaser.GameObjects.Container;
   private callbacks!: OfficeSceneCallbacks;
@@ -125,10 +143,30 @@ export class OfficeScene extends Phaser.Scene {
     if (!this.textures.exists(OFFICE_TILESET.key)) this.load.image(OFFICE_TILESET.key, OFFICE_TILESET.url);
     if (!this.textures.exists(ROOM_BUILDER.key)) this.load.image(ROOM_BUILDER.key, ROOM_BUILDER.url);
     // Office desk singles (desks, chairs, monitors, computer) — composed in buildOfficeArt().
-    for (const n of OFFICE_SINGLES) {
+    // Decorative singles (plants, wall art, furniture) are loaded here too; they're placed
+    // best-effort in spawnDecor() and are NOT part of the licensedAssetsPresent gate, so a
+    // missing decor tile degrades to "that prop absent" rather than voiding the whole scene.
+    for (const n of [...OFFICE_SINGLES, ...DECOR_SINGLES]) {
       const key = officeSingleKey(n);
       if (!this.textures.exists(key)) this.load.image(key, officeSingleUrl(n));
     }
+    // Custom (non-licensed) claw art — the track rail and the runner/arm. Bundled app art shipped
+    // in public/assets, world-served at BASE_URL and present in EVERY build (unlike the auth-gated
+    // licensed art). The runner replaces the procedural 'claw' texture (see spawnFixedProps).
+    if (!this.textures.exists('claw-track')) {
+      this.load.image('claw-track', `${import.meta.env.BASE_URL}assets/claw-track.png`);
+    }
+    if (!this.textures.exists('claw-runner')) {
+      this.load.image('claw-runner', `${import.meta.env.BASE_URL}assets/claw-runner.png`);
+    }
+    if (!this.textures.exists('claw-chain')) {
+      this.load.image('claw-chain', `${import.meta.env.BASE_URL}assets/claw-chain.png`);
+    }
+    // Custom scheduler machine art — replaces the procedural 'scheduler' placeholder.
+    if (!this.textures.exists('scheduler-art')) {
+      this.load.image('scheduler-art', `${import.meta.env.BASE_URL}assets/scheduler.png`);
+    }
+
     // Character sheets are loaded here too (added in Task 5).
     const desks = this.registry.get('desks') as DeskSlot[] ?? [];
     const sheetIndices = new Set(desks.map((d) => characterSheetIndexForAgent(d.agentId)));
@@ -170,9 +208,11 @@ export class OfficeScene extends Phaser.Scene {
 
     this.drawRoom();
     this.spawnFixedProps();
+    this.spawnDecor();
     this.spawnDesks();
     this.spawnAgents(desks);
     this.badgeGroup = this.add.container(0, 0).setDepth(DEPTH.overlay);
+    this.spawnClawTrack();
 
     const pending = this.registry.get('pendingReplay') as SceneDirective[] | undefined;
     if (pending?.length) {
@@ -423,12 +463,99 @@ export class OfficeScene extends Phaser.Scene {
 
   private spawnFixedProps(): void {
     this.add.image(this.layout.tasksBoard.x, this.layout.tasksBoard.y, 'tasks-board').setScale(2).setDepth(DEPTH.wall);
-    this.add.image(this.layout.scheduler.x, this.layout.scheduler.y, 'scheduler').setScale(2).setDepth(DEPTH.wall);
+    const schedulerKey = this.loadedOk('scheduler-art') ? 'scheduler-art' : 'scheduler';
+    this.add.image(this.layout.scheduler.x, this.layout.scheduler.y, schedulerKey).setScale(2).setDepth(DEPTH.wall);
     this.add.image(this.layout.wastebasket.x, this.layout.wastebasket.y, 'wastebasket').setScale(2).setDepth(DEPTH.wall);
     this.add.image(this.layout.tubeIn.x, this.layout.tubeIn.y, 'tube').setScale(2).setTint(0x6a9a6a).setDepth(DEPTH.wall);
     this.add.image(this.layout.tubeOut.x, this.layout.tubeOut.y, 'tube').setScale(2).setTint(0x9a6a6a).setDepth(DEPTH.wall);
 
-    this.claw = this.add.image(this.layout.clawTrack.idleX, this.layout.clawTrack.y, 'claw').setScale(2).setDepth(DEPTH.claw);
+    // Custom claw-runner art if it loaded, else the procedural 'claw' placeholder.
+    const clawKey = this.loadedOk('claw-runner') ? 'claw-runner' : 'claw';
+    this.claw = this.add.image(this.layout.clawTrack.idleX, this.layout.clawTrack.y, clawKey).setScale(2).setDepth(DEPTH.claw);
+
+    // The grabber (placeholder 'claw' art for now) hangs just below the runner and descends to
+    // grab/deposit jobs; the chain fills the gap between them while it's lowered. Both track the
+    // runner's x every frame (see update()); the grabber's y is driven by animateClawDeliver.
+    const restY = this.layout.clawTrack.y + CLAW_REST_OFFSET;
+    const chainTop = this.layout.clawTrack.y + CLAW_CHAIN_TOP_OFFSET;
+    this.clawChain = this.add
+      .tileSprite(this.layout.clawTrack.idleX, chainTop, 64, 0, 'claw-chain')
+      .setOrigin(0.5, 0)   // grow downward from the runner
+      .setTileScale(2)     // match the office's 32px→64px ×2 look
+      .setDepth(DEPTH.clawMech)
+      .setVisible(false);
+    this.clawGrabber = this.add
+      .image(this.layout.clawTrack.idleX, restY, 'claw')
+      .setScale(2)
+      .setDepth(DEPTH.clawMech);
+    this.carriedCard = null;
+  }
+
+  /** Per-frame: keep the grabber + chain (and any gripped job card) locked under the runner's x.
+   *  The runner slides horizontally via tweens; the grabber's y is animated separately, so the
+   *  chain is stretched to fill whatever vertical gap currently exists between the two. */
+  update(): void {
+    if (!this.clawGrabber) return; // pre-create frame — nothing to sync yet
+    const rx = this.claw.x;
+    this.clawGrabber.x = rx;
+    const chainTop = this.layout.clawTrack.y + CLAW_CHAIN_TOP_OFFSET;
+    const chainH = Math.max(0, this.clawGrabber.y - chainTop);
+    this.clawChain.x = rx;
+    this.clawChain.y = chainTop;
+    this.clawChain.height = chainH;
+    this.clawChain.setVisible(chainH > 20); // hide the stub when the grabber is retracted
+    if (this.carriedCard) {
+      this.carriedCard.x = rx;
+      this.carriedCard.y = this.clawGrabber.y;
+    }
+  }
+
+  /** Place the decorative back-wall props (plants, hung art, furniture, bookcase) from the decor
+   *  manifest. Real-art only: these have no procedural fallback, so in placeholder/open-core mode
+   *  we render nothing (matching the all-or-nothing art gate). Each prop is placed best-effort —
+   *  a single that failed to load (or a crop whose source sheet is absent) is skipped, never a
+   *  missing-texture void. See decor.ts to move/add/remove props. */
+  private spawnDecor(): void {
+    if (!this.realArtReady) return;
+    for (const prop of DECOR_PROPS) {
+      if (prop.enabled === false) continue; // kept in the manifest, toggled off the canvas
+      let key: string;
+      if (prop.source.kind === 'single') {
+        key = officeSingleKey(prop.source.single);
+        if (!this.loadedOk(key)) continue; // decor tile absent — skip just this prop
+      } else {
+        // Crop the prop out of its source sheet into a standalone texture (once).
+        key = decorTextureKey(prop.id);
+        if (!this.textures.exists(key)) {
+          const { from, sx, sy, sw, sh } = prop.source;
+          if (!this.loadedOk(from)) continue; // source sheet absent — skip
+          try {
+            this.cropToTexture(from, key, sx, sy, sw, sh);
+          } catch (err) {
+            console.warn(`[antfarm] failed to crop decor ${prop.id}; skipping`, err);
+            continue;
+          }
+        }
+      }
+      // 'floor' props stand on their base point (bottom-anchored); 'wall' props hang centered.
+      const originY = prop.layer === 'floor' ? 1 : 0.5;
+      const depth = prop.layer === 'floor' ? DEPTH.decorFloor : DEPTH.decorWall;
+      this.add
+        .image(prop.x, prop.y, key)
+        .setOrigin(0.5, originY)
+        .setScale(prop.scale ?? 2)
+        .setDepth(depth);
+    }
+  }
+
+  /** Tile the custom claw-track rail across the top row (row 1), on the top layer so the overhead
+   *  claw mechanism reads as mounted in front of the whole office. 32×32 art drawn ×2 = 64px, on
+   *  the same 64px grid as the floor/walls. Custom in-repo art, so it renders in every build. */
+  private spawnClawTrack(): void {
+    if (!this.loadedOk('claw-track')) return;
+    for (let x = 0; x < STAGE_WIDTH; x += 64) {
+      this.add.image(x + 32, 32, 'claw-track').setScale(2).setDepth(DEPTH.clawTrack);
+    }
   }
 
   private spawnDesks(): void {
@@ -559,43 +686,90 @@ export class OfficeScene extends Phaser.Scene {
 
   private animateClawDeliver(directive: SceneDirective & { kind: 'claw.deliver' }): void {
     const target = deskPositionForAgent(this.layout, directive.agentId);
-    const tasksX = this.layout.tasksBoard.x;
-    const trackY = this.layout.clawTrack.y;
+    const pickupX = this.layout.scheduler.x;   // grab the job over the scheduler (the job source)
+    const grabY = this.layout.scheduler.y;      // how far the grabber reaches down to the scheduler
+    const depositY = target.y - 30;             // how far it reaches down onto the target desk
+    const restY = this.layout.clawTrack.y + CLAW_REST_OFFSET;
 
+    // 1. Slide the runner over the scheduler. The grabber + chain follow its x via update().
     this.tweens.add({
       targets: this.claw,
-      x: tasksX,
-      duration: 600,
+      x: pickupX,
+      duration: CLAW_SLIDE_MS,
       ease: 'Sine.easeInOut',
       onComplete: () => {
-        const card = this.add.image(tasksX, this.layout.tasksBoard.y - 20, 'task-card').setScale(2).setDepth(DEPTH.overlay);
+        // 2. Descend the grabber to the scheduler (the chain stretches to fill the gap).
         this.tweens.add({
-          targets: this.claw,
-          x: target.x,
-          duration: 800,
-          ease: 'Sine.easeInOut',
+          targets: this.clawGrabber,
+          y: grabY,
+          duration: CLAW_LEG_MS,
+          ease: 'Sine.easeIn',
           onComplete: () => {
+            // Grab the job: spawn a card that now rides with the grabber (see update()).
+            this.carriedCard?.destroy();
+            this.carriedCard = this.add
+              .image(pickupX, grabY, 'task-card')
+              .setScale(2)
+              .setDepth(DEPTH.clawCard);
+            // 3. Retract the grabber (with the job) back up under the runner.
             this.tweens.add({
-              targets: card,
-              x: target.x,
-              y: target.y - 30,
-              duration: 400,
+              targets: this.clawGrabber,
+              y: restY,
+              duration: CLAW_LEG_MS,
+              ease: 'Sine.easeOut',
               onComplete: () => {
-                card.destroy();
-                this.ensureAgent(directive.agentId);
-                this.setAgentState(directive.agentId, 'active');
+                // 4. Slide the runner over the target desk.
+                this.tweens.add({
+                  targets: this.claw,
+                  x: target.x,
+                  duration: CLAW_SLIDE_MS,
+                  ease: 'Sine.easeInOut',
+                  onComplete: () => {
+                    // 5. Descend to deposit the job on the desk.
+                    this.tweens.add({
+                      targets: this.clawGrabber,
+                      y: depositY,
+                      duration: CLAW_LEG_MS,
+                      ease: 'Sine.easeIn',
+                      onComplete: () => {
+                        // Release the job: detach the card and let it settle on the desk.
+                        const card = this.carriedCard;
+                        this.carriedCard = null;
+                        if (card) {
+                          this.tweens.add({
+                            targets: card,
+                            y: target.y - 10,
+                            duration: 200,
+                            onComplete: () => card.destroy(),
+                          });
+                        }
+                        this.ensureAgent(directive.agentId);
+                        this.setAgentState(directive.agentId, 'active');
+                        // 6. Retract the grabber, then send the runner back to idle.
+                        this.tweens.add({
+                          targets: this.clawGrabber,
+                          y: restY,
+                          duration: CLAW_LEG_MS,
+                          ease: 'Sine.easeOut',
+                          onComplete: () => {
+                            this.tweens.add({
+                              targets: this.claw,
+                              x: this.layout.clawTrack.idleX,
+                              duration: 500,
+                              ease: 'Sine.easeInOut',
+                            });
+                          },
+                        });
+                      },
+                    });
+                  },
+                });
               },
-            });
-            this.tweens.add({
-              targets: this.claw,
-              x: this.layout.clawTrack.idleX,
-              duration: 500,
             });
           },
         });
       },
     });
-    this.claw.y = trackY;
   }
 
   private setAgentState(agentId: string, state: 'active' | 'error'): void {

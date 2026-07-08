@@ -16,6 +16,14 @@ const FLOOR_ROW2_Y = 560;        // second row — clears row 1's bottom (~390)
 const FLOOR_MARGIN = 100;        // min gap from the stage's left/right edges
 const FLOOR_MAX_SPACING = 240;   // center-to-center cap: 192px desk + ~48px breathing room
 
+// Coordinator ("boss") desk — locked to the LEFT wall (was center-stage at STAGE_WIDTH/2). The
+// whole station (desk, chair, agent sprite, monitors, label) is drawn relative to this single
+// point in OfficeScene, so moving it here moves all of it together. The composed grey desk is
+// ~256px wide (4 tiles × 32px × the ×2 scale), centered on this x, so its left edge sits at
+// x−128 — keep x large enough to clear the ~64px-wide left wall.
+const BOSS_DESK_X = 274;
+const BOSS_DESK_Y = 200;
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -44,7 +52,7 @@ export function buildWorldLayout(desks: DeskSlot[]): WorldLayout {
 
   const deskPositions: DeskPosition[] = [];
   if (boss) {
-    deskPositions.push({ agentId: boss.agentId, row: 'boss', x: STAGE_WIDTH / 2, y: 200 });
+    deskPositions.push({ agentId: boss.agentId, row: 'boss', x: BOSS_DESK_X, y: BOSS_DESK_Y });
   }
 
   // Split specialists across two rows (first row gets the extra when odd), each row
@@ -75,11 +83,13 @@ export function buildWorldLayout(desks: DeskSlot[]): WorldLayout {
     desks: deskPositions,
     coordinatorId,
     tasksBoard: { x: 120, y: 380 },
-    scheduler: { x: STAGE_WIDTH / 2 - 40, y: 390 },
+    // Top of the room, just right of the printer (decor printer-325 sits at x≈510). This point is
+    // both the scheduler sprite's position AND the claw's grab target, so they stay in lockstep.
+    scheduler: { x: 650, y: 140 },
     wastebasket: { x: STAGE_WIDTH - 80, y: 400 },
     clawTrack: { y: 36, minX: 60, maxX: STAGE_WIDTH - 60, idleX: STAGE_WIDTH - 120 },
-    tubeIn: { x: STAGE_WIDTH / 2 - 100, y: 90 },
-    tubeOut: { x: STAGE_WIDTH / 2 + 100, y: 90 },
+    tubeIn: { x: STAGE_WIDTH / 2 - 100, y: STAGE_HEIGHT - 90 },
+    tubeOut: { x: STAGE_WIDTH / 2 + 100, y: STAGE_HEIGHT - 90 },
   };
 }
 
