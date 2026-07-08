@@ -27,6 +27,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Ant Farm real art** — the office renders licensed LimeZu tiles/furniture and animated premade character sprites when present, served only behind session auth (`/api/antfarm/assets/*`); falls back to procedural placeholders when absent. (#1335)
 - **Backup-before-update docs** — README now documents a pg_dump backup + rollback step for the auto-migrating update path. Closes #1344.
 
+### Security
+
+- **`postgres.Dockerfile` missing-USER suppression** — corrected the ineffective `nosemgrep` (wrong rule id and line) so the intentional root-then-gosu design no longer trips Semgrep's `missing-user-entrypoint` rule. (alert #200)
+
 ### Fixed
 
 - **`curia-postgres` fresh-init** — probe the real server over TCP so fresh volumes create `curia` instead of crash-looping. (#1350)
