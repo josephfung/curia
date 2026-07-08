@@ -111,7 +111,25 @@ Replace `<vX.Y.Z>` with the latest release tag (check [releases](https://github.
 
 Save the bootstrap secret to a password manager and use it on the login page to create your account.
 
-**To update:** `docker compose pull && docker compose up -d`
+**To update:** Back up your database first, then pull and restart. Migrations apply
+automatically on boot; re-running when already up to date is a safe no-op.
+
+```bash
+# 1. Back up the database (custom-format dump, restorable with pg_restore)
+docker compose exec -T postgres pg_dump -U curia -Fc curia > curia-backup-$(date +%Y%m%d).dump
+
+# 2. Pull new images and restart — the app migrates the schema on startup
+docker compose pull && docker compose up -d
+```
+
+If an update misbehaves, restore the backup: stop the app, restore in place
+(`--clean --if-exists` drops and recreates objects), then bring the stack back up.
+
+```bash
+docker compose stop curia
+docker compose exec -T postgres pg_restore -U curia -d curia --clean --if-exists < curia-backup-YYYYMMDD.dump
+docker compose up -d
+```
 
 ### Developer install (source)
 
