@@ -104,10 +104,9 @@ Starts Postgres (with pgvector) + the framework. Config from `default.yaml` + `l
 
 ### Self-Host (Published Images)
 
-As of v0.40, each Curia release is published as signed, multi-arch container images to
-the GitHub Container Registry, so operators can run a released Curia with no source
-checkout and no Node/pnpm/openssl toolchain on the host — Docker (with the Compose
-plugin) and `curl` are the only requirements.
+Each Curia release is published as signed, multi-arch container images to the GitHub Container
+Registry, so operators can run a released Curia with no source checkout and no Node/pnpm/openssl
+toolchain on the host — Docker (with the Compose plugin) and `curl` are the only requirements.
 
 **Published images** (`.github/workflows/docker-publish.yml`):
 
@@ -119,7 +118,7 @@ plugin) and `curl` are the only requirements.
 Both images are built for `linux/amd64` + `linux/arm64` and signed with **cosign**
 (keyless, via GitHub OIDC — no long-lived signing key). Tagging:
 
-- **Push to `main`** → `:edge` on both images (dogfood / `curia-deploy` pulls).
+- **Push to `main`** → `:edge` on both images (for dogfood use).
 - **Release published** → app gets `vX.Y.Z`, `vX.Y`, and `latest`; the DB image gets
   `pg16` and `latest` (versioned by Postgres major, not app semver).
 - A `workflow_dispatch` input re-publishes a given tag; the dispatched tag is validated
@@ -159,29 +158,20 @@ service that terminates HTTPS with automatic Let's Encrypt certificates, reading
 from `.env` and the `deploy/Caddyfile`. TLS matters because Curia auth (bootstrap secret,
 API token, session cookies) must not cross the wire in cleartext on a public host.
 
-### Production VPS (Maintainer)
+### Runtime
 
-The maintainer's own production deployment lives in the separate `curia-deploy` repo and
-layers instance-only agents/skills/MCP servers, Chrome/patchright, and licensed art on top
-of the core image. As of v0.40 it consumes the published image via a thin
-`FROM ghcr.io/josephfung/curia:${CURIA_IMAGE_TAG}` layer (defaulting to `:edge`, or pinned
-to a release tag) rather than rebuilding core from source — this retires the old
-duplicated ~330-line core Dockerfile. The thin downstream image is still built on the VPS
-(private custom code + licensed art never enter a registry); `deploy.sh` now rsyncs only
-`curia-deploy` and pulls the base image, no longer syncing the curia source checkout.
-
-- Config from `default.yaml` + `production.yaml` + env vars from `.env`
-- **Runtime: Node 24 (Active LTS).** Both the Dockerfile build and runtime stages use `node:24-slim` (digest-pinned). The global `npm install` step was removed — bundled npm is unused (corepack/pnpm handle the build, tsx runs the app), so there is nothing to install globally.
-- **Non-root execution** — the production image runs as a dedicated `curia` user, not root. The Dockerfile creates the user in the build stage and pre-creates any directories the process needs at runtime (e.g., `/tmp/.google_workspace_mcp`).
-- MCP servers as separate containers if needed
-- Caddy reverse proxy for HTTPS (the same TLS overlay pattern generalized above)
+- Config merges `default.yaml` + `production.yaml` + env vars from `.env`, selected by `NODE_ENV`.
+- **Node 24 (Active LTS).** Both the Dockerfile build and runtime stages use `node:24-slim` (digest-pinned). The global `npm install` step was removed — bundled npm is unused (corepack/pnpm handle the build, tsx runs the app), so there is nothing to install globally.
+- **Non-root execution** — the image runs as a dedicated `curia` user, not root. The Dockerfile creates the user in the build stage and pre-creates any directories the process needs at runtime (e.g., `/tmp/.google_workspace_mcp`).
+- MCP servers run as separate containers where needed.
+- HTTPS is terminated by the Caddy TLS overlay (see *Self-Host* above).
 
 ### Docker Compose Structure
 
-As of v0.40, `docker-compose.yml` references the **published GHCR images by default**
-(no `build:`), so an operator pulls rather than builds. Developers restore local source
-builds by layering `docker-compose.dev.yml` (which re-adds `build:` for both services);
-`pnpm run setup` does this automatically.
+`docker-compose.yml` references the **published GHCR images by default** (no `build:`), so an
+operator pulls rather than builds. Developers restore local source builds by layering
+`docker-compose.dev.yml` (which re-adds `build:` for both services); `pnpm run setup` does this
+automatically.
 
 ```yaml
 services:
