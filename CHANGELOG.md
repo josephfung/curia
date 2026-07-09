@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Ant Farm spec** — new `docs/specs/22-antfarm-visualization.md` documents the office-visualization architecture, routes, and CSP.
 - **GHCR image publishing** — releases now push signed, multi-arch `ghcr.io/josephfung/curia` and `ghcr.io/josephfung/curia-postgres` images to the GitHub Container Registry; pushes to `main` publish the `:edge` tag for dogfood use. (#1343)
 - **`install.sh` operator installer** — interactive, image-based entry point for self-hosted operators; fetches the compose bundle, generates secrets, runs migrations and vault-seed inside the pulled container (tsx direct, no host pnpm), prompts for topology/TLS, and prints a bootstrap secret summary. No Node/pnpm/openssl required on the host. (#1343)
 - **Stuck-job recovery notifications** — recovery and suspension emails now include job objective, recurrence, and a console deep-link; `/jobs/:jobId` opens the job drawer directly. Closes #1332.
@@ -71,6 +72,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Docs sync** — specs 08/09/15/20 updated for GHCR install, calendar-grant, bulk export, and task-wake bindings; shipped `docs/wip/` pruned.
 - **`docker-compose.yml`** — references published GHCR images by default (`ghcr.io/josephfung/curia:latest`); developers who need local builds override with `docker-compose.dev.yml`. Shared installer helpers extracted to `scripts/setup-common.sh`. (#1343)
 - **Channel registry** — reconcile no longer auto-installs toggleable channels from ambient credentials; operators install and enable `email`/`signal` explicitly (parity with skills/agents), and `uninstall()` is durable across restarts. Outbound egress is gated on the same registry enabled-state as inbound adapters. (#965, #966)
 - **`outbound.pii_redacted`** — audit event type standardized to the underscore form in code; legacy hyphen-form rows preserved as immutable audit history, not rewritten. (#453)

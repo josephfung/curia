@@ -323,6 +323,16 @@ The `${principal_contact_id}` placeholder (the UUID handle, item 1 above) is del
 
 This is distinct from the `## Principal Contact Details` block (item 2 above), which **is** injected universally. The split is deliberate: the *reach-the-principal* channel identities are injected everywhere because hallucinated addresses are a correctness-and-safety problem the `Reaching the principal` convention alone did not prevent (#786), whereas the *contact-ID handle* that unlocks calendar lookups and arbitrary attribute reads stays opt-in to keep each agent's capability surface minimal.
 
+### Operating on the principal's calendar (#1217)
+
+Calendar actions are performed **as the CEO**, not as a shared office identity. The calendar
+client binds to the principal's Nylas grant (`ceo_nylas_grant_id`) rather than a generic
+coordinator grant, so RSVPs and event writes originate from the principal's own account (this
+fixes the Nylas `omittedAttendeesSpecified` RSVP failure that arose when acting under the wrong
+grant). The binding **fails closed**: when `ceo_nylas_grant_id` is unset, calendar operations
+error rather than silently falling back to a non-principal grant. The grant ID is a bootstrap
+identity handle, resolved once — not re-discovered per task.
+
 ---
 
 ## Unknown Sender Policy

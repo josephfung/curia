@@ -102,22 +102,92 @@ docker compose up
 
 Starts Postgres (with pgvector) + the framework. Config from `default.yaml` + `local.yaml`. Hot-reload in dev mode (restart on file change via `tsx --watch`).
 
-### Production VPS
+### Self-Host (Published Images)
 
-Docker container deployed via the existing `ceo-deploy` repo:
+As of v0.40, each Curia release is published as signed, multi-arch container images to
+the GitHub Container Registry, so operators can run a released Curia with no source
+checkout and no Node/pnpm/openssl toolchain on the host — Docker (with the Compose
+plugin) and `curl` are the only requirements.
+
+**Published images** (`.github/workflows/docker-publish.yml`):
+
+- `ghcr.io/josephfung/curia` — the app image (built from `Dockerfile`).
+- `ghcr.io/josephfung/curia-postgres` — Postgres 16 with pgvector + pgAudit and the
+  init SQL baked in (built from `docker/postgres.Dockerfile`), so the hardened DB is
+  source-free and unified with dev/prod.
+
+Both images are built for `linux/amd64` + `linux/arm64` and signed with **cosign**
+(keyless, via GitHub OIDC — no long-lived signing key). Tagging:
+
+- **Push to `main`** → `:edge` on both images (dogfood / `curia-deploy` pulls).
+- **Release published** → app gets `vX.Y.Z`, `vX.Y`, and `latest`; the DB image gets
+  `pg16` and `latest` (versioned by Postgres major, not app semver).
+- A `workflow_dispatch` input re-publishes a given tag; the dispatched tag is validated
+  against strict semver before build (mirrors `release.yml`).
+
+**`install.sh` — the supported self-host path** (`install.sh`, download-then-run; it uses
+interactive `read` prompts, so `curl … | bash` does not work). The script:
+
+1. Verifies prereqs (Docker daemon, Compose plugin, `curl`) — no Node/pnpm/openssl.
+2. Fetches the compose bundle next to itself, skipping files already present:
+   `docker-compose.yml`, `docker-compose.tls.yml`, `.env.example`, `deploy/Caddyfile`,
+   and `scripts/setup-common.sh` (shared helpers).
+3. Creates `.env` from the example and **generates secrets** for placeholder values
+   (`DB_PASSWORD`, `SECRET_ENCRYPTION_KEY`; an existing real DB password or encryption
+   key is preserved, never rotated). `api_token` and the web-app bootstrap secret are
+   generated too but passed only as transient env vars — never written to `.env`.
+4. Prompts for an Anthropic API key (format-validated, 3 retries; passed transiently).
+5. Prompts for **deployment topology**: local/eval (HTTP on `:3000`), public domain +
+   HTTPS (Caddy + Let's Encrypt), or public IP / own upstream proxy. The HTTPS choice
+   requires a `DOMAIN` and sets `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml`
+   durably in `.env` so the overlay is applied on every subsequent `docker compose`.
+6. Starts Postgres, then runs **migrations and vault-seed *inside* the pulled image**
+   via `docker compose run --rm curia ./node_modules/.bin/tsx …` (tsx invoked directly —
+   the runtime image deliberately ships no corepack/pnpm). Vault-seed runs with
+   `SEED_VAULT_VERIFY=1`, so a partial seed fails loudly instead of booting a
+   half-configured instance.
+7. Brings the full stack up, waits for `/api/health`, writes a `SETUP_COMPLETE` marker
+   to `.env`, and **prints a summary box** with the bootstrap secret the operator uses
+   to sign in.
+
+Re-running against a completed install (detected via the `SETUP_COMPLETE` marker) takes a
+non-rotating upgrade path: no secrets are regenerated, migrations re-apply idempotently,
+and vault-seed runs verify-only.
+
+The **optional Caddy TLS overlay** (`docker-compose.tls.yml`) adds a `caddy:2-alpine`
+service that terminates HTTPS with automatic Let's Encrypt certificates, reading `DOMAIN`
+from `.env` and the `deploy/Caddyfile`. TLS matters because Curia auth (bootstrap secret,
+API token, session cookies) must not cross the wire in cleartext on a public host.
+
+### Production VPS (Maintainer)
+
+The maintainer's own production deployment lives in the separate `curia-deploy` repo and
+layers instance-only agents/skills/MCP servers, Chrome/patchright, and licensed art on top
+of the core image. As of v0.40 it consumes the published image via a thin
+`FROM ghcr.io/josephfung/curia:${CURIA_IMAGE_TAG}` layer (defaulting to `:edge`, or pinned
+to a release tag) rather than rebuilding core from source — this retires the old
+duplicated ~330-line core Dockerfile. The thin downstream image is still built on the VPS
+(private custom code + licensed art never enter a registry); `deploy.sh` now rsyncs only
+`curia-deploy` and pulls the base image, no longer syncing the curia source checkout.
+
 - Config from `default.yaml` + `production.yaml` + env vars from `.env`
-- Single Docker image containing the framework + built-in skills
 - **Runtime: Node 24 (Active LTS).** Both the Dockerfile build and runtime stages use `node:24-slim` (digest-pinned). The global `npm install` step was removed — bundled npm is unused (corepack/pnpm handle the build, tsx runs the app), so there is nothing to install globally.
 - **Non-root execution** — the production image runs as a dedicated `curia` user, not root. The Dockerfile creates the user in the build stage and pre-creates any directories the process needs at runtime (e.g., `/tmp/.google_workspace_mcp`).
 - MCP servers as separate containers if needed
-- Caddy reverse proxy for HTTPS (already configured in ceo-deploy)
+- Caddy reverse proxy for HTTPS (the same TLS overlay pattern generalized above)
 
 ### Docker Compose Structure
+
+As of v0.40, `docker-compose.yml` references the **published GHCR images by default**
+(no `build:`), so an operator pulls rather than builds. Developers restore local source
+builds by layering `docker-compose.dev.yml` (which re-adds `build:` for both services);
+`pnpm run setup` does this automatically.
 
 ```yaml
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    # Published pgvector + pgAudit image (init SQL baked in)
+    image: ghcr.io/josephfung/curia-postgres:${CURIA_POSTGRES_TAG:-pg16}
     volumes:
       - pgdata:/var/lib/postgresql/data
     environment:
@@ -129,7 +199,8 @@ services:
       interval: 5s
 
   curia:
-    build: .
+    # Published app image (developers override with docker-compose.dev.yml → build: .)
+    image: ghcr.io/josephfung/curia:${CURIA_IMAGE_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -144,6 +215,9 @@ services:
 volumes:
   pgdata:
 ```
+
+The optional `docker-compose.tls.yml` overlay adds a `caddy` service for automatic HTTPS
+(see *Self-Host* above), selected durably via `COMPOSE_FILE` in `.env`.
 
 ---
 
@@ -229,6 +303,7 @@ Automated security scanning runs on every pull request and on a weekly schedule:
 - **CodeQL** — weekly JS/TS semantic analysis.
 - **Gitleaks** — blocks merge if hardcoded secrets are detected in the diff.
 - **OpenSSF Scorecard** — `.github/workflows/scorecard.yml` runs weekly and on push. It publishes SARIF to GitHub's Security tab and to securityscorecards.dev, and the score is surfaced via an OpenSSF badge in the README.
+- **SBOM + DAST** — `sbom.yml` generates a dependency SBOM, and `dast.yml` runs an OWASP ZAP passive scan against the booted HTTP API. Together with the on-demand Docker image scan, a fresh CodeQL pass, and Scorecard, these form the pre-release security gate run against `main` before cutting a release (`docker-publish.yml` also emits provenance + an SBOM per published image).
 
 ### Supply-Chain Hardening
 
@@ -351,8 +426,12 @@ curia/
 | Item | Status |
 |---|---|
 | Layered YAML config — `default.yaml` / `local.yaml` / `production.yaml` with env var interpolation | Done |
-| `docker-compose.yml` — postgres (pgvector) + curia services with healthchecks | Done |
+| `docker-compose.yml` — references published GHCR images by default; `docker-compose.dev.yml` restores source builds | Done |
 | `Dockerfile` — multi-stage build, Node 24 (`node:24-slim`, digest-pinned), tsx at runtime; global npm install removed | Done |
+| GHCR image publishing (`docker-publish.yml`) — signed, multi-arch `curia` + `curia-postgres` images; `:edge` on main, semver + `latest` on release (#1343) | Done |
+| `install.sh` self-host installer — image-based, in-container migrate + vault-seed (no host Node/pnpm), topology/TLS prompts, bootstrap-secret summary (#1343) | Done |
+| Optional Caddy TLS overlay (`docker-compose.tls.yml`) — automatic Let's Encrypt HTTPS via `DOMAIN` + `COMPOSE_FILE` | Done |
+| `curia-postgres` fresh-init — probe the real server over TCP so fresh volumes create `curia` instead of crash-looping (#1350) | Done |
 | `GET /api/health` endpoint — three-state (`ok`/`degraded`/`down`) with per-check status for db, bus, channels, browser, MCP, and scheduler | Done |
 | Daily credential canary job — validates LLM tiers, credentials, and external deps; pings heartbeat URLs on success | Done |
 | Structured logging via pino — correct log levels, no `console.log` | Done |

@@ -216,6 +216,27 @@ Documents the shape of a successful result. This is informational for the LLM �
 }
 ```
 
+#### `export_items` (optional — data-export skills)
+
+If your skill sends **bulk data out of the building** — email attachments, or Google Workspace
+MCP exports (`create_drive_file`, `create_sheet`, `append_table_rows`) — accept an optional
+`export_items` input so the bulk-export gates (spec 15 §Bulk Export Gates, #201) can resolve each
+item's sensitivity. Each entry carries a `node_id` (resolved against `kg_nodes` for its sensitivity
+tier) alongside the item it describes:
+
+```json
+"inputs": {
+  "to": "string",
+  "attachments": "object[]?",
+  "export_items": "object[]?"
+}
+```
+
+The `OutboundGateway` uses these to apply the item-count threshold, non-contact destination
+allowlist (confidential+ only), and `restricted` sensitivity ceiling. An agent-supplied
+`sensitivity` on an item can only **ratchet up** the resolved value, never downgrade it. See
+`skills/email-send/skill.json` for a live example and [spec 06 — Sensitivity resolution](../specs/06-audit-and-security.md#sensitivity-resolution).
+
 #### `permissions` (optional, default: `[]`)
 
 Declared capabilities required by this skill, validated at load time. Currently unused for enforcement but reserved for future sandboxing. Example future values: `"network:https"`, `"filesystem:read"`.
@@ -578,6 +599,8 @@ For **freeform working state that grows** — running notes, a draft, or a resea
 - [ ] Tests cover the success path and at least one failure path
 - [ ] Any required secrets are declared in `"secrets"` array
 - [ ] If the skill is useless without a specific credential, it declares that vault key in `install.requires_secrets` so the registry blocks install/enable until it is configured
+- [ ] If the skill sends bulk data externally (attachments, Workspace exports), it accepts `export_items` so the bulk-export gates can resolve sensitivity
+- [ ] If the skill adds a configurable capability a new user would set up (new channel, third-party integration, credential-requiring bundle), a matching entry exists in `skills/setup-status/catalog.yaml` with a `docs_url`
 - [ ] Skill is pinned in at least one agent YAML (or documented as discoverable)
 - [ ] Remember the skill starts **disabled** in the registry — enabling it is a restart-based registry action, not just adding the directory
 

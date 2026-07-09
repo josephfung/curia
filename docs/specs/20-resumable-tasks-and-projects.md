@@ -193,7 +193,29 @@ globally (`documentWorkspace.kgPromotion.enabled: false`), disableable per task
 (`error_budget.kg_promotion: false`), and archives the project's
 workspace docs (`archived_at`) afterward.
 
-## 8. Configuration
+## 8. Task-wake clarifications and past-due subtasks
+
+Two failure modes at the boundary between a waking task and the CEO were closed in #1299.
+
+**Task-wake reply binding.** A task that wakes and needs input asks the CEO a question. The
+question is *sent from the scheduler conversation*, but the CEO's answer arrives on a different
+conversation (Signal/email), so a naive structural match never binds the reply back to the task —
+the task re-asks forever. The fix: an outbound task-wake send **auto-registers a durable reply
+binding** (`src/dispatch/task-wake-reply.ts`) — the outbound-context entry carries
+`bind_reply: true` + the originating `task_id`, with a **7-day TTL** (`TASK_WAKE_REPLY_TTL_HOURS =
+168`, longer than the 6h auto-registration default because a CEO may take days to answer). When the
+reply arrives, the coordinator **judges relevance and persists the answer to the originating task via
+`context-bridge-release` with a `reply`** — not a blind structural auto-bind. When several task-wake
+asks are outstanding at once, the coordinator must match the reply to the right binding **by content**
+(the binding stores a 200-char preview of the question as the `expected_reply` hint). A reply whose
+bound task no longer exists releases the entry rather than erroring.
+
+**Past-due milestone subtasks.** A milestone subtask created already past its due date must **wake
+immediately** to be worked, not be silently auto-completed. The earlier behavior auto-completed a
+past-due-at-creation subtask, dropping the work; a past-due task now schedules an immediate wake
+instead. (#1299)
+
+## 9. Configuration
 
 ```yaml
 tasks:
@@ -220,7 +242,7 @@ Per-task overrides live in `tasks.error_budget` (`resumable`, `kg_promotion`, `m
 `blocked_step_hours`, `throughput_divergence_ratio`) — the keys validated in
 `src/tasks/task-error-budget.ts`.
 
-## 9. Relationship to spec 19
+## 10. Relationship to spec 19
 
 This spec supersedes several items spec 19 §10 deferred: durable multi-step projects with a
 weighted progress rollup (the `progress.plan` "X of Y"), and decomposition with dependencies.
