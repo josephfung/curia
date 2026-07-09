@@ -3,8 +3,13 @@
 #
 # Usage:
 #   # Download first, then review, then run:
-#   curl -fsSL https://raw.githubusercontent.com/josephfung/curia/main/install.sh -o install.sh
+#   curl -fsSL https://github.com/josephfung/curia/releases/latest/download/install.sh -o install.sh
 #   bash install.sh
+#
+#   # Pin a specific release (config files AND image both come from it):
+#   CURIA_VERSION=v0.41.0 bash install.sh
+#   # Track the bleeding edge (main-branch config + :edge image; advanced/testing):
+#   CURIA_VERSION=edge bash install.sh
 #
 # Note: piping curl directly to bash (curl … | bash) does NOT work — this
 # script uses interactive `read` prompts that require a real TTY, not piped
@@ -16,8 +21,8 @@
 #
 # What this script does:
 #   1. Checks for Docker + compose + curl.
-#   2. Fetches docker-compose.yml, the TLS overlay, .env.example, and the
-#      Caddyfile next to install.sh (if not already present).
+#   2. Fetches the matching release's docker-compose.yml, TLS overlay,
+#      .env.example, and Caddyfile next to install.sh (if not already present).
 #   3. Creates .env from the example, generating secrets for any placeholder values.
 #   4. Prompts for an Anthropic API key (format-validated, 3 retries).
 #   5. Asks about deployment topology (local / public HTTPS / behind-proxy).
@@ -34,17 +39,95 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# The Git ref (tag or branch) this installer was downloaded from. Bumped at
-# release time so that installs fetch matching compose files.
-CURIA_REF="${CURIA_REF:-main}"
-RAW_BASE="https://raw.githubusercontent.com/josephfung/curia/${CURIA_REF}"
+# CURIA_VERSION selects a release. From it we derive BOTH where the config files
+# come from AND which app image tag is written to .env — so config and image
+# always come from the same release (no per-release edits to this script).
+#   latest  (default) -> newest release assets       + image tag "latest"
+#   vX.Y.Z / X.Y.Z    -> that release's assets        + image tag "vX.Y.Z"
+#   edge              -> config from raw main branch  + image tag "edge"
+# Advanced override: CURIA_REF=<git-ref> forces the raw path for the config
+# fetch (does NOT set an image tag; .env.example's default applies).
+CURIA_VERSION="${CURIA_VERSION:-latest}"
+
+GH_RELEASES="https://github.com/josephfung/curia/releases"
+RAW_REPO="https://raw.githubusercontent.com/josephfung/curia"
+
+# Populated by resolve_version. Declared up-front for `set -u` safety.
+ASSET_MODE=""               # "release" (flat asset names) | "raw" (repo paths)
+ASSET_BASE=""               # release-asset base URL (release mode)
+RAW_BASE=""                 # raw repo base URL (raw mode)
+CURIA_IMAGE_TAG_RESOLVED="" # image tag to write on fresh install ("" = leave .env.example default)
+
+# Map CURIA_VERSION (and the CURIA_REF override) onto the config source + image
+# tag. Pure string logic — runs before setup-common.sh is sourced, so it must
+# not use the error/hint helpers; it prints its own errors inline.
+resolve_version() {
+  # Advanced escape hatch: an explicit CURIA_REF wins and forces raw mode.
+  if [[ -n "${CURIA_REF:-}" ]]; then
+    ASSET_MODE="raw"
+    RAW_BASE="${RAW_REPO}/${CURIA_REF}"
+    CURIA_IMAGE_TAG_RESOLVED=""
+    return 0
+  fi
+
+  local v="$CURIA_VERSION"
+  case "$v" in
+    latest)
+      ASSET_MODE="release"
+      ASSET_BASE="${GH_RELEASES}/latest/download"
+      CURIA_IMAGE_TAG_RESOLVED="latest"
+      ;;
+    edge)
+      ASSET_MODE="raw"
+      RAW_BASE="${RAW_REPO}/main"
+      CURIA_IMAGE_TAG_RESOLVED="edge"
+      ;;
+    v[0-9]*|[0-9]*)
+      # Normalize a bare "0.41.0" to "v0.41.0".
+      case "$v" in v*) ;; *) v="v$v" ;; esac
+      # Validate the tag shape (same regex the release workflow enforces).
+      if ! printf '%s' "$v" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
+        printf 'error: invalid CURIA_VERSION: %s\n' "$CURIA_VERSION" >&2
+        printf 'hint:  use "latest", "edge", or a release tag like v0.41.0 (see %s)\n' "$GH_RELEASES" >&2
+        exit 1
+      fi
+      ASSET_MODE="release"
+      ASSET_BASE="${GH_RELEASES}/download/${v}"
+      CURIA_IMAGE_TAG_RESOLVED="$v"
+      ;;
+    *)
+      printf 'error: invalid CURIA_VERSION: %s\n' "$CURIA_VERSION" >&2
+      printf 'hint:  use "latest", "edge", or a release tag like v0.41.0\n' >&2
+      exit 1
+      ;;
+  esac
+}
+
+resolve_version
+
+# Fetch a bundled file, mapping its local path to the flat release-asset name in
+# release mode, or using the repo-relative path in raw mode.
+#   $1 = local path (e.g. scripts/setup-common.sh), $2 = flat asset name (e.g. setup-common.sh)
+fetch_asset() {
+  local local_path="$1" asset="$2"
+  if [[ "$ASSET_MODE" == "release" ]]; then
+    curl -fsSL "${ASSET_BASE}/${asset}" -o "$INSTALL_DIR/$local_path"
+  else
+    curl -fsSL "${RAW_BASE}/${local_path}" -o "$INSTALL_DIR/$local_path"
+  fi
+}
 
 # setup-common.sh may not be present when install.sh is fetched standalone.
-# Fetch it from the same ref if missing, then source it to get the shared output
-# helpers and wait_* functions.
+# Fetch it from the matching release/ref if missing, then source it to get the
+# shared output helpers and wait_* functions. NOTE: this runs before INSTALL_DIR
+# is set below, so it targets $SCRIPT_DIR directly rather than via fetch_asset.
 if [[ ! -f "$SCRIPT_DIR/scripts/setup-common.sh" ]]; then
   mkdir -p "$SCRIPT_DIR/scripts"
-  curl -fsSL "$RAW_BASE/scripts/setup-common.sh" -o "$SCRIPT_DIR/scripts/setup-common.sh"
+  if [[ "$ASSET_MODE" == "release" ]]; then
+    curl -fsSL "${ASSET_BASE}/setup-common.sh" -o "$SCRIPT_DIR/scripts/setup-common.sh"
+  else
+    curl -fsSL "${RAW_BASE}/scripts/setup-common.sh" -o "$SCRIPT_DIR/scripts/setup-common.sh"
+  fi
 fi
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/scripts/setup-common.sh"
@@ -139,12 +222,21 @@ check_prereqs() {
 # Caddyfile) into the install dir, skipping files that are already present.
 # This lets an operator re-run install.sh safely without clobbering hand-edits.
 fetch_bundle() {
-  local f
-  for f in docker-compose.yml docker-compose.tls.yml .env.example deploy/Caddyfile; do
-    if [[ ! -f "$INSTALL_DIR/$f" ]]; then
-      mkdir -p "$INSTALL_DIR/$(dirname "$f")"
-      info "Fetching $f ..."
-      curl -fsSL "$RAW_BASE/$f" -o "$INSTALL_DIR/$f"
+  # local-path : flat-release-asset-name. GitHub release assets cannot contain
+  # "/", so deploy/Caddyfile is published as the flat asset "Caddyfile"; the
+  # other three map 1:1. In raw mode the asset name is ignored (see fetch_asset).
+  local pair local_path asset
+  for pair in \
+    "docker-compose.yml:docker-compose.yml" \
+    "docker-compose.tls.yml:docker-compose.tls.yml" \
+    ".env.example:.env.example" \
+    "deploy/Caddyfile:Caddyfile"; do
+    local_path="${pair%%:*}"
+    asset="${pair#*:}"
+    if [[ ! -f "$INSTALL_DIR/$local_path" ]]; then
+      mkdir -p "$INSTALL_DIR/$(dirname "$local_path")"
+      info "Fetching $local_path ..."
+      fetch_asset "$local_path" "$asset"
     fi
   done
 }
@@ -205,6 +297,15 @@ fresh_install() {
   # block (pointing at the internal postgres hostname). This .env value is used
   # by the migration runner (docker compose run --rm curia), not by the app container.
   set_env_var "$env" DATABASE_URL "postgres://curia:${db_pass}@postgres:5432/curia"
+
+  # Pin the app image tag to the resolved CURIA_VERSION (latest / vX.Y.Z / edge),
+  # so the config files and the image both come from the same release. This runs
+  # only on fresh install, so a re-run never clobbers an operator's hand-pinned
+  # tag. CURIA_POSTGRES_TAG is intentionally left at its default (pg16) — the
+  # postgres image is versioned by PG major, not app version.
+  if [[ -n "$CURIA_IMAGE_TAG_RESOLVED" ]]; then
+    set_env_var "$env" CURIA_IMAGE_TAG "$CURIA_IMAGE_TAG_RESOLVED"
+  fi
 
   # Only generate a new encryption key if the current value is the template
   # placeholder or entirely absent/empty. A key that already exists must be

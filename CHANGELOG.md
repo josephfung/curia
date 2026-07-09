@@ -13,6 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **`install.sh` version** — one `CURIA_VERSION` knob (default `latest`) selects config files and image from the same release.
+- **Release assets** — each release now ships a signed `install.sh` + config bundle (`SHA256SUMS`).
+
 ## [0.40.0] — 2026-07-09 — "The Watcher"
 
 > **The Watcher (Uatu)** *(Marvel Comics, 1963, Stan Lee & Jack Kirby)* — a cosmic observer who witnesses and records every event in his domain, sworn never to interfere. This release gives Curia its own watcher: Ant Farm, a read-only pixel-art office that replays the audit log as living animation and never touches the work it depicts.

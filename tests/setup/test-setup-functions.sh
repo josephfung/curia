@@ -496,6 +496,59 @@ fi
 
 rm -f "$_ic_env"
 
+# --- install.sh: resolve_version ---
+
+echo ""
+echo "=== install.sh: resolve_version ==="
+
+_assert_var() {
+    local desc="$1" got="$2" want="$3"
+    if [[ "$got" == "$want" ]]; then
+        echo "  ✓ $desc"; PASS=$((PASS+1))
+    else
+        echo "  ✗ $desc — got '$got' want '$want'"; FAIL=$((FAIL+1))
+    fi
+}
+
+# latest (default): release assets + image tag "latest".
+CURIA_REF=""; CURIA_VERSION="latest"; resolve_version
+_assert_var "latest → release mode" "$ASSET_MODE" "release"
+_assert_var "latest → latest/download base" "$ASSET_BASE" "https://github.com/josephfung/curia/releases/latest/download"
+_assert_var "latest → image tag latest" "$CURIA_IMAGE_TAG_RESOLVED" "latest"
+
+# vX.Y.Z: that release's assets + matching image tag.
+CURIA_REF=""; CURIA_VERSION="v0.41.0"; resolve_version
+_assert_var "v0.41.0 → release mode" "$ASSET_MODE" "release"
+_assert_var "v0.41.0 → download/<tag> base" "$ASSET_BASE" "https://github.com/josephfung/curia/releases/download/v0.41.0"
+_assert_var "v0.41.0 → image tag v0.41.0" "$CURIA_IMAGE_TAG_RESOLVED" "v0.41.0"
+
+# Bare X.Y.Z is normalized to vX.Y.Z.
+CURIA_REF=""; CURIA_VERSION="0.41.0"; resolve_version
+_assert_var "0.41.0 normalized → image tag v0.41.0" "$CURIA_IMAGE_TAG_RESOLVED" "v0.41.0"
+_assert_var "0.41.0 normalized → download/v0.41.0 base" "$ASSET_BASE" "https://github.com/josephfung/curia/releases/download/v0.41.0"
+
+# edge: config from raw main + image tag "edge".
+CURIA_REF=""; CURIA_VERSION="edge"; resolve_version
+_assert_var "edge → raw mode" "$ASSET_MODE" "raw"
+_assert_var "edge → raw main base" "$RAW_BASE" "https://raw.githubusercontent.com/josephfung/curia/main"
+_assert_var "edge → image tag edge" "$CURIA_IMAGE_TAG_RESOLVED" "edge"
+
+# CURIA_REF override: raw mode at that ref, no image-tag pin (empty).
+CURIA_REF="my-branch"; CURIA_VERSION="latest"; resolve_version
+_assert_var "CURIA_REF override → raw mode" "$ASSET_MODE" "raw"
+_assert_var "CURIA_REF override → raw base at ref" "$RAW_BASE" "https://raw.githubusercontent.com/josephfung/curia/my-branch"
+_assert_var "CURIA_REF override → no image-tag pin" "$CURIA_IMAGE_TAG_RESOLVED" ""
+
+# Invalid version errors (subshell so exit 1 doesn't kill the suite).
+if ( CURIA_REF=""; CURIA_VERSION="nope"; resolve_version ) 2>/dev/null; then
+    echo "  ✗ invalid version should error"; FAIL=$((FAIL+1))
+else
+    echo "  ✓ invalid version errors out"; PASS=$((PASS+1))
+fi
+
+# Reset globals so nothing downstream inherits test state.
+CURIA_REF=""; CURIA_VERSION="latest"; resolve_version
+
 # --- Results ---
 
 echo ""
