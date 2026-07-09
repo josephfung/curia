@@ -13,10 +13,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Fixed
-
-- **Release bundle** — `.env.example` publishes as the asset `env.example`; GitHub mangles leading-dot asset names.
-
 ## [0.40.1] — 2026-07-09 — "Voltron"
 
 > **Voltron** *(Voltron: Defender of the Universe, 1984, World Events Productions)* — five lion ships that pilot independently until they combine into a single giant defender. This patch does the same to the installer: two drifting version knobs, a config ref and an image tag, unite into one `CURIA_VERSION`.
@@ -25,6 +21,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`install.sh` version** — one `CURIA_VERSION` knob (default `latest`) selects config files and image from the same release.
 - **Release assets** — each release now ships a signed `install.sh` + config bundle (`SHA256SUMS`).
+
+### Fixed
+
+- **Release bundle** — `.env.example` publishes as the asset `env.example`; GitHub mangles leading-dot asset names.
 
 ## [0.40.0] — 2026-07-09 — "The Watcher"
 
