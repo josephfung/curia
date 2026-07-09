@@ -73,6 +73,7 @@ describe('antfarm routes', () => {
 
     it('removes the antfarm client when a heartbeat write fails', async () => {
       const cleanup = vi.fn();
+      const logger = createLogger();
       const eventRouter = {
         addAntfarmClient: vi.fn().mockImplementation((client: { res: { write: (...args: unknown[]) => boolean } }) => {
           const originalWrite = client.res.write.bind(client.res);
@@ -92,7 +93,7 @@ describe('antfarm routes', () => {
         eventRouter,
         webAppBootstrapSecret: TEST_SECRET,
         sessions: new Map(),
-        logger: createLogger(),
+        logger,
       });
       await app.ready();
       await app.listen({ port: 0, host: '127.0.0.1' });
@@ -117,6 +118,10 @@ describe('antfarm routes', () => {
 
       vi.advanceTimersByTime(30000);
       expect(cleanup).toHaveBeenCalledOnce();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error) }),
+        'Ant Farm SSE heartbeat write failed — removing client',
+      );
 
       await app.close();
     });
