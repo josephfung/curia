@@ -29,6 +29,7 @@
 | 19 | [Tasks & Backlog](19-tasks-and-backlog.md) | `tasks` table (promoted from `agent_tasks`), `task-*` skills, `enable_task_management`, BacklogHeartbeat, digest backlog sections, project decomposition | ✅ Shipped (v0.33) |
 | 20 | [Resumable Tasks & Projects](20-resumable-tasks-and-projects.md) | Resumable-execution contract, checkpoint/pause, `plan` primitive, frontier advancement, throughput telemetry, adaptive re-planning, principal-facing escalation | ✅ Shipped (v0.39) |
 | 21 | [Agent Document Workspace (OKF)](21-agent-document-workspace.md) | OKF `working_documents` store, `doc-*` skills, backlink index, accumulator spill, `/scratch` TTL sweep, KG distillation | ✅ Shipped (v0.39) |
+| 22 | [Ant Farm Visualization](22-antfarm-visualization.md) | Pixel-art office replay of the audit log, `@curia/antfarm` SPA (Phaser + React), event→directive interpreter, timeline/stream/asset routes, scoped CSP | ✅ Shipped (v0.40) |
 
 ---
 

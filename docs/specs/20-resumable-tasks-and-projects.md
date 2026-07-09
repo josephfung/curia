@@ -193,7 +193,26 @@ globally (`documentWorkspace.kgPromotion.enabled: false`), disableable per task
 (`error_budget.kg_promotion: false`), and archives the project's
 workspace docs (`archived_at`) afterward.
 
-## 8. Configuration
+## 8. Task-wake clarifications
+
+A woken task that needs input it cannot supply itself asks the principal a question and suspends
+until the answer returns — the clarification counterpart of the resume loop in §4.
+
+The question is sent from the task's scheduler conversation, but the principal answers on their own
+channel (Signal, email), so the reply cannot be matched back to the task structurally. Instead, the
+outbound question registers a **durable reply binding** on the originating task: an outbound-context
+entry recording the task id and a short preview of the question, held for 7 days (long enough that a
+principal may take days to answer). When an inbound reply arrives, the coordinator decides whether it
+answers an outstanding question and, if so, writes the answer back to the bound task through
+`context-bridge-release`; binding is a judged relevance decision, not an automatic structural match.
+With several questions outstanding at once, the coordinator matches the reply to the right task by
+content, using the stored preview. A binding whose task no longer exists is released rather than
+retried.
+
+A milestone subtask whose due date has already passed at creation wakes immediately to be worked,
+rather than being treated as already complete.
+
+## 9. Configuration
 
 ```yaml
 tasks:
@@ -220,7 +239,7 @@ Per-task overrides live in `tasks.error_budget` (`resumable`, `kg_promotion`, `m
 `blocked_step_hours`, `throughput_divergence_ratio`) — the keys validated in
 `src/tasks/task-error-budget.ts`.
 
-## 9. Relationship to spec 19
+## 10. Relationship to spec 19
 
 This spec supersedes several items spec 19 §10 deferred: durable multi-step projects with a
 weighted progress rollup (the `progress.plan` "X of Y"), and decomposition with dependencies.

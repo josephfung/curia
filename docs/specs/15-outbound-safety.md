@@ -79,10 +79,12 @@ A multi-stage pipeline that runs on every outbound message to an external recipi
 
 Fast, zero-cost pattern matching. Any finding from Stage 1 blocks immediately — Stage 2 is skipped.
 
-- **System prompt fragments** — marker phrases extracted from loaded agent config checked for verbatim or near-verbatim matches in the outbound body
+- **System prompt fragments** — prompt-exfiltration markers are *derived at runtime from the live coordinator prompt* (not a hardcoded phrase list), and matching is whitespace- and markdown-robust so trivial reformatting cannot bypass them. Checked for verbatim or near-verbatim matches in the outbound body. (#1334)
 - **Internal structure leakage** — bus event type names, YAML/JSON config patterns, internal field names (`conversationId`, `taskId`, `agentId`, etc.)
 - **Secret patterns** — reuses existing patterns from `sanitizeOutput()`: API keys, bearer tokens, hex tokens ≥ 32 chars
 - **Contact data leakage** — email addresses in the body that are not the intended recipient or the CEO
+
+The identity- and structure-leakage rules carry a **principal-recipient bypass**: when the outbound message's recipient set is exclusively the structurally-verified principal, these rules do not fire (the principal is entitled to see internal structure). Secret-pattern and contact-leakage rules still apply. (#1334)
 
 ### Stage 2: LLM-as-Judge — audience-leak & sensitive-data detection (implemented)
 
@@ -166,6 +168,23 @@ and any error messages, so a hostile page cannot reflect the injected credential
 model's context. Screenshots are suppressed on any action that fills a secret, since an image
 cannot be value-redacted. See [spec 03 — Output Sanitization](03-skills-and-execution.md#output-sanitization).
 
+### Bulk Export Gates (#201)
+
+Where the content filter guards *message bodies*, a separate set of gates guards *bulk data
+leaving the building* — email attachments through the `OutboundGateway` and Google Workspace MCP
+exports (`create_drive_file`, `create_sheet`, `append_table_rows`). Three deterministic gates apply:
+
+1. **Item-count threshold** — an export exceeding the configured item count escalates for CEO approval.
+2. **Non-contact destination allowlist** — exports to destinations that are not a known contact are
+   permitted only for `confidential`+ data (unknown destinations otherwise escalate).
+3. **Sensitivity ceiling** — `restricted`-tier data is never bulk-exported.
+
+Skills tag exported data for sensitivity resolution via an `export_items` input (with a per-attachment
+`node_id` resolved against `kg_nodes`); an agent-supplied `sensitivity` can only ratchet *up*, never
+downgrade the resolved value. CEO approval notifications for a gated export include the export item
+list. The authoritative gate definitions and sensitivity-resolution rules live in
+[spec 06 — Audit & Security](06-audit-and-security.md#sensitivity-resolution).
+
 ---
 
 ## Audience Partitioning (coordinator prompt guidance)
@@ -238,6 +257,7 @@ without cross-channel confirmation.
 | Outbound rate limiting per recipient | Not Done |
 | Blocklist management skills (`outbound-block` / `outbound-unblock`) | Not Done |
 | `outbound.notification` event type (CEO notifications route through the filter pipeline) | Done |
+| Bulk export gates — item-count threshold, non-contact destination allowlist (confidential+), `restricted` sensitivity ceiling; `export_items`/`node_id` sensitivity resolution (email attachments + Workspace MCP exports) (#201) | Done |
 | Email reply quoting — `email-reply` includes the quoted original message body in drafts and sends; the filter pipeline runs over the full quoted reply | Done |
 | ceo-inbox URGENT alerts route through coordinator via Bullpen — specialist agents no longer call `signal-send` directly; alerts are requested as Bullpen threads mentioning the coordinator (see [spec 17 §4](17-meeting-debrief.md)) | Done |
 | `ceo-inbox-update-folders` empty-folders guard — refuses to PUT an empty folder set to Nylas, preventing accidental folder wipes | Done |
