@@ -101,12 +101,18 @@ Skills come in two flavours (local handlers and MCP servers) behind a single int
 
 ```bash
 mkdir curia && cd curia
-curl -fsSL https://raw.githubusercontent.com/josephfung/curia/<vX.Y.Z>/install.sh -o install.sh
+curl -fsSL https://github.com/josephfung/curia/releases/latest/download/install.sh -o install.sh
 # Review the script, then:
 bash install.sh
 ```
 
-Replace `<vX.Y.Z>` with the latest release tag (check [releases](https://github.com/josephfung/curia/releases)). The installer pulls the published image, generates secrets, runs migrations inside the container, and prints your bootstrap secret. Curia will be running at `http://localhost:3000`.
+The installer pulls the published image, generates secrets, runs migrations inside the container, and prints your bootstrap secret. Curia will be running at `http://localhost:3000`.
+
+By default it installs the **latest release** — both the config files and the image come from it. To pin a specific version, prefix the run with `CURIA_VERSION` (this pins the config *and* the image together):
+
+```bash
+CURIA_VERSION=v0.40.1 bash install.sh
+```
 
 Save the bootstrap secret to a password manager and use it on the login page to create your account.
 

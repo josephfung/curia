@@ -396,14 +396,17 @@ Tagging stays `git tag -a` (annotated, **unsigned**) — releases are signed at 
 
 **8. Verify release artifacts (SBOM + signatures)**
 
-Publishing the release triggers `release.yml`, which generates an SPDX SBOM and a source tarball, signs both with cosign (keyless, via GitHub OIDC), and attaches all four files to the release. This step is **not optional and not silent** — the workflow fails loudly if anything is missing or a signature fails to verify (this is the fix for v0.34.0, which shipped with no SBOM because the old auto-attach skipped silently).
+Publishing the release triggers `release.yml`, which generates an SPDX SBOM, a source tarball, and the operator install bundle (`install.sh` + `docker-compose.yml` + `docker-compose.tls.yml` + `env.example` + `Caddyfile` + `setup-common.sh`), signs the SBOM, tarball, and a `SHA256SUMS` manifest with cosign (keyless, via GitHub OIDC), and attaches all **twelve** files to the release. This step is **not optional and not silent** — the workflow fails loudly if anything is missing or a signature fails to verify (this is the fix for v0.34.0, which shipped with no SBOM because the old auto-attach skipped silently).
 
-Confirm the workflow succeeded and the four assets are present:
+Confirm the workflow succeeded and all twelve assets are present:
 
 ```bash
 gh run list --workflow=release.yml --limit 1   # must be green
 gh release view vX.Y.Z --json assets --jq '.assets[].name'
-# expect: sbom.spdx.json, sbom.spdx.json.sigstore, curia-vX.Y.Z.tar.gz, curia-vX.Y.Z.tar.gz.sigstore
+# expect (12): sbom.spdx.json, sbom.spdx.json.sigstore, curia-vX.Y.Z.tar.gz,
+#   curia-vX.Y.Z.tar.gz.sigstore, install.sh, docker-compose.yml,
+#   docker-compose.tls.yml, env.example, Caddyfile, setup-common.sh,
+#   SHA256SUMS, SHA256SUMS.sigstore
 ```
 
 If the run failed or assets are missing, re-run it (do **not** consider the release done until they are present):
