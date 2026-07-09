@@ -38,6 +38,7 @@ jobs:
             --config p/owasp-top-ten \
             --config p/command-injection \
             --config p/secrets \
+            --config p/dockerfile \
             --metrics=off \
             --sarif \
             --output semgrep.sarif \
