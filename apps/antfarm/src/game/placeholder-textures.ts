@@ -83,14 +83,6 @@ export function registerPlaceholderTextures(scene: Phaser.Scene): void {
   }
 
   {
-    const [canvas, ctx] = createCanvas(40, 48);
-    fillRect(ctx, 4, 4, 32, 40, '#4a5a6a');
-    fillRect(ctx, 8, 8, 24, 32, '#3a4a5a');
-    fillRect(ctx, 12, 12, 16, 4, '#c8e6a0');
-    scene.textures.addCanvas('tasks-board', canvas);
-  }
-
-  {
     const [canvas, ctx] = createCanvas(48, 40);
     fillRect(ctx, 8, 8, 32, 28, '#5a4a3a');
     fillRect(ctx, 16, 12, 16, 16, '#e8e0d0');
@@ -117,24 +109,6 @@ export function registerPlaceholderTextures(scene: Phaser.Scene): void {
     fillRect(ctx, 0, 0, 32, 16, '#f5e6a8');
     drawPixelBorder(ctx, 32, 16, '#c8b878');
     scene.textures.addCanvas('task-card', canvas);
-  }
-
-  {
-    const [canvas, ctx] = createCanvas(64, 24);
-    fillRect(ctx, 0, 0, 64, 24, '#ffffff');
-    drawPixelBorder(ctx, 64, 24, '#888888');
-    scene.textures.addCanvas('speech-bubble', canvas);
-  }
-
-  {
-    const [canvas, ctx] = createCanvas(32, 32);
-    fillRect(ctx, 0, 0, 32, 32, '#ffffff');
-    drawPixelBorder(ctx, 32, 32, '#888888');
-    ctx.beginPath();
-    ctx.arc(16, 16, 6, 0, Math.PI * 2);
-    ctx.fillStyle = '#666666';
-    ctx.fill();
-    scene.textures.addCanvas('think-bubble', canvas);
   }
 
   {

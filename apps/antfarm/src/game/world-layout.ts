@@ -11,8 +11,8 @@ export const STAGE_HEIGHT = 960;
 // (monitors above, chair/label below) is ~180px tall — so spacing must clear the
 // width and the rows must sit well below the coordinator (boss desk at y:200,
 // see buildWorldLayout). Tune freely.
-const FLOOR_ROW1_Y = 340;        // first specialist row — clears the coordinator's station (~y:200 + ~90 below)
-const FLOOR_ROW2_Y = 560;        // second row — clears row 1's bottom (~390)
+const FLOOR_ROW1_Y = 404;        // first specialist row (moved down 1 tile: more room for bubbles + claw)
+const FLOOR_ROW2_Y = 688;        // second row (moved down 2 tiles: dramatic claw descent, bubble headroom)
 const FLOOR_MARGIN = 100;        // min gap from the stage's left/right edges
 const FLOOR_MAX_SPACING = 240;   // center-to-center cap: 192px desk + ~48px breathing room
 
@@ -37,7 +37,6 @@ export interface DeskPosition extends Vec2 {
 export interface WorldLayout {
   desks: DeskPosition[];
   coordinatorId: string;
-  tasksBoard: Vec2;
   scheduler: Vec2;
   wastebasket: Vec2;
   clawTrack: { y: number; minX: number; maxX: number; idleX: number };
@@ -82,7 +81,6 @@ export function buildWorldLayout(desks: DeskSlot[]): WorldLayout {
   return {
     desks: deskPositions,
     coordinatorId,
-    tasksBoard: { x: 120, y: 380 },
     // Top of the room, just right of the printer (decor printer-325 sits at x≈510). This point is
     // both the scheduler sprite's position AND the claw's grab target, so they stay in lockstep.
     scheduler: { x: 650, y: 140 },
@@ -93,8 +91,13 @@ export function buildWorldLayout(desks: DeskSlot[]): WorldLayout {
   };
 }
 
+// Reserved open-floor spot (mid-room, between the two specialist rows) for walk targets that have
+// no desk — non-agent rooms/channels like the bullpen, plus any unknown id. A delegation "to the
+// bullpen" walks here, to open floor, instead of to a desk.
+const OPEN_FLOOR: Vec2 = { x: STAGE_WIDTH / 2, y: 520 };
+
 export function deskPositionForAgent(layout: WorldLayout, agentId: string): Vec2 {
   const desk = layout.desks.find((d) => d.agentId === agentId);
   if (desk) return { x: desk.x, y: desk.y };
-  return { x: STAGE_WIDTH / 2, y: 260 };
+  return { ...OPEN_FLOOR };
 }
