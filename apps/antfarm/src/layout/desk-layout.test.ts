@@ -30,6 +30,26 @@ describe('desk layout', () => {
     expect(layout.some((s) => s.agentId === 'custom-bot')).toBe(true);
   });
 
+  it('never mints a desk for a non-agent room/channel (e.g. the bullpen)', () => {
+    const directives = [{
+      id: '1',
+      logicalTs: 0,
+      causedBy: null,
+      kind: 'agent.walk',
+      agentId: 'coordinator',
+      targetAgentId: 'bullpen',
+    }] as SceneDirective[];
+
+    // The delegation target is a room — it must not appear in the derived ids, the desk layout,
+    // or via ensureAgentDesk.
+    const ids = agentIdsFromDirectives(directives);
+    expect(ids.has('bullpen')).toBe(false);
+
+    const layout = buildDeskLayout([{ name: 'coordinator', metadata: { role: 'coordinator' } }], ['bullpen']);
+    expect(layout.some((s) => s.agentId === 'bullpen')).toBe(false);
+    expect(ensureAgentDesk(layout, 'bullpen').some((s) => s.agentId === 'bullpen')).toBe(false);
+  });
+
   it('spawns a desk for a new agent id', () => {
     const base = buildDeskLayout([{ name: 'coordinator', metadata: { role: 'coordinator' } }], []);
     const extended = ensureAgentDesk(base, 'new-agent');

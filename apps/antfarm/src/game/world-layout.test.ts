@@ -50,7 +50,7 @@ describe('buildWorldLayout', () => {
 
   it('includes fixed props', () => {
     const layout = buildWorldLayout(desks);
-    expect(layout.tasksBoard.x).toBeGreaterThan(0);
+    expect(layout.scheduler.x).toBeGreaterThan(0);
     expect(layout.clawTrack.maxX).toBeGreaterThan(layout.clawTrack.minX);
   });
 });

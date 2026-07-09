@@ -35,6 +35,7 @@ const DEPTH = {
   agent: 10,
   desk: 15,     // real-art composed desks (in front of the seated agent)
   device: 18,   // computers / monitors sitting on the desk
+  walker: 20,   // an agent that has stood up to walk/visit — above desks so it's never occluded
   overlay: 40,  // speech / think bubbles, task cards, badges, desk labels
   clawCard: 49, // a job card gripped by the descending grabber (above the office, below the mechanism)
   clawTrack: 50,// the overhead claw-track rail — mounted in front of the whole office (top layer)
@@ -49,6 +50,41 @@ const CLAW_REST_OFFSET = 28;      // grabber's retracted y below the runner's tr
 const CLAW_CHAIN_TOP_OFFSET = 12; // chain top y below the track y (just under the runner)
 const CLAW_LEG_MS = 420;          // one descend or ascend leg
 const CLAW_SLIDE_MS = 700;        // horizontal slide between stations
+
+// Agent "walk over to delegate" visit: how the visitor stands relative to the target's desk, and
+// how long it lingers before walking home. It stands in FRONT of the desk (positive dy) at a
+// raised depth so it's never hidden behind the desk (the old code parked it behind → "under" it).
+const WALK_DEST_DX = -40;         // x offset from the target desk (slightly left of centre)
+const WALK_DEST_DY = 46;          // y offset — in front of the desk, not behind it
+const WALK_LEG_MS = 700;          // one leg of the trip (there / back)
+const WALK_VISIT_MS = 3200;       // linger at the desk before walking home (≈ a delegation's speech)
+
+// Pixel-art speech / thought bubbles. Drawn from crisp axis-aligned fillRects (blocky bevelled
+// corners + a chunky border) so they read as pixel art, with a readable monospace label on top.
+// All tunable — bump BUBBLE_FONT_PX / paddings for bigger, the dwell knobs for slower.
+const BUBBLE_BORDER_COLOR = 0x1a1f16; // near-black pixel border (matches UI ink)
+const SPEECH_FILL_COLOR = 0xfdfdfb;   // speech = crisp near-white (clearly lighter than thought)
+const THINK_FILL_COLOR = 0xf1e6c9;    // thought = warm cream (distinctly more yellow than speech)
+const BUBBLE_TEXT_COLOR = '#1a1f16';
+const BUBBLE_FONT_PX = 14;            // label size (was 10/8 — far too small to read)
+const BUBBLE_BORDER_PX = 3;           // border thickness
+const BUBBLE_PAD_X = 10;              // horizontal text padding inside the bubble
+const BUBBLE_PAD_Y = 7;               // vertical text padding
+const BUBBLE_MAX_TEXT_W = 190;        // wrap long speech instead of one tiny line
+const BUBBLE_BEVEL_SPEECH = 4;        // single-step corner bevel for speech (reads fine as-is)
+// Thought bubbles round their corners with a multi-step pixel staircase instead of one big bevel
+// notch: each inset is applied to a THINK_CORNER_STEP-tall row from the corner inward, so the
+// corner staggers down smoothly (outermost row most inset → widening to the straight middle).
+const THINK_CORNER_STEP = 3;
+const THINK_CORNER_INSETS = [8, 5, 3, 1];
+const BUBBLE_GAP_SPEECH = 42;         // tail tip height above the agent's anchor
+const BUBBLE_GAP_THINK = 46;          // thought sits a touch higher (and offset right, see caller)
+const SPEECH_TAIL_H = 12;             // downward pointer tail
+const THINK_TAIL_H = 26;             // vertical room for the trailing thought puffs
+// Speech dwell scales with reading length so short quips don't linger and long lines are readable.
+const SPEECH_DWELL_MIN = 2800;
+const SPEECH_DWELL_PER_CHAR = 70;
+const SPEECH_DWELL_MAX = 9000;
 
 // Compose/crop geometry for the singles-based desks (pinned visually with the art director).
 const DESK_TILE_W = 32;   // width of each desk tile's cropped content
@@ -79,14 +115,19 @@ interface AgentSprite {
   container: Phaser.GameObjects.Container;
   body: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
   agentId: string;
-  thinkBubble: Phaser.GameObjects.Image | null;
-  speechBubble: Phaser.GameObjects.Text | null;
+  thinkBubble: Phaser.GameObjects.Container | null;
+  speechBubble: Phaser.GameObjects.Container | null;
   stateTint: 'normal' | 'active' | 'error';
   /** Phaser texture key for the loaded character sheet, or null if using placeholder. */
   sheetKey: string | null;
   /** True when a real premade sprite sheet loaded successfully and is in use. */
   hasReal: boolean;
 }
+
+// Custom in-repo art bundled in public/assets — present in EVERY build. A load failure here is a
+// real bug (bad BASE_URL, CSP block, corrupt/404 asset), NOT the normal open-core "licensed art
+// absent" path, so it's logged loudly (see the loaderror handler) instead of as info.
+const BUNDLED_ASSET_KEYS = new Set(['claw-track', 'claw-runner', 'claw-chain', 'scheduler-art']);
 
 export class OfficeScene extends Phaser.Scene {
   private layout!: WorldLayout;
@@ -96,6 +137,11 @@ export class OfficeScene extends Phaser.Scene {
   private clawChain!: Phaser.GameObjects.TileSprite;
   // A job card currently gripped by the grabber; positioned to follow the grabber each frame.
   private carriedCard: Phaser.GameObjects.Image | null = null;
+  // True while a claw.deliver is animating. The claw/grabber/carriedCard are single shared objects,
+  // so an overlapping delivery (back-to-back directives in fast replay) would fight over them and
+  // mis-destroy the wrong card. When busy, a new delivery skips the animation but still applies its
+  // effect (target agent activates). Reset in spawnFixedProps so a scene.restart clears it.
+  private clawBusy = false;
   private taskCards = new Map<string, Phaser.GameObjects.Image>();
   private badgeGroup!: Phaser.GameObjects.Container;
   private callbacks!: OfficeSceneCallbacks;
@@ -134,8 +180,13 @@ export class OfficeScene extends Phaser.Scene {
     this.load.off('loaderror');
     this.load.on('loaderror', (file: Phaser.Loader.File) => {
       this.failedLoads.add(file.key);
-      // Expected when licensed art is absent — info, never error (no console errors).
-      console.info(`[antfarm] licensed asset not loaded (using placeholder): ${file.key}`);
+      if (BUNDLED_ASSET_KEYS.has(file.key)) {
+        // Shipped in-repo art failed to load — this should never happen in a correct build.
+        console.error(`[antfarm] BUNDLED asset failed to load: ${file.key} (${file.url}) — check BASE_URL / CSP / asset integrity`);
+      } else {
+        // Expected when licensed art is absent (open-core) — info, never error.
+        console.info(`[antfarm] licensed asset not loaded (using placeholder): ${file.key}`);
+      }
     });
 
     // Textures persist across restarts, so skip any key already loaded — re-queuing it is
@@ -462,7 +513,8 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private spawnFixedProps(): void {
-    this.add.image(this.layout.tasksBoard.x, this.layout.tasksBoard.y, 'tasks-board').setScale(2).setDepth(DEPTH.wall);
+    // The old wall "tasks board" was removed — the scheduler now serves as the job source/anchor,
+    // and task cards spawn there (see showTaskCard).
     const schedulerKey = this.loadedOk('scheduler-art') ? 'scheduler-art' : 'scheduler';
     this.add.image(this.layout.scheduler.x, this.layout.scheduler.y, schedulerKey).setScale(2).setDepth(DEPTH.wall);
     this.add.image(this.layout.wastebasket.x, this.layout.wastebasket.y, 'wastebasket').setScale(2).setDepth(DEPTH.wall);
@@ -489,6 +541,7 @@ export class OfficeScene extends Phaser.Scene {
       .setScale(2)
       .setDepth(DEPTH.clawMech);
     this.carriedCard = null;
+    this.clawBusy = false;
   }
 
   /** Per-frame: keep the grabber + chain (and any gripped job card) locked under the runner's x.
@@ -507,6 +560,21 @@ export class OfficeScene extends Phaser.Scene {
     if (this.carriedCard) {
       this.carriedCard.x = rx;
       this.carriedCard.y = this.clawGrabber.y;
+    }
+
+    // Keep each agent's bubbles pinned above it, so speech/thought travels WITH the agent when it
+    // walks (e.g. the coordinator delegating): otherwise a bubble stays frozen at the desk where it
+    // first appeared while the agent walks away — which is why delegations looked like they were
+    // spoken from the coordinator's own desk.
+    for (const agent of this.agents.values()) {
+      if (agent.speechBubble) {
+        agent.speechBubble.x = agent.container.x;
+        agent.speechBubble.y = agent.container.y - BUBBLE_GAP_SPEECH;
+      }
+      if (agent.thinkBubble) {
+        agent.thinkBubble.x = agent.container.x + 12;
+        agent.thinkBubble.y = agent.container.y - BUBBLE_GAP_THINK;
+      }
     }
   }
 
@@ -552,7 +620,11 @@ export class OfficeScene extends Phaser.Scene {
    *  claw mechanism reads as mounted in front of the whole office. 32×32 art drawn ×2 = 64px, on
    *  the same 64px grid as the floor/walls. Custom in-repo art, so it renders in every build. */
   private spawnClawTrack(): void {
-    if (!this.loadedOk('claw-track')) return;
+    if (!this.loadedOk('claw-track')) {
+      // Bundled art — absence means a broken build (also logged loudly by the loaderror handler).
+      console.warn('[antfarm] claw-track art missing — overhead rail will not render');
+      return;
+    }
     for (let x = 0; x < STAGE_WIDTH; x += 64) {
       this.add.image(x + 32, 32, 'claw-track').setScale(2).setDepth(DEPTH.clawTrack);
     }
@@ -685,6 +757,16 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private animateClawDeliver(directive: SceneDirective & { kind: 'claw.deliver' }): void {
+    // Single shared claw: if a delivery is already in flight, don't start a competing tween chain
+    // (it would fight over the runner/grabber and mis-destroy the carried card). Still apply the
+    // effect so the target agent activates, just without the animation.
+    if (this.clawBusy) {
+      this.ensureAgent(directive.agentId);
+      this.setAgentState(directive.agentId, 'active');
+      return;
+    }
+    this.clawBusy = true;
+
     const target = deskPositionForAgent(this.layout, directive.agentId);
     const pickupX = this.layout.scheduler.x;   // grab the job over the scheduler (the job source)
     const grabY = this.layout.scheduler.y;      // how far the grabber reaches down to the scheduler
@@ -757,6 +839,7 @@ export class OfficeScene extends Phaser.Scene {
                               x: this.layout.clawTrack.idleX,
                               duration: 500,
                               ease: 'Sine.easeInOut',
+                              onComplete: () => { this.clawBusy = false; }, // delivery done — allow the next
                             });
                           },
                         });
@@ -821,73 +904,201 @@ export class OfficeScene extends Phaser.Scene {
   private animateWalk(directive: SceneDirective & { kind: 'agent.walk' }): void {
     const agent = this.ensureAgent(directive.agentId);
     const target = deskPositionForAgent(this.layout, directive.targetAgentId);
-    const destX = target.x - 20;
-    const destY = target.y - 10;
-    const dir = this.facing(destX - agent.container.x, destY - agent.container.y);
     const sprite = agent.body;
-    if (agent.hasReal && agent.sheetKey && sprite instanceof Phaser.GameObjects.Sprite) {
-      sprite.play(`${agent.sheetKey}-walk-${dir}`, true);
-    }
+
+    // Home = where the agent is right now (its own seat); it returns here after the visit.
+    const homeX = agent.container.x;
+    const homeY = agent.container.y;
+    // Stand in FRONT of the target's desk (not behind it) so the visitor is visible; raise the
+    // depth above desks/devices for the whole trip so it can't be occluded en route or on arrival.
+    const destX = target.x + WALK_DEST_DX;
+    const destY = target.y + WALK_DEST_DY;
+    agent.container.setDepth(DEPTH.walker);
+
+    const play = (kind: 'walk' | 'idle', dir: Direction): void => {
+      if (agent.hasReal && agent.sheetKey && sprite instanceof Phaser.GameObjects.Sprite) {
+        sprite.play(`${agent.sheetKey}-${kind}-${dir}`, true);
+      }
+    };
+
+    // Leg 1: walk over to the target.
+    const outDir = this.facing(destX - homeX, destY - homeY);
+    play('walk', outDir);
     this.tweens.add({
       targets: agent.container,
       x: destX,
       y: destY,
-      duration: 700,
+      duration: WALK_LEG_MS,
       ease: 'Linear',
       onComplete: () => {
-        if (agent.hasReal && agent.sheetKey && sprite instanceof Phaser.GameObjects.Sprite) {
-          sprite.play(`${agent.sheetKey}-idle-${dir}`, true);
-        }
+        play('idle', outDir);
+        // Linger (the delegation speech shows here), then walk home and re-seat.
+        this.time.delayedCall(WALK_VISIT_MS, () => {
+          const backDir = this.facing(homeX - destX, homeY - destY);
+          play('walk', backDir);
+          this.tweens.add({
+            targets: agent.container,
+            x: homeX,
+            y: homeY,
+            duration: WALK_LEG_MS,
+            ease: 'Linear',
+            onComplete: () => {
+              // Re-seated: always face the desk/computer (down), not the way it walked back —
+              // otherwise it sits facing up/sideways, i.e. "backwards in its chair".
+              play('idle', 'down');
+              agent.container.setDepth(DEPTH.agent);
+            },
+          });
+        });
       },
     });
   }
 
+  /** Draw a blocky bevelled panel (chunky pixel border + cream fill) with crisp axis-aligned
+   *  fillRects. `bevel` cuts the corners in square steps so it reads as pixel art rather than a
+   *  smooth rounded rect. Coordinates are local to the graphics object. */
+  private drawBevelPanel(g: Phaser.GameObjects.Graphics, x: number, y: number, w: number, h: number, bevel: number, fill: number): void {
+    // Dark border shape (a rectangle with square-cut corners = two overlapping rects).
+    g.fillStyle(BUBBLE_BORDER_COLOR, 1);
+    g.fillRect(x + bevel, y, w - 2 * bevel, h);
+    g.fillRect(x, y + bevel, w, h - 2 * bevel);
+    // Interior, inset by the border thickness.
+    const b = BUBBLE_BORDER_PX;
+    g.fillStyle(fill, 1);
+    g.fillRect(x + bevel + b, y + b, w - 2 * bevel - 2 * b, h - 2 * b);
+    g.fillRect(x + b, y + bevel + b, w - 2 * b, h - 2 * bevel - 2 * b);
+  }
+
+  /** Draw a panel whose corners are rounded with a multi-step pixel staircase (THINK_CORNER_INSETS
+   *  applied per THINK_CORNER_STEP-tall row) rather than one big bevel notch — smoother-looking
+   *  corners for thought bubbles. Dark border shape first, then the cream fill inset by the border. */
+  private drawRoundedPanel(g: Phaser.GameObjects.Graphics, x: number, y: number, w: number, h: number): void {
+    const step = THINK_CORNER_STEP;
+    const insets = THINK_CORNER_INSETS;
+    const cornerH = insets.length * step;
+    const strip = (ix: number, iy: number, iw: number, ih: number, color: number): void => {
+      g.fillStyle(color, 1);
+      for (let i = 0; i < insets.length; i++) {
+        const inset = insets[i]!;
+        g.fillRect(ix + inset, iy + i * step, iw - 2 * inset, step);                 // top corner row
+        g.fillRect(ix + inset, iy + ih - (i + 1) * step, iw - 2 * inset, step);       // mirrored bottom row
+      }
+      g.fillRect(ix, iy + cornerH, iw, ih - 2 * cornerH);                             // straight middle band
+    };
+    strip(x, y, w, h, BUBBLE_BORDER_COLOR);
+    const b = BUBBLE_BORDER_PX;
+    strip(x + b, y + b, w - 2 * b, h - 2 * b, THINK_FILL_COLOR);
+  }
+
+  /** A stepped triangular speech tail pointing straight down from (cx, topY) to (cx, topY+tailH),
+   *  with the cream fill inset inside the dark border so it matches the bubble body. */
+  private drawSpeechTail(g: Phaser.GameObjects.Graphics, cx: number, topY: number, tailH: number, fill: number): void {
+    const step = 3;
+    const startW = 16;
+    g.fillStyle(BUBBLE_BORDER_COLOR, 1);
+    for (let i = 0; i * step < tailH; i++) {
+      const w = Math.max(step, startW - i * 4);
+      g.fillRect(cx - w / 2, topY + i * step, w, step);
+    }
+    g.fillStyle(fill, 1);
+    for (let i = 0; i * step < tailH - step; i++) {
+      const w = Math.max(step, startW - 6 - i * 4);
+      g.fillRect(cx - w / 2, topY + i * step, w, step);
+    }
+  }
+
+  /** Two small bevelled puffs descending from the thought bubble toward the agent — the classic
+   *  "…" trail of a thought balloon. */
+  private drawThoughtPuffs(g: Phaser.GameObjects.Graphics, cx: number, topY: number): void {
+    this.drawBevelPanel(g, cx - 7, topY + 2, 14, 14, 3, THINK_FILL_COLOR);
+    this.drawBevelPanel(g, cx - 4, topY + 16, 9, 9, 2, THINK_FILL_COLOR);
+  }
+
+  /** Build a pixel-art bubble (speech = tail, think = puffs) sized to its text, anchored so the
+   *  tail/puffs point down at (ax, ay). Returns the container; the label is stashed on it under
+   *  the 'label' data key for callers that want to wire up interactivity. */
+  private makeBubble(ax: number, ay: number, text: string, kind: 'speech' | 'think'): Phaser.GameObjects.Container {
+    const container = this.add.container(ax, ay).setDepth(DEPTH.overlay);
+    const label = this.add
+      .text(0, 0, text, {
+        fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+        fontSize: `${BUBBLE_FONT_PX}px`,
+        color: BUBBLE_TEXT_COLOR,
+        align: 'center',
+        wordWrap: { width: BUBBLE_MAX_TEXT_W },
+      })
+      .setOrigin(0.5, 0.5);
+
+    const w = Math.ceil(label.width) + BUBBLE_PAD_X * 2;
+    const h = Math.ceil(label.height) + BUBBLE_PAD_Y * 2;
+    const tailH = kind === 'speech' ? SPEECH_TAIL_H : THINK_TAIL_H;
+    const bodyTop = -(tailH + h);   // bubble body sits above the anchor; tail/puffs reach down to 0
+    const bodyBottom = -tailH;
+
+    const g = this.add.graphics();
+    if (kind === 'speech') {
+      this.drawBevelPanel(g, -w / 2, bodyTop, w, h, BUBBLE_BEVEL_SPEECH, SPEECH_FILL_COLOR);
+      this.drawSpeechTail(g, 0, bodyBottom, tailH, SPEECH_FILL_COLOR);
+    } else {
+      // Thought bubbles get the multi-step staircase corner (rounder than a single bevel notch).
+      this.drawRoundedPanel(g, -w / 2, bodyTop, w, h);
+      this.drawThoughtPuffs(g, 0, bodyBottom);
+    }
+
+    label.setPosition(0, bodyTop + h / 2);
+    container.add([g, label]);
+    container.setData('label', label);
+
+    // Little pop-in so bubbles appear with a bit of life rather than snapping in.
+    container.setScale(0.85);
+    this.tweens.add({ targets: container, scale: 1, duration: 150, ease: 'Back.easeOut' });
+    return container;
+  }
+
   private showSpeech(directive: SceneDirective & { kind: 'agent.speak' }): void {
     const agent = this.ensureAgent(directive.agentId);
-    if (agent.speechBubble) {
-      agent.speechBubble.destroy();
-    }
-    const text = (directive.content ?? '…').slice(0, 40);
-    agent.speechBubble = this.add
-      .text(agent.container.x, agent.container.y - 40, text, {
-        fontSize: '10px',
-        color: '#1a1f16',
-        backgroundColor: '#ffffff',
-        padding: { x: 4, y: 2 },
-      })
-      .setOrigin(0.5)
-      .setDepth(DEPTH.overlay);
-    agent.speechBubble.setInteractive({ useHandCursor: true });
-    agent.speechBubble.on('pointerdown', () => {
-      this.callbacks.onDirectiveClick(directive);
-    });
-    this.time.delayedCall(3000, () => {
-      agent.speechBubble?.destroy();
-      agent.speechBubble = null;
+    agent.speechBubble?.destroy();
+    const text = (directive.content ?? '…').slice(0, 140);
+    const bubble = this.makeBubble(agent.container.x, agent.container.y - BUBBLE_GAP_SPEECH, text, 'speech');
+    agent.speechBubble = bubble;
+
+    const label = bubble.getData('label') as Phaser.GameObjects.Text;
+    label.setInteractive({ useHandCursor: true });
+    label.on('pointerdown', () => this.callbacks.onDirectiveClick(directive));
+
+    // Dwell scales with reading length, then fade out (rather than the old hard 3s pop-off).
+    const dwell = Phaser.Math.Clamp(
+      SPEECH_DWELL_MIN + text.length * SPEECH_DWELL_PER_CHAR,
+      SPEECH_DWELL_MIN,
+      SPEECH_DWELL_MAX,
+    );
+    this.time.delayedCall(dwell, () => {
+      // Only fade THIS bubble — if a newer speech replaced it, that one already destroyed this and
+      // owns its own timer; touching agent.speechBubble here would kill the replacement early.
+      if (agent.speechBubble !== bubble) return;
+      this.tweens.add({
+        targets: bubble,
+        alpha: 0,
+        duration: 350,
+        onComplete: () => {
+          bubble.destroy();
+          if (agent.speechBubble === bubble) agent.speechBubble = null;
+        },
+      });
     });
   }
 
   private setThinkBubble(directive: SceneDirective & { kind: 'agent.think' }): void {
     const agent = this.ensureAgent(directive.agentId);
     if (directive.phase === 'stop') {
-      agent.thinkBubble?.destroy();
+      agent.thinkBubble?.destroy(); // destroys the whole container (bubble + label) — no leak
       agent.thinkBubble = null;
       return;
     }
     agent.thinkBubble?.destroy();
-    agent.thinkBubble = this.add
-      .image(agent.container.x + 20, agent.container.y - 30, 'think-bubble')
-      .setScale(1.5)
-      .setDepth(DEPTH.overlay);
-    if (directive.skillName) {
-      this.add
-        .text(agent.container.x + 20, agent.container.y - 30, directive.skillName.slice(0, 8), {
-          fontSize: '8px',
-          color: '#333',
-        })
-        .setOrigin(0.5)
-        .setDepth(DEPTH.overlay);
-    }
+    // Offset slightly right so a think bubble and a speech bubble don't fully overlap.
+    const text = (directive.skillName ?? '…').slice(0, 24);
+    agent.thinkBubble = this.makeBubble(agent.container.x + 12, agent.container.y - BUBBLE_GAP_THINK, text, 'think');
   }
 
   private animateTube(direction: 'in' | 'out'): void {
@@ -912,7 +1123,7 @@ export class OfficeScene extends Phaser.Scene {
     const existing = this.taskCards.get(directive.taskId);
     if (existing) return;
     const card = this.add
-      .image(this.layout.tasksBoard.x, this.layout.tasksBoard.y - 30, 'task-card')
+      .image(this.layout.scheduler.x, this.layout.scheduler.y - 30, 'task-card')
       .setScale(2)
       .setDepth(DEPTH.overlay)
       .setInteractive({ useHandCursor: true });

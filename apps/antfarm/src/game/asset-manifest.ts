@@ -30,9 +30,9 @@ export interface TileRegion {
   sh: number;
 }
 
-// Tileset/room-builder-sourced props: floor tile + the wall tasks board. Desks are NOT
-// here — they are composed from individual Modern Office "singles" (see below), which give
-// clean pre-cropped desk tiles instead of fragile tileset pixel-crops.
+// Tileset/room-builder-sourced props: the floor tiles and room walls. Desks are NOT here —
+// they are composed from individual Modern Office "singles" (see below), which give clean
+// pre-cropped desk tiles instead of fragile tileset pixel-crops.
 //
 // Deliberately left PROCEDURAL (no clean pack match — matches the AF-7 scope decision):
 //   - wastebasket : no dedicated trash-can sprite in the Modern Office pack.
@@ -47,8 +47,6 @@ export const OFFICE_REGIONS: TileRegion[] = [
   { placeholderKey: 'office-floor-c', from: OFFICE_TILESET.key, sx: 448, sy: 128, sw: 32, sh: 32 },
   { placeholderKey: 'office-floor-d', from: OFFICE_TILESET.key, sx: 416, sy: 160, sw: 32, sh: 32 },
   { placeholderKey: 'office-floor-e', from: OFFICE_TILESET.key, sx: 448, sy: 160, sw: 32, sh: 32 },
-  // Wall board displaying a chart — stands in for the tasks board.
-  { placeholderKey: 'tasks-board', from: OFFICE_TILESET.key, sx: 286, sy: 390, sw: 66, sh: 44 },
   // Room walls (Room Builder sheet) — overlaid at the office edges in real-art mode (drawWalls).
   // Top wall is two stacked rows; each side has a corner cap plus a repeating vertical tile.
   { placeholderKey: 'wall-top-a',        from: ROOM_BUILDER.key, sx: 32,  sy: 288, sw: 32, sh: 32 },
