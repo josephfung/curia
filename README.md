@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.40.0-blueviolet" alt="Version: 0.40.0" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.40.1-blueviolet" alt="Version: 0.40.1" /></a>
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" />
   <img src="https://img.shields.io/badge/node-%3E%3D24-brightgreen" alt="Node >= 24" />
   <img src="https://img.shields.io/badge/typescript-ESM-blue" alt="TypeScript ESM" />
