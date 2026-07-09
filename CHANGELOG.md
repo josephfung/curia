@@ -13,81 +13,48 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
-### Added
+## [0.40.0] — 2026-07-09 — "The Watcher"
 
-- **Ant Farm spec** — new `docs/specs/22-antfarm-visualization.md` documents the office-visualization architecture, routes, and CSP.
-- **GHCR image publishing** — releases now push signed, multi-arch `ghcr.io/josephfung/curia` and `ghcr.io/josephfung/curia-postgres` images to the GitHub Container Registry; pushes to `main` publish the `:edge` tag for dogfood use. (#1343)
-- **`install.sh` operator installer** — interactive, image-based entry point for self-hosted operators; fetches the compose bundle, generates secrets, runs migrations and vault-seed inside the pulled container (tsx direct, no host pnpm), prompts for topology/TLS, and prints a bootstrap secret summary. No Node/pnpm/openssl required on the host. (#1343)
-- **Stuck-job recovery notifications** — recovery and suspension emails now include job objective, recurrence, and a console deep-link; `/jobs/:jobId` opens the job drawer directly. Closes #1332.
-- **Ant Farm AF-1** — `AuditLogRepo.findTimeline` / `findByEventTypes` return paginated `TimelinePage` (`hasMore`, keyset `after` cursor) with scoped-query guard; task filter uses `payload->>'taskId'` (index-aligned). Closes #1314.
-- **Ant Farm AF-3** — `@curia/shared-types` contract package and server-side event→directive interpreter for the pixel-art office visualization. Closes #1316.
-- **Ant Farm AF-2** — `GET /api/antfarm/timeline` replay endpoint and `GET /api/antfarm/stream` live SSE fan-out with separate Ant Farm client set. Closes #1315.
-- **Ant Farm AF-4** — `@curia/antfarm` scaffold with Conductor (playback, velocity, scrub, replay↔live merge), transport bar, bookmarks, and dynamic desk layout. Closes #1317.
-- **Ant Farm AF-5** — Phaser `OfficeScene` rendering all AF-3 directive metaphors, React-DOM detail overlays (pause on open), deterministic per-agent character variants, CC0 placeholder art + LimeZu credits. Closes #1318.
-- **Ant Farm AF-6** — Docker image builds both SPAs; `antfarm-static` route serves `/antfarm/*` before the console wildcard. Closes #1319.
-- **Ant Farm real art** — the office renders licensed LimeZu tiles/furniture and animated premade character sprites when present, served only behind session auth (`/api/antfarm/assets/*`); falls back to procedural placeholders when absent. (#1335)
-- **Ant Farm office polish** — decor props, custom claw/scheduler sprites, pixel-art speech/thought bubbles, and claw grab + delegation-walk animations.
-- **Backup-before-update docs** — README now documents a pg_dump backup + rollback step for the auto-migrating update path. Closes #1344.
-
-### Security
-
-- **Semgrep Dockerfile scanning** — `semgrep.yml` adds `p/dockerfile` so Dockerfile findings surface and auto-close in CI.
-- **`postgres.Dockerfile` missing-USER suppression** — fix the ineffective `nosemgrep` so the intentional root-then-gosu design stops tripping Semgrep. (alert #200)
-- **CodeQL `js/missing-rate-limiting` false positives** — excluded the query; it cannot model `@fastify/rate-limit`, which already covers all routes globally. (alerts #201, #202)
-
-### Fixed
-
-- **Ant Farm routes** — timeline 500s return a generic message; SSE heartbeat evicts dead clients. Closes #1365.
-- **`curia-postgres` fresh-init** — probe the real server over TCP so fresh volumes create `curia` instead of crash-looping. (#1350)
-- **CI Node version drift** — `ci.yml` and `dast.yml` now read `node-version-file: .nvmrc` instead of a hardcoded `"22"`, so CI runs on Node 24 in lockstep with `engines` (`>=24`) and the `node:24` Docker image. Previously CI validated on a version that did not satisfy the project's own engines constraint.
-- **Ant Farm** — code review follow-ups: fail-closed session check, conductor live/scrub fixes, incremental live merge, per-agent overlay context, timeline cursor paging, safe `busEventToAuditRow` payload guard, `schedule.fired` task_id normalization.
-- **Ant Farm** — fix playback flicker: stable desk roster + conductor snapshot refs so Phaser scene is not restarted every animation frame.
-- **Runtime image pnpm workspace** — the Dockerfile runtime stage now copies the `@curia/shared-types` member and runs `pnpm add -w --save-prod --prod tsx`, fixing a latent build-break chain (ADDING_TO_ROOT → WORKSPACE_PKG_NOT_FOUND → INCLUDED_DEPS_CONFLICT) that surfaces once curia is a real pnpm workspace.
-- **Ant Farm placeholder-only art in production** — the scoped `/antfarm/` CSP now allows `img-src ... blob:`. Phaser's file loader fetches the licensed art via XHR and assigns it as a `blob:` URL, which `'self' data:` didn't cover, so every real-art load was CSP-blocked and the office silently fell back to procedural placeholders. (#1335)
-- **Ant Farm blank canvas in production** — `/antfarm/*` now gets a scoped CSP with `img-src 'self' data:` so Phaser's base64 boot textures load; the console keeps its strict `img-src 'self'`. The strict CSP was blocking them and the office rendered empty.
-
-### Fixed
-
-- **Calendar operates as the CEO** — binds the calendar client to `ceo_nylas_grant_id`, fixing RSVP `omittedAttendeesSpecified`; fails closed when unset. Closes #1217.
-- **`delegate` timeout storm** — timeouts now return structured, retry-capped failures instead of triggering duplicate re-delegations. Closes #1288.
-- **Delegation failure raw JSON** — non-retryable specialist failures no longer surface `_curia_protocol` JSON to the principal; the coordinator emits a human-readable message instead. Closes #1329.
-
-### Security
-
-- **`docker-publish.yml` least-privilege token** — `packages:write`/`id-token:write` scoped to the `build` job. Clears alert #197.
-- **Ant Farm asset route hardening** — `/api/antfarm/assets/*` now serves a strict content-type allowlist (png/json only, 404 otherwise) and sets `X-Content-Type-Options: nosniff`, closing the MIME-sniffing/XSS class on direct file streaming. (#1335)
-- **Outbound filter** — Stage 1 fixes a signature false-positive, derives prompt-exfiltration markers from the live coordinator prompt (whitespace/markdown-robust) instead of hardcoded phrases, and adds a principal-recipient bypass for identity/structure rules. Closes #1334.
-
-- **Console CSP (#130)** — strict `Content-Security-Policy` and `X-Frame-Options: DENY` on HTML responses; scripts locked to same-origin bundles (legacy KG Tailwind CDN removed with the React console).
-- **Coordinator provenance-aware presentation hardening (#856)** — presentation directives now follow only the principal's instructions, ignoring third-party content.
-- **Provenance-aware red-team harness (#900)** — probes are framed with dispatcher-style sender context to test non-principal provenance.
-- **Memory poisoning research (#418)** — documented KG write paths from inbound email, assessed safeguards, and filed follow-up #1290 to gate checkpoint extraction and `memory-store` for untrusted senders.
+> **The Watcher (Uatu)** *(Marvel Comics, 1963, Stan Lee & Jack Kirby)* — a cosmic observer who witnesses and records every event in his domain, sworn never to interfere. This release gives Curia its own watcher: Ant Farm, a read-only pixel-art office that replays the audit log as living animation and never touches the work it depicts.
 
 ### Added
 
-- **Bulk export controls** — item-count threshold, non-contact destination allowlisting (confidential+ only), and restricted sensitivity ceiling for email attachments (OutboundGateway) and Google Workspace MCP exports (`create_drive_file`, `create_sheet`, `append_table_rows`). Skills accept `export_items` / per-attachment `node_id` for sensitivity resolution; CEO approval notifications include the export item list. Closes #201.
-- **Jobs console** — schedule-type and agent filters, human-readable schedule summaries, and linked task titles with `/tasks?task=` deep links. (#1304)
-- **`approval notifications`** — CEO approval emails now include the pending action's recipient and message/content when the notification goes to the principal, so approvals are informed rather than blind. (#1300)
-- **Calendar principal-grant design** — memo for operating the calendar as the CEO (bind the calendar client to `ceo_nylas_grant_id`), fixing RSVP `omittedAttendeesSpecified`; implementation tracked in #1217.
+- **Ant Farm** — a pixel-art office at `/antfarm/` that replays Curia's audit log as animation: agents at desks, a scheduler claw dropping in jobs, delegation walks, speech and thought bubbles, task cards opening and closing. DVR-style scrub and replay plus a live edge, over `GET /api/antfarm/timeline` (keyset-paginated) and `GET /api/antfarm/stream` (live SSE). Renders licensed LimeZu pixel art when present, procedural placeholders otherwise. (#1314–#1319, #1335)
+- **Published container images** — every release publishes signed, multi-arch `ghcr.io/josephfung/curia` and `curia-postgres` images to the GitHub Container Registry; `main` publishes `:edge`. (#1343)
+- **`install.sh` self-host installer** — one interactive, image-based script stands up a full stack: generates secrets, runs migrations and vault-seed inside the pulled container, and prompts for topology and TLS. No Node, pnpm, or openssl on the host. (#1343)
+- **Bulk export controls** — an item-count threshold, non-contact destination allowlist, and sensitivity ceiling gate email attachments and Google Workspace exports; approval notifications list the exported items. (#201)
+- **Jobs console** — schedule-type and agent filters, human-readable schedule summaries, and task deep links. (#1304)
+- **Informed approvals** — approval notifications to the principal now include the pending action's recipient and content. (#1300)
+- **Stuck-job recovery notifications** — recovery and suspension emails include the job objective, recurrence, and a console deep link. (#1332)
 
 ### Changed
 
-- **Docs sync** — specs 08/09/15/20 updated for GHCR install, calendar-grant, bulk export, and task-wake bindings; shipped `docs/wip/` pruned.
-- **`docker-compose.yml`** — references published GHCR images by default (`ghcr.io/josephfung/curia:latest`); developers who need local builds override with `docker-compose.dev.yml`. Shared installer helpers extracted to `scripts/setup-common.sh`. (#1343)
-- **Channel registry** — reconcile no longer auto-installs toggleable channels from ambient credentials; operators install and enable `email`/`signal` explicitly (parity with skills/agents), and `uninstall()` is durable across restarts. Outbound egress is gated on the same registry enabled-state as inbound adapters. (#965, #966)
-- **`outbound.pii_redacted`** — audit event type standardized to the underscore form in code; legacy hyphen-form rows preserved as immutable audit history, not rewritten. (#453)
-- **`contact_auth_overrides`** — partial unique index preserves grant→revoke→re-grant history instead of reactivating revoked rows. (#45)
-- **Per-task `error_budget.kg_promotion`** — validator now accepts the documented per-task KG-promotion opt-out. (#1286)
-- **`@types/node`** — pinned to the Node 24 type surface to match the runtime; Dependabot ignores major bumps. (#1258)
-- **`conversation_id` spec** — reconciled specs 01/02/04 to the real reversible TEXT key, not UUID v5; decision recorded in ADR-025. (#16)
+- **Published images by default** — `docker-compose.yml` references GHCR images; developers opt into local source builds with `docker-compose.dev.yml`. (#1343)
+- **Channel registry** — `email` and `signal` are installed and enabled explicitly rather than auto-installed from ambient credentials; outbound egress is gated on the same enabled-state, and uninstall is durable across restarts. (#965, #966)
+- **`@types/node`** — pinned to the Node 24 type surface to match the runtime. (#1258)
+- **Documentation** — architecture specs synced to shipped behavior, including a new spec for Ant Farm; `conversation_id` reconciled to the reversible TEXT key (ADR-025). (#16)
 
 ### Fixed
 
-- **Gate C principal carve-out (#1301)** — outbound actions whose recipient set is exclusively the structurally-verified principal no longer escalate on the third-party-facing axis; irreversible actions and mixed recipient sets still escalate. Parser is allowlisted to `email-send`/`signal-send` and fails closed on unknown recipient shapes. Spam backpressure deferred to #1320.
-- **Outbound gateway** — email sends whose recipients are all no-reply/automated addresses are now hard-blocked with an audit note instead of dispatched to a dead-end address. (#1302)
-- **Task-wake CEO questions** — task-wake sends register durable bindings (7-day TTL); the coordinator persists answers via `context-bridge-release` with `reply` after judging relevance (not structural auto-bind). When several asks are outstanding, the coordinator must match by content. (#1299)
-- **Past-due milestone subtasks** — past-due tasks wake immediately instead of being auto-completed. (#1299)
-- **Migration 070** — now a no-op; the `UPDATE audit_log` data-fix tripped the append-only trigger and crash-looped boot on prod. (#453)
+- **Calendar operates as the CEO** — the calendar client binds to the principal's Nylas grant, fixing RSVP handling; fails closed when the grant is unset. (#1217)
+- **`delegate` timeout storm** — timeouts return structured, retry-capped failures instead of triggering duplicate re-delegations. (#1288)
+- **Delegation failures** — non-retryable specialist failures surface a human-readable message instead of raw protocol JSON. (#1329)
+- **Task-wake clarifications** — a woken task's question binds the principal's reply back to the task (7-day TTL), matched by content when several are outstanding; past-due subtasks wake immediately rather than auto-completing. (#1299)
+- **Outbound gateway** — sends addressed only to no-reply or automated recipients are hard-blocked instead of dispatched to a dead end. (#1302)
+- **Gate C principal carve-out** — outbound actions to only the verified principal no longer over-escalate; irreversible and mixed-recipient actions still do. (#1301)
+- **`curia-postgres` fresh-init** — probes the server over TCP so fresh volumes create `curia` instead of crash-looping. (#1350)
+- **Runtime image** — copies the `@curia/shared-types` workspace member and installs `tsx`, fixing a pnpm-workspace build break.
+- **Migration 070** — now a no-op; its `UPDATE audit_log` tripped the append-only trigger and crash-looped boot. (#453)
+- **CI Node version** — CI reads `.nvmrc` (Node 24) instead of a hardcoded 22, matching `engines`.
+
+### Security
+
+- **Outbound filter** — prompt-exfiltration markers are derived from the live coordinator prompt (whitespace and markdown robust), with a principal-recipient bypass for identity and structure rules. (#1334)
+- **Provenance-aware hardening** — presentation directives follow only the principal's instructions; the red-team harness frames probes with dispatcher-style sender context. (#856, #900)
+- **Console and Ant Farm CSP** — strict `Content-Security-Policy` and `X-Frame-Options: DENY` on the console; a scoped `/antfarm/` policy allows only the image sources Phaser needs. (#130, #1335)
+- **Ant Farm asset route** — a strict png/json content-type allowlist plus `nosniff` closes the MIME-sniffing class on file streaming. (#1335)
+- **Memory-poisoning research** — documented KG write paths from inbound email and filed follow-up #1290. (#418)
+- **Supply chain** — least-privilege token in `docker-publish.yml` (#197); Semgrep now scans Dockerfiles.
 
 ## [0.39.0] — 2026-07-01 — "Watney"
 
