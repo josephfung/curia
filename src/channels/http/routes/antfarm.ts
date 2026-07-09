@@ -147,7 +147,8 @@ export async function antfarmRoutes(
     const heartbeat = setInterval(() => {
       try {
         reply.raw.write(':ping\n\n');
-      } catch {
+      } catch (err) {
+        logger.warn({ err }, 'Ant Farm SSE heartbeat write failed — removing client');
         clearInterval(heartbeat);
         cleanup();
       }
