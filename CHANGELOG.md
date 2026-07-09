@@ -30,6 +30,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Semgrep Dockerfile scanning** — `semgrep.yml` adds `p/dockerfile` so Dockerfile findings surface and auto-close in CI.
 - **`postgres.Dockerfile` missing-USER suppression** — fix the ineffective `nosemgrep` so the intentional root-then-gosu design stops tripping Semgrep. (alert #200)
 - **CodeQL `js/missing-rate-limiting` false positives** — excluded the query; it cannot model `@fastify/rate-limit`, which already covers all routes globally. (alerts #201, #202)
 
