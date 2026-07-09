@@ -3,6 +3,10 @@ name: Release Artifacts
 # Builds, signs, and attaches release artifacts on every published release:
 #   - sbom.spdx.json            (SPDX SBOM for the release commit)
 #   - curia-<tag>.tar.gz        (reproducible source tarball)
+#   - the operator install bundle (install.sh, docker-compose.yml,
+#     docker-compose.tls.yml, .env.example, Caddyfile, setup-common.sh) so
+#     install.sh can fetch a release's config from releases/<ref>/download/
+#   - SHA256SUMS + SHA256SUMS.sigstore (one signed manifest over the bundle)
 #   - *.sigstore                (cosign keyless signature bundle per artifact)
 #
 # Signing is keyless via Sigstore + the GitHub OIDC token (id-token: write) —
@@ -128,6 +132,30 @@ jobs:
             exit 1
           fi
 
+      # Stage the operator install bundle with FLAT asset names — GitHub release
+      # assets cannot contain "/", so deploy/Caddyfile and scripts/setup-common.sh
+      # are flattened (install.sh maps them back to their paths). SHA256SUMS is a
+      # single manifest an operator can verify from one cosign signature, then
+      # `sha256sum -c` the whole bundle — cheaper than a signature per file.
+      - name: Stage install bundle
+        run: |
+          rm -rf bundle && mkdir bundle
+          cp install.sh                bundle/install.sh
+          cp docker-compose.yml        bundle/docker-compose.yml
+          cp docker-compose.tls.yml    bundle/docker-compose.tls.yml
+          cp .env.example              bundle/.env.example
+          cp deploy/Caddyfile          bundle/Caddyfile          # flatten dir
+          cp scripts/setup-common.sh   bundle/setup-common.sh    # flatten dir
+          for f in install.sh docker-compose.yml docker-compose.tls.yml .env.example Caddyfile setup-common.sh; do
+            if [ ! -s "bundle/$f" ]; then
+              echo "::error::bundle/$f is missing or empty" >&2
+              exit 1
+            fi
+          done
+          ( cd bundle && sha256sum \
+              install.sh docker-compose.yml docker-compose.tls.yml \
+              .env.example Caddyfile setup-common.sh > SHA256SUMS )
+
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
@@ -137,12 +165,17 @@ jobs:
         run: |
           cosign sign-blob --yes --bundle sbom.spdx.json.sigstore sbom.spdx.json
           cosign sign-blob --yes --bundle "curia-${TAG}.tar.gz.sigstore" "curia-${TAG}.tar.gz"
+          # One signature covers the whole install bundle via the manifest.
+          cosign sign-blob --yes --bundle bundle/SHA256SUMS.sigstore bundle/SHA256SUMS
 
       - name: Attach artifacts to release
         run: |
           gh release upload "$TAG" \
             sbom.spdx.json sbom.spdx.json.sigstore \
             "curia-${TAG}.tar.gz" "curia-${TAG}.tar.gz.sigstore" \
+            bundle/install.sh bundle/docker-compose.yml bundle/docker-compose.tls.yml \
+            bundle/.env.example bundle/Caddyfile bundle/setup-common.sh \
+            bundle/SHA256SUMS bundle/SHA256SUMS.sigstore \
             --clobber
 
       # Final gate: re-download the assets FROM the release and verify the
@@ -155,11 +188,15 @@ jobs:
       - name: Verify attached + signed
         run: |
           rm -rf verify && mkdir verify
-          # We attach exactly 4 assets, well within one API page; `gh release
+          # We attach exactly 12 assets, well within one API page; `gh release
           # download` with no --pattern pulls them all. (If a release ever grows
           # past one page of assets, switch to per-name --pattern fetches.)
           gh release download "$TAG" --dir verify --clobber
-          for f in sbom.spdx.json sbom.spdx.json.sigstore "curia-${TAG}.tar.gz" "curia-${TAG}.tar.gz.sigstore"; do
+          for f in sbom.spdx.json sbom.spdx.json.sigstore \
+                   "curia-${TAG}.tar.gz" "curia-${TAG}.tar.gz.sigstore" \
+                   install.sh docker-compose.yml docker-compose.tls.yml \
+                   .env.example Caddyfile setup-common.sh \
+                   SHA256SUMS SHA256SUMS.sigstore; do
             if [ ! -s "verify/$f" ]; then
               echo "::error::expected release asset '$f' is missing from $TAG" >&2
               exit 1
@@ -179,3 +216,11 @@ jobs:
             --certificate-identity-regexp "$IDENTITY_REGEXP" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "verify/curia-${TAG}.tar.gz"
+          # Verify the install bundle: the manifest signature is authentic, and
+          # every downloaded bundle file matches the signed manifest.
+          cosign verify-blob \
+            --bundle verify/SHA256SUMS.sigstore \
+            --certificate-identity-regexp "$IDENTITY_REGEXP" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            verify/SHA256SUMS
+          ( cd verify && sha256sum -c SHA256SUMS )
