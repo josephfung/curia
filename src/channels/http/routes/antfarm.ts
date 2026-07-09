@@ -126,8 +126,7 @@ export async function antfarmRoutes(
       });
     } catch (err) {
       logger.error({ err }, 'antfarm timeline query failed');
-      const message = err instanceof Error ? err.message : 'Failed to load timeline';
-      return reply.status(500).send({ error: message });
+      return reply.status(500).send({ error: 'Failed to load timeline' });
     }
   });
 
@@ -150,6 +149,7 @@ export async function antfarmRoutes(
         reply.raw.write(':ping\n\n');
       } catch {
         clearInterval(heartbeat);
+        cleanup();
       }
     }, 30000);
 

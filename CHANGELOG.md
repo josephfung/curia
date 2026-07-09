@@ -35,6 +35,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Ant Farm routes** — timeline 500s return a generic message; SSE heartbeat evicts dead clients. Closes #1365.
 - **`curia-postgres` fresh-init** — probe the real server over TCP so fresh volumes create `curia` instead of crash-looping. (#1350)
 - **CI Node version drift** — `ci.yml` and `dast.yml` now read `node-version-file: .nvmrc` instead of a hardcoded `"22"`, so CI runs on Node 24 in lockstep with `engines` (`>=24`) and the `node:24` Docker image. Previously CI validated on a version that did not satisfy the project's own engines constraint.
 - **Ant Farm** — code review follow-ups: fail-closed session check, conductor live/scrub fixes, incremental live merge, per-agent overlay context, timeline cursor paging, safe `busEventToAuditRow` payload guard, `schedule.fired` task_id normalization.
