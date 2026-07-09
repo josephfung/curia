@@ -223,13 +223,15 @@ check_prereqs() {
 # This lets an operator re-run install.sh safely without clobbering hand-edits.
 fetch_bundle() {
   # local-path : flat-release-asset-name. GitHub release assets cannot contain
-  # "/", so deploy/Caddyfile is published as the flat asset "Caddyfile"; the
-  # other three map 1:1. In raw mode the asset name is ignored (see fetch_asset).
+  # "/", so deploy/Caddyfile publishes as "Caddyfile", and cannot start with a
+  # "." (GitHub mangles a leading-dot asset name), so .env.example publishes as
+  # "env.example". docker-compose.* map 1:1. In raw mode the asset name is
+  # ignored and the local path is used verbatim (see fetch_asset).
   local pair local_path asset
   for pair in \
     "docker-compose.yml:docker-compose.yml" \
     "docker-compose.tls.yml:docker-compose.tls.yml" \
-    ".env.example:.env.example" \
+    ".env.example:env.example" \
     "deploy/Caddyfile:Caddyfile"; do
     local_path="${pair%%:*}"
     asset="${pair#*:}"
