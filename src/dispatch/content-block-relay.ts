@@ -49,8 +49,9 @@ export function buildContentBlockRewriteTask(
   return [
     '[OUTBOUND CONTENT FILTER — REWRITE REQUIRED]',
     '',
-    'Your previous reply to this conversation was blocked by the outbound content filter before delivery.',
-    'Rewrite it and return ONLY the corrected reply text — no preamble, no explanation of the block.',
+    'Your previous reply was blocked before delivery. Rewrite it to satisfy the findings below,',
+    'applying your normal audience and voice rules. Return ONLY the corrected reply text —',
+    'no preamble about the block.',
     '',
     `Block reason: ${reasonSummary}`,
     `Rules triggered: ${ruleNames}`,
@@ -59,10 +60,5 @@ export function buildContentBlockRewriteTask(
     '---',
     blockedContent,
     '---',
-    '',
-    'Requirements:',
-    '- Speak in first person as a single assistant ("I found...", "I checked...").',
-    '- Never mention internal specialists, agents, delegation, sub-agents, or internal roles.',
-    '- Fix only what caused the block; preserve the intent of the original message.',
   ].join('\n');
 }

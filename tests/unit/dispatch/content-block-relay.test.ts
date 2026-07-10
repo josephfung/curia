@@ -38,14 +38,16 @@ describe('content-block-relay', () => {
     expect(summary).toContain('calendar specialist');
   });
 
-  it('buildContentBlockRewriteTask includes blocked body and first-person guidance', () => {
+  it('buildContentBlockRewriteTask passes block findings and draft without duplicating voice policy', () => {
     const task = buildContentBlockRewriteTask('The calendar specialist found 4 events.', [
       { rule: 'llm-judge-audience-leak', detail: 'named internal agent' },
     ]);
     expect(task).toContain('[OUTBOUND CONTENT FILTER — REWRITE REQUIRED]');
     expect(task).toContain('The calendar specialist found 4 events.');
-    expect(task).toContain('first person');
     expect(task).toContain('llm-judge-audience-leak');
+    expect(task).toContain('named internal agent');
+    expect(task).toContain('your normal audience and voice rules');
+    expect(task).not.toContain('Never mention internal specialists');
   });
 
   it('allows two retries after the first block', () => {
