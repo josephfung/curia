@@ -425,24 +425,28 @@ This spec is designed to be implemented incrementally. Each phase is independent
 
 ---
 
-## Implementation Status
+## Status
 
-| Item | Status |
-|---|---|
-| Migration: structured columns on `audit_log` (`action`, `outcome`, `target_type`, `target_id`, `initiator_type`, `initiator_id`) | Not Done |
-| Field extraction logic in `AuditLogger.log()` | Not Done |
-| `llm.call` event type added to `events.ts` | Done |
-| LLM providers emit `llm.call` events with provenance fields | Not Done |
-| `llm_call_archive` table created and populated | Not Done |
-| Redaction applied to prompt/response archive writes | Not Done |
-| `entry_hash` column added and hash chain computed on every write | Not Done |
-| `curia audit verify` CLI command implemented and tested | Not Done |
-| `MemoryQueryPayload` extended with `results` array (id + optional score) | Not Done |
-| `sourcesAccessed` convention documented and adopted in existing skills | Not Done |
-| `human.decision` event type added and emitted from approval gates | Not Done |
-| `config.change` event type added and emitted at startup | Done |
-| Retention tiers defined in `config/default.yaml` | Not Done |
-| All new event types covered by tests | Not Done |
-| Hash chain verification tested (insert, verify, detect tamper) | Not Done |
-| Monitoring query: detect `[EXTRACTION_FAILED]` values in structured columns | Not Done |
-| Monitoring query: detect `llm.call` audit rows with no corresponding `llm_call_archive` row | Not Done |
+This spec describes a largely unimplemented hardening backlog for the audit log subsystem. Most items below have not yet been built. No single tracking issue covers this backlog as a whole; the **Phase 1** subset marked below is v1.0-blocking and tracked in [#1383](https://github.com/josephfung/curia/issues/1383). Remaining items should be filed as GitHub issues (labeled `audit`) as they're prioritized, rather than tracked in this doc.
+
+### Outstanding work
+
+**Phase 1 — v1.0-blocking ([#1383](https://github.com/josephfung/curia/issues/1383)):**
+
+- Migration: structured columns on `audit_log` (`action`, `outcome`, `target_type`, `target_id`, `initiator_type`, `initiator_id`)
+- Field extraction logic in `AuditLogger.log()`
+- LLM providers emitting `llm.call` events with provenance fields
+- `llm_call_archive` table (creation and population) (also [#665](https://github.com/josephfung/curia/issues/665))
+- Redaction applied to prompt/response archive writes
+- `entry_hash` column and hash chain computed on every write
+- `curia audit verify` CLI command
+- Test coverage for the above (event types + hash chain verify: insert, verify, detect tamper)
+
+**Later phases — not yet scheduled:**
+
+- `MemoryQueryPayload` extended with `results` array (id + optional score)
+- `sourcesAccessed` convention documented and adopted in existing skills
+- `human.decision` event type emitted from approval gates
+- Retention tiers defined in `config/default.yaml`
+- Monitoring query: detect `[EXTRACTION_FAILED]` values in structured columns
+- Monitoring query: detect `llm.call` audit rows with no corresponding `llm_call_archive` row

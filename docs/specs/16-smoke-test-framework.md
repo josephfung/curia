@@ -285,28 +285,18 @@ run exits 0 regardless of score. See [What's Not Here Yet](#whats-not-here-yet).
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| Harness — boots real bus, agents, skills, DB; exposes `sendMessage()` | Done |
-| Loader — YAML test case parsing with tag/name filtering | Done |
-| Runner — sequential turn replay against live harness | Done |
-| Evaluator — GPT-4o judge with weighted PASS/PARTIAL/MISS scoring | Done |
-| Reporter — self-contained HTML reports with trend charts | Done |
-| Test cases — 34+ YAML case files covering core behaviors | Done |
-| CLI entry point (`pnpm smoke`, `--case`, `--tags` flags) | Done |
-| Per-`sendMessage` 60-second timeout | Done |
-| `agentId` captured from bus events (not hardcoded) | Not Done — hardcoded to `'coordinator'` |
-| Anthropic API rate limit retry with backoff inside `AnthropicProvider` | Not Done |
-| OpenAI judge rate limit retry before abort | Not Done |
-| Exit code enforcement (`--pass-threshold` flag, exit 1 on failure) | Not Done |
-| CI integration (exit codes + DB isolation + secrets) | Not Done |
-| Score-trend alerting on regression between runs | Not Done |
-| Configurable judge model (`--judge-model` flag) | Not Done |
-| Per-case run timeout / circuit breaker | Not Done |
-| Selective re-run of failures from prior results file | Not Done |
-| Parallel case execution with schema isolation | Not Done |
+- **`agentId` capture** — not captured from bus events; hardcoded to `'coordinator'`.
+- **Anthropic retry/backoff** — no rate limit retry with backoff inside `AnthropicProvider`.
+- **OpenAI judge retry/backoff** — no OpenAI judge rate limit retry before abort.
+- **Exit code enforcement** — no `--pass-threshold` flag / exit 1 on failure. (#545)
+- **CI integration** — no exit codes + DB isolation + secrets wiring for CI. (#545)
+- **Score-trend alerting** — no alerting on score regression between runs.
+- **Configurable judge model** — no `--judge-model` flag.
+- **Per-case timeout** — no per-case run timeout / circuit breaker.
+- **Selective re-run** — no re-run of failures from a prior results file.
+- **Parallel execution** — no parallel case execution with schema isolation.
 
 ---
 

@@ -142,23 +142,6 @@ The loader never throws: `OfficeScene.preload()` records load errors in a `faile
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| **AF-1** — `AuditLogRepo.findTimeline` / `findByEventTypes` return keyset-paginated `TimelinePage` (`hasMore`, `after` cursor); task filter on `payload->>'taskId'` | Done (#1314) |
-| **AF-2** — `GET /api/antfarm/timeline` replay endpoint + `GET /api/antfarm/stream` live SSE with separate Ant Farm client set | Done (#1315) |
-| **AF-3** — `@curia/shared-types` contract package + server-side event→directive interpreter | Done (#1316) |
-| **AF-4** — `@curia/antfarm` scaffold: Conductor (playback, velocity, scrub, replay↔live merge), transport bar, bookmarks, dynamic desk layout | Done (#1317) |
-| **AF-5** — Phaser `OfficeScene` rendering all directive metaphors, React-DOM detail overlays (pause on open), deterministic per-agent variants, CC0 placeholders + LimeZu credits | Done (#1318) |
-| **AF-6** — Docker builds both SPAs; `antfarm-static` route serves `/antfarm/*` before the console wildcard | Done (#1319) |
-| **Real art (AF-7)** — office renders licensed LimeZu tiles/furniture + animated premade character sprites when present, served behind session auth; procedural fallback when absent | Done (#1335) |
-| Auth-gated `/api/antfarm/assets/*` — reads from `assets-licensed/` (outside `public/`), session-gated, path-traversal guarded | Done (#1335) |
-| Asset route hardening — strict png/json content-type allowlist (404 otherwise) + `X-Content-Type-Options: nosniff` | Done (#1335) |
-| Scoped `/antfarm/` CSP — `img-src 'self' data:` (Phaser boot textures), trailing-slash matched so the console keeps strict `img-src 'self'` | Done |
-| Scoped `/antfarm/` CSP — `img-src … blob:` so XHR-loaded licensed art is not CSP-blocked | Done (#1335) |
-| Office polish — decor props, custom claw/scheduler sprites, pixel-art speech/thought bubbles, claw-grab + delegation-walk animations | Done |
-| Playback stability — stable desk roster + conductor snapshot refs so the Phaser scene is not restarted every animation frame | Done |
-| Code-review follow-ups — fail-closed session check, conductor live/scrub fixes, incremental live merge, per-agent overlay context, timeline cursor paging, safe `busEventToAuditRow` payload guard, `schedule.fired` task_id normalization | Done |
-| Generator-part character compositing (skin/hair/outfit layers) | Deferred (post-v1; layer library not staged) |
-| Real art for claw / vacuum tubes / scheduler-machine | Not planned (no pack coverage; procedural by design) |
+- **Generator-part character compositing** — deferred post-v1, layer library not staged.

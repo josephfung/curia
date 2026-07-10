@@ -34,7 +34,7 @@ Fails fast with a one-line message and install link if any are missing:
 |------|-------|
 | `docker` | `docker info` exits 0 |
 | `docker compose` | `docker compose version` exits 0 |
-| `node` | `node --version` ≥ 22 |
+| `node` | `node --version` ≥ 24 |
 | `pnpm` | `pnpm --version` exits 0 |
 | `openssl` | `command -v openssl` (used for CSPRNG secret generation) |
 
@@ -289,34 +289,6 @@ coordinator delegates to setup-wizard               ← Layer 3 (v0.2.0)
 outcome-backward concierge: instant wins → outcome question
 → shortest path to first integration → defer the rest
 ```
-
----
-
-## Implementation Status
-
-| Item | Status |
-|------|--------|
-| `scripts/setup.sh` — prereq checks, secret generation, Postgres start, migrations, stack up | Done |
-| `package.json` script `setup` → `bash scripts/setup.sh` | Done |
-| `.env.example` — `DB_USER=curia`; principal created via the wizard, no email env var (#1049) | Done |
-| README Quickstart — single-command `pnpm run setup` block | Done |
-| `apps/console/src/pages/WizardPage.tsx` — 6-step React form (About you, Your details, Identity, Tone, Posture, Review) | Done |
-| `apps/console/src/router.tsx` — `/setup` route sibling to the dashboard | Done |
-| Auth guard — redirect to `/setup` when `configured === false` | Done |
-| `POST /api/setup/principal`, `GET /api/setup/status`, `POST /api/setup/restart` — wizard backend | Done |
-| `POST /api/setup/principal/profile` — principal operational profile endpoint (timezone, email, preferred name, title, working hours) | Done |
-| `POST /api/setup/suggest-name` — LLM-suggested assistant name; silent fallback | Done |
-| Step 1 pre-populates current principal name (no auto-skip on re-entry) | Done |
-| Setup-required boot mode — process stays up without principal so the wizard is reachable | Done |
-| Legacy KG-app wizard HTML/JS in `src/channels/http/routes/kg.ts` — removed | Done |
-| `agents/setup-wizard.yaml` v0.2.0 — outcome-backward concierge prompt; `setup-status` + `setup-defer` added to pinned skills | Done |
-| `skills/setup-status/` — catalog-driven, live-derived status per task; `catalog.yaml` owned by skill bundle | Done |
-| `skills/setup-defer/` — persists/clears deferrals in config-store `setup_wizard/deferrals` | Done |
-| `skills/behavioral-preferences-update/` — manifest + handler + tests | Done |
-| `officeIdentityService` capability — added to `SkillContext`, loader, execution, bootstrap | Done |
-| Chat auto-kickoff — `useChatSession.ts` reads + clears localStorage flag, sends `KICKOFF_TEXT` | Done |
-| `tests/integration/setup-wizard-delegate.test.ts` — kickoff delegates, normal greeting doesn't | Done |
-| Wizard notifies user a restart is needed for captured credentials (secret-capture resume flow) | Done |
 
 ---
 

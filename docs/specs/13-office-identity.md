@@ -352,24 +352,6 @@ The following are explicitly out of scope for this spec. They are valid future e
 
 ---
 
-## Implementation Status
-
-| Item | Status |
-|---|---|
-| `src/identity/defaults.ts` — `DEFAULT_OFFICE_IDENTITY` seed | Done |
-| Migration: `office_identity_versions` and `office_identity_current` tables | Done |
-| `OfficeIdentityService` — load, cache, update, history, compile | Done |
-| `src/identity/types.ts` — `OfficeIdentity` and `OfficeIdentityVersion` interfaces | Done |
-| HTTP routes — `GET/PUT /api/identity`, `GET /api/identity/history`, `POST /api/identity/reload` | Done |
-| Hot reload — `POST /api/identity/reload` (wizard-driven; no file watcher) | Done |
-| `compileSystemPromptBlock()` — constraints → identity → tone → decision style → preferences | Done |
-| Coordinator integration — `${office_identity_block}` token injected at runtime | Done |
-| Audit events — `config.change` emitted on every identity update | Done |
-| DB load precedence at startup (DB → in-code defaults seed) | Done |
-| `behavioral-preferences-update` skill — append/replace via `officeIdentityService` capability | Done |
-
----
-
 ## Migration Path
 
 When this spec ships:

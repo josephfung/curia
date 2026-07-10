@@ -259,35 +259,12 @@ Four skills available to agents:
 ## Job Observability
 
 - All job executions are audit-logged (start, success, failure, suspension)
-- The health endpoint does not yet include scheduler stats (active jobs, suspended jobs, next due time) — see Implementation Status below
+- The health endpoint does not yet include scheduler stats (active jobs, suspended jobs, next due time) — see Known Deficiencies below
 - Suspended jobs trigger a `SuspensionNotifier` direct email to the CEO (bypasses LLM — see Overview above)
 - Watchdog-recovered stuck jobs trigger a `RecoveryNotifier` direct email to the CEO
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| `scheduled_jobs` table (cron, one-shot, status, error tracking) | Done |
-| `scheduled_jobs` timezone column (per-job override) | Done |
-| `scheduled_jobs` prior run context columns (`last_run_outcome`, `last_run_summary`, `last_run_context`) | Done |
-| `tasks` table (formerly `agent_tasks`; forward FK `scheduled_jobs.task_id`, see [spec 19](19-tasks-and-backlog.md)) | Done |
-| `SchedulerService` class (job CRUD, shared by loop and skills) | Done |
-| Scheduler loop (30s poll, `FOR UPDATE SKIP LOCKED`, failure tracking) | Done |
-| Declarative schedules from agent YAML config (upserted at startup) | Done |
-| Skill: `scheduler-create` | Done |
-| Skill: `scheduler-list` | Done |
-| Skill: `scheduler-cancel` | Done |
-| Skill: `scheduler-report` (writes `last_run_summary` and `last_run_context`) | Done |
-| HTTP API routes (`POST/GET/PATCH/DELETE /api/jobs`) | Done |
-| Prior run context injection (structured system message prepended to task) | Done |
-| Timezone handling (per-job tz passed to `cron-parser`) | Done |
-| `SuspensionNotifier` — direct CEO email on suspension (bypasses LLM via `OutboundGateway.sendNotification`) | Done |
-| `RecoveryNotifier` — direct CEO email when watchdog resets a stuck job to pending | Done |
-| Audit logging (`schedule.fired`, `schedule.suspended`, `schedule.recovered` events) | Done |
-| Declarative job cleanup — auto-cancel stale YAML schedules on cron changes or removals | Done |
-| Health endpoint: scheduler stats (active jobs, suspended jobs, next due) | Not Done |
-| `TaskOriginator` threaded through declarative (YAML-defined) scheduled jobs so specialist tasks fired by cron carry the originating caller through the bus | Done |
-| Periodic cleanup of expired or released `outbound_context` rows via a scheduled job (see [spec 11 §Outbound Context Bridge](11-entity-context-enrichment.md#outbound-context-bridge)) | Done |
-| `delegate.defaultTimeoutMs` and `scheduler.defaultExpectedDurationSeconds` config keys (camelCase) with startup validation | Done |
+- **Health endpoint scheduler stats** — the `/api/health` endpoint reports basic scheduler liveness (ok/fail based on watchdog tick recency, see `src/health/health-checks.ts`), but does not yet expose scheduler *stats* (active job count, suspended job count, next-due time) as originally scoped for this spec.

@@ -236,23 +236,6 @@ Effective standing is also what handlers see: `ctx.taskMetadata` carries the pos
 
 ---
 
-## Implementation Status
-
-| Item | Status |
-|---|---|
-| `autonomy_config` table (single-row, score + band) | Done |
-| `autonomy_history` table (append-only audit trail) | Done |
-| Skill: `get-autonomy` (reads score, band, last 3 history rows) | Done |
-| Skill: `set-autonomy` (validates, upserts config, appends history) | Done |
-| Autonomy block injected into Coordinator system prompt per-task | Done |
-| `action_risk` field required on all skill manifests, validated at startup | Done |
-| Phase 2: hard execution gates (block skill when score < `action_risk` floor) | Done |
-| Phase 2: `OutboundGateway` autonomy check (score < 70 → block direct send, drafts unaffected) | Done |
-| Phase 2: principal bypass — skip Gates A and B for CEO-originated tasks (`isPrincipalOriginated`) | Done |
-| Phase 3: automatic score adjustment (Competence/Commitment/Compatibility formula) | Done |
-
----
-
 ## Phase 3: Automatic Score Adjustment
 
 Phase 3 implements automatic score adjustment based on `autonomy_action_log`, using a composite formula:

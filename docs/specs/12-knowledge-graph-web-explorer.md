@@ -39,17 +39,3 @@ The graph view uses a **physics-aware layout** so the structure of the graph is 
 - **Viewport centering** — the view centers on the focal node.
 
 On default mount, the explorer loads the **principal's 2-hop neighborhood** so the most relevant subgraph is visible without a manual search.
-
----
-
-## Implementation Status
-
-| Item | Status |
-|---|---|
-| `GET /api/kg/nodes` — text search with `query`, `type`, `limit` params | Done |
-| `GET /api/kg/graph` — neighborhood traversal with `node_id`, `depth`, `limit` params | Done |
-| `WEB_APP_BOOTSTRAP_SECRET` gating on all data API routes | Done |
-| KG view ported to React console (`apps/console/src/pages/KgPage.tsx`) | Done |
-| Legacy Cytoscape SPA (`/old`) removed | Done |
-| Physics-aware layout — per-type repulsion, per-edge ideal length & elasticity, degree-based sizing, focal-node centering | Done |
-| Default mount loads the principal's 2-hop neighborhood | Done |
