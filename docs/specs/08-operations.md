@@ -408,9 +408,3 @@ curia/
 - `src/index.ts` — Bootstrap orchestrator. Initializes all services in dependency order: DB → migrations → bus → audit → memory → scheduler → execution → agents → channels → dispatch. This is the single place where everything is wired together.
 - `src/bus/events.ts` — The event type registry. All event types as a TypeScript discriminated union. This file is the source of truth for what flows through the system.
 - `src/bus/permissions.ts` — The layer-to-event authorization map. Defines the hard security boundary.
-
----
-
-## Known Deficiencies
-
-- **`curia setup` CLI wizard** — guided onboarding wizard for credentials and channel setup; not yet implemented.

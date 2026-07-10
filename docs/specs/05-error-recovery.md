@@ -243,6 +243,6 @@ This is enforced by code review convention. A lint rule (`no-empty-catch` + cust
 - **Progress extraction before aborting** — summary stored in task record is not yet implemented.
 - **Per-task error pattern detection** — sliding window of last 10 tool invocations is not yet implemented.
 - **Cross-task `known_failures` table** — data collection for future warnings is not yet implemented.
-- **Outbound message queue** — max 100 queue for disconnected channels is not yet implemented.
-- **Database unavailable: in-operation handling** — health check detects it, but path-specific handling (retry in non-critical paths, bubble up in critical) is not verified.
+- **Outbound message queue** — max 100 queue for disconnected channels is not yet implemented. (#1380)
+- **Database unavailable: in-operation handling** — health check detects it, but path-specific handling (retry in non-critical paths, bubble up in critical) is not verified. (#1381)
 - **`no-empty-catch` ESLint rule** — the "Never Swallow" rule is enforced by convention only; the rule is absent from `eslint.config.js`.

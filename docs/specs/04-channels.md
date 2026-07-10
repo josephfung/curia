@@ -177,4 +177,4 @@ Each adapter implements reconnection with exponential backoff:
 - **Reconnection with exponential backoff** — partial; Signal has full backoff, email uses polling (no reconnect path needed), HTTP/CLI not applicable.
 - **`channel.disconnected` event emission** — not yet implemented; event type not emitted, Signal adapter stops but does not publish this event.
 - **Health endpoint adapter status** — not yet implemented; health endpoint only reports DB, agents, and skills.
-- **Outbound message queue for disconnected channels** — not yet implemented (max 100, delivered on reconnect).
+- **Outbound message queue for disconnected channels** — not yet implemented (max 100, delivered on reconnect). (#1380)
