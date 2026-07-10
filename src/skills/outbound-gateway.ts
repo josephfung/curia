@@ -462,7 +462,7 @@ export class OutboundGateway {
           channel: request.channel,
           currentScore: autonomyConfig.score,
           requiredScore: sendThreshold,
-        })).catch((err) => {
+        }, options?.parentEventId)).catch((err) => {
           this.log.warn(
             { err, channel: request.channel },
             'outbound-gateway: failed to publish autonomy.send_blocked event',
@@ -633,13 +633,13 @@ export class OutboundGateway {
           // must never carry raw PII, matching the fail-closed redactor-error path below.
           await this.bus.publish('dispatch', createOutboundBlocked({
             blockId,
-            conversationId: '',
+            conversationId: options?.conversationId ?? '',
             channelId: request.channel,
             content: scrubPii(messageBody),
             recipientId,
             reason: 'no_reply_recipient',
             findings: [{ rule: 'no-reply-recipient', detail: 'All recipients classify as automated/no-reply; message not deliverable' }],
-            parentEventId: '',
+            parentEventId: options?.parentEventId ?? '',
           }));
         } catch (publishErr) {
           this.log.warn(
@@ -854,7 +854,7 @@ export class OutboundGateway {
         try {
           await this.bus.publish('dispatch', createOutboundBlocked({
             blockId,
-            conversationId: '',
+            conversationId: options?.conversationId ?? '',
             channelId: request.channel,
             // scrubPii() as a safety fallback — the redactor itself failed, so we apply
             // a best-effort scrub before writing anything to the audit log. This ensures
@@ -863,7 +863,7 @@ export class OutboundGateway {
             recipientId,
             reason: 'pii_redactor_error',
             findings: [{ rule: 'pii_redactor_error', detail: 'PiiRedactor threw an unexpected error' }],
-            parentEventId: '',
+            parentEventId: options?.parentEventId ?? '',
           }));
         } catch (publishErr) {
           this.log.warn(
@@ -937,13 +937,13 @@ export class OutboundGateway {
       // Use redactedBody so the audit event itself does not contain unredacted PII.
       const blockedEvent = createOutboundBlocked({
         blockId,
-        conversationId: '',
+        conversationId: options?.conversationId ?? '',
         channelId: request.channel,
         content: redactedBody,
         recipientId,
         reason: fullReason,
         findings: filterFindings,
-        parentEventId: '',
+        parentEventId: options?.parentEventId ?? '',
       });
       try {
         await this.bus.publish('dispatch', blockedEvent);
@@ -1589,7 +1589,7 @@ export class OutboundGateway {
             channel: 'email',
             currentScore: autonomyConfig.score,
             requiredScore: sendThreshold,
-          })).catch((err) => {
+          }, options?.parentEventId)).catch((err) => {
             this.log.warn(
               { err, draftId },
               'outbound-gateway: failed to publish autonomy.send_blocked event',
@@ -1697,13 +1697,13 @@ export class OutboundGateway {
 
       const blockedEvent = createOutboundBlocked({
         blockId,
-        conversationId: '',
+        conversationId: options?.conversationId ?? '',
         channelId: 'email',
         content: body,
         recipientId: recipientEmail,
         reason: fullReason,
         findings: filterFindings,
-        parentEventId: '',
+        parentEventId: options?.parentEventId ?? '',
       });
       try {
         await this.bus.publish('dispatch', blockedEvent);

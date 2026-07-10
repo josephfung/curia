@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
-import { createInboundMessage, createAgentError, createAgentTask, createSkillResult, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
+import { createInboundMessage, createAgentError, createAgentTask, createAgentResponse, createOutboundBlocked, createAutonomySendBlocked, createSkillResult, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
+import { CONTENT_BLOCK_MAX_RETRIES } from '../../../src/dispatch/content-block-relay.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -2001,5 +2002,172 @@ describe('Dispatcher auto-elevation — Path 1 correspondence (#951)', () => {
     const { subscribeHandlers, elevateFn } = buildHarness({ withContactService: false });
     await fireSkillResult(subscribeHandlers, { skillName: 'email-reply', to: 'someone@example.com' });
     expect(elevateFn).not.toHaveBeenCalled();
+  });
+});
+
+// #1355: dispatcher-relayed replies blocked by the content filter get a bounded rewrite retry,
+// then a salvage draft on final failure.
+describe('Dispatcher content-block relay (#1355)', () => {
+  function buildHarness() {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const outboundMessages: OutboundMessageEvent[] = [];
+    const agentTasks: AgentTaskEvent[] = [];
+
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    bus.subscribe('outbound.message', 'channel', (event) => {
+      outboundMessages.push(event as OutboundMessageEvent);
+    });
+    bus.subscribe('agent.task', 'system', (event) => {
+      agentTasks.push(event as AgentTaskEvent);
+    });
+
+    return { bus, dispatcher, outboundMessages, agentTasks, logger };
+  }
+
+  it('re-dispatches a rewrite task when a relayed outbound is content-filter blocked', async () => {
+    const { bus, dispatcher, outboundMessages, agentTasks } = buildHarness();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-99',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'Original inbound',
+      parentEventId: 'inbound-1',
+    });
+    dispatcher.registerExternalTaskRouting(task.id, {
+      channelId: 'email',
+      conversationId: 'email:thread-99',
+      senderId: 'alice@example.com',
+    });
+
+    await bus.publish('system', createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-99',
+      content: 'The calendar specialist found 4 events.',
+      parentEventId: task.id,
+    }));
+
+    expect(outboundMessages).toHaveLength(1);
+    const blocked = createOutboundBlocked({
+      blockId: 'block_test',
+      conversationId: 'email:thread-99',
+      channelId: 'email',
+      content: 'The calendar specialist found 4 events.',
+      recipientId: 'alice@example.com',
+      reason: 'llm-judge-audience-leak: named internal agent',
+      findings: [{ rule: 'llm-judge-audience-leak', detail: 'named internal agent' }],
+      parentEventId: outboundMessages[0]!.id,
+    });
+    await bus.publish('dispatch', blocked);
+
+    expect(agentTasks).toHaveLength(1);
+    expect(agentTasks[0]!.payload.agentId).toBe('coordinator');
+    expect(agentTasks[0]!.payload.content).toContain('[OUTBOUND CONTENT FILTER — REWRITE REQUIRED]');
+    expect(agentTasks[0]!.payload.content).toContain('calendar specialist found 4 events');
+    expect(agentTasks[0]!.payload.metadata?.contentBlockRewrite).toBe(true);
+  });
+
+  it('publishes a salvage outbound after retries are exhausted', async () => {
+    const { bus, dispatcher, outboundMessages, agentTasks } = buildHarness();
+
+    const inboundTask = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-101',
+      channelId: 'email',
+      senderId: 'carol@example.com',
+      content: 'inbound',
+      parentEventId: 'inbound-3',
+    });
+    dispatcher.registerExternalTaskRouting(inboundTask.id, {
+      channelId: 'email',
+      conversationId: 'email:thread-101',
+      senderId: 'carol@example.com',
+    });
+    await bus.publish('system', createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-101',
+      content: 'The calendar specialist found events.',
+      parentEventId: inboundTask.id,
+    }));
+
+    let currentOutbound = outboundMessages[0]!;
+    const findings = [{ rule: 'llm-judge-audience-leak', detail: 'named internal agent' }];
+
+    for (let attempt = 0; attempt <= CONTENT_BLOCK_MAX_RETRIES; attempt++) {
+      await bus.publish('dispatch', createOutboundBlocked({
+        blockId: `block_${attempt}`,
+        conversationId: 'email:thread-101',
+        channelId: 'email',
+        content: currentOutbound.payload.content,
+        recipientId: 'carol@example.com',
+        reason: 'llm-judge-audience-leak: named internal agent',
+        findings,
+        parentEventId: currentOutbound.id,
+      }));
+
+      if (attempt < CONTENT_BLOCK_MAX_RETRIES) {
+        const retryTask = agentTasks[agentTasks.length - 1]!;
+        await bus.publish('system', createAgentResponse({
+          agentId: 'coordinator',
+          conversationId: 'email:thread-101',
+          content: `Rewritten attempt ${attempt + 1}`,
+          parentEventId: retryTask.id,
+        }));
+        currentOutbound = outboundMessages[outboundMessages.length - 1]!;
+      }
+    }
+
+    const salvage = outboundMessages.find((m) => m.payload.contentBlockSalvage);
+    expect(salvage).toBeDefined();
+    expect(salvage!.payload.content).toContain(`Rewritten attempt ${CONTENT_BLOCK_MAX_RETRIES}`);
+  });
+
+  it('clears relayOutbound when autonomy.send_blocked carries the outbound message id', async () => {
+    const { bus, dispatcher, outboundMessages, agentTasks } = buildHarness();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-200',
+      channelId: 'email',
+      senderId: 'dana@example.com',
+      content: 'inbound',
+      parentEventId: 'inbound-4',
+    });
+    dispatcher.registerExternalTaskRouting(task.id, {
+      channelId: 'email',
+      conversationId: 'email:thread-200',
+      senderId: 'dana@example.com',
+    });
+    await bus.publish('system', createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-200',
+      content: 'Reply blocked by autonomy gate',
+      parentEventId: task.id,
+    }));
+
+    const outbound = outboundMessages[0]!;
+    await bus.publish('dispatch', createAutonomySendBlocked({
+      channel: 'email',
+      currentScore: 50,
+      requiredScore: 70,
+    }, outbound.id));
+
+    // A subsequent content-filter block should not find relay context or schedule a retry.
+    await bus.publish('dispatch', createOutboundBlocked({
+      blockId: 'block_orphan',
+      conversationId: 'email:thread-200',
+      channelId: 'email',
+      content: outbound.payload.content,
+      recipientId: 'dana@example.com',
+      reason: 'llm-judge-audience-leak: leak',
+      findings: [{ rule: 'llm-judge-audience-leak', detail: 'leak' }],
+      parentEventId: outbound.id,
+    }));
+
+    expect(agentTasks).toHaveLength(0);
   });
 });

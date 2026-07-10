@@ -718,6 +718,14 @@ export class EmailAdapter implements Channel {
         ...(ccAddresses.length > 0 ? { cc: ccAddresses } : {}),
       };
 
+      if (outbound.payload.contentBlockSalvage) {
+        await this.saveContentBlockSalvageDraft(sendRequest, {
+          conversationId: outbound.payload.conversationId,
+          taskEventId: outbound.payload.taskEventId,
+        });
+        return;
+      }
+
       await this.sendWithGatedDraftFallback(sendRequest, {
         taskEventId: outbound.payload.taskEventId,
         conversationId: outbound.payload.conversationId,
@@ -828,6 +836,39 @@ export class EmailAdapter implements Channel {
     }
 
     // Non-gated failure (blocked contact, content filter, etc.) — already logged by gateway
+  }
+
+  /**
+   * Save a blocked dispatcher-relayed reply as a draft after rewrite retries are exhausted (#1355).
+   * Skips the send path entirely — createEmailDraft still runs blocked-contact and content-filter checks.
+   */
+  private async saveContentBlockSalvageDraft(
+    sendRequest: EmailSendRequest,
+    context: { taskEventId?: string; conversationId?: string },
+  ): Promise<void> {
+    const { outboundGateway, logger, accountId } = this.config;
+    let draftResult: Awaited<ReturnType<typeof outboundGateway.createEmailDraft>> | undefined;
+    try {
+      draftResult = await outboundGateway.createEmailDraft(sendRequest);
+    } catch (err) {
+      logger.error(
+        { err, accountId, conversationId: context.conversationId },
+        'email-adapter: unexpected error creating content-block salvage draft',
+      );
+      return;
+    }
+
+    if (draftResult?.success && draftResult.draftId) {
+      logger.info(
+        { accountId, draftId: draftResult.draftId, conversationId: context.conversationId },
+        'email-adapter: content-block salvage draft created',
+      );
+    } else if (draftResult && !draftResult.success) {
+      logger.error(
+        { accountId, conversationId: context.conversationId, reason: draftResult.blockedReason },
+        'email-adapter: content-block salvage draft creation failed',
+      );
+    }
   }
 
   /**
