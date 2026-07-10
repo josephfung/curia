@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **ADR-027** — records the decision to add structured secrets with schema-tagged sub-field addressing (`credit_card` first); implementation tracked separately.
+
 ### Changed
 
 - **Install docs** — README points to `releases/latest/download/install.sh` and documents `CURIA_VERSION`.

@@ -47,6 +47,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [023](023-bullpen-consult-and-resume.md) | Async bullpen consult-and-resume convention — tap/park/resume over existing bullpen primitives, no new event types | Accepted |
 | [024](024-plan-rows-direct.md) | Plan primitive writes child rows directly (rows-direct) — not coordinator-proposed trees | Accepted |
 | [025](025-conversation-id-reversible-text-key.md) | `conversation_id` is a reversible TEXT key, not a UUID v5 — reject the #16 migration, reconcile specs to reality | Accepted |
+| [027](027-structured-secret-subfield-addressing.md) | Structured secrets with schema-tagged sub-field addressing — `secret_ref#field` projections gated to a registered schema, shipping `credit_card` first | Accepted |
 
 ## Adding new ADRs
 
