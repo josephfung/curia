@@ -54,9 +54,12 @@ const publishAllowlist: Record<Layer, Set<EventType>> = {
 // skill.result subscribe for 'dispatch': used by Dispatcher reply-lock (#847) to detect successful
 //          email-reply / email-send calls and set humanReplySent on the routing entry before
 //          handleAgentResponse fires.
+// #1355 (content-block relay retry): dispatch layer subscribes to outbound.blocked and
+//          outbound.delivered to retry or salvage dispatcher-relayed replies blocked by
+//          the content filter after the agent turn has ended.
 const subscribeAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['outbound.message', 'outbound.blocked', 'outbound.notification', 'message.rejected']),
-  dispatch: new Set(['inbound.message', 'agent.response', 'agent.error', 'agent.discuss', 'skill.result']),
+  dispatch: new Set(['inbound.message', 'agent.response', 'agent.error', 'agent.discuss', 'skill.result', 'outbound.blocked', 'outbound.delivered']),
   agent: new Set(['agent.task', 'skill.result']),
   execution: new Set(['skill.invoke']),
   system: new Set(['inbound.message', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.delivered', 'export.delivered', 'outbound.pii_redacted', 'outbound.suppressed_duplicate', 'outbound.notification', 'skill.invoke', 'skill.result', 'memory.store', 'memory.query', 'memory.decay_warning', 'contact.resolved', 'contact.unknown', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'contact.elevated', 'agent.discuss', 'conversation.checkpoint', 'llm.call', 'llm.error', 'embedding.call', 'embedding.error', 'context.budget', 'model.fallback', 'human.decision', 'secret.accessed', 'secret.captured', 'autonomy.skill_blocked', 'autonomy.send_blocked', 'channel.poll', 'channel.stalled', 'task.created', 'task.updated', 'task.completed', 'task.resumable_throughput']),

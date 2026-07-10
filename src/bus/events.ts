@@ -121,6 +121,11 @@ interface OutboundMessagePayload {
   /** The agent.task event ID that originated this outbound message.
    *  Stamped by the dispatcher for traceability and action_log context. */
   taskEventId?: string;
+  /**
+   * When true, the email adapter saves the content as a draft instead of sending.
+   * Set by the dispatcher after content-filter retries are exhausted (#1355).
+   */
+  contentBlockSalvage?: boolean;
 }
 
 // OutboundDeliveredPayload — emitted by OutboundGateway after a successful

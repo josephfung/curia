@@ -633,13 +633,13 @@ export class OutboundGateway {
           // must never carry raw PII, matching the fail-closed redactor-error path below.
           await this.bus.publish('dispatch', createOutboundBlocked({
             blockId,
-            conversationId: '',
+            conversationId: options?.conversationId ?? '',
             channelId: request.channel,
             content: scrubPii(messageBody),
             recipientId,
             reason: 'no_reply_recipient',
             findings: [{ rule: 'no-reply-recipient', detail: 'All recipients classify as automated/no-reply; message not deliverable' }],
-            parentEventId: '',
+            parentEventId: options?.parentEventId ?? '',
           }));
         } catch (publishErr) {
           this.log.warn(
@@ -937,13 +937,13 @@ export class OutboundGateway {
       // Use redactedBody so the audit event itself does not contain unredacted PII.
       const blockedEvent = createOutboundBlocked({
         blockId,
-        conversationId: '',
+        conversationId: options?.conversationId ?? '',
         channelId: request.channel,
         content: redactedBody,
         recipientId,
         reason: fullReason,
         findings: filterFindings,
-        parentEventId: '',
+        parentEventId: options?.parentEventId ?? '',
       });
       try {
         await this.bus.publish('dispatch', blockedEvent);

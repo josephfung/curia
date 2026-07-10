@@ -45,4 +45,9 @@ describe('outbound.blocked event', () => {
   it('agent layer cannot publish outbound.blocked', () => {
     expect(canPublish('agent', 'outbound.blocked')).toBe(false);
   });
+
+  it('dispatch layer can subscribe to outbound.blocked and outbound.delivered (#1355)', () => {
+    expect(canSubscribe('dispatch', 'outbound.blocked')).toBe(true);
+    expect(canSubscribe('dispatch', 'outbound.delivered')).toBe(true);
+  });
 });

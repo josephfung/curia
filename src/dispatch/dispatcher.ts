@@ -1,5 +1,5 @@
 import type { EventBus } from '../bus/bus.js';
-import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, SkillResultEvent } from '../bus/events.js';
+import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, SkillResultEvent, OutboundBlockedEvent } from '../bus/events.js';
 import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
@@ -12,6 +12,12 @@ import type { DbPool } from '../db/connection.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
 import { parseEmailMetadata, sanitizeNylasMessageId, buildCcPreamble, buildThreadParticipantsBlock } from './email-metadata.js';
+import {
+  CONTENT_BLOCK_MAX_RETRIES,
+  buildContentBlockRewriteTask,
+  isContentFilterRewriteable,
+  type RelayOutboundContext,
+} from './content-block-relay.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
 function redactSenderId(value: string): string {
@@ -115,8 +121,17 @@ export class Dispatcher {
       /** Set to true when a human-facing reply skill (email-reply, email-send) succeeds
        *  during this task. handleAgentResponse suppresses outbound.message when true. */
       humanReplySent: boolean;
+      /** Rewrite attempts for dispatcher-relayed replies blocked by the content filter (#1355). */
+      contentBlockRetryAttempt?: number;
+      /** Salvage-only publish — save as draft instead of sending (#1355). */
+      contentBlockSalvage?: boolean;
     }
   >();
+  /**
+   * Tracks dispatcher-relayed outbound.message events awaiting delivery outcome.
+   * Keyed by outbound.message event ID; cleared on outbound.delivered or outbound.blocked.
+   */
+  private relayOutbound = new Map<string, RelayOutboundContext>();
   /** Key: `${conversationId}:${agentId}` — reset on every agent.response */
   private checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pool: DbPool | undefined;
@@ -199,6 +214,18 @@ export class Dispatcher {
     // handleAgentResponse can suppress the duplicate outbound.message. See #847.
     this.bus.subscribe('skill.result', 'dispatch', async (event) => {
       await this.handleSkillResult(event as SkillResultEvent);
+    });
+
+    // outbound.blocked → bounded rewrite retry or salvage draft for dispatcher-relayed replies (#1355)
+    this.bus.subscribe('outbound.blocked', 'dispatch', async (event) => {
+      await this.handleOutboundBlocked(event as OutboundBlockedEvent);
+    });
+
+    // outbound.delivered → clear pending relay tracking on successful delivery
+    this.bus.subscribe('outbound.delivered', 'dispatch', async (event) => {
+      if (event.parentEventId) {
+        this.relayOutbound.delete(event.parentEventId);
+      }
     });
 
     this.logger.info(
@@ -910,12 +937,116 @@ export class Dispatcher {
       // The agent.response's parentEventId is the agent.task that triggered it — thread
       // this through so the email adapter can pass it to gateway.send() for action_log context.
       taskEventId: event.parentEventId ?? undefined,
+      contentBlockSalvage: routing.contentBlockSalvage,
     });
+
+    // Track for content-filter block handling (#1355) — cleared on delivery or block.
+    if (!routing.contentBlockSalvage) {
+      this.relayOutbound.set(outbound.id, {
+        agentId: event.payload.agentId,
+        conversationId: routing.conversationId,
+        channelId: routing.channelId,
+        senderId: routing.senderId,
+        accountId: routing.accountId,
+        taskEventId: event.parentEventId!,
+        content: event.payload.content,
+        contentBlockRetryAttempt: routing.contentBlockRetryAttempt ?? 0,
+      });
+    }
+
     await this.bus.publish('dispatch', outbound);
 
     // Schedule a checkpoint for this conversation — resets the debounce timer if
     // already running, so only fires after a full window of inactivity.
     this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+  }
+
+  /**
+   * Handle content-filter blocks on dispatcher-relayed outbound replies (#1355).
+   * Skill-invoked sends self-correct mid-turn; relayed agent.response replies do not —
+   * retry with the block reason, then salvage a draft on final failure (email only).
+   */
+  private async handleOutboundBlocked(event: OutboundBlockedEvent): Promise<void> {
+    const parentOutboundId = event.parentEventId;
+    if (!parentOutboundId) return;
+
+    const ctx = this.relayOutbound.get(parentOutboundId);
+    if (!ctx) return;
+    this.relayOutbound.delete(parentOutboundId);
+
+    const { findings } = event.payload;
+    const rewriteable = isContentFilterRewriteable(findings);
+    const attemptsRemaining = CONTENT_BLOCK_MAX_RETRIES - ctx.contentBlockRetryAttempt;
+
+    if (rewriteable && attemptsRemaining > 0) {
+      const nextAttempt = ctx.contentBlockRetryAttempt + 1;
+      this.logger.info(
+        {
+          agentId: ctx.agentId,
+          conversationId: ctx.conversationId,
+          attempt: nextAttempt,
+          maxRetries: CONTENT_BLOCK_MAX_RETRIES,
+          rules: findings.map((f) => f.rule),
+        },
+        'Dispatcher content-block relay: scheduling bounded rewrite retry',
+      );
+
+      const taskEvent = createAgentTask({
+        agentId: ctx.agentId,
+        conversationId: ctx.conversationId,
+        channelId: ctx.channelId,
+        senderId: ctx.senderId,
+        accountId: ctx.accountId,
+        content: buildContentBlockRewriteTask(ctx.content, findings),
+        metadata: { contentBlockRewrite: true, contentBlockRetryAttempt: nextAttempt },
+        parentEventId: event.id,
+      });
+      this.taskRouting.set(taskEvent.id, {
+        channelId: ctx.channelId,
+        conversationId: ctx.conversationId,
+        senderId: ctx.senderId,
+        accountId: ctx.accountId,
+        humanReplySent: false,
+        contentBlockRetryAttempt: nextAttempt,
+      });
+      await this.bus.publish('dispatch', taskEvent);
+      return;
+    }
+
+    this.logger.warn(
+      {
+        agentId: ctx.agentId,
+        conversationId: ctx.conversationId,
+        rewriteable,
+        attempt: ctx.contentBlockRetryAttempt,
+        rules: findings.map((f) => f.rule),
+      },
+      'Dispatcher content-block relay: retries exhausted or block not rewriteable — salvaging draft',
+    );
+    await this.publishContentBlockSalvage(ctx, event.id);
+  }
+
+  /** Publish a salvage outbound.message that the email adapter saves as a draft (#1355). */
+  private async publishContentBlockSalvage(ctx: RelayOutboundContext, parentEventId: string): Promise<void> {
+    if (ctx.channelId !== 'email') {
+      this.logger.warn(
+        { channelId: ctx.channelId, conversationId: ctx.conversationId },
+        'Dispatcher content-block relay: salvage draft not supported for this channel — reply lost',
+      );
+      return;
+    }
+
+    const outbound = createOutboundMessage({
+      conversationId: ctx.conversationId,
+      channelId: ctx.channelId,
+      accountId: ctx.accountId,
+      content: ctx.content,
+      recipientId: ctx.senderId,
+      parentEventId,
+      taskEventId: ctx.taskEventId,
+      contentBlockSalvage: true,
+    });
+    await this.bus.publish('dispatch', outbound);
   }
 
   private scheduleCheckpoint(conversationId: string, agentId: string, channelId: string): void {
