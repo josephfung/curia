@@ -265,45 +265,8 @@ These are not bundled but documented as recommended integrations:
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| Local skill directory structure — `skill.json` manifest + `handler.ts` loading | Done |
-| `action_risk` field — required on all manifests, validated at load time | Done |
-| Startup schema validation — `skill.json` validated via Ajv at boot | Done |
-| Execution layer — resolve, validate elevation, build context, execute, sanitize, return result | Done |
-| Output sanitization — tag stripping, secret redaction, truncation, error wrapping | Done |
-| Resource boundaries — per-invocation timeout enforcement from manifest | Done |
-| Secrets access — `ctx.secret()` scoped to manifest `secrets` array, audit-logged | Done |
-| Encrypted secrets vault — AES-256-GCM, `secrets` table, vault-first resolution (ADR-020/021) | Done |
-| Vault seeding (`seed-vault`) and key rotation (`rotate-secret-key.ts`) scripts | Done |
-| Skill registry — `skill_registry` table, install/enable lifecycle, restart-based loading | Done |
-| Agent registry — `agent_registry` table, install/enable lifecycle, restart-based loading | Done |
-| `install.requires_secrets` gate — `RegistryService` blocks install/enable until declared vault keys exist | Done |
-| Registry HTTP API — list/install/enable/install-enable/disable/delete routes | Done |
-| MCP skills — MCP client, stdio/StreamableHTTP transport, `tools/list` discovery | Done |
-| MCP `headers` config field — per-server auth headers for hosted MCP servers | Done |
-| Built-in skill: `skill-registry` (agent-invocable search) | Done |
-| Skill discovery — `allow_discovery: true` wired to runtime tool-list builder | Done |
-| Skill discovery — dynamic tool-list expansion for discovered skills | Done |
-| Elevated-skill gate — live-principal enforcement (#1126) | Done — `isLivePrincipalTurn` at the execution layer is the sole enforcement point |
-| Safety gate for first-time elevated skill use — per-agent-skill `skill_approvals` table | Deferred — persist-once-ask-once flow not yet built (separate from the elevation gate above) |
-| Privilege scoping — per-skill `capabilities` array, load-time validation, frozen manifest | Done |
-| `allowed_callers` enforcement — restrict skill invocation to named agents, validated at startup | Done |
-| `infraLlm` capability — constrained LLM access (classify/extract) for infrastructure skills | Done |
-| Resource boundaries — max 5 concurrent skill invocations per agent task | Not Done |
-| Resource boundaries — 1MB buffer cap on streaming skill responses | Not Done |
-| Built-in skill: `config-store` (generic namespaced agent config store) | Done |
-| Built-in skill: `image-generate` (DALL-E 3 image generation) | Done |
-| Built-in skill: `memory-query` (freeform KG search) | Done |
-| Built-in skill: `memory-store` (write-with-validation) | Done |
-| `outboundContext` capability — pre-scoped `ScopedOutboundContext` injected into send skills for context-bridge registration (see [spec 11](11-entity-context-enrichment.md#outbound-context-bridge)) | Done |
-| Two-tier `allowed_callers` pattern — coordinator-only restrictions for governance skills (e.g. `context-bridge-release`); validator tests enforce manifest correctness at load time | Done |
-| Built-in skill: `request-clarification` — multi-turn clarification systemized as a reusable skill | Done |
-| Built-in skill: `file-parse` — accepts `temp_file_url` as an alternative to `content_base64`, with `CURIA_TEMPFILE_DIR` path validation | Done |
-| Built-in skill: `context-bridge-release` — coordinator-only, marks outbound context entries released | Done |
-| Built-in skill: `context-bridge-clear` — bulk release by meeting subject; pinned to coordinator, contacts, ceo-inbox, meeting-debrief | Done |
-| Built-in skill: `setup-status` — catalog-driven, live-derived status per setup task | Done |
-| Built-in skill: `setup-defer` — persists/clears setup task deferrals in config-store | Done |
-| MCP skill credentials — `secrets:` block in `skills.yaml`; `McpRegistryService` + `mcp_server_registry` table; console credential UI; enable gate on secret resolution | Done |
+- **`skill_approvals` persist-once-ask-once flow** — the per-agent-skill "ask once on first use by that agent" safety gate is still unbuilt (deferred), separate from the live-principal elevation gate.
+- **Max-5 concurrent invocations limit** — the per-agent-task cap on concurrent skill invocations is not yet implemented.
+- **1MB streaming buffer cap** — the buffer limit on streaming skill responses is not yet implemented.

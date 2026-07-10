@@ -5,31 +5,31 @@
 
 ## Spec Index
 
-| # | Document | Scope | Status |
-|---|----------|-------|--------|
-| 00 | This file | Architecture, layers, bus, message flow, design principles | ✅ Implemented |
-| 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings | ✅ 12 of 12 Done |
-| 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers | 20 of 25 Done |
-| 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions, allowed_callers | 24 of 27 Done |
-| 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email channels, message normalization | 10 of 17 Done |
-| 05 | [Error Recovery](05-error-recovery.md) | Error budgets, state continuity, pattern detection, failure model | 10 of 18 Done |
-| 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security | 25 of 27 Done |
-| 07 | [Scheduler](07-scheduler.md) | Job model, cron, one-shot, persistent tasks, burst execution, stale-job cleanup | 21 of 22 Done |
-| 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure, container security | 17 of 18 Done |
-| 09 | [Contacts & Identity](09-contacts-and-identity.md) | Contact resolution, identity verification, unknown sender policy, authorization, channel identity linking, canonical attributes | 12 of 17 Done |
-| 10 | [Audit Log Hardening](10-audit-log-hardening.md) | Structured audit fields, LLM provenance, tamper evidence, source attribution, HITL records | 2 of 17 Done |
-| 11 | [Entity Context Enrichment](11-entity-context-enrichment.md) | Entity model, KG-backed sender/entity profiles, context assembly, agent self-identity, skill convention, delegation-aware outbound context bridge | 23 of 30 Done |
-| 12 | [Knowledge Graph Web Explorer](12-knowledge-graph-web-explorer.md) | Knowledge graph browser, relationship visualization, entity memory viewer | ✅ 5 of 5 Done |
-| 13 | [Office Identity](13-office-identity.md) | Persona config, voice settings, runtime identity injection | ✅ 10 of 10 Done |
-| 14 | [Autonomy Engine](14-autonomy-engine.md) | Global score, autonomy bands, skill action_risk, per-task prompt injection, CEO controls | ✅ 10 of 10 Done |
-| 15 | [Outbound Safety](15-outbound-safety.md) | Content filter, display name sanitization, caller verification, LLM-as-judge gateway | 10 of 17 Done |
-| 16 | [Smoke Test Framework](16-smoke-test-framework.md) | Chat-based test cases, LLM-as-judge evaluation, HTML reports | 8 of 18 Done |
-| 17 | [Meeting Debrief](17-meeting-debrief.md) | Proactive debrief agent, detection pipeline, follow-up execution via Bullpen-through-coordinator | 15 of 17 Done |
-| 18 | [Onboarding](18-onboarding.md) | Single-command host bootstrap, React form wizard at `/setup`, in-chat `setup-wizard` specialist | ✅ 15 of 15 Done |
-| 19 | [Tasks & Backlog](19-tasks-and-backlog.md) | `tasks` table (promoted from `agent_tasks`), `task-*` skills, `enable_task_management`, BacklogHeartbeat, digest backlog sections, project decomposition | ✅ Shipped (v0.33) |
-| 20 | [Resumable Tasks & Projects](20-resumable-tasks-and-projects.md) | Resumable-execution contract, checkpoint/pause, `plan` primitive, frontier advancement, throughput telemetry, adaptive re-planning, principal-facing escalation | ✅ Shipped (v0.39) |
-| 21 | [Agent Document Workspace (OKF)](21-agent-document-workspace.md) | OKF `working_documents` store, `doc-*` skills, backlink index, accumulator spill, `/scratch` TTL sweep, KG distillation | ✅ Shipped (v0.39) |
-| 22 | [Ant Farm Visualization](22-antfarm-visualization.md) | Pixel-art office replay of the audit log, `@curia/antfarm` SPA (Phaser + React), event→directive interpreter, timeline/stream/asset routes, scoped CSP | ✅ Shipped (v0.40) |
+| # | Document | Scope |
+|---|----------|-------|
+| 00 | This file | Architecture, layers, bus, message flow, design principles |
+| 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings |
+| 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers |
+| 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions, allowed_callers |
+| 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email channels, message normalization |
+| 05 | [Error Recovery](05-error-recovery.md) | Error budgets, state continuity, pattern detection, failure model |
+| 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security |
+| 07 | [Scheduler](07-scheduler.md) | Job model, cron, one-shot, persistent tasks, burst execution, stale-job cleanup |
+| 08 | [Operations](08-operations.md) | Config, deployment, health checks, logging, project structure, container security |
+| 09 | [Contacts & Identity](09-contacts-and-identity.md) | Contact resolution, identity verification, unknown sender policy, authorization, channel identity linking, canonical attributes |
+| 10 | [Audit Log Hardening](10-audit-log-hardening.md) | Structured audit fields, LLM provenance, tamper evidence, source attribution, HITL records |
+| 11 | [Entity Context Enrichment](11-entity-context-enrichment.md) | Entity model, KG-backed sender/entity profiles, context assembly, agent self-identity, skill convention, delegation-aware outbound context bridge |
+| 12 | [Knowledge Graph Web Explorer](12-knowledge-graph-web-explorer.md) | Knowledge graph browser, relationship visualization, entity memory viewer |
+| 13 | [Office Identity](13-office-identity.md) | Persona config, voice settings, runtime identity injection |
+| 14 | [Autonomy Engine](14-autonomy-engine.md) | Global score, autonomy bands, skill action_risk, per-task prompt injection, CEO controls |
+| 15 | [Outbound Safety](15-outbound-safety.md) | Content filter, display name sanitization, caller verification, LLM-as-judge gateway |
+| 16 | [Smoke Test Framework](16-smoke-test-framework.md) | Chat-based test cases, LLM-as-judge evaluation, HTML reports |
+| 17 | [Meeting Debrief](17-meeting-debrief.md) | Proactive debrief agent, detection pipeline, follow-up execution via Bullpen-through-coordinator |
+| 18 | [Onboarding](18-onboarding.md) | Single-command host bootstrap, React form wizard at `/setup`, in-chat `setup-wizard` specialist |
+| 19 | [Tasks & Backlog](19-tasks-and-backlog.md) | `tasks` table (promoted from `agent_tasks`), `task-*` skills, `enable_task_management`, BacklogHeartbeat, digest backlog sections, project decomposition |
+| 20 | [Resumable Tasks & Projects](20-resumable-tasks-and-projects.md) | Resumable-execution contract, checkpoint/pause, `plan` primitive, frontier advancement, throughput telemetry, adaptive re-planning, principal-facing escalation |
+| 21 | [Agent Document Workspace (OKF)](21-agent-document-workspace.md) | OKF `working_documents` store, `doc-*` skills, backlink index, accumulator spill, `/scratch` TTL sweep, KG distillation |
+| 22 | [Ant Farm Visualization](22-antfarm-visualization.md) | Pixel-art office replay of the audit log, `@curia/antfarm` SPA (Phaser + React), event→directive interpreter, timeline/stream/asset routes, scoped CSP |
 
 ---
 
@@ -91,9 +91,9 @@ All event types are defined as a TypeScript discriminated union — no `any` pay
 
 ## Tech Stack
 
-- **Runtime:** Node.js 22+ with TypeScript (ESM)
+- **Runtime:** Node.js 24+ with TypeScript (ESM)
 - **Database:** PostgreSQL 16+ with pgvector extension
-- **LLM SDKs:** @anthropic-ai/sdk, openai (embeddings + OpenRouter provider), ollama
+- **LLM SDKs:** @anthropic-ai/sdk, openai (embeddings + OpenRouter provider); `ollama` planned for a future local-model provider (not yet implemented — see spec 02)
 - **MCP:** @modelcontextprotocol/sdk (client)
 - **HTTP:** Fastify (for HTTP API channel + dashboard endpoints)
 - **Testing:** Vitest
@@ -108,9 +108,7 @@ All event types are defined as a TypeScript discriminated union — no `any` pay
 ## What Is NOT In Scope (Launch)
 
 - Multi-tenancy
-- Web dashboard UI (HTTP API is ready for it, but no frontend yet)
 - Memory decay engine (schema supports it, logic deferred)
 - Voice/telephony channel
-- Secrets vault (env vars behind ctx.secret() interface for now)
 - Skill marketplace or versioning
 - Automatic event replay on startup (manual query for now)

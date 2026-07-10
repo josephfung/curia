@@ -237,29 +237,12 @@ This is enforced by code review convention. A lint rule (`no-empty-catch` + cust
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| Error budget: `max_turns` tracking per task | Done |
-| Error budget: `max_errors` (consecutive errors) tracking per task | Done |
-| Error budget: `max_cost_usd` tracking per task | Not Done |
-| State continuity: structured `<task_error>` XML injection into conversation | Done |
-| Progress extraction before aborting (summary stored in task record) | Not Done |
-| Per-task error pattern detection (sliding window of last 10 tool invocations) | Not Done |
-| Cross-task `known_failures` table (data collection for future warnings) | Not Done |
-| LLM call failure handling: rate limit retry with backoff | Done |
-| LLM call failure handling: timeout retry, auth error no-retry | Done |
-| LLM call failure handling: server error retry, fallback provider | Done |
-| Skill invocation failure handling (structured results, timeout) | Done |
-| Channel adapter failure handling: reconnection with exponential backoff | Partial — Signal only; email uses polling model |
-| Channel adapter failure handling: outbound message queue (max 100) for disconnected channels | Not Done |
-| Scheduled job failure handling (suspension after 3 failures, user notification) | Done |
-| Channel poll watchdog — `channel.stalled` audit event when no poll succeeds within `5 × pollingIntervalMs` | Done |
-| Duplicate outbound suppression — `outbound.suppressed_duplicate` when a human reply already shipped (#847) | Done |
-| ceo-inbox triage watermark managed in code with future-timestamp clamping (#866) | Done |
-| Contacts promotion sweep batched to 10/run via offset cursor in `last_run_context`; `error_budget` raised to 30 (#884) | Done |
-| Database unavailable: fail-fast at startup | Done |
-| Database unavailable: in-operation handling (retry in non-critical paths, bubble up in critical) | Partial — health check detects it; path-specific handling not verified |
-| `AgentError` structured type with `ErrorType` discriminated union | Done |
-| "Never Swallow" rule enforced via ESLint rule (`no-empty-catch`) | Not Done — convention only; rule absent from `eslint.config.js` |
+- **`max_cost_usd` tracking** — error budget dimension for per-task cost is not yet implemented.
+- **Progress extraction before aborting** — summary stored in task record is not yet implemented.
+- **Per-task error pattern detection** — sliding window of last 10 tool invocations is not yet implemented.
+- **Cross-task `known_failures` table** — data collection for future warnings is not yet implemented.
+- **Outbound message queue** — max 100 queue for disconnected channels is not yet implemented.
+- **Database unavailable: in-operation handling** — health check detects it, but path-specific handling (retry in non-critical paths, bubble up in critical) is not verified.
+- **`no-empty-catch` ESLint rule** — the "Never Swallow" rule is enforced by convention only; the rule is absent from `eslint.config.js`.

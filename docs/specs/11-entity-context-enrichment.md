@@ -604,54 +604,12 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-### Phase 1: Foundation
-
-| Item | Status |
-|---|---|
-| Agent self-identity: KG node + contact record, bootstrap seeding | Done |
-| Agent contactId injection into coordinator system prompt | Done |
-| Entity-context assembly module (`src/entity-context/`) | Done |
-| `entity-context` skill (manifest + handler) | Done |
-| `ctx.entityContext` field on `SkillContext` | Done |
-| `entity_enrichment` manifest declaration support in execution layer | Done |
-| TTL cache for entity context payloads | Done |
-| Cache invalidation on contact/KG mutations | Done |
-| Proactive account discovery (`discoveredAccounts` field) | Not done |
-| Unit tests: entity-context assembly | Done |
-| Unit tests: execution layer pre-enrichment | Done |
-| Unit tests: cache behavior (hit, miss, invalidation) | Done |
-
-### Phase 2: Calendar adoption
-
-| Item | Status |
-|---|---|
-| Calendar skills declare `entity_enrichment` in their manifests | Not done |
-| Remove `calendarId` from LLM-visible tool definitions | Not done |
-| Integration test: end-to-end "What's on Jenna's calendar?" flow | Not done |
-
-### Phase 3: Broader adoption
-
-| Item | Status |
-|---|---|
-| `entity-lookup` skill for broad KG entity search (orgs, events, places) | Not done |
-| Knowledge skills adoption (travel-preferences, loyalty-programs, etc.) | Not done |
-| Email skills adoption (when email connected accounts are added) | Not done |
-
-### Outbound Context Bridge (v2)
-
-| Item | Status |
-|---|---|
-| `outbound_context` table + partial index (migration 042) | Done |
-| `OutboundContextService` with full CRUD + injection-block formatting | Done |
-| `ScopedOutboundContext` + `outboundContext` skill capability | Done |
-| `context-bridge-parse` helper module (`src/dispatch/`) for skill input normalization | Done |
-| `context-bridge-release` coordinator-only skill | Done |
-| Unconditional auto-registration in `email-send` / `email-reply` / `signal-send` | Done |
-| Two-tier TTL config (`contextBridge.defaultExpiryHours` / `explicitExpiryHours`) | Done |
-| Dispatcher injection of `[ACTIVE OUTBOUND CONTEXT]` block on inbound | Done |
-| Periodic cleanup of expired/released rows (scheduled job) | Done |
-| Coordinator delegation-hint guidance in system prompt | Done |
-| v1 `context-memo.ts` write path removed | Done |
-| v1 `context-memo.ts` module deleted | Done |
+- **Proactive account discovery** — the `discoveredAccounts` field in the entity-context assembly pipeline is not yet implemented.
+- **Calendar `entity_enrichment` manifests** — calendar skills do not yet declare `entity_enrichment` in their manifests. (#544)
+- **Remove `calendarId` from tool definitions** — `calendarId` has not yet been removed from LLM-visible tool definitions; pending cleanup.
+- **Calendar integration test** — the end-to-end "What's on Jenna's calendar?" integration test is not yet implemented. (#544)
+- **`entity-lookup` skill** — the broad KG entity search skill (orgs, events, places) is not yet implemented.
+- **Knowledge-skills adoption** — knowledge skills (travel-preferences, loyalty-programs, etc.) have not yet adopted entity context enrichment.
+- **Email-skills adoption** — email skills adoption is not yet implemented (pending email connected accounts).

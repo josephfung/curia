@@ -289,32 +289,9 @@ All agents receive a `## Current Date & Time` block in their system prompt on ev
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| Coordinator agent — `role: coordinator` routing, `coordinator.yaml` config | Done |
-| Specialist agents — YAML-only config (expense-tracker, research-analyst, etc.) | Done |
-| TypeScript handler escape hatch (`handler:` field, custom lifecycle hooks) | Done |
-| Agent YAML config validation against JSON Schema at startup | Done |
-| Lifecycle hooks (`beforeLLMCall`, `afterLLMCall`, `beforeSkillInvoke`, `afterSkillResult`, `onTaskComplete`, `onTaskError`) | Not Done — no hook system in `AgentRuntime` |
-| Agent state model — stateful per-conversation, Postgres-backed, restart-safe | Done |
-| Agent presence — `GET /api/agents/status` snapshot endpoint | Partial — endpoint exists but all agents return hardcoded `state: 'idle'`; real-time state machine not built |
-| Agent presence — SSE stream at `GET /api/agents/status/stream` | Not Done |
-| Execution mode: reactive (message → respond) | Done |
-| Execution mode: persistent tasks (burst execution, `intent_anchor`, `progress` JSONB) | Done |
-| LLM provider abstraction (`LLMProvider` interface, `provider.ts`) | Done |
-| Anthropic provider | Done |
-| OpenRouter provider (Gemini Flash, DeepSeek V3, GPT-4o via `OPENROUTER_API_KEY`) | Done |
-| Model registry — centralized pricing, context windows, capabilities for all models | Done |
-| Ollama (local model) provider | Not Done |
-| Fallback provider (`model.fallback` in agent config) | Not Done |
-| Token tracking per LLM call (input/output tokens via `llm.call` event) | Done |
-| Cost tracking per LLM call (estimated USD in `llm.call` event) | Done |
-| Dispatch layer — route all inbound to Coordinator, enforce rate limits and policy | Done |
-| Dispatch layer — translate `agent.response` → `outbound.message` | Done |
-| Dispatch layer — inject office identity (display name, email signature) into outbound | Done |
-| Dispatch layer — check pending Bullpen threads on every routing | Done |
-| Dispatch layer — subscribe to `agent.error` and notify user | Done |
-| Turn budget injection — agent runtime prepends a max-turns budget block to the system prompt, with proximity threshold and anti-retry guidance | Done |
-| CallerContext synthesis — delegated specialist tasks reconstruct a synthetic CallerContext from the originator so skills see consistent caller fields | Done |
+- **Lifecycle hooks** — no hook system in `AgentRuntime`; `beforeLLMCall`, `afterLLMCall`, `beforeSkillInvoke`, `afterSkillResult`, `onTaskComplete`, and `onTaskError` are not implemented.
+- **Agent presence snapshot** — the `GET /api/agents/status` endpoint exists but all agents return hardcoded `state: 'idle'`; a real-time state machine has not been built.
+- **Agent presence SSE stream** — the `GET /api/agents/status/stream` endpoint is not implemented.
+- **Ollama provider** — the local-model provider is not implemented; no `ollama.ts` provider file exists.

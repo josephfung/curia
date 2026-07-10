@@ -622,7 +622,7 @@ Both events are audit-logged before delivery (write-ahead, per [06-audit-and-sec
 | **03 — Skills & Execution** | Contact management operations (`contact.create`, `contact.link-identity`, etc.) are skills with manifests in `skills/contact/`. |
 | **04 — Channels** | Channel adapters produce `InboundMessage` with `sender_id`. The contact resolver in the dispatch layer enriches this before routing to the Coordinator. Email adapter extracts To/CC participants into `metadata.participants`. |
 | **05 — Error Recovery** | Contact resolution and authorization check failures are handled as `AgentError` types. If the contacts DB is unreachable, the resolver degrades gracefully: messages are tagged as `resolution_failed` and treated as unknown senders (safe default). Error budgets from spec 05 apply to contact management skills. |
-| **06 — Audit & Security** | Every identity resolution is audit-logged. Failed resolution attempts are logged for security review. Authorization decisions (allow/deny/escalate) are not yet audit-logged — the `AuthorizationService` is a pure function with no bus or logger access; logging is planned (see Implementation Status). The per-channel sender allowlist from spec 04 is fully superseded by contact resolution once the contacts system is deployed — all channels use the contact resolver, and the old allowlist config is ignored. Specs 04 and 06 should be updated to note this deprecation. |
+| **06 — Audit & Security** | Every identity resolution is audit-logged. Failed resolution attempts are logged for security review. Authorization decisions (allow/deny/escalate) are not yet audit-logged — the `AuthorizationService` is a pure function with no bus or logger access; logging is planned (see Known Deficiencies). The per-channel sender allowlist from spec 04 is fully superseded by contact resolution once the contacts system is deployed — all channels use the contact resolver, and the old allowlist config is ignored. |
 | **08 — Operations** | Contact tables added via migration. Role defaults and permissions registry added to `config/`. |
 
 ---
@@ -669,29 +669,10 @@ The migration depends on `kg_nodes` existing (for the foreign key), so it must r
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| Migration: `contacts`, `contact_channel_identities`, `contact_auth_overrides` tables | Done |
-| Contact resolver in dispatch layer (sender lookup + message enrichment) | Done |
-| Participant extraction from email headers (To/CC → metadata.participants) | Done |
-| Contact management skills (`contact.create`, `contact.link-identity`, `contact.unlink-identity`, `contact.set-role`, `contact.grant-permission`, `contact.revoke-permission`, `contact.lookup`, `contact.list`, `contact.merge`) | Done |
-| Bus event types: `contact.resolved`, `contact.unknown` | Done |
-| Role defaults config (`config/role-defaults.yaml`) | Done |
-| Permissions registry config (`config/permissions.yaml`) | Done |
-| Unknown sender policy config and enforcement | Done |
-| Authorization check in Coordinator context assembly (role → overrides → trust) | Done |
-| Audit logging for identity resolution decisions | Done |
-| Audit logging for authorization decisions (allow/deny/escalate) | Not Done |
-| Integration tests: proactive identity establishment | Not Done |
-| Integration tests: reactive identity establishment (unknown sender flow) | Not Done |
-| Integration tests: external source enrichment (CRM/calendar → contact) | Not Done |
-| Integration tests: authorization check (role defaults + overrides + trust) | Partial — three-layer logic unit-tested in `authorization.test.ts`; end-to-end integration test not covered |
-| Tier + kind capability model (migration 055); legacy `status`/`trust_level` columns dropped (migration 059) | Done |
-| Authorization Gate-1 keyed on `meetsMinimumTier(tier, 'known')`; Gate C tier enforcement on consequential actions (#950, #955) | Done |
-| Escalation judge wired into Gate C; fail-closed for unstamped external tiers (#948, #1059) | Done |
-| Auto-elevation `unknown→known` via correspondence, domain/judgment, and `rederive:contact-tiers` backfill (#951) | Done |
-| `contact-set-tier` skill (direct tier set, principal-auth guarded) and `scan-grant-recommendations` / approve-decline grant flow (#952) | Done |
-| Automated sender classification (`classifyEmailSender`) marks `kind=automated`; excluded from ceo-inbox escalation and default `contact-list` view (#953) | Done |
-| Case-insensitive email normalization — `contact-lookup` by email and `contact-merge` for delegated specialists tolerate case differences | Done |
+- **Audit logging for authorization decisions (allow/deny/escalate)** — not yet implemented; the `AuthorizationService` is a pure function with no bus or logger access.
+- **Integration tests: proactive identity establishment** — not yet covered by an integration test.
+- **Integration tests: reactive identity establishment (unknown sender flow)** — not yet covered by an integration test.
+- **Integration tests: external source enrichment (CRM/calendar → contact)** — not yet covered by an integration test.
+- **Integration tests: authorization check (role defaults + overrides + trust)** — three-layer logic is unit-tested in `authorization.test.ts`, but end-to-end integration coverage is missing.

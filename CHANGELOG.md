@@ -25,6 +25,12 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Install docs** — README points to `releases/latest/download/install.sh` and documents `CURIA_VERSION`.
+- **`00-overview.md` Spec Index** — dropped the `Status` column and "N of M Done" counts. (#1282)
+- **Spec audit fixes** — corrected stale claims: Node 24, console UI, secrets vault, and fallback-provider prose. (#1282)
+
+### Removed
+
+- **Spec "Implementation Status" tables** — dropped from `docs/specs/`; replaced by "Known Deficiencies" where work remains. (#1282)
 
 ## [0.40.1] — 2026-07-09 — "Voltron"
 

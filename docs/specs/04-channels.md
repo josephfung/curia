@@ -171,34 +171,10 @@ Each adapter implements reconnection with exponential backoff:
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| `Channel` interface (`name`, `isToggleable`, `start`, `stop` — no `send`; outbound via `OutboundGateway`) in `src/channels/channel.ts` | Done |
-| Channel catalog (`ChannelDescriptor` + `ChannelCredentialField`) in `src/channels/catalog.ts` | Done |
-| Channel registry — `channel_registry` table, install/enable lifecycle, restart-based; `http`/`cli` non-toggleable | Done |
-| Channel credential vault keys — `channel.<name>.<field>` convention | Done |
-| Email poll high-water mark — `lastSeenTimestamp` persisted via `ConfigStore` (`system:email-poll-state`), code-managed | Done |
-| Email poll observability — `channel.poll` per cycle; `channel.stalled` watchdog at `5 × pollingIntervalMs` | Done |
-| `InboundMessage` type | Done |
-| `OutboundMessage` type | Done |
-| CLI channel adapter | Done |
-| Email channel adapter (Nylas API, polling, participant extraction) | Done |
-| Signal channel adapter (signal-cli JSON-RPC subprocess) | Done |
-| HTTP API channel adapter (REST + SSE) | Done |
-| Trust levels assigned to each channel (`config/channel-trust.yaml`) | Done |
-| Sender allowlists per channel | Not Done — superseded by contact resolver (spec 09); no allowlist config present |
-| Email validation: SPF/DKIM/DMARC header check | Done |
-| Email validation: Reply-To vs From header consistency check | Not Done |
-| Reconnection with exponential backoff | Partial — Signal has full backoff; email uses polling (no reconnect path needed); HTTP/CLI not applicable |
-| After max retries: publish `channel.disconnected` and stop | Not Done — event type not emitted; Signal adapter stops but does not publish this event |
-| Health endpoint reports adapter status (connected/disconnected/disabled) | Not Done — health endpoint only reports DB, agents, and skills |
-| Outbound message queue for disconnected channels (max 100, delivered on reconnect) | Not Done |
-| Email reply quoting — `email-reply` appends the quoted original message body to drafts and sends | Done |
-| Email search — `is:unread` is embedded into the Nylas search string when `unread_only` is set alongside a search query | Done |
-| Email accounts table (`email_accounts`, migration 064) + `EmailAccountsRepo` CRUD | Done |
-| Per-account vault grant keys (`channel.email.<name>.nylas_grant_id`) | Done |
-| Console email accounts UI — list, add, edit, delete from Settings → Channels → Email | Done |
-| Email resolver — reads from `email_accounts` table + vault, replacing YAML `channel_accounts` | Done |
-| Vault credential overlay at boot — `applyChannelVaultSecrets()` wires channel vault creds before adapter construction | Done |
+- **Reply-To vs From header consistency check** — not yet implemented.
+- **Reconnection with exponential backoff** — partial; Signal has full backoff, email uses polling (no reconnect path needed), HTTP/CLI not applicable.
+- **`channel.disconnected` event emission** — not yet implemented; event type not emitted, Signal adapter stops but does not publish this event.
+- **Health endpoint adapter status** — not yet implemented; health endpoint only reports DB, agents, and skills.
+- **Outbound message queue for disconnected channels** — not yet implemented (max 100, delivered on reconnect).

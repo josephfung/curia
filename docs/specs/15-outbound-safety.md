@@ -237,41 +237,12 @@ without cross-channel confirmation.
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| `OutboundGateway` class — single chokepoint for all external messages | Done |
-| Blocked contact check in gateway pipeline | Done |
-| Content filter Stage 1 — deterministic rules (system prompt fragments, internal field names, secret patterns, contact data leakage) | Done |
-| Content filter Stage 2 — LLM-as-judge (audience-leak & hyper-sensitive financial/credential detection) | Done |
-| Content filter Stage 2.5 — tier-keyed disclosure gate (escalation judge classifies `DisclosureClass`; `applyDisclosurePolicy` gates on recipient `tier`; fail-closed) (#948, #949) | Done |
-| Disclosure gate + PII redactor key on `contact.tier`; legacy `trust_override` redactor config removed (principal bypass now structural) (#949) | Done |
-| Audience partitioning — coordinator prompt guidance to send external reply and principal status update as **separate** outbound messages (no shared body) | Done |
-| `outbound.blocked` audit event published on filter block | Done |
-| Caller verification gate — elevated-skill check in execution layer | Partial — role-based gate exists; cross-channel challenge/response flow not built |
-| Display name sanitization — storage-time sanitization of inbound display names | Done |
-| Display name mismatch check — flag when display name matches known contact but address does not | Not Done |
-| CEO review-and-approve / edit / discard flow for blocked messages | Not Done |
-| Web UI for reviewing `outbound.blocked` events | Not Done |
-| Outbound rate limiting per recipient | Not Done |
-| Blocklist management skills (`outbound-block` / `outbound-unblock`) | Not Done |
-| `outbound.notification` event type (CEO notifications route through the filter pipeline) | Done |
-| Bulk export gates — item-count threshold, non-contact destination allowlist (confidential+), `restricted` sensitivity ceiling; `export_items`/`node_id` sensitivity resolution (email attachments + Workspace MCP exports) (#201) | Done |
-| Email reply quoting — `email-reply` includes the quoted original message body in drafts and sends; the filter pipeline runs over the full quoted reply | Done |
-| ceo-inbox URGENT alerts route through coordinator via Bullpen — specialist agents no longer call `signal-send` directly; alerts are requested as Bullpen threads mentioning the coordinator (see [spec 17 §4](17-meeting-debrief.md)) | Done |
-| `ceo-inbox-update-folders` empty-folders guard — refuses to PUT an empty folder set to Nylas, preventing accidental folder wipes | Done |
-| `ceo-inbox-draft-reply` — fails on missing sender rather than substituting an `"unknown"` placeholder in the draft | Done |
-
----
-
-## What's Not Here Yet
-
-- Stage 2 follow-up: tone alignment and persona consistency checks (the judge prompt can be extended without further plumbing changes)
-- CEO review-and-approve / edit / discard flow for blocked messages
-- Web UI for reviewing `outbound.blocked` events
-- Outbound rate limiting per recipient
-- Blocklist management skills (`outbound-block` / `outbound-unblock`)
-
-> **TODO:** Replace this section with a proper "What's Implemented / What's Planned" table
-> once the feature is complete. The outstanding items above are the main gaps.
+- **Cross-channel caller challenge** — role-based caller verification gate exists, but the cross-channel challenge/response flow is not built.
+- **Display-name mismatch check** — no flag when a display name matches a known contact but the address does not.
+- **CEO review/approve/edit/discard flow** — no review-and-approve / edit / discard flow for blocked messages.
+- **Web UI for `outbound.blocked`** — no web UI for reviewing `outbound.blocked` events.
+- **Per-recipient outbound rate limiting** — not implemented.
+- **Blocklist skills** — no `outbound-block` / `outbound-unblock` management skills.
+- **Stage 2 follow-up: tone/persona checks** — tone alignment and persona consistency checks; the judge prompt can be extended without further plumbing changes.

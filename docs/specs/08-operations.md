@@ -411,35 +411,6 @@ curia/
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-| Item | Status |
-|---|---|
-| Layered YAML config — `default.yaml` / `local.yaml` / `production.yaml` with env var interpolation | Done |
-| `docker-compose.yml` — references published GHCR images by default; `docker-compose.dev.yml` restores source builds | Done |
-| `Dockerfile` — multi-stage build, Node 24 (`node:24-slim`, digest-pinned), tsx at runtime; global npm install removed | Done |
-| GHCR image publishing (`docker-publish.yml`) — signed, multi-arch `curia` + `curia-postgres` images; `:edge` on main, semver + `latest` on release (#1343) | Done |
-| `install.sh` self-host installer — image-based, in-container migrate + vault-seed (no host Node/pnpm), topology/TLS prompts, bootstrap-secret summary (#1343) | Done |
-| Optional Caddy TLS overlay (`docker-compose.tls.yml`) — automatic Let's Encrypt HTTPS via `DOMAIN` + `COMPOSE_FILE` | Done |
-| `curia-postgres` fresh-init — probe the real server over TCP so fresh volumes create `curia` instead of crash-looping (#1350) | Done |
-| `GET /api/health` endpoint — three-state (`ok`/`degraded`/`down`) with per-check status for db, bus, channels, browser, MCP, and scheduler | Done |
-| Daily credential canary job — validates LLM tiers, credentials, and external deps; pings heartbeat URLs on success | Done |
-| Structured logging via pino — correct log levels, no `console.log` | Done |
-| No-`console.log` lint rule (ESLint `no-console: error`) | Done |
-| Graceful shutdown — SIGTERM/SIGINT handler with ordered cleanup sequence | Done |
-| DB migrations via `node-pg-migrate` — auto-run on startup | Done |
-| Project directory structure — matches spec layout | Done |
-| Config validation against JSON Schema at startup | Done |
-| Non-root container — production image runs as `curia` user | Done |
-| Trivy scanning — filesystem (npm deps + secrets) on every PR; Docker image scan weekly | Done |
-| OpenSSF Scorecard workflow (`scorecard.yml`) — weekly + push, SARIF to Security tab + securityscorecards.dev, README badge | Done |
-| GitHub Actions pinned to 40-char commit SHAs (Dependabot-maintained) | Done |
-| `GITHUB_TOKEN` permissions scoped at job level (least privilege) | Done |
-| Docker base images pinned by SHA-256 digest; `docker` ecosystem added to Dependabot | Done |
-| Encrypted secrets vault for application secrets; 4 bootstrap env vars in `.env`; `seed-vault` seeding | Done |
-| Branch protection on `main` — required PR review + passing status checks | Done |
-| `CURIA_TEMPFILE_DIR` env var — base directory for the `file-parse` `temp_file_url` path validation (see [spec 03](03-skills-and-execution.md)) | Done |
-| `qs` pinned to ≥ 6.15.2 — closes CVE-2026-8723 | Done |
-| `package-lock.json` (and `yarn.lock`) gitignored — pnpm is the source of truth | Done |
-| `workspace-mcp` upgraded to the `complete` tier — Sheets `create_sheet` and `append_table_rows` available | Done |
-| `curia setup` CLI — guided onboarding wizard for credentials and channel setup | Not Done |
+- **`curia setup` CLI wizard** — guided onboarding wizard for credentials and channel setup; not yet implemented.

@@ -337,32 +337,10 @@ These are out of scope for this feature but identified during design:
 
 ---
 
-## Implementation Status
+## Known Deficiencies
 
-> **Note:** Sections 1–10 were updated to reflect the current implementation
-> (tasks migration, #839). Superseded content has been moved to the Historical
-> appendix at the bottom of this document. The implementation (agent YAML,
-> config, tests) is authoritative; this spec tracks its normative contract.
-
-| Number | Item | Status |
-|---|---|---|
-| 0 | Proactive outbound Signal from scheduled jobs (#374) — prerequisite | Done |
-| 1 | Context bridging v2 (#615) — prerequisite infrastructure | Done |
-| 2 | `debrief:` config block in `config/default.yaml` + startup validation | Done |
-| 3 | `meeting-debrief` agent YAML config (prompt, skills, schedule) | Done |
-| 4 | Detection pipeline — calendar scan, prompt-driven classification via LLM judgment | Done |
-| 5 | LLM judgment — binary YES/NO in agent system prompt (DEFER removed) | Done |
-| 6 | Prompt delivery — Bullpen request to coordinator, context bridge registered | Done |
-| 7 | Reminder check — single reminder via wake_at re-schedule on debrief task | Done |
-| 8 | Response processing — coordinator delegates reply, agent executes follow-ups | Done |
-| 9 | Cross-specialist work via Bullpen — research delegation pattern | Done |
-| 10 | State persistence — platform tasks + config-store phase guards (replaces scheduler-report maps) | Done |
-| 11 | Status queries — coordinator delegates to meeting-debrief (no separate skill) | Done |
-| 12 | Preference learning — store CEO feedback as KG facts, wire into judgment | Done |
-| 13 | Audit events — state transitions, expired entry pruning | Done |
-| 14 | Unit tests — config validation | Done |
-| 15 | Integration tests — end-to-end Bullpen→coordinator→send→reply→delegate flows | Not Done |
-| 16 | Smoke tests — LLM judge scenarios for debrief detection and actions | Not Done |
+- **Integration tests** — end-to-end Bullpen→coordinator→send→reply→delegate flows; not yet implemented.
+- **Smoke tests** — LLM judge scenarios for debrief detection and actions; not yet implemented.
 
 **Design notes (2026-05-25):**
 - Items 4–13 are implemented as prompt-driven logic in the agent's system prompt, not custom handler code — consistent with the ceo-inbox pattern.
