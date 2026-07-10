@@ -49,5 +49,6 @@ describe('outbound.blocked event', () => {
   it('dispatch layer can subscribe to outbound.blocked and outbound.delivered (#1355)', () => {
     expect(canSubscribe('dispatch', 'outbound.blocked')).toBe(true);
     expect(canSubscribe('dispatch', 'outbound.delivered')).toBe(true);
+    expect(canSubscribe('dispatch', 'autonomy.send_blocked')).toBe(true);
   });
 });

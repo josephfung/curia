@@ -19,6 +19,17 @@ describe('content-block-relay', () => {
     expect(isContentFilterRewriteable([{ rule: 'filter-error', detail: 'crash' }])).toBe(false);
   });
 
+  it('treats pii_redactor_error as terminal', () => {
+    expect(isContentFilterRewriteable([{ rule: 'pii_redactor_error', detail: 'crash' }])).toBe(false);
+  });
+
+  it('returns false when terminal and non-terminal findings are mixed', () => {
+    expect(isContentFilterRewriteable([
+      { rule: 'llm-judge-audience-leak', detail: 'leak' },
+      { rule: 'no-reply-recipient', detail: 'automated' },
+    ])).toBe(false);
+  });
+
   it('summarizes judge findings with detail', () => {
     const summary = summarizeBlockFindings([
       { rule: 'llm-judge-audience-leak', detail: 'named calendar specialist' },

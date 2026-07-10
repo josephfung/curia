@@ -228,6 +228,13 @@ export class Dispatcher {
       }
     });
 
+    // autonomy.send_blocked → clear relay tracking when the autonomy gate blocks a relayed send
+    this.bus.subscribe('autonomy.send_blocked', 'dispatch', async (event) => {
+      if (event.parentEventId) {
+        this.relayOutbound.delete(event.parentEventId);
+      }
+    });
+
     this.logger.info(
       { outboundContextBridge: this._outboundContextService != null },
       'Dispatcher registered',

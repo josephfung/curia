@@ -9,7 +9,7 @@
 export const CONTENT_BLOCK_MAX_RETRIES = 2;
 
 /** Rules that indicate a recipient/config problem — rewriting the body cannot fix these. */
-const TERMINAL_BLOCK_RULES = new Set(['no-reply-recipient', 'filter-error']);
+const TERMINAL_BLOCK_RULES = new Set(['no-reply-recipient', 'filter-error', 'pii_redactor_error']);
 
 export interface RelayOutboundContext {
   agentId: string;
@@ -25,7 +25,7 @@ export interface RelayOutboundContext {
 /** Whether the block reason is fixable by rewriting the message body. */
 export function isContentFilterRewriteable(findings: Array<{ rule: string; detail: string }>): boolean {
   if (findings.length === 0) return false;
-  return findings.some((f) => !TERMINAL_BLOCK_RULES.has(f.rule));
+  return findings.every((f) => !TERMINAL_BLOCK_RULES.has(f.rule));
 }
 
 /** Principal-safe summary for the rewrite task — mirrors outbound-gateway policy. */

@@ -20,7 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **ADR-027** — records the decision to add structured secrets with schema-tagged sub-field addressing (`credit_card` first); implementation tracked separately.
+- **ADR-027** — structured secrets with schema-tagged sub-field addressing (`credit_card` first).
 
 ### Changed
 
