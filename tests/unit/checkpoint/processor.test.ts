@@ -12,6 +12,7 @@ function makeStubs() {
     subscribe: vi.fn((eventType: string, _layer: string, handler: (e: unknown) => Promise<void>) => {
       subscribeHandlers.set(eventType, handler);
     }),
+    publish: vi.fn().mockResolvedValue(undefined),
   } as unknown as EventBus;
 
   const executionLayer = {
@@ -151,5 +152,98 @@ describe('ConversationCheckpointProcessor', () => {
 
     expect(stubs.executionLayer.invoke).not.toHaveBeenCalled();
     expect(stubs.queryMock).not.toHaveBeenCalled();
+  });
+
+  it('skips KG extraction for unknown senders on low-trust channels and emits audit event', async () => {
+    stubs.queryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes('audit_log')) {
+        return {
+          rows: [{
+            originator: {
+              contactId: 'attacker',
+              systemRole: null,
+              channel: 'email',
+              initiatedAt: '2026-01-01T00:00:00.000Z',
+              tier: 'unknown',
+            },
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const processor = new ConversationCheckpointProcessor(
+      stubs.bus,
+      stubs.executionLayer,
+      stubs.pool,
+      stubs.logger,
+      { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
+    );
+    processor.register();
+
+    await fireCheckpoint(stubs.subscribeHandlers, {
+      conversationId: 'email:thread-untrusted',
+      agentId: 'coordinator',
+      channelId: 'email',
+      since: '',
+      turns: [{ role: 'user', content: 'poisoned fact' }],
+    });
+
+    expect(stubs.executionLayer.invoke).not.toHaveBeenCalled();
+    expect(stubs.bus.publish).toHaveBeenCalledWith(
+      'system',
+      expect.objectContaining({
+        type: 'checkpoint.extraction_skipped',
+        payload: expect.objectContaining({
+          conversationId: 'email:thread-untrusted',
+          channelId: 'email',
+          reason: 'untrusted_sender',
+          firstExternalTier: 'unknown',
+        }),
+      }),
+    );
+    expect(stubs.queryMock).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO conversation_checkpoints'),
+      ['email:thread-untrusted', 'coordinator', '2026-01-01T00:00:00Z'],
+    );
+  });
+
+  it('still extracts for known senders on low-trust channels', async () => {
+    stubs.queryMock.mockImplementation(async (sql: string) => {
+      if (sql.includes('audit_log')) {
+        return {
+          rows: [{
+            originator: {
+              contactId: 'vendor',
+              systemRole: null,
+              channel: 'email',
+              initiatedAt: '2026-01-01T00:00:00.000Z',
+              tier: 'known',
+            },
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const processor = new ConversationCheckpointProcessor(
+      stubs.bus,
+      stubs.executionLayer,
+      stubs.pool,
+      stubs.logger,
+      { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
+    );
+    processor.register();
+
+    await fireCheckpoint(stubs.subscribeHandlers, {
+      conversationId: 'email:thread-known',
+      agentId: 'coordinator',
+      channelId: 'email',
+      since: '',
+      turns: [{ role: 'user', content: 'Alice is my colleague' }],
+    });
+
+    expect(stubs.executionLayer.invoke).toHaveBeenCalled();
+    expect(stubs.bus.publish).not.toHaveBeenCalled();
   });
 });

@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **KG trust gates** — checkpoint extraction and `memory-store` block untrusted inbound senders. (#1290)
+
 ### Fixed
 
 - **Coordinator** — external replies use first-person single-voice; internal specialist names forbidden. (#1354)
