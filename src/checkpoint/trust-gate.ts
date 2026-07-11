@@ -34,24 +34,25 @@ export async function loadFirstExternalOriginatorTier(
   pool: DbPool,
   conversationId: string,
 ): Promise<ContactTier | null | NoExternalOriginator> {
-  const result = await pool.query<{ originator: unknown }>(
-    `SELECT payload->'metadata'->'originator' AS originator
+  const result = await pool.query<{ tier: string | null }>(
+    `SELECT payload->'metadata'->'originator'->>'tier' AS tier
      FROM audit_log
      WHERE conversation_id = $1
        AND event_type = 'agent.task'
-     ORDER BY timestamp ASC`,
+       AND payload->'metadata'->'originator' IS NOT NULL
+       AND jsonb_typeof(payload->'metadata'->'originator') = 'object'
+       AND (
+         payload->'metadata'->'originator'->>'systemRole' IS NULL
+         OR payload->'metadata'->'originator'->>'systemRole' NOT IN ('principal', 'system', 'agent')
+       )
+     ORDER BY timestamp ASC
+     LIMIT 1`,
     [conversationId],
   );
 
-  for (const row of result.rows) {
-    const raw = row.originator;
-    if (!raw || typeof raw !== 'object') continue;
-    const originator = raw as TaskOriginator;
-    if (!isExternalContactOriginator(originator)) continue;
-    return originator.tier ?? null;
-  }
-
-  return 'none';
+  const row = result.rows[0];
+  if (!row) return 'none';
+  return (row.tier as ContactTier | null) ?? null;
 }
 
 export function resolveChannelTrust(

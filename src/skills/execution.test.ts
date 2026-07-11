@@ -1043,6 +1043,33 @@ describe('autonomy gates', () => {
       expect(classifyAction).not.toHaveBeenCalled();
     });
 
+    it('blocks low-risk KG write skill when initiated by blocked-tier contact (#1290)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('memory-store', 'low'), handler);
+
+      const result = await layer.invoke('memory-store', {}, undefined, originatorMeta('blocked'));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('blocked');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('allows low-risk KG write skill when initiated by known-tier contact (#1290)', async () => {
+      const { registry, layer } = makeLayerWithScore100();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('memory-store', 'low'), handler);
+
+      const result = await layer.invoke('memory-store', {}, undefined, originatorMeta('known'));
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
     it('still allows other low-risk skills when initiated by unknown-tier contact', async () => {
       const { registry, layer } = makeLayerWithScore100();
       const handler = makeHandler('ok');

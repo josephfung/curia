@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ErrorType } from '../errors/types.js';
-import type { DedupConfidence, TrustLevel } from '../contacts/types.js';
+import type { ContactTier, DedupConfidence, TrustLevel } from '../contacts/types.js';
 import type { Sensitivity, NodeType } from '../memory/types.js';
 import type { ActionRisk } from '../skills/types.js';
 
@@ -1061,7 +1061,7 @@ interface CheckpointExtractionSkippedPayload {
   agentId: string;
   channelId: string;
   channelTrust: TrustLevel;
-  firstExternalTier: string | null;
+  firstExternalTier: ContactTier | null;
   skills: string[];
   reason: 'untrusted_sender';
 }

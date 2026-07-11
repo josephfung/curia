@@ -157,17 +157,7 @@ describe('ConversationCheckpointProcessor', () => {
   it('skips KG extraction for unknown senders on low-trust channels and emits audit event', async () => {
     stubs.queryMock.mockImplementation(async (sql: string) => {
       if (sql.includes('audit_log')) {
-        return {
-          rows: [{
-            originator: {
-              contactId: 'attacker',
-              systemRole: null,
-              channel: 'email',
-              initiatedAt: '2026-01-01T00:00:00.000Z',
-              tier: 'unknown',
-            },
-          }],
-        };
+        return { rows: [{ tier: 'unknown' }] };
       }
       return { rows: [] };
     });
@@ -211,17 +201,7 @@ describe('ConversationCheckpointProcessor', () => {
   it('still extracts for known senders on low-trust channels', async () => {
     stubs.queryMock.mockImplementation(async (sql: string) => {
       if (sql.includes('audit_log')) {
-        return {
-          rows: [{
-            originator: {
-              contactId: 'vendor',
-              systemRole: null,
-              channel: 'email',
-              initiatedAt: '2026-01-01T00:00:00.000Z',
-              tier: 'known',
-            },
-          }],
-        };
+        return { rows: [{ tier: 'known' }] };
       }
       return { rows: [] };
     });
