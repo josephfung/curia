@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ErrorType } from '../errors/types.js';
-import type { DedupConfidence } from '../contacts/types.js';
+import type { ContactTier, DedupConfidence, TrustLevel } from '../contacts/types.js';
 import type { Sensitivity, NodeType } from '../memory/types.js';
 import type { ActionRisk } from '../skills/types.js';
 
@@ -1054,6 +1054,24 @@ export interface ConversationCheckpointEvent extends BaseEvent {
   payload: ConversationCheckpointPayload;
 }
 
+// CheckpointExtractionSkippedPayload — emitted by the checkpoint processor when
+// extract-facts / extract-relationships are skipped due to untrusted sender policy (#1290).
+interface CheckpointExtractionSkippedPayload {
+  conversationId: string;
+  agentId: string;
+  channelId: string;
+  channelTrust: TrustLevel;
+  firstExternalTier: ContactTier | null;
+  skills: string[];
+  reason: 'untrusted_sender';
+}
+
+export interface CheckpointExtractionSkippedEvent extends BaseEvent {
+  type: 'checkpoint.extraction_skipped';
+  sourceLayer: 'system';
+  payload: CheckpointExtractionSkippedPayload;
+}
+
 // Task lifecycle events — emitted by TaskRepo (execution layer).
 export interface TaskCreatedEvent extends BaseEvent {
   type: 'task.created';
@@ -1161,6 +1179,7 @@ export type BusEvent =
   | ScheduleDriftPausedEvent  // Scheduler: job paused due to intent drift detection
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
   | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
+  | CheckpointExtractionSkippedEvent // Checkpoint pipeline: KG extraction skipped for trust policy (#1290)
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
   | LlmErrorEvent            // #434: failed LLM call — used by HealthService for tier health tracking
   | ModelFallbackEngagedEvent  // #813: primary tier model unavailable, routing to fallback tier
@@ -1623,6 +1642,18 @@ export function createConversationCheckpoint(
     timestamp: new Date(),
     sourceLayer: 'dispatch',
     type: 'conversation.checkpoint',
+    payload,
+  };
+}
+
+export function createCheckpointExtractionSkipped(
+  payload: CheckpointExtractionSkippedPayload,
+): CheckpointExtractionSkippedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    sourceLayer: 'system',
+    type: 'checkpoint.extraction_skipped',
     payload,
   };
 }

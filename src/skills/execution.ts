@@ -22,7 +22,7 @@ import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput } from '../contacts/principal-recipient.js';
 import type { ChannelIdentity } from '../contacts/types.js';
-import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence } from '../autonomy/escalation-policy.js';
+import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_SKILLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import type { ContactTier } from '../contacts/types.js';
@@ -873,6 +873,23 @@ export class ExecutionLayer {
           // external-originated woken task still has its tier enforced here.
           const initiatingTier = getInitiatingTier(effectiveTaskMetadata);
           if (initiatingTier !== null && manifest.action_risk !== 'none') {
+            // KG writes from unknown/blocked external senders are not prompt-only (#1290).
+            if (
+              KG_WRITE_SKILLS.has(skillName) &&
+              (initiatingTier === 'unknown' || initiatingTier === 'blocked')
+            ) {
+              skillLogger.info(
+                { skillName, initiatingTier, actionRisk: manifest.action_risk },
+                'autonomy gate: skill blocked — KG write from untrusted external originator (Gate C, #1290)',
+              );
+              const gateCError = await this.buildTierGateError(
+                skillName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
+              );
+              return {
+                success: false,
+                error: this.wrapSkillError(gateCError),
+              };
+            }
             const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
             const isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
               skillName,

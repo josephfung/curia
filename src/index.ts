@@ -2232,7 +2232,9 @@ async function main(): Promise<void> {
 
   // Conversation checkpoint processor — System Layer subscriber that runs background
   // memory skills (extract-relationships, etc.) at end of each conversation.
-  const checkpointProcessor = new ConversationCheckpointProcessor(bus, executionLayer, pool, logger);
+  const checkpointProcessor = new ConversationCheckpointProcessor(
+    bus, executionLayer, pool, logger, authConfig?.channelPolicies,
+  );
   checkpointProcessor.register();
 
   // BullpenDispatcher — routes agent.discuss → agent.task for inter-agent Bullpen discussions.
