@@ -86,8 +86,8 @@ importers:
         specifier: ^14.3.0
         version: 14.3.0
       node-html-parser:
-        specifier: ^8.0.3
-        version: 8.0.3
+        specifier: ^9.0.0
+        version: 9.0.0
       node-pg-migrate:
         specifier: ^8.0.4
         version: 8.0.4(@types/pg@8.20.0)(pg@8.22.0)
@@ -4118,8 +4118,8 @@ packages:
     resolution: {integrity: sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ==}
     engines: {node: '>= 6.13.0'}
 
-  node-html-parser@8.0.3:
-    resolution: {integrity: sha512-ilV20e83nDfiFoEyhlvgqks23Hmy6pySF6UNb8DpgmxnTbXDGgShYKzH2+7ctJK42LXyo+IFOgxCkXmmbacm8w==}
+  node-html-parser@9.0.0:
+    resolution: {integrity: sha512-MhdaHPyxnyYu/sf0TpiRvDnTrkum0UKHC7FdbDGIUQNlx3I7xzwXoyV0eMUMv/XU+lkJT1glOUzpDPq7b2p1Ew==}
 
   node-int64@0.4.0:
     resolution: {integrity: sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw==}
@@ -9647,7 +9647,7 @@ snapshots:
   node-forge@1.4.0:
     optional: true
 
-  node-html-parser@8.0.3:
+  node-html-parser@9.0.0:
     dependencies:
       css-select: 5.2.2
       entities: 8.0.0
