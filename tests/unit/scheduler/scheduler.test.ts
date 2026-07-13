@@ -165,6 +165,19 @@ describe('Scheduler', () => {
       expect(recoverSpy).toHaveBeenCalled();
     });
 
+    it('watchdog tick alone does not stamp lastTickAt — only pollDueJobs does (#1359)', async () => {
+      pool.query.mockResolvedValue({ rows: [] });
+      vi.spyOn(scheduler, 'recoverStuckJobs').mockResolvedValue();
+      // Prevent the 30s poll interval from firing so only the watchdog runs.
+      vi.spyOn(scheduler, 'pollDueJobs').mockResolvedValue();
+
+      scheduler.start();
+
+      await vi.advanceTimersByTimeAsync(WATCHDOG_INTERVAL_MS);
+
+      expect(scheduler.lastTickAt).toBeNull();
+    });
+
     it('stop clears the watchdog interval', async () => {
       pool.query.mockResolvedValue({ rows: [] });
 
@@ -192,6 +205,23 @@ describe('Scheduler', () => {
       // Only the SELECT query, no UPDATEs or bus publishes
       expect(pool.query).toHaveBeenCalledOnce();
       expect(bus.publish).not.toHaveBeenCalled();
+    });
+
+    it('stamps lastTickAt on every call — this is the liveness signal checkScheduler reads (#1359)', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+      expect(scheduler.lastTickAt).toBeNull();
+
+      await scheduler.pollDueJobs();
+
+      expect(scheduler.lastTickAt).toBeInstanceOf(Date);
+    });
+
+    it('stamps lastTickAt even when the due-jobs query throws', async () => {
+      pool.query.mockRejectedValueOnce(new Error('connection refused'));
+
+      await scheduler.pollDueJobs();
+
+      expect(scheduler.lastTickAt).toBeInstanceOf(Date);
     });
 
     it('claims due jobs and fires them (publishes schedule.fired + agent.task)', async () => {
