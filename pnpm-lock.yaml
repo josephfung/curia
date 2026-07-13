@@ -65,8 +65,8 @@ importers:
         specifier: ^2.2.0
         version: 2.2.0(cytoscape@3.34.0)
       fastify:
-        specifier: ^5.9.0
-        version: 5.9.0
+        specifier: ^5.10.0
+        version: 5.10.0
       googleapis:
         specifier: ^173.0.0
         version: 173.0.0
@@ -3168,11 +3168,8 @@ packages:
   fast-json-stable-stringify@2.1.0:
     resolution: {integrity: sha512-lhd/wF+Lk98HZoTCtlVraHtfh5XYijIjalXck7saUtuanSDyLMxnHhSXEDJqHxD7msR8D0uCmqlkwjCV8xvwHw==}
 
-  fast-json-stringify@6.4.0:
-    resolution: {integrity: sha512-ibRCQ0GZKJIQ+P3Et1h0LhPgp3PMTYk0MH8O+kW3lNYsvmaQww5Nn3f1jf73Q0jR1Yz3a1CDP4/NZD3vOajWJQ==}
-
-  fast-json-stringify@7.0.0:
-    resolution: {integrity: sha512-YV53BAbR3Qwq37wfD1oZ97YJ0nYj6CwfzKXQ38ock9XxI2EnLOdl5psKms6Evook6ACckytZJOaKY0ThmIi1uw==}
+  fast-json-stringify@7.0.1:
+    resolution: {integrity: sha512-eRSayARSbbwlBjpP4vnTTIRD5QPcIrmihPxDeN1DtKnHPg66UuJLx+8hlK1kaFdjvzyQ/dzALoi4vwAQ+T+iZA==}
 
   fast-levenshtein@2.0.6:
     resolution: {integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==}
@@ -3222,8 +3219,8 @@ packages:
   fastify-plugin@6.0.0:
     resolution: {integrity: sha512-fZOty7z3O7vOliF6d8bHE3wiEh1KcNnKEQensSgTk9C1DvN6nRLS++XVd86v33Hw/8u9Un8A1zDrQ8ujcQDHEg==}
 
-  fastify@5.9.0:
-    resolution: {integrity: sha512-VMS5lE0zj+MZlJpQa3Qv5iGjfun0H2N7VRgoBwpcTNQ2bdIQpv7fDpb+HGteGbicBsGkzGS+X+hdx9mmrfWuHQ==}
+  fastify@5.10.0:
+    resolution: {integrity: sha512-A9L0ziuWGQHgEEVgF3davQ9vbD93IuX+lo2IsxapQmu5b/Y/ynn9m9K5JHt9dvyJXOFc5iN0Zk5GHEOqnzhWjg==}
 
   fastq@1.20.1:
     resolution: {integrity: sha512-GGToxJ/w1x32s/D2EKND7kTil4n8OVk/9mycTc4VDza13lOvpUZTGX3mFSCtV9ksdGBVzvsyAVLM6mHFThxXxw==}
@@ -6346,7 +6343,7 @@ snapshots:
 
   '@fastify/fast-json-stringify-compiler@5.1.0':
     dependencies:
-      fast-json-stringify: 7.0.0
+      fast-json-stringify: 7.0.1
 
   '@fastify/forwarded@3.0.1': {}
 
@@ -8576,16 +8573,7 @@ snapshots:
 
   fast-json-stable-stringify@2.1.0: {}
 
-  fast-json-stringify@6.4.0:
-    dependencies:
-      '@fastify/merge-json-schemas': 0.2.1
-      ajv: 8.20.0
-      ajv-formats: 3.0.1(ajv@8.20.0)
-      fast-uri: 4.1.0
-      json-schema-ref-resolver: 3.0.0
-      rfdc: 1.4.1
-
-  fast-json-stringify@7.0.0:
+  fast-json-stringify@7.0.1:
     dependencies:
       '@fastify/merge-json-schemas': 0.2.1
       ajv: 8.20.0
@@ -8646,7 +8634,7 @@ snapshots:
 
   fastify-plugin@6.0.0: {}
 
-  fastify@5.9.0:
+  fastify@5.10.0:
     dependencies:
       '@fastify/ajv-compiler': 4.0.5
       '@fastify/error': 4.2.0
@@ -8654,7 +8642,7 @@ snapshots:
       '@fastify/proxy-addr': 5.1.0
       abstract-logging: 2.0.1
       avvio: 9.2.0
-      fast-json-stringify: 6.4.0
+      fast-json-stringify: 7.0.1
       find-my-way: 9.6.0
       light-my-request: 6.6.0
       pino: 10.3.1
