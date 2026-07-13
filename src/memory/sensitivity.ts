@@ -1,8 +1,9 @@
 // sensitivity.ts — content-based sensitivity classification for KG nodes.
 //
 // The SensitivityClassifier inspects a node's label and properties at creation
-// time and assigns a Sensitivity level. Rules are loaded from config/default.yaml
-// at startup so they can be tuned without code changes.
+// time and assigns a Sensitivity level. Rules come from the `sensitivity_rules`
+// block of the merged config (config/default.yaml + config/local.yaml, see
+// config.ts#loadYamlConfig) so they can be tuned without code changes.
 //
 // Classification is keyword-based: the label and all string property values are
 // concatenated into a single lowercase search string and checked against each
@@ -11,8 +12,6 @@
 // When no rule matches, the default is 'internal' — callers that don't specify
 // sensitivity get a conservative default that still allows normal operations.
 
-import { readFileSync } from 'node:fs';
-import * as yaml from 'js-yaml';
 import type { Sensitivity } from './types.js';
 import { SENSITIVITY_LEVELS } from './types.js';
 
@@ -64,9 +63,10 @@ export function maxSensitivity(a: Sensitivity, b: Sensitivity): Sensitivity {
 /**
  * Classifies KG node content into a Sensitivity level.
  *
- * Instantiate once at startup via SensitivityClassifier.fromYaml() or
- * SensitivityClassifier.fromRules() (for tests). The instance is stateless
- * and safe to share across concurrent requests.
+ * Instantiate once at startup via SensitivityClassifier.fromRules(), passing
+ * the validated `sensitivity_rules` from the merged config (see
+ * parseSensitivityRules() below, consumed by config.ts#loadYamlConfig). The
+ * instance is stateless and safe to share across concurrent requests.
  */
 export class SensitivityClassifier {
   // Rules sorted highest-sensitivity-first so we can return on first match
@@ -115,65 +115,61 @@ export class SensitivityClassifier {
     return 'internal';
   }
 
-  /**
-   * Load rules from a YAML config file.
-   *
-   * Expects the YAML to contain a top-level `sensitivity_rules` array where each
-   * entry has `category`, `sensitivity`, and `patterns` fields.
-   *
-   * Validates that all sensitivity values are known levels and throws if any are
-   * unrecognised — misconfigured rules would silently under-protect data otherwise.
-   *
-   * @param configPath Absolute path to the YAML file (e.g. resolve('config/default.yaml'))
-   */
-  static fromYaml(configPath: string): SensitivityClassifier {
-    const raw = readFileSync(configPath, 'utf-8');
-    const parsed = yaml.load(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`SensitivityClassifier: invalid YAML root in ${configPath}`);
-    }
-
-    const rulesRaw = (parsed as Record<string, unknown>)['sensitivity_rules'];
-    if (!Array.isArray(rulesRaw)) {
-      throw new Error(`SensitivityClassifier: 'sensitivity_rules' missing or not an array in ${configPath}`);
-    }
-
-    const rules: SensitivityRule[] = rulesRaw.map((entry: unknown, i: number) => {
-      const e = entry as Record<string, unknown>;
-      const category = String(e['category'] ?? '');
-      const sensitivity = e['sensitivity'] as string;
-      const patterns = e['patterns'];
-
-      if (!category) throw new Error(`sensitivity_rules[${i}]: missing 'category'`);
-      if (!(SENSITIVITY_LEVELS as readonly string[]).includes(sensitivity)) {
-        throw new Error(`sensitivity_rules[${i}]: unknown sensitivity '${sensitivity}'`);
-      }
-      if (!Array.isArray(patterns) || patterns.length === 0) {
-        throw new Error(`sensitivity_rules[${i}]: 'patterns' must be a non-empty array`);
-      }
-
-      // Normalise to lowercase and trim at load time so classify() never needs to.
-      // Reject blank entries: searchText.includes('') is always true, which would
-      // make the rule match unconditionally and override all other classifications.
-      const normalizedPatterns = patterns.map((p: unknown) => String(p).trim().toLowerCase());
-      if (normalizedPatterns.some((p) => p.length === 0)) {
-        throw new Error(`sensitivity_rules[${i}]: patterns must not contain empty values`);
-      }
-
-      return {
-        category,
-        sensitivity: sensitivity as Sensitivity,
-        patterns: normalizedPatterns,
-      };
-    });
-
-    return new SensitivityClassifier(rules);
-  }
-
-  /** Construct directly from a rules array. Useful in tests. */
+  /** Construct directly from a validated rules array (see parseSensitivityRules()). */
   static fromRules(rules: SensitivityRule[]): SensitivityClassifier {
     return new SensitivityClassifier(rules);
   }
+}
+
+/**
+ * Parse and validate a raw `sensitivity_rules` value, as produced by yaml.load()
+ * on the merged config (config/default.yaml + config/local.yaml — see
+ * config.ts#loadYamlConfig). Each entry must have `category`, `sensitivity`, and
+ * `patterns` fields; `sensitivity` must be a known level.
+ *
+ * Normalises patterns to lowercase/trim at parse time so classify() never needs
+ * to. Rejects blank pattern entries: searchText.includes('') is always true,
+ * which would make the rule match unconditionally and override every other
+ * classification.
+ *
+ * Throws on any malformed entry — misconfigured rules would silently
+ * under-protect data otherwise, so a bad override must fail startup loudly
+ * rather than being ignored (#1369).
+ *
+ * @param rulesRaw Parsed YAML value of the `sensitivity_rules` key.
+ * @param source   Human-readable origin for error messages (e.g. a file path
+ *                 or "merged config").
+ */
+export function parseSensitivityRules(rulesRaw: unknown, source: string): SensitivityRule[] {
+  if (!Array.isArray(rulesRaw)) {
+    throw new Error(`sensitivity_rules must be an array (in ${source})`);
+  }
+
+  return rulesRaw.map((entry: unknown, i: number) => {
+    const e = entry as Record<string, unknown>;
+    const category = String(e['category'] ?? '');
+    const sensitivity = e['sensitivity'] as string;
+    const patterns = e['patterns'];
+
+    if (!category) throw new Error(`sensitivity_rules[${i}]: missing 'category' (in ${source})`);
+    if (!(SENSITIVITY_LEVELS as readonly string[]).includes(sensitivity)) {
+      throw new Error(`sensitivity_rules[${i}]: unknown sensitivity '${sensitivity}' (in ${source})`);
+    }
+    if (!Array.isArray(patterns) || patterns.length === 0) {
+      throw new Error(`sensitivity_rules[${i}]: 'patterns' must be a non-empty array (in ${source})`);
+    }
+
+    const normalizedPatterns = patterns.map((p: unknown) => String(p).trim().toLowerCase());
+    if (normalizedPatterns.some((p) => p.length === 0)) {
+      throw new Error(`sensitivity_rules[${i}]: patterns must not contain empty values (in ${source})`);
+    }
+
+    return {
+      category,
+      sensitivity: sensitivity as Sensitivity,
+      patterns: normalizedPatterns,
+    };
+  });
 }
 
 // -- Internal helpers --

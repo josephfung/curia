@@ -1,6 +1,6 @@
 // src/memory/sensitivity.test.ts
 import { describe, it, expect } from 'vitest';
-import { SensitivityClassifier } from './sensitivity.js';
+import { SensitivityClassifier, parseSensitivityRules } from './sensitivity.js';
 
 describe('SensitivityClassifier', () => {
   it('classifies financial content as confidential based on keyword rule', () => {
@@ -39,5 +39,54 @@ describe('SensitivityClassifier', () => {
     ]);
     // Both match — restricted wins
     expect(classifier.classify('board revenue discussion', {})).toBe('restricted');
+  });
+});
+
+describe('parseSensitivityRules', () => {
+  it('normalizes patterns to lowercase and trims whitespace', () => {
+    const rules = parseSensitivityRules(
+      [{ category: 'financial', sensitivity: 'confidential', patterns: ['  Revenue  ', 'BUDGET'] }],
+      'test',
+    );
+    expect(rules).toEqual([
+      { category: 'financial', sensitivity: 'confidential', patterns: ['revenue', 'budget'] },
+    ]);
+  });
+
+  it('throws when the input is not an array', () => {
+    expect(() => parseSensitivityRules({ not: 'an array' }, 'test')).toThrow('must be an array');
+  });
+
+  it('throws when an entry is missing category', () => {
+    expect(() =>
+      parseSensitivityRules([{ sensitivity: 'confidential', patterns: ['x'] }], 'test'),
+    ).toThrow("missing 'category'");
+  });
+
+  it('throws when sensitivity is not a known level', () => {
+    expect(() =>
+      parseSensitivityRules([{ category: 'x', sensitivity: 'ultra', patterns: ['x'] }], 'test'),
+    ).toThrow("unknown sensitivity 'ultra'");
+  });
+
+  it('throws when patterns is empty', () => {
+    expect(() =>
+      parseSensitivityRules([{ category: 'x', sensitivity: 'confidential', patterns: [] }], 'test'),
+    ).toThrow("'patterns' must be a non-empty array");
+  });
+
+  it('throws when a pattern is blank after trimming', () => {
+    expect(() =>
+      parseSensitivityRules([{ category: 'x', sensitivity: 'confidential', patterns: ['  '] }], 'test'),
+    ).toThrow('patterns must not contain empty values');
+  });
+
+  it('the resulting rules feed directly into SensitivityClassifier.fromRules', () => {
+    const rules = parseSensitivityRules(
+      [{ category: 'financial', sensitivity: 'confidential', patterns: ['Revenue'] }],
+      'test',
+    );
+    const classifier = SensitivityClassifier.fromRules(rules);
+    expect(classifier.classify('Q3 revenue report', {})).toBe('confidential');
   });
 });

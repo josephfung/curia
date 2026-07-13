@@ -517,23 +517,19 @@ async function main(): Promise<void> {
   // If not configured, agents still work — they just don't have KG access.
   let entityMemory: EntityMemory | undefined;
   if (config.openaiApiKey) {
-    // Sensitivity classifier — loads rules from config/default.yaml at startup (#200).
-    // Resolved from __dirname so the path is stable regardless of which directory the
-    // process was launched from (systemd, Docker, worktree, test harness, etc.).
-    // Fail fast with a structured log if the file is missing or malformed — the service
-    // cannot safely protect sensitive data without classification rules.
-    let sensitivityClassifier: SensitivityClassifier;
-    const sensitivityConfigPath = path.resolve(import.meta.dirname, '../config/default.yaml');
-    try {
-      sensitivityClassifier = SensitivityClassifier.fromYaml(sensitivityConfigPath);
-      logger.info({ configPath: sensitivityConfigPath }, 'Sensitivity classifier loaded');
-    } catch (err) {
+    // Sensitivity classifier — built from the already-merged config (default.yaml +
+    // local.yaml, see loadYamlConfig()) so operator overrides in local.yaml actually
+    // take effect rather than being silently ignored (#1369). Malformed rules already
+    // failed startup inside loadYamlConfig(); we still guard against an absent rules
+    // list, since the service cannot safely protect sensitive data without any.
+    if (!yamlConfig.sensitivity_rules) {
       logger.fatal(
-        { err, configPath: sensitivityConfigPath },
-        'Failed to load sensitivity classifier — check that config/default.yaml exists and contains a valid sensitivity_rules array',
+        'sensitivity_rules missing from merged config — check that config/default.yaml contains a sensitivity_rules array',
       );
       process.exit(1);
     }
+    const sensitivityClassifier = SensitivityClassifier.fromRules(yamlConfig.sensitivity_rules);
+    logger.info({ ruleCount: yamlConfig.sensitivity_rules.length }, 'Sensitivity classifier loaded');
 
     const embeddingService = EmbeddingService.createWithOpenAI(
       config.openaiApiKey,
