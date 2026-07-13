@@ -3,7 +3,14 @@ import type { ExecutionLayer } from '../skills/execution.js';
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { ConversationCheckpointEvent } from '../bus/events.js';
+import { createCheckpointExtractionSkipped } from '../bus/events.js';
 import type { SkillResult } from '../skills/types.js';
+import type { ChannelPolicyConfig } from '../contacts/types.js';
+import {
+  loadFirstExternalOriginatorTier,
+  resolveChannelTrust,
+  shouldSkipCheckpointKgExtraction,
+} from './trust-gate.js';
 
 // Skills invoked at every checkpoint, in addition to any future skills.
 // Add new checkpoint skills here — no changes to Dispatch or the runtime required.
@@ -18,6 +25,7 @@ export class ConversationCheckpointProcessor {
     private executionLayer: ExecutionLayer,
     private pool: DbPool,
     private logger: Logger,
+    private channelPolicies?: Record<string, ChannelPolicyConfig>,
   ) {}
 
   register(): void {
@@ -30,6 +38,46 @@ export class ConversationCheckpointProcessor {
     const { conversationId, agentId, channelId, turns } = event.payload;
 
     if (turns.length === 0) return;
+
+    const channelTrust = resolveChannelTrust(channelId, this.channelPolicies);
+    const firstExternalTier = await loadFirstExternalOriginatorTier(this.pool, conversationId);
+    const skipKgExtraction = shouldSkipCheckpointKgExtraction(channelTrust, firstExternalTier);
+
+    if (skipKgExtraction) {
+      const skillNames = CHECKPOINT_SKILLS.map(s => s.name);
+      this.logger.info(
+        {
+          conversationId,
+          agentId,
+          channelId,
+          channelTrust,
+          firstExternalTier: firstExternalTier === 'none' ? null : firstExternalTier,
+          skills: skillNames,
+        },
+        'Checkpoint KG extraction skipped — untrusted external originator on low-trust channel (#1290)',
+      );
+      try {
+        await this.bus.publish(
+          'system',
+          createCheckpointExtractionSkipped({
+            conversationId,
+            agentId,
+            channelId,
+            channelTrust,
+            firstExternalTier: firstExternalTier === 'none' ? null : firstExternalTier,
+            skills: skillNames,
+            reason: 'untrusted_sender',
+          }),
+        );
+      } catch (err) {
+        this.logger.error(
+          { err, conversationId, agentId },
+          'Failed to publish checkpoint.extraction_skipped audit event — watermark will still advance',
+        );
+      }
+      await this.advanceWatermark(event, conversationId, agentId, turns.length);
+      return;
+    }
 
     const transcript = turns
       .map(t => `${t.role === 'user' ? 'User' : 'Curia'}: ${t.content}`)
@@ -73,6 +121,15 @@ export class ConversationCheckpointProcessor {
       }
     });
 
+    await this.advanceWatermark(event, conversationId, agentId, turns.length);
+  }
+
+  private async advanceWatermark(
+    event: ConversationCheckpointEvent,
+    conversationId: string,
+    agentId: string,
+    turnCount: number,
+  ): Promise<void> {
     // Advance the watermark to the batch's upper-bound timestamp (not now()).
     // Using now() would advance the watermark past any turns that arrived between
     // the Dispatcher's DB read and this upsert, causing those turns to be silently
@@ -100,7 +157,7 @@ export class ConversationCheckpointProcessor {
     }
 
     this.logger.info(
-      { conversationId, agentId, turnCount: turns.length },
+      { conversationId, agentId, turnCount },
       'Conversation checkpoint complete',
     );
   }
