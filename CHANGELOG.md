@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Dispatcher** — content-filter blocks on relayed replies retry with reason, then salvage draft. (#1355)
 - **Scheduler** — liveness check no longer flaps `fail` every few minutes on a healthy scheduler. (#1359)
 - **`sensitivity_rules`** — now read from the merged config, so `local.yaml` overrides actually take effect. (#1369)
+- **`security.extra_injection_patterns`** — same fix: now parsed from the merged config instead of `default.yaml` directly. (#1397)
 
 ### Added
 

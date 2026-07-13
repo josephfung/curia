@@ -290,6 +290,10 @@ export interface YamlConfig {
     };
   };
   security?: {
+    /** Operator-supplied prompt-injection patterns, parsed by parseExtraInjectionPatterns()
+     *  (src/dispatch/security-config-loader.ts). Overridable via config/local.yaml; like
+     *  every other array in this config, an override REPLACES this list rather than
+     *  extending it (see deepMerge below) (#1397). */
     extra_injection_patterns?: Array<{ regex: string; label: string }>;
     trust_score?: {
       /** Weight for the channel trust component (0–1). Default: 0.4 */

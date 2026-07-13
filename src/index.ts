@@ -81,7 +81,7 @@ import { OutboundGateway } from './skills/outbound-gateway.js';
 import { ExportControlService, resolveExportControls } from './security/export-controls.js';
 import { InboundScanner } from './dispatch/inbound-scanner.js';
 import { RateLimiter } from './dispatch/rate-limiter.js';
-import { loadExtraInjectionPatterns, type ExtraInjectionPattern } from './dispatch/security-config-loader.js';
+import { parseExtraInjectionPatterns, type ExtraInjectionPattern } from './dispatch/security-config-loader.js';
 import { parseExtraPiiPatterns, getMissingBuiltInPatterns, getBuiltInPatternCount } from './pii/scrubber.js';
 import type { PiiPattern } from './pii/scrubber.js';
 import { PiiRedactor } from './dispatch/pii-redactor.js';
@@ -2145,19 +2145,22 @@ async function main(): Promise<void> {
     'PII scrubber active',
   );
 
-  // Layer 1 inbound injection scanner — loads extra patterns from config/default.yaml
-  // and constructs the scanner. Non-fatal on loader error: a broken custom pattern
-  // entry should warn loudly but not prevent startup (built-in defaults still protect).
-  // configDir is already defined above (used for auth config and yaml config loading).
-  // Narrow the try block to loadExtraInjectionPatterns() only — the constructor and
-  // logger.info are not config-loading concerns and should not be silenced by this catch.
+  // Layer 1 inbound injection scanner — parses extra patterns from the already-merged
+  // config (default.yaml + local.yaml, see loadYamlConfig()) so operator overrides in
+  // local.yaml actually take effect (#1397). Non-fatal on parse error: a broken custom
+  // pattern entry should warn loudly but not prevent startup (built-in defaults still protect).
+  // Narrow the try block to parseExtraInjectionPatterns() only — the constructor and
+  // logger.info are not config-parsing concerns and should not be silenced by this catch.
   let extraInjectionPatterns: ExtraInjectionPattern[] = [];
   try {
-    extraInjectionPatterns = loadExtraInjectionPatterns(configDir);
+    extraInjectionPatterns = parseExtraInjectionPatterns(
+      yamlConfig.security?.extra_injection_patterns ?? [],
+      'security.extra_injection_patterns (config/default.yaml merged with config/local.yaml)',
+    );
   } catch (err) {
     // Warn and fall back to zero extra patterns — built-in defaults still protect.
     // A misconfigured extra pattern entry should not block startup entirely.
-    logger.warn({ err }, 'Failed to load extra injection patterns from config — using built-in defaults only');
+    logger.warn({ err }, 'Failed to parse extra injection patterns from config — using built-in defaults only');
   }
   const injectionScanner = new InboundScanner({ extraPatterns: extraInjectionPatterns });
   logger.info(
