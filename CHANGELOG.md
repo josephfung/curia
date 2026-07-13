@@ -22,6 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Coordinator** — external replies use first-person single-voice; internal specialist names forbidden. (#1354)
 - **Dispatcher** — content-filter blocks on relayed replies retry with reason, then salvage draft. (#1355)
 - **Scheduler** — liveness check no longer flaps `fail` every few minutes on a healthy scheduler. (#1359)
+- **`sensitivity_rules`** — now read from the merged config, so `local.yaml` overrides actually take effect. (#1369)
 
 ### Added
 

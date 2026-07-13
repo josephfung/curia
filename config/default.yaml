@@ -303,6 +303,12 @@ dreaming:
 # checked before 'confidential', so the most protective rule always wins.
 # Add patterns in lowercase; matching is case-insensitive substring search across
 # the node label and all string property values.
+#
+# Operator-overridable via config/local.yaml (#1369). Merge semantics are
+# replace, not extend, like every other array in this config: a
+# `sensitivity_rules` list in local.yaml REPLACES this entire list rather than
+# adding to it. To customize, copy the rules you want to keep from here into
+# local.yaml alongside your additions.
 sensitivity_rules:
   # Credentials — blocked from bulk export entirely
   - category: credentials

@@ -1,6 +1,7 @@
 import * as yaml from 'js-yaml';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
+import { parseSensitivityRules, type SensitivityRule } from './memory/sensitivity.js';
 
 // ---------------------------------------------------------------------------
 // Multi-account email config types
@@ -374,6 +375,17 @@ export interface YamlConfig {
       filePaths?: string[];
     };
   };
+  /**
+   * KG node sensitivity classification rules, used for bulk-export gating (#200).
+   * Each entry maps a category + keyword pattern list to a sensitivity level;
+   * the most restrictive matching rule wins (see SensitivityClassifier).
+   *
+   * Merge semantics: like every other array in this config, an override in
+   * config/local.yaml REPLACES the shipped default list wholesale rather than
+   * extending it (see deepMerge below) — an operator who only wants to add a
+   * category must copy the full shipped list into local.yaml and append to it (#1369).
+   */
+  sensitivity_rules?: SensitivityRule[];
   /**
    * Escalation-line policy judge (issue #948).
    * Classifies disclosure sensitivity and action consequence, then maps
@@ -1075,6 +1087,16 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         throw new Error(`tasks.resumableCeilings.throughputDivergenceRatio must be in (0, 1], got: ${String(c.throughputDivergenceRatio)}`);
       }
     }
+  }
+
+  // Validate + normalize sensitivity_rules if present. This governs KG bulk-export
+  // gating, so a malformed override must fail startup loudly rather than being
+  // silently ignored (#1369) — same fail-fast contract as every other block above.
+  if (config.sensitivity_rules !== undefined) {
+    config.sensitivity_rules = parseSensitivityRules(
+      config.sensitivity_rules,
+      'sensitivity_rules (config/default.yaml merged with config/local.yaml)',
+    );
   }
 
   return config;
