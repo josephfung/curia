@@ -136,8 +136,11 @@ export class Scheduler {
   // In-memory only — resets on process restart (a missed check is not a security failure).
   private burstCounts = new Map<string, number>();
 
-  /** Timestamp of the most recent watchdog tick. Null until the first tick runs.
-   *  Read by HealthService to detect a stalled scheduler. */
+  /** Timestamp of the most recent pollDueJobs tick. Null until the first tick runs.
+   *  Read by HealthService to detect a stalled scheduler. Stamped on the 30s poll
+   *  cadence (POLL_INTERVAL_MS), not the 5-min watchdog — the watchdog interval is
+   *  slower than scheduler_max_tick_s, which flapped the liveness check to 'fail'
+   *  for ~3 of every 5 minutes on an otherwise healthy scheduler (#1359). */
   public lastTickAt: Date | null = null;
 
   constructor(config: SchedulerConfig) {
@@ -194,8 +197,8 @@ export class Scheduler {
     }, POLL_INTERVAL_MS);
 
     // Watchdog: periodically recover jobs that got stuck in 'running' state.
+    // Liveness (lastTickAt) is stamped by pollDueJobs, not here — see its comment.
     this.watchdogHandle = setInterval(() => {
-      this.lastTickAt = new Date();
       this.recoverStuckJobs().catch((err) => {
         this.logger.error({ err }, 'Unhandled error in recoverStuckJobs watchdog');
       });
@@ -266,8 +269,14 @@ export class Scheduler {
    *
    * Uses FOR UPDATE SKIP LOCKED to safely claim jobs in a concurrent environment
    * (multiple scheduler instances won't double-fire the same job).
+   *
+   * Stamps lastTickAt on every call, before the query — this is the scheduler's actual
+   * 30s liveness cadence, read by HealthService's checkScheduler (#1359). Stamped even
+   * if the query below fails, so a transient DB hiccup doesn't itself read as a stalled
+   * scheduler — the poll loop running at all is the signal, not query success.
    */
   async pollDueJobs(): Promise<void> {
+    this.lastTickAt = new Date();
     try {
       const sql = `
         SELECT sj.*,
