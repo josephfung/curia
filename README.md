@@ -168,10 +168,10 @@ The install bundle (`install.sh`, `docker-compose*.yml`, `env.example`, `Caddyfi
 cosign verify-blob --bundle SHA256SUMS.sigstore \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github.com/josephfung/curia/.github/workflows/release.yml@' \
-  SHA256SUMS
-
-sha256sum -c SHA256SUMS
+  SHA256SUMS && sha256sum -c SHA256SUMS
 ```
+
+`cosign verify-blob` prints `Verified OK` on success and exits non-zero on failure — the `&&` above ensures a failed signature check stops before `sha256sum -c` (which only checks hashes, not authenticity) can print a misleading pass. If either command fails, do not trust the downloaded assets.
 
 ---
 
