@@ -1,0 +1,26 @@
+# Developer Certificate of Origin (DCO) enforcement.
+#
+# Read by the DCO GitHub App (https://github.com/apps/dco), which runs as a
+# required status check on pull requests. Every commit must carry a valid
+# `Signed-off-by:` trailer (add one with `git commit -s`) asserting the author is
+# legally authorized to make the contribution. This satisfies OpenSSF Baseline
+# criterion OSPS-LE-01.01 ("all code contributors assert authorization on every
+# commit").
+#
+# `require.members` is intentionally left at its default (true): sign-off is
+# enforced for EVERYONE, including org members and agent-authored PRs. Exempting
+# members would fail OSPS-LE-01.01, which requires *all* code contributors to
+# assert.
+require:
+  members: true
+
+# Remediation lets an already-open branch satisfy the check WITHOUT a force-push /
+# history rewrite (which would invalidate review threads).
+allowRemediationCommits:
+  # The original author retroactively signs off their OWN past commits by adding a
+  # follow-up commit that enumerates the earlier hashes. The assertion is still
+  # made by the contributor, so this still meets OSPS-LE-01.01.
+  individual: true
+  # Keep OFF: third-party remediation would let someone OTHER than the author
+  # certify a commit, which breaks "require all code contributors to assert."
+  thirdParty: false

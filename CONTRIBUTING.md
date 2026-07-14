@@ -39,6 +39,29 @@ fix: prevent infinite retry loop in scheduler
 chore: update pgvector to 0.8.0
 ```
 
+### Sign-off (DCO)
+
+Every commit must be signed off under the [Developer Certificate of Origin](https://developercertificate.org/) (DCO). The sign-off is your assertion that you wrote the change (or otherwise have the right to submit it) under the project's open-source license. This is enforced by the DCO status check on every pull request — a PR with any unsigned commit is blocked until it is remediated.
+
+Add the sign-off automatically with the `-s` flag:
+
+```bash
+git commit -s -m "fix: prevent infinite retry loop in scheduler"
+```
+
+This appends a trailer with your name and email:
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+The name and email must match your `git config user.name` / `user.email`.
+
+**Already-open branch missing sign-offs?** You have two options:
+
+- **Rewrite (simple, but changes SHAs):** `git rebase --signoff main` re-writes each commit with a sign-off, then force-push. This invalidates existing review threads, so prefer it only on branches without review in progress.
+- **Individual remediation (preferred, no force-push):** add a single new commit that retroactively signs off your earlier commits, keeping history and review threads intact. The DCO app accepts this because you — the original author — are still the one making the assertion. See the [DCO app remediation docs](https://github.com/dcoapp/app#how-it-works) for the exact commit-message format.
+
 ### Code Standards
 
 - **TypeScript ESM** — `"type": "module"`, `.js` extensions on imports
@@ -53,6 +76,10 @@ chore: update pgvector to 0.8.0
 - Write tests for new features and bug fixes
 - Run the full test suite before submitting: `pnpm test`
 - Integration tests should use real Postgres (via Docker), not mocks
+
+### Dependencies
+
+Before adding, updating, or pinning a dependency, read the [Dependency Management Policy](docs/dev/dependencies.md). It covers how to evaluate a new dependency, why the committed `pnpm-lock.yaml` is authoritative, how Dependabot and the 7-day cooldown work, and how to pin a transitive dependency for a CVE via the `overrides:` block in `pnpm-workspace.yaml`. Always commit `package.json` and `pnpm-lock.yaml` together.
 
 ### Pull Requests
 
@@ -123,6 +150,10 @@ AI-assisted contributions (Claude Code, Copilot, Codex, etc.) are welcome. We ev
 - **Bugs**: Use the bug report issue template
 - **Features**: Use the feature request issue template
 - **Security vulnerabilities**: See [SECURITY.md](SECURITY.md) — do NOT file a public issue
+
+## Governance
+
+Curia's roles (maintainer, contributor), who holds access to sensitive project resources, and how maintainers are added are documented in [GOVERNANCE.md](GOVERNANCE.md).
 
 ## Code of Conduct
 

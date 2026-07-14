@@ -181,6 +181,7 @@ Curia is in early development and welcomes contributions — including AI-assist
 
 - Read the **[Contributing Guide](CONTRIBUTING.md)** for dev setup, code standards, and how to add channels, skills, and agents
 - Read **[CLAUDE.md](CLAUDE.md)** for repo-level conventions (if you're using Claude Code, these load automatically)
+- See **[GOVERNANCE.md](GOVERNANCE.md)** for project roles, maintainers, and how decisions are made
 - Check **[open issues](https://github.com/josephfung/curia/issues)** — look for `good first issue` labels
 - Report security vulnerabilities via **[SECURITY.md](SECURITY.md)** — not public issues
 
