@@ -10,15 +10,7 @@ Thank you for your interest in contributing to Curia. This document explains how
 
 ## Development Setup
 
-```bash
-git clone https://github.com/YOUR_USERNAME/curia.git
-cd curia
-cp .env.example .env
-# Edit .env with your API keys
-docker compose up
-```
-
-Requires: Node.js 22+, Docker, PostgreSQL 16+ (via Docker Compose).
+Follow the **Developer Install (Source)** path in the **[Development Setup guide](docs/dev/setup.md#developer-install-source)** — it is the single source of truth for prerequisites (Node, pnpm, Docker versions) and the full step-by-step. Version numbers are deliberately not repeated here so there is only one place to update.
 
 ## Making Changes
 
