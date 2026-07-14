@@ -244,6 +244,10 @@ export interface SkillContext {
   actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
   /** Audit log repo — available to skills declaring 'auditLogRepo' in capabilities. */
   auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
+  /** Diagnostics read repo — available to skills declaring 'diagnosticsRepo' in capabilities.
+   *  Read-only access to the operational + agent-state tables (scheduled_jobs, held_messages,
+   *  autonomy_action_log, outbound_context, working_memory) for the diagnostics agent (#1356). */
+  diagnosticsRepo?: import('../diagnostics/diagnostics-repo.js').DiagnosticsRepo;
   /** Task repo — available to skills declaring 'taskRepo' in capabilities.
    *  Provides CRUD access to the tasks table and manages linked wake-up scheduled_jobs rows.
    *  Used by task-create, task-list, task-update, task-complete. */

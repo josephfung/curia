@@ -1,0 +1,26 @@
+{
+  "name": "audit-trace",
+  "description": "Reconstruct the causal chain around an audit event. Given an event ID or a blocked-message ID (block_…), walks parent_event_id upward to the root cause and children downward to consequences, returning the ordered, PII-scrubbed event chain. Read-only; principal-facing diagnostics only.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "event_id": "string?",
+    "block_id": "string?",
+    "max_depth": "number?",
+    "max_children": "number?"
+  },
+  "outputs": {
+    "anchor_event_id": "string",
+    "chain": "object[]",
+    "count": "number",
+    "truncated": "boolean",
+    "available": "boolean",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["auditLogRepo"],
+  "allowed_callers": ["diagnostics"]
+}

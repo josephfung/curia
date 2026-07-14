@@ -29,10 +29,14 @@ describeIf('audit-log timeline query', () => {
     conversationId?: string | null;
     taskId?: string;
     parentEventId?: string | null;
+    blockId?: string;
   }): Promise<string> {
     const payload: Record<string, unknown> = {};
     if (opts.taskId) {
       payload.taskId = opts.taskId;
+    }
+    if (opts.blockId) {
+      payload.blockId = opts.blockId;
     }
     const result = await pool.query<{ id: string }>(
       `INSERT INTO audit_log (
@@ -206,5 +210,36 @@ describeIf('audit-log timeline query', () => {
 
     expect(page.rows.length).toBeGreaterThanOrEqual(2);
     expect(page.rows.every((r) => r.eventType === 'task.created' || r.eventType === 'task.completed')).toBe(true);
+  });
+
+  it('findById returns a single row or null', async () => {
+    const id = await seedRow({ timestamp: '2026-07-01T17:00:00.000Z', conversationId: 'conv-byid' });
+    const found = await repo.findById(id);
+    expect(found).not.toBeNull();
+    expect(found!.id).toBe(id);
+    expect(await repo.findById('00000000-0000-0000-0000-000000000000')).toBeNull();
+  });
+
+  it('findChildren returns direct children by parent_event_id, oldest first', async () => {
+    const parentId = await seedRow({ timestamp: '2026-07-01T18:00:00.000Z', conversationId: 'conv-children' });
+    await seedRow({ timestamp: '2026-07-01T18:00:02.000Z', parentEventId: parentId, conversationId: 'conv-children' });
+    await seedRow({ timestamp: '2026-07-01T18:00:01.000Z', parentEventId: parentId, conversationId: 'conv-children' });
+
+    const children = await repo.findChildren(parentId);
+    expect(children.length).toBe(2);
+    expect(children.every((c) => c.parentEventId === parentId)).toBe(true);
+    // Oldest-first ordering.
+    expect(children[0]!.timestamp.getTime()).toBeLessThan(children[1]!.timestamp.getTime());
+  });
+
+  it('findByBlockId matches rows carrying the blockId in payload', async () => {
+    const blockId = `block_${Date.now().toString(16)}`;
+    await seedRow({ timestamp: '2026-07-01T19:00:00.000Z', eventType: 'outbound.blocked', blockId });
+    await seedRow({ timestamp: '2026-07-01T19:00:01.000Z', eventType: 'outbound.notification' });
+
+    const rows = await repo.findByBlockId(blockId);
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.payload.blockId).toBe(blockId);
+    expect(rows[0]!.eventType).toBe('outbound.blocked');
   });
 });
