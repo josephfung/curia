@@ -17,7 +17,6 @@ interface ManifestMetadata {
   capabilities?: string[];
   role?: string;
   modelTier?: string;
-  memoryScopes?: string[];
   // PR2 (#939): vault keys a skill declares in install.requires_secrets. Cross-referenced
   // against GET /api/vault/status to show configured/missing status and gate install/enable.
   requiresSecrets?: string[];
@@ -258,10 +257,6 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
                     <label>Role / model</label>
                     <div>{entry.metadata.role ?? '—'} / {entry.metadata.modelTier ?? '—'}</div>
                   </div>
-                  <div className="form-field">
-                    <label>Memory scopes</label>
-                    <div>{entry.metadata.memoryScopes?.join(', ') || '—'}</div>
-                  </div>
                 </>
               )}
               {entry.metadata.capabilities && (
@@ -424,7 +419,7 @@ function Pagination({ total, page, pageSize, totalPages, onPage, onPageSize }: P
 
 // Sort key covers columns from both kinds; kind-specific ones only appear
 // in the table when the relevant kind is active.
-type SortKey = 'name' | 'state' | 'version' | 'modelTier' | 'memoryScopes' | 'actionRisk' | 'sensitivity';
+type SortKey = 'name' | 'state' | 'version' | 'modelTier' | 'actionRisk' | 'sensitivity';
 
 function actionRiskToSortKey(v: string | number | null | undefined): string {
   // Normalize to a zero-padded 3-digit number string so lexicographic sort = numeric sort.
@@ -441,7 +436,6 @@ function getSortValue(entry: RegistryEntry, key: SortKey): string {
     case 'state':        return entry.state;
     case 'version':      return entry.metadata?.version ?? '';
     case 'modelTier':    return entry.metadata?.modelTier ?? '';
-    case 'memoryScopes': return entry.metadata?.memoryScopes?.join(', ') ?? '';
     case 'actionRisk':   return actionRiskToSortKey(entry.metadata?.actionRisk);
     case 'sensitivity':  return entry.metadata?.sensitivity ?? '';
     default:             return '';
@@ -534,8 +528,9 @@ function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   const title = kind === 'skill' ? 'Skills' : 'Agents';
-  // Name, State, two kind-specific columns, Version.
-  const colCount = 5;
+  // Name, State, kind-specific columns, Version. Agents have one kind-specific
+  // column (Model tier); skills have two (Action risk, Sensitivity).
+  const colCount = kind === 'agent' ? 4 : 5;
 
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
@@ -614,11 +609,6 @@ function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
                                   Model tier <span className="sort-arrow">{sortArrow('modelTier')}</span>
                                 </button>
                               </th>
-                              <th className="sortable" aria-sort={sort.key === 'memoryScopes' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                                <button className="sort-btn" onClick={() => toggleSort('memoryScopes')}>
-                                  Memory scopes <span className="sort-arrow">{sortArrow('memoryScopes')}</span>
-                                </button>
-                              </th>
                             </>
                           ) : (
                             <>
@@ -660,7 +650,6 @@ function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
                             {kind === 'agent' ? (
                               <>
                                 <td>{e.metadata?.modelTier ?? '—'}</td>
-                                <td>{e.metadata?.memoryScopes?.join(', ') || '—'}</td>
                               </>
                             ) : (
                               <>

@@ -72,14 +72,6 @@ enable_task_management: false  # if true, auto-pins the task-* skills, injects t
                                # heartbeat-eligible (see the field reference below)
 
 # ------------------------------------------------------------------
-# Memory (optional)
-# ------------------------------------------------------------------
-
-memory:
-  scopes: [expenses, vendors]  # which memory namespaces this agent can read/write
-                               # scopes are isolated — an agent only sees its declared scopes
-
-# ------------------------------------------------------------------
 # Scheduled Tasks (optional)
 # ------------------------------------------------------------------
 
@@ -250,14 +242,9 @@ the flag — it just won't be heartbeat-eligible or get the injected block. See
 wake-up) to another registered agent — for example, the Coordinator scheduling a debrief task
 for the `meeting-debrief` specialist. Omit it and the task is assigned to the calling agent.
 
-### `memory` (optional)
+### Memory access
 
-```yaml
-memory:
-  scopes: [expenses, vendors, budgets]
-```
-
-Memory scopes isolate what an agent can read and write in the knowledge graph. An agent only sees entities within its declared scopes. Scopes are freeform strings — coordinate naming conventions across your agent team to avoid fragmentation.
+Agents do not declare memory scopes. All agents read and write a single shared knowledge graph; there is no per-agent memory isolation. Access is governed by capability gating (whether the agent is granted the `entityMemory` / `workingDocs` surfaces at all), data sensitivity tiers (the `max_sensitivity` ceiling on `memory-query`), and source attribution on writes — not by agent identity. See [ADR-028](../adr/028-shared-unbound-agent-memory.md).
 
 ### `schedule` (optional)
 

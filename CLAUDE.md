@@ -10,7 +10,7 @@ Five layers connected by a message bus. Four domain layers have hard security bo
 
 - **Channel Layer** — translates platform messages (Signal, Email, etc.) into normalized bus events
 - **Dispatch Layer** — routes messages to agents, enforces policy, translates responses back
-- **Agent Layer** — LLM-powered agents with isolated memory scopes
+- **Agent Layer** — LLM-powered agents that read and write a shared knowledge graph
 - **Execution Layer** — runs skills (local or MCP), validates permissions, sanitizes outputs
 - **System Layer** — trusted infrastructure with full pub/sub access (audit logger, scheduler)
 

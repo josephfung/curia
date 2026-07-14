@@ -157,7 +157,7 @@ An injection that tricks the Coordinator into delegating a malicious task must a
 
 Track the Coordinator's behavior patterns over time. Flag deviations:
 - Sudden spike in skill invocations
-- Attempts to access skills or memory scopes not previously used
+- Attempts to access skills not previously used
 - Responses that are dramatically different in tone or content from the Coordinator's established persona
 
 For launch, this is data collection (audit log captures everything). Active blocking based on anomaly detection is a future enhancement.

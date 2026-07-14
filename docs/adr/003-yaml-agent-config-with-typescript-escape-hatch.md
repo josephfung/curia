@@ -5,7 +5,7 @@ Status: Accepted
 
 ## Context
 
-Agent definitions need to capture: identity (name, description, model), system prompt, pinned skills, memory scopes, schedule, and error budget. These are primarily static configuration that doesn't change per-request.
+Agent definitions need to capture: identity (name, description, model), system prompt, pinned skills, schedule, and error budget. These are primarily static configuration that doesn't change per-request.
 
 Options considered:
 1. **TypeScript only** — agents defined entirely in code; maximum flexibility, but no declarative overview
@@ -16,7 +16,7 @@ Options considered:
 
 Agent definitions are YAML files (`agents/*.yaml`) with an optional `handler:` field pointing to a TypeScript module.
 
-The YAML layer captures what's universally declarative: identity, model selection, system prompt, pinned skills, memory scopes, schedule, and error budget. This can be read and understood without running the system.
+The YAML layer captures what's universally declarative: identity, model selection, system prompt, pinned skills, schedule, and error budget. This can be read and understood without running the system.
 
 The TypeScript escape hatch (`handler: ./coordinator.handler.ts`) is available for agents with non-trivial routing logic (e.g., the Coordinator, which dynamically selects agents based on message content). Standard specialist agents need no handler — the runtime's default execution path is sufficient.
 

@@ -44,16 +44,6 @@
     },
     "allow_discovery": { "type": "boolean" },
     "enable_task_management": { "type": "boolean" },
-    "memory": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "scopes": {
-          "type": "array",
-          "items": { "type": "string" }
-        }
-      }
-    },
     "schedule": {
       "type": "array",
       "items": {

@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.13.5"
+version: "0.13.6"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -46,9 +46,6 @@ pinned_skills:
 
 allow_discovery: false
 enable_task_management: true
-
-memory:
-  scopes: [ceo-inbox]
 
 error_budget:
   max_turns: 30
