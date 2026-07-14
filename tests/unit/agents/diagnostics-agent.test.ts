@@ -1,10 +1,12 @@
 // tests/unit/agents/diagnostics-agent.test.ts
 //
 // Structural contract tests for the diagnostics agent (#1356). The principal-
-// restriction guarantee is enforced by construction: the agent is pinned ONLY to
-// read-only query skills, so it physically cannot send, write, or delegate. This
-// test is the executable proof of that — if a future edit adds an outbound or
-// write skill to the roster, it fails.
+// restriction guarantee is enforced by construction: the agent holds only
+// read-only query skills plus request-clarification (a principal-DIRECTED pause/
+// ask). It has no skill that can send to an arbitrary recipient, write state, or
+// delegate — so it physically cannot leak internal state to a non-principal. This
+// test is the executable proof; if a future edit adds an outbound or write skill
+// to the roster, it fails.
 
 import { describe, it, expect } from 'vitest';
 import { loadAgentConfig } from '../../../src/agents/loader.js';
@@ -13,8 +15,13 @@ import * as path from 'node:path';
 const agentsDir = path.resolve(import.meta.dirname, '../../../agents');
 const config = loadAgentConfig(path.join(agentsDir, 'diagnostics.yaml'));
 
-/** The complete, read-only toolset the diagnostics agent is allowed to hold. */
-const ALLOWED_SKILLS = new Set(['date-resolve', 'audit-query', 'audit-trace', 'ops-lookup']);
+/**
+ * The complete toolset the diagnostics agent is allowed to hold: read-only
+ * queries + request-clarification. request-clarification is safe here — it only
+ * pauses and routes a question to the PRINCIPAL (via the coordinator's resume
+ * flow); it cannot address an arbitrary recipient.
+ */
+const ALLOWED_SKILLS = new Set(['date-resolve', 'audit-query', 'audit-trace', 'ops-lookup', 'request-clarification']);
 
 describe('diagnostics agent config', () => {
   it('runs on the powerful tier', () => {
@@ -25,8 +32,12 @@ describe('diagnostics agent config', () => {
     expect(config.role).toBe('specialist');
   });
 
-  it('pins exactly the three diagnostics query skills plus date-resolve', () => {
-    expect(config.pinned_skills).toEqual(expect.arrayContaining(['audit-query', 'audit-trace', 'ops-lookup']));
+  it('pins the three diagnostics query skills plus date-resolve', () => {
+    expect(config.pinned_skills).toEqual(expect.arrayContaining(['audit-query', 'audit-trace', 'ops-lookup', 'date-resolve']));
+  });
+
+  it('pins request-clarification so it can ask the principal mid-diagnosis', () => {
+    expect(config.pinned_skills).toContain('request-clarification');
   });
 
   it('pins NO outbound, delegate, or write-capable skill (structural principal-restriction)', () => {
