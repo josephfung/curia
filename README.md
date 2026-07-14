@@ -149,6 +149,30 @@ pnpm run setup
 **[→ Full installation guide](https://docs.meetcuria.com/get-started/installation)**  
 (channels, production deploy, configuration reference)
 
+### Verifying release artifacts
+
+Every published release is signed with [cosign](https://github.com/sigstore/cosign) (keyless, via GitHub OIDC — no long-lived signing key). The SBOM, source tarball, and the install bundle's `SHA256SUMS` manifest each ship with a `.sigstore` bundle, verifiable against GitHub's OIDC issuer:
+
+```bash
+gh release download vX.Y.Z --dir verify && cd verify
+
+cosign verify-blob --bundle sbom.spdx.json.sigstore \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/josephfung/curia/.github/workflows/release.yml@' \
+  sbom.spdx.json
+```
+
+The install bundle (`install.sh`, `docker-compose*.yml`, `env.example`, `Caddyfile`, `setup-common.sh`) is covered by one signed manifest — verify it, then check the files against it:
+
+```bash
+cosign verify-blob --bundle SHA256SUMS.sigstore \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/josephfung/curia/.github/workflows/release.yml@' \
+  SHA256SUMS
+
+sha256sum -c SHA256SUMS
+```
+
 ---
 
 ## Contributing
