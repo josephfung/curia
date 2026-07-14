@@ -497,8 +497,6 @@ export class Dispatcher {
           // The first message from a new automated sender follows the normal unknownSender
           // policy. Subsequent messages (after createContact runs) will have kind='automated'
           // and bypass the unknown-tier gate.
-          // TODO(#953): Consider classifyEmailSender(senderId) here to apply the bypass
-          // on first contact for recognizable-pattern addresses.
           //
           // 'allow' policy or no policy — route to coordinator without sender context.
           // runtime.ts injects a low-trust signal block so the coordinator knows to apply skepticism.

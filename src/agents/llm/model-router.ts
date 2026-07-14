@@ -7,7 +7,7 @@
 //
 // Capability needs (vision, large_context, etc.) are accepted but not
 // validated in this version — they are documentary-only, logged at debug
-// level for observability. Validation deferred to #379.
+// level for observability.
 //
 // Fallback tier rules (#813): when a tier's primary model is unavailable
 // (NOT_FOUND from the provider), the runtime re-routes to the fallback tier.

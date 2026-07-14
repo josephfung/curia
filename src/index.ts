@@ -1161,7 +1161,7 @@ async function main(): Promise<void> {
   // (e.g. a `known` contact's reply to the sender is allowed, but emailing a third party must
   // escalate). Construct the judge here from the escalation.judge config block, mirroring the
   // outbound judge above. The judge is fail-closed; a disabled/unconfigured judge makes Gate C
-  // escalate on ambiguous actions. (#949 disclosure-gate wiring is still pending.)
+  // escalate on ambiguous actions.
   let escalationJudge: EscalationJudge | undefined;
   const escalationJudgeYaml = yamlConfig.escalation?.judge;
   const escalationJudgeEnabled = escalationJudgeYaml?.enabled ?? true;

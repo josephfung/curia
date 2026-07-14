@@ -314,7 +314,6 @@ export function meetsMinimumTier(
  * skip tier gates for automated senders (noreply, newsletters, notifications).
  *
  * The dispatch tier gate bypass is wired in dispatcher.ts (#953).
- * TODO(#953): Wire into the outbound filter.
  */
 export function isAutomatedKind(kind: ContactKind): boolean {
   return kind === 'automated';
