@@ -10,14 +10,25 @@ interface Captured {
   params: unknown[];
 }
 
-function repoWithRows(rows: Array<Record<string, unknown>>): { repo: DiagnosticsRepo; calls: Captured[] } {
+// The repo runs each SELECT inside a READ ONLY transaction on a checked-out client,
+// so the fake pool exposes connect() → client. BEGIN/COMMIT/ROLLBACK are ignored;
+// only the actual query is captured. `txnControl` records the control statements so a
+// test can assert the read-only transaction wrapper actually ran.
+function repoWithRows(rows: Array<Record<string, unknown>>): { repo: DiagnosticsRepo; calls: Captured[]; txnControl: string[]; released: () => number } {
   const calls: Captured[] = [];
-  const query = vi.fn(async (text: string, params: unknown[]) => {
-    calls.push({ text, params });
+  const txnControl: string[] = [];
+  const release = vi.fn();
+  const query = vi.fn(async (text: string, params?: unknown[]) => {
+    if (/^\s*(BEGIN|COMMIT|ROLLBACK)/i.test(text)) {
+      txnControl.push(text.trim());
+      return { rows: [] };
+    }
+    calls.push({ text, params: params ?? [] });
     return { rows };
   });
-  const pool = { query } as unknown as Pool;
-  return { repo: new DiagnosticsRepo(pool, createSilentLogger()), calls };
+  const client = { query, release };
+  const pool = { connect: vi.fn(async () => client) } as unknown as Pool;
+  return { repo: new DiagnosticsRepo(pool, createSilentLogger()), calls, txnControl, released: () => release.mock.calls.length };
 }
 
 describe('DiagnosticsRepo', () => {
@@ -75,5 +86,13 @@ describe('DiagnosticsRepo', () => {
     await repo.getActionLog({ id: '42' });
     expect(calls[0]!.text).toContain('id::text = $1');
     expect(calls[0]!.params).toContain('42');
+  });
+
+  it('runs each read inside a READ ONLY transaction and releases the client', async () => {
+    const { repo, txnControl, released } = repoWithRows([]);
+    await repo.getScheduledJobs({});
+    expect(txnControl.some((s) => /BEGIN TRANSACTION READ ONLY/i.test(s))).toBe(true);
+    expect(txnControl).toContain('COMMIT');
+    expect(released()).toBe(1);
   });
 });

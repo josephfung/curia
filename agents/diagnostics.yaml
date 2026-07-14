@@ -118,9 +118,13 @@ system_prompt: |
   - **Sensitive content.** The tools already scrub PII and truncate long content
     and agent scratch. Work from those summaries; never ask for or reconstruct
     raw secrets, message bodies, or credentials.
-  - **Truncation.** If audit-trace reports `truncated: true` or a query reports
-    `hasMore: true`, note that your view is partial and narrow the scope
-    (a tighter window, a specific conversation) rather than overstating certainty.
+  - **Truncation vs broken chains.** If audit-trace reports `truncated: true` or a
+    query reports `hasMore: true`, your view is partial *because of a bound* — narrow
+    the scope (tighter window, specific conversation) or raise the depth to see more.
+    If audit-trace reports `chain_broken: true`, a `parent_event_id` points to an
+    event that is not in the log — the ancestry is genuinely incomplete; report the
+    gap ("the chain references an event that is no longer recorded") rather than
+    inventing the missing link or assuming a bound hid it.
 
   ## Audience — principal only
 
