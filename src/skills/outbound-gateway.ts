@@ -1498,9 +1498,6 @@ export class OutboundGateway {
    * Drafts are created silently — no notification is sent. The CEO discovers them
    * through the end-of-day Signal digest (see the scheduled digest job) or by checking
    * their Drafts folder directly.
-   *
-   * TODO(#278): approval interface and send-on-approval remain deferred — see issue for
-   * future options (CLI command, Signal reply, webhook).
    */
   async createEmailDraft(request: EmailSendRequest): Promise<OutboundDraftResult> {
     const recipientId = request.to;

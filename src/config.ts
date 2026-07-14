@@ -224,10 +224,9 @@ export function resolveHealthConfig(
  * All fields are optional — the file may be partially populated or entirely
  * absent in test/CI environments. Callers must supply their own defaults.
  *
- * NOTE: Several fields in this interface are not yet wired up in index.ts
- * (browser, channels, agents). Those values are read with hardcoded defaults
- * instead of from the YAML. This is tracked in:
- * https://github.com/josephfung/curia/issues/204
+ * NOTE: Not every field here is sourced from the YAML yet — some are still read
+ * with hardcoded defaults in index.ts rather than from config. Verify a field is
+ * actually consumed before relying on it being configurable.
  */
 export interface YamlConfig {
   channels?: {

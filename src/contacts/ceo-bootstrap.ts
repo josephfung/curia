@@ -11,10 +11,6 @@
 //   - insertKgPersonNode / createAndLinkKgNode: KG person-node creation + linkage
 //
 // Legacy status/trust_level columns are not written by this module (#955).
-//
-// TODO(#1049 follow-up): the filename `ceo-bootstrap.ts` is now a misnomer — these are
-// generic principal/KG utilities. Renaming was left out of scope to avoid churning the
-// ensure-principal.ts import; rename in a dedicated cleanup if it becomes confusing.
 
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';

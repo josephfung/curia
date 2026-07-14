@@ -45,9 +45,9 @@ export interface DecayPassResult {
  * Named after the neuroscience analogy: sleep is when the brain consolidates
  * short-term experiences into long-term memory and prunes weak connections.
  *
- * Currently implements one pass: memory decay (issue #27).
- * Future passes (decay warning #280, contradiction resolution, synthesis) will
- * be added as sibling methods with their own config keys under `dreaming`.
+ * Currently implements memory decay (issue #27) with decay warnings (#280).
+ * Future passes (contradiction resolution, synthesis) will be added as sibling
+ * methods with their own config keys under `dreaming`.
  *
  * EventBus is injected and used by the decay warning pass (#280) to emit
  * `memory.decay_warning` before archiving important nodes.
