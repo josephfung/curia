@@ -11,8 +11,12 @@
 // (src/diagnostics/redact.ts) before anything leaves the skill. Keeping redaction
 // in the handler mirrors AuditLogRepo (which also returns raw payloads) and keeps
 // this repo a pure data-access layer.
+//
+// The read-only guarantee is enforced, not just documented: every query runs
+// through readOnlyQuery() inside a `BEGIN TRANSACTION READ ONLY`, so a stray write
+// introduced by a future edit fails at runtime instead of silently mutating state.
 
-import type { Pool } from 'pg';
+import type { Pool, QueryResult } from 'pg';
 import type { Logger } from '../logger.js';
 
 const DEFAULT_LIMIT = 100;
@@ -144,6 +148,32 @@ export class DiagnosticsRepo {
     private readonly logger: Logger,
   ) {}
 
+  /**
+   * Run a single parameterized SELECT inside a `READ ONLY` transaction. Postgres
+   * rejects any write attempted on such a connection, so the repo's read-only
+   * contract is enforced by the database rather than by convention alone. Each
+   * call checks out one client and releases it; diagnostics is low-frequency, so
+   * the per-query transaction overhead is negligible.
+   */
+  private async readOnlyQuery(
+    text: string,
+    params: unknown[],
+  ): Promise<QueryResult<Record<string, unknown>>> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN TRANSACTION READ ONLY');
+      const result = await client.query<Record<string, unknown>>(text, params);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      // Best-effort rollback; the original error is what matters and is re-thrown.
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async getScheduledJobs(query: DiagnosticsQuery): Promise<ScheduledJobRow[]> {
     const params: unknown[] = [];
     const conditions: string[] = [];
@@ -167,7 +197,7 @@ export class DiagnosticsRepo {
     params.push(clampLimit(query.limit));
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await this.pool.query(
+    const result = await this.readOnlyQuery(
       `SELECT id, agent_id, source_agent_id, task_id, cron_expr, run_at, next_run_at,
               last_run_at, run_started_at, status, last_run_outcome, last_run_summary,
               last_error, consecutive_failures, created_by, created_at, task_payload
@@ -218,7 +248,7 @@ export class DiagnosticsRepo {
     params.push(clampLimit(query.limit));
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await this.pool.query(
+    const result = await this.readOnlyQuery(
       `SELECT id, channel, sender_id, conversation_id, subject, content, status,
               metadata, resolved_contact_id, created_at, processed_at
        FROM held_messages
@@ -270,7 +300,7 @@ export class DiagnosticsRepo {
     params.push(clampLimit(query.limit));
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await this.pool.query(
+    const result = await this.readOnlyQuery(
       `SELECT id, task_id, conversation_id, skill_name, action_risk, outcome,
               task_summary, description, short_ref, resolved_by, resolved_at,
               expires_at, created_at, payload
@@ -324,7 +354,7 @@ export class DiagnosticsRepo {
     params.push(clampLimit(query.limit));
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await this.pool.query(
+    const result = await this.readOnlyQuery(
       `SELECT id, conversation_id, channel_id, agent_id, content_preview, expected_reply,
               delegation_hint, metadata, released, created_at, expires_at,
               (expires_at <= now()) AS expired
@@ -379,7 +409,7 @@ export class DiagnosticsRepo {
     params.push(clampLimit(query.limit));
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await this.pool.query(
+    const result = await this.readOnlyQuery(
       `SELECT id, conversation_id, agent_id, role, content, archived, created_at, expires_at
        FROM working_memory
        ${where}

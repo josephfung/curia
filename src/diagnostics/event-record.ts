@@ -9,7 +9,9 @@ import { summarizePayload } from './redact.js';
 
 export interface DiagnosticEventRecord {
   id: string;
-  /** Local-timezone ISO string for display; falls back to UTC when tz is absent. */
+  /** Local-timezone ISO string for display (UTC when no tz is configured, per
+   *  toLocalIso). The literal 'unknown' only when the row's own timestamp is
+   *  corrupt/non-finite — never a raw fabricated value. */
   timestamp: string;
   eventType: string;
   sourceLayer: string;
@@ -22,7 +24,11 @@ export interface DiagnosticEventRecord {
 export function toEventRecord(row: AuditLogRow, tz?: string): DiagnosticEventRecord {
   return {
     id: row.id,
-    timestamp: toLocalIso(Math.floor(row.timestamp.getTime() / 1000), tz) ?? row.timestamp.toISOString(),
+    // toLocalIso returns null ONLY when the timestamp is corrupt (non-finite/≤0).
+    // In that case surface an explicit sentinel rather than `row.timestamp.toISOString()`,
+    // which would either throw (Invalid Date) or emit a raw UTC `Z` string the timestamp
+    // convention forbids. A wrong-but-formatted "now" would be worse for a forensic tool.
+    timestamp: toLocalIso(Math.floor(row.timestamp.getTime() / 1000), tz) ?? 'unknown',
     eventType: row.eventType,
     sourceLayer: row.sourceLayer,
     sourceId: row.sourceId,

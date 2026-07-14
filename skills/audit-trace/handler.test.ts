@@ -94,10 +94,27 @@ describe('AuditTraceHandler', () => {
       makeCtx({ auditLogRepo: seededRepo(rows), input: { event_id: 'e2', max_depth: 1 } }),
     );
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: { truncated: boolean; chain: Array<{ id: string }> } }).data;
+    const data = (result as { success: true; data: { truncated: boolean; chain_broken: boolean; chain: Array<{ id: string }> } }).data;
     // max_depth 1: from e2 we reach e1 but not e0.
     expect(data.chain.map((e) => e.id)).toEqual(['e1', 'e2']);
     expect(data.truncated).toBe(true);
+    expect(data.chain_broken).toBe(false); // a bound stopped us, the chain is intact
+  });
+
+  it('reports chain_broken (not truncated) when a parent_event_id points to a missing row', async () => {
+    // e1 references parent e0, which is NOT in the log — a dangling parent_event_id.
+    const rows = [
+      row('e1', 'e0', '2026-07-07T08:00:01.000Z'),
+      row('e2', 'e1', '2026-07-07T08:00:02.000Z'),
+    ];
+    const result = await new AuditTraceHandler().execute(makeCtx({ auditLogRepo: seededRepo(rows), input: { event_id: 'e1' } }));
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: { truncated: boolean; chain_broken: boolean; chain: Array<{ id: string }> } }).data;
+    expect(data.chain_broken).toBe(true);
+    // Crucially NOT truncated — narrowing the scope can never recover a missing row.
+    expect(data.truncated).toBe(false);
+    expect(data.chain.map((e) => e.id)).toEqual(['e1', 'e2']);
   });
 
   it('resolves a block_id anchor by preferring the outbound.blocked event', async () => {

@@ -107,7 +107,11 @@ Inputs: `event_id?`, `block_id?`, `conversation_id?`, `task_id?`, `event_types?`
 Inputs: `event_id?` **or** `block_id?`, `max_depth?` (default 20), `max_children?`.
 Resolves the anchor, walks `parent_event_id` **up** to the root (bounded), then walks
 `findChildren` **down** breadth-first (bounded), assembling a de-duplicated, timestamp-
-ordered causal chain of redacted event records. Reports when a bound truncated the walk.
+ordered causal chain of redacted event records. It distinguishes two "incomplete" signals:
+`truncated` (a depth / fan-out / total-node **bound** stopped the walk — more exists to
+fetch) vs `chain_broken` (a `parent_event_id` points to a row not in the log — a genuine
+gap no bound change recovers). Conflating them would mislead the agent, whose prompt reads
+`truncated` as "narrow the scope."
 
 ### ops-lookup
 Input: `source` (one of `scheduled_jobs | messages | action_log | outbound_context |
@@ -130,10 +134,14 @@ working_memory`) + scope filters (`conversation_id?`, `task_id?`, `agent_id?`, `
 ## DiagnosticsRepo + redaction
 
 `DiagnosticsRepo(pool, logger)` — parameterized SELECTs only, mirroring `AuditLogRepo`.
-One method per source, each returning typed rows scoped by the diagnostic filters.
-`src/diagnostics/redact.ts` provides `redactText()` (scrubPii + truncate) and
-`summarizePayload()` (bounded, scrubbed object summary) shared by all three handlers. The
-execution layer's `sanitizeObjectOutput` remains the outer net for structured secrets.
+One method per source, each returning typed rows scoped by the diagnostic filters. Every
+query runs through a private `readOnlyQuery()` that wraps it in a `BEGIN TRANSACTION READ
+ONLY`, so the read-only contract is enforced by Postgres (a stray future write fails at
+runtime) rather than by convention alone — a dedicated read-only role would be the heavier,
+infra-level alternative. `src/diagnostics/redact.ts` provides `redactText()` (scrubPii +
+truncate) and `summarizePayload()` (bounded, scrubbed object summary) shared by all three
+handlers. The execution layer's `sanitizeObjectOutput` remains the outer net for structured
+secrets.
 
 ## Migration 072
 

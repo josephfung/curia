@@ -59,6 +59,7 @@ export class AuditTraceHandler implements SkillHandler {
             chain: [],
             count: 0,
             truncated: false,
+            chain_broken: false,
             available: false,
             displayTimezone,
           },
@@ -66,21 +67,30 @@ export class AuditTraceHandler implements SkillHandler {
       }
 
       const collected = new Map<string, AuditLogRow>([[anchor.id, anchor]]);
+      // `truncated` = a BOUND (depth / fan-out / total-node cap) stopped us and more of
+      // the chain exists to fetch → narrowing scope or raising a bound would surface it.
+      // `chainBroken` = a referenced parent_event_id points to a row that isn't in the log
+      // → the ancestry is genuinely incomplete, and no bound change can recover it. Keeping
+      // these distinct matters: the agent is told truncated means "narrow the scope", which
+      // does nothing for a broken link.
       let truncated = false;
+      let chainBroken = false;
 
       // Walk UP: follow parent_event_id to the root, cycle-safe and depth-bounded.
       let current: AuditLogRow = anchor;
+      let ancestryDone = false; // reached a root / cycle / broken link — i.e. NOT stopped by a bound
       for (let depth = 0; depth < maxDepth; depth++) {
         const parentId: string | null = current.parentEventId;
-        if (!parentId || collected.has(parentId)) break;
+        if (!parentId || collected.has(parentId)) { ancestryDone = true; break; } // root or cycle
         const parent: AuditLogRow | null = await repo.findById(parentId);
-        if (!parent) break;
+        if (!parent) { chainBroken = true; ancestryDone = true; break; } // dangling parent_event_id
         collected.set(parent.id, parent);
         current = parent;
         if (collected.size >= MAX_TOTAL_NODES) { truncated = true; break; }
       }
-      if (current.parentEventId && !collected.has(current.parentEventId)) {
-        // Stopped because we hit maxDepth (parent exists but wasn't followed).
+      // Only a genuine depth bound (loop exhausted with a real, unfetched parent still above)
+      // counts as truncation — never a broken chain or a completed walk.
+      if (!ancestryDone && current.parentEventId && !collected.has(current.parentEventId)) {
         truncated = true;
       }
 
@@ -114,6 +124,7 @@ export class AuditTraceHandler implements SkillHandler {
           chain,
           count: chain.length,
           truncated,
+          chain_broken: chainBroken,
           available: true,
           displayTimezone,
         },
