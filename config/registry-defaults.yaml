@@ -87,6 +87,10 @@ skills:
   - list-pending-actions
   - activity-log
   - approval-expiry-sweep
+  # NOTE: diagnostics skills (audit-query, audit-trace, ops-lookup) excluded — they
+  #        read internal audit + operational state and are the principal-only
+  #        diagnostics agent's toolset. Opt-in: enable them alongside the diagnostics
+  #        agent (Settings → Skills), not on a fresh install.
   # NOTE: web-search excluded — gated by install.requires_secrets: [tavily_api_key].
   #        Stays admin-enabled: an operator provisions the Tavily key in the console
   #        (Settings → Skills → web-search), which lifts the gate and lets them install/enable it.
@@ -102,3 +106,6 @@ agents:
   - meeting-debrief
   # NOTE: calendar excluded — calendar-* skills are not default; enable after calendar credentials configured
   # NOTE: ceo-inbox excluded — specialized inbox agent; must be enabled manually
+  # NOTE: diagnostics excluded — principal-only, read-only forensic agent (#1356). Opt-in:
+  #        reads internal audit + operational state, so an operator enables it (and its
+  #        audit-query/audit-trace/ops-lookup skills) manually. First `powerful`-tier agent.

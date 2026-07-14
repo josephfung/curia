@@ -1,0 +1,33 @@
+{
+  "name": "ops-lookup",
+  "description": "Read the operational + agent-state tables to explain WHY something happened. Pick one source: scheduled_jobs (scheduler double-fires, duplicate/overdue jobs), messages (inbound held for review), action_log (autonomy outcomes + draft approvals), outbound_context (the context bridge — delegation_hint, expected_reply, released state), or working_memory (the agent's per-conversation reasoning). Scope by conversation/task/agent/id/status/time window. Content is PII-scrubbed and truncated; expired or swept rows are reported as unavailable, never guessed. Read-only; principal-facing diagnostics only.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "source": "string",
+    "id": "string?",
+    "conversation_id": "string?",
+    "task_id": "string?",
+    "agent_id": "string?",
+    "status": "string?",
+    "skill_name": "string?",
+    "outcome": "string?",
+    "role": "string?",
+    "since": "timestamp?",
+    "until": "timestamp?",
+    "limit": "number?"
+  },
+  "outputs": {
+    "source": "string",
+    "rows": "object[]",
+    "count": "number",
+    "available": "boolean",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["diagnosticsRepo"],
+  "allowed_callers": ["diagnostics"]
+}

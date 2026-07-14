@@ -230,6 +230,76 @@ export class AuditLogRepo {
     );
     return page;
   }
+
+  /**
+   * Fetch a single audit row by its event id. Returns null when no row matches.
+   * Used by the diagnostics agent to anchor a causal-chain trace on one event.
+   */
+  async findById(id: string): Promise<AuditLogRow | null> {
+    const result = await this.pool.query(
+      `SELECT id, timestamp, event_type, source_layer, source_id,
+              conversation_id, parent_event_id, payload
+       FROM audit_log
+       WHERE id = $1`,
+      [id],
+    );
+    const row = result.rows[0];
+    return row ? mapRow(row) : null;
+  }
+
+  /**
+   * Return the direct children of an event — rows whose `parent_event_id` matches.
+   * Ordered oldest-first for deterministic chain assembly. Bounded by `limit`
+   * (default {@link DEFAULT_LIMIT}, capped at {@link MAX_LIMIT}); the returned count
+   * reaching the limit is the caller's signal that the fan-out was truncated.
+   */
+  async findChildren(parentEventId: string, options: { limit?: number } = {}): Promise<AuditLogRow[]> {
+    const limit = Math.min(Math.max(options.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+    const result = await this.pool.query(
+      `SELECT id, timestamp, event_type, source_layer, source_id,
+              conversation_id, parent_event_id, payload
+       FROM audit_log
+       WHERE parent_event_id = $1
+       ORDER BY timestamp ASC, id ASC
+       LIMIT $2`,
+      [parentEventId, limit],
+    );
+    return result.rows.map(mapRow);
+  }
+
+  /**
+   * Return audit rows whose payload carries the given `blockId` (e.g. an
+   * `outbound.blocked` event and anything that references it). Optional [from, to)
+   * window narrows the scan. Backed by idx_audit_log_payload_block_id (migration 072).
+   */
+  async findByBlockId(
+    blockId: string,
+    query: { from?: Date; to?: Date; limit?: number } = {},
+  ): Promise<AuditLogRow[]> {
+    const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+    const params: unknown[] = [blockId];
+    const conditions: string[] = [`payload->>'blockId' = $1`];
+    if (query.from) {
+      params.push(query.from);
+      conditions.push(`timestamp >= $${params.length}`);
+    }
+    if (query.to) {
+      params.push(query.to);
+      conditions.push(`timestamp < $${params.length}`);
+    }
+    params.push(limit);
+
+    const result = await this.pool.query(
+      `SELECT id, timestamp, event_type, source_layer, source_id,
+              conversation_id, parent_event_id, payload
+       FROM audit_log
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY timestamp ASC, id ASC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows.map(mapRow);
+  }
 }
 
 function mapRow(row: Record<string, unknown>): AuditLogRow {

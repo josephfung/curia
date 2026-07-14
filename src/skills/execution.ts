@@ -163,6 +163,7 @@ export class ExecutionLayer {
   private escalationJudge?: EscalationJudge;
   private actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
   private auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
+  private diagnosticsRepo?: import('../diagnostics/diagnostics-repo.js').DiagnosticsRepo;
   private taskRepo?: import('../db/task-repo.js').TaskRepo;
   private workingDocsRepo?: import('../db/working-docs-repo.js').WorkingDocsRepo;
   private confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
@@ -218,6 +219,7 @@ export class ExecutionLayer {
     escalationJudge?: EscalationJudge;
     actionLogRepo?: import('../autonomy/action-log-repo.js').ActionLogRepo;
     auditLogRepo?: import('../audit/audit-log-repo.js').AuditLogRepo;
+    diagnosticsRepo?: import('../diagnostics/diagnostics-repo.js').DiagnosticsRepo;
     taskRepo?: import('../db/task-repo.js').TaskRepo;
     workingDocsRepo?: import('../db/working-docs-repo.js').WorkingDocsRepo;
     confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
@@ -259,6 +261,7 @@ export class ExecutionLayer {
     this.escalationJudge = options?.escalationJudge;
     this.actionLogRepo = options?.actionLogRepo;
     this.auditLogRepo = options?.auditLogRepo;
+    this.diagnosticsRepo = options?.diagnosticsRepo;
     this.taskRepo = options?.taskRepo;
     this.workingDocsRepo = options?.workingDocsRepo;
     this.confidencePipeline = options?.confidencePipeline;
@@ -1196,6 +1199,7 @@ export class ExecutionLayer {
       officeIdentityService: this.officeIdentityService,
       actionLogRepo: this.actionLogRepo,
       auditLogRepo: this.auditLogRepo,
+      diagnosticsRepo: this.diagnosticsRepo,
       taskRepo: this.taskRepo,
       workingDocs: this.workingDocsRepo,
       confidencePipeline: this.confidencePipeline,

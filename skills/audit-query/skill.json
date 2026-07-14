@@ -1,0 +1,29 @@
+{
+  "name": "audit-query",
+  "description": "Read the audit_log for forensic investigation. Anchor on an event ID, a blocked-message ID (block_…), a conversation ID, a task ID, one or more event types, and/or a time window. Returns bounded, PII-scrubbed event records (id, type, source, parent_event_id, payload summary). Read-only; principal-facing diagnostics only.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "event_id": "string?",
+    "block_id": "string?",
+    "conversation_id": "string?",
+    "task_id": "string?",
+    "event_types": "string[]?",
+    "since": "timestamp?",
+    "until": "timestamp?",
+    "limit": "number?"
+  },
+  "outputs": {
+    "events": "object[]",
+    "count": "number",
+    "hasMore": "boolean",
+    "available": "boolean",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["auditLogRepo"],
+  "allowed_callers": ["diagnostics"]
+}

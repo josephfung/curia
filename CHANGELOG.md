@@ -27,6 +27,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`diagnostics` agent** — opt-in, read-only forensic agent that diagnoses "what happened / why" for the principal. (#1356)
+- **`audit-query` / `audit-trace` / `ops-lookup`** — read-only diagnostics skills over audit + operational state. (#1356)
+- **`diagnosticsRepo` capability** — read-only reads of the ops + agent-state tables for diagnostics skills. (#1356)
 - **ADR-027** — structured secrets with schema-tagged sub-field addressing (`credit_card` first).
 
 ### Changed
