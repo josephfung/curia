@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.2.0"
+version: "0.2.1"
 role: specialist
 description: >
   Proactively debriefs the CEO after external meetings. Three times a day it
@@ -40,9 +40,6 @@ pinned_skills:
   - context-bridge-clear
 
 allow_discovery: false
-
-memory:
-  scopes: [meeting-debrief]
 
 error_budget:
   max_turns: 25

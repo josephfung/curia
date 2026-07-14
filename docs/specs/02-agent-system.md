@@ -84,8 +84,6 @@ pinned_skills:
   - email-parser
   - spreadsheet-writer
 allow_discovery: true    # can discover and use non-pinned skills
-memory:
-  scopes: [expenses, vendors, budgets]
 schedule:
   - cron: "0 9 * * 1"
     task: "Generate weekly expense summary"

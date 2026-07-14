@@ -30,9 +30,6 @@ export interface AgentYamlConfig {
   system_prompt: string;
   pinned_skills?: string[];
   allow_discovery?: boolean;
-  memory?: {
-    scopes?: string[];
-  };
   schedule?: Array<{
     cron: string;
     task: string;

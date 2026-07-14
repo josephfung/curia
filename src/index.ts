@@ -1813,7 +1813,13 @@ async function main(): Promise<void> {
     agentDiscovery.map(d => ({
       name: d.name,
       metadata: d.config
-        ? { name: d.config.name, description: d.config.description ?? d.config.name, version: d.config.version ?? '0.0.0', role: d.config.role, modelTier: d.config.model?.tier, memoryScopes: d.config.memory?.scopes }
+        ? {
+            name: d.config.name,
+            description: d.config.description ?? d.config.name,
+            version: d.config.version ?? '0.0.0',
+            role: d.config.role,
+            modelTier: d.config.model?.tier,
+          }
         : null,
       error: d.error,
     })),
