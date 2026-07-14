@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **KG trust gates** — checkpoint extraction and `memory-store` block untrusted inbound senders. (#1290)
+- **Release verification docs** — README documents `cosign verify-blob` for signed release artifacts. (#929)
 
 ### Fixed
 
