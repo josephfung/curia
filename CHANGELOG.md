@@ -38,6 +38,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`docs/dev/dependencies.md`** — adds explicit SCA remediation threshold and pre-release policy (OSPS-VM-05.01/05.02).
 - **Install docs** — README points to `releases/latest/download/install.sh` and documents `CURIA_VERSION`.
 - **`00-overview.md` Spec Index** — dropped the `Status` column and "N of M Done" counts. (#1282)
 - **Spec audit fixes** — corrected stale claims: Node 24, console UI, secrets vault, setup story, fallback-provider prose. (#1282)

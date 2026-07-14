@@ -126,10 +126,62 @@ Dependency and code scanning run on every push and pull request:
 - **CodeQL** — deep security analysis (`security-extended`).
 - **OpenSSF Scorecard** — repository-level supply-chain posture.
 
-Results surface under **GitHub → Security → Code Scanning**. Unresolved CRITICAL
-findings block a release; HIGH findings are a documented judgment call. The full
-pre-release security gate is described in [CLAUDE.md](../../CLAUDE.md) under
-*Preparing a release*.
+Results surface under **GitHub → Security → Code Scanning**. How
+dependency-vulnerability and license findings are triaged — and the threshold that
+blocks a release — is defined once in
+[SCA remediation threshold and pre-release policy](#sca-remediation-threshold-and-pre-release-policy)
+below.
+
+## SCA remediation threshold and pre-release policy
+
+*This section states the project's Software Composition Analysis (SCA) policy: the
+remediation threshold for dependency vulnerability and license findings, and the
+requirement to clear them before a release. It satisfies OpenSSF Baseline
+**OSPS-VM-05.01** and **OSPS-VM-05.02**.*
+
+**Software Composition Analysis** — scanning the resolved dependency tree for known
+vulnerabilities and for license violations — runs continuously:
+
+- **Trivy** scans the filesystem (the resolved dependency tree) and the release
+  container image for CVEs on every push and pull request, and again on demand as
+  part of the release gate.
+- **Dependabot** raises security alerts and opens fix PRs for vulnerable
+  dependencies; security updates bypass the 7-day cooldown so CVE patches are not
+  delayed.
+- **License compatibility** is reviewed when a dependency is added (see
+  [Selecting a new dependency](#selecting-a-new-dependency)).
+
+### Remediation threshold
+
+Findings are triaged by severity, and the threshold that must be cleared before a
+release is:
+
+- **CRITICAL** — must be remediated before release. Remediation means upgrading the
+  dependency, pinning a patched transitive version via the `overrides:` block,
+  removing the dependency, or — only if the finding is genuinely unreachable or
+  unfixable — recording a written, reviewed exception. A release is **blocked**
+  while any CRITICAL SCA finding is unresolved.
+- **HIGH** — must be fixed, or explicitly accepted with a documented rationale
+  (e.g. unreachable code path, no fix available) before the release proceeds.
+- **MEDIUM / LOW** — tracked and addressed in the normal Dependabot update cadence;
+  they do not block a release.
+
+**License findings** follow a zero-tolerance threshold: only permissive licenses
+(MIT, BSD, Apache-2.0, ISC, and similar) are permitted. A dependency under a
+copyleft license (GPL/AGPL) or another incompatible license is a violation that
+must be resolved — replaced or removed — before it can be merged or released. It is
+never shipped.
+
+### Addressing findings prior to a release
+
+Clearing the threshold above is a required step of cutting a release, not an
+afterthought. Before a release is tagged, the **pre-release security gate** runs the
+on-demand scans (the Trivy image scan, a fresh CodeQL pass, Scorecard, and DAST)
+against the exact commit to be tagged; the release is blocked on any unresolved
+CRITICAL finding, with HIGH findings either fixed or documented as accepted. Because
+the release commit is code-identical to the scanned commit, clearing the gate clears
+it for the tag. The full step-by-step gate is described in
+[CLAUDE.md](../../CLAUDE.md) under *Preparing a release → Pre-release security gate*.
 
 ## Summary
 
@@ -142,3 +194,4 @@ pre-release security gate is described in [CLAUDE.md](../../CLAUDE.md) under
 | Build scripts | `allowBuilds:` block, boolean-enforced by pre-commit hook |
 | Inventory | SPDX SBOM on every `main` push; signed SBOM per release |
 | Scanning | Trivy, Semgrep, Gitleaks, CodeQL, Scorecard on push/PR |
+| SCA policy | CRITICAL blocks a release; permissive licenses only; cleared at the pre-release gate |
