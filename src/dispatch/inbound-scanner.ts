@@ -24,11 +24,19 @@ const INSTRUCTION_TAG_PAIR_PATTERN =
 const INSTRUCTION_TAG_ORPHAN_PATTERN =
   /<\/?(system|instructions?|prompt|context|assistant|user)[^>]*>/gi;
 
+// Maximum length of raw content passed to extra injection pattern regexes.
+// An operator-supplied extra pattern with catastrophic backtracking (e.g. `(a+)+b`)
+// combined with an attacker-controlled long message body creates a self-inflicted ReDoS.
+// 10K is generous for any realistic message body and keeps regex matching O(1) in input size.
+// The built-in default patterns are code-reviewed and safe; the cap here protects against
+// operator-configurable extra patterns that may not be.
+const MAX_EXTRA_PATTERN_INPUT_LENGTH = 10000;
+
 // Default injection pattern list from the spec.
 // Each entry is a [regex, human-readable label] pair.
 // The regex is the detection rule; the label appears in findings for audit readability.
 //
-// Patterns are intentionally case-insensitive (flag `i`) and use \s+ to tolerate
+// Patterns are intentionally case-insensitive (flag `i`) and use \\s+ to tolerate
 // whitespace variations that an adversary might insert to break naive string matching.
 const DEFAULT_INJECTION_PATTERNS: Array<{ regex: RegExp; label: string }> = [
   { regex: /ignore\s+previous\s+instructions?/i, label: 'ignore previous instructions' },
@@ -119,13 +127,19 @@ export class InboundScanner {
     // We test the raw content so that stripped tags still contribute to the risk
     // score — a message that contained <system>...</system> is riskier even after
     // its markup is removed.
+    //
+    // Cap input before running pattern regexes to prevent self-inflicted ReDoS
+    // from operator-supplied extra_injection_patterns. The built-in defaults are
+    // code-reviewed and safe; this cap is defence-in-depth for custom patterns.
+    const scanContent = rawContent.slice(0, MAX_EXTRA_PATTERN_INPUT_LENGTH);
+
     const findings: InboundScanFinding[] = [];
     for (const { regex, label } of this.patterns) {
       // Reset lastIndex before each test — shared global regexes retain state across calls.
       regex.lastIndex = 0;
       // Use string.match() rather than RegExp.exec() — idiomatic for non-global patterns
       // where we only need the first occurrence.
-      const matched = rawContent.match(regex);
+      const matched = scanContent.match(regex);
       if (matched) {
         findings.push({
           pattern: label,
