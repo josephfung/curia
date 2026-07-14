@@ -146,6 +146,14 @@ export function parseSensitivityRules(rulesRaw: unknown, source: string): Sensit
   }
 
   return rulesRaw.map((entry: unknown, i: number) => {
+    // Guard against null entries or primitives — e.g. a bare `-` in YAML produces null.
+    // Without this, `e['category']` below throws a raw TypeError instead of the
+    // intended validation Error (mirrors parseExtraInjectionPatterns's same guard).
+    if (!entry || typeof entry !== 'object') {
+      throw new Error(
+        `sensitivity_rules[${i}] must be an object with 'category', 'sensitivity', and 'patterns' fields (in ${source})`,
+      );
+    }
     const e = entry as Record<string, unknown>;
     const category = String(e['category'] ?? '');
     const sensitivity = e['sensitivity'] as string;
