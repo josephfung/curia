@@ -46,13 +46,36 @@ src/db/migrations/072_*            index on payload->>'blockId'
   skill result (structured secrets: API keys/JWT/AWS/long-hex). `scrubPii` does **not**
   run automatically, so we apply it ourselves to the content fields we surface.
 
+## Routing & clarifying questions — reuse generic mechanisms (no coordinator edits)
+
+Two design constraints — "the coordinator recognizes and delegates the handoff" and
+"the agent can ask the principal clarifying questions" — are both met **without any
+diagnostics-specific coordinator code**, so adding future agents never means editing the
+coordinator (no whack-a-mole):
+
+- **Routing** is driven entirely by the agent's `description`. The runtime injects every
+  enabled specialist into the coordinator's `## Available Specialists` block
+  (`agentRegistry.specialistSummary()` → `- @name: description`), and the coordinator's
+  existing generic "delegate to the right specialist" logic routes on it. The routing
+  trigger *and* the principal-only signal live in the diagnostics `description`; the
+  coordinator system prompt is **unchanged**.
+- **Clarifying questions** reuse the existing `request-clarification` skill + the
+  coordinator's generic clarification-resume flow. Diagnostics calls
+  `request-clarification`; the task pauses, the coordinator routes the question to the
+  principal, and diagnostics is resumed automatically with the answer **and its full prior
+  context** (multiple rounds supported). Nothing about that flow is agent-specific.
+
 ## Principal-restriction — how it is actually enforced
 
 There is no agent-level `principal_only` flag, and none is needed. Enforcement is layered:
 
-1. **Structural (primary).** Diagnostics is pinned to read-only query skills *only* —
-   no `email-*`, `signal-send`, `delegate`, or memory-write skills. It physically cannot
-   emit anything outbound. Its output returns to the coordinator via `delegate`.
+1. **Structural (primary).** Diagnostics holds read-only query skills plus
+   `request-clarification` only — no `email-*`, `signal-send`, `send-draft`, `delegate`,
+   or memory-write skills. It has **no skill that can address an arbitrary recipient**; its
+   one reach-out, `request-clarification`, is principal-*directed* by construction (it
+   pauses and routes a question to the principal via the coordinator). So it physically
+   cannot leak internal state to a non-principal. Findings return to the coordinator as the
+   `delegate` result.
 2. **Action gate (Gate C).** If the coordinator invokes an outbound skill carrying
    diagnostic content to a third party, Gate C consults the (wired) escalation judge
    (`classifyAction` → `applyActionPolicy`) and escalates third-party-facing disclosure,
@@ -62,12 +85,12 @@ There is no agent-level `principal_only` flag, and none is needed. Enforcement i
 3. **Audience-leak judge (Stage 2).** Its rule (b) already flags "internal system state,
    tools, agents, skills, errors, backend status" reaching a non-principal — which is
    exactly what diagnostic output is. No prompt change required.
-4. **Prompt guardrails.** The diagnostics system prompt declares its output is internal,
-   principal-only. The coordinator handoff guidance says diagnostic findings are for the
-   principal only and must never be relayed to a third party.
+4. **Prompt guardrails.** The diagnostics `description` and system prompt declare its
+   output is internal, principal-only, and it refuses non-principal audiences.
 
 Verification for the acceptance criterion is a unit test asserting the agent's
-`pinned_skills` contains no outbound/delegate/write-capable skill.
+`pinned_skills` contains no outbound/delegate/write skill (request-clarification, being
+principal-directed, is the sole allowed communication path).
 
 ## Skill designs (all `action_risk: "none"`, parameterized, read-only)
 
@@ -133,7 +156,8 @@ IS NOT NULL`, mirroring the migration-071 `taskId` index. Makes "what happened w
 - `config/registry-defaults.yaml` — add NOTE comments documenting the agent + skills as
   opt-in/excluded; do **not** list them.
 - CHANGELOG **Added** entries for the agent and the skills.
-- Versions: agent `0.1.0`; each skill `0.1.0`; coordinator `0.11.6 → 0.11.7` (prompt handoff).
+- Versions: agent `0.1.0`; each skill `0.1.0`. Coordinator is **unchanged** (routing +
+  clarification reuse its existing generic flows).
 
 ## Scoping decisions
 

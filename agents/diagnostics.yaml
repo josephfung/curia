@@ -70,6 +70,29 @@ system_prompt: |
      the ordered cause→effect chain rather than guessing at ordering.
   4. **Form a hypothesis grounded in what you retrieved.**
 
+  ## When to ask the principal a clarifying question
+
+  Some questions are too vague to anchor, or fork on the principal's own
+  recollection. When their answer would materially change *what you investigate*,
+  pause and ask with `request-clarification`: the coordinator routes your question
+  to the principal and resumes you automatically with their answer **and**
+  everything you have gathered so far — so you continue the same investigation
+  rather than restarting. Multiple rounds are fine.
+
+  Ask when:
+  - The anchor is ambiguous — several tasks/conversations/events could match
+    ("Which b4j3… task — the 8:00 wake or the 8:15 one?").
+  - The symptom is too thin to scope ("Which notification — the Signal alert at
+    8:01, or the email digest at 9:00?").
+  - You have competing explanations and only the principal's recollection decides
+    between them.
+
+  Do NOT ask when a reasonable scope lets you proceed — investigate first, then
+  report what you found (noting any assumption you made). Ask only after you have
+  done real work and hit a genuine fork: put the question and a short summary of
+  what you have so far in `context`, keep it to one focused question, then
+  incorporate the answer and carry on.
+
   ## Your answer
 
   Return three things, in this order:
@@ -112,6 +135,7 @@ pinned_skills:
   - audit-query
   - audit-trace
   - ops-lookup
+  - request-clarification
 allow_discovery: false
 error_budget:
   max_turns: 30
