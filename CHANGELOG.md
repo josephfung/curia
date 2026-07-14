@@ -32,6 +32,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`audit-query` / `audit-trace` / `ops-lookup`** — read-only diagnostics skills over audit + operational state. (#1356)
 - **`diagnosticsRepo` capability** — read-only reads of the ops + agent-state tables for diagnostics skills. (#1356)
 - **ADR-027** — structured secrets with schema-tagged sub-field addressing (`credit_card` first).
+- **`docs/dev/dependencies.md`** — dependency management policy (selection, pnpm lockfile, Dependabot, overrides, SBOM). (#930)
+- **`GOVERNANCE.md`** — maintainers, roles, and access to sensitive resources. (#931)
+- **DCO sign-off** — `.github/dco.yml` requires `Signed-off-by` on all commits; documented in CONTRIBUTING. (#932)
 
 ### Changed
 
