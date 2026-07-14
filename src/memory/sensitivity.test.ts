@@ -63,6 +63,19 @@ describe('parseSensitivityRules', () => {
     ).toThrow("missing 'category'");
   });
 
+  it('throws a validation Error (not a raw TypeError) when a list entry is null', () => {
+    // A bare `-` in YAML (e.g. a stray list item) parses to null.
+    expect(() =>
+      parseSensitivityRules([null, { category: 'x', sensitivity: 'confidential', patterns: ['x'] }], 'test'),
+    ).toThrow("sensitivity_rules[0] must be an object with 'category', 'sensitivity', and 'patterns' fields");
+  });
+
+  it('throws a validation Error when a list entry is a primitive', () => {
+    expect(() => parseSensitivityRules(['not an object'], 'test')).toThrow(
+      "sensitivity_rules[0] must be an object with 'category', 'sensitivity', and 'patterns' fields",
+    );
+  });
+
   it('throws when sensitivity is not a known level', () => {
     expect(() =>
       parseSensitivityRules([{ category: 'x', sensitivity: 'ultra', patterns: ['x'] }], 'test'),

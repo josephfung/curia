@@ -520,11 +520,13 @@ async function main(): Promise<void> {
     // Sensitivity classifier — built from the already-merged config (default.yaml +
     // local.yaml, see loadYamlConfig()) so operator overrides in local.yaml actually
     // take effect rather than being silently ignored (#1369). Malformed rules already
-    // failed startup inside loadYamlConfig(); we still guard against an absent rules
-    // list, since the service cannot safely protect sensitive data without any.
-    if (!yamlConfig.sensitivity_rules) {
+    // failed startup inside loadYamlConfig(); we still guard against an absent or empty
+    // rules list, since the service cannot safely protect sensitive data without any.
+    // (`![]` is false — an explicit `sensitivity_rules: []` override must be checked
+    // via .length, not truthiness, or it would slip past this guard.)
+    if (!yamlConfig.sensitivity_rules || yamlConfig.sensitivity_rules.length === 0) {
       logger.fatal(
-        'sensitivity_rules missing from merged config — check that config/default.yaml contains a sensitivity_rules array',
+        'sensitivity_rules missing or empty in merged config — check that config/default.yaml contains a sensitivity_rules array',
       );
       process.exit(1);
     }
