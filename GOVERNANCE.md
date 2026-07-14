@@ -78,14 +78,14 @@ extended period, or violates the [Code of Conduct](CODE_OF_CONDUCT.md). When acc
 is revoked, the relevant credentials are rotated and the tables above are updated
 in the same change.
 
-## Decision making
+## Decision-making
 
 While Curia is single-maintainer, the maintainer is the final decision maker on
 technical direction, releases, and contribution acceptance, guided by the project's
 [architecture principles](docs/specs/00-overview.md) and
 [ADRs](docs/adr/). Significant architectural decisions are recorded as ADRs so the
 reasoning is durable and reviewable. As the maintainer base grows, this section
-will be updated to describe consensus-based decision making.
+will be updated to describe consensus-based decision-making.
 
 ## Changes to this document
 

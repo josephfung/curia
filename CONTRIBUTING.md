@@ -43,7 +43,7 @@ git commit -s -m "fix: prevent infinite retry loop in scheduler"
 
 This appends a trailer with your name and email:
 
-```
+```text
 Signed-off-by: Your Name <you@example.com>
 ```
 
