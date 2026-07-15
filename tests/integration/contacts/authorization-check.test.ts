@@ -19,6 +19,7 @@ import type { AuthConfig } from '../../../src/contacts/types.js';
 import {
   describeIf,
   makeRunId,
+  signalForRun,
   createContactStack,
   CONFIG_DIR,
   type ContactTestStack,
@@ -72,7 +73,7 @@ describeIf('Contact resolution: authorization check integration', () => {
     );
 
     // High-trust channel: same role grants without trust block.
-    const signalId = `+1777${String([...runId].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 0) % 10_000_000).padStart(7, '0')}`;
+    const signalId = signalForRun(runId, 77);
     await stack.contactService.linkIdentity({
       contactId: contact.id,
       channel: 'signal',
@@ -114,7 +115,7 @@ describeIf('Contact resolution: authorization check integration', () => {
     await stack.contactService.grantPermission(contact.id, 'schedule_meetings', false, 'ceo');
 
     // send_on_behalf is high sensitivity — use signal so override grant is not trust-blocked.
-    const signalId = `+1888${String([...runId].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 1) % 10_000_000).padStart(7, '0')}`;
+    const signalId = signalForRun(runId, 88);
     await stack.contactService.linkIdentity({
       contactId: contact.id,
       channel: 'signal',

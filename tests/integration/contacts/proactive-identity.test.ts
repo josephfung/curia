@@ -5,15 +5,10 @@ import { it, expect, beforeAll, afterAll } from 'vitest';
 import {
   describeIf,
   makeRunId,
+  signalForRun,
   createContactStack,
   type ContactTestStack,
 } from './harness.js';
-
-function signalForRun(runId: string): string {
-  let n = 0;
-  for (let i = 0; i < runId.length; i++) n = (n * 31 + runId.charCodeAt(i)) >>> 0;
-  return `+1555${String(n % 10_000_000).padStart(7, '0')}`;
-}
 
 describeIf('Contact resolution: proactive identity establishment', () => {
   let stack: ContactTestStack;
@@ -115,11 +110,14 @@ describeIf('Contact resolution: proactive identity establishment', () => {
     });
 
     if (contact.kgNodeId) {
-      await stack.entityMemory.storeFact({
+      const factResult = await stack.entityMemory.storeFact({
         entityNodeId: contact.kgNodeId,
         label: `Manages Q3 board packet for run ${runId}`,
         source: 'integration-test',
       });
+      if (factResult.stored && factResult.nodeId) {
+        stack.trackKgNode(factResult.nodeId);
+      }
     }
 
     const resolved = await stack.resolver.resolve('email', email);
