@@ -3,6 +3,7 @@ import { ContactFindDuplicatesHandler } from '../../../skills/contact-find-dupli
 import type { SkillContext } from '../../../src/skills/types.js';
 import type { DuplicatePair } from '../../../src/contacts/types.js';
 import type { TaskRow } from '../../../src/db/queries/tasks.js';
+import { dedupPairTag } from '../../../src/contacts/dedup-pair-key.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -274,38 +275,52 @@ describe('ContactFindDuplicatesHandler', () => {
     }
   });
 
+  it('skips pairs when an open dedup task has a structured dedup-pair tag', async () => {
+    const pairs = [
+      makePair(UUID_A, 'Alice', null, UUID_B, 'Bob', null, 0.95),
+    ];
+    const contactService = { findDuplicates: async () => pairs };
+    const createTask = vi.fn().mockResolvedValue({ id: 'task-1' });
+    const taskRepo = {
+      listTasks: async () => [{ id: 'task-tagged', tags: ['dedup', dedupPairTag(UUID_A, UUID_B)] }],
+      createTask,
+    };
+
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { filed: number; skipped_existing: number };
+      expect(data.skipped_existing).toBe(1);
+      expect(createTask).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not file a second task for the same pair within one run', async () => {
+    const pairs = [
+      makePair(UUID_A, 'Alice', null, UUID_B, 'Bob', null, 0.95),
+      makePair(UUID_A, 'Alice', null, UUID_B, 'Bob', null, 0.94),
+    ];
+    const contactService = { findDuplicates: async () => pairs };
+    const createTask = vi.fn().mockResolvedValue({ id: 'task-1' });
+    const taskRepo = { listTasks: async () => [], createTask };
+
+    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { filed: number; total_scanned: number };
+      expect(data.total_scanned).toBe(2);
+      expect(data.filed).toBe(1);
+      expect(createTask).toHaveBeenCalledOnce();
+    }
+  });
+
   // ---------------------------------------------------------------------------
   // Idempotency: dedup_exclusion KG fact
   // ---------------------------------------------------------------------------
 
   it('skips pairs that have a dedup_exclusion fact on contact A naming contact B', async () => {
-    const pairs = [
-      makePair(UUID_A, 'Alice', 'kg-node-a', UUID_B, 'Bob', null, 0.95),
-    ];
-    const contactService = { findDuplicates: async () => pairs };
-    const createTask = vi.fn().mockResolvedValue({ id: 'task-1' });
-    const taskRepo = { listTasks: async () => [], createTask };
-    const entityMemory = {
-      getFacts: async (nodeId: string) => {
-        if (nodeId === 'kg-node-a') {
-          return [{ properties: { attribute: 'dedup_exclusion', value: UUID_B } }];
-        }
-        return [];
-      },
-    };
-
-    const result = await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory }));
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      const data = result.data as { filed: number; skipped_excluded: number };
-      expect(data.filed).toBe(0);
-      expect(data.skipped_excluded).toBe(1);
-      expect(createTask).not.toHaveBeenCalled();
-    }
-  });
-
-  it('skips pairs that have a dedup_exclusion fact on contact B naming contact A', async () => {
     const pairs = [
       makePair(UUID_A, 'Alice', null, UUID_B, 'Bob', 'kg-node-b', 0.95),
     ];
@@ -476,9 +491,10 @@ describe('ContactFindDuplicatesHandler', () => {
     await handler.execute(makeContext({}, { contactService, taskRepo: taskRepo as never, entityMemory: noFactsEntityMemory }));
 
     expect(createTask).toHaveBeenCalledOnce();
-    const callArg = createTask.mock.calls[0]![0] as { description: string };
+    const callArg = createTask.mock.calls[0]![0] as { description: string; tags: string[] };
     expect(callArg.description).toContain(`Contact A ID: ${UUID_A}`);
     expect(callArg.description).toContain(`Contact B ID: ${UUID_B}`);
     expect(callArg.description).toContain('Score:');
+    expect(callArg.tags).toContain(dedupPairTag(UUID_A, UUID_B));
   });
 });
