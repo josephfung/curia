@@ -241,7 +241,6 @@ The framework ships with these skills (in `skills/` as part of core):
 - `entity-context` — assemble full context for a list of contacts/entities
 - `get-autonomy` / `set-autonomy` — read and write the global autonomy score (CEO only)
 - `bullpen` — inter-agent discussion threads; `post`/`reply` persist the thread/message synchronously and fire-and-forget the `agent.discuss` publish so a slow subscriber can't push the handler past its timeout (see *Timeout safety* above)
-- `template-doc-request` — structured document request template (scheduling templates retired; calendar specialist composes scheduling email text directly)
 - `image-generate` — generate an image from a text prompt via DALL-E 3; returns a temporary CDN URL (~1hr TTL)
 - `setup-status` — read-only (`action_risk: none`); returns the setup catalog (`skills/setup-status/catalog.yaml`) with each task's live-derived status (`done` / `pending` / `deferred`). The catalog is owned by the skill bundle, not core.
 - `setup-defer` — write (`action_risk: low`); persists or clears a setup task deferral in config-store (`setup_wizard/deferrals`). Pinned to `setup-wizard`.

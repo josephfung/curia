@@ -45,6 +45,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Removed
 
+- **Email policy templates** — retires `template-doc-request`, `context-for-email`, and `template-base`. (#1406)
 - **Spec "Implementation Status" tables** — dropped from `docs/specs/`; replaced by "Known Deficiencies" where work remains. (#1282)
 - **`memory.scopes`** — removed the inert, never-enforced agent memory-scope field; breaking change, see ADR-028 for deploy ordering. (#521)
 
