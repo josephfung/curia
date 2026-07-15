@@ -159,6 +159,16 @@ export async function selectHeartbeatCandidates(
          AND NOT EXISTS (
                SELECT 1 FROM scheduled_jobs sj
                WHERE sj.task_id = t.id AND sj.status IN ('pending', 'running'))
+         -- Suppress a parent "container" task whose pending work is already covered by a
+         -- non-terminal subtask carrying its own ACTIVE (pending/running) wake (#1410). The
+         -- plan is progressing on schedule via the child; re-poking the parent every interval
+         -- just burns no-op agent turns. A completed/absent child wake does NOT shield the
+         -- parent — that's a stalled plan the heartbeat should still resurface.
+         AND NOT EXISTS (
+               SELECT 1 FROM tasks c
+               JOIN scheduled_jobs cj ON cj.task_id = c.id AND cj.status IN ('pending', 'running')
+               WHERE c.parent_task_id = t.id
+                 AND c.status IN ('open', 'in_progress', 'waiting', 'blocked'))
          AND (
                (t.owner = 'curia' AND t.status IN ('open','in_progress')
                   AND t.updated_at < now() - make_interval(hours => $2))

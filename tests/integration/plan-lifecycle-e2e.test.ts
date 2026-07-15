@@ -146,9 +146,8 @@ describeIf('Plan primitive end-to-end (#1177)', () => {
     );
     expect(synthDispatch.rows).toHaveLength(1);
 
-    // Mark the already-fired gather wake completed (as the scheduler would after a
-    // run), so the one-active-wake-per-task dedup frees. This lets us prove synth
-    // completion schedules a *fresh* parent wake rather than recycling the gather one.
+    // Mark the already-fired parent wake completed (as the scheduler would after a
+    // run), so the one-active-wake-per-task dedup frees for the next enqueue.
     await schedulerService.completeJobRun(parentWakeId, true);
 
     // 5. The deliverable child produces its output and completes.
@@ -156,14 +155,16 @@ describeIf('Plan primitive end-to-end (#1177)', () => {
     await repo.updateTask(synthId, { progressNote: deliverable }, 'coordinator');
     await repo.updateTask(synthId, { status: 'done' }, 'coordinator');
 
-    // Synth completion must enqueue a brand-new parent wake (not the gather one).
+    // Synth completion enqueues the parent wake again. Per #1410, enqueueTaskWake now
+    // REVIVES the task's terminal wake row rather than inserting a new one, so the
+    // frontier keeps exactly one scheduled_jobs row per task and recycles its id.
     const wakeAfterSynth = await pool.query<{ id: string }>(
       `SELECT id FROM scheduled_jobs WHERE task_id = $1 AND status = 'pending'`,
       [parent.id],
     );
     expect(wakeAfterSynth.rows).toHaveLength(1);
     const completionWakeId = wakeAfterSynth.rows[0]!.id;
-    expect(completionWakeId).not.toBe(parentWakeId);
+    expect(completionWakeId).toBe(parentWakeId); // reused row, not a fresh insert (#1410)
 
     // 6. Fire the fresh wake → subtree resolved → parent auto-completes.
     await bus.publish('system', createScheduleFired({

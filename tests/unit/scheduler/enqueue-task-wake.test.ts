@@ -6,7 +6,8 @@ function mockLogger() {
 }
 
 describe('SchedulerService.enqueueTaskWake', () => {
-  it('inserts a one-shot pending scheduled_jobs row carrying the existing task_id', async () => {
+  it('revives the task\'s existing terminal wake row when one exists (#1410)', async () => {
+    // First query (the revive UPDATE) returns a row → short-circuit, no INSERT.
     const pool = { query: vi.fn().mockResolvedValue({ rows: [{ id: 'job-9' }] }) };
     const bus = { publish: vi.fn(), subscribe: vi.fn() };
     const svc = new SchedulerService(
@@ -20,10 +21,38 @@ describe('SchedulerService.enqueueTaskWake', () => {
     const result = await svc.enqueueTaskWake({ taskId: 'task-7', agentId: 'ceo-inbox', runAt });
 
     expect(result.jobId).toBe('job-9');
-    expect(pool.query).toHaveBeenCalledTimes(1);
+    expect(pool.query).toHaveBeenCalledTimes(1); // reuse short-circuits before the insert
     const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
-    expect(sql).toMatch(/INSERT INTO scheduled_jobs/i);
+    expect(sql).toMatch(/UPDATE scheduled_jobs/i); // revives the row, not a fresh insert
     expect(sql).toMatch(/task_id/);
+    expect(params).toContain('task-7');
+    expect(params).toContain('ceo-inbox');
+    expect(params).toContain(runAt);
+  });
+
+  it('inserts a one-shot pending row when there is no terminal wake to reuse (#1410)', async () => {
+    // Revive returns no row → fall through to the INSERT path.
+    const pool = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [] })              // revive: nothing to reuse
+        .mockResolvedValueOnce({ rows: [{ id: 'job-new' }] }), // insert
+    };
+    const bus = { publish: vi.fn(), subscribe: vi.fn() };
+    const svc = new SchedulerService(
+      pool as unknown as import('pg').Pool,
+      bus as never,
+      mockLogger() as never,
+      'America/Toronto',
+    );
+
+    const runAt = new Date('2026-06-04T12:00:00Z');
+    const result = await svc.enqueueTaskWake({ taskId: 'task-7', agentId: 'ceo-inbox', runAt });
+
+    expect(result.jobId).toBe('job-new');
+    expect(pool.query).toHaveBeenCalledTimes(2);
+    const [insertSql, params] = pool.query.mock.calls[1] as [string, unknown[]];
+    expect(insertSql).toMatch(/INSERT INTO scheduled_jobs/i);
+    expect(insertSql).toMatch(/task_id/);
     // status pending, one-shot (cron NULL), task_id = the EXISTING task
     expect(params).toContain('task-7');
     expect(params).toContain('ceo-inbox');
