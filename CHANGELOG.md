@@ -37,6 +37,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`diagnostics` agent** — opt-in, read-only forensic agent that diagnoses "what happened / why" for the principal. (#1356)
 - **`audit-query` / `audit-trace` / `ops-lookup`** — read-only diagnostics skills over audit + operational state. (#1356)
 - **`diagnosticsRepo` capability** — read-only reads of the ops + agent-state tables for diagnostics skills. (#1356)
+- **Email-observation design docs** — WIP design + issue breakdown for voice learning, task-completion & capability growth (v0.42). (#1419)
 - **ADR-027** — structured secrets with schema-tagged sub-field addressing (`credit_card` first).
 - **`docs/dev/dependencies.md`** — dependency management policy (selection, pnpm lockfile, Dependabot, overrides, SBOM). (#930)
 - **`GOVERNANCE.md`** — maintainers, roles, and access to sensitive resources. (#931)
