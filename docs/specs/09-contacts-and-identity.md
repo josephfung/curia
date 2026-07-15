@@ -191,10 +191,10 @@ There are three write paths, all converging on `ContactService`:
 
 `EntityContext.contact` exposes all 12 fields as structured values (see
 [spec 11 — Entity Context Enrichment](11-entity-context-enrichment.md)), so an agent reads
-a typed field rather than reasoning over a scored fact list. `context-for-email` prefers
-`contact.primaryEmail` and surfaces `contact.preferredName` for salutations. Rich, non-
-canonical knowledge about a person (relationships, history, preferences) continues to live
-in the knowledge graph.
+a typed field rather than reasoning over a scored fact list — including
+`contact.primaryEmail` and `contact.preferredName` for outbound address and salutation.
+Rich, non-canonical knowledge about a person (relationships, history, preferences)
+continues to live in the knowledge graph.
 
 ---
 

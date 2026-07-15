@@ -681,9 +681,7 @@ pinned_skills:
   - scheduler-create
   - scheduler-list
   - scheduler-cancel
-  - template-doc-request
   - config-store
-  - context-for-email
   - date-resolve
   - get-autonomy
   - set-autonomy

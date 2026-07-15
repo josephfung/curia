@@ -162,8 +162,7 @@ Current built-in skills include (see `skills/` for the full list):
 | **Scheduling** | `scheduler-create`, `scheduler-list`, `scheduler-cancel` |
 | **Delegation** | `delegate` |
 | **Autonomy** | `get-autonomy`, `set-autonomy` |
-| **Context** | `entity-context`, `context-for-email`, `held-messages-list`, `held-messages-process` |
-| **Templates** | `template-doc-request` |
+| **Context** | `entity-context`, `held-messages-list`, `held-messages-process` |
 | **Config** | `config-store` — generic key-value agent config; namespace-scoped, KG-backed, permanent decay |
 
 This table is hand-maintained — run `ls skills/` for the authoritative current set.
