@@ -405,25 +405,37 @@ export class SchedulerService {
   }
 
   /**
-   * Set a job and its linked task to 'paused' in a single round-trip.
+   * Set a job and its linked task to 'paused' in a single round-trip, returning the
+   * number of job rows actually transitioned (0 when the job is missing or terminal).
    * Shared by the drift-pause and operator-pause paths so the SQL stays in one place.
-   * Updates both tables atomically via a CTE so they stay consistent.
-   * The FK is scheduled_jobs.task_id → tasks.id, so we join through scheduled_jobs.
+   *
+   * The scheduled_jobs UPDATE is the OUTER statement so result.rowCount reflects the
+   * job (a CTE-wrapped final UPDATE would report the tasks row count instead, which is
+   * 0 for jobs without a linked task). The task UPDATE runs in the CTE against the same
+   * snapshot, so both see the pre-update status.
+   *
+   * The terminal-state guard prevents re-arming a job the CEO already ended: without it,
+   * pausing a 'cancelled'/'completed' job then resuming it (unsuspendJob accepts 'paused')
+   * would resurrect it. Drift only ever pauses active jobs, so the guard is a no-op there.
    */
-  private async setPaused(jobId: string): Promise<void> {
-    await this.pool.query(
-      `WITH paused_job AS (
-         UPDATE scheduled_jobs
-            SET status = 'paused'
-          WHERE id = $1
+  private async setPaused(jobId: string): Promise<number> {
+    const result = await this.pool.query(
+      `WITH paused_task AS (
+         UPDATE tasks t
+            SET status     = 'paused',
+                updated_at = now()
+           FROM scheduled_jobs sj
+          WHERE sj.id = $1
+            AND t.id = sj.task_id
+            AND sj.status NOT IN ('cancelled', 'completed')
        )
-       UPDATE tasks t
-          SET status     = 'paused',
-              updated_at = now()
-         FROM scheduled_jobs sj
-        WHERE sj.id = $1 AND t.id = sj.task_id`,
+       UPDATE scheduled_jobs
+          SET status = 'paused'
+        WHERE id = $1
+          AND status NOT IN ('cancelled', 'completed')`,
       [jobId],
     );
+    return result.rowCount ?? 0;
   }
 
   /**
@@ -432,7 +444,13 @@ export class SchedulerService {
    * The CEO must review and resume or cancel the job manually.
    */
   async pauseJobForDrift(jobId: string): Promise<void> {
-    await this.setPaused(jobId);
+    const count = await this.setPaused(jobId);
+    if (count === 0) {
+      // Drift only targets active jobs, so a miss here means the job vanished or was
+      // ended concurrently — log rather than throw to keep the detector's flow intact.
+      this.logger.warn({ jobId }, 'Drift pause matched no active job (already ended?)');
+      return;
+    }
     this.logger.info({ jobId }, 'Job paused due to intent drift detection');
   }
 
@@ -441,9 +459,14 @@ export class SchedulerService {
    * (e.g. the CEO asking Curia to pause a schedule via the scheduler-update skill).
    * Neutral counterpart to pauseJobForDrift — same state transition, no drift semantics.
    * Released by unsuspendJob(), which accepts both 'suspended' and 'paused' states.
+   * Throws when the job is missing or already terminal so callers don't report a
+   * silent no-op as success.
    */
   async pauseJob(jobId: string): Promise<void> {
-    await this.setPaused(jobId);
+    const count = await this.setPaused(jobId);
+    if (count === 0) {
+      throw new Error(`Job ${jobId} not found or already cancelled/completed`);
+    }
     this.logger.info({ jobId }, 'Job paused by operator request');
   }
 
@@ -538,7 +561,15 @@ export class SchedulerService {
 
     params.push(jobId);
     const sql = `UPDATE scheduled_jobs SET ${setClauses.join(', ')} WHERE id = $${params.length}`;
-    await this.pool.query(sql, params);
+    const result = await this.pool.query(sql, params);
+
+    // A 0-row update means the job_id doesn't exist. Throw rather than return silently
+    // so callers (e.g. the scheduler-update skill) surface a real failure instead of
+    // reporting a no-op edit as success. The web PATCH route already checks existence
+    // via getJob() before calling this, so this only bites genuinely-missing jobs.
+    if (result.rowCount === 0) {
+      throw new Error(`Job ${jobId} not found`);
+    }
 
     this.logger.info({ jobId, updates: Object.keys(updates) }, 'Scheduled job updated');
   }

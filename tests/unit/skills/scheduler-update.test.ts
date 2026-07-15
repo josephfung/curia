@@ -176,4 +176,34 @@ describe('SchedulerUpdateHandler', () => {
       expect(result.error).toContain('not found or not suspended');
     }
   });
+
+  it('surfaces a pause failure (e.g. missing/terminal job) as success:false', async () => {
+    const svc = mockSchedulerService();
+    svc.pauseJob.mockRejectedValue(new Error('Job gone not found or already cancelled/completed'));
+
+    const result = await handler.execute(makeCtx(
+      { job_id: 'gone', action: 'pause' },
+      { schedulerService: svc as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('not found or already cancelled/completed');
+    }
+  });
+
+  it('surfaces an edit failure on a missing job as success:false', async () => {
+    const svc = mockSchedulerService();
+    svc.updateJob.mockRejectedValue(new Error('Job gone not found'));
+
+    const result = await handler.execute(makeCtx(
+      { job_id: 'gone', action: 'edit', cron_expr: '*/10 * * * *' },
+      { schedulerService: svc as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('not found');
+    }
+  });
 });
