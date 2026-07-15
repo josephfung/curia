@@ -96,11 +96,15 @@ describeIf('SchedulerService.enqueueTaskWake (#1410 reuse + updated_at touch)', 
       svc.enqueueTaskWake({ taskId, agentId: 'coordinator', runAt: new Date() }),
       svc.enqueueTaskWake({ taskId, agentId: 'coordinator', runAt: new Date() }),
     ]);
-    // At least one must succeed; a racing loser fails on the partial unique index (23505).
-    expect(results.some((r) => r.status === 'fulfilled')).toBe(true);
-    for (const r of results) {
-      if (r.status === 'rejected') expect((r.reason as { code?: string }).code).toBe('23505');
-    }
+    // Deterministic: the revive UPDATE's terminal-status guard means exactly one caller revives
+    // the row; the loser matches 0 rows, inserts, and loses on the partial unique index (23505).
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const reason = (rejected[0] as PromiseRejectedResult).reason as { code?: string; constraint?: string };
+    expect(reason.code).toBe('23505');
+    expect(reason.constraint).toBe('scheduled_jobs_one_active_wake_per_task_uq');
     // Invariant: exactly one row for the task, and exactly one active wake.
     const rows = await rowsForTask(pool, taskId);
     expect(rows).toHaveLength(1);

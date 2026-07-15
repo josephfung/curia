@@ -1171,6 +1171,12 @@ export class SchedulerService {
              ORDER BY created_at DESC
              LIMIT 1
           )
+          -- Re-check the status on the target row itself, not just its id. Under READ COMMITTED
+          -- two concurrent revives can both pick the same terminal row; without this predicate the
+          -- second UPDATE (whose qual is only id = X) still matches after the first commits and
+          -- silently re-revives the now-pending row. With it, the loser's UPDATE matches 0 rows,
+          -- falls through to the INSERT, and loses cleanly on the one-active-wake index (23505).
+          AND status IN ('completed', 'failed', 'suspended', 'cancelled')
          RETURNING id
        ),
        _touch AS (

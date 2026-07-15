@@ -92,12 +92,14 @@ export class BacklogHeartbeat {
         this.opts.logger.debug({ taskId: c.id, agentId: c.agentId, jobId }, 'BacklogHeartbeat: wake enqueued');
         enqueued += 1;
       } catch (err) {
-        const e = err as { code?: string; constraint?: string };
-        if (e.code === '23503') {
+        // Guard against a thrown null/undefined (optional chaining) so error classification
+        // can never itself throw and abort the tick mid-loop.
+        const e = err as { code?: string; constraint?: string } | null;
+        if (e?.code === '23503') {
           // foreign_key_violation: task completed/deleted between selection and enqueue — benign.
           taskGoneSkips += 1;
           this.opts.logger.debug({ taskId: c.id, agentId: c.agentId }, 'BacklogHeartbeat: task gone at enqueue time — skipped');
-        } else if (e.code === '23505' && e.constraint === 'scheduled_jobs_one_active_wake_per_task_uq') {
+        } else if (e?.code === '23505' && e?.constraint === 'scheduled_jobs_one_active_wake_per_task_uq') {
           // unique_violation on the one-active-wake index: another enqueuer (plan-frontier /
           // resumable-continuation) won the race for this task's wake — benign. Tracked
           // separately (not folded into 23503) because within the heartbeat's own path this
