@@ -71,3 +71,25 @@ caveats; standard commands live in `package.json` scripts and `scripts/setup.sh`
   Always commit with `git commit -s` (or `git commit --signoff`). See `CONTRIBUTING.md`.
 - If an already-pushed commit is missing sign-off, amend or `git rebase --signoff main`
   and force-push (fine when no review threads are in flight).
+
+### GitHub PR review replies
+When addressing review feedback (CodeRabbit, humans, Bugbot, etc.) on a PR this run owns:
+
+1. **Post replies yourself** on the GitHub review thread. Never ask the user to
+   copy-paste a reply into GitHub — that is an anti-pattern for this environment.
+2. Use the Cursor **ManagePullRequest** tool (`action: post_comment`):
+   - Inline thread reply: set `in_reply_to` to the numeric review-comment id
+     (from `gh api repos/.../pulls/<n>/comments` or a permalink ending in
+     `#discussion_r<id>`).
+   - File/line note when there is no discussion id (e.g. a review-body nitpick):
+     set `path` + `line` (and optional `side`).
+   - Top-level note only when neither applies: `body` alone.
+3. Do **not** use `gh pr comment`, `gh api` POST to review comments, or raw
+   GraphQL — the cloud sandbox GitHub App token can push git but **lacks**
+   issues/PR comment write scopes (`Resource not accessible by integration`).
+4. After a confident fix: commit with `-s`, push the existing PR branch, then
+   reply on the same thread citing the fix SHA. Use `resolve_comment` only when
+   the user asks you to resolve, or when instructions for this run explicitly
+   allow resolving fully-addressed threads.
+5. If a comment needs human judgment: reply on the thread saying so — do not
+   leave a "please paste this" draft in chat.
