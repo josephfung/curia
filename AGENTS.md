@@ -65,3 +65,9 @@ caveats; standard commands live in `package.json` scripts and `scripts/setup.sh`
   migrations; they `describe.skip` when it is unset. Mirror CI by using a separate
   `curia_test` DB: create it, migrate it, then
   `DATABASE_URL=postgres://curia:<pw>@localhost:5432/curia_test LOG_LEVEL=error pnpm test`.
+
+### Git commits (DCO)
+- Every commit must include a DCO `Signed-off-by:` trailer — CI blocks PRs without it.
+  Always commit with `git commit -s` (or `git commit --signoff`). See `CONTRIBUTING.md`.
+- If an already-pushed commit is missing sign-off, amend or `git rebase --signoff main`
+  and force-push (fine when no review threads are in flight).
