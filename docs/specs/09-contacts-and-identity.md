@@ -662,17 +662,13 @@ The migration depends on `kg_nodes` existing (for the foreign key), so it must r
 - [ ] Unknown sender policy config and enforcement
 - [ ] Authorization check in Coordinator context assembly (role → overrides → trust)
 - [ ] Audit logging for all identity resolution and authorization decisions
-- [ ] Integration tests: proactive identity establishment
-- [ ] Integration tests: reactive identity establishment (unknown sender flow)
-- [ ] Integration tests: external source enrichment (CRM/calendar → contact)
-- [ ] Integration tests: authorization check (role defaults + overrides + trust)
+- [x] Integration tests: proactive identity establishment — covered by `tests/integration/contacts/` (#1382)
+- [x] Integration tests: reactive identity establishment (unknown sender flow) — covered by `tests/integration/contacts/` (#1382)
+- [x] Integration tests: external source enrichment (CRM/calendar → contact) — covered by `tests/integration/contacts/` (#1382)
+- [x] Integration tests: authorization check (role defaults + overrides + trust) — covered by `tests/integration/contacts/` (#1382)
 
 ---
 
 ## Known Deficiencies
 
 - **Audit logging for authorization decisions (allow/deny/escalate)** — not yet implemented; the `AuthorizationService` is a pure function with no bus or logger access. (#1379)
-- **Integration tests: proactive identity establishment** — not yet covered by an integration test. (#1382)
-- **Integration tests: reactive identity establishment (unknown sender flow)** — not yet covered by an integration test. (#1382)
-- **Integration tests: external source enrichment (CRM/calendar → contact)** — not yet covered by an integration test. (#1382)
-- **Integration tests: authorization check (role defaults + overrides + trust)** — three-layer logic is unit-tested in `authorization.test.ts`, but end-to-end integration coverage is missing. (#1382)
