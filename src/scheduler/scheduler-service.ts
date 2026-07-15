@@ -932,10 +932,22 @@ export class SchedulerService {
   }
 
   /**
+   * A completion write matched no 'running' row: the job was paused or cancelled while the
+   * run was in flight. Log and report not-suspended rather than resurrecting the job.
+   */
+  private skippedCompletion(jobId: string): { suspended: boolean } {
+    this.logger.info({ jobId }, 'Job completion skipped — job no longer running (paused/cancelled concurrently)');
+    return { suspended: false };
+  }
+
+  /**
    * Complete a job run.
    * - On success: if recurring (has cron_expr), advance next_run_at and reset failures;
    *   if one-shot, mark as completed.
    * - On failure: increment consecutive_failures. If it reaches SUSPEND_THRESHOLD, auto-suspend.
+   *
+   * All completion writes are fenced on status = 'running' so a run that finishes after a
+   * concurrent pause/cancel does not overwrite that state (see skippedCompletion).
    */
   async completeJobRun(
     jobId: string,
@@ -960,6 +972,9 @@ export class SchedulerService {
     if (success) {
       if (job.cron_expr) {
         // Recurring job: advance to next run using the per-job timezone, reset failure counter.
+        // The AND status = 'running' fence prevents a late completion from stamping 'pending'
+        // over a concurrent operator pause/cancel that landed while the run was in flight —
+        // the same guard recoverStuckJob and the claim-revert use.
         const nextRunAt = this.nextRunFromCron(job.cron_expr, job.timezone);
         const updateSql = `
           UPDATE scheduled_jobs
@@ -971,11 +986,12 @@ export class SchedulerService {
                  status = $2,
                  last_run_outcome = $4,
                  last_run_summary = COALESCE(last_run_summary, $5)
-           WHERE id = $3
+           WHERE id = $3 AND status = 'running'
         `;
-        await this.pool.query(updateSql, [nextRunAt, 'pending', jobId, 'completed', autoSummary ?? null]);
+        const res = await this.pool.query(updateSql, [nextRunAt, 'pending', jobId, 'completed', autoSummary ?? null]);
+        if (res.rowCount === 0) return this.skippedCompletion(jobId);
       } else {
-        // One-shot job: mark as completed.
+        // One-shot job: mark as completed (same running-status fence).
         const updateSql = `
           UPDATE scheduled_jobs
              SET last_run_at = now(),
@@ -985,9 +1001,10 @@ export class SchedulerService {
                  run_started_at = NULL,
                  last_run_outcome = $3,
                  last_run_summary = COALESCE(last_run_summary, $4)
-           WHERE id = $2
+           WHERE id = $2 AND status = 'running'
         `;
-        await this.pool.query(updateSql, ['completed', jobId, 'completed', autoSummary ?? null]);
+        const res = await this.pool.query(updateSql, ['completed', jobId, 'completed', autoSummary ?? null]);
+        if (res.rowCount === 0) return this.skippedCompletion(jobId);
       }
 
       this.logger.info({ jobId }, 'Job run completed successfully');
@@ -1007,9 +1024,10 @@ export class SchedulerService {
              run_started_at = NULL,
              status = $3,
              last_run_outcome = $5
-       WHERE id = $4
+       WHERE id = $4 AND status = 'running'
     `;
-    await this.pool.query(updateSql, [newFailures, error ?? null, newStatus, jobId, 'failed']);
+    const res = await this.pool.query(updateSql, [newFailures, error ?? null, newStatus, jobId, 'failed']);
+    if (res.rowCount === 0) return this.skippedCompletion(jobId);
 
     if (shouldSuspend) {
       this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Job auto-suspended after consecutive failures');

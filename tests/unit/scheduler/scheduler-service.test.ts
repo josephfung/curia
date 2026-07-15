@@ -531,6 +531,22 @@ describe('SchedulerService', () => {
       expect(result.suspended).toBe(false);
     });
 
+    it('skips the completion write when the job is no longer running (0 rows updated)', async () => {
+      // Fetch says running, but the fenced UPDATE matches 0 rows because a concurrent
+      // pause/cancel changed the status — completion must not resurrect the job.
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: 'job-race', cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // fenced UPDATE: no running row
+
+      const result = await svc.completeJobRun('job-race', true);
+
+      expect(result.suspended).toBe(false);
+      // The UPDATE is fenced on the running status so a paused job stays paused.
+      const [sql] = pool.query.mock.calls[1] as [string];
+      expect(sql).toContain("status = 'running'");
+    });
+
     it('clears run_started_at on success for a recurring job', async () => {
       pool.query
         .mockResolvedValueOnce({

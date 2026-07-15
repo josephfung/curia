@@ -66,9 +66,17 @@ export class SchedulerUpdateHandler implements SkillHandler {
             };
           }
 
+          // Parse and validate run_at here so the agent gets a clear diagnostic instead
+          // of a cryptic Postgres error when a malformed string reaches the DB as an
+          // Invalid Date. new Date('garbage') yields NaN rather than throwing.
+          const parsedRunAt = runAt ? new Date(runAt) : undefined;
+          if (parsedRunAt && Number.isNaN(parsedRunAt.getTime())) {
+            return { success: false, error: `Invalid run_at: "${run_at}" is not a valid ISO 8601 timestamp` };
+          }
+
           await ctx.schedulerService.updateJob(job_id, {
             cronExpr,
-            runAt: runAt ? new Date(runAt) : undefined,
+            runAt: parsedRunAt,
             taskPayload: task_payload,
           });
           break;

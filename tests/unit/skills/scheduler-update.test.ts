@@ -136,6 +136,21 @@ describe('SchedulerUpdateHandler', () => {
     expect(call[1].runAt!.toISOString()).toBe(runAt);
   });
 
+  it('rejects action=edit with a malformed run_at before hitting the service', async () => {
+    const svc = mockSchedulerService();
+    const result = await handler.execute(makeCtx(
+      { job_id: 'job-bad', action: 'edit', run_at: 'not-a-date' },
+      { schedulerService: svc as never },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('valid ISO 8601 timestamp');
+    }
+    // Must not reach the DB with an Invalid Date.
+    expect(svc.updateJob).not.toHaveBeenCalled();
+  });
+
   it('rejects action=edit with no editable field supplied', async () => {
     const svc = mockSchedulerService();
     const result = await handler.execute(makeCtx(

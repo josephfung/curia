@@ -130,4 +130,18 @@ describeIf('Scheduler lifecycle mutations against real Postgres (#1409)', () => 
       svc.updateJob('00000000-0000-0000-0000-000000000000', { cronExpr: '30 14 * * 3' }),
     ).rejects.toThrow('not found');
   });
+
+  it('a completion that lands after a pause does not resurrect the job', async () => {
+    // Race: the job is 'running', the operator pauses it, then the in-flight run finishes
+    // and calls completeJobRun. The status = 'running' fence must keep it 'paused'.
+    const { jobId, taskId } = await insertJobWithTask(pool, 'running', 'active');
+
+    await svc.pauseJob(jobId);
+    expect((await statuses(pool, jobId, taskId)).job).toBe('paused');
+
+    // Late successful completion of the recurring run — must be a no-op, not a reset to 'pending'.
+    const result = await svc.completeJobRun(jobId, true);
+    expect(result.suspended).toBe(false);
+    expect((await statuses(pool, jobId, taskId)).job).toBe('paused');
+  });
 });
