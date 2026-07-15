@@ -20,6 +20,7 @@ import {
   parseNumericFlag,
   type DedupRunOptions,
 } from './dedup-contacts.js';
+import { dedupPairTag } from '../src/contacts/dedup-pair-key.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -207,6 +208,27 @@ describe('runDedup — unit', () => {
     const description = taskArgs.description as string;
     expect(description).toContain('c1');
     expect(description).toContain('c2');
+  });
+
+  it('skips fuzzy pairs that already have an open dedup review task', async () => {
+    const uuidA = '11111111-1111-1111-1111-111111111111';
+    const uuidB = '22222222-2222-2222-2222-222222222222';
+    const contacts: Contact[] = [
+      makeContact({ id: uuidA, displayName: 'Mikael Sorensen' }),
+      makeContact({ id: uuidB, displayName: 'Michael Sorenson' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, {
+      ...opts,
+      listOpenDedupTasks: async () => [{
+        tags: ['dedup', dedupPairTag(uuidA, uuidB)],
+      }],
+    });
+
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(result.taskCount).toBe(0);
+    expect(result.skippedExistingCount).toBe(1);
   });
 
   // -------------------------------------------------------------------------

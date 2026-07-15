@@ -14,6 +14,11 @@ import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/t
 import type { DuplicatePair, TaskOriginator } from '../../src/contacts/types.js';
 import type { KgNode } from '../../src/memory/types.js';
 import { hasExclusion } from '../../src/contacts/dedup-exclusions.js';
+import {
+  canonicalPairKey,
+  dedupPairTag,
+  pairKeyFromDedupTask,
+} from '../../src/contacts/dedup-pair-key.js';
 
 // Default minimum Jaro-Winkler score — chosen empirically as the precision sweet
 // spot on the production contact set (0.95 is very clean, 0.90 starts to pick up
@@ -30,28 +35,6 @@ const OPEN_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
 // schema change; document this as an accepted ceiling. If it ever becomes an
 // issue, adding offset to ListTasksFilters and paginating here is the right fix.
 const EXISTING_TASK_FETCH_LIMIT = 1000;
-
-// Regex to extract contact IDs from task descriptions filed by this skill or
-// by the dedup-contacts maintenance script, both of which use the same format:
-//   "Contact A ID: <uuid>  (Display Name)"
-//   "Contact B ID: <uuid>  (Display Name)"
-const CONTACT_ID_LINE_RE = /Contact ([AB]) ID: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
-
-/** Canonical (order-independent) key for a contact pair. */
-function pairKey(aId: string, bId: string): string {
-  return aId < bId ? `${aId}:${bId}` : `${bId}:${aId}`;
-}
-
-/** Extract contact A and B IDs from a dedup task description. Returns null if not found. */
-function extractPairIds(description: string | null | undefined): { aId: string; bId: string } | null {
-  if (!description) return null;
-  const found: Record<string, string> = {};
-  for (const match of description.matchAll(CONTACT_ID_LINE_RE)) {
-    found[match[1]!.toUpperCase()] = match[2]!;
-  }
-  if (found['A'] && found['B']) return { aId: found['A'], bId: found['B'] };
-  return null;
-}
 
 export class ContactFindDuplicatesHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -122,9 +105,9 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
       existingPairKeys = new Set<string>();
       let unparseable = 0;
       for (const task of existingTasks) {
-        const ids = extractPairIds(task.description ?? null);
-        if (ids) {
-          existingPairKeys.add(pairKey(ids.aId, ids.bId));
+        const key = pairKeyFromDedupTask(task);
+        if (key) {
+          existingPairKeys.add(key);
         } else {
           unparseable++;
         }
@@ -165,7 +148,7 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
 
     // -- Per-pair processing: errors are isolated so one failing pair doesn't abort the scan --
     for (const pair of pairs) {
-      const key = pairKey(pair.contactA.id, pair.contactB.id);
+      const key = canonicalPairKey(pair.contactA.id, pair.contactB.id);
 
       if (existingPairKeys.has(key)) {
         skippedExisting++;
@@ -224,7 +207,7 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
           owner: 'curia',
           source: 'agent',
           sourceAgentId: 'contacts',
-          tags: ['dedup', 'contacts'],
+          tags: ['dedup', 'contacts', dedupPairTag(pair.contactA.id, pair.contactB.id)],
           // Copy the cron run's lineage (system) onto the review task (#1125). As a source='agent'
           // task it is a DERIVED child, so when the heartbeat wakes it the bypass ladder requires
           // posture D (score >= 90) to retain system standing — below that it is propose-only and
@@ -237,6 +220,7 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
           'contact-find-duplicates: filed review task',
         );
         filed++;
+        existingPairKeys.add(key);
       } catch (taskErr) {
         // Fail open: log and continue so one pair error doesn't abort the entire scan.
         // The pair is not counted as filed, so the idempotency check will attempt it again

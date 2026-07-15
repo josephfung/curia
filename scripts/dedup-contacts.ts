@@ -25,6 +25,11 @@ import {
   type WriteExclusionOptions,
   type HasExclusionOptions,
 } from '../src/contacts/dedup-exclusions.js';
+import {
+  canonicalPairKey,
+  dedupPairTag,
+  pairKeyFromDedupTask,
+} from '../src/contacts/dedup-pair-key.js';
 import { ModelRegistry } from '../src/agents/llm/model-registry.js';
 import { EventBus } from '../src/bus/bus.js';
 import { AuditLogger } from '../src/audit/logger.js';
@@ -56,6 +61,8 @@ export interface DedupRunResult {
   taskCount: number;
   /** Number of pairs skipped due to dedup_exclusion facts. */
   skippedExcludedCount: number;
+  /** Number of pairs skipped because an open dedup review task already exists. */
+  skippedExistingCount: number;
   /** Number of structural pairs involving the principal (routed to task instead of merge). */
   principalSkippedCount: number;
   /** Number of pairs that would have been merged (dry-run report). */
@@ -87,8 +94,7 @@ export interface DedupRunOptions {
    * (counted in skippedAboveMaxScoreCount). Pairs with `minScore ≤ score < maxScore` are
    * acted on. Used for incremental band runs: a later, lower `--min-score` pass sets
    * `--max-score` to the previous run's `--min-score` so it doesn't re-create tasks for
-   * pairs the earlier run already surfaced (the sweep is not task-idempotent). Undefined =
-   * no upper bound.
+   * pairs the earlier run already surfaced. Undefined = no upper bound.
    */
   maxScore?: number;
   /**
@@ -113,6 +119,8 @@ export interface DedupRunOptions {
     sourceAgentId: string;
     tags: string[];
   }) => Promise<unknown>;
+  /** Open dedup review tasks for idempotency checks. Omit in unit tests that don't need it. */
+  listOpenDedupTasks?: () => Promise<Array<{ tags?: string[]; description?: string | null }>>;
   // storeFact is NOT included here: the sweep never writes exclusion facts.
   // Decline→exclusion writes go through the contacts agent calling contact-dedup-exclude.
   /** Calls EntityMemory.getFacts for a KG node — returns fact nodes. */
@@ -142,7 +150,7 @@ export async function runDedup(
   identityMap: Map<string, ChannelIdentity[]>,
   opts: DedupRunOptions,
 ): Promise<DedupRunResult> {
-  const { dryRun, mergeContacts, createTask, getFacts, minScore, maxScore, maxTasks, noTasks } = opts;
+  const { dryRun, mergeContacts, createTask, getFacts, minScore, maxScore, maxTasks, noTasks, listOpenDedupTasks } = opts;
 
   // Memoize getFacts per KG node for the duration of the sweep. The exclusion check
   // runs inside the O(n²) pair loop, and a contact that appears in many candidate
@@ -163,6 +171,7 @@ export async function runDedup(
     mergedCount: 0,
     taskCount: 0,
     skippedExcludedCount: 0,
+    skippedExistingCount: 0,
     principalSkippedCount: 0,
     wouldMergeCount: 0,
     wouldCreateTaskCount: 0,
@@ -174,6 +183,15 @@ export async function runDedup(
 
   if (contacts.length < 2) return result;
 
+  const existingPairKeys = new Set<string>();
+  if (listOpenDedupTasks) {
+    const existingTasks = await listOpenDedupTasks();
+    for (const task of existingTasks) {
+      const key = pairKeyFromDedupTask(task);
+      if (key) existingPairKeys.add(key);
+    }
+  }
+
   // Track pairs we've already handled to avoid double-processing (A,B) and (B,A).
   const processedPairs = new Set<string>();
 
@@ -184,7 +202,7 @@ export async function runDedup(
 
   // We need a canonical ordering for pair keys
   function pairKey(aId: string, bId: string): string {
-    return aId < bId ? `${aId}:${bId}` : `${bId}:${aId}`;
+    return canonicalPairKey(aId, bId);
   }
 
   for (let i = 0; i < contacts.length; i++) {
@@ -330,6 +348,11 @@ export async function runDedup(
           result.principalSkippedCount++;
         }
 
+        if (existingPairKeys.has(key)) {
+          result.skippedExistingCount++;
+          continue;
+        }
+
         // --no-tasks (merge-only) or the --max-tasks cap: suppress task creation. Compare
         // against tasks already acted on (real run: taskCount; dry-run: wouldCreateTaskCount)
         // so the cap behaves identically in both modes and the dry-run preview reflects
@@ -381,9 +404,10 @@ export async function runDedup(
             owner: 'curia',
             source: 'agent',
             sourceAgentId: 'contacts',
-            tags: ['dedup', 'contacts'],
+            tags: ['dedup', 'contacts', dedupPairTag(a.id, b.id)],
           });
           result.taskCount++;
+          existingPairKeys.add(key);
         } catch (err) {
           logger.error({ err, contactAId: a.id, contactBId: b.id }, 'dedup: task creation failed — continuing');
           result.errorCount++;
@@ -737,6 +761,12 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
 
         // TaskRepo.createTask publishes task.created and handles progress/error_budget cols.
         createTask: (params) => taskRepo.createTask(params),
+
+        listOpenDedupTasks: () => taskRepo.listTasks({
+          statuses: ['open', 'in_progress', 'waiting', 'blocked'],
+          tag: 'dedup',
+          limit: 1000,
+        }),
 
         // storeFact is NOT included in DedupRunOptions — the sweep never writes exclusion
         // facts directly. See writeExclusion() and its doc comment for the intended call site.
