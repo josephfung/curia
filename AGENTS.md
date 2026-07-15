@@ -93,3 +93,17 @@ When addressing review feedback (CodeRabbit, humans, Bugbot, etc.) on a PR this 
    allow resolving fully-addressed threads.
 5. If a comment needs human judgment: reply on the thread saying so — do not
    leave a "please paste this" draft in chat.
+
+### Pull request bodies (no Cursor chrome)
+When creating or updating a PR via **ManagePullRequest**, pass **only** the
+human-readable description. Never include any of the following in `body`:
+
+- `<!-- CURSOR_AGENT_PR_BODY_BEGIN -->` / `<!-- CURSOR_AGENT_PR_BODY_END -->`
+- "Open in Web" / "Open in Cursor" buttons, badges, or image links
+- `cursor.com/agents/...` run links or other cloud-agent deep links meant as PR chrome
+
+If the platform re-injects those wrappers or footers after the call, do not add
+a second copy, and do not ask the user to scrub them as part of the happy path.
+There is currently **no** AGENTS.md or dashboard toggle that disables
+server-side injection (Cursor staff confirmed; Attribution settings only cover
+the separate "Made with Cursor" trailer).
