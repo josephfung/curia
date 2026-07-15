@@ -347,7 +347,7 @@ describe('SchedulerService', () => {
 
   describe('pauseJob', () => {
     it('sets both the job and its linked task to paused in one query', async () => {
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
       await svc.pauseJob('job-pause');
 
@@ -357,7 +357,26 @@ describe('SchedulerService', () => {
       expect(sql).toContain('scheduled_jobs');
       expect(sql).toContain('tasks');
       expect(sql).toContain('paused');
+      // Terminal jobs must not be re-armable via pause → resume.
+      expect(sql).toContain("NOT IN ('cancelled', 'completed')");
       expect(params[0]).toBe('job-pause');
+    });
+
+    it('throws when the job is missing or already terminal (0 rows)', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      await expect(svc.pauseJob('gone')).rejects.toThrow('not found or already cancelled/completed');
+    });
+  });
+
+  // -- pauseJobForDrift (drift path stays non-throwing) --
+
+  describe('pauseJobForDrift', () => {
+    it('logs a warning but does not throw when the job matched nothing', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      await expect(svc.pauseJobForDrift('gone')).resolves.toBeUndefined();
+      expect(logger.warn).toHaveBeenCalled();
     });
   });
 
@@ -1179,7 +1198,7 @@ describe('SchedulerService', () => {
 
   describe('updateJob', () => {
     it('updates cronExpr and recalculates next_run_at', async () => {
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
       await svc.updateJob('job-up', { cronExpr: '*/10 * * * *' });
 
@@ -1190,13 +1209,19 @@ describe('SchedulerService', () => {
     });
 
     it('updates taskPayload only', async () => {
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
       await svc.updateJob('job-up2', { taskPayload: { a: 1 } });
 
       const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
       expect(sql).toContain('task_payload');
       expect(params).toContain('job-up2');
+    });
+
+    it('throws when the job_id matches no row (0 rows updated)', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      await expect(svc.updateJob('gone', { cronExpr: '*/10 * * * *' })).rejects.toThrow('not found');
     });
   });
 });
