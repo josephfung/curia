@@ -1112,9 +1112,15 @@ export class SchedulerService {
     return { noOp: false, suspended: shouldSuspend, consecutiveFailures: newFailures };
   }
 
-  /** Enqueue a one-shot wake for an EXISTING task. Inserts a pending scheduled_jobs
-   *  row with task_id preset so the dispatcher routes it to `agentId` with full task
-   *  context. Used by the BacklogHeartbeat. Does not create a new task.
+  /** Enqueue a one-shot wake for an EXISTING task. Revives the task's most-recent terminal
+   *  wake row back to `pending` (or inserts one if none exists) with task_id preset so the
+   *  dispatcher routes it to `agentId` with full task context, and touches the task's
+   *  updated_at. Does not create a new task. See #1410 for the reuse + backoff rationale.
+   *
+   *  Three callers, all of which now get the revive + updated_at touch: the BacklogHeartbeat
+   *  (backlog-heartbeat.ts), resumable continuation (resumable-continuation.ts), and the
+   *  plan frontier (plan-frontier.ts). The continuation/frontier callers pre-guard with
+   *  taskHasPendingWake and catch 23505, so on their paths the touch is redundant-but-harmless.
    *
    *  `originator` (the task's lineage, #1125) is persisted on the wake row so the woken task
    *  fires with provenance — previously it fired with metadata: undefined and lost all
@@ -1131,20 +1137,66 @@ export class SchedulerService {
     derived?: boolean;
   }): Promise<{ jobId: string }> {
     const { taskId, agentId, runAt, createdBy = 'heartbeat', originator = null, derived = false } = params;
+    const payload = JSON.stringify({ type: 'task-wake', task_id: taskId, standing: { derived } });
+    const originatorJson = originator ? JSON.stringify(originator) : null;
+    const args = [agentId, runAt, payload, createdBy, this.timezone, taskId, originatorJson];
+
+    // Fix 3 (#1410): reuse the task's existing terminal wake row instead of inserting a fresh
+    // row every cycle. Left unbounded this accreted thousands of completed rows for a single
+    // looping task; reusing keeps one scheduled_jobs row per task so the table stays searchable.
+    // Failure bookkeeping is preserved when reviving a 'failed'/'suspended' row (mirrors
+    // upsertDeclarativeJob) so the SUSPEND_THRESHOLD circuit-breaker accumulates across reuse
+    // cycles for a persistently-failing wake; a clean 'completed'/'cancelled' row starts fresh.
+    // Fix 1 (#1410): the _touch CTE bumps the task's updated_at so an *attended* task leaves the
+    // heartbeat's idle window for a full idleThresholdHours rather than being re-selected on the
+    // next tick (a no-op wake previously never bumped updated_at, so the task looped forever).
+    // Safety rests on two invariants: the partial unique index
+    // scheduled_jobs_one_active_wake_per_task_uq (migration 067) means only terminal rows are
+    // revived and a racing insert loses with 23505; and the FK scheduled_jobs.task_id ON DELETE
+    // SET NULL (migration 049) means a deleted task nulls the link, so a revive/insert for a gone
+    // task fails with 23503 rather than ever touching a phantom task row.
+    const revive = await this.pool.query(
+      `WITH revived AS (
+         UPDATE scheduled_jobs
+            SET status = 'pending', run_at = $2, next_run_at = $2, run_started_at = NULL,
+                consecutive_failures = CASE WHEN status IN ('failed','suspended') THEN consecutive_failures ELSE 0 END,
+                last_error = CASE WHEN status IN ('failed','suspended') THEN last_error ELSE NULL END,
+                last_run_outcome = CASE WHEN status IN ('failed','suspended') THEN last_run_outcome ELSE NULL END,
+                agent_id = $1, created_by = $4, timezone = $5,
+                task_payload = $3::jsonb, originator = $7::jsonb
+          WHERE id = (
+            SELECT id FROM scheduled_jobs
+             WHERE task_id = $6 AND task_payload->>'type' = 'task-wake'
+               AND status IN ('completed', 'failed', 'suspended', 'cancelled')
+             ORDER BY created_at DESC
+             LIMIT 1
+          )
+         RETURNING id
+       ),
+       _touch AS (
+         UPDATE tasks SET updated_at = now() WHERE id = $6 AND EXISTS (SELECT 1 FROM revived)
+       )
+       SELECT id FROM revived`,
+      args,
+    );
+    if (revive.rows.length > 0) {
+      return { jobId: (revive.rows[0] as { id: string }).id };
+    }
+
+    // No terminal wake row to reuse (first wake for this task) — insert a new one, touching
+    // the task's updated_at in the same statement so the backoff applies to first wakes too.
     const { rows } = await this.pool.query(
-      `INSERT INTO scheduled_jobs
-         (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
-       VALUES ($1, NULL, $2, $3, 'pending', $2, $4, $5, $6, $7::jsonb)
-       RETURNING id`,
-      [
-        agentId,
-        runAt,
-        JSON.stringify({ type: 'task-wake', task_id: taskId, standing: { derived } }),
-        createdBy,
-        this.timezone,
-        taskId,
-        originator ? JSON.stringify(originator) : null,
-      ],
+      `WITH j AS (
+         INSERT INTO scheduled_jobs
+           (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
+         VALUES ($1, NULL, $2, $3::jsonb, 'pending', $2, $4, $5, $6, $7::jsonb)
+         RETURNING id
+       ),
+       _touch AS (
+         UPDATE tasks SET updated_at = now() WHERE id = $6
+       )
+       SELECT id FROM j`,
+      args,
     );
     return { jobId: (rows[0] as { id: string }).id };
   }

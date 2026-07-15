@@ -75,6 +75,9 @@ export class BacklogHeartbeat {
 
     const runAt = new Date();
     let enqueued = 0;
+    let taskGoneSkips = 0; // 23503 — task terminal/deleted between selection and enqueue
+    let raceSkips = 0; // 23505 — another enqueuer already holds this task's active wake
+    let hardFailures = 0; // anything else — a real problem
     for (const c of candidates) {
       try {
         const { jobId } = await this.opts.schedulerService.enqueueTaskWake({
@@ -89,18 +92,38 @@ export class BacklogHeartbeat {
         this.opts.logger.debug({ taskId: c.id, agentId: c.agentId, jobId }, 'BacklogHeartbeat: wake enqueued');
         enqueued += 1;
       } catch (err) {
-        // 23503 = foreign_key_violation: task was completed/deleted between selection and enqueue — benign race.
-        if ((err as { code?: string }).code === '23503') {
-          this.opts.logger.debug({ taskId: c.id, agentId: c.agentId }, 'BacklogHeartbeat: task no longer exists at enqueue time — skipped');
+        const e = err as { code?: string; constraint?: string };
+        if (e.code === '23503') {
+          // foreign_key_violation: task completed/deleted between selection and enqueue — benign.
+          taskGoneSkips += 1;
+          this.opts.logger.debug({ taskId: c.id, agentId: c.agentId }, 'BacklogHeartbeat: task gone at enqueue time — skipped');
+        } else if (e.code === '23505' && e.constraint === 'scheduled_jobs_one_active_wake_per_task_uq') {
+          // unique_violation on the one-active-wake index: another enqueuer (plan-frontier /
+          // resumable-continuation) won the race for this task's wake — benign. Tracked
+          // separately (not folded into 23503) because within the heartbeat's own path this
+          // should be near-zero: selectHeartbeatCandidates already excludes active-wake tasks.
+          // A sustained count means the suppression clause regressed and the flood (#1410) is
+          // recurring — surfaced at warn below so it is not silently swallowed.
+          raceSkips += 1;
+          this.opts.logger.debug({ taskId: c.id, agentId: c.agentId }, 'BacklogHeartbeat: task already has an active wake — skipped (race)');
         } else {
+          hardFailures += 1;
           this.opts.logger.error({ err, taskId: c.id, agentId: c.agentId }, 'BacklogHeartbeat: failed to enqueue wake');
         }
       }
     }
-    this.opts.logger.info({ enqueued, considered: candidates.length }, 'BacklogHeartbeat: tick complete');
-    if (enqueued === 0 && candidates.length > 0) {
+    this.opts.logger.info({ enqueued, considered: candidates.length, taskGoneSkips, raceSkips, hardFailures }, 'BacklogHeartbeat: tick complete');
+    if (raceSkips > 0) {
+      this.opts.logger.warn(
+        { raceSkips, considered: candidates.length },
+        'BacklogHeartbeat: enqueue hit the one-active-wake index — expected near-zero; investigate candidate suppression (#1410) if sustained',
+      );
+    }
+    // Only alarm when real (non-benign) failures blocked all progress — a tick where every
+    // candidate was a benign task-gone/race skip is healthy, not a stuck scheduler.
+    if (enqueued === 0 && hardFailures > 0) {
       this.opts.logger.error(
-        { considered: candidates.length },
+        { considered: candidates.length, hardFailures },
         'BacklogHeartbeat: all wake enqueues failed — tasks will not advance until next tick',
       );
     }

@@ -17,6 +17,7 @@ async function seedTask(
     owner?: string;
     sourceAgentId?: string | null;
     blockedBy?: string | null;
+    parentTaskId?: string | null;
     updatedAt: Date;
     /** Task source — drives the `derived` computation (source='agent' → derived). Default 'agent'. */
     source?: 'ceo' | 'agent' | 'scheduler' | 'coordinator';
@@ -27,8 +28,8 @@ async function seedTask(
   const { rows } = await pool.query(
     `INSERT INTO tasks
        (agent_id, title, intent_anchor, status, progress, error_budget, owner,
-        blocked_by_task_id, priority, source, source_agent_id, created_by, tags, updated_at, originator)
-     VALUES ($1,$2,$3,$4,'{}'::jsonb,'{}'::jsonb,$5,$6,50,$9,$7,'test','{}',$8,$10::jsonb)
+        blocked_by_task_id, parent_task_id, priority, source, source_agent_id, created_by, tags, updated_at, originator)
+     VALUES ($1,$2,$3,$4,'{}'::jsonb,'{}'::jsonb,$5,$6,$11,50,$9,$7,'test','{}',$8,$10::jsonb)
      RETURNING id`,
     [
       opts.sourceAgentId ?? 'coordinator',
@@ -41,6 +42,7 @@ async function seedTask(
       opts.updatedAt,
       opts.source ?? 'agent',
       opts.originator ? JSON.stringify(opts.originator) : null,
+      opts.parentTaskId ?? null,
     ],
   );
   const [row] = rows as Array<{ id: string }>;
@@ -163,6 +165,61 @@ describeIf('selectHeartbeatCandidates', () => {
     await pool.query(`UPDATE tasks SET waiting_on_contact_id = $1 WHERE id = $2`, [contactId, id]);
     const got = await selectHeartbeatCandidates(pool, opts);
     expect(got.map((c) => c.id)).not.toContain(id);
+  });
+
+  // -- parent-with-scheduled-children suppression (#1410) --
+  // A parent "container" task whose real work lives in subtasks that already carry
+  // their own future wakes has nothing to do until then; the heartbeat should not
+  // re-poke it every interval. Suppression is scoped to children with an ACTIVE
+  // (pending/running) wake — a covered plan, not a stalled one.
+
+  const seedChildWake = async (childId: string, status = 'pending') =>
+    pool.query(
+      `INSERT INTO scheduled_jobs (agent_id, cron_expr, run_at, task_payload, status, next_run_at, created_by, task_id)
+       VALUES ('coordinator', NULL, now() + interval '2 days', '{"type":"task-wake"}'::jsonb, $2, now() + interval '2 days', 'test', $1)`,
+      [childId, status],
+    );
+
+  it('suppresses an idle parent whose non-terminal child already has a pending wake', async () => {
+    const parent = await seedTask(pool, { title: 'parent', status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
+    const child = await seedTask(pool, { title: 'child', status: 'open', sourceAgentId: 'ceo-inbox', parentTaskId: parent, updatedAt: hoursAgo(10) });
+    await seedChildWake(child, 'pending');
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got.map((c) => c.id)).not.toContain(parent);
+  });
+
+  it('suppresses an idle parent whose child has a running wake', async () => {
+    const parent = await seedTask(pool, { title: 'parent-run', status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
+    const child = await seedTask(pool, { title: 'child-run', status: 'in_progress', sourceAgentId: 'ceo-inbox', parentTaskId: parent, updatedAt: hoursAgo(10) });
+    await seedChildWake(child, 'running');
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got.map((c) => c.id)).not.toContain(parent);
+  });
+
+  it('still selects a parent whose child wake is already terminal (completed)', async () => {
+    // A completed child wake does not "cover" the parent — the plan is not progressing on
+    // schedule, so the parent remains a legitimate heartbeat candidate.
+    const parent = await seedTask(pool, { title: 'parent-done-child', status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
+    const child = await seedTask(pool, { title: 'child-done', status: 'open', sourceAgentId: 'ceo-inbox', parentTaskId: parent, updatedAt: hoursAgo(1) });
+    await seedChildWake(child, 'completed');
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got.map((c) => c.id)).toContain(parent);
+  });
+
+  it('still selects a parent whose non-terminal child has no wake at all', async () => {
+    const parent = await seedTask(pool, { title: 'parent-nowake-child', status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
+    await seedTask(pool, { title: 'child-nowake', status: 'open', sourceAgentId: 'ceo-inbox', parentTaskId: parent, updatedAt: hoursAgo(1) });
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got.map((c) => c.id)).toContain(parent);
+  });
+
+  it('does not suppress a parent when only a terminal (done) child holds the wake', async () => {
+    // A done child is terminal — its wake, even if somehow pending, must not shield the parent.
+    const parent = await seedTask(pool, { title: 'parent-terminal-child', status: 'open', sourceAgentId: 'ceo-inbox', updatedAt: hoursAgo(10) });
+    const child = await seedTask(pool, { title: 'child-terminal', status: 'done', sourceAgentId: 'ceo-inbox', parentTaskId: parent, updatedAt: hoursAgo(1) });
+    await seedChildWake(child, 'pending');
+    const got = await selectHeartbeatCandidates(pool, opts);
+    expect(got.map((c) => c.id)).toContain(parent);
   });
 
   // -- lineage + derived threading (#1125) --

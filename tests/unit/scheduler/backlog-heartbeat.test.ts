@@ -71,6 +71,55 @@ describe('BacklogHeartbeat.tick', () => {
     expect(count).toBe(1); // second succeeds despite first failing
     expect(enqueueTaskWake).toHaveBeenCalledTimes(2);
   });
+
+  it('logs an error only when a real (non-benign) failure blocks all progress', async () => {
+    vi.spyOn(tasksQueries, 'selectHeartbeatCandidates').mockResolvedValue([
+      { id: 't1', agentId: 'ceo-inbox', originator: null, derived: false },
+    ]);
+    const logger = mockLogger();
+    const { hb, enqueueTaskWake } = makeHeartbeat({ logger: logger as never });
+    enqueueTaskWake.mockRejectedValueOnce(new Error('db blip')); // no pg code → hard failure
+    expect(await hb.tick()).toBe(0);
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  it('treats a one-active-wake unique violation (23505) as a benign race: no error, but warns (#1410)', async () => {
+    vi.spyOn(tasksQueries, 'selectHeartbeatCandidates').mockResolvedValue([
+      { id: 't1', agentId: 'ceo-inbox', originator: null, derived: false },
+    ]);
+    const logger = mockLogger();
+    const { hb, enqueueTaskWake } = makeHeartbeat({ logger: logger as never });
+    enqueueTaskWake.mockRejectedValueOnce(
+      Object.assign(new Error('dup'), { code: '23505', constraint: 'scheduled_jobs_one_active_wake_per_task_uq' }),
+    );
+    expect(await hb.tick()).toBe(0);
+    expect(logger.error).not.toHaveBeenCalled(); // benign — must not alarm
+    expect(logger.warn).toHaveBeenCalled(); // but surfaced so a suppression regression is visible
+  });
+
+  it('treats a task-gone FK violation (23503) as benign: no error and no warn', async () => {
+    vi.spyOn(tasksQueries, 'selectHeartbeatCandidates').mockResolvedValue([
+      { id: 't1', agentId: 'ceo-inbox', originator: null, derived: false },
+    ]);
+    const logger = mockLogger();
+    const { hb, enqueueTaskWake } = makeHeartbeat({ logger: logger as never });
+    enqueueTaskWake.mockRejectedValueOnce(Object.assign(new Error('fk'), { code: '23503' }));
+    expect(await hb.tick()).toBe(0);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled(); // task-gone is routine, not a regression signal
+  });
+
+  it('does not raise an unexpected unique violation on a different constraint as benign', async () => {
+    vi.spyOn(tasksQueries, 'selectHeartbeatCandidates').mockResolvedValue([
+      { id: 't1', agentId: 'ceo-inbox', originator: null, derived: false },
+    ]);
+    const logger = mockLogger();
+    const { hb, enqueueTaskWake } = makeHeartbeat({ logger: logger as never });
+    // A 23505 on some OTHER constraint is not the one-active-wake race — it must surface as error.
+    enqueueTaskWake.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505', constraint: 'some_other_uq' }));
+    expect(await hb.tick()).toBe(0);
+    expect(logger.error).toHaveBeenCalled();
+  });
 });
 
 describe('BacklogHeartbeat start/stop', () => {
