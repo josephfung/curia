@@ -460,25 +460,28 @@ export class TaskRepo {
       RETURNING ${TASK_COLUMNS}
     `;
 
-    // Terminal-status transitions (cancelled / done) always cancel pending wake-up jobs.
-    // The _cancel_wake arm handles the bare status-only path; wakeAt reschedules update
-    // the pending row in place (or revive/insert) instead of cancel+insert (#1415).
-    const cancelOnTerminal = (updates.status === 'cancelled' || updates.status === 'done')
-      && !updates.wakeAt;
+    // Terminal-status transitions (cancelled / done) always cancel pending wake-up jobs,
+    // even when wakeAt is also supplied — terminal wins over reschedule (#1415 review).
+    // Otherwise wakeAt updates the pending row in place (or revive/insert) instead of
+    // cancel+insert.
+    const cancelOnTerminal = updates.status === 'cancelled' || updates.status === 'done';
+    const rescheduleWake = updates.wakeAt !== undefined && !cancelOnTerminal;
 
     const transitioningToTerminal = updates.status !== undefined
       && updates.status !== current.status
       && (updates.status === 'done' || updates.status === 'cancelled');
 
     const executeUpdate = async (executor: DbQueryable): Promise<DbTaskRow | null> => {
-      if (updates.wakeAt || cancelOnTerminal) {
+      if (rescheduleWake || cancelOnTerminal) {
         const wakeAgentIdx = whereIdx + 1;
-        const wakeRunAtIdx = updates.wakeAt ? whereIdx + 2 : null;
-        const wakeCreatedByIdx = updates.wakeAt ? whereIdx + 3 : null;
-        const wakeTzIdx = updates.wakeAt ? whereIdx + 4 : null;
-        const wakeOriginatorIdx = updates.wakeAt ? whereIdx + 5 : null;
+        const wakeRunAtIdx = rescheduleWake ? whereIdx + 2 : null;
+        const wakeCreatedByIdx = rescheduleWake ? whereIdx + 3 : null;
+        const wakeTzIdx = rescheduleWake ? whereIdx + 4 : null;
+        const wakeOriginatorIdx = rescheduleWake ? whereIdx + 5 : null;
 
-        const cteSql = updates.wakeAt ? `
+        // Every wake mutation is gated on updated_task so a concurrent terminal
+        // transition cannot revive/insert a pending wake after the task UPDATE matched 0 rows.
+        const cteSql = rescheduleWake ? `
         WITH updated_task AS (
           ${updateSql}
         ),
@@ -486,8 +489,13 @@ export class TaskRepo {
           UPDATE scheduled_jobs
              SET run_at = $${wakeRunAtIdx}, next_run_at = $${wakeRunAtIdx},
                  agent_id = $${wakeAgentIdx}, created_by = $${wakeCreatedByIdx},
-                 timezone = $${wakeTzIdx}, originator = $${wakeOriginatorIdx}::jsonb
-           WHERE task_id = $${whereIdx} AND status = 'pending'
+                 timezone = $${wakeTzIdx},
+                 task_payload = '{"type":"task-wake"}'::jsonb,
+                 originator = $${wakeOriginatorIdx}::jsonb
+           WHERE task_id = $${whereIdx}
+             AND task_payload->>'type' = 'task-wake'
+             AND status = 'pending'
+             AND EXISTS (SELECT 1 FROM updated_task)
           RETURNING id
         ),
         _revive_wake AS (
@@ -509,6 +517,7 @@ export class TaskRepo {
            )
              AND status IN ('completed', 'failed', 'suspended', 'cancelled')
              AND NOT EXISTS (SELECT 1 FROM _update_pending_wake)
+             AND EXISTS (SELECT 1 FROM updated_task)
           RETURNING id
         ),
         _insert_wake AS (
@@ -517,6 +526,7 @@ export class TaskRepo {
                  $${wakeRunAtIdx}, $${wakeCreatedByIdx}, $${wakeTzIdx}, $${whereIdx}, $${wakeOriginatorIdx}::jsonb
            WHERE NOT EXISTS (SELECT 1 FROM _update_pending_wake)
              AND NOT EXISTS (SELECT 1 FROM _revive_wake)
+             AND EXISTS (SELECT 1 FROM updated_task)
           RETURNING id
         )
         SELECT * FROM updated_task
@@ -531,7 +541,7 @@ export class TaskRepo {
         SELECT * FROM updated_task
       `;
         const allParams: unknown[] = [...updateParams];
-        if (updates.wakeAt) {
+        if (rescheduleWake) {
           allParams.push(
             current.sourceAgentId ?? current.agentId ?? callerAgentId,
             updates.wakeAt,
