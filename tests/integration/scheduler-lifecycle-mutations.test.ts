@@ -144,4 +144,23 @@ describeIf('Scheduler lifecycle mutations against real Postgres (#1409)', () => 
     expect(result.suspended).toBe(false);
     expect((await statuses(pool, jobId, taskId)).job).toBe('paused');
   });
+
+  it('completeJobRun still completes a wake job that is fired straight from pending', async () => {
+    // Regression guard: the pause/cancel fence must NOT be "status = running". Plan-frontier
+    // wake jobs are completed directly from 'pending' (they never pass through a claim), so a
+    // running-only fence would silently skip them and recycle the stale wake.
+    const pastRun = new Date(Date.now() - 60_000).toISOString();
+    const job = await pool.query(
+      `INSERT INTO scheduled_jobs
+         (agent_id, source_agent_id, run_at, task_payload, status, next_run_at, created_by, timezone)
+       VALUES ($1, $1, $2, $3, 'pending', $2, 'system', 'UTC')
+       RETURNING id`,
+      [AGENT_ID, pastRun, JSON.stringify({ type: 'task-wake' })],
+    );
+    const jobId = job.rows[0]!.id as string;
+
+    await svc.completeJobRun(jobId, true);
+    const j = await pool.query(`SELECT status FROM scheduled_jobs WHERE id = $1`, [jobId]);
+    expect(j.rows[0]!.status).toBe('completed');
+  });
 });

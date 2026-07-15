@@ -542,9 +542,10 @@ describe('SchedulerService', () => {
       const result = await svc.completeJobRun('job-race', true);
 
       expect(result.suspended).toBe(false);
-      // The UPDATE is fenced on the running status so a paused job stays paused.
+      // The UPDATE is fenced against operator-intervention states so a paused/cancelled
+      // job stays put, while a plain 'pending' wake job can still be completed.
       const [sql] = pool.query.mock.calls[1] as [string];
-      expect(sql).toContain("status = 'running'");
+      expect(sql).toContain("status NOT IN ('paused', 'cancelled')");
     });
 
     it('clears run_started_at on success for a recurring job', async () => {
