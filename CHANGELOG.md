@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Scheduler** — liveness check no longer flaps `fail` every few minutes on a healthy scheduler. (#1359)
 - **`sensitivity_rules`** — now read from the merged config, so `local.yaml` overrides actually take effect. (#1369)
 - **`security.extra_injection_patterns`** — same fix: now parsed from the merged config instead of `default.yaml` directly. (#1397)
+- **Backlog heartbeat** — stops re-poking parked-open parents whose subtasks are already scheduled; reuses one wake row per task. (#1410)
 - **Dedup sweep** — stamps structured `dedup-pair` tags so repeat runs skip pending pairs. (#1416)
 
 ### Added
