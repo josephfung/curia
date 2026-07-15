@@ -4,6 +4,7 @@ import { it, expect, beforeAll, afterAll } from 'vitest';
 import {
   describeIf,
   makeRunId,
+  signalForRun,
   createContactStack,
   type ContactTestStack,
 } from './harness.js';
@@ -56,7 +57,7 @@ describeIf('Contact resolution: external source enrichment', () => {
 
   it('enrichment via crm_import Signal identity + field update is resolvable', async () => {
     const email = `crm-${runId}@example.com`;
-    const signalId = `+1666${runId.slice(0, 7).padEnd(7, '0')}`;
+    const signalId = signalForRun(runId, 66);
 
     const contact = await stack.contactService.createContact({
       displayName: `CRM Import ${runId}`,
@@ -118,11 +119,14 @@ describeIf('Contact resolution: external source enrichment', () => {
     });
 
     if (contact.kgNodeId) {
-      await stack.entityMemory.storeFact({
+      const factResult = await stack.entityMemory.storeFact({
         entityNodeId: contact.kgNodeId,
         label: `Imported from HubSpot account run ${runId}`,
         source: 'crm_import',
       });
+      if (factResult.stored && factResult.nodeId) {
+        stack.trackKgNode(factResult.nodeId);
+      }
     }
 
     const resolved = await stack.resolver.resolve('email', email);

@@ -26,6 +26,20 @@ export function makeRunId(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/**
+ * Deterministic digit-only Signal identifier derived from runId.
+ * `salt` differentiates multiple identities within the same suite.
+ */
+export function signalForRun(runId: string, salt = 0): string {
+  let n = salt >>> 0;
+  for (let i = 0; i < runId.length; i++) {
+    n = (n * 31 + runId.charCodeAt(i)) >>> 0;
+  }
+  // Keep NPA in the 7xx range so callers can vary the area code by salt.
+  const npa = 700 + (salt % 100);
+  return `+1${npa}${String(n % 10_000_000).padStart(7, '0')}`;
+}
+
 export interface ContactTestStack {
   pool: pg.Pool;
   logger: Logger;
@@ -36,6 +50,8 @@ export interface ContactTestStack {
   createdContactIds: string[];
   createdKgNodeIds: string[];
   trackContact: (contactId: string, kgNodeId?: string | null) => void;
+  /** Track arbitrary KG nodes (e.g. fact nodes from storeFact) for teardown. */
+  trackKgNode: (kgNodeId: string) => void;
   cleanup: () => Promise<void>;
 }
 
@@ -50,60 +66,75 @@ export async function createContactStack(): Promise<ContactTestStack> {
   }
 
   const pool = new Pool({ connectionString: DATABASE_URL });
-  const logger = createLogger('error');
-  const embeddingService = EmbeddingService.createForTesting();
-  const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
-  const validator = new MemoryValidator(kgStore, embeddingService);
-  const entityMemory = new EntityMemory(kgStore, validator, embeddingService, createSilentLogger());
-  const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
-  const authService = new AuthorizationService(loadAuthConfig(CONFIG_DIR));
-  const resolver = new ContactResolver(contactService, entityMemory, authService, logger);
 
-  const createdContactIds: string[] = [];
-  const createdKgNodeIds: string[] = [];
+  try {
+    const logger = createLogger('error');
+    const embeddingService = EmbeddingService.createForTesting();
+    const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
+    const validator = new MemoryValidator(kgStore, embeddingService);
+    const entityMemory = new EntityMemory(kgStore, validator, embeddingService, createSilentLogger());
+    const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
+    const authService = new AuthorizationService(loadAuthConfig(CONFIG_DIR));
+    const resolver = new ContactResolver(contactService, entityMemory, authService, logger);
 
-  const trackContact = (contactId: string, kgNodeId?: string | null): void => {
-    createdContactIds.push(contactId);
-    if (kgNodeId) createdKgNodeIds.push(kgNodeId);
-  };
+    const createdContactIds: string[] = [];
+    const createdKgNodeIds: string[] = [];
 
-  const cleanup = async (): Promise<void> => {
-    // FK order: identities / overrides → contacts → kg edges → kg nodes.
-    // Never DELETE FROM audit_log — append-only trigger rejects it.
-    if (createdContactIds.length > 0) {
-      await pool.query(
-        'DELETE FROM contact_channel_identities WHERE contact_id = ANY($1)',
-        [createdContactIds],
-      );
-      await pool.query(
-        'DELETE FROM contact_auth_overrides WHERE contact_id = ANY($1)',
-        [createdContactIds],
-      );
-      await pool.query('DELETE FROM contacts WHERE id = ANY($1)', [createdContactIds]);
-    }
-    if (createdKgNodeIds.length > 0) {
-      await pool.query(
-        'DELETE FROM kg_edges WHERE source_node_id = ANY($1) OR target_node_id = ANY($1)',
-        [createdKgNodeIds],
-      );
-      // Fact nodes linked via edges are cleaned above; also remove tracked entity nodes.
-      await pool.query('DELETE FROM kg_nodes WHERE id = ANY($1)', [createdKgNodeIds]);
-    }
-    await pool.end();
-  };
+    const trackContact = (contactId: string, kgNodeId?: string | null): void => {
+      createdContactIds.push(contactId);
+      if (kgNodeId) createdKgNodeIds.push(kgNodeId);
+    };
 
-  await pool.query('SELECT 1 FROM contacts LIMIT 0');
+    const trackKgNode = (kgNodeId: string): void => {
+      createdKgNodeIds.push(kgNodeId);
+    };
 
-  return {
-    pool,
-    logger,
-    entityMemory,
-    contactService,
-    authService,
-    resolver,
-    createdContactIds,
-    createdKgNodeIds,
-    trackContact,
-    cleanup,
-  };
+    const cleanup = async (): Promise<void> => {
+      // FK order: identities / overrides → contacts → kg edges → kg nodes.
+      // Never DELETE FROM audit_log — append-only trigger rejects it.
+      try {
+        if (createdContactIds.length > 0) {
+          await pool.query(
+            'DELETE FROM contact_channel_identities WHERE contact_id = ANY($1)',
+            [createdContactIds],
+          );
+          await pool.query(
+            'DELETE FROM contact_auth_overrides WHERE contact_id = ANY($1)',
+            [createdContactIds],
+          );
+          await pool.query('DELETE FROM contacts WHERE id = ANY($1)', [createdContactIds]);
+        }
+        if (createdKgNodeIds.length > 0) {
+          await pool.query(
+            'DELETE FROM kg_edges WHERE source_node_id = ANY($1) OR target_node_id = ANY($1)',
+            [createdKgNodeIds],
+          );
+          // Delete tracked nodes (contact entity nodes and any fact nodes via trackKgNode).
+          await pool.query('DELETE FROM kg_nodes WHERE id = ANY($1)', [createdKgNodeIds]);
+        }
+      } finally {
+        await pool.end();
+      }
+    };
+
+    await pool.query('SELECT 1 FROM contacts LIMIT 0');
+
+    return {
+      pool,
+      logger,
+      entityMemory,
+      contactService,
+      authService,
+      resolver,
+      createdContactIds,
+      createdKgNodeIds,
+      trackContact,
+      trackKgNode,
+      cleanup,
+    };
+  } catch (err) {
+    // Setup failed after the pool was opened — release connections before rethrowing.
+    await pool.end().catch(() => undefined);
+    throw err;
+  }
 }
