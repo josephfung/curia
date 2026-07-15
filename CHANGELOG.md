@@ -20,6 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scheduler** — a run finishing after a concurrent pause/cancel no longer overwrites that state. (#1409)
 - **Coordinator** — external replies use first-person single-voice; internal specialist names forbidden. (#1354)
 - **Dispatcher** — content-filter blocks on relayed replies retry with reason, then salvage draft. (#1355)
 - **Scheduler** — liveness check no longer flaps `fail` every few minutes on a healthy scheduler. (#1359)
