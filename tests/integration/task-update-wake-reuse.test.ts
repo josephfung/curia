@@ -27,8 +27,10 @@ async function wakeRowsFor(pool: pg.Pool, taskId: string) {
     id: string;
     status: string;
     run_at: Date;
+    next_run_at: Date;
+    task_payload: Record<string, unknown>;
   }>(
-    `SELECT id, status, run_at FROM scheduled_jobs WHERE task_id = $1 ORDER BY created_at`,
+    `SELECT id, status, run_at, next_run_at, task_payload FROM scheduled_jobs WHERE task_id = $1 ORDER BY created_at`,
     [taskId],
   );
   return rows;
@@ -63,6 +65,8 @@ describeIf('TaskRepo.updateTask wake row reuse (#1415)', () => {
     expect(rows[0]!.id).toBe(initial!.id);
     expect(rows[0]!.status).toBe('pending');
     expect(new Date(rows[0]!.run_at).getTime()).toBe(newWakeAt.getTime());
+    expect(new Date(rows[0]!.next_run_at).getTime()).toBe(newWakeAt.getTime());
+    expect(rows[0]!.task_payload).toEqual({ type: 'task-wake' });
     expect(rows.some((r) => r.status === 'cancelled')).toBe(false);
   });
 
@@ -81,6 +85,52 @@ describeIf('TaskRepo.updateTask wake row reuse (#1415)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.status).toBe('pending');
     expect(new Date(rows[0]!.run_at).getTime()).toBe(wakeAt.getTime());
+    expect(new Date(rows[0]!.next_run_at).getTime()).toBe(wakeAt.getTime());
+  });
+
+  it('revives a terminal wake row instead of inserting a new one', async () => {
+    const task = await repo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX} revive`,
+      source: 'coordinator',
+      wakeAt: new Date(Date.now() + 3_600_000),
+    });
+    const [initial] = await wakeRowsFor(pool, task.id);
+    expect(initial).toBeDefined();
+    await pool.query(`UPDATE scheduled_jobs SET status = 'completed' WHERE id = $1`, [initial!.id]);
+
+    const newWakeAt = new Date(Date.now() + 7_200_000);
+    await repo.updateTask(task.id, { wakeAt: newWakeAt }, 'coordinator');
+
+    const rows = await wakeRowsFor(pool, task.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(initial!.id);
+    expect(rows[0]!.status).toBe('pending');
+    expect(new Date(rows[0]!.run_at).getTime()).toBe(newWakeAt.getTime());
+    expect(new Date(rows[0]!.next_run_at).getTime()).toBe(newWakeAt.getTime());
+    expect(rows[0]!.task_payload).toEqual({ type: 'task-wake' });
+  });
+
+  it('resets a heartbeat standing envelope when updating a pending wake in place', async () => {
+    const task = await repo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX} standing-reset`,
+      source: 'coordinator',
+      wakeAt: new Date(Date.now() + 3_600_000),
+    });
+    const [initial] = await wakeRowsFor(pool, task.id);
+    await pool.query(
+      `UPDATE scheduled_jobs SET task_payload = $2::jsonb WHERE id = $1`,
+      [initial!.id, JSON.stringify({ type: 'task-wake', standing: { derived: true } })],
+    );
+
+    const newWakeAt = new Date(Date.now() + 7_200_000);
+    await repo.updateTask(task.id, { wakeAt: newWakeAt }, 'coordinator');
+
+    const rows = await wakeRowsFor(pool, task.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(initial!.id);
+    expect(rows[0]!.task_payload).toEqual({ type: 'task-wake' });
   });
 
   it('cancels the pending wake when the task transitions to done', async () => {
@@ -105,6 +155,24 @@ describeIf('TaskRepo.updateTask wake row reuse (#1415)', () => {
       wakeAt: new Date(Date.now() + 3_600_000),
     });
     await repo.updateTask(task.id, { status: 'cancelled' }, 'coordinator');
+
+    const rows = await wakeRowsFor(pool, task.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('cancelled');
+  });
+
+  it('cancels the pending wake when done and wakeAt are supplied together', async () => {
+    const task = await repo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX} done-with-wake`,
+      source: 'coordinator',
+      wakeAt: new Date(Date.now() + 3_600_000),
+    });
+    await repo.updateTask(
+      task.id,
+      { status: 'done', wakeAt: new Date(Date.now() + 7_200_000) },
+      'coordinator',
+    );
 
     const rows = await wakeRowsFor(pool, task.id);
     expect(rows).toHaveLength(1);
