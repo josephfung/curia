@@ -762,11 +762,24 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
         // TaskRepo.createTask publishes task.created and handles progress/error_budget cols.
         createTask: (params) => taskRepo.createTask(params),
 
-        listOpenDedupTasks: () => taskRepo.listTasks({
-          statuses: ['open', 'in_progress', 'waiting', 'blocked'],
-          tag: 'dedup',
-          limit: 1000,
-        }),
+        listOpenDedupTasks: async () => {
+          const limit = 1000;
+          const tasks = await taskRepo.listTasks({
+            statuses: ['open', 'in_progress', 'waiting', 'blocked'],
+            tag: 'dedup',
+            limit,
+          });
+          // Hitting the ceiling means the idempotency set is truncated — pairs beyond
+          // this page may be re-filed. Mirror the warning already documented on the
+          // skill's EXISTING_TASK_FETCH_LIMIT.
+          if (tasks.length >= limit) {
+            logger.warn(
+              { count: tasks.length, limit },
+              'dedup: open-task fetch hit limit — idempotency guard may miss older pairs',
+            );
+          }
+          return tasks;
+        },
 
         // storeFact is NOT included in DedupRunOptions — the sweep never writes exclusion
         // facts directly. See writeExclusion() and its doc comment for the intended call site.

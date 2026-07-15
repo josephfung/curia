@@ -46,8 +46,10 @@ export function extractPairKeyFromDescription(description: string | null | undef
   for (const match of description.matchAll(CONTACT_ID_LINE_RE)) {
     found[match[1]!.toUpperCase()] = match[2]!.toLowerCase();
   }
-  if (!found['A'] || !found['B']) return null;
-  return canonicalPairKey(found['A'], found['B']);
+  const a = found['A'];
+  const b = found['B'];
+  if (!a || !b) return null;
+  return canonicalPairKey(a, b);
 }
 
 /** Resolve a canonical pair key from tags first, then description. */

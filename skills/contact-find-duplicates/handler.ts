@@ -101,6 +101,12 @@ export class ContactFindDuplicatesHandler implements SkillHandler {
         tag: 'dedup',
         limit: EXISTING_TASK_FETCH_LIMIT,
       });
+      if (existingTasks.length >= EXISTING_TASK_FETCH_LIMIT) {
+        ctx.log.warn(
+          { count: existingTasks.length, limit: EXISTING_TASK_FETCH_LIMIT },
+          'contact-find-duplicates: open-task fetch hit limit — idempotency guard may miss older pairs',
+        );
+      }
 
       existingPairKeys = new Set<string>();
       let unparseable = 0;
