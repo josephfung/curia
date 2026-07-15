@@ -383,8 +383,9 @@ export class TaskRepo {
 
   /**
    * Update a task's fields. Validates status transitions: done and cancelled are terminal.
-   * When `wakeAt` is provided, existing pending wake-up jobs are cancelled and a new one
-   * is created — all in a single CTE for atomicity.
+   * When `wakeAt` is provided, an existing pending wake row is updated in place (run_at /
+   * next_run_at); otherwise the most recent terminal wake row is revived or a new row is
+   * inserted — all in a single CTE for atomicity (#1415, mirrors enqueueTaskWake).
    *
    * Returns the updated task row, or null if the task was not found.
    */
@@ -460,8 +461,8 @@ export class TaskRepo {
     `;
 
     // Terminal-status transitions (cancelled / done) always cancel pending wake-up jobs.
-    // When wakeAt is also provided the cancel+create is already atomic; the extra
-    // _cancel_wake arm here handles the bare status-only path.
+    // The _cancel_wake arm handles the bare status-only path; wakeAt reschedules update
+    // the pending row in place (or revive/insert) instead of cancel+insert (#1415).
     const cancelOnTerminal = (updates.status === 'cancelled' || updates.status === 'done')
       && !updates.wakeAt;
 
@@ -477,19 +478,56 @@ export class TaskRepo {
         const wakeTzIdx = updates.wakeAt ? whereIdx + 4 : null;
         const wakeOriginatorIdx = updates.wakeAt ? whereIdx + 5 : null;
 
-        const cteSql = `
+        const cteSql = updates.wakeAt ? `
+        WITH updated_task AS (
+          ${updateSql}
+        ),
+        _update_pending_wake AS (
+          UPDATE scheduled_jobs
+             SET run_at = $${wakeRunAtIdx}, next_run_at = $${wakeRunAtIdx},
+                 agent_id = $${wakeAgentIdx}, created_by = $${wakeCreatedByIdx},
+                 timezone = $${wakeTzIdx}, originator = $${wakeOriginatorIdx}::jsonb
+           WHERE task_id = $${whereIdx} AND status = 'pending'
+          RETURNING id
+        ),
+        _revive_wake AS (
+          UPDATE scheduled_jobs
+             SET status = 'pending', run_at = $${wakeRunAtIdx}, next_run_at = $${wakeRunAtIdx},
+                 run_started_at = NULL,
+                 consecutive_failures = CASE WHEN status IN ('failed','suspended') THEN consecutive_failures ELSE 0 END,
+                 last_error = CASE WHEN status IN ('failed','suspended') THEN last_error ELSE NULL END,
+                 last_run_outcome = CASE WHEN status IN ('failed','suspended') THEN last_run_outcome ELSE NULL END,
+                 agent_id = $${wakeAgentIdx}, created_by = $${wakeCreatedByIdx},
+                 timezone = $${wakeTzIdx}, task_payload = '{"type":"task-wake"}'::jsonb,
+                 originator = $${wakeOriginatorIdx}::jsonb
+           WHERE id = (
+             SELECT id FROM scheduled_jobs
+              WHERE task_id = $${whereIdx} AND task_payload->>'type' = 'task-wake'
+                AND status IN ('completed', 'failed', 'suspended', 'cancelled')
+              ORDER BY created_at DESC
+              LIMIT 1
+           )
+             AND status IN ('completed', 'failed', 'suspended', 'cancelled')
+             AND NOT EXISTS (SELECT 1 FROM _update_pending_wake)
+          RETURNING id
+        ),
+        _insert_wake AS (
+          INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
+          SELECT $${wakeAgentIdx}, $${wakeRunAtIdx}, '{"type":"task-wake"}'::jsonb, 'pending',
+                 $${wakeRunAtIdx}, $${wakeCreatedByIdx}, $${wakeTzIdx}, $${whereIdx}, $${wakeOriginatorIdx}::jsonb
+           WHERE NOT EXISTS (SELECT 1 FROM _update_pending_wake)
+             AND NOT EXISTS (SELECT 1 FROM _revive_wake)
+          RETURNING id
+        )
+        SELECT * FROM updated_task
+      ` : `
         WITH updated_task AS (
           ${updateSql}
         ),
         _cancel_wake AS (
           UPDATE scheduled_jobs SET status = 'cancelled'
           WHERE task_id = $${whereIdx} AND status = 'pending'
-        )${updates.wakeAt ? `,
-        _new_wake AS (
-          INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
-          VALUES ($${wakeAgentIdx}, $${wakeRunAtIdx}, '{"type":"task-wake"}'::jsonb, 'pending',
-                  $${wakeRunAtIdx}, $${wakeCreatedByIdx}, $${wakeTzIdx}, $${whereIdx}, $${wakeOriginatorIdx}::jsonb)
-        )` : ''}
+        )
         SELECT * FROM updated_task
       `;
         const allParams: unknown[] = [...updateParams];

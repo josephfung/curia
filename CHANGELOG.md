@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`security.extra_injection_patterns`** — same fix: now parsed from the merged config instead of `default.yaml` directly. (#1397)
 - **Backlog heartbeat** — stops re-poking parked-open parents whose subtasks are already scheduled; reuses one wake row per task. (#1410)
 - **Dedup sweep** — stamps structured `dedup-pair` tags so repeat runs skip pending pairs. (#1416)
+- **`task-update` wake reschedule** — updates the pending wake row in place instead of cancel+insert. (#1415)
 
 ### Added
 
