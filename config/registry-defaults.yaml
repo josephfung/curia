@@ -33,6 +33,7 @@ skills:
   - scheduler-create
   - scheduler-list
   - scheduler-cancel
+  - scheduler-update
   - scheduler-report
   # Contacts
   - contact-create

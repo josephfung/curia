@@ -343,6 +343,24 @@ describe('SchedulerService', () => {
     });
   });
 
+  // -- pauseJob (operator-initiated pause; distinct from drift pause) --
+
+  describe('pauseJob', () => {
+    it('sets both the job and its linked task to paused in one query', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.pauseJob('job-pause');
+
+      expect(pool.query).toHaveBeenCalledTimes(1);
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      // Single CTE updates scheduled_jobs and the linked tasks row together.
+      expect(sql).toContain('scheduled_jobs');
+      expect(sql).toContain('tasks');
+      expect(sql).toContain('paused');
+      expect(params[0]).toBe('job-pause');
+    });
+  });
+
   // -- listJobs --
 
   describe('listJobs', () => {

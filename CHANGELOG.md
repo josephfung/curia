@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`scheduler-update`** — new skill lets agents resume, pause, or edit a scheduled job without the web UI. (#1409)
 - **Contact resolution** — integration test coverage for identity establishment and authorization. (#1382)
 - **`diagnostics` agent** — opt-in, read-only forensic agent that diagnoses "what happened / why" for the principal. (#1356)
 - **`audit-query` / `audit-trace` / `ops-lookup`** — read-only diagnostics skills over audit + operational state. (#1356)

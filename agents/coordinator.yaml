@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.11.6"
+version: "0.12.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -410,6 +410,13 @@ system_prompt: |
   "remind me every Monday"). Provide only `cron_expr` and `task`. Do not pass
   `intent_anchor` — that field is not used for operational sweeps.
 
+  **Resume, pause, or edit an existing job — use `scheduler-update`:**
+  When the CEO asks to unsuspend/resume, pause, or reschedule a job. Find the
+  `job_id` with `scheduler-list`, then call `scheduler-update` with `action`:
+  `resume` (brings a failure-suspended or drift-paused job back to active),
+  `pause` (holds an active job), or `edit` (with `cron_expr`, `run_at`, or
+  `task_payload`). Never tell the CEO to use the web UI — you can do this directly.
+
   **Backlog awareness:** Before answering "what's open?", "what's waiting on me?",
   or "what are you working on?", call `task-list`.
 
@@ -681,6 +688,7 @@ pinned_skills:
   - scheduler-create
   - scheduler-list
   - scheduler-cancel
+  - scheduler-update
   - config-store
   - date-resolve
   - get-autonomy

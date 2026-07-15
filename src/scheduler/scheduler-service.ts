@@ -405,14 +405,12 @@ export class SchedulerService {
   }
 
   /**
-   * Pause a job and its linked task due to intent drift detection.
-   * Sets status = 'paused' on both tables in a single query.
-   * The CEO must review and resume or cancel the job manually.
+   * Set a job and its linked task to 'paused' in a single round-trip.
+   * Shared by the drift-pause and operator-pause paths so the SQL stays in one place.
+   * Updates both tables atomically via a CTE so they stay consistent.
+   * The FK is scheduled_jobs.task_id → tasks.id, so we join through scheduled_jobs.
    */
-  async pauseJobForDrift(jobId: string): Promise<void> {
-    // Update both tables atomically: pause the job and its linked task.
-    // Uses a CTE so both updates happen in one round-trip and stay consistent.
-    // The FK is now scheduled_jobs.task_id → tasks.id, so we join through scheduled_jobs.
+  private async setPaused(jobId: string): Promise<void> {
     await this.pool.query(
       `WITH paused_job AS (
          UPDATE scheduled_jobs
@@ -426,8 +424,27 @@ export class SchedulerService {
         WHERE sj.id = $1 AND t.id = sj.task_id`,
       [jobId],
     );
+  }
 
+  /**
+   * Pause a job and its linked task due to intent drift detection.
+   * Sets status = 'paused' on both tables.
+   * The CEO must review and resume or cancel the job manually.
+   */
+  async pauseJobForDrift(jobId: string): Promise<void> {
+    await this.setPaused(jobId);
     this.logger.info({ jobId }, 'Job paused due to intent drift detection');
+  }
+
+  /**
+   * Pause a job and its linked task at an operator's explicit request
+   * (e.g. the CEO asking Curia to pause a schedule via the scheduler-update skill).
+   * Neutral counterpart to pauseJobForDrift — same state transition, no drift semantics.
+   * Released by unsuspendJob(), which accepts both 'suspended' and 'paused' states.
+   */
+  async pauseJob(jobId: string): Promise<void> {
+    await this.setPaused(jobId);
+    this.logger.info({ jobId }, 'Job paused by operator request');
   }
 
   async unsuspendJob(jobId: string): Promise<void> {
