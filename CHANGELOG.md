@@ -29,6 +29,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Backlog heartbeat** — stops re-poking parked-open parents whose subtasks are already scheduled; reuses one wake row per task. (#1410)
 - **Dedup sweep** — stamps structured `dedup-pair` tags so repeat runs skip pending pairs. (#1416)
 - **`task-update` wake reschedule** — updates the pending wake row in place instead of cancel+insert. (#1415)
+- **Email-observation skills** — pin `voice-learn`/`task-completion-from-sent`/`ceo-inbox-shadow-draft` to ceo-inbox so their crons work. (#1419)
+- **`ceo-inbox-sent-observe`** — paginate the Sent poll so busy days don't drop unobserved messages past the first page. (#1419)
+- **`voice-learn`** — dedup proposals so weekly reruns stop appending duplicate voice-diff blocks. (#1419)
 
 ### Added
 
