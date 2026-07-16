@@ -10,6 +10,7 @@ import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js'
 import {
   markCompletionStatus,
   markProposalStatus,
+  parseCompletionDigest,
   parseVoiceProposals,
   type VoiceProposalItem,
 } from '../_shared/learning-digest.js';
@@ -33,6 +34,20 @@ function findProposal(body: string, field: string): VoiceProposalItem | undefine
 
 export class ResolveLearningDigestHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
+    // Skill contract: never throw — a rejected profile/config/task/document call becomes
+    // a failure result rather than escaping the handler.
+    try {
+      return await this.runResolve(ctx);
+    } catch (err) {
+      ctx.log.error({ err }, 'resolve-learning-digest: unexpected failure');
+      return {
+        success: false,
+        error: `resolve-learning-digest failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  private async runResolve(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.workingDocs || !ctx.taskRepo || !ctx.entityMemory || !ctx.executiveProfileService) {
       return {
         success: false,
@@ -153,6 +168,17 @@ export class ResolveLearningDigestHandler implements SkillHandler {
 
     const digest = await ctx.workingDocs.read(COMPLETION_DIGEST_PATH);
     if (!digest) return { success: false, error: 'No completion digest items' };
+
+    // Require an actionable digest item of the matching kind before mutating a task —
+    // otherwise undo/confirm would reopen/complete ANY task id the caller supplies, and
+    // still report success even when markCompletionStatus changed nothing.
+    const expectedKind = action === 'undo_completion' ? 'undo' : 'confirm';
+    const item = parseCompletionDigest(digest.body).find(
+      (candidate) => candidate.taskId === taskId && candidate.kind === expectedKind,
+    );
+    if (!item) {
+      return { success: false, error: `No actionable ${expectedKind} item for task ${taskId}` };
+    }
 
     if (action === 'undo_completion') {
       await ctx.taskRepo.reopenTask(taskId, 'Undo auto-complete from sent mail', ctx.agentId);

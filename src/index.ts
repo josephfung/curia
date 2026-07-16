@@ -2004,10 +2004,9 @@ async function main(): Promise<void> {
       // Coordinator + ceo-inbox receive autonomyService for per-task band injection
       // (spec 14 checklist / ADR-029). ceo-inbox's draft-vs-punt aggressiveness
       // tracks the live band; it must never write the global score itself.
-      autonomyService:
-        agentConfig.role === 'coordinator' || agentConfig.name === 'ceo-inbox'
-          ? autonomyService
-          : undefined,
+      autonomyService: AutonomyService.receivesInjection(agentConfig)
+        ? autonomyService
+        : undefined,
       // All agents receive per-turn time block injection so the current date/time
       // and timezone are always accurate. Specialists need this too — scheduled
       // agents in particular make time-sensitive decisions (backoff gates, date
