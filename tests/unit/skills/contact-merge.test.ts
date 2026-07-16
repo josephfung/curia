@@ -12,6 +12,8 @@ function makeCtx(
   overrides?: Partial<SkillContext>,
 ): SkillContext {
   return {
+    skillName: 'contact-merge',
+    skillVersion: '1.1.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

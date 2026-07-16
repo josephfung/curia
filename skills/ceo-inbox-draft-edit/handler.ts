@@ -11,9 +11,6 @@ import { captureDraftSnapshot, parseLinkedTaskIds } from '../_shared/voice-learn
 const MAX_BODY_LENGTH = 50_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Keep in sync with skill.json version — stamped onto voice-learning snapshots. */
-const SKILL_VERSION = '0.2.1';
-
 // Parse a `to`/`cc` input that may arrive as a single string or an array of
 // strings. Returns the trimmed addresses, or an `{ error }` when the input is
 // malformed (a non-string, or an array containing a non-string/blank entry).
@@ -174,7 +171,7 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
         to: draft.to,
         cc: draft.cc,
         body: snapshotBody,
-        agentVersion: SKILL_VERSION,
+        agentVersion: ctx.skillVersion,
         linkedTaskIds:
           input.linked_task_ids === undefined
             ? undefined

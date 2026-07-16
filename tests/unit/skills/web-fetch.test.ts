@@ -7,6 +7,8 @@ const logger = pino({ level: 'silent' });
 
 function makeCtx(input: Record<string, unknown>): SkillContext {
   return {
+    skillName: 'web-fetch',
+    skillVersion: '1.0.0',
     input,
     secret: () => { throw new Error('no secrets needed'); },
     log: logger,

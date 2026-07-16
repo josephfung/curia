@@ -354,6 +354,35 @@ describe('capability-gated service injection', () => {
 });
 
 // ---------------------------------------------------------------------------
+// skillName / skillVersion injection (#1419) — the execution layer must
+// populate these from the loaded manifest so handlers never hardcode their
+// own version const that can drift out of sync with skill.json.
+// ---------------------------------------------------------------------------
+
+describe('skillName/skillVersion injection', () => {
+  it('injects skillVersion and skillName from the manifest into ctx', async () => {
+    const registry = new SkillRegistry();
+    const manifest: SkillManifest = {
+      ...makeManifest('version-probe'),
+      version: '9.9.9',
+    };
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => ({
+        success: true,
+        data: { v: ctx.skillVersion, n: ctx.skillName },
+      })),
+    };
+    registry.register(manifest, handler);
+
+    const layer = new ExecutionLayer(registry, logger);
+
+    const result = await layer.invoke('version-probe', {});
+
+    expect(result).toMatchObject({ success: true, data: { v: '9.9.9', n: 'version-probe' } });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // taskMetadata pass-through
 // ---------------------------------------------------------------------------
 

@@ -89,6 +89,8 @@ function makeCtx(overrides: {
   );
 
   const ctx: SkillContext = {
+    skillName: 'approval-expiry-sweep',
+    skillVersion: '1.0.1',
     input: {},
     secret: vi.fn().mockImplementation((name: string) => {
       throw new Error(`secret ${name} not configured`);

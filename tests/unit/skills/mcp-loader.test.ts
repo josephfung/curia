@@ -379,6 +379,8 @@ servers:
 
     const skill = registry.get('read_file')!;
     const result = await skill.handler.execute({
+      skillName: 'read_file',
+      skillVersion: '1.0.0',
       input: { path: '/tmp/test.txt' },
       secret: () => '',
       log: logger,
@@ -412,6 +414,8 @@ servers:
     await loadMcpServers(dir, registry, logger, secrets);
 
     const result = await registry.get('bad_tool')!.handler.execute({
+      skillName: 'bad_tool',
+      skillVersion: '1.0.0',
       input: {},
       secret: () => '',
       log: logger,
@@ -438,6 +442,8 @@ servers:
     await loadMcpServers(dir, registry, logger, secrets);
 
     const result = await registry.get('erroring_tool')!.handler.execute({
+      skillName: 'erroring_tool',
+      skillVersion: '1.0.0',
       input: {},
       secret: () => '',
       log: logger,

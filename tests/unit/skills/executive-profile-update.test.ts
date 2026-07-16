@@ -29,6 +29,8 @@ function makeCtx(
   caller?: { contactId?: string; role?: string },
 ): SkillContext {
   return {
+    skillName: 'executive-profile-update',
+    skillVersion: '1.1.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

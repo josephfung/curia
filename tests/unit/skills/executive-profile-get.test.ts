@@ -22,6 +22,8 @@ const testProfile: ExecutiveProfile = {
 
 function makeCtx(service?: { get: () => ExecutiveProfile }): SkillContext {
   return {
+    skillName: 'executive-profile-get',
+    skillVersion: '1.0.0',
     input: {},
     secret: () => { throw new Error('no secrets'); },
     log: logger,

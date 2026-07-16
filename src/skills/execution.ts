@@ -1081,6 +1081,10 @@ export class ExecutionLayer {
     }
 
     const ctx: SkillContext = {
+      // Invoking skill's manifest identity — lets handlers read their own name/version
+      // from ctx instead of hardcoding a const that must be kept in sync with skill.json.
+      skillName: manifest.name,
+      skillVersion: manifest.version,
       input,
       secret: (name: string): string => {
         if (!declaredSecrets.has(name)) {

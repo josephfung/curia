@@ -10,6 +10,8 @@ function makeCtx(
   opts: { selfEmail?: string } = {},
 ): SkillContext {
   return {
+    skillName: 'ceo-inbox-search',
+    skillVersion: '0.2.0',
     input,
     secret(name: string) {
       if (name === 'nylas_api_key') return 'test-key';

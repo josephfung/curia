@@ -15,6 +15,8 @@ function makeCtx(
   opts?: { selfEmail?: string },
 ): SkillContext {
   return {
+    skillName: 'email-reply',
+    skillVersion: '1.3.2',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

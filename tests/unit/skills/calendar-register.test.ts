@@ -11,6 +11,8 @@ function makeCtx(
   overrides?: Partial<SkillContext>,
 ): SkillContext {
   return {
+    skillName: 'calendar-register',
+    skillVersion: '1.0.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

@@ -10,6 +10,8 @@ function makeCtx(
   secretValue = 'tvly-test-key',
 ): SkillContext {
   return {
+    skillName: 'web-search',
+    skillVersion: '1.1.0',
     input,
     secret: (name: string) => {
       if (name === 'tavily_api_key') return secretValue;
@@ -40,6 +42,8 @@ describe('WebSearchHandler', () => {
 
   it('returns failure when API key is missing', async () => {
     const ctx: SkillContext = {
+      skillName: 'web-search',
+      skillVersion: '1.1.0',
       input: { query: 'test' },
       // A genuinely-missing secret throws a plain Error with no `cause`.
       secret: () => { throw new Error('Secret not set'); },
@@ -57,6 +61,8 @@ describe('WebSearchHandler', () => {
 
   it('surfaces vault read failures as operational errors, not missing-secret guidance', async () => {
     const ctx: SkillContext = {
+      skillName: 'web-search',
+      skillVersion: '1.1.0',
       input: { query: 'test' },
       // The execution layer wraps a vault read failure in an Error with a `cause`
       // (see src/skills/execution.ts). That is an outage, not a misconfiguration —

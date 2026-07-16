@@ -6,7 +6,7 @@ import pino from 'pino';
 const logger = pino({ level: 'silent' });
 
 function makeCtx(input: Record<string, unknown>, overrides?: Partial<SkillContext>): SkillContext {
-  return { input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
+  return { skillName: 'email-archive', skillVersion: '1.0.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
 }
 
 describe('EmailArchiveHandler', () => {

@@ -89,6 +89,8 @@ function makeMockBrowserService(): BrowserService {
 
 function makeCtx(input: Record<string, unknown>, browserService?: BrowserService): SkillContext {
   return {
+    skillName: 'web-browser',
+    skillVersion: '1.5.0',
     input,
     secret: () => { throw new Error('no secrets needed'); },
     log: logger,

@@ -6,9 +6,6 @@ import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../src/skills/_shared/read-attachments.js';
 import { captureDraftSnapshot, parseLinkedTaskIds } from '../_shared/voice-learning-capture.js';
 
-/** Keep in sync with skill.json version — stamped onto voice-learning snapshots. */
-const SKILL_VERSION = '0.3.0';
-
 export class CeoInboxDraftReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     let apiKey: string;
@@ -154,7 +151,7 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
         to: draft.to,
         cc: draft.cc,
         body,
-        agentVersion: SKILL_VERSION,
+        agentVersion: ctx.skillVersion,
         linkedTaskIds: parseLinkedTaskIds(input.linked_task_ids),
       });
 
