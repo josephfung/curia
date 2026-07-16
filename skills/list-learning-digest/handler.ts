@@ -14,30 +14,39 @@ export class ListLearningDigestHandler implements SkillHandler {
       return { success: false, error: 'list-learning-digest requires workingDocs' };
     }
 
-    const proposalsDoc = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
-    const completionsDoc = await ctx.workingDocs.read(COMPLETION_DIGEST_PATH);
+    // Skill contract: never throw — a failed document read becomes a failure result.
+    try {
+      const proposalsDoc = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
+      const completionsDoc = await ctx.workingDocs.read(COMPLETION_DIGEST_PATH);
 
-    const voice_proposals = parseVoiceProposals(proposalsDoc?.body ?? '');
-    const completion_items = parseCompletionDigest(completionsDoc?.body ?? '');
+      const voice_proposals = parseVoiceProposals(proposalsDoc?.body ?? '');
+      const completion_items = parseCompletionDigest(completionsDoc?.body ?? '');
 
-    const sections = [
-      renderVoiceProposalsSection(voice_proposals),
-      renderCompletionSection(completion_items),
-    ]
-      .filter(Boolean)
-      .join('\n');
+      const sections = [
+        renderVoiceProposalsSection(voice_proposals),
+        renderCompletionSection(completion_items),
+      ]
+        .filter(Boolean)
+        .join('\n');
 
-    return {
-      success: true,
-      data: {
-        voice_proposals,
-        completion_items,
-        sections_markdown: sections,
-        message:
-          voice_proposals.length === 0 && completion_items.length === 0
-            ? 'No pending learning-digest items.'
-            : undefined,
-      },
-    };
+      return {
+        success: true,
+        data: {
+          voice_proposals,
+          completion_items,
+          sections_markdown: sections,
+          message:
+            voice_proposals.length === 0 && completion_items.length === 0
+              ? 'No pending learning-digest items.'
+              : undefined,
+        },
+      };
+    } catch (err) {
+      ctx.log.error({ err }, 'list-learning-digest: unexpected failure');
+      return {
+        success: false,
+        error: `list-learning-digest failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
 }
