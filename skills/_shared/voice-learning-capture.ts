@@ -55,13 +55,15 @@ export async function captureDraftSnapshot(
     to: input.to.map((p) => ({ email: p.email, ...(p.name ? { name: p.name } : {}) })),
     cc: input.cc.map((p) => ({ email: p.email, ...(p.name ? { name: p.name } : {}) })),
   };
+  // linked_task_ids is handled per-path, not folded into this base, so an edit that
+  // omits it (input.linkedTaskIds === undefined) preserves the ids captured at create
+  // time instead of clearing them. An explicit [] still clears.
   const frontmatter: Record<string, unknown> = {
     draft_id: input.draftId,
     thread_id: input.threadId,
     recipients,
     subject: input.subject,
     created_at: new Date().toISOString(),
-    linked_task_ids: input.linkedTaskIds ?? [],
     agent_version: input.agentVersion,
   };
 
@@ -71,18 +73,20 @@ export async function captureDraftSnapshot(
       await repo.create({
         path,
         type: VOICE_LEARNING_DOC_TYPE,
-        frontmatter,
+        frontmatter: { ...frontmatter, linked_task_ids: input.linkedTaskIds ?? [] },
         body: input.body,
         agentId: ctx.agentId,
         conversationId: ctx.conversationId,
       });
     } else {
-      // Edit path: replace body + refresh frontmatter (keep created_at from first write).
+      // Edit path: replace body + refresh frontmatter (keep created_at from first write,
+      // and keep prior linked_task_ids when this edit didn't supply new ones).
       const mergedFrontmatter = {
         ...existing.frontmatter,
         ...frontmatter,
         created_at: existing.frontmatter.created_at ?? frontmatter.created_at,
         updated_at: new Date().toISOString(),
+        linked_task_ids: input.linkedTaskIds ?? existing.frontmatter.linked_task_ids ?? [],
       };
       const result = await repo.update(path, {
         frontmatter: mergedFrontmatter,
@@ -99,6 +103,8 @@ export async function captureDraftSnapshot(
             ...frontmatter,
             created_at: result.document.frontmatter.created_at ?? frontmatter.created_at,
             updated_at: new Date().toISOString(),
+            linked_task_ids:
+              input.linkedTaskIds ?? result.document.frontmatter.linked_task_ids ?? [],
           },
           body: input.body,
           expectedVersion: result.document.version,

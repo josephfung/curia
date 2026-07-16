@@ -12,7 +12,7 @@ const MAX_BODY_LENGTH = 50_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Keep in sync with skill.json version — stamped onto voice-learning snapshots. */
-const SKILL_VERSION = '0.2.0';
+const SKILL_VERSION = '0.2.1';
 
 // Parse a `to`/`cc` input that may arrive as a single string or an array of
 // strings. Returns the trimmed addresses, or an `{ error }` when the input is
@@ -164,6 +164,9 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
           : htmlToPlainText(draft.body);
 
       // Best-effort voice-learning snapshot — must not block the edit (#1421).
+      // Only pass linkedTaskIds when the caller actually supplied them; otherwise leave
+      // it undefined so a body-only edit preserves the ids captured at draft creation
+      // (passing [] would clear them).
       await captureDraftSnapshot(ctx, {
         draftId: draft.id,
         threadId: draft.threadId,
@@ -172,7 +175,10 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
         cc: draft.cc,
         body: snapshotBody,
         agentVersion: SKILL_VERSION,
-        linkedTaskIds: parseLinkedTaskIds(input.linked_task_ids),
+        linkedTaskIds:
+          input.linked_task_ids === undefined
+            ? undefined
+            : parseLinkedTaskIds(input.linked_task_ids),
       });
 
       return {
