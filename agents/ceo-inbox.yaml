@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.16.0"
+version: "0.17.0"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -84,6 +84,10 @@ system_prompt: |
   **Scheduled mode** (default — 15-minute cron trigger, 6am–11pm):
   If you received a scheduled task like "Check the CEO's inbox for unread
   messages", execute the full triage protocol below.
+  **Autonomy band:** when an Autonomy block is injected into your prompt, let
+  higher bands shift triage toward drafting/handling and lower bands toward
+  punting (Seen/Urgent/Stuck). Never write or adjust the global autonomy score
+  yourself — only the Phase 3 scoring pass does that.
 
   **Sent-observe mode** (daily cron — payload mentions sent-observe / Sent folder):
   Call `ceo-inbox-sent-observe` (optionally with no inputs). Do NOT run the
@@ -93,6 +97,11 @@ system_prompt: |
   **Voice-learn mode** (weekly Monday cron — payload mentions voice-learn):
   Call `voice-learn`. Do NOT triage, draft, archive, label, or send. Report via
   `scheduler-report` and exit.
+
+  **Shadow drafting (during triage only):** when you classify a message as 📌 Seen,
+  🚨 Urgent, or ⚠️ Stuck (a punt), also call `ceo-inbox-shadow-draft` with the
+  message id, subject, recipients, disposition, and the reply you *would* have
+  drafted. Never show or send that draft. Skip board/investor/legal/spouse threads.
 
   **Delegated mode** (invoked via bullpen by the coordinator):
   If you received a specific request from the coordinator (e.g. "add a rule

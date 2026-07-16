@@ -1,0 +1,26 @@
+{
+  "name": "ceo-inbox-shadow-draft",
+  "description": "Store a non-surfaced, non-sent shadow draft for a punted inbox message (Seen / Urgent / Stuck). Never creates approvals, notifications, or Nylas drafts. Skips high-sensitivity threads (board, investors, legal, spouse). Used during triage so later sent-observe can score decision equivalence into autonomy_action_log.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "source_message_id": "string (Nylas message id that was punted)",
+    "thread_id": "string?",
+    "subject": "string",
+    "body": "string (the shadow draft Curia would have sent — never shown to the CEO)",
+    "recipients": "string[]? (to addresses)",
+    "disposition": "string? (Seen | Urgent | Stuck)",
+    "from": "string?",
+    "labels": "string[]?"
+  },
+  "outputs": {
+    "captured": "boolean",
+    "path": "string?",
+    "skipped_reason": "string?"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["workingDocs"]
+}

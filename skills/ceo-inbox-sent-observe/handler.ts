@@ -18,6 +18,11 @@ import {
   type DraftSnapshotLike,
 } from '../_shared/sent-observe-match.js';
 import { createCeoSentObserved } from '../../src/bus/events.js';
+import {
+  parseShadowDoc,
+  scoreDecisionEquivalence,
+  SHADOW_SCRATCH_PREFIX,
+} from '../_shared/shadow-draft.js';
 
 export const CONFIG_NAMESPACE = 'ceo_inbox';
 export const WATERMARK_KEY = 'sent_observe.last_seen_at';
@@ -151,6 +156,8 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         error: 'ceo-inbox-sent-observe requires entityMemory, workingDocs, taskRepo, and bus',
       };
     }
+    // actionLogRepo is optional at runtime for backward-compatible tests; shadow
+    // reconciliation is skipped when absent.
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -233,20 +240,29 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
 
     let draftMatches = 0;
     let taskCandidates = 0;
+    let shadowReconciled = 0;
     let maxDate = watermark;
     const diffChunks: string[] = [];
     const completionChunks: string[] = [];
 
+    const shadowDocs = await ctx.workingDocs.listByPrefix(`${SHADOW_SCRATCH_PREFIX}/`);
+    const shadows = shadowDocs
+      .map((d) => parseShadowDoc(d))
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+
     for (const msg of messages) {
       if (msg.date > maxDate) maxDate = msg.date;
+
+      let sentBody = msg.snippet ?? '';
+      let fetchedBody = false;
 
       const draftMatch = matchDraftToSent(msg, snapshots, alreadyMatchedDraftIds);
       if (draftMatch) {
         alreadyMatchedDraftIds.add(draftMatch.draftId);
-        let sentBody = msg.snippet ?? '';
         try {
           const full = await client.getMessage(msg.id);
           sentBody = htmlToPlainText(full.body) || full.snippet || sentBody;
+          fetchedBody = true;
         } catch (err) {
           ctx.log.warn(
             { err, messageId: msg.id },
@@ -262,6 +278,70 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         alreadyAskedTaskIds.add(tm.taskId);
         completionChunks.push(formatCompletionCandidateBlock(tm));
         taskCandidates += 1;
+      }
+
+      // Shadow-draft competence reconcile (#1426).
+      if (ctx.actionLogRepo) {
+        const shadow = shadows.find(
+          (s) =>
+            (s.threadId && msg.threadId && s.threadId === msg.threadId) ||
+            s.sourceMessageId === msg.id,
+        );
+        if (shadow) {
+          if (!fetchedBody) {
+            try {
+              const full = await client.getMessage(msg.id);
+              sentBody = htmlToPlainText(full.body) || full.snippet || sentBody;
+            } catch (err) {
+              ctx.log.warn(
+                { err, messageId: msg.id },
+                'ceo-inbox-sent-observe: getMessage failed for shadow reconcile',
+              );
+            }
+          }
+          const score = scoreDecisionEquivalence(shadow.body, sentBody);
+          try {
+            await ctx.actionLogRepo.insert({
+              taskId: ctx.taskEventId ?? `shadow:${shadow.sourceMessageId}`,
+              conversationId: ctx.conversationId,
+              skillName: 'shadow-draft-eval',
+              actionRisk: 'none',
+              outcome: 'shadow_evaluated',
+              taskSummary: `Shadow draft vs sent for thread ${msg.threadId || shadow.threadId}: ${score.reason}`,
+              payload: {
+                shadow: true,
+                source_message_id: shadow.sourceMessageId,
+                sent_message_id: msg.id,
+                thread_id: msg.threadId,
+                competence_reason: score.reason,
+              },
+              competenceFlag: score.competenceFlag,
+              commitmentFlag: null,
+              compatibility: null,
+              scoredBy: 'shadow-reconciler',
+            });
+            shadowReconciled += 1;
+
+            // Mark shadow doc reconciled so we don't double-score.
+            const path = `${SHADOW_SCRATCH_PREFIX}/${shadow.sourceMessageId}.md`;
+            const doc = await ctx.workingDocs.read(path);
+            if (doc) {
+              await ctx.workingDocs.update(path, {
+                frontmatter: {
+                  ...doc.frontmatter,
+                  reconciled_at: new Date().toISOString(),
+                  competence_flag: score.competenceFlag,
+                },
+                expectedVersion: doc.version,
+              });
+            }
+          } catch (err) {
+            ctx.log.error(
+              { err, messageId: msg.id },
+              'ceo-inbox-sent-observe: shadow competence insert failed',
+            );
+          }
+        }
       }
     }
 
@@ -304,6 +384,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         messagesScanned: messages.length,
         draftMatches,
         taskCandidates,
+        shadowReconciled,
         watermarkAdvancedTo,
       },
       'ceo-inbox-sent-observe: run complete',
@@ -315,6 +396,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         messages_scanned: messages.length,
         draft_matches: draftMatches,
         task_candidates: taskCandidates,
+        shadow_reconciled: shadowReconciled,
         watermark_advanced_to: watermarkAdvancedTo,
         skipped_backoff: false,
       },

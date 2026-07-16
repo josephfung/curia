@@ -17,5 +17,5 @@
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 60000,
-  "capabilities": ["entityMemory", "workingDocs", "taskRepo", "bus"]
+  "capabilities": ["entityMemory", "workingDocs", "taskRepo", "bus", "actionLogRepo"]
 }

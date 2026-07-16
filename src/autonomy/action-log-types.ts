@@ -13,6 +13,7 @@ export const TERMINAL_OUTCOMES = [
   'denied',
   'expired',
   'resolved_externally',
+  'shadow_evaluated', // ADR-029 / #1426 — pre-scored by shadow-reconciler
 ] as const;
 
 /** Outcomes that require an LLM judge call (not deterministically scorable). */
@@ -27,7 +28,8 @@ export type ActionLogOutcome =
   | 'approved'
   | 'denied'
   | 'expired'
-  | 'resolved_externally';
+  | 'resolved_externally'
+  | 'shadow_evaluated';
 
 /** A row from autonomy_action_log. */
 export interface ActionLogRow {
@@ -73,6 +75,12 @@ export interface ActionLogInsert {
   description?: string;
   /** Links a re-execution row back to the approved row. Used by approve-action (#428). */
   parentActionId?: number;
+
+  /** Pre-scored flags (shadow-reconciler / #1426). When scoredBy is set, findUnscoredTerminal skips the row. */
+  competenceFlag?: 0 | 1 | null;
+  commitmentFlag?: 0 | 1 | null;
+  compatibility?: 0 | 1 | null;
+  scoredBy?: string;
 }
 
 /** Scoring flags written by the scoring pass or deterministic scorer. */
