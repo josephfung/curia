@@ -17,6 +17,10 @@ export const HIGH_PRIORITY_FLOOR = 70;
 export interface RiskTaskLike {
   id: string;
   title: string;
+  /** Task body. A generically titled task can hold confidential detail only here, so it
+   *  must be classified too — otherwise the task reads as low-risk and auto-completes.
+   *  Accepts null to match TaskRow.description straight from the repo. */
+  description?: string | null;
   priority: number;
   tags: string[];
   progress: Record<string, unknown>;
@@ -27,8 +31,8 @@ export interface RiskTaskLike {
 /**
  * Determine completion risk for a task. `classify` is the shared
  * SensitivityClassifier's classify function (or an equivalent test double) —
- * title + tags are concatenated and run through it in place of the old
- * hardcoded SENSITIVE_TAGS set / title regex (#1419).
+ * title + description + tags are concatenated and run through it in place of the
+ * old hardcoded SENSITIVE_TAGS set / title regex (#1419).
  */
 export function classifyTaskRisk(
   task: RiskTaskLike,
@@ -38,7 +42,11 @@ export function classifyTaskRisk(
   if (plan) return 'high';
   if (task.hasSubtasks) return 'high';
   if (task.priority >= HIGH_PRIORITY_FLOOR) return 'high';
-  const sensitivity = classify(`${task.title}\n${task.tags.join(' ')}`);
+  // Include the description: confidential detail often lives only in the body of an
+  // otherwise generic-looking task, and classifying title+tags alone would miss it.
+  const sensitivity = classify(
+    `${task.title}\n${task.description ?? ''}\n${task.tags.join(' ')}`,
+  );
   if (isConfidentialOrAbove(sensitivity)) return 'high';
   return 'low';
 }

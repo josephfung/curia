@@ -14,6 +14,13 @@ import {
 export const COMPLETION_DIGEST_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/completion-digest.md`;
 export const COMPLETION_DIGEST_TYPE = 'task-completion-digest';
 
+// Active (non-terminal) task statuses eligible for sent-mail completion. Mirrors the
+// active-status set used by the scheduler/backlog queries (src/db/queries/tasks.ts).
+// Using an explicit allow-list (rather than excluding only done/cancelled) ensures
+// terminal statuses like 'failed' are skipped — a confident match must never resurrect
+// a terminated task as done.
+const ACTIVE_TASK_STATUSES = new Set(['open', 'in_progress', 'waiting', 'blocked']);
+
 async function appendDigest(ctx: SkillContext, content: string): Promise<void> {
   const repo = ctx.workingDocs!;
   const existing = await repo.read(COMPLETION_DIGEST_PATH);
@@ -99,13 +106,12 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
     for (const candidate of candidates) {
       const task = await ctx.taskRepo.getTask(candidate.taskId);
       // Re-validate eligibility: the candidate may be stale (task reassigned, completed,
-      // or cancelled since observation). Only open/in-progress CEO-owned tasks may be
-      // completed — this enforces the documented owner='ceo', still-open boundary.
+      // cancelled, or failed since observation). Only active CEO-owned tasks may be
+      // completed — this enforces the documented owner='ceo', still-active boundary.
       const eligible =
         !!task &&
         task.owner === 'ceo' &&
-        task.status !== 'done' &&
-        task.status !== 'cancelled';
+        ACTIVE_TASK_STATUSES.has(task.status);
       if (!eligible) {
         skipped += 1;
         body = markCandidateProcessed(body, candidate.taskId, 'skipped_ineligible');
@@ -134,6 +140,7 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
         {
           id: task.id,
           title: task.title,
+          description: task.description,
           priority: task.priority,
           tags: task.tags,
           progress: task.progress,
