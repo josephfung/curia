@@ -111,8 +111,23 @@ export function markCompletionStatus(
   taskId: string,
   status: string,
 ): string {
-  const re = new RegExp(
-    `(## ${kind} — task ${taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?- status:\\s*)\\S+`,
-  );
-  return body.replace(re, `$1${status}`);
+  const esc = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Match the header EXACTLY: the task id must be followed by whitespace or end-of-line,
+  // so id `t1` never matches a `t10` block. Scope the operation to a single block (split
+  // on the `## ` boundary, delimiters preserved) so a later historical block for the same
+  // task can't be picked instead of the current actionable one.
+  const headerRe = new RegExp(`^## ${kind} — task ${esc}(?:\\s|$)`);
+  // Only the actionable status is rewritten, so an already-resolved block (e.g. status
+  // `undone`/`confirmed`/`dismissed`) is left untouched.
+  const actionable = kind === 'Undo' ? 'undo_available' : 'pending_confirm';
+  const statusRe = new RegExp(`(- status:\\s*)${actionable}\\b`);
+  let done = false;
+  return body
+    .split(/(?=^## )/m)
+    .map((block) => {
+      if (done || !headerRe.test(block) || !statusRe.test(block)) return block;
+      done = true;
+      return block.replace(statusRe, `$1${status}`);
+    })
+    .join('');
 }

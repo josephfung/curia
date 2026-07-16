@@ -130,7 +130,12 @@ export class ResolveLearningDigestHandler implements SkillHandler {
 
     if (action === 'confirm_completion') {
       const task = await ctx.taskRepo.getTask(taskId);
-      if (task && task.status !== 'done') {
+      // Fail loudly when the task no longer exists — otherwise we'd mark the digest
+      // "confirmed" and report success while completing nothing.
+      if (!task) {
+        return { success: false, error: `Task ${taskId} not found; cannot confirm completion` };
+      }
+      if (task.status !== 'done') {
         await ctx.taskRepo.completeTask(
           taskId,
           'Confirmed complete from sent-mail digest',
