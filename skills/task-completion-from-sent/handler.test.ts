@@ -60,6 +60,7 @@ function makeCtx(): SkillContext & {
     id: string;
     title: string;
     status: string;
+    owner: string;
     priority: number;
     tags: string[];
     progress: Record<string, unknown>;
@@ -68,6 +69,7 @@ function makeCtx(): SkillContext & {
       id: '11111111-1111-4111-8111-111111111111',
       title: 'Follow up with John',
       status: 'open',
+      owner: 'ceo',
       priority: 40,
       tags: ['inbox-follow-up'],
       progress: {},
@@ -76,6 +78,7 @@ function makeCtx(): SkillContext & {
       id: '22222222-2222-4222-8222-222222222222',
       title: 'Plan AGM',
       status: 'open',
+      owner: 'ceo',
       priority: 40,
       tags: [],
       progress: {},
@@ -84,6 +87,7 @@ function makeCtx(): SkillContext & {
       id: '33333333-3333-4333-8333-333333333333',
       title: 'Maybe related',
       status: 'open',
+      owner: 'ceo',
       priority: 40,
       tags: [],
       progress: {},
@@ -154,6 +158,35 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(digest).toContain('Undo — task 11111111-1111-4111-8111-111111111111');
     expect(digest).toContain('Confirm — task 22222222-2222-4222-8222-222222222222');
     expect(digest).toContain('Confirm — task 33333333-3333-4333-8333-333333333333');
+
+    // Both confirmed candidates must receive their own completion_asked guard — a
+    // document-wide check previously marked only the first (#1429 CodeRabbit).
+    const pending = ctx.__docs.get(PENDING_COMPLETIONS_PATH)?.body ?? '';
+    const markerCount = (pending.match(/completion_asked:/g) ?? []).length;
+    expect(markerCount).toBe(2);
+  });
+
+  it('skips a candidate whose task is no longer CEO-owned', async () => {
+    const ctx = makeCtx();
+    // Reassign one task away from the CEO after observation.
+    const repo = ctx.taskRepo as unknown as {
+      getTask: (id: string) => Promise<{ owner: string } | null>;
+    };
+    const original = repo.getTask.bind(repo);
+    (ctx.taskRepo as unknown as { getTask: (id: string) => Promise<unknown> }).getTask = async (
+      id: string,
+    ) => {
+      const t = (await original(id)) as { owner: string } | null;
+      if (t && id === '11111111-1111-4111-8111-111111111111') return { ...t, owner: 'curia' };
+      return t;
+    };
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    // The reassigned task must NOT be auto-completed.
+    expect(ctx.__completed).not.toContain('11111111-1111-4111-8111-111111111111');
+    const pending = ctx.__docs.get(PENDING_COMPLETIONS_PATH)?.body ?? '';
+    expect(pending).toContain('skipped_ineligible');
   });
 
   it('reopenTask undoes an auto-complete (reversible path)', async () => {

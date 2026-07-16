@@ -37,8 +37,10 @@ export function classifyTaskRisk(task: RiskTaskLike): TaskRisk {
   for (const tag of task.tags) {
     if (SENSITIVE_TAGS.has(tag.toLowerCase())) return 'high';
   }
-  // Title heuristic for classic high-risk examples ("Plan AGM").
-  if (/\b(plan|agm|board|legal|investors?)\b/i.test(task.title)) return 'high';
+  // Title heuristic for classic high-risk examples ("Plan AGM"). Note: bare "plan"
+  // is intentionally excluded — it swept up "Plan lunch" / "Plan the offsite"; "agm"
+  // already captures the AGM case.
+  if (/\b(agm|board|legal|investors?)\b/i.test(task.title)) return 'high';
   return 'low';
 }
 
