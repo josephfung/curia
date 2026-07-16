@@ -263,7 +263,11 @@ export class CeoNylasClient {
       pageToken = nextCursor;
     }
 
-    return { messages: messages.slice(0, maxScan), truncated };
+    // slice() defends against a final page overshooting maxScan when maxScan is not a
+    // multiple of pageSize; if it actually trims anything, that's a truncation too even
+    // if the last page carried no cursor.
+    const capped = messages.slice(0, maxScan);
+    return { messages: capped, truncated: truncated || capped.length < messages.length };
   }
 
   async getMessage(messageId: string): Promise<NylasMessageFull> {

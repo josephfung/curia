@@ -398,6 +398,54 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(data.messages_scanned).toBe(3);
     expect(data.watermark_advanced_to).toBe(1_720_000_401);
     // Second fetch carried the cursor, proving pagination happened.
-    expect(mockFetch.mock.calls.some((c) => String(c[0]).includes('page_token=CURSOR1'))).toBe(true);
+    expect(
+      mockFetch.mock.calls.some((c: unknown[]) => String(c[0]).includes('page_token=CURSOR1')),
+    ).toBe(true);
+  });
+
+  it('on truncation advances forward and warns (never re-scans or strands via a held watermark)', async () => {
+    const mkMsg = (id: string, date: number) => ({
+      id,
+      thread_id: `t-${id}`,
+      subject: 'Note',
+      from: [{ email: 'ceo@example.com' }],
+      to: [{ email: 'x@example.com' }],
+      cc: [],
+      snippet: 'body',
+      date,
+      unread: false,
+      folders: ['SENT'],
+      attachments: [],
+    });
+
+    // Every page returns a full batch AND a cursor → listAllMessages hits the maxScan
+    // ceiling and reports truncated=true. Newest message date = 1_720_009_999.
+    let n = 0;
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages?')) {
+        // 20 messages per page, always with a next_cursor.
+        const data = Array.from({ length: 20 }, (_v, i) => {
+          const date = 1_720_009_999 - (n * 20 + i);
+          return mkMsg(`m-${n}-${i}`, date);
+        });
+        n += 1;
+        return new Response(JSON.stringify({ data, next_cursor: `c${n}` }), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const ctx = buildCtx({ force: true, nowMs: 1_720_100_000_000, tasks: [] });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { messages_scanned: number; watermark_advanced_to: number } }).data;
+    // Advanced forward to newest+1 (no held-watermark re-scan loop).
+    expect(data.watermark_advanced_to).toBe(1_720_010_000);
+    expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBe('1720010000');
+    // A truncation warning was emitted (loss is loud, not silent).
+    const warnMsgs = (ctx.log.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
+      (c) => String(c[1]),
+    );
+    expect(warnMsgs.some((m) => /scan ceiling/i.test(m))).toBe(true);
   });
 });
