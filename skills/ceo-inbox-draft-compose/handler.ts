@@ -106,8 +106,11 @@ export class CeoInboxDraftComposeHandler implements SkillHandler {
         'ceo-inbox-draft-compose: draft created',
       );
 
-      // Best-effort voice-learning snapshot — must not block draft creation (#1421).
-      await captureDraftSnapshot(ctx, {
+      // Best-effort voice-learning snapshot — fire-and-forget so working-document I/O
+      // never adds latency to draft creation (#1421). captureDraftSnapshot logs its own
+      // failures and never rejects; the .catch guards against an unexpected throw becoming
+      // an unhandled rejection.
+      void captureDraftSnapshot(ctx, {
         draftId: draft.id,
         threadId: draft.threadId,
         subject: draft.subject,
@@ -116,7 +119,9 @@ export class CeoInboxDraftComposeHandler implements SkillHandler {
         body,
         agentVersion: ctx.skillVersion,
         linkedTaskIds: parseLinkedTaskIds(input.linked_task_ids),
-      });
+      }).catch((err) =>
+        ctx.log.error({ err }, 'ceo-inbox-draft-compose: voice snapshot capture rejected'),
+      );
 
       return {
         success: true,
