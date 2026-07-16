@@ -19,6 +19,14 @@ export const PENDING_PROPOSALS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-
 export const PENDING_PROPOSALS_TYPE = 'voice-pending-proposals';
 export const CONFIG_NAMESPACE = 'ceo_inbox';
 
+// Checkpoint (ISO timestamp string) marking the newest `sentAt` among diff pairs already fed
+// to the LLM. pending-diffs.md is rolling/append-only and never consumed, so without this the
+// weekly run would re-feed the SAME evidence forever — even after a proposal was approved or
+// dismissed — and propose essentially the same guide again (CodeRabbit finding #11). Stored via
+// ConfigStore (best-effort — see the ctx.entityMemory guard below), NOT as part of the diff doc
+// itself, so a doc-write failure can never desync the checkpoint from what was actually read.
+export const DIFFS_CHECKPOINT_KEY = 'voice_learn.diffs_checkpoint';
+
 /** Most-recent diff pairs fed into a single LLM guide-refinement call. Bounded to keep the
  *  prompt (and cost) predictable regardless of how large the never-consumed diff doc grows. */
 const MAX_PAIRS = 40;
@@ -52,6 +60,32 @@ export class VoiceLearnHandler implements SkillHandler {
       return { success: true, data: { pairs_considered: 0, proposed: false } };
     }
 
+    // Checkpoint gate: best-effort, only consulted when entityMemory is wired (same guard
+    // style as the dismissal cooldown below) — if unavailable, fall back to the pre-fix
+    // behaviour of feeding every accumulated pair rather than failing the run.
+    let configStore: ConfigStore | null = null;
+    let checkpointMs = NaN;
+    if (ctx.entityMemory) {
+      configStore = new ConfigStore(ctx.entityMemory, ctx.log);
+      const checkpointRaw = await configStore.get(CONFIG_NAMESPACE, DIFFS_CHECKPOINT_KEY);
+      checkpointMs = checkpointRaw ? Date.parse(checkpointRaw) : NaN;
+    }
+    // A pair with an unparsable sentAt fails open (treated as new) so a malformed
+    // `- sent_at:` line can never silently drop real evidence from the LLM pass.
+    const newPairs = Number.isFinite(checkpointMs)
+      ? pairs.filter((p) => {
+          const sentAtMs = Date.parse(p.sentAt);
+          return !Number.isFinite(sentAtMs) || sentAtMs > checkpointMs;
+        })
+      : pairs;
+    if (newPairs.length === 0) {
+      ctx.log.info({}, 'voice-learn: no diffs newer than checkpoint — nothing new to learn');
+      return {
+        success: true,
+        data: { pairs_considered: 0, proposed: false, reason: 'no-new-evidence' },
+      };
+    }
+
     // Dedup: skip if a guide proposal is already pending. The diff doc is never
     // consumed, so without this a still-open proposal would get re-proposed weekly.
     // pending-proposals.md is APPEND-ONLY, so use the shared parser invariant rather than a
@@ -61,7 +95,7 @@ export class VoiceLearnHandler implements SkillHandler {
     if (existing && parseVoiceGuideProposal(existing.body) !== null) {
       return {
         success: true,
-        data: { pairs_considered: pairs.length, proposed: false, reason: 'proposal-pending' },
+        data: { pairs_considered: newPairs.length, proposed: false, reason: 'proposal-pending' },
       };
     }
 
@@ -69,9 +103,10 @@ export class VoiceLearnHandler implements SkillHandler {
     // additive: only consulted when entityMemory is wired (guarded, not a hard capability), and
     // a missing/garbage record simply doesn't gate. Without this the cooldown was written but
     // never read, so a dismissed guide got re-proposed on the very next weekly run (known-Minor #3).
-    if (ctx.entityMemory) {
-      const store = new ConfigStore(ctx.entityMemory, ctx.log);
-      const rawDismissed = await store.get(CONFIG_NAMESPACE, DISMISSED_KEY);
+    // Reuses `configStore` from the checkpoint read above (same guard, same ConfigStore instance)
+    // rather than constructing a second one.
+    if (configStore) {
+      const rawDismissed = await configStore.get(CONFIG_NAMESPACE, DISMISSED_KEY);
       let dismissed: Array<{ dimension: string; until: string }> = [];
       if (rawDismissed) {
         try {
@@ -88,13 +123,13 @@ export class VoiceLearnHandler implements SkillHandler {
         );
         return {
           success: true,
-          data: { pairs_considered: pairs.length, proposed: false, reason: 'dismiss-cooldown' },
+          data: { pairs_considered: newPairs.length, proposed: false, reason: 'dismiss-cooldown' },
         };
       }
     }
 
     const currentGuide = ctx.executiveProfileService.get().writingVoice.guide ?? '';
-    const batch = pairs.slice(-MAX_PAIRS);
+    const batch = newPairs.slice(-MAX_PAIRS);
     const res = await ctx.infraLlm.extract(buildVoiceGuidePrompt(currentGuide, batch), {
       maxTokens: 1200,
     });
@@ -102,7 +137,7 @@ export class VoiceLearnHandler implements SkillHandler {
       ctx.log.warn({ error: res.error }, 'voice-learn: LLM failed — no proposal this run');
       return {
         success: true,
-        data: { pairs_considered: pairs.length, proposed: false, reason: 'llm-failed' },
+        data: { pairs_considered: newPairs.length, proposed: false, reason: 'llm-failed' },
       };
     }
 
@@ -110,7 +145,7 @@ export class VoiceLearnHandler implements SkillHandler {
     if (!guide) {
       return {
         success: true,
-        data: { pairs_considered: pairs.length, proposed: false, reason: 'empty-guide' },
+        data: { pairs_considered: newPairs.length, proposed: false, reason: 'empty-guide' },
       };
     }
 
@@ -130,7 +165,23 @@ export class VoiceLearnHandler implements SkillHandler {
       });
     }
 
-    ctx.log.info({ pairs: pairs.length }, 'voice-learn: proposed an updated guide');
-    return { success: true, data: { pairs_considered: pairs.length, proposed: true } };
+    // Advance the checkpoint only now that the proposal write above has succeeded — a failed
+    // LLM call or empty guide already returned earlier without reaching here, so those cases
+    // correctly leave the checkpoint untouched and the same evidence gets retried next run.
+    // Checkpoint = newest sentAt among the pairs actually fed to the LLM (`batch`), not all of
+    // `newPairs` — anything beyond MAX_PAIRS wasn't used yet and must stay eligible next run.
+    if (configStore) {
+      const newestSentAt = batch.reduce<string>((newest, p) => {
+        const t = Date.parse(p.sentAt);
+        if (!Number.isFinite(t)) return newest;
+        return !newest || t > Date.parse(newest) ? p.sentAt : newest;
+      }, '');
+      if (newestSentAt) {
+        await configStore.set(CONFIG_NAMESPACE, DIFFS_CHECKPOINT_KEY, newestSentAt);
+      }
+    }
+
+    ctx.log.info({ pairs: newPairs.length }, 'voice-learn: proposed an updated guide');
+    return { success: true, data: { pairs_considered: newPairs.length, proposed: true } };
   }
 }
