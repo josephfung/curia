@@ -38,6 +38,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`voice-learn`** — weekly WritingVoice deltas from draft→sent diffs; hybrid auto/propose. (#1423)
 - **`task-completion-from-sent`** — risk-tiered auto-complete/confirm from Sent matches. (#1424)
 - **Learning digest** — voice proposals + completion undo/confirm in the daily digest. (#1425)
+- **Shadow drafting** — punted emails store silent drafts; competence feeds Phase 3. (#1426)
+- **`ceo-inbox` autonomy** — scheduled runs receive the live autonomy band block. (#1427)
 - **`scheduler-update`** — new skill lets agents resume, pause, or edit a scheduled job without the web UI. (#1409)
 - **Contact resolution** — integration test coverage for identity establishment and authorization. (#1382)
 - **`diagnostics` agent** — opt-in, read-only forensic agent that diagnoses "what happened / why" for the principal. (#1356)
