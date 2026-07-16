@@ -4,6 +4,8 @@ import type { SkillContext } from '../../src/skills/types.js';
 
 function buildCtx(input: Record<string, unknown>): SkillContext {
   return {
+    skillName: 'ceo-inbox-draft-edit',
+    skillVersion: '0.2.1',
     input,
     timezone: 'America/Toronto',
     secret(key: string): string {

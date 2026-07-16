@@ -13,6 +13,8 @@ function makeCtx(
   overrides?: Partial<SkillContext>,
 ): SkillContext {
   return {
+    skillName: 'delegate',
+    skillVersion: '1.3.0',
     input,
     secret: () => { throw new Error('no secrets needed'); },
     log: logger,

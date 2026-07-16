@@ -52,6 +52,8 @@ function makeContext(
   } = {},
 ): SkillContext {
   return {
+    skillName: 'contact-find-duplicates',
+    skillVersion: '2.1.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

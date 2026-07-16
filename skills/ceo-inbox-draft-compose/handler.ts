@@ -8,9 +8,6 @@ import { captureDraftSnapshot, parseLinkedTaskIds } from '../_shared/voice-learn
 const MAX_BODY_LENGTH = 50_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Keep in sync with skill.json version — stamped onto voice-learning snapshots. */
-const SKILL_VERSION = '0.3.0';
-
 export class CeoInboxDraftComposeHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     let apiKey: string;
@@ -117,7 +114,7 @@ export class CeoInboxDraftComposeHandler implements SkillHandler {
         to: draft.to,
         cc: draft.cc,
         body,
-        agentVersion: SKILL_VERSION,
+        agentVersion: ctx.skillVersion,
         linkedTaskIds: parseLinkedTaskIds(input.linked_task_ids),
       });
 

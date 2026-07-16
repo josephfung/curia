@@ -25,6 +25,8 @@ function buildCtx(overrides: Partial<{
   if ('attachments' in overrides) input.attachments = overrides.attachments;
 
   return {
+    skillName: 'ceo-inbox-draft-reply',
+    skillVersion: '0.3.0',
     input,
     timezone: 'America/Toronto',
     secret(key: string): string {
@@ -334,6 +336,8 @@ describe('CeoInboxDraftReplyHandler', () => {
 
     // Build a ctx where ceo_self_email returns an empty string
     const ctx: SkillContext = {
+      skillName: 'ceo-inbox-draft-reply',
+      skillVersion: '0.3.0',
       input: {
         reply_to_message_id: 'msg-001',
         body: 'Thanks for reaching out.',

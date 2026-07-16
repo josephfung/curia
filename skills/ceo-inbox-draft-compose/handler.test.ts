@@ -12,6 +12,8 @@ const mockRealpath = realpath as ReturnType<typeof vi.fn>;
 
 function buildCtx(input?: Record<string, unknown>): SkillContext {
   return {
+    skillName: 'ceo-inbox-draft-compose',
+    skillVersion: '0.3.0',
     input: input ?? {
       to: ['alice@example.com'],
       subject: 'Hello from CEO',

@@ -24,6 +24,8 @@ function makeCtx(input: Record<string, unknown>, gateway?: Partial<{
   getEmailMessage: (...args: unknown[]) => unknown;
 }>): SkillContext {
   return {
+    skillName: 'email-get',
+    skillVersion: '1.0.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

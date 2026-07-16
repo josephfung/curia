@@ -137,6 +137,11 @@ export interface AgentPersona {
  * they receive inputs through ctx.input and return outputs via SkillResult.
  */
 export interface SkillContext {
+  /** The invoking skill's manifest name and version (from skill.json). Populated by the
+   *  execution layer at context build time so handlers never need to hardcode their own
+   *  version — it stays in sync with skill.json automatically. */
+  skillName: string;
+  skillVersion: string;
   /** Validated input matching the manifest's inputs declaration */
   input: Record<string, unknown>;
   /** Scoped secret access — only secrets declared in the manifest are accessible */

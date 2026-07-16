@@ -11,6 +11,8 @@ function makeCtx(
   overrides?: Partial<SkillContext>,
 ): SkillContext {
   return {
+    skillName: 'scheduler-update',
+    skillVersion: '0.1.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

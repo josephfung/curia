@@ -10,6 +10,8 @@ function makeCtx(input: Record<string, unknown>, gateway?: Partial<{
   getEmailMessage: (...args: unknown[]) => unknown;
 }>, taskMetadata?: Record<string, unknown>, opts?: { timezone?: string }): SkillContext {
   return {
+    skillName: 'email-draft-save',
+    skillVersion: '1.1.1',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

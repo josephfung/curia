@@ -14,6 +14,8 @@ function buildCtx(overrides: Partial<{
   if ('message_id' in overrides) input.message_id = overrides.message_id;
 
   return {
+    skillName: 'ceo-inbox-download-attachment',
+    skillVersion: '0.1.0',
     input,
     secret(key: string): string {
       switch (key) {

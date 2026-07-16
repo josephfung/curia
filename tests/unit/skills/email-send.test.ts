@@ -14,6 +14,8 @@ function makeCtx(
   opts?: { timezone?: string; agentId?: string },
 ): SkillContext {
   return {
+    skillName: 'email-send',
+    skillVersion: '1.2.2',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

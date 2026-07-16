@@ -6,7 +6,7 @@ import pino from 'pino';
 const logger = pino({ level: 'silent' });
 
 function makeCtx(input: Record<string, unknown>, overrides?: Partial<SkillContext>): SkillContext {
-  return { input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
+  return { skillName: 'contact-set-role', skillVersion: '1.1.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
 }
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000';

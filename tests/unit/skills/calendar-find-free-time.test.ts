@@ -6,7 +6,7 @@ import pino from 'pino';
 const logger = pino({ level: 'silent' });
 
 function makeCtx(input: Record<string, unknown>, overrides?: Partial<SkillContext>): SkillContext {
-  return { input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
+  return { skillName: 'calendar-find-free-time', skillVersion: '1.1.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
 }
 
 // Realistic Unix timestamps (seconds) on 2026-04-06.
