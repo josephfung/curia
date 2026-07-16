@@ -4,21 +4,14 @@ import {
   CONFIG_NAMESPACE as VOICE_NS,
   DISMISSED_KEY,
   PENDING_PROPOSALS_PATH,
-  PROVENANCE_KEY,
 } from '../voice-learn/handler.js';
 import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
 import {
   markCompletionStatus,
-  markProposalStatus,
+  markGuideProposalStatus,
   parseCompletionDigest,
-  parseVoiceProposals,
-  type VoiceProposalItem,
+  parseVoiceGuideProposal,
 } from '../_shared/learning-digest.js';
-import {
-  DEFAULT_PROVENANCE,
-  type VoiceField,
-  type VoiceProvenanceMap,
-} from '../_shared/voice-learn-logic.js';
 
 const ACTIONS = new Set([
   'approve_voice',
@@ -27,10 +20,6 @@ const ACTIONS = new Set([
   'confirm_completion',
   'dismiss_completion',
 ]);
-
-function findProposal(body: string, field: string): VoiceProposalItem | undefined {
-  return parseVoiceProposals(body).find((p) => p.field === field);
-}
 
 export class ResolveLearningDigestHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -66,79 +55,28 @@ export class ResolveLearningDigestHandler implements SkillHandler {
     }
 
     if (action === 'approve_voice' || action === 'dismiss_voice') {
-      const field = typeof input.field === 'string' ? input.field.trim() : '';
-      if (!field) return { success: false, error: 'field is required for voice actions' };
-
       const doc = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
-      if (!doc) return { success: false, error: 'No pending voice proposals' };
-      const proposal = findProposal(doc.body, field);
-      if (!proposal) return { success: false, error: `No pending proposal for field ${field}` };
+      const proposal = doc ? parseVoiceGuideProposal(doc.body) : null;
+      if (!doc || !proposal) return { success: false, error: 'No pending voice guide proposal' };
 
       if (action === 'approve_voice') {
         const current = ctx.executiveProfileService.get().writingVoice;
-        const patch = proposal.patch;
-        const nextVoice = {
-          ...current,
-          ...(typeof patch.sign_off === 'string' ? { signOff: patch.sign_off } : {}),
-          ...(patch.vocabulary && typeof patch.vocabulary === 'object'
-            ? {
-                vocabulary: {
-                  prefer: [
-                    ...new Set([
-                      ...current.vocabulary.prefer,
-                      ...((patch.vocabulary as { prefer?: string[] }).prefer ?? []),
-                    ]),
-                  ],
-                  avoid: [
-                    ...new Set([
-                      ...current.vocabulary.avoid,
-                      ...((patch.vocabulary as { avoid?: string[] }).avoid ?? []),
-                    ]),
-                  ],
-                },
-              }
-            : {}),
-          ...(typeof patch.formality_delta === 'number'
-            ? {
-                formality: Math.max(
-                  0,
-                  Math.min(100, current.formality + (patch.formality_delta as number)),
-                ),
-              }
-            : {}),
-          ...(Array.isArray(patch.tone) ? { tone: patch.tone as string[] } : {}),
-          ...(Array.isArray(patch.patterns) ? { patterns: patch.patterns as string[] } : {}),
-        };
         await ctx.executiveProfileService.update(
-          { writingVoice: nextVoice },
+          { writingVoice: { ...current, guide: proposal.guide } },
           'skill',
-          `voice proposal approved: ${proposal.description}`,
+          'voice guide approved',
         );
 
-        const store = new ConfigStore(ctx.entityMemory, ctx.log);
-        const raw = await store.get(VOICE_NS, PROVENANCE_KEY);
-        let prov: VoiceProvenanceMap = { ...DEFAULT_PROVENANCE };
-        if (raw) {
-          try {
-            prov = { ...DEFAULT_PROVENANCE, ...(JSON.parse(raw) as Partial<VoiceProvenanceMap>) };
-          } catch {
-            /* keep default */
-          }
-        }
-        if (field in prov) {
-          prov[field as VoiceField] = 'operator-set';
-          await store.set(VOICE_NS, PROVENANCE_KEY, JSON.stringify(prov));
-        }
-
-        const updatedBody = markProposalStatus(doc.body, field, 'approved');
+        const updatedBody = markGuideProposalStatus(doc.body, 'approved');
         await ctx.workingDocs.update(PENDING_PROPOSALS_PATH, {
           body: updatedBody,
           expectedVersion: doc.version,
         });
-        return { success: true, data: { resolved: true, detail: `Approved voice ${field}` } };
+        return { success: true, data: { resolved: true, detail: 'Approved voice guide' } };
       }
 
-      // dismiss
+      // dismiss: keep the existing DISMISSED_KEY cooldown write. There's only one guide
+      // dimension now (no per-field proposals), so the cooldown entry uses a fixed key.
       const store = new ConfigStore(ctx.entityMemory, ctx.log);
       const rawDismissed = await store.get(VOICE_NS, DISMISSED_KEY);
       let dismissed: Array<{ dimension: string; until: string }> = [];
@@ -150,16 +88,16 @@ export class ResolveLearningDigestHandler implements SkillHandler {
         }
       }
       const until = new Date(Date.now() + 30 * 86_400_000).toISOString();
-      dismissed = dismissed.filter((d) => d.dimension !== field);
-      dismissed.push({ dimension: field, until });
+      dismissed = dismissed.filter((d) => d.dimension !== 'guide');
+      dismissed.push({ dimension: 'guide', until });
       await store.set(VOICE_NS, DISMISSED_KEY, JSON.stringify(dismissed));
 
-      const updatedBody = markProposalStatus(doc.body, field, 'dismissed');
+      const updatedBody = markGuideProposalStatus(doc.body, 'dismissed');
       await ctx.workingDocs.update(PENDING_PROPOSALS_PATH, {
         body: updatedBody,
         expectedVersion: doc.version,
       });
-      return { success: true, data: { resolved: true, detail: `Dismissed voice ${field}` } };
+      return { success: true, data: { resolved: true, detail: 'Dismissed voice guide' } };
     }
 
     // completion actions

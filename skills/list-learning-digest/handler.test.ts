@@ -25,7 +25,7 @@ describe('ListLearningDigestHandler', () => {
         read: vi.fn(async (path: string) => {
           if (path === PENDING_PROPOSALS_PATH) {
             return {
-              body: `## Proposal — signOff\n- status: pending\n- description: Prefer Thanks\n- sample_count: 3\n- consistency: 1.00\n- patch: {"sign_off":"Thanks"}\n---\n`,
+              body: `# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Dry humour.\n\n---\n`,
               version: 1,
             };
           }
@@ -43,7 +43,7 @@ describe('ListLearningDigestHandler', () => {
     const result = await new ListLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
     const data = (result as { data: { sections_markdown: string } }).data;
-    expect(data.sections_markdown).toContain('### Proposed voice diffs');
+    expect(data.sections_markdown).toContain('### Proposed writing-voice update');
     expect(data.sections_markdown).toContain('### Task completion from sent mail');
   });
 });

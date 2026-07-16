@@ -31,14 +31,71 @@ function makeMem(): EntityMemory & { __values: Map<string, string> } {
   } as unknown as EntityMemory & { __values: Map<string, string> };
 }
 
+const GUIDE_BODY = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Dry humour.\n\n---\n`;
+
 describe('ResolveLearningDigestHandler', () => {
-  it('dismisses a voice proposal and writes dismissal guard', async () => {
+  it('approves a voice guide proposal and writes it into WritingVoice.guide', async () => {
     const docs = new Map([
       [
         PENDING_PROPOSALS_PATH,
         {
           path: PENDING_PROPOSALS_PATH,
-          body: `## Proposal — signOff\n- status: pending\n- description: Prefer Thanks\n- sample_count: 3\n- consistency: 1.00\n- patch: {"sign_off":"Thanks"}\n---\n`,
+          body: GUIDE_BODY,
+          version: 1,
+          type: 'x',
+          frontmatter: {},
+        },
+      ],
+    ]);
+    const mem = makeMem();
+    const update = vi.fn();
+    const ctx = {
+      input: { action: 'approve_voice' },
+      workingDocs: {
+        read: vi.fn(async (p: string) => docs.get(p) ?? null),
+        update: vi.fn(async (p: string, params: { body: string }) => {
+          const cur = docs.get(p)!;
+          docs.set(p, { ...cur, body: params.body, version: cur.version + 1 });
+          return { ok: true, document: docs.get(p) };
+        }),
+      },
+      entityMemory: mem,
+      executiveProfileService: {
+        get: () => ({
+          writingVoice: {
+            tone: [],
+            formality: 50,
+            patterns: [],
+            vocabulary: { prefer: [], avoid: [] },
+            signOff: '',
+            guide: '',
+          },
+        }),
+        update,
+      },
+      taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+
+    const result = await new ResolveLearningDigestHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writingVoice: expect.objectContaining({ guide: expect.stringContaining('Dry humour') }),
+      }),
+      'skill',
+      expect.any(String),
+    );
+    expect(docs.get(PENDING_PROPOSALS_PATH)!.body).toContain('status: approved');
+  });
+
+  it('dismisses a voice guide proposal and writes dismissal guard', async () => {
+    const docs = new Map([
+      [
+        PENDING_PROPOSALS_PATH,
+        {
+          path: PENDING_PROPOSALS_PATH,
+          body: GUIDE_BODY,
           version: 1,
           type: 'x',
           frontmatter: {},
@@ -47,7 +104,7 @@ describe('ResolveLearningDigestHandler', () => {
     ]);
     const mem = makeMem();
     const ctx = {
-      input: { action: 'dismiss_voice', field: 'signOff' },
+      input: { action: 'dismiss_voice' },
       workingDocs: {
         read: vi.fn(async (p: string) => docs.get(p) ?? null),
         update: vi.fn(async (p: string, params: { body: string }) => {
@@ -68,7 +125,7 @@ describe('ResolveLearningDigestHandler', () => {
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
     expect(docs.get(PENDING_PROPOSALS_PATH)!.body).toContain('status: dismissed');
-    expect(mem.__values.get(DISMISSED_KEY)).toContain('signOff');
+    expect(mem.__values.get(DISMISSED_KEY)).toContain('guide');
   });
 
   it('undoes an auto-complete via reopenTask', async () => {

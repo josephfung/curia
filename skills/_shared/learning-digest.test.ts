@@ -1,28 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseVoiceProposals,
+  parseVoiceGuideProposal,
   parseCompletionDigest,
-  renderVoiceProposalsSection,
+  renderVoiceGuideSection,
   renderCompletionSection,
+  markGuideProposalStatus,
 } from './learning-digest.js';
 
-const PROPOSALS = `
-## Proposal — signOff
-- status: pending
-- description: Prefer sign-off "Thanks"
-- sample_count: 3
-- consistency: 1.00
-- magnitude: low
-- patch: {"sign_off":"Thanks"}
----
-## Proposal — formality
-- status: approved
-- description: shift
-- sample_count: 8
-- consistency: 1.00
-- patch: {"formality_delta":-10}
----
-`;
+const GUIDE_DOC = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Dry humour.\n\n---\n`;
 
 const COMPLETIONS = `
 ## Undo — task aaa
@@ -43,11 +28,17 @@ const COMPLETIONS = `
 `;
 
 describe('learning digest parsers + renderers', () => {
-  it('parses pending voice proposals only', () => {
-    const items = parseVoiceProposals(PROPOSALS);
-    expect(items).toHaveLength(1);
-    expect(items[0]!.field).toBe('signOff');
-    expect(items[0]!.patch).toEqual({ sign_off: 'Thanks' });
+  it('parses a pending guide proposal', () => {
+    expect(parseVoiceGuideProposal(GUIDE_DOC)?.guide).toContain('Dry humour');
+  });
+
+  it('returns null when no guide proposal is present or it is not pending', () => {
+    expect(parseVoiceGuideProposal('')).toBeNull();
+    expect(
+      parseVoiceGuideProposal(
+        `## Guide Proposal\n- status: approved\n- generated_at: x\n\n- Writes short.\n\n---\n`,
+      ),
+    ).toBeNull();
   });
 
   it('parses undo + confirm completion items; skips resolved', () => {
@@ -57,14 +48,9 @@ describe('learning digest parsers + renderers', () => {
     expect(items[1]!.kind).toBe('confirm');
   });
 
-  it('renders voice section only when items exist (snapshot)', () => {
-    expect(renderVoiceProposalsSection([])).toBe('');
-    expect(renderVoiceProposalsSection(parseVoiceProposals(PROPOSALS))).toMatchInlineSnapshot(`
-      "### Proposed voice diffs
-
-      1. **signOff** — Prefer sign-off "Thanks" (n=3, consistency=1.00). Reply \`approve voice signOff\` or \`dismiss voice signOff\`.
-      "
-    `);
+  it('renders the guide section only when present', () => {
+    expect(renderVoiceGuideSection(null)).toBe('');
+    expect(renderVoiceGuideSection('- Writes short.')).toContain('### Proposed writing-voice update');
   });
 
   it('renders completion section only when items exist (snapshot)', () => {
@@ -76,5 +62,9 @@ describe('learning digest parsers + renderers', () => {
       2. Did emailing board@example.com complete *Plan AGM*? Reply \`confirm completion bbb\` or \`dismiss completion bbb\`.
       "
     `);
+  });
+
+  it('marks the guide proposal status', () => {
+    expect(markGuideProposalStatus(GUIDE_DOC, 'approved')).toContain('status: approved');
   });
 });
