@@ -33,6 +33,13 @@ async function appendDigest(ctx: SkillContext, content: string): Promise<void> {
   });
 }
 
+/** Extract a single candidate's markdown block (header to the next `## ` heading / EOF). */
+function candidateBlock(body: string, taskId: string): string {
+  const esc = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = body.match(new RegExp(`## Candidate — task ${esc}\\b[\\s\\S]*?(?=\\n## |$)`));
+  return m ? m[0] : '';
+}
+
 function markCandidateProcessed(body: string, taskId: string, marker: string): string {
   const re = new RegExp(
     `(## Candidate — task ${taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?)(- status:\\s*)pending`,
@@ -49,6 +56,19 @@ function markCandidateProcessed(body: string, taskId: string, marker: string): s
 
 export class TaskCompletionFromSentHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
+    // Skill contract: never throw — normalize repo/document failures to a result.
+    try {
+      return await this.runCompletion(ctx);
+    } catch (err) {
+      ctx.log.error({ err }, 'task-completion-from-sent: unexpected failure');
+      return {
+        success: false,
+        error: `task-completion-from-sent failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  private async runCompletion(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.taskRepo || !ctx.workingDocs) {
       return {
         success: false,
@@ -73,13 +93,23 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
 
     for (const candidate of candidates) {
       const task = await ctx.taskRepo.getTask(candidate.taskId);
-      if (!task || task.status === 'done' || task.status === 'cancelled') {
+      // Re-validate eligibility: the candidate may be stale (task reassigned, completed,
+      // or cancelled since observation). Only open/in-progress CEO-owned tasks may be
+      // completed — this enforces the documented owner='ceo', still-open boundary.
+      const eligible =
+        !!task &&
+        task.owner === 'ceo' &&
+        task.status !== 'done' &&
+        task.status !== 'cancelled';
+      if (!eligible) {
         skipped += 1;
-        body = markCandidateProcessed(body, candidate.taskId, 'skipped_missing_or_done');
+        body = markCandidateProcessed(body, candidate.taskId, 'skipped_ineligible');
         continue;
       }
 
-      // Detect subtasks via parent lookups when available.
+      // Detect subtasks via parent lookups when available. Fail CLOSED: if the lookup
+      // errors we cannot rule out subtasks, so treat the task as high-risk rather than
+      // risk auto-completing a parent (which would cancel its descendants).
       let hasSubtasks = false;
       try {
         const children = await ctx.taskRepo.listTasks({
@@ -87,8 +117,12 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
           limit: 5,
         });
         hasSubtasks = children.length > 0;
-      } catch {
-        hasSubtasks = false;
+      } catch (err) {
+        ctx.log.warn(
+          { err, taskId: task.id },
+          'task-completion-from-sent: subtask lookup failed — treating as high risk',
+        );
+        hasSubtasks = true;
       }
 
       const risk = classifyTaskRisk({
@@ -135,8 +169,10 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
           }),
         );
         body = markCandidateProcessed(body, candidate.taskId, 'confirm_queued');
-        // In-band guard so fuzzy candidates aren't re-surfaced.
-        if (!body.includes(`completion_asked:`) || !body.includes(candidate.taskId)) {
+        // In-band guard so fuzzy candidates aren't re-surfaced — scoped to THIS
+        // candidate's block (a document-wide check let one candidate's marker suppress
+        // every later candidate's guard).
+        if (!/completion_asked:/i.test(candidateBlock(body, candidate.taskId))) {
           body = body.replace(
             `## Candidate — task ${candidate.taskId}`,
             `## Candidate — task ${candidate.taskId}\n- completion_asked: {${new Date().toISOString().slice(0, 10)}}`,
