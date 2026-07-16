@@ -302,23 +302,26 @@ export function formatDiffBlock(match: DraftMatch, sentBody: string): string {
  * would otherwise accumulate forever, since appendDoc refreshes `updated_at` on every active run
  * and defeats the idle-TTL sweep.
  *
- * Boundaries: each block starts at a line beginning `## ` and runs up to (not including) the next
- * such line — the same header boundary formatDiffBlock/formatCompletionCandidateBlock produce and
- * parsePendingDiffs/parseCompletionCandidates consume, so the result round-trips. Any leading
- * preamble/header before the first block is preserved. Blocks with a missing or unparseable
- * `sent_at` are KEPT (never drop on parse failure — data loss is worse than over-retention), as is
- * the whole body when `cutoffIso` itself is unparseable.
+ * Boundaries: each block starts at a real `## Diff — ` / `## Candidate — ` header and runs up to
+ * (not including) the next such header — the same headers formatDiffBlock/formatCompletionCandidateBlock
+ * produce and parsePendingDiffs/parseCompletionCandidates consume, so the result round-trips. We split
+ * on the namespaced headers, NOT any `## ` line, so a `## `-prefixed line inside a sent email body
+ * (a markdown H2 surviving htmlToPlainText) stays part of its block instead of mis-splitting it and
+ * leaving a timestamp-less tail behind. Any leading preamble/header before the first block is
+ * preserved. Blocks with a missing or unparseable `sent_at` are KEPT (never drop on parse failure —
+ * data loss is worse than over-retention), as is the whole body when `cutoffIso` itself is unparseable.
  */
 export function trimEvidenceDoc(body: string, cutoffIso: string): string {
   const cutoffMs = Date.parse(cutoffIso);
   if (!Number.isFinite(cutoffMs)) return body;
 
-  // Lookahead split keeps the `## ` delimiters, so the surviving pieces re-join to the exact
-  // original bytes (each block carries its own trailing `---` and blank line).
-  const parts = body.split(/(?=^## )/m);
+  // Lookahead split keeps the header delimiters, so the surviving pieces re-join to the exact
+  // original bytes (each block carries its own trailing `---` and blank line). Split only on the
+  // real block headers (`## Diff — ` / `## Candidate — `), never a bare `## ` — see the doc comment.
+  const parts = body.split(/(?=^## (?:Diff|Candidate) — )/m);
   const kept: string[] = [];
   for (const part of parts) {
-    if (!part.startsWith('## ')) {
+    if (!/^## (?:Diff|Candidate) — /.test(part)) {
       kept.push(part); // leading preamble / doc header
       continue;
     }

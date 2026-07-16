@@ -195,6 +195,32 @@ describe('trimEvidenceDoc', () => {
     expect(pairs[0]!.messageId).toBe(`msg-${NEW}`);
   });
 
+  it('drops an old block whose body contains a "## " line without leaving a tail (splits on real headers only)', () => {
+    // A sent email body can legitimately contain a markdown H2 that survives htmlToPlainText.
+    // The block boundary must be the real Diff/Candidate header, not any `## ` line — otherwise
+    // the old block's tail (which has no `sent_at`) is wrongly retained, partially defeating the
+    // retention bound for exactly the sensitive bodies F3 is meant to age out.
+    const sentWithHeading = `Here's the plan.\n\n## Agenda\n\n- item one\n- item two`;
+    const sent: SentMessageLike = { ...baseSent, id: `msg-${OLD}`, date: OLD };
+    const snap: DraftSnapshotLike = {
+      ...baseSnap,
+      draftId: `draft-${OLD}`,
+      body: DRAFT_BODY,
+      createdAt: new Date((OLD - 1000) * 1000).toISOString(),
+    };
+    const oldBlock = formatDiffBlock(matchDraftToSent(sent, [snap])!, sentWithHeading);
+    const trimmed = trimEvidenceDoc(`# Pending voice diffs\n${oldBlock}${diffBlock(NEW)}`, CUTOFF);
+
+    // The entire old block is gone — header, metadata, body heading, and tail.
+    expect(trimmed).not.toContain(`draft draft-${OLD}`);
+    expect(trimmed).not.toContain('## Agenda');
+    expect(trimmed).not.toContain('item two');
+    // The newer block survives and still round-trips to exactly the kept pair.
+    const pairs = parsePendingDiffs(trimmed);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]!.draftId).toBe(`draft-${NEW}`);
+  });
+
   it('keeps a block whose sent_at is missing or unparseable (never drops on parse failure)', () => {
     const garbage = `\n## Diff — draft dg ↔ sent mg\n\n- thread_id: t\n- confidence: high\n- sent_at: not-a-date\n- subject: x\n- recipients: a@b.com\n\n### Draft\n\n${DRAFT_BODY}\n\n### Sent\n\n${SENT_BODY}\n\n---\n`;
     const missing = `\n## Diff — draft dm ↔ sent mm\n\n- thread_id: t\n- confidence: high\n- subject: x\n- recipients: a@b.com\n\n### Draft\n\n${DRAFT_BODY}\n\n### Sent\n\n${SENT_BODY}\n\n---\n`;
