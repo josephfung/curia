@@ -163,7 +163,9 @@ function buildCtx(overrides: {
     secret(key: string): string {
       if (key === 'nylas_api_key') return 'key';
       if (key === 'ceo_nylas_grant_id') return 'grant';
-      return '';
+      // Mirror the real ctx.secret(): an unrecognized key is a wiring bug, not an empty
+      // string. Throwing here surfaces any stray secret request instead of masking it.
+      throw new Error(`Unexpected secret: ${key}`);
     },
     entityMemory: mem as unknown as EntityMemory,
     workingDocs,
@@ -553,6 +555,251 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBeUndefined();
     // The shadow was neither scored nor stamped, so it will be retried.
     expect(data.shadow_reconciled).toBe(0);
+    const shadowDoc = ctx.__docs.get(shadowDraftPath('src-1'));
+    expect(shadowDoc?.frontmatter.reconciled_at).toBeUndefined();
+  });
+
+  it('matches a shadow to the nearest eligible send, not a later unrelated one (F6)', async () => {
+    // Thread-1 carries TWO sends after the shadow was captured: S1 (nearest in time) and
+    // a later S2. Both share the shadow's subject + recipient, so ONLY nearest-in-time
+    // distinguishes them. The shadow must be judged against S1's body, never S2's.
+    const common = {
+      thread_id: 'thread-1',
+      subject: 'Re: Hello',
+      from: [{ email: 'ceo@example.com' }],
+      to: [{ email: 'alice@example.com' }],
+      cc: [],
+      unread: false,
+      folders: ['SENT'],
+      attachments: [],
+    };
+    // Newest-first (as Nylas returns): S2 (later) precedes S1 (nearer to shadow capture).
+    const listResponse = {
+      data: [
+        { ...common, id: 'msg-s2', snippet: 'later unrelated', date: 1_720_050_000 },
+        { ...common, id: 'msg-s1', snippet: 'the real reply', date: 1_720_000_200 },
+      ],
+    };
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-s1')) {
+        return new Response(
+          JSON.stringify({
+            data: { ...common, id: 'msg-s1', date: 1_720_000_200, body: '<p>Tuesday works for me.</p>', snippet: 'the real reply', bcc: [], labels: [] },
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes('/messages/msg-s2')) {
+        return new Response(
+          JSON.stringify({
+            data: { ...common, id: 'msg-s2', date: 1_720_050_000, body: '<p>Different unrelated topic entirely.</p>', snippet: 'later unrelated', bcc: [], labels: [] },
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify(listResponse), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    let capturedPrompt = '';
+    const extract = vi.fn(async (prompt: string) => {
+      capturedPrompt = prompt;
+      return {
+        ok: true as const,
+        text: '[{"source_message_id":"src-1","same_decision":true,"reason":"same"}]',
+      };
+    });
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+      withActionLogRepo: true,
+      snapshots: [
+        {
+          path: shadowDraftPath('src-1'),
+          type: SHADOW_DOC_TYPE,
+          frontmatter: {
+            source_message_id: 'src-1',
+            thread_id: 'thread-1',
+            subject: 'Re: Hello',
+            recipients: ['alice@example.com'],
+            created_at: '2024-07-03T00:00:00.000Z',
+            disposition: 'punt',
+          },
+          body: 'Thanks Alice, how about Wednesday?',
+        },
+      ],
+      tasks: [],
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    // The judge pair carried S1's body, not S2's.
+    expect(capturedPrompt).toContain('Tuesday works for me.');
+    expect(capturedPrompt).not.toContain('Different unrelated topic');
+    // Only the selected send (S1) had its full body fetched.
+    expect(mockFetch.mock.calls.some((c: unknown[]) => String(c[0]).includes('/messages/msg-s1'))).toBe(true);
+    expect(mockFetch.mock.calls.some((c: unknown[]) => String(c[0]).includes('/messages/msg-s2'))).toBe(false);
+    expect((result as { data: { shadow_reconciled: number } }).data.shadow_reconciled).toBe(1);
+  });
+
+  it('holds the watermark and skips scoring when the sent body cannot be fetched (F7)', async () => {
+    // The shadow matches a send, but fetching its full body fails. We must NOT score a
+    // truncated snippet — the pair is dropped, the shadow left unclaimed, watermark held.
+    const listResponse = {
+      data: [
+        {
+          id: 'msg-sent-1',
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          from: [{ email: 'ceo@example.com' }],
+          to: [{ email: 'alice@example.com' }],
+          cc: [],
+          snippet: 'truncated snippet only',
+          date: 1_720_000_500,
+          unread: false,
+          folders: ['SENT'],
+          attachments: [],
+        },
+      ],
+    };
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-1')) {
+        // Full-body fetch fails.
+        throw new Error('nylas 500');
+      }
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify(listResponse), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const extract = vi.fn(async () => ({
+      ok: true as const,
+      text: '[{"source_message_id":"src-1","same_decision":true,"reason":"same"}]',
+    }));
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+      withActionLogRepo: true,
+      snapshots: [
+        {
+          path: shadowDraftPath('src-1'),
+          type: SHADOW_DOC_TYPE,
+          frontmatter: {
+            source_message_id: 'src-1',
+            thread_id: 'thread-1',
+            subject: 'Re: Hello',
+            recipients: ['alice@example.com'],
+            created_at: '2024-07-03T00:00:00.000Z',
+            disposition: 'punt',
+          },
+          body: 'Thanks Alice, how about Wednesday?',
+        },
+      ],
+      tasks: [],
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    // No pair reached the judge, nothing scored, and the watermark is held for retry.
+    expect(extract).not.toHaveBeenCalled();
+    expect(ctx.__actionLog).toHaveLength(0);
+    const data = (result as { data: { watermark_advanced_to: number | null; shadow_reconciled: number } }).data;
+    expect(data.watermark_advanced_to).toBeNull();
+    expect(data.shadow_reconciled).toBe(0);
+    expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBeUndefined();
+    const shadowDoc = ctx.__docs.get(shadowDraftPath('src-1'));
+    expect(shadowDoc?.frontmatter.reconciled_at).toBeUndefined();
+  });
+
+  it('holds the watermark when the judge omits a pair (F8)', async () => {
+    // The judge returns an empty array — the only pair goes unjudged. That pair must stay
+    // unreconciled and the watermark must be held so it retries next run.
+    const listResponse = {
+      data: [
+        {
+          id: 'msg-sent-1',
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          from: [{ email: 'ceo@example.com' }],
+          to: [{ email: 'alice@example.com' }],
+          cc: [],
+          snippet: 'Thanks Alice',
+          date: 1_720_000_500,
+          unread: false,
+          folders: ['SENT'],
+          attachments: [],
+        },
+      ],
+    };
+    const fullResponse = {
+      data: {
+        ...listResponse.data[0],
+        body: '<p>Thanks Alice, sounds good, let us do Tuesday.</p>',
+        bcc: [],
+        labels: [],
+      },
+    };
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-1')) {
+        return new Response(JSON.stringify(fullResponse), { status: 200 });
+      }
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify(listResponse), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    // Judge succeeds at the LLM layer but returns NO judgement for the pair.
+    const extract = vi.fn(async () => ({ ok: true as const, text: '[]' }));
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      infraLlm: { extract, classify: vi.fn() } as unknown as InfraLlm,
+      withActionLogRepo: true,
+      snapshots: [
+        {
+          path: shadowDraftPath('src-1'),
+          type: SHADOW_DOC_TYPE,
+          frontmatter: {
+            source_message_id: 'src-1',
+            thread_id: 'thread-1',
+            subject: 'Re: Hello',
+            recipients: ['alice@example.com'],
+            created_at: '2024-07-03T00:00:00.000Z',
+            disposition: 'punt',
+          },
+          body: 'Thanks Alice, how about Wednesday?',
+        },
+      ],
+      tasks: [],
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    expect(extract).toHaveBeenCalledTimes(1);
+    // The pair was omitted, so nothing was inserted or marked, and the watermark is held.
+    expect(ctx.__actionLog).toHaveLength(0);
+    const data = (result as { data: { watermark_advanced_to: number | null; shadow_reconciled: number } }).data;
+    expect(data.watermark_advanced_to).toBeNull();
+    expect(data.shadow_reconciled).toBe(0);
+    expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBeUndefined();
     const shadowDoc = ctx.__docs.get(shadowDraftPath('src-1'));
     expect(shadowDoc?.frontmatter.reconciled_at).toBeUndefined();
   });
