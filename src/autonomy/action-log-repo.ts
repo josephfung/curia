@@ -25,8 +25,9 @@ export class ActionLogRepo {
     const result = await this.pool.query<{ id: number }>(
       `INSERT INTO autonomy_action_log
          (task_id, conversation_id, skill_name, action_risk, outcome, task_summary,
-          payload, expires_at, short_ref, description, parent_action_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          payload, expires_at, short_ref, description, parent_action_id,
+          competence_flag, commitment_flag, compatibility, scored_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING id`,
       [
         row.taskId,
@@ -40,6 +41,10 @@ export class ActionLogRepo {
         row.shortRef ?? null,
         row.description ?? null,
         row.parentActionId ?? null,
+        row.competenceFlag ?? null,
+        row.commitmentFlag ?? null,
+        row.compatibility ?? null,
+        row.scoredBy ?? null,
       ],
     );
     this.logger.debug({ id: result.rows[0]!.id, skillName: row.skillName, outcome: row.outcome }, 'action-log-repo: inserted row');
