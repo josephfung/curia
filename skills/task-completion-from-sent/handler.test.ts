@@ -133,6 +133,12 @@ function makeCtx(): SkillContext & {
       }),
     },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    // Fake classifier: 'restricted' for board/agm text (covers the "Plan AGM" high-risk
+    // case below), 'internal' for everything else — mirrors the real SensitivityClassifier's
+    // classify(label, properties) signature.
+    sensitivityClassifier: {
+      classify: (text: string) => (/board|agm/i.test(text) ? 'restricted' : 'internal'),
+    },
     __completed: completed,
     __docs: docs,
   } as unknown as SkillContext & {

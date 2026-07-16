@@ -6,76 +6,68 @@ import {
   HIGH_PRIORITY_FLOOR,
 } from './task-completion-risk.js';
 
-describe('classifyTaskRisk', () => {
-  it('marks Plan AGM as high-risk', () => {
-    expect(
-      classifyTaskRisk({
-        id: 't1',
-        title: 'Plan AGM',
-        priority: 40,
-        tags: [],
-        progress: {},
-      }),
-    ).toBe('high');
-  });
+// Fake classifier: 'restricted' when the text mentions "board" or "agm", else 'internal'.
+const fakeClassify = (text: string) =>
+  /board|agm/i.test(text) ? ('restricted' as const) : ('internal' as const);
 
+describe('classifyTaskRisk', () => {
   it('marks tasks with a plan block as high-risk', () => {
     expect(
-      classifyTaskRisk({
-        id: 't2',
-        title: 'Follow up',
-        priority: 40,
-        tags: [],
-        progress: {
-          plan: {
-            steps: [
-              { id: 's1', taskId: '00000000-0000-4000-8000-000000000001' },
-              { id: 's2', taskId: null },
-            ],
-            deliverableStepId: null,
-            done: 0,
-            total: 2,
-            next: 's1',
+      classifyTaskRisk(
+        {
+          id: 't2',
+          title: 'Follow up',
+          priority: 40,
+          tags: [],
+          progress: {
+            plan: {
+              steps: [
+                { id: 's1', taskId: '00000000-0000-4000-8000-000000000001' },
+                { id: 's2', taskId: null },
+              ],
+              deliverableStepId: null,
+              done: 0,
+              total: 2,
+              next: 's1',
+            },
           },
         },
-      }),
+        fakeClassify,
+      ),
     ).toBe('high');
-  });
-
-  it('marks sensitive tags as high-risk', () => {
-    expect(
-      classifyTaskRisk({
-        id: 't3',
-        title: 'Send note',
-        priority: 40,
-        tags: ['board'],
-        progress: {},
-      }),
-    ).toBe('high');
-  });
-
-  it('marks simple follow-ups as low-risk', () => {
-    expect(
-      classifyTaskRisk({
-        id: 't4',
-        title: 'Follow up with John',
-        priority: 40,
-        tags: ['inbox-follow-up'],
-        progress: {},
-      }),
-    ).toBe('low');
   });
 
   it('marks high priority as high-risk', () => {
     expect(
-      classifyTaskRisk({
-        id: 't5',
-        title: 'Call vendor',
-        priority: HIGH_PRIORITY_FLOOR,
-        tags: [],
-        progress: {},
-      }),
+      classifyTaskRisk(
+        {
+          id: 't5',
+          title: 'Call vendor',
+          priority: HIGH_PRIORITY_FLOOR,
+          tags: [],
+          progress: {},
+        },
+        () => 'internal',
+      ),
     ).toBe('high');
+  });
+
+  it('marks a restricted/confidential task high-risk via the classifier', () => {
+    expect(
+      classifyTaskRisk(
+        { id: 't', title: 'Prep board pack', priority: 40, tags: [], progress: {} },
+        fakeClassify,
+      ),
+    ).toBe('high');
+  });
+
+  it('marks an ordinary task low-risk', () => {
+    expect(
+      classifyTaskRisk(
+        { id: 't', title: 'Follow up with John', priority: 40, tags: [], progress: {} },
+        fakeClassify,
+      ),
+    ).toBe('low');
   });
 });
 
