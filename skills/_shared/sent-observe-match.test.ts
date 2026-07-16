@@ -103,6 +103,29 @@ describe('matchTasksToSent', () => {
     );
     expect(matches).toHaveLength(0);
   });
+
+  it('does not grant high confidence when the local-part is only a substring', () => {
+    // recipient ann@example.com must NOT match the word "annual" in the task text.
+    const matches = matchTasksToSent(
+      {
+        ...baseSent,
+        to: [{ email: 'ann@example.com' }],
+        subject: 'Weekly note',
+        snippet: 'A quick weekly note about nothing in particular',
+      },
+      [
+        {
+          id: 'task-annual',
+          title: 'Annual planning offsite',
+          description: 'Organise the annual planning offsite agenda',
+          tags: [],
+          priority: 40,
+        },
+      ],
+    );
+    // Either no match, or at most a low-confidence semantic one — never high via substring.
+    expect(matches.every((m) => m.confidence !== 'high')).toBe(true);
+  });
 });
 
 describe('formatDiffBlock', () => {

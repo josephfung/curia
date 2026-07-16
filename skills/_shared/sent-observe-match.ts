@@ -214,9 +214,13 @@ export function matchTasksToSent(
 
     const taskText = `${task.title}\n${task.description ?? ''}`;
     const taskLower = taskText.toLowerCase();
+    const taskTokens = tokenize(taskText);
     const recipientHit = sentRecipients.some((email) => {
       const local = email.split('@')[0] ?? email;
-      return taskLower.includes(email) || (local.length >= 3 && taskLower.includes(local));
+      // Match the local-part as a whole token, not a substring — otherwise
+      // `ann@example.com` "matches" the word "annual" and can push an unrelated
+      // task to high confidence (and possibly auto-completion).
+      return taskLower.includes(email) || (local.length >= 3 && taskTokens.has(local));
     });
     const overlap = jaccard(sentTokens, tokenize(taskText));
 
