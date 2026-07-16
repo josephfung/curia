@@ -266,20 +266,25 @@ competence model and no second score dial (ADR-029).
 
 When `ceo-inbox` triages a message but punts (Seen / Urgent / Stuck), it may silently
 generate a **non-surfaced, non-sent** shadow draft and store it in OKF. High-sensitivity
-threads (board, investors, legal, spouse — KG sensitivity tier) are excluded from shadow
-*capture*. When the sent-mail observer later reconciles against the CEO's actual send, it
-writes a **pre-scored** `autonomy_action_log` row:
+threads (board, investors, legal, spouse — KG sensitivity tier) are **included** in shadow
+capture, not excluded. Those are the highest-stakes decisions, where competence evidence
+matters most. When the sent-mail observer later reconciles against the CEO's actual send,
+it batches `(shadow draft, actual sent reply)` pairs (batch size 20) into a single
+`ctx.infraLlm.extract()` call that judges whether the shadow draft reached the same
+substantive decision/recommendation as the actual send, then writes a **pre-scored**
+`autonomy_action_log` row:
 
 | Field | Value |
 |---|---|
-| `competence_flag` | `1` if the shadow draft reached the same **decision/outcome** as the actual send (equivalence, not phrasing); `0` if it diverged |
+| `competence_flag` | `1` if the batched LLM judged the shadow draft equivalent (same substantive decision/recommendation) to the actual send; `0` if it diverged |
 | `commitment_flag` / `compatibility` | `null` — pure competence signal; `computeCapabilityScore` ignores nulls per dimension |
 | `scored_by` | `'shadow-reconciler'` — `findUnscoredTerminal` skips it; `findAllScored` includes it |
-| Markers | `skill_name: 'shadow-draft-eval'`, `action_risk: 'none'`, `payload.shadow: true`, dedicated terminal `outcome` |
+| Markers | `skill_name: 'shadow-draft-eval'`, `action_risk: 'none'`, `payload.shadow: true`, `outcome: 'shadow_evaluated'` |
 
-Score from ground truth (the actual send), not the generic LLM judge. Shadow drafts never
-create approvals or notifications. As competence accrues, the single global score rises
-through the existing bands; agents that receive the autonomy prompt block (including
-`ceo-inbox` once `autonomyService` is injected — see checklist above) draft/handle more
-rather than punt. Fully autonomous *sending* still sits behind the existing `medium`/70
-floor. The loop never writes the global score itself — only the Phase 3 pass does.
+These rows arrive pre-scored and feed the existing Phase 3 scoring pass unchanged, same
+as any other scored row. Shadow drafts never create approvals or notifications. As
+competence accrues, the single global score rises through the existing bands; agents
+that receive the autonomy prompt block (including `ceo-inbox` once `autonomyService`
+is injected, see checklist above) draft/handle more rather than punt. Fully autonomous
+*sending* still sits behind the existing `medium`/70 floor. The loop never writes the
+global score itself, only the Phase 3 pass does.

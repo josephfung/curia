@@ -40,7 +40,7 @@ Concrete mapping:
 | Concern | Store |
 |---|---|
 | Draft snapshots + `(draft, sent)` diffs | OKF `/scratch/voice-learning/…` (spec 21) |
-| Learned voice | `ExecutiveProfile.WritingVoice` via `executive-profile-update` |
+| Learned voice | free-form `WritingVoice.guide`, maintained by a weekly batched LLM pass and approved via the digest |
 | Todo completion | `tasks` + `task-complete` / digest confirm |
 | Capability evidence | Pre-scored rows in `autonomy_action_log` |
 | Cadence / watermarks / guard markers | Scheduler crons + `config-store` |
@@ -53,19 +53,20 @@ Rationale for rejecting new stores (options 1 and 3): the destinations already e
 
 Mechanism (no new competence model):
 
-- On reconciliation, write a **pre-scored** `autonomy_action_log` row with `competence_flag` from decision/outcome equivalence (not phrasing), `commitment_flag` and `compatibility` null, `scored_by = 'shadow-reconciler'`.
-- Mark rows unmistakably (`skill_name: 'shadow-draft-eval'`, `action_risk: 'none'`, `payload.shadow: true`, dedicated terminal `outcome`).
+- On reconciliation, collect `(shadow draft, actual sent reply)` pairs and make a **batched LLM call** (`ctx.infraLlm.extract()`, batch size 20) that judges whether the shadow draft reached the same substantive decision/recommendation as the actual send. This is a semantic equivalence judgment, not token or approve/deny matching.
+- Write a **pre-scored** `autonomy_action_log` row with the resulting `competence_flag` (binary, `0` or `1`), `commitment_flag` and `compatibility` null, `scored_by = 'shadow-reconciler'`.
+- Mark rows unmistakably (`skill_name: 'shadow-draft-eval'`, `action_risk: 'none'`, `payload.shadow: true`, `outcome: 'shadow_evaluated'`).
 - `findUnscoredTerminal` skips them (no double-scoring); `findAllScored` includes them in the composite.
 - The global score remains the only dial; existing guards (≥30 scored, 20% error-rate block on increases, ±5/day, 7-day CEO cooldown) apply unchanged.
-- High-sensitivity threads (board / investors / legal / spouse) are excluded from shadow *capture*, not scored differently.
+- High-sensitivity threads (board / investors / legal / spouse) are **included** in shadow capture, not excluded. Those are the highest-stakes decisions, where competence evidence matters most.
 
 Rationale for rejecting a parallel competence model (option 1): Phase 3 already auto-adjusts one global score from competence evidence; a second dial would fight ADR-011's single-score design and invent graduation machinery the band injection already provides emergently.
 
 ## Consequences
 
 - **Three loops share one observer.** Voice, task-completion, and shadow competence all hang off `ceo-inbox-sent-observe` + draft/shadow capture — one Sent-folder poll, not three pipelines.
-- **Privacy surface widens.** The observer reads *all* Sent mail (not only Curia-touched threads). Spec 04 records retention/TTL for raw OKF evidence; sensitivity tiers gate shadow capture.
+- **Privacy surface widens.** The observer reads *all* Sent mail (not only Curia-touched threads), and shadow capture now includes sensitive threads (board / investors / legal / spouse) since those are the highest-stakes decisions. Spec 04 records retention/TTL for raw OKF evidence, per OKF scratch conventions.
 - **Hybrid auto/confirm is required.** Voice and task-completion write-back are confidence- and risk-tiered so noisy signal cannot silently corrupt the profile or close high-risk tasks.
 - **`ceo-inbox` must become autonomy-band-aware.** Per the spec 14 checklist, scheduled specialists need explicit `autonomyService` injection so triage aggressiveness tracks the live band as shadow competence raises the score.
 - **No new public memory API.** Skills and bus events are additive (`ceo.sent_observed`, new skills); the skill/handler surfaces grow, but knowledge-graph and task schemas do not gain parallel "learning" tables.
-- **Accepted trade-off:** shadow rows are ground-truth-scored, not LLM-judged — better signal, but the scoring-pass judge path never sees them. Operators must understand `scored_by = 'shadow-reconciler'` in audits.
+- **Accepted trade-off:** shadow rows are judged by a batched LLM assessment of substantive decision/recommendation equivalence at reconciliation time, not by the live per-action scoring-pass judge. They arrive pre-scored, so the scoring-pass judge path never sees them directly. Operators must understand `scored_by = 'shadow-reconciler'` in audits.
