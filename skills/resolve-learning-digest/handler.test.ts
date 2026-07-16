@@ -86,7 +86,9 @@ describe('ResolveLearningDigestHandler', () => {
       'skill',
       expect.any(String),
     );
-    expect(docs.get(PENDING_PROPOSALS_PATH)!.body).toContain('status: approved');
+    // The resolved proposal is removed from the queue doc (the approved guide now lives in
+    // the versioned profile), so the doc doesn't accumulate actioned proposals.
+    expect(docs.get(PENDING_PROPOSALS_PATH)!.body).not.toContain('## Guide Proposal');
   });
 
   it('dismisses a voice guide proposal and writes dismissal guard', async () => {
@@ -124,7 +126,9 @@ describe('ResolveLearningDigestHandler', () => {
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
-    expect(docs.get(PENDING_PROPOSALS_PATH)!.body).toContain('status: dismissed');
+    // The dismissed proposal is removed from the queue doc; the dismiss cooldown is what
+    // suppresses re-proposal, and it lives in config (asserted below).
+    expect(docs.get(PENDING_PROPOSALS_PATH)!.body).not.toContain('## Guide Proposal');
     expect(mem.__values.get(DISMISSED_KEY)).toContain('guide');
   });
 
@@ -162,6 +166,7 @@ describe('ResolveLearningDigestHandler', () => {
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
     expect(reopenTask).toHaveBeenCalledWith('t1', expect.any(String), 'coordinator');
-    expect(docs.get(COMPLETION_DIGEST_PATH)!.body).toContain('status: undone');
+    // The actioned item is removed from the queue doc so resolved items don't accumulate.
+    expect(docs.get(COMPLETION_DIGEST_PATH)!.body).not.toContain('## Undo — task t1');
   });
 });

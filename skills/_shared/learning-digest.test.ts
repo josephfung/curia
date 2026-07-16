@@ -4,14 +4,15 @@ import {
   parseCompletionDigest,
   renderVoiceGuideSection,
   renderCompletionSection,
-  markGuideProposalStatus,
-  markCompletionStatus,
+  pruneGuideProposals,
+  removeCompletionBlock,
 } from './learning-digest.js';
 
 const GUIDE_DOC = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Dry humour.\n\n---\n`;
 
-// pending-proposals.md is APPEND-ONLY: voice-learn appends a new block each cycle, so after
-// cycle 1 is approved the doc holds an approved block FOLLOWED BY a fresh pending block (F1).
+// A doc that accumulated an approved block before a fresh pending one. Resolving now PRUNES
+// resolved blocks (pruneGuideProposals), so this shape is transient/legacy — kept here to
+// prove the parser skips resolved blocks and the pruner drops them.
 const APPROVED_THEN_PENDING = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: approved\n- generated_at: 2026-07-01T00:00:00.000Z\n\n- Writes short.\n\n---\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Adds a dry closer.\n\n---\n`;
 
 const ALL_RESOLVED = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: approved\n- generated_at: 2026-07-01T00:00:00.000Z\n\n- Writes short.\n\n---\n\n## Guide Proposal\n- status: dismissed\n- generated_at: 2026-07-08T00:00:00.000Z\n\n- Rejected idea.\n\n---\n`;
@@ -84,25 +85,30 @@ describe('learning digest parsers + renderers', () => {
     `);
   });
 
-  it('marks the guide proposal status', () => {
-    expect(markGuideProposalStatus(GUIDE_DOC, 'approved')).toContain('status: approved');
+  it('prunes resolved blocks by default, keeping the pending one', () => {
+    const pruned = pruneGuideProposals(APPROVED_THEN_PENDING);
+    // The approved block (and its guide) is gone; the pending block survives.
+    expect(pruned).not.toContain('- Writes short.\n\n---\n\n## Guide Proposal');
+    expect(pruned).toContain('- status: pending');
+    expect((pruned.match(/## Guide Proposal/g) ?? []).length).toBe(1);
+    expect(pruned).toContain('- Adds a dry closer.');
   });
 
-  it('marks only the PENDING block, leaving an earlier approved block intact', () => {
-    const marked = markGuideProposalStatus(APPROVED_THEN_PENDING, 'approved');
-    // Both blocks now approved; none left pending.
-    expect(marked).not.toContain('status: pending');
-    expect((marked.match(/status: approved/g) ?? []).length).toBe(2);
-    // The already-approved block's guide is preserved verbatim.
-    expect(marked).toContain('- Adds a dry closer.');
+  it('with removePending, drops every block (used on approve/dismiss so the queue does not grow)', () => {
+    const pruned = pruneGuideProposals(APPROVED_THEN_PENDING, { removePending: true });
+    expect(pruned).not.toContain('## Guide Proposal');
+    expect(pruned).not.toContain('- status:');
+    // Preamble/header is preserved so voice-learn can append to it next cycle.
+    expect(pruned).toContain('# Pending voice guide proposal');
   });
 
-  it('returns the body unchanged when there is no pending block to mark', () => {
-    expect(markGuideProposalStatus(ALL_RESOLVED, 'approved')).toBe(ALL_RESOLVED);
+  it('leaves an already header-only doc unchanged', () => {
+    const headerOnly = '# Pending voice guide proposal\n\n';
+    expect(pruneGuideProposals(headerOnly, { removePending: true })).toBe(headerOnly);
   });
 });
 
-describe('markCompletionStatus', () => {
+describe('removeCompletionBlock', () => {
   const confirmBlock = (taskId: string, status: string) =>
     `\n## Confirm — task ${taskId}\n\n- status: ${status}\n- risk: low\n- task_title: T\n- sent_at: 2026-07-16\n\n---\n`;
   const undoBlock = (taskId: string, status: string) =>
@@ -110,26 +116,24 @@ describe('markCompletionStatus', () => {
 
   it('does not let task id `t1` match a `t10` block (exact header only)', () => {
     const body = `# Digest\n${confirmBlock('t10', 'pending_confirm')}${confirmBlock('t1', 'pending_confirm')}`;
-    const marked = markCompletionStatus(body, 'Confirm', 't1', 'confirmed');
-    // t1's block flips; t10's stays pending.
-    expect(marked).toContain('## Confirm — task t1\n\n- status: confirmed');
-    expect(marked).toContain('## Confirm — task t10\n\n- status: pending_confirm');
+    const out = removeCompletionBlock(body, 'Confirm', 't1');
+    // t1's block is removed; t10's survives.
+    expect(out).not.toContain('## Confirm — task t1\n');
+    expect(out).toContain('## Confirm — task t10\n');
   });
 
-  it('marks the current actionable block, not an earlier resolved block for the same task', () => {
-    // A historical (already-confirmed) block precedes the current pending one.
-    const body = `# Digest\n${confirmBlock('t5', 'confirmed')}${confirmBlock('t5', 'pending_confirm')}`;
-    const marked = markCompletionStatus(body, 'Confirm', 't5', 'dismissed');
-    // Exactly one block becomes dismissed; the historical confirmed block is untouched.
-    expect(marked.match(/- status: confirmed/g)).toHaveLength(1);
-    expect(marked.match(/- status: dismissed/g)).toHaveLength(1);
-    expect(marked).not.toContain('- status: pending_confirm');
+  it('removes exactly one matching block, preserving other items and the preamble', () => {
+    const body = `# Digest\n${undoBlock('t5', 'undo_available')}${confirmBlock('t6', 'pending_confirm')}`;
+    const out = removeCompletionBlock(body, 'Undo', 't5');
+    expect(out).not.toContain('## Undo — task t5');
+    expect(out).toContain('## Confirm — task t6'); // unrelated item untouched
+    expect(out).toContain('# Digest'); // preamble kept
   });
 
-  it('only rewrites the actionable status for the given kind', () => {
+  it('only removes a block of the matching kind', () => {
     const body = `# Digest\n${undoBlock('t7', 'undo_available')}`;
-    expect(markCompletionStatus(body, 'Undo', 't7', 'undone')).toContain('- status: undone');
-    // A Confirm action must not touch an Undo block.
-    expect(markCompletionStatus(body, 'Confirm', 't7', 'confirmed')).toContain('- status: undo_available');
+    // A Confirm action must not remove an Undo block.
+    expect(removeCompletionBlock(body, 'Confirm', 't7')).toContain('## Undo — task t7');
+    expect(removeCompletionBlock(body, 'Undo', 't7')).not.toContain('## Undo — task t7');
   });
 });

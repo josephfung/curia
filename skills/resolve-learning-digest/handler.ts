@@ -7,8 +7,8 @@ import {
 } from '../voice-learn/handler.js';
 import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
 import {
-  markCompletionStatus,
-  markGuideProposalStatus,
+  pruneGuideProposals,
+  removeCompletionBlock,
   parseCompletionDigest,
   parseVoiceGuideProposal,
 } from '../_shared/learning-digest.js';
@@ -67,7 +67,9 @@ export class ResolveLearningDigestHandler implements SkillHandler {
           'voice guide approved',
         );
 
-        const updatedBody = markGuideProposalStatus(doc.body, 'approved');
+        // Remove the resolved proposal from the queue doc so it doesn't accumulate — the
+        // approved guide now lives in the versioned profile.
+        const updatedBody = pruneGuideProposals(doc.body, { removePending: true });
         await ctx.workingDocs.update(PENDING_PROPOSALS_PATH, {
           body: updatedBody,
           expectedVersion: doc.version,
@@ -92,7 +94,9 @@ export class ResolveLearningDigestHandler implements SkillHandler {
       dismissed.push({ dimension: 'guide', until });
       await store.set(VOICE_NS, DISMISSED_KEY, JSON.stringify(dismissed));
 
-      const updatedBody = markGuideProposalStatus(doc.body, 'dismissed');
+      // Remove the resolved proposal from the queue doc — the dismiss cooldown is tracked
+      // in config, so the block itself serves no further purpose.
+      const updatedBody = pruneGuideProposals(doc.body, { removePending: true });
       await ctx.workingDocs.update(PENDING_PROPOSALS_PATH, {
         body: updatedBody,
         expectedVersion: doc.version,
@@ -109,7 +113,7 @@ export class ResolveLearningDigestHandler implements SkillHandler {
 
     // Require an actionable digest item of the matching kind before mutating a task —
     // otherwise undo/confirm would reopen/complete ANY task id the caller supplies, and
-    // still report success even when markCompletionStatus changed nothing.
+    // still report success even when the digest held no such item.
     const expectedKind = action === 'undo_completion' ? 'undo' : 'confirm';
     const item = parseCompletionDigest(digest.body).find(
       (candidate) => candidate.taskId === taskId && candidate.kind === expectedKind,
@@ -120,7 +124,8 @@ export class ResolveLearningDigestHandler implements SkillHandler {
 
     if (action === 'undo_completion') {
       await ctx.taskRepo.reopenTask(taskId, 'Undo auto-complete from sent mail', ctx.agentId);
-      const updatedBody = markCompletionStatus(digest.body, 'Undo', taskId, 'undone');
+      // Remove the actioned item from the queue doc so resolved items don't accumulate.
+      const updatedBody = removeCompletionBlock(digest.body, 'Undo', taskId);
       await ctx.workingDocs.update(COMPLETION_DIGEST_PATH, {
         body: updatedBody,
         expectedVersion: digest.version,
@@ -142,7 +147,7 @@ export class ResolveLearningDigestHandler implements SkillHandler {
           ctx.agentId,
         );
       }
-      const updatedBody = markCompletionStatus(digest.body, 'Confirm', taskId, 'confirmed');
+      const updatedBody = removeCompletionBlock(digest.body, 'Confirm', taskId);
       await ctx.workingDocs.update(COMPLETION_DIGEST_PATH, {
         body: updatedBody,
         expectedVersion: digest.version,
@@ -151,7 +156,7 @@ export class ResolveLearningDigestHandler implements SkillHandler {
     }
 
     // dismiss_completion
-    const updatedBody = markCompletionStatus(digest.body, 'Confirm', taskId, 'dismissed');
+    const updatedBody = removeCompletionBlock(digest.body, 'Confirm', taskId);
     await ctx.workingDocs.update(COMPLETION_DIGEST_PATH, {
       body: updatedBody,
       expectedVersion: digest.version,

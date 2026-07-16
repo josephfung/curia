@@ -13,10 +13,10 @@ export interface CompletionDigestItem {
   status: string;
 }
 
-/** Split a pending-proposals body into its `## Guide Proposal` blocks. The doc is APPEND-ONLY
- *  (voice-learn appends a new block each cycle), so there can be several — an approved block
- *  followed by a fresh pending one is the steady state. The lookahead split keeps each header,
- *  so blocks re-join to the exact original bytes. Preamble (before the first block) is dropped. */
+/** Split a pending-proposals body into its `## Guide Proposal` blocks. voice-learn appends a
+ *  block each cycle, but resolved blocks are pruned on approve/dismiss (see pruneGuideProposals),
+ *  so in steady state the doc holds at most the single pending block. The lookahead split keeps
+ *  each header, so blocks re-join to the exact original bytes. */
 function guideProposalBlocks(body: string): string[] {
   return body.split(/(?=^## Guide Proposal)/m).filter((b) => b.startsWith('## Guide Proposal'));
 }
@@ -90,44 +90,46 @@ export function renderCompletionSection(items: CompletionDigestItem[]): string {
   return lines.join('\n');
 }
 
-export function markGuideProposalStatus(body: string, status: string): string {
-  // Rewrite the status of the PENDING block only, leaving already-approved/dismissed blocks
-  // intact (the append-only doc keeps prior blocks). If nothing is pending, return unchanged.
-  const parts = body.split(/(?=^## Guide Proposal)/m);
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]!;
-    if (!part.startsWith('## Guide Proposal')) continue;
-    if (!/- status:\s*pending\b/.test(part)) continue;
-    // The block's own status line is its first `- status:`; replace only that one.
-    parts[i] = part.replace(/(- status:\s*)\S+/, `$1${status}`);
-    break; // at most one pending block by construction
-  }
-  return parts.join('');
+/** Drop `## Guide Proposal` blocks from the append-only proposals doc so it can't grow without
+ *  bound. By default removes only resolved (non-pending) blocks; pass `removePending` to also
+ *  drop the pending one — used on approve/dismiss, since nothing reads a resolved proposal
+ *  afterwards (the approved guide is written to the versioned ExecutiveProfile, which is the
+ *  real audit trail, and the dismiss cooldown lives in config). The preamble/header before the
+ *  first block is preserved. After resolving the sole pending block the doc is just its header,
+ *  which voice-learn re-appends to next cycle. */
+export function pruneGuideProposals(
+  body: string,
+  opts: { removePending?: boolean } = {},
+): string {
+  return body
+    .split(/(?=^## Guide Proposal)/m)
+    .filter((part) => {
+      if (!part.startsWith('## Guide Proposal')) return true; // preamble / header
+      const status = (part.match(/- status:\s*(\S+)/)?.[1] ?? 'pending').trim();
+      return status === 'pending' && !opts.removePending;
+    })
+    .join('');
 }
 
-export function markCompletionStatus(
+/** Remove a completion block from the append-only completion digest once its item has been
+ *  actioned (undone/confirmed/dismissed), so resolved items don't accumulate. The header is
+ *  matched EXACTLY — the task id must be followed by whitespace or end-of-line, so id `t1`
+ *  never matches a `t10` block — and only the first matching block is dropped. Other pending
+ *  items and the preamble/header are preserved. */
+export function removeCompletionBlock(
   body: string,
   kind: 'Undo' | 'Confirm',
   taskId: string,
-  status: string,
 ): string {
   const esc = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Match the header EXACTLY: the task id must be followed by whitespace or end-of-line,
-  // so id `t1` never matches a `t10` block. Scope the operation to a single block (split
-  // on the `## ` boundary, delimiters preserved) so a later historical block for the same
-  // task can't be picked instead of the current actionable one.
   const headerRe = new RegExp(`^## ${kind} — task ${esc}(?:\\s|$)`);
-  // Only the actionable status is rewritten, so an already-resolved block (e.g. status
-  // `undone`/`confirmed`/`dismissed`) is left untouched.
-  const actionable = kind === 'Undo' ? 'undo_available' : 'pending_confirm';
-  const statusRe = new RegExp(`(- status:\\s*)${actionable}\\b`);
-  let done = false;
+  let removed = false;
   return body
     .split(/(?=^## )/m)
-    .map((block) => {
-      if (done || !headerRe.test(block) || !statusRe.test(block)) return block;
-      done = true;
-      return block.replace(statusRe, `$1${status}`);
+    .filter((block) => {
+      if (removed || !headerRe.test(block)) return true;
+      removed = true;
+      return false; // drop exactly one matching block
     })
     .join('');
 }
