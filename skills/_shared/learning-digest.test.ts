@@ -5,6 +5,7 @@ import {
   renderVoiceGuideSection,
   renderCompletionSection,
   markGuideProposalStatus,
+  markCompletionStatus,
 } from './learning-digest.js';
 
 const GUIDE_DOC = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Dry humour.\n\n---\n`;
@@ -98,5 +99,37 @@ describe('learning digest parsers + renderers', () => {
 
   it('returns the body unchanged when there is no pending block to mark', () => {
     expect(markGuideProposalStatus(ALL_RESOLVED, 'approved')).toBe(ALL_RESOLVED);
+  });
+});
+
+describe('markCompletionStatus', () => {
+  const confirmBlock = (taskId: string, status: string) =>
+    `\n## Confirm — task ${taskId}\n\n- status: ${status}\n- risk: low\n- task_title: T\n- sent_at: 2026-07-16\n\n---\n`;
+  const undoBlock = (taskId: string, status: string) =>
+    `\n## Undo — task ${taskId}\n\n- status: ${status}\n- task_title: T\n\n---\n`;
+
+  it('does not let task id `t1` match a `t10` block (exact header only)', () => {
+    const body = `# Digest\n${confirmBlock('t10', 'pending_confirm')}${confirmBlock('t1', 'pending_confirm')}`;
+    const marked = markCompletionStatus(body, 'Confirm', 't1', 'confirmed');
+    // t1's block flips; t10's stays pending.
+    expect(marked).toContain('## Confirm — task t1\n\n- status: confirmed');
+    expect(marked).toContain('## Confirm — task t10\n\n- status: pending_confirm');
+  });
+
+  it('marks the current actionable block, not an earlier resolved block for the same task', () => {
+    // A historical (already-confirmed) block precedes the current pending one.
+    const body = `# Digest\n${confirmBlock('t5', 'confirmed')}${confirmBlock('t5', 'pending_confirm')}`;
+    const marked = markCompletionStatus(body, 'Confirm', 't5', 'dismissed');
+    // Exactly one block becomes dismissed; the historical confirmed block is untouched.
+    expect(marked.match(/- status: confirmed/g)).toHaveLength(1);
+    expect(marked.match(/- status: dismissed/g)).toHaveLength(1);
+    expect(marked).not.toContain('- status: pending_confirm');
+  });
+
+  it('only rewrites the actionable status for the given kind', () => {
+    const body = `# Digest\n${undoBlock('t7', 'undo_available')}`;
+    expect(markCompletionStatus(body, 'Undo', 't7', 'undone')).toContain('- status: undone');
+    // A Confirm action must not touch an Undo block.
+    expect(markCompletionStatus(body, 'Confirm', 't7', 'confirmed')).toContain('- status: undo_available');
   });
 });
