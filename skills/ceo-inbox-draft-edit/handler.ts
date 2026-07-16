@@ -160,11 +160,13 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
           ? input.body.trim()
           : htmlToPlainText(draft.body);
 
-      // Best-effort voice-learning snapshot — must not block the edit (#1421).
+      // Best-effort voice-learning snapshot — fire-and-forget so it never adds latency to
+      // the edit (#1421). captureDraftSnapshot logs its own failures and never rejects;
+      // the .catch guards against an unexpected throw becoming an unhandled rejection.
       // Only pass linkedTaskIds when the caller actually supplied them; otherwise leave
       // it undefined so a body-only edit preserves the ids captured at draft creation
       // (passing [] would clear them).
-      await captureDraftSnapshot(ctx, {
+      void captureDraftSnapshot(ctx, {
         draftId: draft.id,
         threadId: draft.threadId,
         subject: draft.subject,
@@ -176,7 +178,9 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
           input.linked_task_ids === undefined
             ? undefined
             : parseLinkedTaskIds(input.linked_task_ids),
-      });
+      }).catch((err) =>
+        ctx.log.error({ err }, 'ceo-inbox-draft-edit: voice snapshot capture rejected'),
+      );
 
       return {
         success: true,

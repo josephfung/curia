@@ -571,6 +571,8 @@ describe('CeoInboxDraftReplyHandler', () => {
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     expect((result as { data: { draft_id: string } }).data.draft_id).toBe('draft-1');
-    expect(ctx.log.error).toHaveBeenCalled();
+    // The voice snapshot is now fire-and-forget so it can't add latency to draft creation;
+    // its failure is logged asynchronously after the handler returns. Wait for that log.
+    await vi.waitFor(() => expect(ctx.log.error).toHaveBeenCalled());
   });
 });
