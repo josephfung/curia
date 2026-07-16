@@ -49,6 +49,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [025](025-conversation-id-reversible-text-key.md) | `conversation_id` is a reversible TEXT key, not a UUID v5 — reject the #16 migration, reconcile specs to reality | Accepted |
 | [027](027-structured-secret-subfield-addressing.md) | Structured secrets with schema-tagged sub-field addressing — `secret_ref#field` projections gated to a registered schema, shipping `credit_card` first | Accepted |
 | [028](028-shared-unbound-agent-memory.md) | Shared, unbound agent memory — remove the inert `memory.scopes` field; govern access by capability gating + sensitivity tiers + provenance, not per-agent scopes | Accepted |
+| [029](029-passive-email-observation-and-counterfactual-competence.md) | Passive email observation with counterfactual (shadow) competence as a Phase 3 input — reuse existing stores, no new memory types | Accepted |
 
 ## Adding new ADRs
 
