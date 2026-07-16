@@ -73,7 +73,10 @@ export function parsePendingDiffs(body: string): ParsedDiffPair[] {
     const sentAt = (section.match(/- sent_at:\s*(.+)/)?.[1] ?? '').trim();
     const subject = (section.match(/- subject:\s*(.+)/)?.[1] ?? '').trim();
     const draftBody = extractSection(section, '### Draft', '### Sent');
-    const sentBody = extractSection(section, '### Sent', '---');
+    // Use the LAST `---` in the block as the sent terminator: formatDiffBlock closes each
+    // block with `---`, but a sent email can legitimately contain its own `---` line
+    // (markdown rule / signature). Matching the first would truncate the body mid-email.
+    const sentBody = extractSection(section, '### Sent', '---', { fromEnd: true });
     if (!draftBody.trim() && !sentBody.trim()) continue;
     // Exclude verbatim sends (no signal) and near-total rewrites.
     if (isVerbatim(draftBody, sentBody) || isNearTotalRewrite(draftBody, sentBody)) continue;
@@ -82,12 +85,22 @@ export function parsePendingDiffs(body: string): ParsedDiffPair[] {
   return pairs;
 }
 
-function extractSection(text: string, start: string, end: string): string {
+function extractSection(
+  text: string,
+  start: string,
+  end: string,
+  opts: { fromEnd?: boolean } = {},
+): string {
   const s = text.indexOf(start);
   if (s < 0) return '';
   const after = text.slice(s + start.length);
-  const e = after.search(new RegExp(`^${end.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm'));
-  return (e < 0 ? after : after.slice(0, e)).trim();
+  const re = new RegExp(`^${end.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gm');
+  let cut = -1;
+  for (let m = re.exec(after); m; m = re.exec(after)) {
+    cut = m.index;
+    if (!opts.fromEnd) break; // first match unless the caller wants the last delimiter
+  }
+  return (cut < 0 ? after : after.slice(0, cut)).trim();
 }
 
 function normalizeWs(s: string): string {
@@ -102,13 +115,18 @@ function isNearTotalRewrite(draft: string, sent: string): boolean {
   const d = normalizeWs(draft);
   const s = normalizeWs(sent);
   if (!d || !s) return false;
-  // Rough: shared prefix ratio under 20% and length ratio far from 1.
-  const minLen = Math.min(d.length, s.length);
-  let shared = 0;
-  while (shared < minLen && d[shared] === s[shared]) shared += 1;
-  const prefixRatio = shared / Math.max(d.length, s.length);
-  const lenRatio = Math.min(d.length, s.length) / Math.max(d.length, s.length);
-  return prefixRatio < 0.1 && lenRatio < 0.4;
+  // Measure whole-content overlap, not shared prefix: an unrelated rewrite of similar
+  // length has a long common prefix ratio near 0 but the old length heuristic let it
+  // through. Token Jaccard catches "different email entirely" regardless of length.
+  const dt = new Set(d.split(' ').filter(Boolean));
+  const st = new Set(s.split(' ').filter(Boolean));
+  let inter = 0;
+  for (const t of dt) if (st.has(t)) inter += 1;
+  const union = dt.size + st.size - inter;
+  const overlap = union === 0 ? 0 : inter / union;
+  // Near-total rewrite = almost no shared vocabulary. Draft→sent edits that keep the
+  // email's substance stay well above this floor and remain valid learning signal.
+  return overlap < 0.15;
 }
 
 /** Extract a trailing sign-off from a body (last short line, or trailing clause). */

@@ -52,13 +52,16 @@ function parseDismissed(raw: string | null): Set<string> {
 }
 
 /**
- * Fields that already have an open proposal in the pending-proposals doc and so
- * must not be re-proposed. Because voice-learn re-reads the whole (never-consumed)
- * diff doc every run, a field that stays above threshold would otherwise get a
- * fresh `## Proposal — <field>` block appended each week — duplicates the digest
- * shows and that the non-global status-marker can't all clear. `pending` = still
- * awaiting the CEO; `approved` = already applied, don't nag again. `dismissed` is
- * intentionally NOT blocked here — its cooldown is enforced via dismissedDimensions.
+ * Fields that already have a *pending* proposal awaiting the CEO. Because voice-learn
+ * re-reads the whole (never-consumed) diff doc every run, a field above threshold would
+ * otherwise get a fresh `## Proposal — <field>` block appended each week — duplicates in
+ * the digest that the non-global status-marker can't all clear.
+ *
+ * Only `pending` blocks: an `approved` proposal must NOT freeze the field forever (that
+ * would stop the learning loop from ever refining it again). Re-nagging an already-applied
+ * change is prevented instead by the no-op guard in `patchIsNoop` — a delta whose value the
+ * profile already reflects is skipped, so an approved change won't re-propose but a genuinely
+ * different future delta still can. `dismissed` cooldown is enforced via dismissedDimensions.
  */
 function blockedProposalFields(body: string): Set<string> {
   const blocked = new Set<string>();
@@ -66,13 +69,57 @@ function blockedProposalFields(body: string): Set<string> {
     const field = (section.split('\n')[0] ?? '').trim();
     if (!field) continue;
     const status = (section.match(/- status:\s*(\S+)/)?.[1] ?? 'pending').trim();
-    if (status === 'pending' || status === 'approved') blocked.add(field);
+    if (status === 'pending') blocked.add(field);
   }
   return blocked;
 }
 
+/** True when the delta's target value is already reflected in the current voice, so
+ *  re-proposing it would just re-nag the CEO about a change already in effect. Formality
+ *  is a relative delta (can't be compared to an absolute), so it's never treated as noop. */
+function patchIsNoop(
+  patch: Record<string, unknown>,
+  voice: {
+    signOff: string;
+    vocabulary: { prefer: string[]; avoid: string[] };
+    tone: string[];
+    patterns: string[];
+  },
+): boolean {
+  if (typeof patch.formality_delta === 'number') return false;
+  if (typeof patch.sign_off === 'string') {
+    return patch.sign_off.trim() === voice.signOff.trim();
+  }
+  if (patch.vocabulary && typeof patch.vocabulary === 'object') {
+    const v = patch.vocabulary as { prefer?: string[]; avoid?: string[] };
+    const preferCovered = (v.prefer ?? []).every((w) => voice.vocabulary.prefer.includes(w));
+    const avoidCovered = (v.avoid ?? []).every((w) => voice.vocabulary.avoid.includes(w));
+    return preferCovered && avoidCovered;
+  }
+  if (Array.isArray(patch.tone)) {
+    return (patch.tone as string[]).every((t) => voice.tone.includes(t));
+  }
+  if (Array.isArray(patch.patterns)) {
+    return (patch.patterns as string[]).every((p) => voice.patterns.includes(p));
+  }
+  return false;
+}
+
 export class VoiceLearnHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
+    // Skill contract: never throw — normalize any profile/config/document failure.
+    try {
+      return await this.runLearn(ctx);
+    } catch (err) {
+      ctx.log.error({ err }, 'voice-learn: unexpected failure');
+      return {
+        success: false,
+        error: `voice-learn failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  private async runLearn(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.executiveProfileService || !ctx.workingDocs || !ctx.entityMemory) {
       return {
         success: false,
@@ -121,6 +168,14 @@ export class VoiceLearnHandler implements SkillHandler {
     const provenanceUpdates: Partial<VoiceProvenanceMap> = {};
 
     for (const delta of deltas) {
+      // Skip deltas the profile already reflects — otherwise an approved-then-applied
+      // change would re-propose from the same un-consumed evidence every run.
+      const currentVoice = ctx.executiveProfileService.get().writingVoice;
+      if (patchIsNoop(delta.patch, currentVoice)) {
+        skipped += 1;
+        continue;
+      }
+
       const decision = decideApplication(delta, provenance, {
         currentSignOffEmpty: voice.signOff.trim() === '',
         currentVocabularyEmpty:
@@ -176,6 +231,20 @@ export class VoiceLearnHandler implements SkillHandler {
                   },
                 }
               : {}),
+            // Only vocabulary/sign-off currently reach the auto lane (formality is
+            // magnitude 'high' → propose; tone/patterns → propose), but apply the rest
+            // too so a future threshold change can't silently report an auto-apply that
+            // left the profile unchanged. Mirrors resolve-learning-digest's merge.
+            ...(typeof patch.formality_delta === 'number'
+              ? {
+                  formality: Math.max(
+                    0,
+                    Math.min(100, current.formality + (patch.formality_delta as number)),
+                  ),
+                }
+              : {}),
+            ...(Array.isArray(patch.tone) ? { tone: patch.tone as string[] } : {}),
+            ...(Array.isArray(patch.patterns) ? { patterns: patch.patterns as string[] } : {}),
           },
         };
         await ctx.executiveProfileService.update(
