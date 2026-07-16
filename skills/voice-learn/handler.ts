@@ -51,6 +51,26 @@ function parseDismissed(raw: string | null): Set<string> {
   }
 }
 
+/**
+ * Fields that already have an open proposal in the pending-proposals doc and so
+ * must not be re-proposed. Because voice-learn re-reads the whole (never-consumed)
+ * diff doc every run, a field that stays above threshold would otherwise get a
+ * fresh `## Proposal — <field>` block appended each week — duplicates the digest
+ * shows and that the non-global status-marker can't all clear. `pending` = still
+ * awaiting the CEO; `approved` = already applied, don't nag again. `dismissed` is
+ * intentionally NOT blocked here — its cooldown is enforced via dismissedDimensions.
+ */
+function blockedProposalFields(body: string): Set<string> {
+  const blocked = new Set<string>();
+  for (const section of body.split(/^## Proposal — /m).slice(1)) {
+    const field = (section.split('\n')[0] ?? '').trim();
+    if (!field) continue;
+    const status = (section.match(/- status:\s*(\S+)/)?.[1] ?? 'pending').trim();
+    if (status === 'pending' || status === 'approved') blocked.add(field);
+  }
+  return blocked;
+}
+
 export class VoiceLearnHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     if (!ctx.executiveProfileService || !ctx.workingDocs || !ctx.entityMemory) {
@@ -88,6 +108,11 @@ export class VoiceLearnHandler implements SkillHandler {
     const voice = profile.writingVoice;
     const bootstrap = isNearDefaultProfile(voice);
 
+    // Read the existing proposals once so we can dedup: the diff doc is never
+    // consumed, so without this a still-above-threshold field re-proposes weekly.
+    const existingProposalsDoc = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
+    const blockedFields = blockedProposalFields(existingProposalsDoc?.body ?? '');
+
     const deltas = proposeDeltasFromPairs(pairs);
     let autoApplied = 0;
     let proposed = 0;
@@ -109,6 +134,12 @@ export class VoiceLearnHandler implements SkillHandler {
       }
 
       if (decision.action === 'propose' || decision.delta.magnitude === 'high') {
+        // Don't re-append a proposal for a field that already has one open.
+        if (blockedFields.has(delta.field)) {
+          skipped += 1;
+          continue;
+        }
+        blockedFields.add(delta.field);
         proposed += 1;
         proposalChunks.push(formatProposalBlock({ ...decision, action: 'propose' }));
         continue;
@@ -156,8 +187,14 @@ export class VoiceLearnHandler implements SkillHandler {
         autoApplied += 1;
       } catch (err) {
         ctx.log.error({ err, field: decision.delta.field }, 'voice-learn: auto-apply failed');
-        proposed += 1;
-        proposalChunks.push(formatProposalBlock({ ...decision, action: 'propose' }));
+        // Fall back to a proposal, but still dedup against any open one.
+        if (!blockedFields.has(decision.delta.field)) {
+          blockedFields.add(decision.delta.field);
+          proposed += 1;
+          proposalChunks.push(formatProposalBlock({ ...decision, action: 'propose' }));
+        } else {
+          skipped += 1;
+        }
       }
     }
 
@@ -170,7 +207,8 @@ export class VoiceLearnHandler implements SkillHandler {
     }
 
     if (!dryRun && proposalChunks.length > 0) {
-      const existing = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
+      // Reuse the doc read at the top of the run (single-threaded weekly job).
+      const existing = existingProposalsDoc;
       if (!existing) {
         await ctx.workingDocs.create({
           path: PENDING_PROPOSALS_PATH,

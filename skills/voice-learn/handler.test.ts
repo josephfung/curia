@@ -167,4 +167,30 @@ describe('VoiceLearnHandler', () => {
     expect((result as { data: { pairs_considered: number } }).data.pairs_considered).toBe(0);
     expect(ctx.__updates).toHaveLength(0);
   });
+
+  it('does not re-propose a field that already has an open proposal (dedup)', async () => {
+    const ctx = makeCtx({ voice: { signOff: 'Cheers' } });
+    const mem = ctx.entityMemory as EntityMemory & { __values: Map<string, string> };
+    // operator-set → signOff takes the propose lane (never auto).
+    mem.__values.set(
+      PROVENANCE_KEY,
+      JSON.stringify({ ...DEFAULT_PROVENANCE, signOff: 'operator-set' }),
+    );
+    // Pre-seed an existing pending signOff proposal (as a prior week would have left).
+    ctx.__docs.set(PENDING_PROPOSALS_PATH, {
+      path: PENDING_PROPOSALS_PATH,
+      type: 'voice-pending-proposals',
+      frontmatter: {},
+      body: `# Pending voice proposals\n\n## Proposal — signOff\n- status: pending\n- description: Prefer Thanks\n- sample_count: 3\n- consistency: 1.00\n- patch: {"sign_off":"Thanks"}\n---\n`,
+      version: 1,
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    // Still exactly one signOff proposal block — not duplicated.
+    const body = ctx.__docs.get(PENDING_PROPOSALS_PATH)?.body ?? '';
+    const count = (body.match(/## Proposal — signOff/g) ?? []).length;
+    expect(count).toBe(1);
+  });
 });

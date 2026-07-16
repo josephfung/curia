@@ -1,7 +1,7 @@
 {
   "name": "voice-learn",
   "description": "Weekly job: read accumulated (draft, sent) diffs from OKF, propose WritingVoice deltas, auto-apply high-confidence low-magnitude changes (and seeded empty fills), and queue the rest as digest proposals. Never fabricates on zero data. Intended for the ceo-inbox weekly voice-learn cron.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
