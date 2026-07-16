@@ -30,8 +30,10 @@ export class CeoInboxShadowDraftHandler implements SkillHandler {
     const from = typeof input.from === 'string' ? input.from : '';
 
     if (isHighSensitivityThread({ subject, body, from, labels })) {
+      // Don't log the subject of a thread we're excluding precisely because it's
+      // high-sensitivity (board / legal / spouse) — the id is enough to trace.
       ctx.log.info(
-        { sourceMessageId, subject },
+        { sourceMessageId },
         'ceo-inbox-shadow-draft: skipping high-sensitivity thread',
       );
       return {
