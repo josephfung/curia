@@ -121,14 +121,18 @@ async function ensureDoc(
   return { body: created.body, version: created.version };
 }
 
+/** Returns true when the content was persisted (or there was nothing to write),
+ *  false when every append attempt lost the version race. The caller uses this to
+ *  decide whether the watermark may advance — persisting evidence must succeed
+ *  before we forget the messages that produced it. */
 async function appendDoc(
   ctx: SkillContext,
   path: string,
   type: string,
   title: string,
   content: string,
-): Promise<void> {
-  if (!content.trim()) return;
+): Promise<boolean> {
+  if (!content.trim()) return true;
   const repo = ctx.workingDocs!;
   for (let attempt = 0; attempt < 3; attempt++) {
     const doc = await ensureDoc(ctx, path, type, title);
@@ -136,13 +140,28 @@ async function appendDoc(
       content,
       expectedVersion: doc.version,
     });
-    if (result.ok) return;
+    if (result.ok) return true;
   }
   ctx.log.warn({ path }, 'ceo-inbox-sent-observe: failed to append after conflicts');
+  return false;
 }
 
 export class CeoInboxSentObserveHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
+    // Skill contract: never throw. Any Nylas / config / document / task / bus rejection
+    // that escapes the inner flow is normalized to a failure result here.
+    try {
+      return await this.runObserve(ctx);
+    } catch (err) {
+      ctx.log.error({ err }, 'ceo-inbox-sent-observe: unexpected failure');
+      return {
+        success: false,
+        error: `sent-observe failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  private async runObserve(ctx: SkillContext): Promise<SkillResult> {
     let apiKey: string;
     let grantId: string;
     try {
@@ -199,6 +218,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
               messages_scanned: 0,
               draft_matches: 0,
               task_candidates: 0,
+              shadow_reconciled: 0,
               watermark_advanced_to: null,
               skipped_backoff: true,
             },
@@ -238,11 +258,21 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     const alreadyMatchedDraftIds = extractMatchedDraftIds(pendingDiffs.body);
     const alreadyAskedTaskIds = extractAskedTaskIds(pendingCompletions.body);
 
+    const OPEN_TASK_LIMIT = 100;
     const openTasks = await ctx.taskRepo.listTasks({
       owner: 'ceo',
       statuses: ['open', 'in_progress'],
-      limit: 100,
+      limit: OPEN_TASK_LIMIT,
     });
+    // taskRepo.listTasks has no keyset/pagination, so completion matching considers at
+    // most OPEN_TASK_LIMIT tasks. Log when the cap is hit so a silently-partial match set
+    // is visible rather than mistaken for full coverage (keyset paging tracked separately).
+    if (openTasks.length >= OPEN_TASK_LIMIT) {
+      ctx.log.warn(
+        { openTaskLimit: OPEN_TASK_LIMIT },
+        'ceo-inbox-sent-observe: open CEO task list hit the fetch cap — some tasks were not considered for completion',
+      );
+    }
 
     let draftMatches = 0;
     let taskCandidates = 0;
@@ -258,6 +288,9 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     const shadows = shadowDocs
       .map((d) => parseShadowDoc(d))
       .filter((s): s is NonNullable<typeof s> => s !== null);
+    // Guard against scoring the same shadow twice when several sends share a thread
+    // in one run (the durable guard is the shadow doc's reconciled_at marker).
+    const claimedShadows = new Set<string>();
 
     for (const msg of messages) {
       if (msg.date > maxDate) maxDate = msg.date;
@@ -294,10 +327,13 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       if (ctx.actionLogRepo) {
         const shadow = shadows.find(
           (s) =>
-            (s.threadId && msg.threadId && s.threadId === msg.threadId) ||
-            s.sourceMessageId === msg.id,
+            !claimedShadows.has(s.sourceMessageId) &&
+            ((s.threadId && msg.threadId && s.threadId === msg.threadId) ||
+              s.sourceMessageId === msg.id),
         );
         if (shadow) {
+          // Claim immediately so a later same-thread send in this run can't re-score it.
+          claimedShadows.add(shadow.sourceMessageId);
           if (!fetchedBody) {
             try {
               const full = await client.getMessage(msg.id);
@@ -355,14 +391,24 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       }
     }
 
-    await appendDoc(ctx, PENDING_DIFFS_PATH, PENDING_DIFFS_TYPE, 'Pending voice diffs', diffChunks.join(''));
-    await appendDoc(
+    const diffsPersisted = await appendDoc(
+      ctx,
+      PENDING_DIFFS_PATH,
+      PENDING_DIFFS_TYPE,
+      'Pending voice diffs',
+      diffChunks.join(''),
+    );
+    const completionsPersisted = await appendDoc(
       ctx,
       PENDING_COMPLETIONS_PATH,
       PENDING_COMPLETIONS_TYPE,
       'Pending task-completion candidates',
       completionChunks.join(''),
     );
+    // If evidence didn't reach OKF, hold the watermark so those messages are re-observed
+    // next run (matching is idempotent via the already-matched/asked sets seeded from the
+    // docs, so the successful writes won't duplicate).
+    const evidencePersisted = diffsPersisted && completionsPersisted;
 
     // Advance the watermark past the newest message seen (exclusive next poll).
     //
@@ -378,9 +424,14 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // forward-looking observer. Draining a true >ceiling backlog would need oldest-first
     // paging (received_before), deliberately out of scope here.
     let watermarkAdvancedTo: number | null = null;
-    if (messages.length > 0 && maxDate >= watermark) {
+    if (messages.length > 0 && maxDate >= watermark && evidencePersisted) {
       watermarkAdvancedTo = maxDate + 1;
       await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
+    } else if (!evidencePersisted) {
+      ctx.log.warn(
+        { path: PENDING_DIFFS_PATH },
+        'ceo-inbox-sent-observe: evidence persistence failed — holding watermark for retry',
+      );
     }
     if (truncated) {
       ctx.log.warn(
