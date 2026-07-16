@@ -3,9 +3,14 @@ import {
   matchDraftToSent,
   matchTasksToSent,
   formatDiffBlock,
+  formatCompletionCandidateBlock,
+  trimEvidenceDoc,
   type DraftSnapshotLike,
   type SentMessageLike,
+  type TaskMatch,
 } from './sent-observe-match.js';
+import { parsePendingDiffs } from './voice-learn-logic.js';
+import { parseCompletionCandidates } from './task-completion-risk.js';
 
 const baseSent: SentMessageLike = {
   id: 'msg-1',
@@ -136,5 +141,88 @@ describe('formatDiffBlock', () => {
     expect(block).toContain('### Draft');
     expect(block).toContain('### Sent');
     expect(block).toContain('Sent body text');
+  });
+});
+
+describe('trimEvidenceDoc', () => {
+  const DRAFT_BODY = 'Thanks Alice, following up on the partnership timeline. Can we meet Tuesday?';
+  const SENT_BODY = 'Thanks Alice, following up on the partnership timeline. Could we meet Wednesday instead?';
+
+  // Build a diff block whose sent_at is derived from `date` (unix seconds).
+  function diffBlock(date: number): string {
+    const sent: SentMessageLike = { ...baseSent, id: `msg-${date}`, date };
+    const snap: DraftSnapshotLike = {
+      ...baseSnap,
+      draftId: `draft-${date}`,
+      body: DRAFT_BODY,
+      // Draft must not post-date the send, or matchDraftToSent skips it.
+      createdAt: new Date((date - 1000) * 1000).toISOString(),
+    };
+    const match = matchDraftToSent(sent, [snap])!;
+    return formatDiffBlock(match, SENT_BODY);
+  }
+
+  function completionBlock(date: number, taskId: string): string {
+    const match: TaskMatch = {
+      messageId: `msg-${date}`,
+      taskId,
+      confidence: 'high',
+      reason: 'recipient+semantic',
+      sentSubject: 'Follow up',
+      sentRecipients: ['alice@example.com'],
+      sentAt: new Date(date * 1000).toISOString(),
+      taskTitle: 'Follow up with Alice',
+    };
+    return formatCompletionCandidateBlock(match);
+  }
+
+  const OLD = 1_600_000_000; // 2020-09-13
+  const NEW = 1_720_000_000; // 2024-07-03
+  const CUTOFF = new Date(1_700_000_000_000).toISOString(); // 2023-11-14, between OLD and NEW
+
+  it('drops a diff block older than the cutoff and keeps a newer one (re-parses to the kept pair)', () => {
+    const body = `# Pending voice diffs\n${diffBlock(OLD)}${diffBlock(NEW)}`;
+    const trimmed = trimEvidenceDoc(body, CUTOFF);
+
+    // Preamble preserved; old block gone; new block intact.
+    expect(trimmed).toContain('# Pending voice diffs');
+    expect(trimmed).not.toContain(`draft draft-${OLD}`);
+    expect(trimmed).toContain(`draft draft-${NEW}`);
+
+    const pairs = parsePendingDiffs(trimmed);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]!.draftId).toBe(`draft-${NEW}`);
+    expect(pairs[0]!.messageId).toBe(`msg-${NEW}`);
+  });
+
+  it('keeps a block whose sent_at is missing or unparseable (never drops on parse failure)', () => {
+    const garbage = `\n## Diff — draft dg ↔ sent mg\n\n- thread_id: t\n- confidence: high\n- sent_at: not-a-date\n- subject: x\n- recipients: a@b.com\n\n### Draft\n\n${DRAFT_BODY}\n\n### Sent\n\n${SENT_BODY}\n\n---\n`;
+    const missing = `\n## Diff — draft dm ↔ sent mm\n\n- thread_id: t\n- confidence: high\n- subject: x\n- recipients: a@b.com\n\n### Draft\n\n${DRAFT_BODY}\n\n### Sent\n\n${SENT_BODY}\n\n---\n`;
+    // Cutoff in the far future — anything with a valid, older sent_at would be dropped.
+    const cutoff = new Date(4_000_000_000_000).toISOString();
+    const trimmed = trimEvidenceDoc(`# H\n${garbage}${missing}`, cutoff);
+    expect(trimmed).toContain('draft dg');
+    expect(trimmed).toContain('draft dm');
+  });
+
+  it('trims completion blocks too (re-parses via parseCompletionCandidates)', () => {
+    const body = `# Pending task-completion candidates\n${completionBlock(OLD, 'task-old')}${completionBlock(NEW, 'task-new')}`;
+    const trimmed = trimEvidenceDoc(body, CUTOFF);
+
+    const candidates = parseCompletionCandidates(trimmed);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.taskId).toBe('task-new');
+  });
+
+  it('returns an empty / block-free body unchanged', () => {
+    expect(trimEvidenceDoc('', CUTOFF)).toBe('');
+    expect(trimEvidenceDoc('# Just a header\n\nno blocks here\n', CUTOFF)).toBe(
+      '# Just a header\n\nno blocks here\n',
+    );
+  });
+
+  it('returns the body unchanged when the cutoff itself is unparseable', () => {
+    const body = `# H\n${diffBlock(OLD)}`;
+    expect(trimEvidenceDoc(body, 'not-a-date')).toBe(body);
   });
 });
