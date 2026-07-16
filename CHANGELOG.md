@@ -33,6 +33,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **ADR-029** — passive email observation; shadow competence feeds Phase 3 scoring. (#1420)
+- **Draft capture** — CEO-inbox draft skills snapshot proposals to OKF for voice learning. (#1421)
 - **`scheduler-update`** — new skill lets agents resume, pause, or edit a scheduled job without the web UI. (#1409)
 - **Contact resolution** — integration test coverage for identity establishment and authorization. (#1382)
 - **`diagnostics` agent** — opt-in, read-only forensic agent that diagnoses "what happened / why" for the principal. (#1356)
@@ -46,6 +47,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Specs 04/13/14/19** — document sent-observer, voice learning, task-completion, shadow competence. (#1420)
 - **`docs/dev/dependencies.md`** — adds explicit SCA remediation threshold and pre-release policy (OSPS-VM-05.01/05.02).
 - **Install docs** — README points to `releases/latest/download/install.sh` and documents `CURIA_VERSION`.
 - **`00-overview.md` Spec Index** — dropped the `Status` column and "N of M Done" counts. (#1282)
