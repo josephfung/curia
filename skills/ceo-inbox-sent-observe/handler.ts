@@ -278,8 +278,10 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     let taskCandidates = 0;
     let shadowReconciled = 0;
     let maxDate = watermark;
-    // Oldest message actually processed this run — used to keep the watermark below
-    // the un-fetched tail when a run is truncated, so nothing is skipped for good.
+    // Oldest message actually processed this run. Diagnostics only: it's surfaced as
+    // `oldestScannedAt` in the truncation warning so an operator can see where the
+    // skipped tail begins. The watermark still advances to maxDate + 1 on truncation
+    // (see the watermark-advance block below) — minDate does NOT hold it back.
     let minDate = Number.POSITIVE_INFINITY;
     const diffChunks: string[] = [];
     const completionChunks: string[] = [];
