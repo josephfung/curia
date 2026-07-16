@@ -49,6 +49,8 @@ export interface NylasMessageFull extends NylasMessageSummary {
 
 export interface NylasDraft {
   id: string;
+  /** Nylas thread id when the draft is threaded; empty for cold compose. */
+  threadId: string;
   subject: string;
   to: NylasParticipant[];
   cc: NylasParticipant[];
@@ -234,6 +236,7 @@ export class CeoNylasClient {
     const data = await this.requestDraft(url, 'createDraftReply', messagePayload, options.attachments);
     return {
       id: data.id,
+      threadId: data.thread_id ?? '',
       subject: data.subject ?? '',
       to: (data.to ?? []).map(normParticipant),
       cc: (data.cc ?? []).map(normParticipant),
@@ -262,6 +265,7 @@ export class CeoNylasClient {
     const data = await this.requestDraft(url, 'createDraft', messagePayload, options.attachments);
     return {
       id: data.id,
+      threadId: data.thread_id ?? '',
       subject: data.subject ?? '',
       to: (data.to ?? []).map(normParticipant),
       cc: (data.cc ?? []).map(normParticipant),
@@ -637,6 +641,7 @@ interface NylasApiMessage {
 
 interface NylasApiDraft {
   id: string;
+  thread_id?: string;
   subject?: string;
   to?: NylasApiParticipant[];
   cc?: NylasApiParticipant[];

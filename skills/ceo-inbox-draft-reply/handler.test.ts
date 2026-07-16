@@ -540,4 +540,33 @@ describe('CeoInboxDraftReplyHandler', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });
+
+  it('voice-learning capture failure does not block draft creation (#1421)', async () => {
+    const messageResponse = buildNylasMessage({
+      from: [{ email: 'alice@external.com', name: 'Alice' }],
+      to: [{ email: 'bob@example.com' }],
+    });
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/messages/msg-001')) {
+        return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts')) {
+        return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${urlStr}`);
+    });
+
+    const ctx = buildCtx();
+    ctx.workingDocs = {
+      read: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockRejectedValue(new Error('okf unavailable')),
+      update: vi.fn(),
+    } as unknown as NonNullable<SkillContext['workingDocs']>;
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect((result as { data: { draft_id: string } }).data.draft_id).toBe('draft-1');
+    expect(ctx.log.error).toHaveBeenCalled();
+  });
 });
