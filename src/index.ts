@@ -2001,11 +2001,13 @@ async function main(): Promise<void> {
       // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
       modelRegistry,
       estimateCostUsd,
-      // Only the coordinator receives the autonomy service — it's the only agent
-      // that needs per-task autonomy prompt injection and the autonomy skills.
-      // Use role (same predicate as interpolateRuntimeContext above) so both
-      // branches stay in sync if the coordinator YAML is ever reconfigured.
-      autonomyService: agentConfig.role === 'coordinator' ? autonomyService : undefined,
+      // Coordinator + ceo-inbox receive autonomyService for per-task band injection
+      // (spec 14 checklist / ADR-029). ceo-inbox's draft-vs-punt aggressiveness
+      // tracks the live band; it must never write the global score itself.
+      autonomyService:
+        agentConfig.role === 'coordinator' || agentConfig.name === 'ceo-inbox'
+          ? autonomyService
+          : undefined,
       // All agents receive per-turn time block injection so the current date/time
       // and timezone are always accurate. Specialists need this too — scheduled
       // agents in particular make time-sensitive decisions (backoff gates, date
