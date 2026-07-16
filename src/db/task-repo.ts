@@ -749,6 +749,16 @@ export class TaskRepo {
   /**
    * Reopen a done task back to open — used for reversible sent-mail auto-completes (#1424).
    * Cancelled tasks cannot be reopened. Appends an audit note in progress.notes.
+   *
+   * completeTask cancels the task's pending wake-up job as part of marking it done, so
+   * reopening must symmetrically revive that cancelled wake — otherwise undoing an
+   * auto-complete leaves the task open with no scheduled reminder (CodeRabbit finding:
+   * "reopenTask must restore the task's cancelled wake"). The revival mirrors the
+   * `_revive_wake` CTE in updateTask (#1415, mirrors enqueueTaskWake), gated on the task
+   * UPDATE via EXISTS so a concurrent status change can't revive a wake after the row
+   * update matched 0 rows. Unlike updateTask's revival, reopenTask has no new `wakeAt` to
+   * apply, so it only flips the row's status back to 'pending' and clears run-attempt
+   * bookkeeping — the original run_at / next_run_at schedule is preserved as-is.
    */
   async reopenTask(
     taskId: string,
@@ -768,18 +778,43 @@ export class TaskRepo {
       note: note ?? 'Reopened (undo auto-complete from sent mail)',
     };
 
+    const cteSql = `
+      WITH reopened_task AS (
+        UPDATE tasks
+        SET status = 'open',
+            progress = jsonb_set(
+              COALESCE(progress, '{}'::jsonb),
+              '{notes}',
+              COALESCE(progress->'notes', '[]'::jsonb) || $1::jsonb,
+              true
+            ),
+            updated_at = now()
+        WHERE id = $2 AND status = 'done'
+        RETURNING ${TASK_COLUMNS}
+      ),
+      _revive_wake AS (
+        UPDATE scheduled_jobs
+           SET status = 'pending',
+               run_started_at = NULL,
+               consecutive_failures = 0,
+               last_error = NULL,
+               last_run_outcome = NULL
+         WHERE id = (
+           SELECT id FROM scheduled_jobs
+            WHERE task_id = $2 AND task_payload->>'type' = 'task-wake'
+              AND status = 'cancelled'
+            ORDER BY created_at DESC
+            LIMIT 1
+         )
+           AND status = 'cancelled'
+           AND EXISTS (SELECT 1 FROM reopened_task)
+        RETURNING id
+      )
+      SELECT * FROM reopened_task
+    `;
+
     const { rows } = await this.pool.query(
-      `UPDATE tasks
-       SET status = 'open',
-           progress = jsonb_set(
-             COALESCE(progress, '{}'::jsonb),
-             '{notes}',
-             COALESCE(progress->'notes', '[]'::jsonb) || $1::jsonb,
-             true
-           ),
-           updated_at = now()
-       WHERE id = $2 AND status = 'done'
-       RETURNING ${TASK_COLUMNS}`,
+      cteSql,
       [JSON.stringify([noteEntry]), taskId],
     );
     const row = rows[0] as DbTaskRow | undefined;

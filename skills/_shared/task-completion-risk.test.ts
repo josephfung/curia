@@ -69,6 +69,23 @@ describe('classifyTaskRisk', () => {
       ),
     ).toBe('low');
   });
+
+  it('classifies the description, not just title+tags, so a confidential body is caught', () => {
+    // Generic title + tags read as low-risk; the sensitive detail lives only in the body.
+    expect(
+      classifyTaskRisk(
+        {
+          id: 't',
+          title: 'Follow up',
+          description: 'Send the board deck to the directors before the AGM.',
+          priority: 40,
+          tags: [],
+          progress: {},
+        },
+        fakeClassify,
+      ),
+    ).toBe('high');
+  });
 });
 
 describe('decideCompletionAction', () => {
