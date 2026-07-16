@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.15.0"
+version: "0.16.0"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -62,11 +62,11 @@ schedule:
       If there are no unread messages, exit immediately without any output.
   - cron: "0 7 * * *"  # daily sent-observe — keep out of the 15-min triage loop
     task: >
-      Run ceo-inbox-sent-observe only: poll the CEO's Sent folder since the
-      watermark, match Curia draft snapshots and open owner=ceo tasks, append
-      pending-diffs / pending-completions evidence, emit ceo.sent_observed, and
-      advance the watermark. Call scheduler-report when done. Do NOT triage the
-      inbox, draft, archive, label, or send any messages on this wake.
+      Run ceo-inbox-sent-observe, then task-completion-from-sent: poll Sent since
+      the watermark, match drafts and open owner=ceo tasks, append evidence,
+      emit ceo.sent_observed, advance the watermark, then auto-complete or queue
+      confirmations for matches. Call scheduler-report when done. Do NOT triage
+      the inbox, draft, archive, label, or send any messages on this wake.
     expectedDurationSeconds: 120
   - cron: "0 8 * * 1"  # weekly voice-learn (Monday 8am)
     task: >
