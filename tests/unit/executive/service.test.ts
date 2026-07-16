@@ -57,6 +57,7 @@ describe('validateProfile', () => {
       patterns: ['Short sentences.'],
       vocabulary: { prefer: ['folks'], avoid: ['synergy'] },
       signOff: '-- Joseph',
+      guide: '',
     },
   };
 
@@ -147,6 +148,7 @@ describe('compileWritingVoiceBlock', () => {
         avoid: ['leverage', 'synergy'],
       },
       signOff: '-- Joseph',
+      guide: '',
     },
   };
 
@@ -213,6 +215,27 @@ describe('compileWritingVoiceBlock', () => {
     const block = compileWritingVoiceBlock(testProfile, 'Joseph');
     expect(block).toContain('NOT your (the assistant\'s) voice');
     expect(block).toContain('the executive\'s voice');
+  });
+});
+
+describe('compileWritingVoiceBlock guide', () => {
+  function baseProfile(guide: string): ExecutiveProfile {
+    return {
+      writingVoice: {
+        tone: ['direct'], formality: 50, patterns: [],
+        vocabulary: { prefer: [], avoid: [] }, signOff: 'Thanks', guide,
+      },
+    };
+  }
+
+  it('renders the learned guide section when guide is non-empty', () => {
+    const block = compileWritingVoiceBlock(baseProfile('Writes short. Dry humour. No greetings.'), 'Jordan');
+    expect(block).toContain('How the executive actually writes');
+    expect(block).toContain('Dry humour');
+  });
+  it('omits the guide section when guide is empty', () => {
+    const block = compileWritingVoiceBlock(baseProfile(''), 'Jordan');
+    expect(block).not.toContain('How the executive actually writes');
   });
 });
 
