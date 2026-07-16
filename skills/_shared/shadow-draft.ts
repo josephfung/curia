@@ -59,9 +59,30 @@ export function parseShadowDoc(doc: {
   };
 }
 
+export type DecisionPolarity = 'affirm' | 'deny' | 'none';
+
+// Deny is checked first so "cannot approve" / "won't accept" read as denials.
+const DENY_RE =
+  /\b(decline|declined|reject|rejected|refuse|refused|won'?t|cannot|can'?t|unable|deny|denied|not\s+(?:able|going|proceeding|approv\w*|accept\w*))\b/i;
+const AFFIRM_RE =
+  /\b(approve|approved|agree|agreed|accept|accepted|confirm|confirmed|will|shall|yes|happy\s+to|glad\s+to|sounds\s+good|go\s+ahead)\b/i;
+
+/** Classify the decision a message expresses. Deny wins ties ("cannot approve" = deny). */
+export function detectDecisionPolarity(body: string): DecisionPolarity {
+  if (DENY_RE.test(body)) return 'deny';
+  if (AFFIRM_RE.test(body)) return 'affirm';
+  return 'none';
+}
+
 /**
- * Decision/outcome equivalence — not phrasing.
- * High overlap of content tokens OR shared commitment verbs/dates → match.
+ * Decision/outcome equivalence — did the shadow reach the SAME decision as the actual
+ * send, not merely share vocabulary. This flag feeds the autonomy score, so it fails
+ * safe (toward 0): a false 1 would inflate autonomy on evidence Curia didn't earn.
+ *
+ * - Opposing decisions (approve vs decline) never count, however much text they share.
+ * - A decision on one side but not the other is not equivalence.
+ * - Aligned decisions credit on modest content overlap; two purely informational
+ *   replies credit only on strong overlap.
  */
 export function scoreDecisionEquivalence(
   shadowBody: string,
@@ -78,11 +99,20 @@ export function scoreDecisionEquivalence(
   const union = shadowTokens.size + sentTokens.size - inter;
   const jaccard = union === 0 ? 0 : inter / union;
 
-  const commitRe =
-    /\b(will|shall|confirm|confirmed|agree|agreed|schedule|scheduled|send|sent|approve|approved|decline|declined|accept|accepted)\b/i;
-  const shadowCommit = commitRe.test(shadowBody);
-  const sentCommit = commitRe.test(sentBody);
-  const commitAlign = shadowCommit === sentCommit;
+  const shadowPol = detectDecisionPolarity(shadowBody);
+  const sentPol = detectDecisionPolarity(sentBody);
+
+  // Opposing decisions are the clearest form of divergence — reject outright.
+  if (
+    (shadowPol === 'affirm' && sentPol === 'deny') ||
+    (shadowPol === 'deny' && sentPol === 'affirm')
+  ) {
+    return { competenceFlag: 0, reason: `decision-diverged(${shadowPol}!=${sentPol})` };
+  }
+  // One side committed to a decision, the other stayed silent — not the same decision.
+  if ((shadowPol === 'none') !== (sentPol === 'none')) {
+    return { competenceFlag: 0, reason: `decision-asymmetry(${shadowPol}/${sentPol})` };
+  }
 
   // Dates / numbers alignment (rough commitment signal).
   const nums = (s: string) => new Set(s.match(/\b\d{1,4}\b/g) ?? []);
@@ -92,11 +122,17 @@ export function scoreDecisionEquivalence(
   for (const n of shadowNums) if (sentNums.has(n)) numHit += 1;
   const numAlign = shadowNums.size === 0 || numHit > 0;
 
-  if (jaccard >= 0.35 && commitAlign) {
-    return { competenceFlag: 1, reason: `jaccard=${jaccard.toFixed(2)}+commit-align` };
+  if (shadowPol !== 'none') {
+    // Both reached the same decision polarity — credit on modest content overlap.
+    if (jaccard >= 0.25 && numAlign) {
+      return { competenceFlag: 1, reason: `${shadowPol}-aligned;jaccard=${jaccard.toFixed(2)}` };
+    }
+    return { competenceFlag: 0, reason: `${shadowPol}-aligned;low-overlap;jaccard=${jaccard.toFixed(2)}` };
   }
-  if (jaccard >= 0.25 && commitAlign && numAlign) {
-    return { competenceFlag: 1, reason: `jaccard=${jaccard.toFixed(2)}+commit+nums` };
+
+  // Both purely informational (no explicit decision) — demand strong equivalence.
+  if (jaccard >= 0.4 && numAlign) {
+    return { competenceFlag: 1, reason: `informational-equiv;jaccard=${jaccard.toFixed(2)}` };
   }
-  return { competenceFlag: 0, reason: `jaccard=${jaccard.toFixed(2)};commitAlign=${commitAlign}` };
+  return { competenceFlag: 0, reason: `no-decision;jaccard=${jaccard.toFixed(2)}` };
 }
