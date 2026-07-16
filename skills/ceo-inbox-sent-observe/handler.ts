@@ -15,6 +15,7 @@ import {
   formatDiffBlock,
   matchDraftToSent,
   matchTasksToSent,
+  trimEvidenceDoc,
   type DraftSnapshotLike,
 } from '../_shared/sent-observe-match.js';
 import { createCeoSentObserved } from '../../src/bus/events.js';
@@ -33,6 +34,14 @@ export const PENDING_DIFFS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-diff
 export const PENDING_COMPLETIONS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-completions.md`;
 export const PENDING_DIFFS_TYPE = 'voice-pending-diffs';
 export const PENDING_COMPLETIONS_TYPE = 'voice-pending-completions';
+
+/** Calendar-time retention bound for the rolling evidence docs (pending-diffs.md /
+ *  pending-completions.md), per ADR-029: their sensitive full email bodies must not be retained
+ *  indefinitely. 90 days comfortably exceeds the weekly voice-learn window (MAX_PAIRS=40) and the
+ *  daily task-completion cadence, so no still-useful evidence is trimmed early. Doubles as the
+ *  `ttl_days` frontmatter backstop so a doc that STOPS being appended still ages out via the
+ *  idle-TTL sweep (purgeExpiredScratch). */
+export const EVIDENCE_RETENTION_DAYS = 90;
 
 /** Idle backoff when a run finds nothing — 2 hours (t2125 pattern). */
 const IDLE_BACKOFF_MS = 2 * 60 * 60 * 1000;
@@ -115,7 +124,10 @@ async function ensureDoc(
   const created = await repo.create({
     path,
     type,
-    frontmatter: { title },
+    // ttl_days backstop (ADR-029): purgeExpiredScratch honors this on scratch paths, so a doc
+    // that stops being appended still ages out. ensureDoc only ever creates the two rolling
+    // evidence docs, both of which want this bound. The trim on append covers the active case.
+    frontmatter: { title, ttl_days: EVIDENCE_RETENTION_DAYS },
     body: `# ${title}\n\n`,
     agentId: ctx.agentId,
     conversationId: ctx.conversationId,
@@ -123,28 +135,40 @@ async function ensureDoc(
   return { body: created.body, version: created.version };
 }
 
-/** Returns true when the content was persisted (or there was nothing to write),
- *  false when every append attempt lost the version race. The caller uses this to
- *  decide whether the watermark may advance — persisting evidence must succeed
- *  before we forget the messages that produced it. */
-async function appendDoc(
+/** Append to a rolling evidence doc AND bound its calendar-time retention in one write: read the
+ *  current body, append `newContent`, drop blocks older than `cutoffIso` (trimEvidenceDoc), and
+ *  write the whole body back with the same 3-attempt conflict-retry loop appendDoc used. Returns
+ *  true when the content was persisted (or there was nothing to write), false when every attempt
+ *  lost the version race — the caller uses this to decide whether the watermark may advance, since
+ *  persisting evidence must succeed before we forget the messages that produced it.
+ *
+ *  Trimming rides along on the append write, so a lost race just retries the whole thing; there is
+ *  no separate trim write that could fail independently. */
+async function appendAndTrimDoc(
   ctx: SkillContext,
   path: string,
   type: string,
   title: string,
-  content: string,
+  newContent: string,
+  cutoffIso: string,
 ): Promise<boolean> {
-  if (!content.trim()) return true;
+  if (!newContent.trim()) return true;
   const repo = ctx.workingDocs!;
   for (let attempt = 0; attempt < 3; attempt++) {
     const doc = await ensureDoc(ctx, path, type, title);
-    const result = await repo.append(path, {
-      content,
+    // Mirror repo.append's body joining (strip one trailing newline, then a blank line) so the
+    // combined body stays well-formed before trimming.
+    const combined = doc.body.length > 0
+      ? `${doc.body.replace(/\n$/, '')}\n\n${newContent}`
+      : newContent;
+    const newBody = trimEvidenceDoc(combined, cutoffIso);
+    const result = await repo.update(path, {
+      body: newBody,
       expectedVersion: doc.version,
     });
     if (result.ok) return true;
   }
-  ctx.log.warn({ path }, 'ceo-inbox-sent-observe: failed to append after conflicts');
+  ctx.log.warn({ path }, 'ceo-inbox-sent-observe: failed to append+trim after conflicts');
   return false;
 }
 
@@ -420,19 +444,25 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       }
     }
 
-    const diffsPersisted = await appendDoc(
+    // Retention cutoff for the rolling evidence docs (ADR-029): blocks older than this are dropped
+    // on write. Derived from the same injected `now` the backoff gate uses, so trimming is
+    // deterministic under test.
+    const cutoffIso = new Date(nowMs - EVIDENCE_RETENTION_DAYS * 86_400_000).toISOString();
+    const diffsPersisted = await appendAndTrimDoc(
       ctx,
       PENDING_DIFFS_PATH,
       PENDING_DIFFS_TYPE,
       'Pending voice diffs',
       diffChunks.join(''),
+      cutoffIso,
     );
-    const completionsPersisted = await appendDoc(
+    const completionsPersisted = await appendAndTrimDoc(
       ctx,
       PENDING_COMPLETIONS_PATH,
       PENDING_COMPLETIONS_TYPE,
       'Pending task-completion candidates',
       completionChunks.join(''),
+      cutoffIso,
     );
     // If evidence didn't reach OKF, hold the watermark so those messages are re-observed
     // next run (matching is idempotent via the already-matched/asked sets seeded from the

@@ -133,16 +133,21 @@ function buildCtx(overrides: {
       docs.set(path, next);
       return { ok: true as const, document: next };
     }),
-    // Applies the frontmatter patch to the in-memory doc so a follow-up read()
-    // reflects reconciled_at — mirrors the real repo's update() semantics closely
-    // enough for the shadow-reconcile assertions below.
-    update: vi.fn(async (path: string, params: { frontmatter: Record<string, unknown>; expectedVersion: number }) => {
+    // Applies the frontmatter and/or body patch to the in-memory doc so follow-up reads reflect
+    // reconciled_at (shadow reconcile) and the append+trim body writes — mirrors the real repo's
+    // update() semantics closely enough for these assertions.
+    update: vi.fn(async (path: string, params: { frontmatter?: Record<string, unknown>; body?: string; expectedVersion: number }) => {
       const cur = docs.get(path);
       if (!cur) throw new Error('missing');
       if (cur.version !== params.expectedVersion) {
         return { ok: false as const, conflict: true as const, document: cur };
       }
-      const next = { ...cur, frontmatter: params.frontmatter, version: cur.version + 1 };
+      const next = {
+        ...cur,
+        ...(params.frontmatter !== undefined ? { frontmatter: params.frontmatter } : {}),
+        ...(params.body !== undefined ? { body: params.body } : {}),
+        version: cur.version + 1,
+      };
       docs.set(path, next);
       return { ok: true as const, document: next };
     }),
@@ -358,6 +363,8 @@ describe('CeoInboxSentObserveHandler', () => {
 
     const ctx = buildCtx({
       force: true,
+      // Pin the clock near the sent date so the fresh candidate survives the retention trim.
+      nowMs: 1_720_100_000_000,
       tasks: [
         {
           id: 'task-ceo-1',

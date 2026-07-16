@@ -295,6 +295,46 @@ export function formatDiffBlock(match: DraftMatch, sentBody: string): string {
   ].join('\n');
 }
 
+/**
+ * Bound calendar-time retention of a rolling evidence doc (pending-diffs.md /
+ * pending-completions.md) by dropping blocks whose `- sent_at:` predates `cutoffIso` (#1419,
+ * ADR-029: consumed evidence must not be retained indefinitely). Sensitive full email bodies
+ * would otherwise accumulate forever, since appendDoc refreshes `updated_at` on every active run
+ * and defeats the idle-TTL sweep.
+ *
+ * Boundaries: each block starts at a line beginning `## ` and runs up to (not including) the next
+ * such line — the same header boundary formatDiffBlock/formatCompletionCandidateBlock produce and
+ * parsePendingDiffs/parseCompletionCandidates consume, so the result round-trips. Any leading
+ * preamble/header before the first block is preserved. Blocks with a missing or unparseable
+ * `sent_at` are KEPT (never drop on parse failure — data loss is worse than over-retention), as is
+ * the whole body when `cutoffIso` itself is unparseable.
+ */
+export function trimEvidenceDoc(body: string, cutoffIso: string): string {
+  const cutoffMs = Date.parse(cutoffIso);
+  if (!Number.isFinite(cutoffMs)) return body;
+
+  // Lookahead split keeps the `## ` delimiters, so the surviving pieces re-join to the exact
+  // original bytes (each block carries its own trailing `---` and blank line).
+  const parts = body.split(/(?=^## )/m);
+  const kept: string[] = [];
+  for (const part of parts) {
+    if (!part.startsWith('## ')) {
+      kept.push(part); // leading preamble / doc header
+      continue;
+    }
+    // The block's metadata `- sent_at:` is the first such line (it precedes any body sections).
+    const sentAtRaw = part.match(/^- sent_at:\s*(.+)$/m)?.[1]?.trim();
+    const sentAtMs = sentAtRaw ? Date.parse(sentAtRaw) : Number.NaN;
+    if (!Number.isFinite(sentAtMs)) {
+      kept.push(part); // keep on missing/unparseable timestamp
+      continue;
+    }
+    if (sentAtMs < cutoffMs) continue; // strictly older than the cutoff → drop
+    kept.push(part);
+  }
+  return kept.join('');
+}
+
 /** Format a completion candidate block for pending-completions.md. */
 export function formatCompletionCandidateBlock(match: TaskMatch): string {
   return [
