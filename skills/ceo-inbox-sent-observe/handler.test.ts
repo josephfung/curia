@@ -10,6 +10,9 @@ import {
 import type { SkillContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import { VOICE_LEARNING_DOC_TYPE } from '../_shared/voice-learning-capture.js';
+import { SHADOW_DOC_TYPE, shadowDraftPath } from '../_shared/shadow-draft.js';
+import type { ActionLogInsert } from '../../src/autonomy/action-log-types.js';
+import type { InfraLlm } from '../../src/skills/infra-llm.js';
 
 function makeEntityMemory(seed: Record<string, string> = {}): EntityMemory & {
   __values: Map<string, string>;
@@ -80,16 +83,20 @@ function buildCtx(overrides: {
   }>;
   force?: boolean;
   nowMs?: number;
+  infraLlm?: InfraLlm;
+  withActionLogRepo?: boolean;
 } = {}): SkillContext & {
   __mem: ReturnType<typeof makeEntityMemory>;
   __docs: Map<string, { path: string; type: string; frontmatter: Record<string, unknown>; body: string; version: number }>;
   __published: Array<{ type: string; payload: Record<string, unknown> }>;
+  __actionLog: ActionLogInsert[];
 } {
   const mem = makeEntityMemory(overrides.seed ?? {});
   const docs = new Map(
     (overrides.snapshots ?? []).map((d) => [d.path, { ...d, version: d.version ?? 1 }]),
   );
   const published: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const actionLog: ActionLogInsert[] = [];
 
   const workingDocs = {
     listByPrefix: vi.fn(async (prefix: string) =>
@@ -126,7 +133,19 @@ function buildCtx(overrides: {
       docs.set(path, next);
       return { ok: true as const, document: next };
     }),
-    update: vi.fn(),
+    // Applies the frontmatter patch to the in-memory doc so a follow-up read()
+    // reflects reconciled_at — mirrors the real repo's update() semantics closely
+    // enough for the shadow-reconcile assertions below.
+    update: vi.fn(async (path: string, params: { frontmatter: Record<string, unknown>; expectedVersion: number }) => {
+      const cur = docs.get(path);
+      if (!cur) throw new Error('missing');
+      if (cur.version !== params.expectedVersion) {
+        return { ok: false as const, conflict: true as const, document: cur };
+      }
+      const next = { ...cur, frontmatter: params.frontmatter, version: cur.version + 1 };
+      docs.set(path, next);
+      return { ok: true as const, document: next };
+    }),
   };
 
   const ctx = {
@@ -157,15 +176,28 @@ function buildCtx(overrides: {
       error: vi.fn(),
       debug: vi.fn(),
     },
+    ...(overrides.infraLlm ? { infraLlm: overrides.infraLlm } : {}),
+    ...(overrides.withActionLogRepo
+      ? {
+          actionLogRepo: {
+            insert: vi.fn(async (row: ActionLogInsert) => {
+              actionLog.push(row);
+              return actionLog.length;
+            }),
+          },
+        }
+      : {}),
     __mem: mem,
     __docs: docs,
     __published: published,
+    __actionLog: actionLog,
   };
 
   return ctx as unknown as SkillContext & {
     __mem: ReturnType<typeof makeEntityMemory>;
     __docs: typeof docs;
     __published: typeof published;
+    __actionLog: ActionLogInsert[];
   };
 }
 
@@ -343,6 +375,97 @@ describe('CeoInboxSentObserveHandler', () => {
 
     const pending = ctx.__docs.get(PENDING_COMPLETIONS_PATH);
     expect(pending?.body).toContain('task-ceo-1');
+  });
+
+  it('reconciles shadow drafts via a batched LLM judge', async () => {
+    // A shadow doc for source message 'src-1' on thread-1 was captured when the
+    // CEO punted on Curia's shadow draft. The CEO later sent their own reply on
+    // the same thread — sent-observe should match them and hand the (shadow,
+    // sent) pair to the batched LLM judge instead of the deleted heuristic scorer.
+    const listResponse = {
+      data: [
+        {
+          id: 'msg-sent-1',
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          from: [{ email: 'ceo@example.com' }],
+          to: [{ email: 'alice@example.com' }],
+          cc: [],
+          snippet: 'Thanks Alice',
+          date: 1_720_000_500,
+          unread: false,
+          folders: ['SENT'],
+          attachments: [],
+        },
+      ],
+    };
+    const fullResponse = {
+      data: {
+        ...listResponse.data[0],
+        body: '<p>Thanks Alice, sounds good, let us do Tuesday.</p>',
+        bcc: [],
+        labels: [],
+      },
+    };
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-1')) {
+        return new Response(JSON.stringify(fullResponse), { status: 200 });
+      }
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify(listResponse), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const extract = vi.fn(async () => ({
+      ok: true as const,
+      text: '[{"source_message_id":"src-1","same_decision":true,"reason":"same"}]',
+    }));
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      infraLlm: { extract, classify: vi.fn() },
+      withActionLogRepo: true,
+      snapshots: [
+        {
+          path: shadowDraftPath('src-1'),
+          type: SHADOW_DOC_TYPE,
+          frontmatter: {
+            source_message_id: 'src-1',
+            thread_id: 'thread-1',
+            subject: 'Re: Hello',
+            recipients: ['alice@example.com'],
+            created_at: '2024-07-03T00:00:00.000Z',
+            disposition: 'punt',
+          },
+          body: 'Thanks Alice, how about Wednesday?',
+        },
+      ],
+      tasks: [],
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    // One batched call, not one per pair.
+    expect(extract).toHaveBeenCalledTimes(1);
+
+    expect(ctx.__actionLog).toHaveLength(1);
+    const row = ctx.__actionLog[0]!;
+    expect(row.competenceFlag).toBe(1);
+    expect(row.scoredBy).toBe('shadow-reconciler');
+    expect(row.skillName).toBe('shadow-draft-eval');
+    expect(row.outcome).toBe('shadow_evaluated');
+
+    const shadowDoc = ctx.__docs.get(shadowDraftPath('src-1'));
+    expect(shadowDoc?.frontmatter.reconciled_at).toBeTruthy();
+    expect(shadowDoc?.frontmatter.competence_flag).toBe(1);
+
+    const data = (result as { data: { shadow_reconciled: number } }).data;
+    expect(data.shadow_reconciled).toBe(1);
   });
 
   it('skips when idle backoff is active', async () => {
