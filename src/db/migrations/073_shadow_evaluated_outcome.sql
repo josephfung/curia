@@ -34,6 +34,13 @@ CREATE INDEX idx_aal_unscored
   WHERE scored_by IS NULL
     AND outcome IN ('success', 'failure', 'rejected', 'approved', 'denied', 'expired', 'resolved_externally');
 
+-- The restored constraint below does not allow 'shadow_evaluated'. Any such rows are
+-- synthetic pre-scored competence rows written by this feature (scored_by =
+-- 'shadow-reconciler'); once the feature is rolled back they carry no meaning, so remove
+-- them before reinstating the constraint — otherwise ADD CONSTRAINT aborts on the
+-- pre-existing violating rows and the downgrade cannot complete.
+DELETE FROM autonomy_action_log WHERE outcome = 'shadow_evaluated';
+
 ALTER TABLE autonomy_action_log
   DROP CONSTRAINT IF EXISTS autonomy_action_log_outcome_check;
 

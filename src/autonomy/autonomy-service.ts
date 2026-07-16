@@ -112,6 +112,16 @@ export class AutonomyService {
   }
 
   /**
+   * Which agents receive the autonomy service (and therefore per-task band injection).
+   * The coordinator needs it for delegation/approval gating; ceo-inbox needs it so its
+   * draft-vs-punt aggressiveness tracks the live band (spec 14 checklist / ADR-029).
+   * Single source of truth so src/index.ts wiring and its test can't drift apart.
+   */
+  static receivesInjection(agent: { name: string; role?: string }): boolean {
+    return agent.role === 'coordinator' || agent.name === 'ceo-inbox';
+  }
+
+  /**
    * Format the autonomy block for injection into the coordinator system prompt.
    * Returns a Markdown section with the current score, band label, and behavioral guidance.
    */

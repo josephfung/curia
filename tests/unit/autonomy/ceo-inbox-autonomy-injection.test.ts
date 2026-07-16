@@ -28,10 +28,12 @@ describe('ceo-inbox autonomy band injection (#1427)', () => {
   });
 
   it('injection predicate includes ceo-inbox alongside coordinator', () => {
-    const shouldInject = (name: string, role: string) =>
-      role === 'coordinator' || name === 'ceo-inbox';
-    expect(shouldInject('coordinator', 'coordinator')).toBe(true);
-    expect(shouldInject('ceo-inbox', 'specialist')).toBe(true);
-    expect(shouldInject('calendar', 'specialist')).toBe(false);
+    // Assert the *production* predicate (used by src/index.ts to pass autonomyService),
+    // not a local copy — otherwise this test stays green even if the wiring regresses.
+    expect(
+      AutonomyService.receivesInjection({ name: 'coordinator', role: 'coordinator' }),
+    ).toBe(true);
+    expect(AutonomyService.receivesInjection({ name: 'ceo-inbox', role: 'specialist' })).toBe(true);
+    expect(AutonomyService.receivesInjection({ name: 'calendar', role: 'specialist' })).toBe(false);
   });
 });
