@@ -1,0 +1,21 @@
+{
+  "name": "voice-learn",
+  "description": "Weekly job: read accumulated (draft, sent) diffs from OKF, propose WritingVoice deltas, auto-apply high-confidence low-magnitude changes (and seeded empty fills), and queue the rest as digest proposals. Never fabricates on zero data. Intended for the ceo-inbox weekly voice-learn cron.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "medium",
+  "inputs": {
+    "dry_run": "boolean? (when true, compute decisions but do not write profile or proposals)"
+  },
+  "outputs": {
+    "pairs_considered": "number",
+    "auto_applied": "number",
+    "proposed": "number",
+    "skipped": "number",
+    "bootstrap": "boolean"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 60000,
+  "capabilities": ["executiveProfileService", "workingDocs", "entityMemory"]
+}
