@@ -253,8 +253,13 @@ export class CeoNylasClient {
       );
       messages.push(...data.map(normalizeMessageSummary));
 
-      // An empty page with a cursor would otherwise spin forever — bail out.
-      if (data.length === 0) break;
+      // An empty page with a cursor would otherwise spin forever — bail out, but
+      // treat a lingering cursor as truncation so the caller doesn't mistake an
+      // incomplete walk for a fully-drained window.
+      if (data.length === 0) {
+        truncated = Boolean(nextCursor);
+        break;
+      }
       if (messages.length >= maxScan) {
         truncated = Boolean(nextCursor);
         break;
