@@ -32,6 +32,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Email-observation skills** — pin `voice-learn`/`task-completion-from-sent`/`ceo-inbox-shadow-draft` to ceo-inbox so their crons work. (#1419)
 - **`ceo-inbox-sent-observe`** — paginate the Sent poll so busy days don't drop unobserved messages past the first page. (#1419)
 - **`ceo-inbox-sent-observe`** — hold the watermark when evidence fails to persist; wrap failures in the skill result. (#1419)
+- **`ceo-inbox-sent-observe`** — also hold the watermark when a shadow-judge LLM batch fails, so the signal is retried. (#1419)
 - **`task-completion-from-sent`** — re-check tasks are open and CEO-owned; fail closed on subtask-lookup errors. (#1419)
 - **Voice-learning capture** — a body-only draft edit no longer clears the snapshot's linked task ids. (#1419)
 - **`voice-learn`** — voice-guide approval loop no longer breaks after one cycle; honors dismiss cooldown. (#1419)
