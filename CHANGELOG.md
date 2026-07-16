@@ -32,9 +32,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Email-observation skills** — pin `voice-learn`/`task-completion-from-sent`/`ceo-inbox-shadow-draft` to ceo-inbox so their crons work. (#1419)
 - **`ceo-inbox-sent-observe`** — paginate the Sent poll so busy days don't drop unobserved messages past the first page. (#1419)
 - **`ceo-inbox-sent-observe`** — hold the watermark when evidence fails to persist; wrap failures in the skill result. (#1419)
-- **`voice-learn`** — dedup proposals so weekly reruns stop appending duplicate voice-diff blocks. (#1419)
-- **`voice-learn`** — measure content similarity (not shared prefix) and skip already-applied deltas. (#1419)
-- **Shadow competence** — score decision polarity so approve-vs-decline no longer counts as equivalent. (#1419)
 - **`task-completion-from-sent`** — re-check tasks are open and CEO-owned; fail closed on subtask-lookup errors. (#1419)
 - **Voice-learning capture** — a body-only draft edit no longer clears the snapshot's linked task ids. (#1419)
 
@@ -43,7 +40,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **ADR-029** — passive email observation; shadow competence feeds Phase 3 scoring. (#1420)
 - **Draft capture** — CEO-inbox draft skills snapshot proposals to OKF for voice learning. (#1421)
 - **`ceo-inbox-sent-observe`** — daily Sent poll matches drafts/tasks; emits `ceo.sent_observed`. (#1422)
-- **`voice-learn`** — weekly WritingVoice deltas from draft→sent diffs; hybrid auto/propose. (#1423)
+- **`voice-learn`** — weekly LLM pass proposes a free-form WritingVoice guide from draft→sent edits. (#1423)
 - **`task-completion-from-sent`** — risk-tiered auto-complete/confirm from Sent matches. (#1424)
 - **Learning digest** — voice proposals + completion undo/confirm in the daily digest. (#1425)
 - **Shadow drafting** — punted emails store silent drafts; competence feeds Phase 3. (#1426)
@@ -62,7 +59,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`SkillContext`** — adds `skillName`/`skillVersion`, populated from the manifest; draft skills read version from ctx instead of a hardcoded const. (#1419)
-- **Shadow competence** — reconciles via one batched LLM judge call instead of a per-pair heuristic scorer. (#1419)
+- **Voice learning** — LLM maintains a free-form writing-voice guide from draft→sent edits; replaces heuristics. (#1419)
+- **Shadow competence** — LLM judges substantive decision equivalence (batched, binary flag); replaces token heuristics. (#1419)
+- **Sensitivity** — shadow capture + task risk reuse the shared SensitivityClassifier; sensitive threads now included. (#1419)
 - **Specs 04/13/14/19** — document sent-observer, voice learning, task-completion, shadow competence. (#1420)
 - **`docs/dev/dependencies.md`** — adds explicit SCA remediation threshold and pre-release policy (OSPS-VM-05.01/05.02).
 - **Install docs** — README points to `releases/latest/download/install.sh` and documents `CURIA_VERSION`.
