@@ -37,6 +37,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ceo-inbox-sent-observe`** — daily Sent poll matches drafts/tasks; emits `ceo.sent_observed`. (#1422)
 - **`voice-learn`** — weekly WritingVoice deltas from draft→sent diffs; hybrid auto/propose. (#1423)
 - **`task-completion-from-sent`** — risk-tiered auto-complete/confirm from Sent matches. (#1424)
+- **Learning digest** — voice proposals + completion undo/confirm in the daily digest. (#1425)
 - **`scheduler-update`** — new skill lets agents resume, pause, or edit a scheduled job without the web UI. (#1409)
 - **Contact resolution** — integration test coverage for identity establishment and authorization. (#1382)
 - **`diagnostics` agent** — opt-in, read-only forensic agent that diagnoses "what happened / why" for the principal. (#1356)
