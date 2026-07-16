@@ -1,113 +1,29 @@
 // voice-learn — weekly WritingVoice refinement from (draft, sent) diffs (#1423).
+//
+// Replaces the old heuristic scoring/threshold/provenance machinery with a single
+// batched LLM pass: read the accumulated diffs, ask the model for an updated
+// free-form guide, and queue it as a "Guide Proposal" for the CEO to approve via
+// the digest. This handler never writes the profile directly — human-in-the-loop.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { ConfigStore } from '../../src/memory/config-store.js';
-import {
-  DEFAULT_PROVENANCE,
-  decideApplication,
-  formatProposalBlock,
-  isNearDefaultProfile,
-  parsePendingDiffs,
-  proposeDeltasFromPairs,
-  type VoiceProvenanceMap,
-} from '../_shared/voice-learn-logic.js';
-import {
-  PENDING_DIFFS_PATH,
-  PENDING_DIFFS_TYPE,
-} from '../ceo-inbox-sent-observe/handler.js';
+import { buildVoiceGuidePrompt, parsePendingDiffs } from '../_shared/voice-learn-logic.js';
+import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
 import { VOICE_LEARNING_SCRATCH_PREFIX } from '../_shared/voice-learning-capture.js';
 
-export const PROVENANCE_KEY = 'voice_learn.provenance';
+// Kept for Task 9 (resolve-learning-digest) and cooldown bookkeeping, even though
+// this handler no longer reads/writes provenance directly.
 export const DISMISSED_KEY = 'voice_learn.dismissed';
-export const BOOTSTRAP_SENT_KEY = 'voice_learn.bootstrap_sent';
 export const PENDING_PROPOSALS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-proposals.md`;
 export const PENDING_PROPOSALS_TYPE = 'voice-pending-proposals';
 export const CONFIG_NAMESPACE = 'ceo_inbox';
 
-function parseProvenance(raw: string | null): VoiceProvenanceMap {
-  if (!raw) return { ...DEFAULT_PROVENANCE };
-  try {
-    const parsed = JSON.parse(raw) as Partial<VoiceProvenanceMap>;
-    return { ...DEFAULT_PROVENANCE, ...parsed };
-  } catch {
-    return { ...DEFAULT_PROVENANCE };
-  }
-}
-
-function parseDismissed(raw: string | null): Set<string> {
-  if (!raw) return new Set();
-  try {
-    const parsed = JSON.parse(raw) as Array<{ dimension: string; until?: string }>;
-    const now = Date.now();
-    const active = new Set<string>();
-    for (const row of parsed) {
-      if (!row.dimension) continue;
-      if (row.until && Date.parse(row.until) < now) continue;
-      active.add(row.dimension);
-    }
-    return active;
-  } catch {
-    return new Set();
-  }
-}
-
-/**
- * Fields that already have a *pending* proposal awaiting the CEO. Because voice-learn
- * re-reads the whole (never-consumed) diff doc every run, a field above threshold would
- * otherwise get a fresh `## Proposal — <field>` block appended each week — duplicates in
- * the digest that the non-global status-marker can't all clear.
- *
- * Only `pending` blocks: an `approved` proposal must NOT freeze the field forever (that
- * would stop the learning loop from ever refining it again). Re-nagging an already-applied
- * change is prevented instead by the no-op guard in `patchIsNoop` — a delta whose value the
- * profile already reflects is skipped, so an approved change won't re-propose but a genuinely
- * different future delta still can. `dismissed` cooldown is enforced via dismissedDimensions.
- */
-function blockedProposalFields(body: string): Set<string> {
-  const blocked = new Set<string>();
-  for (const section of body.split(/^## Proposal — /m).slice(1)) {
-    const field = (section.split('\n')[0] ?? '').trim();
-    if (!field) continue;
-    const status = (section.match(/- status:\s*(\S+)/)?.[1] ?? 'pending').trim();
-    if (status === 'pending') blocked.add(field);
-  }
-  return blocked;
-}
-
-/** True when the delta's target value is already reflected in the current voice, so
- *  re-proposing it would just re-nag the CEO about a change already in effect. Formality
- *  is a relative delta (can't be compared to an absolute), so it's never treated as noop. */
-function patchIsNoop(
-  patch: Record<string, unknown>,
-  voice: {
-    signOff: string;
-    vocabulary: { prefer: string[]; avoid: string[] };
-    tone: string[];
-    patterns: string[];
-  },
-): boolean {
-  if (typeof patch.formality_delta === 'number') return false;
-  if (typeof patch.sign_off === 'string') {
-    return patch.sign_off.trim() === voice.signOff.trim();
-  }
-  if (patch.vocabulary && typeof patch.vocabulary === 'object') {
-    const v = patch.vocabulary as { prefer?: string[]; avoid?: string[] };
-    const preferCovered = (v.prefer ?? []).every((w) => voice.vocabulary.prefer.includes(w));
-    const avoidCovered = (v.avoid ?? []).every((w) => voice.vocabulary.avoid.includes(w));
-    return preferCovered && avoidCovered;
-  }
-  if (Array.isArray(patch.tone)) {
-    return (patch.tone as string[]).every((t) => voice.tone.includes(t));
-  }
-  if (Array.isArray(patch.patterns)) {
-    return (patch.patterns as string[]).every((p) => voice.patterns.includes(p));
-  }
-  return false;
-}
+/** Most-recent diff pairs fed into a single LLM guide-refinement call. Bounded to keep the
+ *  prompt (and cost) predictable regardless of how large the never-consumed diff doc grows. */
+const MAX_PAIRS = 40;
 
 export class VoiceLearnHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    // Skill contract: never throw — normalize any profile/config/document failure.
+    // Skill contract: never throw — normalize any profile/document/LLM failure.
     try {
       return await this.runLearn(ctx);
     } catch (err) {
@@ -120,210 +36,68 @@ export class VoiceLearnHandler implements SkillHandler {
   }
 
   private async runLearn(ctx: SkillContext): Promise<SkillResult> {
-    if (!ctx.executiveProfileService || !ctx.workingDocs || !ctx.entityMemory) {
+    if (!ctx.executiveProfileService || !ctx.workingDocs || !ctx.infraLlm) {
       return {
         success: false,
-        error: 'voice-learn requires executiveProfileService, workingDocs, and entityMemory',
+        error: 'voice-learn requires executiveProfileService, workingDocs, infraLlm',
       };
     }
-
-    const input =
-      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
-    const dryRun = input.dry_run === true;
 
     const diffsDoc = await ctx.workingDocs.read(PENDING_DIFFS_PATH);
     const pairs = parsePendingDiffs(diffsDoc?.body ?? '');
     if (pairs.length === 0) {
       ctx.log.info({}, 'voice-learn: no qualifying pairs — nothing to learn');
+      return { success: true, data: { pairs_considered: 0, proposed: false } };
+    }
+
+    // Dedup: skip if a guide proposal is already pending. The diff doc is never
+    // consumed, so without this a still-open proposal would get re-proposed weekly.
+    const existing = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
+    if (existing && /## Guide Proposal[\s\S]*?- status:\s*pending/.test(existing.body)) {
       return {
         success: true,
-        data: {
-          pairs_considered: 0,
-          auto_applied: 0,
-          proposed: 0,
-          skipped: 0,
-          bootstrap: false,
-        },
+        data: { pairs_considered: pairs.length, proposed: false, reason: 'proposal-pending' },
       };
     }
 
-    const store = new ConfigStore(ctx.entityMemory, ctx.log);
-    const provenance = parseProvenance(await store.get(CONFIG_NAMESPACE, PROVENANCE_KEY));
-    const dismissed = parseDismissed(await store.get(CONFIG_NAMESPACE, DISMISSED_KEY));
+    const currentGuide = ctx.executiveProfileService.get().writingVoice.guide ?? '';
+    const batch = pairs.slice(-MAX_PAIRS);
+    const res = await ctx.infraLlm.extract(buildVoiceGuidePrompt(currentGuide, batch), {
+      maxTokens: 1200,
+    });
+    if (!res.ok) {
+      ctx.log.warn({ error: res.error }, 'voice-learn: LLM failed — no proposal this run');
+      return {
+        success: true,
+        data: { pairs_considered: pairs.length, proposed: false, reason: 'llm-failed' },
+      };
+    }
 
-    const profile = ctx.executiveProfileService.get();
-    const voice = profile.writingVoice;
-    const bootstrap = isNearDefaultProfile(voice);
+    const guide = res.text.trim();
+    if (!guide) {
+      return {
+        success: true,
+        data: { pairs_considered: pairs.length, proposed: false, reason: 'empty-guide' },
+      };
+    }
 
-    // Read the existing proposals once so we can dedup: the diff doc is never
-    // consumed, so without this a still-above-threshold field re-proposes weekly.
-    const existingProposalsDoc = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
-    const blockedFields = blockedProposalFields(existingProposalsDoc?.body ?? '');
-
-    const deltas = proposeDeltasFromPairs(pairs);
-    let autoApplied = 0;
-    let proposed = 0;
-    let skipped = 0;
-    const proposalChunks: string[] = [];
-    const provenanceUpdates: Partial<VoiceProvenanceMap> = {};
-
-    for (const delta of deltas) {
-      // Skip deltas the profile already reflects — otherwise an approved-then-applied
-      // change would re-propose from the same un-consumed evidence every run.
-      const currentVoice = ctx.executiveProfileService.get().writingVoice;
-      if (patchIsNoop(delta.patch, currentVoice)) {
-        skipped += 1;
-        continue;
-      }
-
-      const decision = decideApplication(delta, provenance, {
-        currentSignOffEmpty: voice.signOff.trim() === '',
-        currentVocabularyEmpty:
-          voice.vocabulary.prefer.length === 0 && voice.vocabulary.avoid.length === 0,
-        dismissedDimensions: dismissed,
+    const block = `## Guide Proposal\n- status: pending\n- generated_at: ${new Date().toISOString()}\n\n${guide}\n\n---\n`;
+    if (!existing) {
+      await ctx.workingDocs.create({
+        path: PENDING_PROPOSALS_PATH,
+        type: PENDING_PROPOSALS_TYPE,
+        frontmatter: { title: 'Pending voice guide proposal' },
+        body: `# Pending voice guide proposal\n\n${block}`,
+        agentId: ctx.agentId,
       });
-
-      if (decision.action === 'skip') {
-        skipped += 1;
-        continue;
-      }
-
-      if (decision.action === 'propose' || decision.delta.magnitude === 'high') {
-        // Don't re-append a proposal for a field that already has one open.
-        if (blockedFields.has(delta.field)) {
-          skipped += 1;
-          continue;
-        }
-        blockedFields.add(delta.field);
-        proposed += 1;
-        proposalChunks.push(formatProposalBlock({ ...decision, action: 'propose' }));
-        continue;
-      }
-
-      // auto
-      if (dryRun) {
-        autoApplied += 1;
-        continue;
-      }
-
-      try {
-        const current = ctx.executiveProfileService.get().writingVoice;
-        const patch = decision.delta.patch;
-        const merged = {
-          writingVoice: {
-            ...current,
-            ...(typeof patch.sign_off === 'string' ? { signOff: patch.sign_off } : {}),
-            ...(patch.vocabulary && typeof patch.vocabulary === 'object'
-              ? {
-                  vocabulary: {
-                    prefer: [
-                      ...new Set([
-                        ...current.vocabulary.prefer,
-                        ...((patch.vocabulary as { prefer?: string[] }).prefer ?? []),
-                      ]),
-                    ],
-                    avoid: [
-                      ...new Set([
-                        ...current.vocabulary.avoid,
-                        ...((patch.vocabulary as { avoid?: string[] }).avoid ?? []),
-                      ]),
-                    ],
-                  },
-                }
-              : {}),
-            // Only vocabulary/sign-off currently reach the auto lane (formality is
-            // magnitude 'high' → propose; tone/patterns → propose), but apply the rest
-            // too so a future threshold change can't silently report an auto-apply that
-            // left the profile unchanged. Mirrors resolve-learning-digest's merge.
-            ...(typeof patch.formality_delta === 'number'
-              ? {
-                  formality: Math.max(
-                    0,
-                    Math.min(100, current.formality + (patch.formality_delta as number)),
-                  ),
-                }
-              : {}),
-            ...(Array.isArray(patch.tone) ? { tone: patch.tone as string[] } : {}),
-            ...(Array.isArray(patch.patterns) ? { patterns: patch.patterns as string[] } : {}),
-          },
-        };
-        await ctx.executiveProfileService.update(
-          merged,
-          'skill',
-          `voice-learn auto: ${decision.delta.description}`,
-        );
-        provenanceUpdates[decision.delta.field] = 'learned';
-        autoApplied += 1;
-      } catch (err) {
-        ctx.log.error({ err, field: decision.delta.field }, 'voice-learn: auto-apply failed');
-        // Fall back to a proposal, but still dedup against any open one.
-        if (!blockedFields.has(decision.delta.field)) {
-          blockedFields.add(decision.delta.field);
-          proposed += 1;
-          proposalChunks.push(formatProposalBlock({ ...decision, action: 'propose' }));
-        } else {
-          skipped += 1;
-        }
-      }
+    } else {
+      await ctx.workingDocs.append(PENDING_PROPOSALS_PATH, {
+        content: block,
+        expectedVersion: existing.version,
+      });
     }
 
-    if (!dryRun && Object.keys(provenanceUpdates).length > 0) {
-      await store.set(
-        CONFIG_NAMESPACE,
-        PROVENANCE_KEY,
-        JSON.stringify({ ...provenance, ...provenanceUpdates }),
-      );
-    }
-
-    if (!dryRun && proposalChunks.length > 0) {
-      // Reuse the doc read at the top of the run (single-threaded weekly job).
-      const existing = existingProposalsDoc;
-      if (!existing) {
-        await ctx.workingDocs.create({
-          path: PENDING_PROPOSALS_PATH,
-          type: PENDING_PROPOSALS_TYPE,
-          frontmatter: { title: 'Pending voice proposals' },
-          body: `# Pending voice proposals\n\n${proposalChunks.join('')}`,
-          agentId: ctx.agentId,
-        });
-      } else {
-        await ctx.workingDocs.append(PENDING_PROPOSALS_PATH, {
-          content: proposalChunks.join(''),
-          expectedVersion: existing.version,
-        });
-      }
-    }
-
-    // One-time bootstrap marker (onboarding summary is surfaced via digest / agent prompt).
-    let bootstrapFlag = false;
-    if (bootstrap && pairs.length > 0) {
-      const already = await store.get(CONFIG_NAMESPACE, BOOTSTRAP_SENT_KEY);
-      if (!already) {
-        bootstrapFlag = true;
-        if (!dryRun) {
-          await store.set(CONFIG_NAMESPACE, BOOTSTRAP_SENT_KEY, new Date().toISOString());
-        }
-      }
-    }
-
-    // Optionally note that diffs were consumed — leave evidence for now; retention
-    // sweep can prune later. Touch the diffs doc type for liveness.
-    void PENDING_DIFFS_TYPE;
-
-    ctx.log.info(
-      { pairs: pairs.length, autoApplied, proposed, skipped, bootstrap: bootstrapFlag },
-      'voice-learn: run complete',
-    );
-
-    return {
-      success: true,
-      data: {
-        pairs_considered: pairs.length,
-        auto_applied: autoApplied,
-        proposed,
-        skipped,
-        bootstrap: bootstrapFlag,
-      },
-    };
+    ctx.log.info({ pairs: pairs.length }, 'voice-learn: proposed an updated guide');
+    return { success: true, data: { pairs_considered: pairs.length, proposed: true } };
   }
 }
