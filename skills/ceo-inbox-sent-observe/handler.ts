@@ -4,7 +4,11 @@
 // (t2125 pattern). Capture/match failures on individual messages log and continue.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { CeoNylasClient, htmlToPlainText } from '../_shared/ceo-nylas-client.js';
+import {
+  CeoNylasClient,
+  htmlToPlainText,
+  type NylasMessageSummary,
+} from '../_shared/ceo-nylas-client.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 import {
   VOICE_LEARNING_DOC_TYPE,
@@ -25,6 +29,8 @@ import {
   parseShadowJudgeResult,
   SHADOW_SCRATCH_PREFIX,
   type ShadowJudgePair,
+  type ShadowJudgement,
+  type ShadowSnapshot,
 } from '../_shared/shadow-draft.js';
 
 export const CONFIG_NAMESPACE = 'ceo_inbox';
@@ -110,6 +116,97 @@ function extractAskedTaskIds(pendingCompletionsBody: string): Set<string> {
     if (m[1]) ids.add(m[1]);
   }
   return ids;
+}
+
+/** ISO timestamp → Unix seconds, or null when missing/unparseable. */
+function isoToUnixSeconds(iso: string): number | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+/** Strip a leading Re:/Fwd: and normalize whitespace/case for loose subject comparison. */
+function normalizeSubjectKey(subject: string): string {
+  return subject
+    .replace(/^(re|fwd|fw):\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function subjectsSimilar(a: string, b: string): boolean {
+  const na = normalizeSubjectKey(a);
+  const nb = normalizeSubjectKey(b);
+  if (!na || !nb) return false;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+/** True when any of the shadow's recorded recipients appears in the message's to/cc. */
+function shadowRecipientsOverlap(
+  shadowRecipients: string[],
+  msg: { to: Array<{ email: string }>; cc: Array<{ email: string }> },
+): boolean {
+  const want = new Set(shadowRecipients.map((r) => r.trim().toLowerCase()));
+  if (want.size === 0) return false;
+  for (const p of [...msg.to, ...msg.cc]) {
+    if (want.has(p.email.trim().toLowerCase())) return true;
+  }
+  return false;
+}
+
+/**
+ * Finding 6 (#1426): pick the send that best corresponds to a shadow draft.
+ *
+ * Messages are iterated newest-first, so claiming the first same-thread message can score
+ * the shadow against a NEWER, unrelated send that happened after the one the shadow was
+ * drafted for. Instead choose the *nearest eligible* send: same thread, sent at/after the
+ * shadow was captured (2-min clock skew allowed, mirroring matchDraftToSent), preferring
+ * subject/recipient-consistent candidates and then the closest in time. A direct
+ * `sourceMessageId === msg.id` hit remains an exact-match fast path. Returns null when no
+ * eligible send exists (the shadow stays unclaimed and is retried next run).
+ */
+function selectShadowSend(
+  shadow: ShadowSnapshot,
+  messages: NylasMessageSummary[],
+): NylasMessageSummary | null {
+  // Exact-match fast path — a send whose id IS the shadow's recorded source message.
+  const exact = messages.find((m) => m.id === shadow.sourceMessageId);
+  if (exact) return exact;
+
+  const createdSec = isoToUnixSeconds(shadow.createdAt);
+  const SKEW_SEC = 120;
+
+  const eligible = messages.filter((m) => {
+    if (!(shadow.threadId && m.threadId && shadow.threadId === m.threadId)) return false;
+    // The send must not precede the shadow's capture. When createdAt is unparseable we
+    // can't gate on time, so we accept and rank by recency below.
+    if (createdSec !== null && m.date + SKEW_SEC < createdSec) return false;
+    return true;
+  });
+  if (eligible.length === 0) return null;
+
+  // Refine by subject/recipient when both sides carry those fields. Only narrow when at
+  // least one candidate matches, so a thread whose subjects/recipients drifted doesn't
+  // exclude every candidate and strand the shadow.
+  const refined = eligible.filter((m) => {
+    const subjectOk = !shadow.subject || !m.subject || subjectsSimilar(shadow.subject, m.subject);
+    const recipientOk =
+      shadow.recipients.length === 0 || shadowRecipientsOverlap(shadow.recipients, m);
+    return subjectOk && recipientOk;
+  });
+  const pool = refined.length > 0 ? refined : eligible;
+
+  // Nearest in time to the shadow's capture (or newest when capture time is unknown).
+  let best: NylasMessageSummary | null = null;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  for (const m of pool) {
+    const delta = createdSec !== null ? Math.abs(m.date - createdSec) : -m.date;
+    if (delta < bestDelta) {
+      best = m;
+      bestDelta = delta;
+    }
+  }
+  return best;
 }
 
 async function ensureDoc(
@@ -323,12 +420,15 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // single batched LLM call after the loop instead of one call per pair.
     const judgePairs: ShadowJudgePair[] = [];
 
+    // Full sent bodies fetched during the message loop (for draft diffs), keyed by
+    // message id so shadow reconcile can reuse them instead of re-fetching.
+    const fetchedBodies = new Map<string, string>();
+
     for (const msg of messages) {
       if (msg.date > maxDate) maxDate = msg.date;
       if (msg.date < minDate) minDate = msg.date;
 
       let sentBody = msg.snippet ?? '';
-      let fetchedBody = false;
 
       const draftMatch = matchDraftToSent(msg, snapshots, alreadyMatchedDraftIds);
       if (draftMatch) {
@@ -336,7 +436,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         try {
           const full = await client.getMessage(msg.id);
           sentBody = htmlToPlainText(full.body) || full.snippet || sentBody;
-          fetchedBody = true;
+          fetchedBodies.set(msg.id, sentBody);
         } catch (err) {
           ctx.log.warn(
             { err, messageId: msg.id },
@@ -353,38 +453,52 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         completionChunks.push(formatCompletionCandidateBlock(tm));
         taskCandidates += 1;
       }
+    }
 
-      // Shadow-draft competence reconcile (#1426).
-      if (ctx.actionLogRepo) {
-        const shadow = shadows.find(
-          (s) =>
-            !claimedShadows.has(s.sourceMessageId) &&
-            ((s.threadId && msg.threadId && s.threadId === msg.threadId) ||
-              s.sourceMessageId === msg.id),
-        );
-        if (shadow) {
-          // Claim immediately so a later same-thread send in this run can't re-score it.
-          claimedShadows.add(shadow.sourceMessageId);
-          if (!fetchedBody) {
-            try {
-              const full = await client.getMessage(msg.id);
-              sentBody = htmlToPlainText(full.body) || full.snippet || sentBody;
-            } catch (err) {
-              ctx.log.warn(
-                { err, messageId: msg.id },
-                'ceo-inbox-sent-observe: getMessage failed for shadow reconcile',
-              );
-            }
+    // Shadow-draft competence reconcile (#1426). Runs AFTER the message loop so each shadow
+    // can be matched to the *nearest eligible* send across the whole window rather than the
+    // first newest same-thread message (Finding 6). shadowReconcileOk gates the watermark:
+    // any un-scored / un-reconciled shadow flips it false so the carrying Sent message is
+    // re-observed next run (received_after is an exclusive lower bound). Declared here (not at
+    // the batch loop) so a body-fetch failure below can hold the watermark too.
+    let shadowReconcileOk = true;
+    if (ctx.actionLogRepo) {
+      for (const shadow of shadows) {
+        if (claimedShadows.has(shadow.sourceMessageId)) continue;
+        const send = selectShadowSend(shadow, messages);
+        if (!send) continue;
+        // Claim so two shadows or a later run can't re-score the same one this run.
+        claimedShadows.add(shadow.sourceMessageId);
+
+        // Finding 7: never judge against a truncated snippet — the LLM would write a false
+        // competence score. If the full sent body can't be fetched, don't push the pair,
+        // release the claim, and hold the watermark so the send is re-observed next run.
+        const cachedBody = fetchedBodies.get(send.id);
+        let sentBody: string;
+        if (cachedBody !== undefined) {
+          sentBody = cachedBody;
+        } else {
+          try {
+            const full = await client.getMessage(send.id);
+            sentBody = htmlToPlainText(full.body) || full.snippet || '';
+          } catch (err) {
+            ctx.log.warn(
+              { err, messageId: send.id, sourceMessageId: shadow.sourceMessageId },
+              'ceo-inbox-sent-observe: getMessage failed for shadow reconcile — not scoring, holding watermark',
+            );
+            claimedShadows.delete(shadow.sourceMessageId);
+            shadowReconcileOk = false;
+            continue;
           }
-          // Don't score inline — collect the pair and judge everything in one
-          // batched LLM call after the message loop (see below).
-          judgePairs.push({
-            sourceMessageId: shadow.sourceMessageId,
-            subject: msg.subject || shadow.subject,
-            shadowBody: shadow.body,
-            sentBody,
-          });
         }
+        // Don't score inline — collect the pair and judge everything in one batched LLM
+        // call after this loop (see below).
+        judgePairs.push({
+          sourceMessageId: shadow.sourceMessageId,
+          subject: send.subject || shadow.subject,
+          shadowBody: shadow.body,
+          sentBody,
+        });
       }
     }
 
@@ -396,7 +510,6 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // watermark-advance guard below blocks the advance. Retry is idempotent because
     // already-reconciled shadows are skipped (parseShadowDoc returns null once reconciled_at
     // is set) and diff/completion matching is idempotent via the already-matched/asked sets.
-    let shadowReconcileOk = true;
     if (judgePairs.length > 0 && ctx.infraLlm && ctx.actionLogRepo) {
       const BATCH = 20;
       for (let i = 0; i < judgePairs.length; i += BATCH) {
@@ -410,10 +523,39 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
           );
           continue; // reconciled_at stays unset → retried next run (watermark held below)
         }
+
+        // Finding 8: the batch counts as reconciled ONLY if every pair got exactly one
+        // judgement, every insert succeeded, and every reconciled_at mark persisted. Index
+        // judgements by source id and flag duplicates — a repeated id is ambiguous (which
+        // verdict wins?) so we refuse to reconcile those pairs and hold the watermark.
         const judgements = parseShadowJudgeResult(res.text);
+        const byId = new Map<string, ShadowJudgement>();
+        const duplicateIds = new Set<string>();
         for (const j of judgements) {
-          const pair = batch.find((p) => p.sourceMessageId === j.sourceMessageId);
-          if (!pair) continue;
+          if (byId.has(j.sourceMessageId)) duplicateIds.add(j.sourceMessageId);
+          else byId.set(j.sourceMessageId, j);
+        }
+        if (duplicateIds.size > 0) {
+          shadowReconcileOk = false;
+          ctx.log.warn(
+            { duplicateIds: [...duplicateIds] },
+            'sent-observe: shadow judge returned duplicate judgements — holding watermark',
+          );
+        }
+
+        for (const pair of batch) {
+          const j = byId.get(pair.sourceMessageId);
+          // Missing or ambiguous (duplicated) judgement → this shadow stays unreconciled.
+          if (!j || duplicateIds.has(pair.sourceMessageId)) {
+            shadowReconcileOk = false;
+            if (!j) {
+              ctx.log.warn(
+                { sourceMessageId: pair.sourceMessageId },
+                'sent-observe: shadow judge omitted a pair — holding watermark',
+              );
+            }
+            continue;
+          }
           try {
             await ctx.actionLogRepo.insert({
               taskId: ctx.taskEventId ?? `shadow:${j.sourceMessageId}`,
@@ -428,18 +570,45 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
               compatibility: null,
               scoredBy: 'shadow-reconciler',
             });
-            shadowReconciled += 1;
-            const path = `${SHADOW_SCRATCH_PREFIX}/${j.sourceMessageId}.md`;
-            const doc = await ctx.workingDocs.read(path);
-            if (doc) {
-              await ctx.workingDocs.update(path, {
-                frontmatter: { ...doc.frontmatter, reconciled_at: new Date().toISOString(), competence_flag: j.sameDecision ? 1 : 0 },
-                expectedVersion: doc.version,
-              });
-            }
           } catch (err) {
-            ctx.log.error({ err, sourceMessageId: j.sourceMessageId }, 'sent-observe: shadow competence insert failed');
+            // A failed insert must not silently strand the pair — hold the watermark so it
+            // retries next run (reconciled_at is unset, so the shadow is re-judged).
+            shadowReconcileOk = false;
+            ctx.log.error(
+              { err, sourceMessageId: j.sourceMessageId },
+              'sent-observe: shadow competence insert failed — holding watermark',
+            );
+            continue;
           }
+
+          // Insert succeeded — durably mark the shadow doc reconciled so retry skips it.
+          const path = `${SHADOW_SCRATCH_PREFIX}/${j.sourceMessageId}.md`;
+          const doc = await ctx.workingDocs.read(path);
+          if (!doc) {
+            // Doc vanished before we could mark it — treat as not durably reconciled so the
+            // batch holds the watermark (a stray re-insert next run is harmless).
+            shadowReconcileOk = false;
+            ctx.log.warn(
+              { sourceMessageId: j.sourceMessageId },
+              'sent-observe: shadow doc missing at mark time — holding watermark',
+            );
+            continue;
+          }
+          const upd = await ctx.workingDocs.update(path, {
+            frontmatter: { ...doc.frontmatter, reconciled_at: new Date().toISOString(), competence_flag: j.sameDecision ? 1 : 0 },
+            expectedVersion: doc.version,
+          });
+          if (!upd.ok) {
+            // Version conflict — the reconciled_at mark didn't land, so hold the watermark.
+            shadowReconcileOk = false;
+            ctx.log.warn(
+              { sourceMessageId: j.sourceMessageId },
+              'sent-observe: shadow doc mark update conflict — holding watermark',
+            );
+            continue;
+          }
+          // Only a successful insert AND durable mark counts as reconciled.
+          shadowReconciled += 1;
         }
       }
     }
