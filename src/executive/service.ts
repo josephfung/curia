@@ -365,9 +365,10 @@ export class ExecutiveProfileService {
         },
         signOff: wv.sign_off ?? '',
         // The learned guide is never seeded from YAML — it's populated later by the
-        // weekly voice-learn LLM pass. Defaulting here keeps initialize() from
-        // dropping the field when it re-seeds from config/executive-profile.yaml.
-        guide: '',
+        // weekly voice-learn LLM pass. Preserve the currently-cached guide here so an
+        // unrelated YAML edit (which triggers the watcher to re-seed from
+        // config/executive-profile.yaml and persist) does not wipe the learned value.
+        guide: this.cached?.writingVoice.guide ?? '',
       },
     };
   }
