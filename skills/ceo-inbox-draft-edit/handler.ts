@@ -1,9 +1,18 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { CeoNylasClient, type NylasParticipant, type UpdateDraftOptions } from '../_shared/ceo-nylas-client.js';
+import {
+  CeoNylasClient,
+  htmlToPlainText,
+  type NylasParticipant,
+  type UpdateDraftOptions,
+} from '../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../src/format/markdown-to-html.js';
+import { captureDraftSnapshot, parseLinkedTaskIds } from '../_shared/voice-learning-capture.js';
 
 const MAX_BODY_LENGTH = 50_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Keep in sync with skill.json version — stamped onto voice-learning snapshots. */
+const SKILL_VERSION = '0.2.0';
 
 // Parse a `to`/`cc` input that may arrive as a single string or an array of
 // strings. Returns the trimmed addresses, or an `{ error }` when the input is
@@ -146,6 +155,26 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
 
     try {
       const draft = await client.updateDraft(draftId, updates);
+
+      // Snapshot the post-edit draft for voice learning. Prefer the markdown body
+      // the caller just supplied; fall back to plain text from the stored HTML.
+      const snapshotBody =
+        hasBody && typeof input.body === 'string' && input.body.trim()
+          ? input.body.trim()
+          : htmlToPlainText(draft.body);
+
+      // Best-effort voice-learning snapshot — must not block the edit (#1421).
+      await captureDraftSnapshot(ctx, {
+        draftId: draft.id,
+        threadId: draft.threadId,
+        subject: draft.subject,
+        to: draft.to,
+        cc: draft.cc,
+        body: snapshotBody,
+        agentVersion: SKILL_VERSION,
+        linkedTaskIds: parseLinkedTaskIds(input.linked_task_ids),
+      });
+
       return {
         success: true,
         data: {
