@@ -207,6 +207,65 @@ export class CeoNylasClient {
     return data.map(normalizeMessageSummary);
   }
 
+  // Exhaustively list messages by following Nylas's `next_cursor`, up to `maxScan`
+  // total messages. Nylas returns messages newest-first, so a single fixed-limit
+  // listMessages() call silently drops everything past the first page — on a busy
+  // Sent folder that means lost observations (issue: #1429 review). This walks all
+  // pages so a watermark-scoped poll actually sees every message in the window.
+  //
+  // Filters (in/received_after) are only sent on the first request; Nylas's cursor
+  // encodes the original query, so subsequent pages carry the filter automatically
+  // (same contract listAllDrafts relies on). `truncated` is true when the maxScan
+  // ceiling was hit with more pages still available — callers must NOT treat the
+  // window as fully drained in that case.
+  async listAllMessages(
+    options: ListMessagesOptions & { maxScan?: number } = {},
+  ): Promise<{ messages: NylasMessageSummary[]; truncated: boolean }> {
+    const maxScan = options.maxScan ?? 500;
+    const pageSize = Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT);
+
+    const messages: NylasMessageSummary[] = [];
+    let pageToken: string | undefined;
+    let truncated = false;
+
+    for (;;) {
+      const params = new URLSearchParams();
+      params.set('limit', String(pageSize));
+      if (pageToken) {
+        // Cursor carries the original filter — do not re-send in/received_after.
+        params.set('page_token', pageToken);
+      } else {
+        if (options.folder) {
+          const normalized = GMAIL_FOLDER_ALIASES[options.folder] ?? options.folder;
+          params.set('in', normalized);
+        }
+        if (options.unread !== undefined) params.set('unread', String(options.unread));
+        if (options.receivedAfter !== undefined) {
+          params.set('received_after', String(options.receivedAfter));
+        }
+      }
+      const url = `${this.baseUrl}/messages?${params}`;
+
+      const { data, nextCursor } = await this.requestWithCursor<NylasApiMessage[]>(
+        'GET',
+        url,
+        'listAllMessages',
+      );
+      messages.push(...data.map(normalizeMessageSummary));
+
+      // An empty page with a cursor would otherwise spin forever — bail out.
+      if (data.length === 0) break;
+      if (messages.length >= maxScan) {
+        truncated = Boolean(nextCursor);
+        break;
+      }
+      if (!nextCursor) break;
+      pageToken = nextCursor;
+    }
+
+    return { messages: messages.slice(0, maxScan), truncated };
+  }
+
   async getMessage(messageId: string): Promise<NylasMessageFull> {
     const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
     const data = await this.request<NylasApiMessage>('GET', url, 'getMessage');
