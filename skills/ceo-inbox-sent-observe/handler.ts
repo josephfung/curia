@@ -364,29 +364,36 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       completionChunks.join(''),
     );
 
-    // Advance the watermark. When the run drained the window (not truncated), jump
-    // past the newest message seen (exclusive next poll). When truncated, older sends
-    // below `minDate` were NOT fetched (Nylas returns newest-first), so advancing past
-    // the newest would strand them — instead hold the watermark just below the oldest
-    // message we processed so the next run re-covers the tail. Re-processing the newer
-    // messages is safe: draft/task/shadow writes are all idempotent (already-matched
-    // ids + shadow reconciled_at markers).
+    // Advance the watermark past the newest message seen (exclusive next poll).
+    //
+    // Nylas returns newest-first and `received_after` is an exclusive lower bound, so
+    // a single-floor poll can only ever walk *forward*. On truncation the un-fetched
+    // messages are the OLDEST in the window (date < minDate); there is no lower-bound
+    // value that both advances and re-includes them, so we do not attempt a partial
+    // hold (an earlier version did and simply stranded the tail while re-scanning the
+    // newest 500 forever). Instead we advance to the newest seen and log — loudly and
+    // accurately — that older messages were skipped. This is realistically only a
+    // first-run/backfill event against a large existing mailbox; day-to-day Sent volume
+    // never approaches SENT_MAX_SCAN, and back-mining old history is not a goal of a
+    // forward-looking observer. Draining a true >ceiling backlog would need oldest-first
+    // paging (received_before), deliberately out of scope here.
     let watermarkAdvancedTo: number | null = null;
-    if (messages.length > 0) {
-      if (truncated && Number.isFinite(minDate)) {
-        const held = Math.max(watermark, minDate - 1);
-        if (held > watermark) {
-          watermarkAdvancedTo = held;
-          await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(held));
-        }
-        ctx.log.warn(
-          { scanned: messages.length, maxScan: SENT_MAX_SCAN, heldWatermarkAt: held },
-          'ceo-inbox-sent-observe: scan ceiling hit — older sends deferred to next run',
-        );
-      } else if (maxDate >= watermark) {
-        watermarkAdvancedTo = maxDate + 1;
-        await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
-      }
+    if (messages.length > 0 && maxDate >= watermark) {
+      watermarkAdvancedTo = maxDate + 1;
+      await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
+    }
+    if (truncated) {
+      ctx.log.warn(
+        {
+          scanned: messages.length,
+          maxScan: SENT_MAX_SCAN,
+          oldestScannedAt: Number.isFinite(minDate) ? minDate : null,
+          advancedTo: watermarkAdvancedTo,
+        },
+        `ceo-inbox-sent-observe: Sent window exceeded the ${SENT_MAX_SCAN}-message scan ceiling — ` +
+          'messages older than the newest batch were NOT observed and will not be revisited ' +
+          '(expected only on first run against a large mailbox).',
+      );
     }
 
     if (messages.length === 0) {
