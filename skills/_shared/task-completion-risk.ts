@@ -1,20 +1,15 @@
 // Risk + action tiering for sent-mail task-completion (#1424).
 
 import { readPlanBlock } from '../../src/db/plan-progress.js';
+// NOTE: `Sensitivity` is defined in memory/types.ts, not re-exported from
+// memory/sensitivity.ts — import each from its actual source (matches the
+// pattern in src/security/export-controls.ts).
+import { isConfidentialOrAbove } from '../../src/memory/sensitivity.js';
+import type { Sensitivity } from '../../src/memory/types.js';
 
 export type TaskRisk = 'low' | 'high';
 export type MatchConfidence = 'high' | 'low';
 export type CompletionAction = 'auto_complete' | 'confirm';
-
-const SENSITIVE_TAGS = new Set([
-  'board',
-  'legal',
-  'investor',
-  'investors',
-  'spouse',
-  'agm',
-  'confidential',
-]);
 
 /** High priority threshold — matches common "high" band usage (lower number = higher priority in some systems; here higher number = higher priority per TaskRow default 50). */
 export const HIGH_PRIORITY_FLOOR = 70;
@@ -29,18 +24,22 @@ export interface RiskTaskLike {
   hasSubtasks?: boolean;
 }
 
-export function classifyTaskRisk(task: RiskTaskLike): TaskRisk {
+/**
+ * Determine completion risk for a task. `classify` is the shared
+ * SensitivityClassifier's classify function (or an equivalent test double) —
+ * title + tags are concatenated and run through it in place of the old
+ * hardcoded SENSITIVE_TAGS set / title regex (#1419).
+ */
+export function classifyTaskRisk(
+  task: RiskTaskLike,
+  classify: (text: string) => Sensitivity,
+): TaskRisk {
   const plan = readPlanBlock(task.progress);
   if (plan) return 'high';
   if (task.hasSubtasks) return 'high';
   if (task.priority >= HIGH_PRIORITY_FLOOR) return 'high';
-  for (const tag of task.tags) {
-    if (SENSITIVE_TAGS.has(tag.toLowerCase())) return 'high';
-  }
-  // Title heuristic for classic high-risk examples ("Plan AGM"). Note: bare "plan"
-  // is intentionally excluded — it swept up "Plan lunch" / "Plan the offsite"; "agm"
-  // already captures the AGM case.
-  if (/\b(agm|board|legal|investors?)\b/i.test(task.title)) return 'high';
+  const sensitivity = classify(`${task.title}\n${task.tags.join(' ')}`);
+  if (isConfidentialOrAbove(sensitivity)) return 'high';
   return 'low';
 }
 

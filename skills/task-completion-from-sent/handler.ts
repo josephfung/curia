@@ -69,12 +69,17 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
   }
 
   private async runCompletion(ctx: SkillContext): Promise<SkillResult> {
-    if (!ctx.taskRepo || !ctx.workingDocs) {
+    if (!ctx.taskRepo || !ctx.workingDocs || !ctx.sensitivityClassifier) {
       return {
         success: false,
-        error: 'task-completion-from-sent requires taskRepo and workingDocs',
+        error: 'task-completion-from-sent requires taskRepo, workingDocs, sensitivityClassifier',
       };
     }
+    // Narrow closure over the classifier's classify() so classifyTaskRisk stays a pure,
+    // testable helper that doesn't need to know about SkillContext (#1419). No structured
+    // properties here — the title+tags text is already flattened by classifyTaskRisk, so
+    // pass an empty properties bag (classify()'s second, required arg).
+    const classify = (text: string) => ctx.sensitivityClassifier!.classify(text, {});
 
     const pendingDoc = await ctx.workingDocs.read(PENDING_COMPLETIONS_PATH);
     if (!pendingDoc) {
@@ -125,14 +130,17 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
         hasSubtasks = true;
       }
 
-      const risk = classifyTaskRisk({
-        id: task.id,
-        title: task.title,
-        priority: task.priority,
-        tags: task.tags,
-        progress: task.progress,
-        hasSubtasks,
-      });
+      const risk = classifyTaskRisk(
+        {
+          id: task.id,
+          title: task.title,
+          priority: task.priority,
+          tags: task.tags,
+          progress: task.progress,
+          hasSubtasks,
+        },
+        classify,
+      );
       const action = decideCompletionAction(risk, candidate.confidence);
       const recipient = candidate.recipients[0] ?? 'them';
 
