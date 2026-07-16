@@ -517,6 +517,12 @@ async function main(): Promise<void> {
   // Entity memory — optional, requires OPENAI_API_KEY for embeddings.
   // If not configured, agents still work — they just don't have KG access.
   let entityMemory: EntityMemory | undefined;
+  // Sensitivity classifier — declared outside the if-block (like entityMemory above) so it
+  // stays in scope for the ExecutionLayer construction further down (#1419), which exposes
+  // it to skills as the 'sensitivityClassifier' capability. Same availability as entityMemory:
+  // both require OPENAI_API_KEY today because the classifier is currently only built inside
+  // this branch — see the sensitivity_rules guard below for why it can't be built earlier.
+  let sensitivityClassifier: SensitivityClassifier | undefined;
   if (config.openaiApiKey) {
     // Sensitivity classifier — built from the already-merged config (default.yaml +
     // local.yaml, see loadYamlConfig()) so operator overrides in local.yaml actually
@@ -531,7 +537,7 @@ async function main(): Promise<void> {
       );
       process.exit(1);
     }
-    const sensitivityClassifier = SensitivityClassifier.fromRules(yamlConfig.sensitivity_rules);
+    sensitivityClassifier = SensitivityClassifier.fromRules(yamlConfig.sensitivity_rules);
     logger.info({ ruleCount: yamlConfig.sensitivity_rules.length }, 'Sensitivity classifier loaded');
 
     const embeddingService = EmbeddingService.createWithOpenAI(
@@ -1768,7 +1774,7 @@ async function main(): Promise<void> {
   // validated here (the JSON-schema startup check only covers default.yaml, not local overrides,
   // and cannot express the derived_child >= same_task invariant). Throws → boot fails loudly.
   const bypassLadder = resolveBypassLadder(yamlConfig.autonomy?.bypass_ladder);
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete

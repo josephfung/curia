@@ -22,6 +22,7 @@ import type { SecretsService } from '../secrets/secrets-service.js';
 import type { ApprovalTriggerService, ApprovalRequestResult } from '../autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import type { ChannelIdentity } from '../contacts/types.js';
+import { SensitivityClassifier } from '../memory/sensitivity.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -270,6 +271,45 @@ describe('capability-gated service injection', () => {
     // No privileged services should be injected — capabilities is empty
     expect(capturedCtx.bus).toBeUndefined();
     expect(capturedCtx.outboundGateway).toBeUndefined();
+  });
+
+  it('injects sensitivityClassifier for skills declaring the capability (#1419)', async () => {
+    const registry = new SkillRegistry();
+    let capturedCtx: SkillContext | undefined;
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        capturedCtx = ctx;
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeCapManifest('classify-sensitivity', ['sensitivityClassifier']), handler);
+
+    const sensitivityClassifier = SensitivityClassifier.fromRules([]);
+    const layer = new ExecutionLayer(registry, logger, { sensitivityClassifier });
+
+    await layer.invoke('classify-sensitivity', {});
+
+    // The same shared instance built at startup must reach the skill — not a copy.
+    expect(capturedCtx?.sensitivityClassifier).toBe(sensitivityClassifier);
+  });
+
+  it('does NOT inject sensitivityClassifier for skills without the capability (#1419)', async () => {
+    const registry = new SkillRegistry();
+    let capturedCtx: Record<string, unknown> = {};
+    const handler: SkillHandler = {
+      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+        capturedCtx = ctx as unknown as Record<string, unknown>;
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeCapManifest('no-sensitivity', []), handler);
+
+    const sensitivityClassifier = SensitivityClassifier.fromRules([]);
+    const layer = new ExecutionLayer(registry, logger, { sensitivityClassifier });
+
+    await layer.invoke('no-sensitivity', {});
+
+    expect(capturedCtx.sensitivityClassifier).toBeUndefined();
   });
 
   it('returns skill error when declared capability is not available on ExecutionLayer', async () => {

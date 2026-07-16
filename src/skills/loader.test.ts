@@ -237,6 +237,29 @@ describe('loader: capability validation', () => {
     }
   });
 
+  it('accepts the sensitivityClassifier capability', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_cap_sensitivity__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      setupSkillDir(tmpDir, 'sensitivity-skill', {
+        name: 'sensitivity-skill',
+        description: 'test skill',
+        version: '1.0.0',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        capabilities: ['sensitivityClassifier'],
+      });
+      const registry = new SkillRegistry();
+      const discoveries = discoverSkillManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      const count = await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      expect(count).toBe(1);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('throws when attempting to mutate a frozen capabilities array', async () => {
     const tmpDir = path.join(import.meta.dirname, '__test_cap_freeze__');
     fs.mkdirSync(tmpDir, { recursive: true });
