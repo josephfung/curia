@@ -299,8 +299,17 @@ approvals block, each rendered only when non-empty and capped at 5 with a `+N mo
   `waiting_on_contact_id` to a display name, falling back to `waiting_on_text`.
 - **What I'm working on** — `owner='curia'`, status `open`/`in_progress`, top 5 by priority.
 
+Email-observation learning (ADR-029) adds two further sections, also rendered only when
+items exist:
+
+- **Proposed voice diffs** — `WritingVoice` changes that need one-tap approve/dismiss
+  ([spec 13](13-office-identity.md)).
+- **Task-completion candidates / undo notes** — sent-mail matches awaiting confirm, plus
+  reversible notes for auto-completes (see §8 below).
+
 This reuses the existing digest the CEO already reads; no parallel digest or new channel
-was introduced. Interactive controls (snooze / done / reassign) are explicitly deferred.
+was introduced. Interactive controls (snooze / done / reassign) beyond approve/dismiss/undo
+for these learning surfaces are explicitly deferred.
 
 ---
 
@@ -322,11 +331,28 @@ was introduced. Interactive controls (snooze / done / reassign) are explicitly d
   remain, self-wakes via a single `tag='inbox-drain'` continuation task (`owner='curia'`,
   near-term `wake_at`) until the inbox is empty. There is no watermark — read/archive status
   is the "already-triaged" marker — and no per-message overflow to-do tasks.
+- **Sent-mail task-completion (ADR-029).** The daily `ceo-inbox-sent-observe` job
+  ([spec 04](04-channels.md)) correlates new Sent messages to open `owner='ceo'` tasks by
+  recipient + subject + semantic similarity of body to title/description. Action is
+  **hybrid by match confidence and task risk** (risk inferred from the task — has a
+  `plan`/subtasks, high `priority`, or sensitive tags such as `board`/`legal` = high-risk;
+  no new risk column):
+
+  | | Low-risk task | High-risk task |
+  |---|---|---|
+  | High-confidence match | Auto-`task-complete` with reversible digest undo note | Confirm in digest |
+  | Low-confidence match | Confirm in digest | Confirm in digest |
+
+  High-risk tasks (e.g. "Plan AGM") never auto-complete. Fuzzy candidates get a guard marker
+  (`completion_asked: {date}`) so they are not re-surfaced every run. Auto-completes remain
+  reversible via reopen from the digest undo note.
 - **Autonomy** ([spec 14](14-autonomy-engine.md)). The "execute the safe stuff, escalate
   the rest" behavior is the existing autonomy engine — `action_risk` per skill against the
   live score. Drafting (low) just happens; outbound (medium) is gated; spending money
-  (high/critical) escalates via the pending-approval flow. This design adds zero new
-  autonomy mechanics.
+  (high/critical) escalates via the pending-approval flow. Task-completion and voice
+  write-back reuse existing floors (`task-complete` = `low`/60, profile update = `medium`/70);
+  this design adds zero new autonomy mechanics for those loops. Shadow-draft competence
+  feeds Phase 3 only (ADR-029).
 
 ---
 

@@ -258,3 +258,28 @@ Key constraints:
 See `src/autonomy/scoring-pass.ts`, `src/autonomy/action-log-repo.ts`, and ADR-018.
 
 The `autonomy_history` table from Phase 1 is the exact foundation Phase 3 writes to. Phase 3 gets its own design doc when the time comes. See `docs/wip/2026-04-03-autonomy-engine.md` for the detailed Phase 3 roadmap.
+
+### Shadow-draft competence (counterfactual input, ADR-029)
+
+Capability growth from email observation feeds this **same** Phase 3 pass — no parallel
+competence model and no second score dial (ADR-029).
+
+When `ceo-inbox` triages a message but punts (Seen / Urgent / Stuck), it may silently
+generate a **non-surfaced, non-sent** shadow draft and store it in OKF. High-sensitivity
+threads (board, investors, legal, spouse — KG sensitivity tier) are excluded from shadow
+*capture*. When the sent-mail observer later reconciles against the CEO's actual send, it
+writes a **pre-scored** `autonomy_action_log` row:
+
+| Field | Value |
+|---|---|
+| `competence_flag` | `1` if the shadow draft reached the same **decision/outcome** as the actual send (equivalence, not phrasing); `0` if it diverged |
+| `commitment_flag` / `compatibility` | `null` — pure competence signal; `computeCapabilityScore` ignores nulls per dimension |
+| `scored_by` | `'shadow-reconciler'` — `findUnscoredTerminal` skips it; `findAllScored` includes it |
+| Markers | `skill_name: 'shadow-draft-eval'`, `action_risk: 'none'`, `payload.shadow: true`, dedicated terminal `outcome` |
+
+Score from ground truth (the actual send), not the generic LLM judge. Shadow drafts never
+create approvals or notifications. As competence accrues, the single global score rises
+through the existing bands; agents that receive the autonomy prompt block (including
+`ceo-inbox` once `autonomyService` is injected — see checklist above) draft/handle more
+rather than punt. Fully autonomous *sending* still sits behind the existing `medium`/70
+floor. The loop never writes the global score itself — only the Phase 3 pass does.
