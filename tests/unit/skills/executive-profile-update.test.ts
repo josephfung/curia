@@ -209,6 +209,30 @@ describe('ExecutiveProfileUpdateHandler', () => {
     expect(updatedConfig.writingVoice.formality).toBe(35);
   });
 
+  it('carries forward a previously-learned guide when an unrelated field is updated', async () => {
+    // guide is populated by the weekly voice-learn pass, not by this skill's
+    // input schema — a human-facing formality edit must not clobber it.
+    const profileWithGuide: ExecutiveProfile = {
+      writingVoice: {
+        ...baseProfile.writingVoice,
+        guide: 'Learned guide: prefers short paragraphs and concrete examples.',
+      },
+    };
+    const service = {
+      get: () => profileWithGuide,
+      update: vi.fn(async () => {}),
+    };
+
+    await handler.execute(makeCtx(
+      { writing_voice: { formality: 65 } },
+      service,
+    ));
+
+    const updatedConfig = (service.update.mock.calls as unknown[][])[0]![0] as unknown as ExecutiveProfile;
+    expect(updatedConfig.writingVoice.formality).toBe(65);
+    expect(updatedConfig.writingVoice.guide).toBe('Learned guide: prefers short paragraphs and concrete examples.');
+  });
+
   it('returns changes as "no changes" when input matches current profile', async () => {
     const service = {
       get: () => baseProfile,
