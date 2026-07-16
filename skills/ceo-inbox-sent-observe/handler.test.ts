@@ -464,8 +464,90 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(shadowDoc?.frontmatter.reconciled_at).toBeTruthy();
     expect(shadowDoc?.frontmatter.competence_flag).toBe(1);
 
-    const data = (result as { data: { shadow_reconciled: number } }).data;
+    const data = (result as { data: { shadow_reconciled: number; watermark_advanced_to: number } }).data;
     expect(data.shadow_reconciled).toBe(1);
+    // Happy path (evidence persisted AND shadow judge ok) still advances the watermark.
+    expect(data.watermark_advanced_to).toBe(1_720_000_501);
+    expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBe('1720000501');
+  });
+
+  it('holds the watermark when the shadow-judge LLM batch fails (F2)', async () => {
+    // Same shape as the happy shadow test, but the batched judge returns {ok:false}. The
+    // shadow's reconciled_at stays unset, so the Sent message must be re-fetched next run —
+    // which only happens if the watermark is HELD (received_after is an exclusive lower bound).
+    const listResponse = {
+      data: [
+        {
+          id: 'msg-sent-1',
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          from: [{ email: 'ceo@example.com' }],
+          to: [{ email: 'alice@example.com' }],
+          cc: [],
+          snippet: 'Thanks Alice',
+          date: 1_720_000_500,
+          unread: false,
+          folders: ['SENT'],
+          attachments: [],
+        },
+      ],
+    };
+    const fullResponse = {
+      data: {
+        ...listResponse.data[0],
+        body: '<p>Thanks Alice, sounds good, let us do Tuesday.</p>',
+        bcc: [],
+        labels: [],
+      },
+    };
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-1')) {
+        return new Response(JSON.stringify(fullResponse), { status: 200 });
+      }
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify(listResponse), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const extract = vi.fn(async () => ({ ok: false as const, error: 'llm unavailable' }));
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      infraLlm: { extract, classify: vi.fn() },
+      withActionLogRepo: true,
+      snapshots: [
+        {
+          path: shadowDraftPath('src-1'),
+          type: SHADOW_DOC_TYPE,
+          frontmatter: {
+            source_message_id: 'src-1',
+            thread_id: 'thread-1',
+            subject: 'Re: Hello',
+            recipients: ['alice@example.com'],
+            created_at: '2024-07-03T00:00:00.000Z',
+            disposition: 'punt',
+          },
+          body: 'Thanks Alice, how about Wednesday?',
+        },
+      ],
+      tasks: [],
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    // Watermark NOT advanced — the failed shadow batch holds it for retry.
+    const data = (result as { data: { watermark_advanced_to: number | null; shadow_reconciled: number } }).data;
+    expect(data.watermark_advanced_to).toBeNull();
+    expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBeUndefined();
+    // The shadow was neither scored nor stamped, so it will be retried.
+    expect(data.shadow_reconciled).toBe(0);
+    const shadowDoc = ctx.__docs.get(shadowDraftPath('src-1'));
+    expect(shadowDoc?.frontmatter.reconciled_at).toBeUndefined();
   });
 
   it('skips when idle backoff is active', async () => {

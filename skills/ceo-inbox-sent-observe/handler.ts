@@ -366,18 +366,25 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
 
     // Shadow-draft competence reconcile, batched (#1419 / ADR-029): one LLM call per
     // up-to-20 pairs rather than one per pair. A failed batch call leaves those shadow
-    // docs' reconciled_at unset so they are retried on the next run.
+    // docs' reconciled_at unset — but `received_after` is an exclusive lower bound, so the
+    // Sent message that carried the shadow is only re-fetched next run if we HOLD the
+    // watermark. shadowReconcileOk tracks that: any failed batch flips it false and the
+    // watermark-advance guard below blocks the advance. Retry is idempotent because
+    // already-reconciled shadows are skipped (parseShadowDoc returns null once reconciled_at
+    // is set) and diff/completion matching is idempotent via the already-matched/asked sets.
+    let shadowReconcileOk = true;
     if (judgePairs.length > 0 && ctx.infraLlm && ctx.actionLogRepo) {
       const BATCH = 20;
       for (let i = 0; i < judgePairs.length; i += BATCH) {
         const batch = judgePairs.slice(i, i + BATCH);
         const res = await ctx.infraLlm.extract(buildShadowJudgePrompt(batch), { maxTokens: 1500 });
         if (!res.ok) {
+          shadowReconcileOk = false;
           ctx.log.warn(
             { error: res.error, count: batch.length },
-            'sent-observe: shadow judge LLM failed — leaving unreconciled',
+            'sent-observe: shadow judge LLM failed — holding watermark so these sends are re-observed next run',
           );
-          continue; // reconciled_at stays unset → retried next run
+          continue; // reconciled_at stays unset → retried next run (watermark held below)
         }
         const judgements = parseShadowJudgeResult(res.text);
         for (const j of judgements) {
@@ -431,6 +438,11 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // next run (matching is idempotent via the already-matched/asked sets seeded from the
     // docs, so the successful writes won't duplicate).
     const evidencePersisted = diffsPersisted && completionsPersisted;
+    // The watermark may only advance when BOTH the rolling evidence persisted AND every shadow
+    // batch reconciled. A failed shadow batch (shadowReconcileOk === false) holds it too, so the
+    // orphaned shadow's Sent message is re-fetched next run instead of being stranded past the
+    // exclusive `received_after` floor (its doc is otherwise TTL-swept after 7 idle days).
+    const advanceOk = evidencePersisted && shadowReconcileOk;
 
     // Advance the watermark past the newest message seen (exclusive next poll).
     //
@@ -446,13 +458,19 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // forward-looking observer. Draining a true >ceiling backlog would need oldest-first
     // paging (received_before), deliberately out of scope here.
     let watermarkAdvancedTo: number | null = null;
-    if (messages.length > 0 && maxDate >= watermark && evidencePersisted) {
+    if (messages.length > 0 && maxDate >= watermark && advanceOk) {
       watermarkAdvancedTo = maxDate + 1;
       await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
-    } else if (!evidencePersisted) {
+    } else if (messages.length > 0 && !advanceOk) {
       ctx.log.warn(
-        { path: PENDING_DIFFS_PATH },
-        'ceo-inbox-sent-observe: evidence persistence failed — holding watermark for retry',
+        {
+          path: PENDING_DIFFS_PATH,
+          evidencePersisted,
+          shadowReconcileOk,
+        },
+        !evidencePersisted
+          ? 'ceo-inbox-sent-observe: evidence persistence failed — holding watermark for retry'
+          : 'ceo-inbox-sent-observe: shadow reconcile failed — holding watermark for retry',
       );
     }
     if (truncated) {

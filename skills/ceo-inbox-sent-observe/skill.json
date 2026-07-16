@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-sent-observe",
   "description": "Poll the CEO's Sent folder since a stored watermark, match new sends to Curia draft snapshots and open owner=ceo tasks, append evidence to OKF, emit ceo.sent_observed, and advance the watermark. Read-only against Nylas; never drafts, archives, or sends. Intended for the daily ceo-inbox sent-observe cron — do not fold into triage.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
