@@ -124,4 +124,44 @@ describe('captureDraftSnapshot', () => {
       expect.stringContaining('failed to write draft snapshot'),
     );
   });
+
+  it('preserves existing linked_task_ids on a body-only edit (linkedTaskIds omitted)', async () => {
+    const update = vi.fn().mockResolvedValue({ ok: true, document: {} });
+    const read = vi.fn().mockResolvedValue({
+      version: 3,
+      frontmatter: { created_at: '2026-07-01T00:00:00.000Z', linked_task_ids: ['task-existing'] },
+      body: 'old',
+    });
+    const ctx = buildCtx({ read, create: vi.fn(), update });
+
+    // Note: no `linkedTaskIds` on this input → an edit that didn't touch task links.
+    const { linkedTaskIds: _omit, ...bodyOnly } = SNAPSHOT;
+    const ok = await captureDraftSnapshot(ctx, { ...bodyOnly, body: 'edited body' });
+    expect(ok).toBe(true);
+    expect(update).toHaveBeenCalledWith(
+      '/scratch/voice-learning/draft-abc.md',
+      expect.objectContaining({
+        frontmatter: expect.objectContaining({ linked_task_ids: ['task-existing'] }),
+      }),
+    );
+  });
+
+  it('clears linked_task_ids when an edit explicitly passes an empty array', async () => {
+    const update = vi.fn().mockResolvedValue({ ok: true, document: {} });
+    const read = vi.fn().mockResolvedValue({
+      version: 4,
+      frontmatter: { created_at: '2026-07-01T00:00:00.000Z', linked_task_ids: ['task-existing'] },
+      body: 'old',
+    });
+    const ctx = buildCtx({ read, create: vi.fn(), update });
+
+    const ok = await captureDraftSnapshot(ctx, { ...SNAPSHOT, linkedTaskIds: [], body: 'x' });
+    expect(ok).toBe(true);
+    expect(update).toHaveBeenCalledWith(
+      '/scratch/voice-learning/draft-abc.md',
+      expect.objectContaining({
+        frontmatter: expect.objectContaining({ linked_task_ids: [] }),
+      }),
+    );
+  });
 });
