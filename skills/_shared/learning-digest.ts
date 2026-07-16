@@ -1,12 +1,8 @@
 // Shared parsers/renderers for voice proposals + task-completion digest sections (#1425).
 
-export interface VoiceProposalItem {
-  field: string;
-  description: string;
-  sampleCount: number;
-  consistency: string;
-  patch: Record<string, unknown>;
+export interface VoiceGuideProposal {
   status: string;
+  guide: string;
 }
 
 export interface CompletionDigestItem {
@@ -17,31 +13,16 @@ export interface CompletionDigestItem {
   status: string;
 }
 
-export function parseVoiceProposals(body: string): VoiceProposalItem[] {
-  const items: VoiceProposalItem[] = [];
-  for (const section of body.split(/^## Proposal — /m).slice(1)) {
-    const field = (section.split('\n')[0] ?? '').trim();
-    const status = (section.match(/- status:\s*(\S+)/)?.[1] ?? 'pending').trim();
-    if (status !== 'pending') continue;
-    let patch: Record<string, unknown> = {};
-    const patchRaw = section.match(/- patch:\s*(\{[\s\S]*?\})\s*$/m)?.[1];
-    if (patchRaw) {
-      try {
-        patch = JSON.parse(patchRaw) as Record<string, unknown>;
-      } catch {
-        patch = {};
-      }
-    }
-    items.push({
-      field,
-      description: (section.match(/- description:\s*(.+)/)?.[1] ?? '').trim(),
-      sampleCount: Number(section.match(/- sample_count:\s*(\d+)/)?.[1] ?? 0),
-      consistency: (section.match(/- consistency:\s*(\S+)/)?.[1] ?? '').trim(),
-      patch,
-      status,
-    });
-  }
-  return items;
+export function parseVoiceGuideProposal(body: string): VoiceGuideProposal | null {
+  const idx = body.indexOf('## Guide Proposal');
+  if (idx < 0) return null;
+  const section = body.slice(idx);
+  const status = (section.match(/- status:\s*(\S+)/)?.[1] ?? 'pending').trim();
+  if (status !== 'pending') return null;
+  // Guide is everything after the blank line following the metadata, up to the trailing '---'.
+  const afterMeta = section.replace(/^## Guide Proposal[\s\S]*?\n\n/, '');
+  const guide = afterMeta.split(/\n---\s*$/m)[0]!.trim();
+  return { status, guide };
 }
 
 export function parseCompletionDigest(body: string): CompletionDigestItem[] {
@@ -67,18 +48,16 @@ export function parseCompletionDigest(body: string): CompletionDigestItem[] {
 }
 
 /** Render digest sections — empty string when no items (omit section). */
-export function renderVoiceProposalsSection(items: VoiceProposalItem[]): string {
-  if (items.length === 0) return '';
-  const lines = [
-    '### Proposed voice diffs',
+export function renderVoiceGuideSection(guide: string | null): string {
+  if (!guide) return '';
+  return [
+    '### Proposed writing-voice update',
     '',
-    ...items.map(
-      (i, idx) =>
-        `${idx + 1}. **${i.field}** — ${i.description} (n=${i.sampleCount}, consistency=${i.consistency}). Reply \`approve voice ${i.field}\` or \`dismiss voice ${i.field}\`.`,
-    ),
+    guide,
     '',
-  ];
-  return lines.join('\n');
+    'Reply `approve voice` or `dismiss voice`.',
+    '',
+  ].join('\n');
 }
 
 export function renderCompletionSection(items: CompletionDigestItem[]): string {
@@ -97,11 +76,8 @@ export function renderCompletionSection(items: CompletionDigestItem[]): string {
   return lines.join('\n');
 }
 
-export function markProposalStatus(body: string, field: string, status: string): string {
-  const re = new RegExp(
-    `(## Proposal — ${field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?- status:\\s*)pending`,
-  );
-  return body.replace(re, `$1${status}`);
+export function markGuideProposalStatus(body: string, status: string): string {
+  return body.replace(/(## Guide Proposal[\s\S]*?- status:\s*)\S+/, `$1${status}`);
 }
 
 export function markCompletionStatus(

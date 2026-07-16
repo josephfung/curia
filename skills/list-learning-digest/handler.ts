@@ -3,9 +3,9 @@ import { PENDING_PROPOSALS_PATH } from '../voice-learn/handler.js';
 import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
 import {
   parseCompletionDigest,
-  parseVoiceProposals,
+  parseVoiceGuideProposal,
   renderCompletionSection,
-  renderVoiceProposalsSection,
+  renderVoiceGuideSection,
 } from '../_shared/learning-digest.js';
 
 export class ListLearningDigestHandler implements SkillHandler {
@@ -19,11 +19,11 @@ export class ListLearningDigestHandler implements SkillHandler {
       const proposalsDoc = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
       const completionsDoc = await ctx.workingDocs.read(COMPLETION_DIGEST_PATH);
 
-      const voice_proposals = parseVoiceProposals(proposalsDoc?.body ?? '');
+      const guide = parseVoiceGuideProposal(proposalsDoc?.body ?? '');
       const completion_items = parseCompletionDigest(completionsDoc?.body ?? '');
 
       const sections = [
-        renderVoiceProposalsSection(voice_proposals),
+        renderVoiceGuideSection(guide?.guide ?? null),
         renderCompletionSection(completion_items),
       ]
         .filter(Boolean)
@@ -32,11 +32,11 @@ export class ListLearningDigestHandler implements SkillHandler {
       return {
         success: true,
         data: {
-          voice_proposals,
+          voice_guide: guide?.guide ?? null,
           completion_items,
           sections_markdown: sections,
           message:
-            voice_proposals.length === 0 && completion_items.length === 0
+            !guide && completion_items.length === 0
               ? 'No pending learning-digest items.'
               : undefined,
         },
