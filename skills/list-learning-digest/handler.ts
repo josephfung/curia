@@ -1,0 +1,43 @@
+import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { PENDING_PROPOSALS_PATH } from '../voice-learn/handler.js';
+import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
+import {
+  parseCompletionDigest,
+  parseVoiceProposals,
+  renderCompletionSection,
+  renderVoiceProposalsSection,
+} from '../_shared/learning-digest.js';
+
+export class ListLearningDigestHandler implements SkillHandler {
+  async execute(ctx: SkillContext): Promise<SkillResult> {
+    if (!ctx.workingDocs) {
+      return { success: false, error: 'list-learning-digest requires workingDocs' };
+    }
+
+    const proposalsDoc = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
+    const completionsDoc = await ctx.workingDocs.read(COMPLETION_DIGEST_PATH);
+
+    const voice_proposals = parseVoiceProposals(proposalsDoc?.body ?? '');
+    const completion_items = parseCompletionDigest(completionsDoc?.body ?? '');
+
+    const sections = [
+      renderVoiceProposalsSection(voice_proposals),
+      renderCompletionSection(completion_items),
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    return {
+      success: true,
+      data: {
+        voice_proposals,
+        completion_items,
+        sections_markdown: sections,
+        message:
+          voice_proposals.length === 0 && completion_items.length === 0
+            ? 'No pending learning-digest items.'
+            : undefined,
+      },
+    };
+  }
+}

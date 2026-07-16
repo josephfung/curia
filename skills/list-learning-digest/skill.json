@@ -1,0 +1,18 @@
+{
+  "name": "list-learning-digest",
+  "description": "List pending voice-profile proposals and sent-mail task-completion undo/confirm items for the daily CEO digest. Returns structured items plus pre-rendered markdown sections (omitted when empty).",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {},
+  "outputs": {
+    "voice_proposals": "object[]",
+    "completion_items": "object[]",
+    "sections_markdown": "string (concatenated non-empty sections)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["workingDocs"],
+  "allowed_callers": ["coordinator"]
+}
