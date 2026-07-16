@@ -1,7 +1,7 @@
 {
   "name": "voice-learn",
   "description": "Weekly job: read accumulated (draft, sent) diffs from OKF, make one batched LLM pass to produce an updated free-form voice guide, and queue it as a digest proposal. Never writes the profile directly (human-in-the-loop). Never fabricates on zero data. Intended for the ceo-inbox weekly voice-learn cron.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {},
