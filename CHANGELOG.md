@@ -62,6 +62,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`SkillContext`** — adds `skillName`/`skillVersion`, populated from the manifest; draft skills read version from ctx instead of a hardcoded const. (#1419)
+- **Shadow competence** — reconciles via one batched LLM judge call instead of a per-pair heuristic scorer. (#1419)
 - **Specs 04/13/14/19** — document sent-observer, voice learning, task-completion, shadow competence. (#1420)
 - **`docs/dev/dependencies.md`** — adds explicit SCA remediation threshold and pre-release policy (OSPS-VM-05.01/05.02).
 - **Install docs** — README points to `releases/latest/download/install.sh` and documents `CURIA_VERSION`.

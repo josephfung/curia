@@ -20,8 +20,10 @@ import {
 import { createCeoSentObserved } from '../../src/bus/events.js';
 import {
   parseShadowDoc,
-  scoreDecisionEquivalence,
+  buildShadowJudgePrompt,
+  parseShadowJudgeResult,
   SHADOW_SCRATCH_PREFIX,
+  type ShadowJudgePair,
 } from '../_shared/shadow-draft.js';
 
 export const CONFIG_NAMESPACE = 'ceo_inbox';
@@ -293,6 +295,9 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // Guard against scoring the same shadow twice when several sends share a thread
     // in one run (the durable guard is the shadow doc's reconciled_at marker).
     const claimedShadows = new Set<string>();
+    // (shadow, sent) pairs collected during the message loop below, judged in a
+    // single batched LLM call after the loop instead of one call per pair.
+    const judgePairs: ShadowJudgePair[] = [];
 
     for (const msg of messages) {
       if (msg.date > maxDate) maxDate = msg.date;
@@ -347,47 +352,62 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
               );
             }
           }
-          const score = scoreDecisionEquivalence(shadow.body, sentBody);
+          // Don't score inline — collect the pair and judge everything in one
+          // batched LLM call after the message loop (see below).
+          judgePairs.push({
+            sourceMessageId: shadow.sourceMessageId,
+            subject: msg.subject || shadow.subject,
+            shadowBody: shadow.body,
+            sentBody,
+          });
+        }
+      }
+    }
+
+    // Shadow-draft competence reconcile, batched (#1419 / ADR-029): one LLM call per
+    // up-to-20 pairs rather than one per pair. A failed batch call leaves those shadow
+    // docs' reconciled_at unset so they are retried on the next run.
+    if (judgePairs.length > 0 && ctx.infraLlm && ctx.actionLogRepo) {
+      const BATCH = 20;
+      for (let i = 0; i < judgePairs.length; i += BATCH) {
+        const batch = judgePairs.slice(i, i + BATCH);
+        const res = await ctx.infraLlm.extract(buildShadowJudgePrompt(batch), { maxTokens: 1500 });
+        if (!res.ok) {
+          ctx.log.warn(
+            { error: res.error, count: batch.length },
+            'sent-observe: shadow judge LLM failed — leaving unreconciled',
+          );
+          continue; // reconciled_at stays unset → retried next run
+        }
+        const judgements = parseShadowJudgeResult(res.text);
+        for (const j of judgements) {
+          const pair = batch.find((p) => p.sourceMessageId === j.sourceMessageId);
+          if (!pair) continue;
           try {
             await ctx.actionLogRepo.insert({
-              taskId: ctx.taskEventId ?? `shadow:${shadow.sourceMessageId}`,
+              taskId: ctx.taskEventId ?? `shadow:${j.sourceMessageId}`,
               conversationId: ctx.conversationId,
               skillName: 'shadow-draft-eval',
               actionRisk: 'none',
               outcome: 'shadow_evaluated',
-              taskSummary: `Shadow draft vs sent for thread ${msg.threadId || shadow.threadId}: ${score.reason}`,
-              payload: {
-                shadow: true,
-                source_message_id: shadow.sourceMessageId,
-                sent_message_id: msg.id,
-                thread_id: msg.threadId,
-                competence_reason: score.reason,
-              },
-              competenceFlag: score.competenceFlag,
+              taskSummary: `Shadow vs sent (${j.sourceMessageId}): ${j.reason}`,
+              payload: { shadow: true, source_message_id: j.sourceMessageId, competence_reason: j.reason },
+              competenceFlag: j.sameDecision ? 1 : 0,
               commitmentFlag: null,
               compatibility: null,
               scoredBy: 'shadow-reconciler',
             });
             shadowReconciled += 1;
-
-            // Mark shadow doc reconciled so we don't double-score.
-            const path = `${SHADOW_SCRATCH_PREFIX}/${shadow.sourceMessageId}.md`;
+            const path = `${SHADOW_SCRATCH_PREFIX}/${j.sourceMessageId}.md`;
             const doc = await ctx.workingDocs.read(path);
             if (doc) {
               await ctx.workingDocs.update(path, {
-                frontmatter: {
-                  ...doc.frontmatter,
-                  reconciled_at: new Date().toISOString(),
-                  competence_flag: score.competenceFlag,
-                },
+                frontmatter: { ...doc.frontmatter, reconciled_at: new Date().toISOString(), competence_flag: j.sameDecision ? 1 : 0 },
                 expectedVersion: doc.version,
               });
             }
           } catch (err) {
-            ctx.log.error(
-              { err, messageId: msg.id },
-              'ceo-inbox-sent-observe: shadow competence insert failed',
-            );
+            ctx.log.error({ err, sourceMessageId: j.sourceMessageId }, 'sent-observe: shadow competence insert failed');
           }
         }
       }

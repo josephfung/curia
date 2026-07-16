@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-sent-observe",
   "description": "Poll the CEO's Sent folder since a stored watermark, match new sends to Curia draft snapshots and open owner=ceo tasks, append evidence to OKF, emit ceo.sent_observed, and advance the watermark. Read-only against Nylas; never drafts, archives, or sends. Intended for the daily ceo-inbox sent-observe cron — do not fold into triage.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -18,5 +18,5 @@
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id"],
   "timeout": 60000,
-  "capabilities": ["entityMemory", "workingDocs", "taskRepo", "bus", "actionLogRepo"]
+  "capabilities": ["entityMemory", "workingDocs", "taskRepo", "bus", "actionLogRepo", "infraLlm"]
 }
