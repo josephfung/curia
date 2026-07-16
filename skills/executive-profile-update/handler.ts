@@ -58,6 +58,10 @@ export class ExecutiveProfileUpdateHandler implements SkillHandler {
             : currentVoice.vocabulary.avoid,
         },
         signOff: typeof writing_voice.sign_off === 'string' ? writing_voice.sign_off : currentVoice.signOff,
+        // The learned guide isn't part of this skill's input surface — it's maintained
+        // by the weekly voice-learn LLM pass. Always carry the current value forward so
+        // this human-facing edit doesn't clobber it.
+        guide: currentVoice.guide,
       };
 
       // Build a human-readable changes summary before updating.

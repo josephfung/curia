@@ -32,6 +32,9 @@ export interface WritingVoice {
   };
   /** Email sign-off when drafting in the executive's voice. */
   signOff: string;
+  /** Learned, free-form markdown describing how the executive actually writes.
+   *  Maintained by the weekly voice-learn LLM pass; '' until first learned. */
+  guide: string;
 }
 
 export interface ExecutiveProfileVersion {

@@ -16,6 +16,7 @@ const baseProfile: ExecutiveProfile = {
       avoid: ['leverage', 'synergy'],
     },
     signOff: '-- Joseph',
+    guide: '',
   },
 };
 

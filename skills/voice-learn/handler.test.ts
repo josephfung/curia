@@ -72,6 +72,7 @@ function makeCtx(opts: {
     patterns: ['Concise and to the point', 'Professional but approachable'],
     vocabulary: { prefer: [] as string[], avoid: [] as string[] },
     signOff: '',
+    guide: '',
     ...opts.voice,
   };
   const profile: ExecutiveProfile = { writingVoice: voice };
