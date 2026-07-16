@@ -6,7 +6,9 @@
 // the digest. This handler never writes the profile directly — human-in-the-loop.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { ConfigStore } from '../../src/memory/config-store.js';
 import { buildVoiceGuidePrompt, parsePendingDiffs } from '../_shared/voice-learn-logic.js';
+import { parseVoiceGuideProposal } from '../_shared/learning-digest.js';
 import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
 import { VOICE_LEARNING_SCRATCH_PREFIX } from '../_shared/voice-learning-capture.js';
 
@@ -52,12 +54,43 @@ export class VoiceLearnHandler implements SkillHandler {
 
     // Dedup: skip if a guide proposal is already pending. The diff doc is never
     // consumed, so without this a still-open proposal would get re-proposed weekly.
+    // pending-proposals.md is APPEND-ONLY, so use the shared parser invariant rather than a
+    // raw regex: a non-null parse means a pending block exists somewhere in the doc even after
+    // earlier blocks were approved/dismissed (F1 — the raw regex only saw the FIRST block).
     const existing = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
-    if (existing && /## Guide Proposal[\s\S]*?- status:\s*pending/.test(existing.body)) {
+    if (existing && parseVoiceGuideProposal(existing.body) !== null) {
       return {
         success: true,
         data: { pairs_considered: pairs.length, proposed: false, reason: 'proposal-pending' },
       };
+    }
+
+    // Respect the dismissal cooldown the digest writes on `dismiss voice`. Best-effort and
+    // additive: only consulted when entityMemory is wired (guarded, not a hard capability), and
+    // a missing/garbage record simply doesn't gate. Without this the cooldown was written but
+    // never read, so a dismissed guide got re-proposed on the very next weekly run (known-Minor #3).
+    if (ctx.entityMemory) {
+      const store = new ConfigStore(ctx.entityMemory, ctx.log);
+      const rawDismissed = await store.get(CONFIG_NAMESPACE, DISMISSED_KEY);
+      let dismissed: Array<{ dimension: string; until: string }> = [];
+      if (rawDismissed) {
+        try {
+          dismissed = JSON.parse(rawDismissed) as Array<{ dimension: string; until: string }>;
+        } catch {
+          dismissed = [];
+        }
+      }
+      const guideEntry = dismissed.find((d) => d.dimension === 'guide');
+      if (guideEntry && Date.parse(guideEntry.until) > Date.now()) {
+        ctx.log.info(
+          { until: guideEntry.until },
+          'voice-learn: guide dismissal cooldown active — no proposal this run',
+        );
+        return {
+          success: true,
+          data: { pairs_considered: pairs.length, proposed: false, reason: 'dismiss-cooldown' },
+        };
+      }
     }
 
     const currentGuide = ctx.executiveProfileService.get().writingVoice.guide ?? '';

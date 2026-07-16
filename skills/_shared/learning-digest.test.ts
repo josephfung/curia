@@ -9,6 +9,12 @@ import {
 
 const GUIDE_DOC = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Dry humour.\n\n---\n`;
 
+// pending-proposals.md is APPEND-ONLY: voice-learn appends a new block each cycle, so after
+// cycle 1 is approved the doc holds an approved block FOLLOWED BY a fresh pending block (F1).
+const APPROVED_THEN_PENDING = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: approved\n- generated_at: 2026-07-01T00:00:00.000Z\n\n- Writes short.\n\n---\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Adds a dry closer.\n\n---\n`;
+
+const ALL_RESOLVED = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: approved\n- generated_at: 2026-07-01T00:00:00.000Z\n\n- Writes short.\n\n---\n\n## Guide Proposal\n- status: dismissed\n- generated_at: 2026-07-08T00:00:00.000Z\n\n- Rejected idea.\n\n---\n`;
+
 const COMPLETIONS = `
 ## Undo — task aaa
 - status: undo_available
@@ -41,6 +47,19 @@ describe('learning digest parsers + renderers', () => {
     ).toBeNull();
   });
 
+  it('returns the PENDING block when an approved block precedes it (F1 append-only repro)', () => {
+    const proposal = parseVoiceGuideProposal(APPROVED_THEN_PENDING);
+    expect(proposal).not.toBeNull();
+    expect(proposal!.status).toBe('pending');
+    expect(proposal!.guide).toContain('Adds a dry closer');
+    // The earlier approved block's guide must not leak into the returned proposal.
+    expect(proposal!.guide).not.toContain('---');
+  });
+
+  it('returns null when every block is already approved/dismissed', () => {
+    expect(parseVoiceGuideProposal(ALL_RESOLVED)).toBeNull();
+  });
+
   it('parses undo + confirm completion items; skips resolved', () => {
     const items = parseCompletionDigest(COMPLETIONS);
     expect(items).toHaveLength(2);
@@ -66,5 +85,18 @@ describe('learning digest parsers + renderers', () => {
 
   it('marks the guide proposal status', () => {
     expect(markGuideProposalStatus(GUIDE_DOC, 'approved')).toContain('status: approved');
+  });
+
+  it('marks only the PENDING block, leaving an earlier approved block intact', () => {
+    const marked = markGuideProposalStatus(APPROVED_THEN_PENDING, 'approved');
+    // Both blocks now approved; none left pending.
+    expect(marked).not.toContain('status: pending');
+    expect((marked.match(/status: approved/g) ?? []).length).toBe(2);
+    // The already-approved block's guide is preserved verbatim.
+    expect(marked).toContain('- Adds a dry closer.');
+  });
+
+  it('returns the body unchanged when there is no pending block to mark', () => {
+    expect(markGuideProposalStatus(ALL_RESOLVED, 'approved')).toBe(ALL_RESOLVED);
   });
 });

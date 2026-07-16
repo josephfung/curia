@@ -13,16 +13,30 @@ export interface CompletionDigestItem {
   status: string;
 }
 
-export function parseVoiceGuideProposal(body: string): VoiceGuideProposal | null {
-  const idx = body.indexOf('## Guide Proposal');
-  if (idx < 0) return null;
-  const section = body.slice(idx);
-  const status = (section.match(/- status:\s*(\S+)/)?.[1] ?? 'pending').trim();
-  if (status !== 'pending') return null;
+/** Split a pending-proposals body into its `## Guide Proposal` blocks. The doc is APPEND-ONLY
+ *  (voice-learn appends a new block each cycle), so there can be several — an approved block
+ *  followed by a fresh pending one is the steady state. The lookahead split keeps each header,
+ *  so blocks re-join to the exact original bytes. Preamble (before the first block) is dropped. */
+function guideProposalBlocks(body: string): string[] {
+  return body.split(/(?=^## Guide Proposal)/m).filter((b) => b.startsWith('## Guide Proposal'));
+}
+
+/** Extract the guide text from a single `## Guide Proposal` block. */
+function guideFromBlock(block: string): string {
   // Guide is everything after the blank line following the metadata, up to the trailing '---'.
-  const afterMeta = section.replace(/^## Guide Proposal[\s\S]*?\n\n/, '');
-  const guide = afterMeta.split(/\n---\s*$/m)[0]!.trim();
-  return { status, guide };
+  const afterMeta = block.replace(/^## Guide Proposal[\s\S]*?\n\n/, '');
+  return afterMeta.split(/\n---\s*$/m)[0]!.trim();
+}
+
+export function parseVoiceGuideProposal(body: string): VoiceGuideProposal | null {
+  // Return the FIRST pending block (by construction there is at most one), scanning past any
+  // earlier approved/dismissed blocks that the append-only doc has accumulated (F1).
+  for (const block of guideProposalBlocks(body)) {
+    const status = (block.match(/- status:\s*(\S+)/)?.[1] ?? 'pending').trim();
+    if (status !== 'pending') continue;
+    return { status, guide: guideFromBlock(block) };
+  }
+  return null;
 }
 
 export function parseCompletionDigest(body: string): CompletionDigestItem[] {
@@ -77,7 +91,18 @@ export function renderCompletionSection(items: CompletionDigestItem[]): string {
 }
 
 export function markGuideProposalStatus(body: string, status: string): string {
-  return body.replace(/(## Guide Proposal[\s\S]*?- status:\s*)\S+/, `$1${status}`);
+  // Rewrite the status of the PENDING block only, leaving already-approved/dismissed blocks
+  // intact (the append-only doc keeps prior blocks). If nothing is pending, return unchanged.
+  const parts = body.split(/(?=^## Guide Proposal)/m);
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]!;
+    if (!part.startsWith('## Guide Proposal')) continue;
+    if (!/- status:\s*pending\b/.test(part)) continue;
+    // The block's own status line is its first `- status:`; replace only that one.
+    parts[i] = part.replace(/(- status:\s*)\S+/, `$1${status}`);
+    break; // at most one pending block by construction
+  }
+  return parts.join('');
 }
 
 export function markCompletionStatus(
