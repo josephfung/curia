@@ -36,6 +36,7 @@ Specialist agents do not have personalities. They have task-specific posture. On
 | Concern | Lives in |
 |---------|----------|
 | Assistant name, title, tone | `src/identity/defaults.ts` (seed) + `office_identity_*` DB tables (authoritative) — this spec |
+| Executive writing voice (how the CEO writes) | `ExecutiveProfile.WritingVoice` (`src/executive/types.ts`) — see [Writing-voice learning](#writing-voice-learning) below |
 | Coordinator routing, delegation, skills | `agents/coordinator.yaml` |
 | Channel trust, permissions | `config/channel-trust.yaml`, `config/permissions.yaml` |
 | Per-agent task behavior | agent's own `system_prompt` |
@@ -349,6 +350,44 @@ The following are explicitly out of scope for this spec. They are valid future e
 - **Contact overlays** — adapting tone per recipient. Deferred.
 - **LLM-suggested identity refinements** — the agent proposes changes, the user approves. Deferred.
 - **Multi-instance identities** — one Curia serving multiple offices. Out of scope entirely.
+
+---
+
+## Writing-voice learning
+
+Office identity is how the *assistant* presents itself. Separately, Curia maintains an
+**executive writing voice** — how the *CEO* writes — in `ExecutiveProfile.WritingVoice`
+(`tone[]`, `formality` 0–100, `patterns[]`, `vocabulary.{prefer,avoid}`, `signOff`).
+That profile is read by `executive-profile-get` (e.g. when `ceo-inbox` drafts) and written
+by `executive-profile-update`. It is versioned in `executive_profile_versions` and emits
+`config.change` on every write — the same audit posture as office identity.
+
+### Observation → learn loop (ADR-029)
+
+A weekly `voice-learn` job on `ceo-inbox` (cron `0 8 * * 1`) reads accumulated
+`(draft, sent)` diffs from the OKF evidence doc produced by the sent-mail observer
+([spec 04](04-channels.md)) and proposes a `WritingVoice` delta. Two signal sources:
+
+- **Differential** — draft→sent edits; sharp; used to refine fields that already have content.
+- **Absolute** — style of raw sent mail (no Curia draft required); used to bootstrap empty/seeded fields.
+
+Application is **hybrid by confidence**, decided per field via provenance
+(`seeded` / `learned` / `operator-set`):
+
+| Lane | When |
+|---|---|
+| Auto-apply via `executive-profile-update` | High-confidence, low-magnitude changes; fills into empty (seeded) fields that meet sample thresholds |
+| Propose in the daily digest | Higher-magnitude shifts, tone descriptors, or any change to an operator-set field |
+
+Minimum-sample thresholds (starting points; calibrate against real pairs): vocabulary
+prefer/avoid ≥3 pairs & ≥70% consistency (auto); sign-off ≥3; patterns ≥5 & ≥60%;
+formality-band ≥8. Weight the last ~90 days with `slow_decay`. Dismissed proposals get a
+guard marker and cooldown before re-propose. Near-default profiles take a bootstrap posture
+(aggressive fill of empties + one-time onboarding summary). Never fabricate on zero data;
+tone always proposes.
+
+Raw OKF evidence is swept after it is folded into the profile (retention rule in
+[spec 04](04-channels.md)). This loop does **not** use the knowledge graph for voice state.
 
 ---
 
