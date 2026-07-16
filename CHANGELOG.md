@@ -34,6 +34,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **ADR-029** — passive email observation; shadow competence feeds Phase 3 scoring. (#1420)
 - **Draft capture** — CEO-inbox draft skills snapshot proposals to OKF for voice learning. (#1421)
+- **`ceo-inbox-sent-observe`** — daily Sent poll matches drafts/tasks; emits `ceo.sent_observed`. (#1422)
 - **`scheduler-update`** — new skill lets agents resume, pause, or edit a scheduled job without the web UI. (#1409)
 - **Contact resolution** — integration test coverage for identity establishment and authorization. (#1382)
 - **`diagnostics` agent** — opt-in, read-only forensic agent that diagnoses "what happened / why" for the principal. (#1356)

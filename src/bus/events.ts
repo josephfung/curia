@@ -640,6 +640,16 @@ interface TaskCompletedPayload {
   agentId: string | null;
 }
 
+// ceo.sent_observed — audit event from ceo-inbox-sent-observe after a Sent-folder poll (#1422).
+// No required subscriber beyond write-ahead audit; available for future UI / digests.
+interface CeoSentObservedPayload {
+  messagesScanned: number;
+  draftMatches: number;
+  taskCandidates: number;
+  watermarkAdvancedTo: number | null;
+  skippedBackoff: boolean;
+}
+
 // task.resumable_throughput — emitted when a resumable task pauses mid-work (#1264).
 // Derived telemetry from progress.resumable + progress.resumableCircuit for audit trails.
 interface TaskResumableThroughputPayload {
@@ -1091,6 +1101,12 @@ export interface TaskCompletedEvent extends BaseEvent {
   payload: TaskCompletedPayload;
 }
 
+export interface CeoSentObservedEvent extends BaseEvent {
+  type: 'ceo.sent_observed';
+  sourceLayer: 'execution';
+  payload: CeoSentObservedPayload;
+}
+
 export interface TaskResumableThroughputEvent extends BaseEvent {
   type: 'task.resumable_throughput';
   sourceLayer: 'system';
@@ -1194,6 +1210,7 @@ export type BusEvent =
   | TaskCreatedEvent           // Tasks v1: task created via task-create skill (#835)
   | TaskUpdatedEvent           // Tasks v1: task fields updated via task-update skill (#835)
   | TaskCompletedEvent         // Tasks v1: task set to done via task-complete skill (#835)
+  | CeoSentObservedEvent       // #1422: Sent-folder observation poll (draft/task matches)
   | TaskResumableThroughputEvent // #1264: resumable pause throughput telemetry
   | ChannelPollEvent           // #846: email adapter poll heartbeat (one per cycle)
   | ChannelStalledEvent;       // #846: email adapter stall detection (fire-once per lifecycle)
@@ -1824,6 +1841,20 @@ export function createTaskCompleted(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'task.completed',
+    sourceLayer: 'execution',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createCeoSentObserved(
+  payload: CeoSentObservedPayload & { parentEventId?: string },
+): CeoSentObservedEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'ceo.sent_observed',
     sourceLayer: 'execution',
     payload: rest,
     parentEventId,

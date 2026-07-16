@@ -1,0 +1,323 @@
+// ceo-inbox-sent-observe — daily Sent-folder poll for voice learning + task completion (#1422).
+//
+// Watermarked like the inbound email poll. Self-throttles via last_run_found_nothing_at
+// (t2125 pattern). Capture/match failures on individual messages log and continue.
+
+import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import { CeoNylasClient, htmlToPlainText } from '../_shared/ceo-nylas-client.js';
+import { ConfigStore } from '../../src/memory/config-store.js';
+import {
+  VOICE_LEARNING_DOC_TYPE,
+  VOICE_LEARNING_SCRATCH_PREFIX,
+} from '../_shared/voice-learning-capture.js';
+import {
+  formatCompletionCandidateBlock,
+  formatDiffBlock,
+  matchDraftToSent,
+  matchTasksToSent,
+  type DraftSnapshotLike,
+} from '../_shared/sent-observe-match.js';
+import { createCeoSentObserved } from '../../src/bus/events.js';
+
+export const CONFIG_NAMESPACE = 'ceo_inbox';
+export const WATERMARK_KEY = 'sent_observe.last_seen_at';
+export const IDLE_BACKOFF_KEY = 'sent_observe.last_run_found_nothing_at';
+export const PENDING_DIFFS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-diffs.md`;
+export const PENDING_COMPLETIONS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-completions.md`;
+export const PENDING_DIFFS_TYPE = 'voice-pending-diffs';
+export const PENDING_COMPLETIONS_TYPE = 'voice-pending-completions';
+
+/** Idle backoff when a run finds nothing — 2 hours (t2125 pattern). */
+const IDLE_BACKOFF_MS = 2 * 60 * 60 * 1000;
+
+const EPOCH = '0';
+
+function parseSnapshot(doc: {
+  path: string;
+  type: string;
+  frontmatter: Record<string, unknown>;
+  body: string;
+}): DraftSnapshotLike | null {
+  if (doc.type !== VOICE_LEARNING_DOC_TYPE) return null;
+  const fm = doc.frontmatter;
+  const draftId = typeof fm.draft_id === 'string' ? fm.draft_id : '';
+  if (!draftId) return null;
+
+  const recipientsRaw = fm.recipients;
+  let to: Array<{ email: string }> = [];
+  let cc: Array<{ email: string }> = [];
+  if (recipientsRaw && typeof recipientsRaw === 'object') {
+    const rec = recipientsRaw as Record<string, unknown>;
+    if (Array.isArray(rec.to)) {
+      to = rec.to
+        .filter((p): p is { email: string } => !!p && typeof p === 'object' && typeof (p as { email?: unknown }).email === 'string')
+        .map((p) => ({ email: p.email }));
+    }
+    if (Array.isArray(rec.cc)) {
+      cc = rec.cc
+        .filter((p): p is { email: string } => !!p && typeof p === 'object' && typeof (p as { email?: unknown }).email === 'string')
+        .map((p) => ({ email: p.email }));
+    }
+  }
+
+  return {
+    draftId,
+    threadId: typeof fm.thread_id === 'string' ? fm.thread_id : '',
+    subject: typeof fm.subject === 'string' ? fm.subject : '',
+    recipients: { to, cc },
+    body: doc.body,
+    createdAt: typeof fm.created_at === 'string' ? fm.created_at : new Date(0).toISOString(),
+    linkedTaskIds: Array.isArray(fm.linked_task_ids)
+      ? fm.linked_task_ids.filter((v): v is string => typeof v === 'string')
+      : [],
+  };
+}
+
+function extractMatchedDraftIds(pendingDiffsBody: string): Set<string> {
+  const ids = new Set<string>();
+  for (const m of pendingDiffsBody.matchAll(/draft\s+([^\s↔]+)\s*↔/g)) {
+    if (m[1]) ids.add(m[1]);
+  }
+  return ids;
+}
+
+function extractAskedTaskIds(pendingCompletionsBody: string): Set<string> {
+  const ids = new Set<string>();
+  for (const m of pendingCompletionsBody.matchAll(/## Candidate — task\s+(\S+)/g)) {
+    if (m[1]) ids.add(m[1]);
+  }
+  // Also honor in-band completion_asked markers written by later jobs.
+  for (const m of pendingCompletionsBody.matchAll(/completion_asked:\s*\{[^}]*\}[^\n]*task[_\s-]?id[:\s]+(\S+)/gi)) {
+    if (m[1]) ids.add(m[1].replace(/[.,;]/g, ''));
+  }
+  return ids;
+}
+
+async function ensureDoc(
+  ctx: SkillContext,
+  path: string,
+  type: string,
+  title: string,
+): Promise<{ body: string; version: number }> {
+  const repo = ctx.workingDocs!;
+  const existing = await repo.read(path);
+  if (existing) return { body: existing.body, version: existing.version };
+  const created = await repo.create({
+    path,
+    type,
+    frontmatter: { title },
+    body: `# ${title}\n\n`,
+    agentId: ctx.agentId,
+    conversationId: ctx.conversationId,
+  });
+  return { body: created.body, version: created.version };
+}
+
+async function appendDoc(
+  ctx: SkillContext,
+  path: string,
+  type: string,
+  title: string,
+  content: string,
+): Promise<void> {
+  if (!content.trim()) return;
+  const repo = ctx.workingDocs!;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const doc = await ensureDoc(ctx, path, type, title);
+    const result = await repo.append(path, {
+      content,
+      expectedVersion: doc.version,
+    });
+    if (result.ok) return;
+  }
+  ctx.log.warn({ path }, 'ceo-inbox-sent-observe: failed to append after conflicts');
+}
+
+export class CeoInboxSentObserveHandler implements SkillHandler {
+  async execute(ctx: SkillContext): Promise<SkillResult> {
+    let apiKey: string;
+    let grantId: string;
+    try {
+      apiKey = ctx.secret('nylas_api_key');
+      grantId = ctx.secret('ceo_nylas_grant_id');
+    } catch (err) {
+      ctx.log.error({ err }, 'ceo-inbox-sent-observe: required secret not available');
+      return { success: false, error: 'CEO inbox is not configured (missing credentials)' };
+    }
+
+    if (!ctx.entityMemory || !ctx.workingDocs || !ctx.taskRepo || !ctx.bus) {
+      return {
+        success: false,
+        error: 'ceo-inbox-sent-observe requires entityMemory, workingDocs, taskRepo, and bus',
+      };
+    }
+
+    const input =
+      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
+    const force = input.force === true;
+    // Undocumented test seam — inject fixed "now" for deterministic backoff tests.
+    const nowMs = typeof input.nowMs === 'number' ? input.nowMs : Date.now();
+
+    const store = new ConfigStore(ctx.entityMemory, ctx.log);
+
+    // Self-throttle: if the last idle run was recent, skip (unless force).
+    if (!force) {
+      const idleAt = await store.get(CONFIG_NAMESPACE, IDLE_BACKOFF_KEY);
+      if (idleAt && idleAt !== EPOCH) {
+        const idleMs = Number(idleAt);
+        if (Number.isFinite(idleMs) && nowMs - idleMs < IDLE_BACKOFF_MS) {
+          ctx.log.info(
+            { idleAt, backoffMs: IDLE_BACKOFF_MS },
+            'ceo-inbox-sent-observe: skipping — idle backoff active',
+          );
+          if (ctx.bus) {
+            await ctx.bus.publish(
+              'execution',
+              createCeoSentObserved({
+                messagesScanned: 0,
+                draftMatches: 0,
+                taskCandidates: 0,
+                watermarkAdvancedTo: null,
+                skippedBackoff: true,
+                parentEventId: ctx.taskEventId,
+              }),
+            );
+          }
+          return {
+            success: true,
+            data: {
+              messages_scanned: 0,
+              draft_matches: 0,
+              task_candidates: 0,
+              watermark_advanced_to: null,
+              skipped_backoff: true,
+            },
+          };
+        }
+      }
+    }
+
+    const watermarkRaw = await store.get(CONFIG_NAMESPACE, WATERMARK_KEY);
+    const watermark = watermarkRaw && Number.isFinite(Number(watermarkRaw))
+      ? Number(watermarkRaw)
+      : 0;
+
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const messages = await client.listMessages({
+      folder: 'SENT',
+      ...(watermark > 0 ? { receivedAfter: watermark } : {}),
+      limit: 20,
+    });
+
+    // Load draft snapshots + pending evidence.
+    const scratchDocs = await ctx.workingDocs.listByPrefix(`${VOICE_LEARNING_SCRATCH_PREFIX}/`);
+    const snapshots = scratchDocs
+      .map(parseSnapshot)
+      .filter((s): s is DraftSnapshotLike => s !== null);
+
+    const pendingDiffs = await ensureDoc(ctx, PENDING_DIFFS_PATH, PENDING_DIFFS_TYPE, 'Pending voice diffs');
+    const pendingCompletions = await ensureDoc(
+      ctx,
+      PENDING_COMPLETIONS_PATH,
+      PENDING_COMPLETIONS_TYPE,
+      'Pending task-completion candidates',
+    );
+    const alreadyMatchedDraftIds = extractMatchedDraftIds(pendingDiffs.body);
+    const alreadyAskedTaskIds = extractAskedTaskIds(pendingCompletions.body);
+
+    const openTasks = await ctx.taskRepo.listTasks({
+      owner: 'ceo',
+      statuses: ['open', 'in_progress'],
+      limit: 100,
+    });
+
+    let draftMatches = 0;
+    let taskCandidates = 0;
+    let maxDate = watermark;
+    const diffChunks: string[] = [];
+    const completionChunks: string[] = [];
+
+    for (const msg of messages) {
+      if (msg.date > maxDate) maxDate = msg.date;
+
+      const draftMatch = matchDraftToSent(msg, snapshots, alreadyMatchedDraftIds);
+      if (draftMatch) {
+        alreadyMatchedDraftIds.add(draftMatch.draftId);
+        let sentBody = msg.snippet ?? '';
+        try {
+          const full = await client.getMessage(msg.id);
+          sentBody = htmlToPlainText(full.body) || full.snippet || sentBody;
+        } catch (err) {
+          ctx.log.warn(
+            { err, messageId: msg.id },
+            'ceo-inbox-sent-observe: getMessage failed — using snippet for sent body',
+          );
+        }
+        diffChunks.push(formatDiffBlock(draftMatch, sentBody));
+        draftMatches += 1;
+      }
+
+      const taskMatches = matchTasksToSent(msg, openTasks, alreadyAskedTaskIds);
+      for (const tm of taskMatches) {
+        alreadyAskedTaskIds.add(tm.taskId);
+        completionChunks.push(formatCompletionCandidateBlock(tm));
+        taskCandidates += 1;
+      }
+    }
+
+    await appendDoc(ctx, PENDING_DIFFS_PATH, PENDING_DIFFS_TYPE, 'Pending voice diffs', diffChunks.join(''));
+    await appendDoc(
+      ctx,
+      PENDING_COMPLETIONS_PATH,
+      PENDING_COMPLETIONS_TYPE,
+      'Pending task-completion candidates',
+      completionChunks.join(''),
+    );
+
+    // Advance watermark past the newest message seen (exclusive next poll).
+    let watermarkAdvancedTo: number | null = null;
+    if (messages.length > 0 && maxDate >= watermark) {
+      watermarkAdvancedTo = maxDate + 1;
+      await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
+    }
+
+    if (messages.length === 0) {
+      await store.set(CONFIG_NAMESPACE, IDLE_BACKOFF_KEY, String(nowMs));
+    } else {
+      await store.set(CONFIG_NAMESPACE, IDLE_BACKOFF_KEY, EPOCH);
+    }
+
+    await ctx.bus.publish(
+      'execution',
+      createCeoSentObserved({
+        messagesScanned: messages.length,
+        draftMatches,
+        taskCandidates,
+        watermarkAdvancedTo,
+        skippedBackoff: false,
+        parentEventId: ctx.taskEventId,
+      }),
+    );
+
+    ctx.log.info(
+      {
+        messagesScanned: messages.length,
+        draftMatches,
+        taskCandidates,
+        watermarkAdvancedTo,
+      },
+      'ceo-inbox-sent-observe: run complete',
+    );
+
+    return {
+      success: true,
+      data: {
+        messages_scanned: messages.length,
+        draft_matches: draftMatches,
+        task_candidates: taskCandidates,
+        watermark_advanced_to: watermarkAdvancedTo,
+        skipped_backoff: false,
+      },
+    };
+  }
+}
