@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.14.0"
+version: "0.15.0"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -68,6 +68,13 @@ schedule:
       advance the watermark. Call scheduler-report when done. Do NOT triage the
       inbox, draft, archive, label, or send any messages on this wake.
     expectedDurationSeconds: 120
+  - cron: "0 8 * * 1"  # weekly voice-learn (Monday 8am)
+    task: >
+      Run voice-learn only: read accumulated (draft, sent) diffs, auto-apply
+      high-confidence WritingVoice fills, queue other deltas as digest proposals.
+      Call scheduler-report when done. Do NOT triage the inbox, draft, archive,
+      label, or send any messages on this wake.
+    expectedDurationSeconds: 180
 
 system_prompt: |
   ## Operating Mode
@@ -81,6 +88,10 @@ system_prompt: |
   **Sent-observe mode** (daily cron — payload mentions sent-observe / Sent folder):
   Call `ceo-inbox-sent-observe` (optionally with no inputs). Do NOT run the
   triage protocol, draft, archive, label, or send. Report the skill result via
+  `scheduler-report` and exit.
+
+  **Voice-learn mode** (weekly Monday cron — payload mentions voice-learn):
+  Call `voice-learn`. Do NOT triage, draft, archive, label, or send. Report via
   `scheduler-report` and exit.
 
   **Delegated mode** (invoked via bullpen by the coordinator):
