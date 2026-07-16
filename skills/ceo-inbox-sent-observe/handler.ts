@@ -35,6 +35,11 @@ export const PENDING_COMPLETIONS_TYPE = 'voice-pending-completions';
 /** Idle backoff when a run finds nothing — 2 hours (t2125 pattern). */
 const IDLE_BACKOFF_MS = 2 * 60 * 60 * 1000;
 
+/** Safety ceiling on messages scanned per run — a daily Sent volume never reaches
+ *  this, but it bounds a runaway mailbox. Truncation is handled by holding the
+ *  watermark (see watermark-advance below), not by silently dropping the tail. */
+const SENT_MAX_SCAN = 500;
+
 const EPOCH = '0';
 
 function parseSnapshot(doc: {
@@ -87,13 +92,11 @@ function extractMatchedDraftIds(pendingDiffsBody: string): Set<string> {
 }
 
 function extractAskedTaskIds(pendingCompletionsBody: string): Set<string> {
+  // Every candidate (including ones later stamped with a `completion_asked` marker)
+  // keeps its `## Candidate — task <id>` header, so this single pass covers them all.
   const ids = new Set<string>();
   for (const m of pendingCompletionsBody.matchAll(/## Candidate — task\s+(\S+)/g)) {
     if (m[1]) ids.add(m[1]);
-  }
-  // Also honor in-band completion_asked markers written by later jobs.
-  for (const m of pendingCompletionsBody.matchAll(/completion_asked:\s*\{[^}]*\}[^\n]*task[_\s-]?id[:\s]+(\S+)/gi)) {
-    if (m[1]) ids.add(m[1].replace(/[.,;]/g, ''));
   }
   return ids;
 }
@@ -210,10 +213,13 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       : 0;
 
     const client = new CeoNylasClient(apiKey, grantId, ctx.log);
-    const messages = await client.listMessages({
+    // Paginate the whole watermark window — a single fixed-limit page silently drops
+    // everything past the newest 20 on a busy Sent folder (#1429 review). `truncated`
+    // means the maxScan ceiling was hit and older sends remain unseen this run.
+    const { messages, truncated } = await client.listAllMessages({
       folder: 'SENT',
       ...(watermark > 0 ? { receivedAfter: watermark } : {}),
-      limit: 20,
+      maxScan: SENT_MAX_SCAN,
     });
 
     // Load draft snapshots + pending evidence.
@@ -242,6 +248,9 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     let taskCandidates = 0;
     let shadowReconciled = 0;
     let maxDate = watermark;
+    // Oldest message actually processed this run — used to keep the watermark below
+    // the un-fetched tail when a run is truncated, so nothing is skipped for good.
+    let minDate = Number.POSITIVE_INFINITY;
     const diffChunks: string[] = [];
     const completionChunks: string[] = [];
 
@@ -252,6 +261,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
 
     for (const msg of messages) {
       if (msg.date > maxDate) maxDate = msg.date;
+      if (msg.date < minDate) minDate = msg.date;
 
       let sentBody = msg.snippet ?? '';
       let fetchedBody = false;
@@ -354,11 +364,29 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       completionChunks.join(''),
     );
 
-    // Advance watermark past the newest message seen (exclusive next poll).
+    // Advance the watermark. When the run drained the window (not truncated), jump
+    // past the newest message seen (exclusive next poll). When truncated, older sends
+    // below `minDate` were NOT fetched (Nylas returns newest-first), so advancing past
+    // the newest would strand them — instead hold the watermark just below the oldest
+    // message we processed so the next run re-covers the tail. Re-processing the newer
+    // messages is safe: draft/task/shadow writes are all idempotent (already-matched
+    // ids + shadow reconciled_at markers).
     let watermarkAdvancedTo: number | null = null;
-    if (messages.length > 0 && maxDate >= watermark) {
-      watermarkAdvancedTo = maxDate + 1;
-      await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
+    if (messages.length > 0) {
+      if (truncated && Number.isFinite(minDate)) {
+        const held = Math.max(watermark, minDate - 1);
+        if (held > watermark) {
+          watermarkAdvancedTo = held;
+          await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(held));
+        }
+        ctx.log.warn(
+          { scanned: messages.length, maxScan: SENT_MAX_SCAN, heldWatermarkAt: held },
+          'ceo-inbox-sent-observe: scan ceiling hit — older sends deferred to next run',
+        );
+      } else if (maxDate >= watermark) {
+        watermarkAdvancedTo = maxDate + 1;
+        await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
+      }
     }
 
     if (messages.length === 0) {

@@ -356,4 +356,48 @@ describe('CeoInboxSentObserveHandler', () => {
     expect((result as { data: { skipped_backoff: boolean } }).data.skipped_backoff).toBe(true);
     expect(mockFetch).not.toHaveBeenCalled();
   });
+
+  it('follows next_cursor to scan every message in the window (no page-1 drop)', async () => {
+    const mkMsg = (id: string, date: number) => ({
+      id,
+      thread_id: `t-${id}`,
+      subject: 'Note',
+      from: [{ email: 'ceo@example.com' }],
+      to: [{ email: 'x@example.com' }],
+      cc: [],
+      snippet: 'body',
+      date,
+      unread: false,
+      folders: ['SENT'],
+      attachments: [],
+    });
+
+    // Page 1 carries a cursor; page 2 (fetched via page_token) has no cursor → done.
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('page_token=CURSOR1')) {
+        return new Response(JSON.stringify({ data: [mkMsg('m3', 1_720_000_400)] }), { status: 200 });
+      }
+      if (u.includes('/messages?')) {
+        return new Response(
+          JSON.stringify({
+            data: [mkMsg('m1', 1_720_000_200), mkMsg('m2', 1_720_000_300)],
+            next_cursor: 'CURSOR1',
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const ctx = buildCtx({ force: true, nowMs: 1_720_100_000_000, tasks: [] });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { messages_scanned: number; watermark_advanced_to: number } }).data;
+    // All three messages across both pages were scanned — page 2 not dropped.
+    expect(data.messages_scanned).toBe(3);
+    expect(data.watermark_advanced_to).toBe(1_720_000_401);
+    // Second fetch carried the cursor, proving pagination happened.
+    expect(mockFetch.mock.calls.some((c) => String(c[0]).includes('page_token=CURSOR1'))).toBe(true);
+  });
 });
