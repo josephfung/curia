@@ -1,10 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { VoiceLearnHandler, PENDING_PROPOSALS_PATH, CONFIG_NAMESPACE, PROVENANCE_KEY } from './handler.js';
+import { VoiceLearnHandler, PENDING_PROPOSALS_PATH } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
-import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import type { ExecutiveProfile } from '../../src/executive/types.js';
 import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
-import { DEFAULT_PROVENANCE } from '../_shared/voice-learn-logic.js';
 
 const DIFFS = `
 # Pending voice diffs
@@ -35,37 +33,13 @@ Hi Carol, Thanks
 ---
 `;
 
-function makeMem(seed: Record<string, string> = {}): EntityMemory & { __values: Map<string, string> } {
-  const values = new Map(Object.entries(seed));
-  const anchor = {
-    id: 'a1',
-    label: `config:${CONFIG_NAMESPACE}`,
-    temporal: { createdAt: new Date(), lastConfirmedAt: new Date(), confidence: 0.9, decayClass: 'permanent', source: 't' },
-  };
-  return {
-    __values: values,
-    findEntities: vi.fn(async () => [anchor]),
-    getFacts: vi.fn(async () =>
-      [...values.entries()].map(([key, value]) => ({
-        id: key,
-        label: key,
-        properties: { key, value, namespace: CONFIG_NAMESPACE },
-        temporal: { createdAt: new Date(), lastConfirmedAt: new Date(), confidence: 0.9, decayClass: 'permanent', source: 't' },
-      })),
-    ),
-    storeFact: vi.fn(async (p: { label: string; properties?: Record<string, unknown> }) => {
-      values.set(p.label, String(p.properties?.value ?? ''));
-      return { stored: true, action: 'created' };
-    }),
-    createEntity: vi.fn(async () => ({ entity: anchor, created: false })),
-  } as unknown as EntityMemory & { __values: Map<string, string> };
-}
-
 function makeCtx(opts: {
   voice?: Partial<ExecutiveProfile['writingVoice']>;
   diffs?: string;
-  dryRun?: boolean;
-}): SkillContext & { __updates: unknown[]; __docs: Map<string, { body: string; version: number; type: string; path: string; frontmatter: Record<string, unknown> }> } {
+}): SkillContext & {
+  __updates: unknown[];
+  __docs: Map<string, { body: string; version: number; type: string; path: string; frontmatter: Record<string, unknown> }>;
+} {
   const voice = {
     tone: ['direct', 'warm'],
     formality: 50,
@@ -89,8 +63,10 @@ function makeCtx(opts: {
   }
 
   return {
-    input: opts.dryRun ? { dry_run: true } : {},
+    input: {},
     agentId: 'ceo-inbox',
+    skillName: 'voice-learn',
+    skillVersion: '0.2.0',
     executiveProfileService: {
       get: () => profile,
       update: vi.fn(async (next: ExecutiveProfile) => {
@@ -98,9 +74,10 @@ function makeCtx(opts: {
         profile.writingVoice = next.writingVoice;
       }),
     },
-    entityMemory: makeMem({
-      [PROVENANCE_KEY]: JSON.stringify(DEFAULT_PROVENANCE),
-    }),
+    infraLlm: {
+      extract: vi.fn(),
+      classify: vi.fn(),
+    },
     workingDocs: {
       read: vi.fn(async (path: string) => docs.get(path) ?? null),
       create: vi.fn(async (p: { path: string; type: string; body?: string; frontmatter?: Record<string, unknown> }) => {
@@ -133,65 +110,37 @@ function makeCtx(opts: {
 describe('VoiceLearnHandler', () => {
   const handler = new VoiceLearnHandler();
 
-  it('auto path: fills empty sign-off from consistent samples', async () => {
+  it('proposes an updated guide from the diff corpus via the LLM', async () => {
     const ctx = makeCtx({});
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    const data = (result as { data: { auto_applied: number; bootstrap: boolean } }).data;
-    expect(data.auto_applied).toBeGreaterThanOrEqual(1);
-    expect(data.bootstrap).toBe(true);
-    expect(ctx.__updates.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('propose path: operator-set sign-off is not auto-applied', async () => {
-    const ctx = makeCtx({
-      voice: { signOff: 'Cheers' },
+    (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      text: '- Writes short.\n- Dry humour.',
     });
-    // Mark signOff as operator-set in provenance store.
-    const mem = ctx.entityMemory as EntityMemory & { __values: Map<string, string> };
-    mem.__values.set(
-      PROVENANCE_KEY,
-      JSON.stringify({ ...DEFAULT_PROVENANCE, signOff: 'operator-set' }),
-    );
-
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
-    // Sign-off should be proposed, not auto-applied over operator-set.
-    const proposals = ctx.__docs.get(PENDING_PROPOSALS_PATH);
-    expect(proposals?.body ?? '').toMatch(/signOff|sign_off|Thanks/i);
-  });
-
-  it('cold-start / zero data: no pairs → no fabrication', async () => {
-    const ctx = makeCtx({ diffs: '# empty\n' });
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    expect((result as { data: { pairs_considered: number } }).data.pairs_considered).toBe(0);
+    const proposals = ctx.__docs.get(PENDING_PROPOSALS_PATH)?.body ?? '';
+    expect(proposals).toContain('## Guide Proposal');
+    expect(proposals).toContain('Dry humour');
+    // profile NOT written directly (human-in-the-loop)
     expect(ctx.__updates).toHaveLength(0);
   });
 
-  it('does not re-propose a field that already has an open proposal (dedup)', async () => {
-    const ctx = makeCtx({ voice: { signOff: 'Cheers' } });
-    const mem = ctx.entityMemory as EntityMemory & { __values: Map<string, string> };
-    // operator-set → signOff takes the propose lane (never auto).
-    mem.__values.set(
-      PROVENANCE_KEY,
-      JSON.stringify({ ...DEFAULT_PROVENANCE, signOff: 'operator-set' }),
-    );
-    // Pre-seed an existing pending signOff proposal (as a prior week would have left).
-    ctx.__docs.set(PENDING_PROPOSALS_PATH, {
-      path: PENDING_PROPOSALS_PATH,
-      type: 'voice-pending-proposals',
-      frontmatter: {},
-      body: `# Pending voice proposals\n\n## Proposal — signOff\n- status: pending\n- description: Prefer Thanks\n- sample_count: 3\n- consistency: 1.00\n- patch: {"sign_off":"Thanks"}\n---\n`,
-      version: 1,
-    });
-
+  it('no pairs → no LLM call, no proposal', async () => {
+    const ctx = makeCtx({ diffs: '# empty\n' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
+    expect(ctx.infraLlm!.extract).not.toHaveBeenCalled();
+    expect(ctx.__docs.get(PENDING_PROPOSALS_PATH)).toBeUndefined();
+  });
 
-    // Still exactly one signOff proposal block — not duplicated.
-    const body = ctx.__docs.get(PENDING_PROPOSALS_PATH)?.body ?? '';
-    const count = (body.match(/## Proposal — signOff/g) ?? []).length;
-    expect(count).toBe(1);
+  it('LLM failure → no proposal, success result', async () => {
+    const ctx = makeCtx({});
+    (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      error: 'timeout',
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(ctx.__docs.get(PENDING_PROPOSALS_PATH)).toBeUndefined();
   });
 });
