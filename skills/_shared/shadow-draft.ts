@@ -1,29 +1,12 @@
-// Shadow-draft capture + decision-equivalence scoring (#1426 / ADR-029).
+// Shadow-draft capture + batched LLM judge prompt/parse (#1426 / #1419 / ADR-029).
 
 import { VOICE_LEARNING_SCRATCH_PREFIX } from './voice-learning-capture.js';
-import { tokenize } from './sent-observe-match.js';
 
 export const SHADOW_DOC_TYPE = 'shadow-draft';
 export const SHADOW_SCRATCH_PREFIX = `${VOICE_LEARNING_SCRATCH_PREFIX}/shadow`;
 
-/** High-sensitivity capture exclusions (board / investors / legal / spouse). */
-const SENSITIVE_RE =
-  /\b(board|investor|investors|legal|counsel|attorney|spouse|wife|husband|partner\b.*personal|nda|privileged)\b/i;
-
 export function shadowDraftPath(sourceMessageId: string): string {
   return `${SHADOW_SCRATCH_PREFIX}/${sourceMessageId}.md`;
-}
-
-export function isHighSensitivityThread(params: {
-  subject: string;
-  body?: string;
-  from?: string;
-  labels?: string[];
-}): boolean {
-  const hay = [params.subject, params.body ?? '', params.from ?? '', ...(params.labels ?? [])].join(
-    ' ',
-  );
-  return SENSITIVE_RE.test(hay);
 }
 
 export interface ShadowSnapshot {
@@ -59,80 +42,66 @@ export function parseShadowDoc(doc: {
   };
 }
 
-export type DecisionPolarity = 'affirm' | 'deny' | 'none';
-
-// Deny is checked first so "cannot approve" / "won't accept" read as denials.
-const DENY_RE =
-  /\b(decline|declined|reject|rejected|refuse|refused|won'?t|cannot|can'?t|unable|deny|denied|not\s+(?:able|going|proceeding|approv\w*|accept\w*))\b/i;
-const AFFIRM_RE =
-  /\b(approve|approved|agree|agreed|accept|accepted|confirm|confirmed|will|shall|yes|happy\s+to|glad\s+to|sounds\s+good|go\s+ahead)\b/i;
-
-/** Classify the decision a message expresses. Deny wins ties ("cannot approve" = deny). */
-export function detectDecisionPolarity(body: string): DecisionPolarity {
-  if (DENY_RE.test(body)) return 'deny';
-  if (AFFIRM_RE.test(body)) return 'affirm';
-  return 'none';
+export interface ShadowJudgePair {
+  sourceMessageId: string;
+  subject: string;
+  shadowBody: string;
+  sentBody: string;
 }
 
-/**
- * Decision/outcome equivalence — did the shadow reach the SAME decision as the actual
- * send, not merely share vocabulary. This flag feeds the autonomy score, so it fails
- * safe (toward 0): a false 1 would inflate autonomy on evidence Curia didn't earn.
- *
- * - Opposing decisions (approve vs decline) never count, however much text they share.
- * - A decision on one side but not the other is not equivalence.
- * - Aligned decisions credit on modest content overlap; two purely informational
- *   replies credit only on strong overlap.
- */
-export function scoreDecisionEquivalence(
-  shadowBody: string,
-  sentBody: string,
-): { competenceFlag: 0 | 1; reason: string } {
-  const shadowTokens = tokenize(shadowBody);
-  const sentTokens = tokenize(sentBody);
-  if (shadowTokens.size === 0 || sentTokens.size === 0) {
-    return { competenceFlag: 0, reason: 'empty-body' };
+export interface ShadowJudgement {
+  sourceMessageId: string;
+  sameDecision: boolean;
+  reason: string;
+}
+
+/** Build one prompt that judges substantive decision equivalence for a batch of pairs. */
+export function buildShadowJudgePrompt(pairs: ShadowJudgePair[]): string {
+  const items = pairs
+    .map(
+      (p, i) =>
+        `### Pair ${i + 1} (source_message_id: ${p.sourceMessageId})\n` +
+        `Subject: ${p.subject}\n\n` +
+        `SHADOW (what the assistant would have sent):\n${p.shadowBody.trim() || '(empty)'}\n\n` +
+        `ACTUAL (what the CEO actually sent):\n${p.sentBody.trim() || '(empty)'}`,
+    )
+    .join('\n\n---\n\n');
+  return [
+    'You are auditing an AI assistant against a CEO. For each pair, decide whether the',
+    'SHADOW email reaches the SAME substantive decision / recommendation / outcome as the',
+    'ACTUAL email — e.g. proposes the same meeting time, gives the same answer to a policy',
+    'question, makes the same ask, reports the same status. Judge the decision, NOT wording,',
+    'tone, or length. Opposing or materially different decisions are not the same.',
+    '',
+    'Return ONLY a JSON array, one object per pair:',
+    '[{"source_message_id": "...", "same_decision": true|false, "reason": "<short>"}]',
+    '',
+    items,
+  ].join('\n');
+}
+
+/** Tolerant parse of the judge output — extracts the first JSON array, keeps well-formed entries. */
+export function parseShadowJudgeResult(text: string): ShadowJudgement[] {
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start < 0 || end <= start) return [];
+  let arr: unknown;
+  try {
+    arr = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return [];
   }
-
-  let inter = 0;
-  for (const t of shadowTokens) if (sentTokens.has(t)) inter += 1;
-  const union = shadowTokens.size + sentTokens.size - inter;
-  const jaccard = union === 0 ? 0 : inter / union;
-
-  const shadowPol = detectDecisionPolarity(shadowBody);
-  const sentPol = detectDecisionPolarity(sentBody);
-
-  // Opposing decisions are the clearest form of divergence — reject outright.
-  if (
-    (shadowPol === 'affirm' && sentPol === 'deny') ||
-    (shadowPol === 'deny' && sentPol === 'affirm')
-  ) {
-    return { competenceFlag: 0, reason: `decision-diverged(${shadowPol}!=${sentPol})` };
+  if (!Array.isArray(arr)) return [];
+  const out: ShadowJudgement[] = [];
+  for (const raw of arr) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.source_message_id !== 'string' || typeof r.same_decision !== 'boolean') continue;
+    out.push({
+      sourceMessageId: r.source_message_id,
+      sameDecision: r.same_decision,
+      reason: typeof r.reason === 'string' ? r.reason : '',
+    });
   }
-  // One side committed to a decision, the other stayed silent — not the same decision.
-  if ((shadowPol === 'none') !== (sentPol === 'none')) {
-    return { competenceFlag: 0, reason: `decision-asymmetry(${shadowPol}/${sentPol})` };
-  }
-
-  // Dates / numbers alignment (rough commitment signal).
-  const nums = (s: string) => new Set(s.match(/\b\d{1,4}\b/g) ?? []);
-  const shadowNums = nums(shadowBody);
-  const sentNums = nums(sentBody);
-  let numHit = 0;
-  for (const n of shadowNums) if (sentNums.has(n)) numHit += 1;
-  const numAlign = shadowNums.size === 0 || numHit > 0;
-
-  if (shadowPol !== 'none') {
-    // Both reached the same decision polarity — credit on modest content overlap.
-    if (jaccard >= 0.25 && numAlign) {
-      return { competenceFlag: 1, reason: `${shadowPol}-aligned;jaccard=${jaccard.toFixed(2)}` };
-    }
-    return { competenceFlag: 0, reason: `${shadowPol}-aligned;low-overlap;jaccard=${jaccard.toFixed(2)}` };
-  }
-
-  // Both purely informational (no explicit decision) — demand strong equivalence.
-  if (jaccard >= 0.4 && numAlign) {
-    return { competenceFlag: 1, reason: `informational-equiv;jaccard=${jaccard.toFixed(2)}` };
-  }
-  return { competenceFlag: 0, reason: `no-decision;jaccard=${jaccard.toFixed(2)}` };
+  return out;
 }

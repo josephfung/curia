@@ -1,9 +1,5 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import {
-  isHighSensitivityThread,
-  shadowDraftPath,
-  SHADOW_DOC_TYPE,
-} from '../_shared/shadow-draft.js';
+import { shadowDraftPath, SHADOW_DOC_TYPE } from '../_shared/shadow-draft.js';
 
 export class CeoInboxShadowDraftHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -24,23 +20,6 @@ export class CeoInboxShadowDraftHandler implements SkillHandler {
     const recipients = Array.isArray(input.recipients)
       ? input.recipients.filter((r): r is string => typeof r === 'string')
       : [];
-    const labels = Array.isArray(input.labels)
-      ? input.labels.filter((r): r is string => typeof r === 'string')
-      : [];
-    const from = typeof input.from === 'string' ? input.from : '';
-
-    if (isHighSensitivityThread({ subject, body, from, labels })) {
-      // Don't log the subject of a thread we're excluding precisely because it's
-      // high-sensitivity (board / legal / spouse) — the id is enough to trace.
-      ctx.log.info(
-        { sourceMessageId },
-        'ceo-inbox-shadow-draft: skipping high-sensitivity thread',
-      );
-      return {
-        success: true,
-        data: { captured: false, skipped_reason: 'high_sensitivity' },
-      };
-    }
 
     const path = shadowDraftPath(sourceMessageId);
     try {
