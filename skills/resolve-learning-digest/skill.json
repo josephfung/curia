@@ -1,0 +1,21 @@
+{
+  "name": "resolve-learning-digest",
+  "description": "Resolve a learning-digest item: approve/dismiss a voice proposal, undo an auto-completed task, or confirm/dismiss a task-completion candidate.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "medium",
+  "inputs": {
+    "action": "string (approve_voice | dismiss_voice | undo_completion | confirm_completion | dismiss_completion)",
+    "field": "string? (required for approve_voice / dismiss_voice — e.g. signOff)",
+    "task_id": "string? (required for completion actions)"
+  },
+  "outputs": {
+    "resolved": "boolean",
+    "detail": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 20000,
+  "capabilities": ["workingDocs", "executiveProfileService", "entityMemory", "taskRepo"],
+  "allowed_callers": ["coordinator"]
+}

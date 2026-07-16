@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.12.0"
+version: "0.13.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -703,6 +703,8 @@ pinned_skills:
   - deny-action
   - dismiss-action
   - list-pending-actions
+  - list-learning-digest
+  - resolve-learning-digest
   - activity-log
   - task-list
   - approval-expiry-sweep
@@ -724,12 +726,16 @@ schedule:
       all open approval requests. (2) Use task-list three times: owner "ceo"
       with no date filter (all open CEO tasks); owner "ceo" with due_before set
       to end of today (overdue or due today); owner "external" with no date
-      filter (waiting-on-others tasks). (3) Compose a clear summary. Lead with
+      filter (waiting-on-others tasks). (3) Use list-learning-digest for proposed
+      voice diffs and sent-mail task-completion undo/confirm items — include its
+      sections_markdown only when non-empty. (4) Compose a clear summary. Lead with
       any overdue or due-today CEO tasks — flag these prominently. Follow with
-      the full open-task counts and pending approvals. Send via email using the
-      CEO's address from the Principal Contact Details block. Skip sending
-      entirely if all three task-list calls return empty and list-pending-actions
-      returns no pending approvals. If list-pending-actions returns an error,
+      the full open-task counts, pending approvals, then any learning-digest
+      sections. Send via email using the CEO's address from the Principal Contact
+      Details block. Skip sending entirely if all three task-list calls return
+      empty, list-pending-actions returns no pending approvals, and
+      list-learning-digest has no items. If list-pending-actions returns an error,
       include a brief note that pending approvals could not be retrieved, then
-      send anyway.
+      send anyway. When the CEO later replies approve/dismiss/undo/confirm for a
+      learning item, call resolve-learning-digest with the matching action.
     expectedDurationSeconds: 360
