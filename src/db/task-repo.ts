@@ -746,6 +746,62 @@ export class TaskRepo {
     return updated;
   }
 
+  /**
+   * Reopen a done task back to open — used for reversible sent-mail auto-completes (#1424).
+   * Cancelled tasks cannot be reopened. Appends an audit note in progress.notes.
+   */
+  async reopenTask(
+    taskId: string,
+    note?: string,
+    callerAgentId?: string,
+  ): Promise<TaskRow | null> {
+    const current = await this.getTask(taskId);
+    if (!current) return null;
+    if (current.status !== 'done') {
+      throw new Error(
+        `Cannot reopen task — status is '${current.status}' (only 'done' can be reopened).`,
+      );
+    }
+
+    const noteEntry = {
+      at: new Date().toISOString(),
+      note: note ?? 'Reopened (undo auto-complete from sent mail)',
+    };
+
+    const { rows } = await this.pool.query(
+      `UPDATE tasks
+       SET status = 'open',
+           progress = jsonb_set(
+             COALESCE(progress, '{}'::jsonb),
+             '{notes}',
+             COALESCE(progress->'notes', '[]'::jsonb) || $1::jsonb,
+             true
+           ),
+           updated_at = now()
+       WHERE id = $2 AND status = 'done'
+       RETURNING ${TASK_COLUMNS}`,
+      [JSON.stringify([noteEntry]), taskId],
+    );
+    const row = rows[0] as DbTaskRow | undefined;
+    if (!row) return null;
+
+    const updated = mapTaskRow(row);
+    try {
+      await this.bus.publish('execution', createTaskUpdated({
+        taskId: updated.id,
+        previousStatus: 'done',
+        newStatus: 'open',
+        progressNote: noteEntry.note,
+        agentId: callerAgentId ?? null,
+      }));
+    } catch (busErr) {
+      this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after reopenTask');
+    }
+
+    this.logger.info({ taskId: updated.id }, 'task-repo: reopened task');
+    return updated;
+  }
+
   private async runReconcileChildrenQuery(
     executor: DbQueryable,
     taskId: string,
