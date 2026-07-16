@@ -36,6 +36,7 @@ import type { ContactService } from '../contacts/contact-service.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { EntityMemory, CreateEntityOptions, StoreFactResult } from '../memory/entity-memory.js';
+import type { SensitivityClassifier } from '../memory/sensitivity.js';
 import type { StoreFactOptions } from '../memory/types.js';
 import { createMemoryStore } from '../bus/events.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
@@ -196,6 +197,10 @@ export class ExecutionLayer {
   private principalIdentities: readonly ChannelIdentity[];
   /** Bulk export gates for MCP and attachment exports (#201). */
   private exportControlService?: ExportControlService;
+  /** Shared sensitivity classifier (#1419) — available to skills declaring
+   *  'sensitivityClassifier' in capabilities. Built once at startup from
+   *  yamlConfig.sensitivity_rules and reused across skills and EntityMemory. */
+  private sensitivityClassifier?: SensitivityClassifier;
 
   constructor(registry: SkillRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -239,6 +244,8 @@ export class ExecutionLayer {
     principalIdentities?: readonly ChannelIdentity[];
     /** Bulk export gate service (#201). */
     exportControlService?: ExportControlService;
+    /** Shared sensitivity classifier (#1419) — available to skills declaring 'sensitivityClassifier'. */
+    sensitivityClassifier?: SensitivityClassifier;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -279,6 +286,7 @@ export class ExecutionLayer {
     this.resumableCeilings = options?.resumableCeilings ?? DEFAULT_RESUMABLE_CEILINGS;
     this.principalIdentities = options?.principalIdentities ?? [];
     this.exportControlService = options?.exportControlService;
+    this.sensitivityClassifier = options?.sensitivityClassifier;
   }
 
   /**
@@ -1230,6 +1238,9 @@ export class ExecutionLayer {
       // loop below. Backed by secretsService — listed here so the missing-cap guard fails
       // closed when a skill declares the capability but no vault is wired.
       secretResolver: this.secretsService,
+      // sensitivityClassifier (#1419) — plain field injection, no special-casing needed.
+      // Classifies free text against config sensitivity_rules; shared with EntityMemory.
+      sensitivityClassifier: this.sensitivityClassifier,
     };
 
     // Hard-restrict executionLayer to approve-action only.
