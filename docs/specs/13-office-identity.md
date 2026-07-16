@@ -356,10 +356,13 @@ The following are explicitly out of scope for this spec. They are valid future e
 ## Writing-voice learning
 
 Office identity is how the *assistant* presents itself. Separately, Curia maintains an
-**executive writing voice** — how the *CEO* writes — in `ExecutiveProfile.WritingVoice`
-(`tone[]`, `formality` 0–100, `patterns[]`, `vocabulary.{prefer,avoid}`, `signOff`).
-That profile is read by `executive-profile-get` (e.g. when `ceo-inbox` drafts) and written
-by `executive-profile-update`. It is versioned in `executive_profile_versions` and emits
+**executive writing voice** — how the *CEO* writes — in `ExecutiveProfile.WritingVoice`.
+That type carries seeded structured fields (`tone[]`, `formality` 0–100, `patterns[]`,
+`vocabulary.{prefer,avoid}`, `signOff`) alongside a learned free-form `guide` (see the
+loop below). The profile is read by `executive-profile-get` (e.g. when `ceo-inbox` drafts).
+Its structured fields are set via `executive-profile-update`; the learned `guide` is
+written only through the `resolve-learning-digest` `approve_voice` action, never by the
+weekly job directly. It is versioned in `executive_profile_versions` and emits
 `config.change` on every write — the same audit posture as office identity.
 
 ### Observation → learn loop (ADR-029)
