@@ -9,8 +9,7 @@
     "thread_id": "string?",
     "subject": "string",
     "body": "string (the shadow draft Curia would have sent — never shown to the CEO)",
-    "recipients": "string[]? (to addresses)",
-    "disposition": "string? (Seen | Urgent | Stuck)"
+    "recipients": "string[]? (to addresses)"
   },
   "outputs": {
     "captured": "boolean",

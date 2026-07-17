@@ -16,7 +16,6 @@ export interface ShadowSnapshot {
   recipients: string[];
   body: string;
   createdAt: string;
-  disposition: string;
 }
 
 export function parseShadowDoc(doc: {
@@ -38,7 +37,6 @@ export function parseShadowDoc(doc: {
       : [],
     body: doc.body,
     createdAt: typeof fm.created_at === 'string' ? fm.created_at : '',
-    disposition: typeof fm.disposition === 'string' ? fm.disposition : 'punt',
   };
 }
 
