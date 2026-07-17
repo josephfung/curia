@@ -38,7 +38,6 @@ export interface DraftMatch {
   messageId: string;
   draftId: string;
   threadId: string;
-  confidence: 'high' | 'medium';
   draftBody: string;
   sentSubject: string;
   sentRecipients: string[];
@@ -127,6 +126,9 @@ export function matchDraftToSent(
   const sentRecipients = recipientSet(sent);
   const sentAtIso = new Date(sent.date * 1000).toISOString();
   let best: DraftMatch | null = null;
+  // Preference ordering: thread+recipient beats thread-only beats recipient+subject. Once we
+  // hold a thread hit, a later recipient+subject candidate must not replace it.
+  let bestIsThreadHit = false;
 
   for (const snap of snapshots) {
     if (alreadyMatchedDraftIds.has(snap.draftId)) continue;
@@ -147,45 +149,30 @@ export function matchDraftToSent(
       Boolean(snap.threadId) &&
       sent.threadId === snap.threadId;
 
+    const common = {
+      messageId: sent.id,
+      draftId: snap.draftId,
+      draftBody: snap.body,
+      sentSubject: sent.subject,
+      sentRecipients: [...sentRecipients],
+      sentAt: sentAtIso,
+    };
+
+    // Best possible: same thread AND a shared recipient — return immediately.
     if (threadHit && overlap >= 1) {
-      return {
-        messageId: sent.id,
-        draftId: snap.draftId,
-        threadId: sent.threadId,
-        confidence: 'high',
-        draftBody: snap.body,
-        sentSubject: sent.subject,
-        sentRecipients: [...sentRecipients],
-        sentAt: sentAtIso,
-      };
+      return { ...common, threadId: sent.threadId };
     }
 
+    // Thread-only: strong; keep scanning in case a thread+recipient hit appears.
     if (threadHit) {
-      best = {
-        messageId: sent.id,
-        draftId: snap.draftId,
-        threadId: sent.threadId,
-        confidence: 'high',
-        draftBody: snap.body,
-        sentSubject: sent.subject,
-        sentRecipients: [...sentRecipients],
-        sentAt: sentAtIso,
-      };
+      best = { ...common, threadId: sent.threadId };
+      bestIsThreadHit = true;
       continue;
     }
 
-    if (overlap >= 1 && subjectSimilar(sent.subject, snap.subject)) {
-      const candidate: DraftMatch = {
-        messageId: sent.id,
-        draftId: snap.draftId,
-        threadId: sent.threadId || snap.threadId,
-        confidence: 'medium',
-        draftBody: snap.body,
-        sentSubject: sent.subject,
-        sentRecipients: [...sentRecipients],
-        sentAt: sentAtIso,
-      };
-      if (!best || best.confidence === 'medium') best = candidate;
+    // Weakest accepted: shared recipient + similar subject. Only fills in when no thread match yet.
+    if (overlap >= 1 && subjectSimilar(sent.subject, snap.subject) && !bestIsThreadHit) {
+      best = { ...common, threadId: sent.threadId || snap.threadId };
     }
   }
 
@@ -276,7 +263,6 @@ export function formatDiffBlock(match: DraftMatch, sentBody: string): string {
     `## Diff — draft ${match.draftId} ↔ sent ${match.messageId}`,
     '',
     `- thread_id: ${match.threadId || '(none)'}`,
-    `- confidence: ${match.confidence}`,
     `- sent_at: ${match.sentAt}`,
     `- subject: ${match.sentSubject}`,
     `- recipients: ${match.sentRecipients.join(', ')}`,
