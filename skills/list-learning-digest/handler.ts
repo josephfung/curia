@@ -15,8 +15,8 @@ export class ListLearningDigestHandler implements SkillHandler {
       // Guarded on ctx.entityMemory since it's not a hard capability requirement of this
       // skill — without it, neither section renders (same net effect as both being absent).
       const store = ctx.entityMemory ? new ConfigStore(ctx.entityMemory, ctx.log) : null;
-      const guide = store ? await readVoiceProposal(store) : null;
-      const completion_items = store ? digestMapToItems(await readCompletionDigest(store)) : [];
+      const guide = store ? await readVoiceProposal(store, ctx.log) : null;
+      const completion_items = store ? digestMapToItems(await readCompletionDigest(store, ctx.log)) : [];
       const guideText = guide?.status === 'pending' ? guide.guide : null;
 
       const sections = [

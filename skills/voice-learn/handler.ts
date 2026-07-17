@@ -173,11 +173,25 @@ export class VoiceLearnHandler implements SkillHandler {
         data: { pairs_considered: newPairs.length, proposed: false, reason: 'no-config-store' },
       };
     }
-    await writeVoiceProposal(configStore, {
+    const proposalStored = await writeVoiceProposal(configStore, {
       status: 'pending',
       generatedAt: new Date().toISOString(),
       guide,
     });
+    if (!proposalStored) {
+      // Soft-reject (stored:false, no thrown error) — do NOT advance the checkpoint below, or
+      // this evidence would never be retried and the proposal would simply vanish. Returning
+      // early here (before the checkpoint-advance block) is what keeps this batch eligible on
+      // the next run.
+      ctx.log.warn(
+        {},
+        'voice-learn: proposal write soft-rejected — not advancing checkpoint so evidence retries',
+      );
+      return {
+        success: true,
+        data: { pairs_considered: newPairs.length, proposed: false, reason: 'proposal-not-persisted' },
+      };
+    }
 
     // Advance the checkpoint only now that the proposal write above has succeeded — a failed
     // LLM call or empty guide already returned earlier without reaching here, so those cases

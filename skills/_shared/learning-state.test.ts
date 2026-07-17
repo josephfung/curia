@@ -20,13 +20,32 @@ import {
 } from './learning-state.js';
 
 // Minimal in-memory ConfigStore double: only get/set, keyed by config key (namespace fixed).
+// set() mirrors the real ConfigStore.set()'s `{ stored: boolean }` return shape — the write
+// accessors in learning-state.ts now read `.stored` off it, so a double that resolved `undefined`
+// would throw at runtime the moment a write accessor's boolean return is exercised.
 function fakeStore(seed: Record<string, string> = {}) {
   const values = new Map(Object.entries(seed));
   const store = {
     get: async (_ns: string, key: string) => values.get(key) ?? null,
-    set: async (_ns: string, key: string, value: string) => { values.set(key, value); },
+    set: async (_ns: string, key: string, value: string) => {
+      values.set(key, value);
+      return { stored: true };
+    },
   } as unknown as ConfigStore;
   return { store, values };
+}
+
+// Minimal spy Logger double — just enough of the pino.Logger surface (warn) for the corruption
+// callback learning-state.ts's read accessors invoke on a JSON.parse failure.
+function fakeLogger() {
+  const warnCalls: Array<[Record<string, unknown>, string]> = [];
+  const logger = {
+    warn: (obj: Record<string, unknown>, msg: string) => { warnCalls.push([obj, msg]); },
+    info: () => {},
+    error: () => {},
+    debug: () => {},
+  } as unknown as Parameters<typeof readCompletionCandidates>[1];
+  return { logger, warnCalls };
 }
 
 describe('learning-state config accessors', () => {
@@ -86,6 +105,27 @@ describe('learning-state config accessors', () => {
     expect(items).toHaveLength(2);
     expect(items[0]!.taskId).toBe('t1');
     expect(items.find((i) => i.taskId === 't2')!.kind).toBe('confirm');
+  });
+
+  it('logs corruption via the provided logger when a stored value fails to parse, and still degrades to empty', async () => {
+    // Finding 4: a corrupt stored value used to silently reset to empty with zero
+    // observability. readCompletionCandidates must still degrade to {} (skill contract) but
+    // now surfaces the corruption through an optional logger so it's not a silent data loss.
+    const { store } = fakeStore({ [COMPLETION_CANDIDATES_KEY]: 'not json' });
+    const { logger, warnCalls } = fakeLogger();
+    const result = await readCompletionCandidates(store, logger);
+    expect(result).toEqual({});
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![1]).toMatch(/failed to parse/);
+    expect(warnCalls[0]![0]).toMatchObject({ key: COMPLETION_CANDIDATES_KEY });
+  });
+
+  it('does not log corruption for an unset (null) value — absence is not corruption', async () => {
+    const { store } = fakeStore();
+    const { logger, warnCalls } = fakeLogger();
+    const result = await readCompletionCandidates(store, logger);
+    expect(result).toEqual({});
+    expect(warnCalls).toHaveLength(0);
   });
 
   it('composes undo/confirm note text verbatim to the pre-migration copy', () => {

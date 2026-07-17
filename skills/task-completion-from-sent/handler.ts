@@ -55,7 +55,7 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
     const classify = (text: string) => ctx.sensitivityClassifier!.classify(text, {});
 
     const store = new ConfigStore(ctx.entityMemory, ctx.log);
-    const candidateMap = await readCompletionCandidates(store);
+    const candidateMap = await readCompletionCandidates(store, ctx.log);
     const candidates = Object.entries(candidateMap).map(([taskId, c]) => ({ taskId, ...c }));
     if (candidates.length === 0) {
       return { success: true, data: { auto_completed: 0, queued_confirm: 0, skipped: 0 } };
@@ -174,13 +174,31 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
     // the stale candidate get re-skipped next run (ineligible → removed, no re-complete,
     // no duplicate digest item). Consume-first would instead silently drop the undo/confirm
     // affordance the user needed while leaving no trace that one was ever queued.
+    //
+    // digestStored gates the candidate-consume write below: if the digest write soft-rejects
+    // (stored:false) we must NOT remove the just-completed/confirmed items from the candidate
+    // queue, or their undo/confirm affordance is lost with no trace it ever existed. Note this
+    // is not full completion+digest atomicity — an already-auto-completed task whose digest
+    // write then soft-fails will simply be re-evaluated next run: it's re-fetched (still 'done'),
+    // found ineligible (ACTIVE_TASK_STATUSES excludes 'done'), and cleaned up as skipped_ineligible
+    // — so its undo note is lost but the loss is logged, not silent. Confirm-queued items get a
+    // clean retry (task is still active, so it's simply re-classified next run). A larger
+    // restructure (e.g. a single combined write) would be needed for true atomicity here, out of
+    // scope for this fix.
+    let digestStored = true;
     if (digestAdds.length > 0) {
-      const digestMap: CompletionDigestMap = await readCompletionDigest(store);
+      const digestMap: CompletionDigestMap = await readCompletionDigest(store, ctx.log);
       for (const item of digestAdds) digestMap[item.taskId] = item;
-      await writeCompletionDigest(store, digestMap);
+      digestStored = await writeCompletionDigest(store, digestMap);
+      if (!digestStored) {
+        ctx.log.warn(
+          {},
+          'task-completion-from-sent: digest write soft-rejected — not consuming candidates so confirm items retry next run',
+        );
+      }
     }
 
-    if (Object.keys(remaining).length !== Object.keys(candidateMap).length) {
+    if (digestStored && Object.keys(remaining).length !== Object.keys(candidateMap).length) {
       await writeCompletionCandidates(store, remaining);
     }
 

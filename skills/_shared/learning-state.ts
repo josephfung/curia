@@ -7,6 +7,7 @@
 // (pending-diffs.md), draft snapshots, and shadow docs stay in OKF (see ADR-029).
 
 import type { ConfigStore } from '../../src/memory/config-store.js';
+import type { Logger } from '../../src/logger.js';
 import type { MatchConfidence } from './sent-observe-match.js';
 
 /** Same namespace as the watermark/idle-backoff/checkpoint/dismiss-cooldown keys. */
@@ -48,43 +49,63 @@ export interface VoiceGuideProposal {
 }
 
 /** Parse a stored JSON value, treating unset/garbage as absent — data loss (a dropped item) is
- *  worse than over-retention, and a parse throw must never escape into a skill failure. */
-function parseJson<T>(raw: string | null): T | null {
+ *  worse than over-retention, and a parse throw must never escape into a skill failure. A
+ *  `null`/empty `raw` is NOT corruption (just "never written") and does not invoke `onCorrupt`;
+ *  only an actual JSON.parse failure on a non-empty value does — that's a genuinely corrupt
+ *  stored value silently degrading to empty, which callers should be able to observe/log. */
+function parseJson<T>(raw: string | null, onCorrupt?: () => void): T | null {
   if (!raw) return null;
   try {
     return JSON.parse(raw) as T;
   } catch {
+    onCorrupt?.();
     return null;
   }
 }
 
-export async function readCompletionCandidates(store: ConfigStore): Promise<CompletionCandidateMap> {
-  return parseJson<CompletionCandidateMap>(await store.get(LEARNING_STATE_NAMESPACE, COMPLETION_CANDIDATES_KEY)) ?? {};
-}
-export async function writeCompletionCandidates(store: ConfigStore, map: CompletionCandidateMap): Promise<void> {
-  await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_CANDIDATES_KEY, JSON.stringify(map));
-}
-
-export async function readCompletionDigest(store: ConfigStore): Promise<CompletionDigestMap> {
-  return parseJson<CompletionDigestMap>(await store.get(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_KEY)) ?? {};
-}
-export async function writeCompletionDigest(store: ConfigStore, map: CompletionDigestMap): Promise<void> {
-  await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_KEY, JSON.stringify(map));
+/** Build the onCorrupt callback shared by every read accessor below: logs a warning (only when a
+ *  logger was supplied — the param is optional so callers/tests without a ctx.log still compile)
+ *  identifying the key and a truncated snippet of the unparseable value, without dumping the
+ *  full (possibly large) raw string into logs. */
+function corruptionLogger(key: string, raw: string, log?: Logger): () => void {
+  return () =>
+    log?.warn(
+      { key, rawSnippet: raw.slice(0, 120) },
+      'learning-state: stored value failed to parse — treating as empty',
+    );
 }
 
-export async function readVoiceProposal(store: ConfigStore): Promise<VoiceGuideProposal | null> {
-  return parseJson<VoiceGuideProposal>(await store.get(LEARNING_STATE_NAMESPACE, VOICE_PROPOSAL_KEY));
+export async function readCompletionCandidates(store: ConfigStore, log?: Logger): Promise<CompletionCandidateMap> {
+  const raw = await store.get(LEARNING_STATE_NAMESPACE, COMPLETION_CANDIDATES_KEY);
+  return parseJson<CompletionCandidateMap>(raw, raw ? corruptionLogger(COMPLETION_CANDIDATES_KEY, raw, log) : undefined) ?? {};
 }
-export async function writeVoiceProposal(store: ConfigStore, proposal: VoiceGuideProposal | null): Promise<void> {
-  await store.set(LEARNING_STATE_NAMESPACE, VOICE_PROPOSAL_KEY, JSON.stringify(proposal));
+export async function writeCompletionCandidates(store: ConfigStore, map: CompletionCandidateMap): Promise<boolean> {
+  return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_CANDIDATES_KEY, JSON.stringify(map))).stored;
 }
 
-export async function readIdSet(store: ConfigStore, key: string): Promise<Set<string>> {
-  const arr = parseJson<string[]>(await store.get(LEARNING_STATE_NAMESPACE, key));
+export async function readCompletionDigest(store: ConfigStore, log?: Logger): Promise<CompletionDigestMap> {
+  const raw = await store.get(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_KEY);
+  return parseJson<CompletionDigestMap>(raw, raw ? corruptionLogger(COMPLETION_DIGEST_KEY, raw, log) : undefined) ?? {};
+}
+export async function writeCompletionDigest(store: ConfigStore, map: CompletionDigestMap): Promise<boolean> {
+  return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_KEY, JSON.stringify(map))).stored;
+}
+
+export async function readVoiceProposal(store: ConfigStore, log?: Logger): Promise<VoiceGuideProposal | null> {
+  const raw = await store.get(LEARNING_STATE_NAMESPACE, VOICE_PROPOSAL_KEY);
+  return parseJson<VoiceGuideProposal>(raw, raw ? corruptionLogger(VOICE_PROPOSAL_KEY, raw, log) : undefined);
+}
+export async function writeVoiceProposal(store: ConfigStore, proposal: VoiceGuideProposal | null): Promise<boolean> {
+  return (await store.set(LEARNING_STATE_NAMESPACE, VOICE_PROPOSAL_KEY, JSON.stringify(proposal))).stored;
+}
+
+export async function readIdSet(store: ConfigStore, key: string, log?: Logger): Promise<Set<string>> {
+  const raw = await store.get(LEARNING_STATE_NAMESPACE, key);
+  const arr = parseJson<string[]>(raw, raw ? corruptionLogger(key, raw, log) : undefined);
   return new Set(Array.isArray(arr) ? arr : []);
 }
-export async function writeIdSet(store: ConfigStore, key: string, ids: Set<string>): Promise<void> {
-  await store.set(LEARNING_STATE_NAMESPACE, key, JSON.stringify([...ids]));
+export async function writeIdSet(store: ConfigStore, key: string, ids: Set<string>): Promise<boolean> {
+  return (await store.set(LEARNING_STATE_NAMESPACE, key, JSON.stringify([...ids]))).stored;
 }
 
 /** Flatten the digest map to the array the render helpers consume, preserving insertion order. */

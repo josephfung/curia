@@ -425,5 +425,39 @@ describe('VoiceLearnHandler', () => {
       expect(mem.__values.get(VOICE_PROPOSAL_KEY)).toContain('Writes short.');
       expect(mem.__values.has(DIFFS_CHECKPOINT_KEY)).toBe(false);
     });
+
+    it('a SOFT-rejected proposal write (stored:false, no throw) does not advance the checkpoint', async () => {
+      // Unlike the "checkpoint WRITE fails" test above (which throws only for the checkpoint
+      // key, proving the proposal write itself is independent), this drives the opposite and
+      // more dangerous case: the PROPOSAL write soft-rejects — resolves normally with
+      // stored:false — while the checkpoint write would otherwise succeed. Before the fix,
+      // writeVoiceProposal returned void and the handler always advanced the checkpoint right
+      // after calling it, so a soft-rejected proposal (nothing actually persisted) would still
+      // retire this batch of evidence forever — the proposal is simply lost with no retry.
+      const mem = makeEntityMemory();
+      (mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+        async (p: { label: string; properties?: Record<string, unknown> }) => {
+          if (p.label === VOICE_PROPOSAL_KEY) {
+            return { stored: false, action: 'conflict' as const };
+          }
+          mem.__values.set(p.label, String(p.properties?.value ?? ''));
+          return { stored: true, action: 'created' as const };
+        },
+      );
+      const ctx = makeCtx({ entityMemory: mem });
+      (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        text: '- Writes short.',
+      });
+
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      const data = (result as { data: Record<string, unknown> }).data;
+      expect(data).toMatchObject({ proposed: false, reason: 'proposal-not-persisted' });
+      // The proposal was never actually stored.
+      expect(mem.__values.has(VOICE_PROPOSAL_KEY)).toBe(false);
+      // The checkpoint must NOT have advanced — the evidence must retry on the next run.
+      expect(mem.__values.has(DIFFS_CHECKPOINT_KEY)).toBe(false);
+    });
   });
 });

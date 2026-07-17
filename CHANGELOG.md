@@ -37,6 +37,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`task-completion-from-sent`** — re-check tasks are open and CEO-owned; fail closed on subtask-lookup errors. (#1419)
 - **Voice-learning capture** — a body-only draft edit refreshes the snapshot in place, preserving its original `created_at`. (#1419)
 - **`voice-learn`** — voice-guide approval loop no longer breaks after one cycle; honors dismiss cooldown. (#1419)
+- **Learning-subsystem config writes** — soft-rejected `ConfigStore` writes now hold state instead of silently advancing. (#1438)
 
 ### Added
 

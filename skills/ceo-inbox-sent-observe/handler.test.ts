@@ -615,6 +615,100 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(ctx.__mem.__values.has(ASKED_TASK_IDS_KEY)).toBe(false);
   });
 
+  it('holds the watermark and skips the asked-guard when the candidate write SOFT-rejects (stored:false, no throw)', async () => {
+    // Same shape as the hard-failure test above, but this time storeFact does NOT throw — it
+    // resolves normally with { stored: false } (the real dedup 'conflict'/'auto_rejected' shape
+    // ConfigStore.set can hit). Before the fix, completionsPersisted was only ever flipped false
+    // in the catch block, so a soft-reject like this one would sail through as "persisted" even
+    // though nothing was actually written — silently losing the candidate while still advancing
+    // the watermark past the sends that produced it. This is the HIGH-severity regression case.
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-2')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: 'msg-sent-2',
+              thread_id: 't2',
+              subject: 'Follow up',
+              from: [{ email: 'ceo@example.com' }],
+              to: [{ email: 'alice@example.com' }],
+              cc: [],
+              body: '<p>Following up on our chat</p>',
+              snippet: 'Following up',
+              date: 1_720_000_300,
+              unread: false,
+              folders: ['SENT'],
+              bcc: [],
+              labels: [],
+              attachments: [],
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes('/messages?')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: 'msg-sent-2',
+                thread_id: 't2',
+                subject: 'Follow up',
+                from: [{ email: 'ceo@example.com' }],
+                to: [{ email: 'alice@example.com' }],
+                cc: [],
+                snippet: 'Following up on our chat with Alice',
+                date: 1_720_000_300,
+                unread: false,
+                folders: ['SENT'],
+                attachments: [],
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      tasks: [
+        {
+          id: 'task-ceo-1',
+          title: 'Follow up with Alice',
+          description: 'Email alice@example.com about the chat',
+          tags: [],
+          priority: 40,
+        },
+      ],
+    });
+
+    // Soft-reject only the completion-candidates write — resolves normally with stored:false,
+    // mirroring a dedup 'conflict'/'auto_rejected' storeFact outcome rather than an infra error.
+    (ctx.__mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+      async (params: { label: string; properties?: Record<string, unknown> }) => {
+        if (params.label === COMPLETION_CANDIDATES_KEY) {
+          return { stored: false, action: 'conflict' as const };
+        }
+        ctx.__mem.__values.set(params.label, String(params.properties?.value ?? ''));
+        return { stored: true, action: 'created' as const };
+      },
+    );
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { watermark_advanced_to: number | null } }).data;
+    // The watermark must be HELD (not advanced) so the candidate-producing send is re-observed.
+    expect(data.watermark_advanced_to).toBeNull();
+    expect(ctx.__mem.__values.has(COMPLETION_CANDIDATES_KEY)).toBe(false);
+    // The asked-guard must NOT have been persisted with this task — otherwise next run's
+    // matchTasksToSent would skip it via the guard while the candidate was never actually queued.
+    expect(ctx.__mem.__values.has(ASKED_TASK_IDS_KEY)).toBe(false);
+  });
+
   it('prunes asked_task_ids to currently-open tasks on write', async () => {
     // closed-task was asked about previously but is no longer open (completed/cancelled).
     // task-ceo-1 is still open. After a run, the persisted guard should drop closed-task.
