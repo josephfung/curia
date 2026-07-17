@@ -6,7 +6,7 @@ import {
   type UpdateDraftOptions,
 } from '../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../src/format/markdown-to-html.js';
-import { captureDraftSnapshot, parseLinkedTaskIds } from '../_shared/voice-learning-capture.js';
+import { captureDraftSnapshot } from '../_shared/voice-learning-capture.js';
 
 const MAX_BODY_LENGTH = 50_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -163,9 +163,6 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
       // Best-effort voice-learning snapshot — fire-and-forget so it never adds latency to
       // the edit (#1421). captureDraftSnapshot logs its own failures and never rejects;
       // the .catch guards against an unexpected throw becoming an unhandled rejection.
-      // Only pass linkedTaskIds when the caller actually supplied them; otherwise leave
-      // it undefined so a body-only edit preserves the ids captured at draft creation
-      // (passing [] would clear them).
       void captureDraftSnapshot(ctx, {
         draftId: draft.id,
         threadId: draft.threadId,
@@ -173,11 +170,6 @@ export class CeoInboxDraftEditHandler implements SkillHandler {
         to: draft.to,
         cc: draft.cc,
         body: snapshotBody,
-        agentVersion: ctx.skillVersion,
-        linkedTaskIds:
-          input.linked_task_ids === undefined
-            ? undefined
-            : parseLinkedTaskIds(input.linked_task_ids),
       }).catch((err) =>
         ctx.log.error({ err }, 'ceo-inbox-draft-edit: voice snapshot capture rejected'),
       );

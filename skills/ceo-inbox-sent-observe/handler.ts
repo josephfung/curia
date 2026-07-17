@@ -94,9 +94,6 @@ function parseSnapshot(doc: {
     recipients: { to, cc },
     body: doc.body,
     createdAt: typeof fm.created_at === 'string' ? fm.created_at : new Date(0).toISOString(),
-    linkedTaskIds: Array.isArray(fm.linked_task_ids)
-      ? fm.linked_task_ids.filter((v): v is string => typeof v === 'string')
-      : [],
   };
 }
 

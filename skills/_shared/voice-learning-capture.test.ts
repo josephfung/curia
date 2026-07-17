@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   captureDraftSnapshot,
   draftSnapshotPath,
-  parseLinkedTaskIds,
   VOICE_LEARNING_DOC_TYPE,
 } from './voice-learning-capture.js';
 import type { SkillContext } from '../../src/skills/types.js';
@@ -32,20 +31,7 @@ const SNAPSHOT = {
   to: [{ email: 'alice@example.com', name: 'Alice' }],
   cc: [{ email: 'bob@example.com' }],
   body: 'Thanks for the note.',
-  agentVersion: '0.3.0',
-  linkedTaskIds: ['task-1'],
 };
-
-describe('parseLinkedTaskIds', () => {
-  it('returns trimmed string ids', () => {
-    expect(parseLinkedTaskIds(['  a  ', 'b', '', 3, null])).toEqual(['a', 'b']);
-  });
-
-  it('returns [] for non-arrays', () => {
-    expect(parseLinkedTaskIds(undefined)).toEqual([]);
-    expect(parseLinkedTaskIds('task-1')).toEqual([]);
-  });
-});
 
 describe('captureDraftSnapshot', () => {
   beforeEach(() => {
@@ -72,8 +58,6 @@ describe('captureDraftSnapshot', () => {
         },
         subject: 'Re: Hello',
         created_at: '2026-07-16T12:00:00.000Z',
-        linked_task_ids: ['task-1'],
-        agent_version: '0.3.0',
       },
       body: 'Thanks for the note.',
       agentId: 'ceo-inbox',
@@ -125,42 +109,24 @@ describe('captureDraftSnapshot', () => {
     );
   });
 
-  it('preserves existing linked_task_ids on a body-only edit (linkedTaskIds omitted)', async () => {
+  it('preserves created_at from the first write on a body-only edit', async () => {
     const update = vi.fn().mockResolvedValue({ ok: true, document: {} });
     const read = vi.fn().mockResolvedValue({
       version: 3,
-      frontmatter: { created_at: '2026-07-01T00:00:00.000Z', linked_task_ids: ['task-existing'] },
+      frontmatter: { created_at: '2026-07-01T00:00:00.000Z', draft_id: 'draft-abc' },
       body: 'old',
     });
     const ctx = buildCtx({ read, create: vi.fn(), update });
 
-    // Note: no `linkedTaskIds` on this input → an edit that didn't touch task links.
-    const { linkedTaskIds: _omit, ...bodyOnly } = SNAPSHOT;
-    const ok = await captureDraftSnapshot(ctx, { ...bodyOnly, body: 'edited body' });
+    const ok = await captureDraftSnapshot(ctx, { ...SNAPSHOT, body: 'edited body' });
     expect(ok).toBe(true);
     expect(update).toHaveBeenCalledWith(
       '/scratch/voice-learning/draft-abc.md',
       expect.objectContaining({
-        frontmatter: expect.objectContaining({ linked_task_ids: ['task-existing'] }),
-      }),
-    );
-  });
-
-  it('clears linked_task_ids when an edit explicitly passes an empty array', async () => {
-    const update = vi.fn().mockResolvedValue({ ok: true, document: {} });
-    const read = vi.fn().mockResolvedValue({
-      version: 4,
-      frontmatter: { created_at: '2026-07-01T00:00:00.000Z', linked_task_ids: ['task-existing'] },
-      body: 'old',
-    });
-    const ctx = buildCtx({ read, create: vi.fn(), update });
-
-    const ok = await captureDraftSnapshot(ctx, { ...SNAPSHOT, linkedTaskIds: [], body: 'x' });
-    expect(ok).toBe(true);
-    expect(update).toHaveBeenCalledWith(
-      '/scratch/voice-learning/draft-abc.md',
-      expect.objectContaining({
-        frontmatter: expect.objectContaining({ linked_task_ids: [] }),
+        frontmatter: expect.objectContaining({
+          created_at: '2026-07-01T00:00:00.000Z',
+          updated_at: '2026-07-16T12:00:00.000Z',
+        }),
       }),
     );
   });

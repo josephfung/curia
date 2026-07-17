@@ -290,8 +290,6 @@ describe('CeoInboxSentObserveHandler', () => {
             subject: 'Re: Hello',
             recipients: { to: [{ email: 'alice@example.com' }], cc: [] },
             created_at: '2024-07-03T00:00:00.000Z',
-            linked_task_ids: [],
-            agent_version: '0.3.0',
           },
           body: 'Thanks Alice — following up.',
         },

@@ -4,7 +4,7 @@ import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
 import { markdownToHtml } from '../../src/format/markdown-to-html.js';
 import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../src/skills/_shared/read-attachments.js';
-import { captureDraftSnapshot, parseLinkedTaskIds } from '../_shared/voice-learning-capture.js';
+import { captureDraftSnapshot } from '../_shared/voice-learning-capture.js';
 
 export class CeoInboxDraftReplyHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -154,8 +154,6 @@ export class CeoInboxDraftReplyHandler implements SkillHandler {
         to: draft.to,
         cc: draft.cc,
         body,
-        agentVersion: ctx.skillVersion,
-        linkedTaskIds: parseLinkedTaskIds(input.linked_task_ids),
       }).catch((err) =>
         ctx.log.error({ err }, 'ceo-inbox-draft-reply: voice snapshot capture rejected'),
       );

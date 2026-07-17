@@ -24,7 +24,6 @@ export interface DraftSnapshotLike {
   body: string;
   /** ISO timestamp when Curia captured the draft. */
   createdAt: string;
-  linkedTaskIds?: string[];
 }
 
 export interface TaskMatchCandidate {

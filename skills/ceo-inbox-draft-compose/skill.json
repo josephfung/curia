@@ -9,8 +9,7 @@
     "cc": "string[]? (CC email addresses)",
     "subject": "string (email subject line)",
     "body": "string (email body; markdown supported, converted to HTML automatically)",
-    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)",
-    "linked_task_ids": "string[]? (optional task ids this draft fulfils — recorded on the voice-learning snapshot)"
+    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)"
   },
   "outputs": {
     "draft_id": "string (Nylas draft ID)",
