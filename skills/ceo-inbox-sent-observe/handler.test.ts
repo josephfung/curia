@@ -307,7 +307,6 @@ describe('CeoInboxSentObserveHandler', () => {
     const diffs = ctx.__docs.get(PENDING_DIFFS_PATH);
     expect(diffs?.body).toContain('draft draft-1');
     expect(diffs?.body).toContain('msg-sent-1');
-    expect(ctx.__published.some((e) => e.type === 'ceo.sent_observed')).toBe(true);
   });
 
   it('persists task-completion candidates for open CEO tasks', async () => {

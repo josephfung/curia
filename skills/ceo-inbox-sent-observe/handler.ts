@@ -22,7 +22,6 @@ import {
   trimEvidenceDoc,
   type DraftSnapshotLike,
 } from '../_shared/sent-observe-match.js';
-import { createCeoSentObserved } from '../../src/bus/events.js';
 import {
   parseShadowDoc,
   buildShadowJudgePrompt,
@@ -292,10 +291,10 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       return { success: false, error: 'CEO inbox is not configured (missing credentials)' };
     }
 
-    if (!ctx.entityMemory || !ctx.workingDocs || !ctx.taskRepo || !ctx.bus) {
+    if (!ctx.entityMemory || !ctx.workingDocs || !ctx.taskRepo) {
       return {
         success: false,
-        error: 'ceo-inbox-sent-observe requires entityMemory, workingDocs, taskRepo, and bus',
+        error: 'ceo-inbox-sent-observe requires entityMemory, workingDocs, taskRepo',
       };
     }
     // actionLogRepo is optional at runtime for backward-compatible tests; shadow
@@ -319,19 +318,6 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
             { idleAt, backoffMs: IDLE_BACKOFF_MS },
             'ceo-inbox-sent-observe: skipping — idle backoff active',
           );
-          if (ctx.bus) {
-            await ctx.bus.publish(
-              'execution',
-              createCeoSentObserved({
-                messagesScanned: 0,
-                draftMatches: 0,
-                taskCandidates: 0,
-                watermarkAdvancedTo: null,
-                skippedBackoff: true,
-                parentEventId: ctx.taskEventId,
-              }),
-            );
-          }
           return {
             success: true,
             data: {
@@ -686,18 +672,6 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     } else {
       await store.set(CONFIG_NAMESPACE, IDLE_BACKOFF_KEY, EPOCH);
     }
-
-    await ctx.bus.publish(
-      'execution',
-      createCeoSentObserved({
-        messagesScanned: messages.length,
-        draftMatches,
-        taskCandidates,
-        watermarkAdvancedTo,
-        skippedBackoff: false,
-        parentEventId: ctx.taskEventId,
-      }),
-    );
 
     ctx.log.info(
       {
