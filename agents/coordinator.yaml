@@ -726,8 +726,8 @@ schedule:
       all open approval requests. (2) Use task-list three times: owner "ceo"
       with no date filter (all open CEO tasks); owner "ceo" with due_before set
       to end of today (overdue or due today); owner "external" with no date
-      filter (waiting-on-others tasks). (3) Use list-learning-digest for proposed
-      voice diffs and sent-mail task-completion undo/confirm items — include its
+      filter (waiting-on-others tasks). (3) Use list-learning-digest for the proposed
+      writing-voice guide update and sent-mail task-completion undo/confirm items — include its
       sections_markdown only when non-empty. (4) Compose a clear summary. Lead with
       any overdue or due-today CEO tasks — flag these prominently. Follow with
       the full open-task counts, pending approvals, then any learning-digest

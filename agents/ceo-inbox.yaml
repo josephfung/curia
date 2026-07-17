@@ -75,10 +75,11 @@ schedule:
     expectedDurationSeconds: 120
   - cron: "0 8 * * 1"  # weekly voice-learn (Monday 8am)
     task: >
-      Run voice-learn only: read accumulated (draft, sent) diffs, auto-apply
-      high-confidence WritingVoice fills, queue other deltas as digest proposals.
-      Call scheduler-report when done. Do NOT triage the inbox, draft, archive,
-      label, or send any messages on this wake.
+      Run voice-learn only: read accumulated (draft, sent) diffs and, if there is
+      enough new signal, queue a single updated writing-voice guide proposal for the
+      daily digest (human-approved; never writes the profile directly). Call
+      scheduler-report when done. Do NOT triage the inbox, draft, archive, label, or
+      send any messages on this wake.
     expectedDurationSeconds: 180
 
 system_prompt: |
