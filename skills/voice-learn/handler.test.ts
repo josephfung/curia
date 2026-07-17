@@ -311,5 +311,89 @@ describe('VoiceLearnHandler', () => {
         proposed: true,
       });
     });
+
+    // Build `n` diff blocks with strictly increasing sent_at (one per day from 2026-06-01), so the
+    // oldest is d1 and the newest is d`n`. Returns the doc text and the ordered sent_at strings so
+    // the test can assert against exact checkpoint values. Used to prove batch draining past MAX_PAIRS.
+    function buildDiffs(n: number): { text: string; sentAts: string[] } {
+      const base = Date.UTC(2026, 5, 1, 12, 0, 0); // 2026-06-01T12:00:00Z
+      let text = '\n# Pending voice diffs\n\n';
+      const sentAts: string[] = [];
+      for (let i = 1; i <= n; i++) {
+        const iso = new Date(base + (i - 1) * 86_400_000).toISOString();
+        sentAts.push(iso);
+        text +=
+          `## Diff — draft d${i} ↔ sent m${i}\n` +
+          `- sent_at: ${iso}\n` +
+          `- subject: Hello\n### Draft\nHi ${i}, Best regards\n### Sent\nHi ${i}, Thanks\n---\n`;
+      }
+      return { text, sentAts };
+    }
+
+    it('drains the OLDEST batch first so a >MAX_PAIRS backlog is never stranded past the checkpoint', async () => {
+      // 41 pending pairs — one more than MAX_PAIRS (40). The old `slice(-MAX_PAIRS)` fed the NEWEST
+      // 40 and advanced the checkpoint to the newest sent_at, stranding d1 forever. The fix feeds
+      // the OLDEST 40 (d1..d40) and advances the checkpoint only to d40's sent_at, so d41 survives.
+      const { text, sentAts } = buildDiffs(41);
+      const mem = makeEntityMemory();
+      const ctx = makeCtx({ entityMemory: mem, diffs: text });
+      (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        text: '- Writes short.',
+      });
+
+      const first = await handler.execute(ctx);
+      expect(first.success).toBe(true);
+      // All 41 are eligible (no checkpoint yet), but only the oldest 40 are fed this run, so the
+      // checkpoint advances to d40's sent_at (sentAts[39]) — NOT d41's (sentAts[40]).
+      expect(mem.__values.get(DIFFS_CHECKPOINT_KEY)).toBe(sentAts[39]);
+      // d41 is still strictly newer than the checkpoint, so a second run proposes it rather than
+      // dropping it — proof it was not stranded.
+      const second = await handler.execute(ctx);
+      expect(second.success).toBe(true);
+      expect((second as { data: Record<string, unknown> }).data).toMatchObject({
+        pairs_considered: 1,
+        proposed: true,
+      });
+      expect(mem.__values.get(DIFFS_CHECKPOINT_KEY)).toBe(sentAts[40]);
+    });
+  });
+
+  // The comments promise the checkpoint is best-effort; ConfigStore.get/set propagate infra
+  // failures, so the handler must swallow them rather than aborting the run or reporting failure.
+  describe('checkpoint is genuinely best-effort', () => {
+    it('a failing checkpoint READ falls back to feeding every pair, still succeeds', async () => {
+      const mem = makeEntityMemory();
+      // getFacts backs ConfigStore.get — make it throw so both checkpoint and dismissed reads fail.
+      (mem.getFacts as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('store down'));
+      const ctx = makeCtx({ entityMemory: mem });
+      (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        text: '- Writes short.',
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      // Fell back to feeding all 3 pairs (checkpoint filter disabled) and still proposed.
+      expect((result as { data: Record<string, unknown> }).data).toMatchObject({
+        pairs_considered: 3,
+        proposed: true,
+      });
+    });
+
+    it('a failing checkpoint WRITE does not fail the run after the proposal is written', async () => {
+      const mem = makeEntityMemory();
+      // storeFact backs ConfigStore.set — make the checkpoint write throw.
+      (mem.storeFact as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('store down'));
+      const ctx = makeCtx({ entityMemory: mem });
+      (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        text: '- Writes short.',
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect((result as { data: Record<string, unknown> }).data).toMatchObject({ proposed: true });
+      // The proposal was still persisted despite the checkpoint write failing.
+      expect(ctx.__docs.get(PENDING_PROPOSALS_PATH)?.body ?? '').toContain('## Guide Proposal');
+    });
   });
 });
