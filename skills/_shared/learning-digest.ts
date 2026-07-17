@@ -112,9 +112,13 @@ export function pruneGuideProposals(
 }
 
 /** Remove a completion block from the append-only completion digest once its item has been
- *  actioned (undone/confirmed/dismissed), so resolved items don't accumulate. The header is
- *  matched EXACTLY — the task id must be followed by whitespace or end-of-line, so id `t1`
- *  never matches a `t10` block — and only the first matching block is dropped. Other pending
+ *  actioned (undone/confirmed/dismissed), so resolved items don't accumulate. A block is dropped
+ *  only when BOTH its header and its status line match: the task id must be followed by whitespace
+ *  or end-of-line (so id `t1` never matches a `t10` block) AND the status must be the actionable
+ *  one for that kind (`undo_available` for Undo, `pending_confirm` for Confirm/dismiss). Matching
+ *  the status too means a historical block for the same task in a different state is preserved
+ *  rather than removed in place of the live actionable one (which would leave the real item to be
+ *  replayed after the task mutation already ran). Only the first matching block is dropped; other
  *  items and the preamble/header are preserved. */
 export function removeCompletionBlock(
   body: string,
@@ -123,13 +127,15 @@ export function removeCompletionBlock(
 ): string {
   const esc = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const headerRe = new RegExp(`^## ${kind} — task ${esc}(?:\\s|$)`);
+  const expectedStatus = kind === 'Undo' ? 'undo_available' : 'pending_confirm';
+  const statusRe = new RegExp(`^- status:\\s*${expectedStatus}\\b`, 'm');
   let removed = false;
   return body
     .split(/(?=^## )/m)
     .filter((block) => {
-      if (removed || !headerRe.test(block)) return true;
+      if (removed || !headerRe.test(block) || !statusRe.test(block)) return true;
       removed = true;
-      return false; // drop exactly one matching block
+      return false; // drop exactly one matching, actionable block
     })
     .join('');
 }
