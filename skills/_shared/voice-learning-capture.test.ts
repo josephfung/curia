@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   captureDraftSnapshot,
   draftSnapshotPath,
@@ -37,6 +37,11 @@ describe('captureDraftSnapshot', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-16T12:00:00.000Z'));
+  });
+
+  // Restore real timers so the mocked clock can't leak into later suites in the same worker.
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('writes a create snapshot with the expected frontmatter and body', async () => {
