@@ -163,4 +163,85 @@ describe('ResolveLearningDigestHandler', () => {
     const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
     expect(updated.t1).toEqual(digestMap.t1);
   });
+
+  it('confirms completion via completeTask and removes the digest item', async () => {
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'confirm', taskId: 't1', taskTitle: 'Follow up', note: 'Did emailing them complete it?' },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const getTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
+    const completeTask = vi.fn(async () => undefined);
+    const ctx = {
+      input: { action: 'confirm_completion', task_id: 't1' },
+      workingDocs: { read: vi.fn(), update: vi.fn() },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+
+    const result = await new ResolveLearningDigestHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    expect(completeTask).toHaveBeenCalledWith('t1', expect.any(String), 'coordinator');
+    // The actioned item is removed from the config map so resolved items don't accumulate.
+    const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(updated.t1).toBeUndefined();
+  });
+
+  it('fails and keeps the confirm item when the task no longer exists (getTask returns null)', async () => {
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'confirm', taskId: 't1', taskTitle: 'Follow up', note: 'Did emailing them complete it?' },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const getTask = vi.fn(async () => null);
+    const completeTask = vi.fn();
+    const ctx = {
+      input: { action: 'confirm_completion', task_id: 't1' },
+      workingDocs: { read: vi.fn(), update: vi.fn() },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+
+    const result = await new ResolveLearningDigestHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    expect(completeTask).not.toHaveBeenCalled();
+    // writeCompletionDigest was never called — the item is preserved for a retry.
+    const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(updated.t1).toEqual(digestMap.t1);
+  });
+
+  it('dismisses a queued confirm item without touching the task', async () => {
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'confirm', taskId: 't1', taskTitle: 'Follow up', note: 'Did emailing them complete it?' },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const getTask = vi.fn();
+    const completeTask = vi.fn();
+    const reopenTask = vi.fn();
+    const ctx = {
+      input: { action: 'dismiss_completion', task_id: 't1' },
+      workingDocs: { read: vi.fn(), update: vi.fn() },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask, completeTask, getTask },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+
+    const result = await new ResolveLearningDigestHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    expect(getTask).not.toHaveBeenCalled();
+    expect(completeTask).not.toHaveBeenCalled();
+    expect(reopenTask).not.toHaveBeenCalled();
+    // The actioned item is removed from the config map so resolved items don't accumulate.
+    const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(updated.t1).toBeUndefined();
+  });
 });
