@@ -121,80 +121,33 @@ function isoToUnixSeconds(iso: string): number | null {
 }
 
 /** Strip a leading Re:/Fwd: and normalize whitespace/case for loose subject comparison. */
-function normalizeSubjectKey(subject: string): string {
-  return subject
-    .replace(/^(re|fwd|fw):\s*/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function subjectsSimilar(a: string, b: string): boolean {
-  const na = normalizeSubjectKey(a);
-  const nb = normalizeSubjectKey(b);
-  if (!na || !nb) return false;
-  return na === nb || na.includes(nb) || nb.includes(na);
-}
-
-/** True when any of the shadow's recorded recipients appears in the message's to/cc. */
-function shadowRecipientsOverlap(
-  shadowRecipients: string[],
-  msg: { to: Array<{ email: string }>; cc: Array<{ email: string }> },
-): boolean {
-  const want = new Set(shadowRecipients.map((r) => r.trim().toLowerCase()));
-  if (want.size === 0) return false;
-  for (const p of [...msg.to, ...msg.cc]) {
-    if (want.has(p.email.trim().toLowerCase())) return true;
-  }
-  return false;
-}
 
 /**
- * Finding 6 (#1426): pick the send that best corresponds to a shadow draft.
- *
- * Messages are iterated newest-first, so claiming the first same-thread message can score
- * the shadow against a NEWER, unrelated send that happened after the one the shadow was
- * drafted for. Instead choose the *nearest eligible* send: same thread, sent at/after the
- * shadow was captured (2-min clock skew allowed, mirroring matchDraftToSent), preferring
- * subject/recipient-consistent candidates and then the closest in time. A direct
- * `sourceMessageId === msg.id` hit remains an exact-match fast path. Returns null when no
- * eligible send exists (the shadow stays unclaimed and is retried next run).
+ * Pick the send that corresponds to a shadow draft (#1426). The CEO's reply to a punted message
+ * near-always shares its thread, and an unmatched shadow is simply retried on later runs (then
+ * TTL-swept after 7 idle days), so a simple two-rule match is enough:
+ *   (a) exact `id === sourceMessageId` fast path;
+ *   (b) otherwise the nearest-in-time same-thread send at/after capture (2-min clock skew,
+ *       mirroring matchDraftToSent).
+ * Newest-first iteration would otherwise score the shadow against a newer, unrelated same-thread
+ * send. Returns null when no eligible send exists (the shadow retries next run).
  */
 function selectShadowSend(
   shadow: ShadowSnapshot,
   messages: NylasMessageSummary[],
 ): NylasMessageSummary | null {
-  // Exact-match fast path — a send whose id IS the shadow's recorded source message.
   const exact = messages.find((m) => m.id === shadow.sourceMessageId);
   if (exact) return exact;
 
   const createdSec = isoToUnixSeconds(shadow.createdAt);
   const SKEW_SEC = 120;
 
-  const eligible = messages.filter((m) => {
-    if (!(shadow.threadId && m.threadId && shadow.threadId === m.threadId)) return false;
-    // The send must not precede the shadow's capture. When createdAt is unparseable we
-    // can't gate on time, so we accept and rank by recency below.
-    if (createdSec !== null && m.date + SKEW_SEC < createdSec) return false;
-    return true;
-  });
-  if (eligible.length === 0) return null;
-
-  // Refine by subject/recipient when both sides carry those fields. Only narrow when at
-  // least one candidate matches, so a thread whose subjects/recipients drifted doesn't
-  // exclude every candidate and strand the shadow.
-  const refined = eligible.filter((m) => {
-    const subjectOk = !shadow.subject || !m.subject || subjectsSimilar(shadow.subject, m.subject);
-    const recipientOk =
-      shadow.recipients.length === 0 || shadowRecipientsOverlap(shadow.recipients, m);
-    return subjectOk && recipientOk;
-  });
-  const pool = refined.length > 0 ? refined : eligible;
-
-  // Nearest in time to the shadow's capture (or newest when capture time is unknown).
+  // Nearest same-thread send at/after capture (newest when capture time is unparseable).
   let best: NylasMessageSummary | null = null;
   let bestDelta = Number.POSITIVE_INFINITY;
-  for (const m of pool) {
+  for (const m of messages) {
+    if (!(shadow.threadId && m.threadId && shadow.threadId === m.threadId)) continue;
+    if (createdSec !== null && m.date + SKEW_SEC < createdSec) continue;
     const delta = createdSec !== null ? Math.abs(m.date - createdSec) : -m.date;
     if (delta < bestDelta) {
       best = m;
