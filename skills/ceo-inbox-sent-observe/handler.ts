@@ -28,7 +28,6 @@ import {
   parseShadowJudgeResult,
   SHADOW_SCRATCH_PREFIX,
   type ShadowJudgePair,
-  type ShadowJudgement,
   type ShadowSnapshot,
 } from '../_shared/shadow-draft.js';
 
@@ -481,60 +480,45 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       }
     }
 
-    // Shadow-draft competence reconcile, batched (#1419 / ADR-029): one LLM call per
-    // up-to-20 pairs rather than one per pair. A failed batch call leaves those shadow
-    // docs' reconciled_at unset — but `received_after` is an exclusive lower bound, so the
-    // Sent message that carried the shadow is only re-fetched next run if we HOLD the
-    // watermark. shadowReconcileOk tracks that: any failed batch flips it false and the
-    // watermark-advance guard below blocks the advance. Retry is idempotent because
-    // already-reconciled shadows are skipped (parseShadowDoc returns null once reconciled_at
-    // is set) and diff/completion matching is idempotent via the already-matched/asked sets.
+    // Shadow-draft competence reconcile (#1419 / ADR-029): ONE LLM call per run over up to 40
+    // pairs. A failed batch leaves those shadow docs' reconciled_at unset — but `received_after`
+    // is an exclusive lower bound, so the carrying Sent message is only re-fetched next run if we
+    // HOLD the watermark. shadowReconcileOk tracks that: anything short of a clean, complete
+    // response flips it false and the watermark-advance guard below blocks the advance. Retry is
+    // idempotent because already-reconciled shadows are skipped (parseShadowDoc returns null once
+    // reconciled_at is set) and diff/completion matching is idempotent via the matched/asked sets.
     if (judgePairs.length > 0 && ctx.infraLlm && ctx.actionLogRepo) {
-      const BATCH = 20;
-      for (let i = 0; i < judgePairs.length; i += BATCH) {
-        const batch = judgePairs.slice(i, i + BATCH);
-        const res = await ctx.infraLlm.extract(buildShadowJudgePrompt(batch), { maxTokens: 1500 });
-        if (!res.ok) {
-          shadowReconcileOk = false;
-          ctx.log.warn(
-            { error: res.error, count: batch.length },
-            'sent-observe: shadow judge LLM failed — holding watermark so these sends are re-observed next run',
-          );
-          continue; // reconciled_at stays unset → retried next run (watermark held below)
-        }
+      const MAX_JUDGE = 40;
+      const batch = judgePairs.slice(0, MAX_JUDGE);
+      if (judgePairs.length > MAX_JUDGE) {
+        // Overflow pairs stay unreconciled (reconciled_at unset) and retry next run; hold the
+        // watermark so their carrying sends are re-observed.
+        shadowReconcileOk = false;
+        ctx.log.warn(
+          { total: judgePairs.length, judged: MAX_JUDGE, dropped: judgePairs.length - MAX_JUDGE },
+          'sent-observe: more than 40 shadow pairs — judging the first 40, the rest retry next run',
+        );
+      }
 
-        // Finding 8: the batch counts as reconciled ONLY if every pair got exactly one
-        // judgement, every insert succeeded, and every reconciled_at mark persisted. Index
-        // judgements by source id and flag duplicates — a repeated id is ambiguous (which
-        // verdict wins?) so we refuse to reconcile those pairs and hold the watermark.
-        const judgements = parseShadowJudgeResult(res.text);
-        const byId = new Map<string, ShadowJudgement>();
-        const duplicateIds = new Set<string>();
-        for (const j of judgements) {
-          if (byId.has(j.sourceMessageId)) duplicateIds.add(j.sourceMessageId);
-          else byId.set(j.sourceMessageId, j);
-        }
-        if (duplicateIds.size > 0) {
-          shadowReconcileOk = false;
-          ctx.log.warn(
-            { duplicateIds: [...duplicateIds] },
-            'sent-observe: shadow judge returned duplicate judgements — holding watermark',
-          );
-        }
+      const res = await ctx.infraLlm.extract(buildShadowJudgePrompt(batch), { maxTokens: 1500 });
+      const judged = res.ok
+        ? parseShadowJudgeResult(res.text, batch.map((p) => p.sourceMessageId))
+        : null;
 
+      // All-or-nothing: an LLM error, or a malformed / duplicate-id / incomplete response, fails
+      // the WHOLE batch — write no rows, hold the watermark, retry next run.
+      if (judged === null) {
+        shadowReconcileOk = false;
+        ctx.log.warn(
+          { count: batch.length, error: res.ok ? 'malformed-or-incomplete-response' : res.error },
+          'sent-observe: shadow judge failed or returned an unusable response — holding watermark',
+        );
+      } else {
+        // Clean response — per-pair insert + durable reconciled_at mark. A per-pair insert/mark
+        // failure holds the watermark for that pair (it re-judges next run) without discarding
+        // the pairs that did land.
         for (const pair of batch) {
-          const j = byId.get(pair.sourceMessageId);
-          // Missing or ambiguous (duplicated) judgement → this shadow stays unreconciled.
-          if (!j || duplicateIds.has(pair.sourceMessageId)) {
-            shadowReconcileOk = false;
-            if (!j) {
-              ctx.log.warn(
-                { sourceMessageId: pair.sourceMessageId },
-                'sent-observe: shadow judge omitted a pair — holding watermark',
-              );
-            }
-            continue;
-          }
+          const j = judged.get(pair.sourceMessageId)!; // strict parse guarantees exact coverage
           try {
             await ctx.actionLogRepo.insert({
               taskId: ctx.taskEventId ?? `shadow:${j.sourceMessageId}`,
@@ -548,8 +532,6 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
               scoredBy: 'shadow-reconciler',
             });
           } catch (err) {
-            // A failed insert must not silently strand the pair — hold the watermark so it
-            // retries next run (reconciled_at is unset, so the shadow is re-judged).
             shadowReconcileOk = false;
             ctx.log.error(
               { err, sourceMessageId: j.sourceMessageId },
@@ -562,8 +544,6 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
           const path = `${SHADOW_SCRATCH_PREFIX}/${j.sourceMessageId}.md`;
           const doc = await ctx.workingDocs.read(path);
           if (!doc) {
-            // Doc vanished before we could mark it — treat as not durably reconciled so the
-            // batch holds the watermark (a stray re-insert next run is harmless).
             shadowReconcileOk = false;
             ctx.log.warn(
               { sourceMessageId: j.sourceMessageId },
@@ -576,7 +556,6 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
             expectedVersion: doc.version,
           });
           if (!upd.ok) {
-            // Version conflict — the reconciled_at mark didn't land, so hold the watermark.
             shadowReconcileOk = false;
             ctx.log.warn(
               { sourceMessageId: j.sourceMessageId },
@@ -584,7 +563,6 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
             );
             continue;
           }
-          // Only a successful insert AND durable mark counts as reconciled.
           shadowReconciled += 1;
         }
       }

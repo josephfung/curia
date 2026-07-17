@@ -18,17 +18,46 @@ describe('buildShadowJudgePrompt', () => {
   });
 });
 
-describe('parseShadowJudgeResult', () => {
-  it('parses a JSON array of judgements', () => {
-    const out = parseShadowJudgeResult('[{"source_message_id":"m1","same_decision":true,"reason":"both confirm Thursday"}]');
-    expect(out).toEqual([{ sourceMessageId: 'm1', sameDecision: true, reason: 'both confirm Thursday' }]);
+describe('parseShadowJudgeResult (strict, all-or-nothing)', () => {
+  it('parses a complete response covering the expected ids exactly', () => {
+    const out = parseShadowJudgeResult(
+      'Here you go:\n[{"source_message_id":"m1","same_decision":true,"reason":"both confirm Thursday"},{"source_message_id":"m2","same_decision":false,"reason":"diverged"}]\ndone',
+      ['m1', 'm2'],
+    );
+    expect(out).not.toBeNull();
+    expect(out!.get('m1')).toEqual({ sourceMessageId: 'm1', sameDecision: true, reason: 'both confirm Thursday' });
+    expect(out!.get('m2')).toEqual({ sourceMessageId: 'm2', sameDecision: false, reason: 'diverged' });
   });
-  it('tolerates surrounding prose and skips malformed entries', () => {
-    const out = parseShadowJudgeResult('Here you go:\n[{"source_message_id":"m2","same_decision":false,"reason":"diverged"},{"bad":1}]\ndone');
-    expect(out).toEqual([{ sourceMessageId: 'm2', sameDecision: false, reason: 'diverged' }]);
+
+  it('returns null on a malformed entry (whole batch fails)', () => {
+    expect(
+      parseShadowJudgeResult('[{"source_message_id":"m1","same_decision":true},{"bad":1}]', ['m1', 'm2']),
+    ).toBeNull();
   });
-  it('returns [] on unparseable text', () => {
-    expect(parseShadowJudgeResult('no json here')).toEqual([]);
+
+  it('returns null when a pair is missing from the response', () => {
+    expect(
+      parseShadowJudgeResult('[{"source_message_id":"m1","same_decision":true,"reason":"x"}]', ['m1', 'm2']),
+    ).toBeNull();
+  });
+
+  it('returns null on a duplicate id or an unexpected extra id', () => {
+    expect(
+      parseShadowJudgeResult(
+        '[{"source_message_id":"m1","same_decision":true,"reason":"x"},{"source_message_id":"m1","same_decision":false,"reason":"y"}]',
+        ['m1'],
+      ),
+    ).toBeNull();
+    expect(
+      parseShadowJudgeResult(
+        '[{"source_message_id":"m1","same_decision":true,"reason":"x"},{"source_message_id":"m9","same_decision":true,"reason":"z"}]',
+        ['m1'],
+      ),
+    ).toBeNull();
+  });
+
+  it('returns null on unparseable text', () => {
+    expect(parseShadowJudgeResult('no json here', ['m1'])).toBeNull();
   });
 });
 
