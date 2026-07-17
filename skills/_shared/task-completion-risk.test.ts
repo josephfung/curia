@@ -89,11 +89,9 @@ describe('classifyTaskRisk', () => {
 });
 
 describe('decideCompletionAction', () => {
-  it('auto-completes only low-risk + high-confidence', () => {
-    expect(decideCompletionAction('low', 'high')).toBe('auto_complete');
-    expect(decideCompletionAction('high', 'high')).toBe('confirm');
-    expect(decideCompletionAction('low', 'low')).toBe('confirm');
-    expect(decideCompletionAction('high', 'low')).toBe('confirm');
+  it('auto-completes low risk, confirms high risk (confidence is short-circuited by the caller)', () => {
+    expect(decideCompletionAction('low')).toBe('auto_complete');
+    expect(decideCompletionAction('high')).toBe('confirm');
   });
 });
 

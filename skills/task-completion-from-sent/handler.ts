@@ -9,6 +9,8 @@ import {
   formatConfirmNote,
   formatUndoNote,
   parseCompletionCandidates,
+  type CompletionAction,
+  type TaskRisk,
 } from '../_shared/task-completion-risk.js';
 
 export const COMPLETION_DIGEST_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/completion-digest.md`;
@@ -118,37 +120,45 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
         continue;
       }
 
-      // Detect subtasks via parent lookups when available. Fail CLOSED: if the lookup
-      // errors we cannot rule out subtasks, so treat the task as high-risk rather than
-      // risk auto-completing a parent (which would cancel its descendants).
-      let hasSubtasks = false;
-      try {
-        const children = await ctx.taskRepo.listTasks({
-          parentTaskId: task.id,
-          limit: 5,
-        });
-        hasSubtasks = children.length > 0;
-      } catch (err) {
-        ctx.log.warn(
-          { err, taskId: task.id },
-          'task-completion-from-sent: subtask lookup failed — treating as high risk',
-        );
-        hasSubtasks = true;
-      }
+      // Low-confidence matches always go to confirm — auto-complete requires HIGH confidence, so
+      // risk classification (the subtask lookup + sensitivity classify) is wasted work for them.
+      // Only classify risk for high-confidence candidates (T3.1); low-confidence risk stays
+      // undefined ("unassessed") and is shown as such in the confirm digest.
+      let action: CompletionAction = 'confirm';
+      let risk: TaskRisk | undefined;
+      if (candidate.confidence === 'high') {
+        // Detect subtasks via parent lookups when available. Fail CLOSED: if the lookup
+        // errors we cannot rule out subtasks, so treat the task as high-risk rather than
+        // risk auto-completing a parent (which would cancel its descendants).
+        let hasSubtasks = false;
+        try {
+          const children = await ctx.taskRepo.listTasks({
+            parentTaskId: task.id,
+            limit: 5,
+          });
+          hasSubtasks = children.length > 0;
+        } catch (err) {
+          ctx.log.warn(
+            { err, taskId: task.id },
+            'task-completion-from-sent: subtask lookup failed — treating as high risk',
+          );
+          hasSubtasks = true;
+        }
 
-      const risk = classifyTaskRisk(
-        {
-          id: task.id,
-          title: task.title,
-          description: task.description,
-          priority: task.priority,
-          tags: task.tags,
-          progress: task.progress,
-          hasSubtasks,
-        },
-        classify,
-      );
-      const action = decideCompletionAction(risk, candidate.confidence);
+        risk = classifyTaskRisk(
+          {
+            id: task.id,
+            title: task.title,
+            description: task.description,
+            priority: task.priority,
+            tags: task.tags,
+            progress: task.progress,
+            hasSubtasks,
+          },
+          classify,
+        );
+        action = decideCompletionAction(risk);
+      }
       const recipient = candidate.recipients[0] ?? 'them';
 
       if (action === 'auto_complete') {
