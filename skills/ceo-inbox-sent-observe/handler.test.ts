@@ -12,7 +12,7 @@ import { VOICE_LEARNING_DOC_TYPE } from '../_shared/voice-learning-capture.js';
 import { SHADOW_DOC_TYPE, shadowDraftPath } from '../_shared/shadow-draft.js';
 import type { ActionLogInsert } from '../../src/autonomy/action-log-types.js';
 import type { InfraLlm } from '../../src/skills/infra-llm.js';
-import { COMPLETION_CANDIDATES_KEY, ASKED_TASK_IDS_KEY } from '../_shared/learning-state.js';
+import { COMPLETION_CANDIDATES_KEY, ASKED_TASK_IDS_KEY, MATCHED_DRAFT_IDS_KEY } from '../_shared/learning-state.js';
 
 function makeEntityMemory(seed: Record<string, string> = {}): EntityMemory & {
   __values: Map<string, string>;
@@ -307,6 +307,9 @@ describe('CeoInboxSentObserveHandler', () => {
     const diffs = ctx.__docs.get(PENDING_DIFFS_PATH);
     expect(diffs?.body).toContain('draft draft-1');
     expect(diffs?.body).toContain('msg-sent-1');
+
+    // The matched-draft guard is now stored in config, not re-derived from pending-diffs.md.
+    expect(JSON.parse(ctx.__mem.__values.get(MATCHED_DRAFT_IDS_KEY)!)).toContain('draft-1');
   });
 
   it('holds the watermark and persists no diff when a matched draft body cannot be fetched (F8)', async () => {
@@ -371,6 +374,80 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBeUndefined();
     // No diff was persisted from the truncated snippet.
     expect(ctx.__docs.get(PENDING_DIFFS_PATH)?.body ?? '').not.toContain('draft draft-1');
+    // The failed-fetch draft must NOT be in the stored matched set — it never got a diff, so it
+    // must re-match next run (mirrors the old re-derive-from-pending-diffs behavior).
+    const matched = ctx.__mem.__values.get(MATCHED_DRAFT_IDS_KEY);
+    expect(matched ? JSON.parse(matched) : []).not.toContain('draft-1');
+  });
+
+  it('prunes matched_draft_ids to drafts whose snapshot still exists', async () => {
+    // Seed the guard with a stale draft id ('gone-draft') whose snapshot doc no longer exists
+    // (TTL-swept) alongside 'draft-1', whose snapshot is still present. After a run that matches
+    // draft-1, the stored set must drop gone-draft but keep draft-1.
+    const listResponse = {
+      data: [
+        {
+          id: 'msg-sent-1',
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          from: [{ email: 'ceo@example.com' }],
+          to: [{ email: 'alice@example.com' }],
+          cc: [],
+          snippet: 'Thanks Alice',
+          date: 1_720_000_200,
+          unread: false,
+          folders: ['SENT'],
+          attachments: [],
+        },
+      ],
+    };
+    const fullResponse = {
+      data: {
+        ...listResponse.data[0],
+        body: '<p>Thanks Alice — following up.</p>',
+        bcc: [],
+        labels: [],
+      },
+    };
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-1')) {
+        return new Response(JSON.stringify(fullResponse), { status: 200 });
+      }
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify(listResponse), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      seed: { [MATCHED_DRAFT_IDS_KEY]: JSON.stringify(['gone-draft', 'draft-1']) },
+      snapshots: [
+        {
+          path: '/scratch/voice-learning/draft-1.md',
+          type: VOICE_LEARNING_DOC_TYPE,
+          frontmatter: {
+            draft_id: 'draft-1',
+            thread_id: 'thread-1',
+            subject: 'Re: Hello',
+            recipients: { to: [{ email: 'alice@example.com' }], cc: [] },
+            created_at: '2024-07-03T00:00:00.000Z',
+          },
+          body: 'Thanks Alice — following up.',
+        },
+      ],
+      tasks: [],
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    const matched = JSON.parse(ctx.__mem.__values.get(MATCHED_DRAFT_IDS_KEY)!);
+    expect(matched).not.toContain('gone-draft');
+    expect(matched).toContain('draft-1');
   });
 
   it('persists task-completion candidates for open CEO tasks', async () => {
