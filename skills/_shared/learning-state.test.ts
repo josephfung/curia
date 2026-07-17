@@ -3,6 +3,7 @@ import type { ConfigStore } from '../../src/memory/config-store.js';
 import {
   LEARNING_STATE_NAMESPACE,
   COMPLETION_CANDIDATES_KEY,
+  VOICE_PROPOSAL_KEY,
   ASKED_TASK_IDS_KEY,
   readCompletionCandidates,
   writeCompletionCandidates,
@@ -117,7 +118,32 @@ describe('learning-state config accessors', () => {
     expect(result).toEqual({});
     expect(warnCalls).toHaveLength(1);
     expect(warnCalls[0]![1]).toMatch(/failed to parse/);
+    // PII fix: the log payload carries only the key and the raw value's length — never the raw
+    // content itself (which can hold recipients/subjects/task-titles/proposal text).
+    expect(warnCalls[0]![0]).toEqual({ key: COMPLETION_CANDIDATES_KEY, rawLength: 'not json'.length });
+    expect(warnCalls[0]![0]).not.toHaveProperty('rawSnippet');
+  });
+
+  it('logs corruption and returns {} when a map key holds valid JSON with the wrong top-level shape (an array)', async () => {
+    // The value parses fine (JSON.parse succeeds on "[]") but a map key must hold a plain
+    // object, not an array — this used to pass straight through as CompletionCandidateMap.
+    const { store } = fakeStore({ [COMPLETION_CANDIDATES_KEY]: '[]' });
+    const { logger, warnCalls } = fakeLogger();
+    const result = await readCompletionCandidates(store, logger);
+    expect(result).toEqual({});
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![1]).toMatch(/failed to parse/);
     expect(warnCalls[0]![0]).toMatchObject({ key: COMPLETION_CANDIDATES_KEY });
+  });
+
+  it('logs corruption and returns null when the voice proposal holds valid JSON missing guide/status', async () => {
+    const { store } = fakeStore({ [VOICE_PROPOSAL_KEY]: '{"x":1}' });
+    const { logger, warnCalls } = fakeLogger();
+    const result = await readVoiceProposal(store, logger);
+    expect(result).toBeNull();
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![1]).toMatch(/failed to parse/);
+    expect(warnCalls[0]![0]).toMatchObject({ key: VOICE_PROPOSAL_KEY });
   });
 
   it('does not log corruption for an unset (null) value — absence is not corruption', async () => {

@@ -68,7 +68,21 @@ export class ResolveLearningDigestHandler implements SkillHandler {
 
         // Clear the resolved proposal so it doesn't stay "pending" forever — the approved
         // guide now lives in the versioned profile, which is the real audit trail.
-        await writeVoiceProposal(store, null);
+        //
+        // The primary side effect (the profile write above) already succeeded by this point.
+        // If the clear itself soft-rejects (stored:false — a dedup 'conflict'/'auto_rejected'
+        // outcome, not a throw), we must NOT report success: the proposal item would still be
+        // there next time the digest is listed, contradicting a "resolved: true" response. We
+        // surface that honestly instead. A retry is safe because the mutations here are
+        // idempotent — re-approving writes the identical guide text again, and re-clearing a
+        // proposal that's already gone is a no-op.
+        const cleared = await writeVoiceProposal(store, null);
+        if (!cleared) {
+          return {
+            success: false,
+            error: 'Voice guide applied to the profile, but the pending proposal could not be cleared (transient) and may reappear — retry to clear it.',
+          };
+        }
         return { success: true, data: { resolved: true, detail: 'Approved voice guide' } };
       }
 
@@ -89,8 +103,15 @@ export class ResolveLearningDigestHandler implements SkillHandler {
       await store.set(VOICE_NS, DISMISSED_KEY, JSON.stringify(dismissed));
 
       // Clear the resolved proposal — the dismiss cooldown is tracked in config, so the
-      // proposal record itself serves no further purpose.
-      await writeVoiceProposal(store, null);
+      // proposal record itself serves no further purpose. The cooldown write above already
+      // landed, so a soft-reject here only means the proposal item may reappear in the digest.
+      const cleared = await writeVoiceProposal(store, null);
+      if (!cleared) {
+        return {
+          success: false,
+          error: 'Voice guide dismissed (cooldown recorded), but the pending proposal could not be cleared (transient) and may reappear — retry to clear it.',
+        };
+      }
       return { success: true, data: { resolved: true, detail: 'Dismissed voice guide' } };
     }
 
@@ -122,10 +143,18 @@ export class ResolveLearningDigestHandler implements SkillHandler {
       if (!reopened) {
         return { success: false, error: `Task ${taskId} not found; cannot undo completion` };
       }
-      // Remove the actioned item from the config map so resolved items don't accumulate.
+      // Remove the actioned item from the config map so resolved items don't accumulate. The
+      // task is already reopened by this point, so a soft-reject on the clear only means the
+      // digest item may reappear — reopening an already-open task next retry is a no-op.
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
-      await writeCompletionDigest(store, rest);
+      const cleared = await writeCompletionDigest(store, rest);
+      if (!cleared) {
+        return {
+          success: false,
+          error: `Task ${taskId} was reopened, but the digest item could not be cleared (transient) and may reappear — retry to clear it.`,
+        };
+      }
       return { success: true, data: { resolved: true, detail: `Reopened task ${taskId}` } };
     }
 
@@ -143,16 +172,31 @@ export class ResolveLearningDigestHandler implements SkillHandler {
           ctx.agentId,
         );
       }
+      // Task completion (if needed) already happened above; a soft-reject on the clear only
+      // means the digest item may reappear — completing an already-done task next retry is a
+      // no-op (the `task.status !== 'done'` guard above skips it).
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
-      await writeCompletionDigest(store, rest);
+      const cleared = await writeCompletionDigest(store, rest);
+      if (!cleared) {
+        return {
+          success: false,
+          error: `Task ${taskId} was confirmed complete, but the digest item could not be cleared (transient) and may reappear — retry to clear it.`,
+        };
+      }
       return { success: true, data: { resolved: true, detail: `Confirmed completion ${taskId}` } };
     }
 
     // dismiss_completion
     const { [taskId]: _removed, ...rest } = digestMap;
     void _removed;
-    await writeCompletionDigest(store, rest);
+    const cleared = await writeCompletionDigest(store, rest);
+    if (!cleared) {
+      return {
+        success: false,
+        error: `Digest item for task ${taskId} could not be cleared (transient); retry.`,
+      };
+    }
     return { success: true, data: { resolved: true, detail: `Dismissed completion ${taskId}` } };
   }
 }

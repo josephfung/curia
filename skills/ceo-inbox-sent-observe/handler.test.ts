@@ -450,6 +450,89 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(matched).toContain('draft-1');
   });
 
+  it('holds the watermark when the matched-draft guard write soft-rejects (stored:false, no throw)', async () => {
+    // Same matched-draft-and-diff-persisted setup as the happy-path draft test, but this time
+    // the MATCHED_DRAFT_IDS_KEY write soft-rejects (stored:false, no throw) — the real dedup
+    // 'conflict'/'auto_rejected' shape storeFact can hit. The guard no longer re-derives from the
+    // pending-diffs doc (extractMatchedDraftIds was deleted in #1438), so a lost guard write must
+    // hold the watermark for retry rather than being treated as harmless.
+    const listResponse = {
+      data: [
+        {
+          id: 'msg-sent-1',
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          from: [{ email: 'ceo@example.com' }],
+          to: [{ email: 'alice@example.com' }],
+          cc: [],
+          snippet: 'Thanks Alice',
+          date: 1_720_000_200,
+          unread: false,
+          folders: ['SENT'],
+          attachments: [],
+        },
+      ],
+    };
+    const fullResponse = {
+      data: {
+        ...listResponse.data[0],
+        body: '<p>Thanks Alice — following up.</p>',
+        bcc: [],
+        labels: [],
+      },
+    };
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-1')) {
+        return new Response(JSON.stringify(fullResponse), { status: 200 });
+      }
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify(listResponse), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      snapshots: [
+        {
+          path: '/scratch/voice-learning/draft-1.md',
+          type: VOICE_LEARNING_DOC_TYPE,
+          frontmatter: {
+            draft_id: 'draft-1',
+            thread_id: 'thread-1',
+            subject: 'Re: Hello',
+            recipients: { to: [{ email: 'alice@example.com' }], cc: [] },
+            created_at: '2024-07-03T00:00:00.000Z',
+          },
+          body: 'Thanks Alice — following up.',
+        },
+      ],
+      tasks: [],
+    });
+
+    // Soft-reject only the matched-draft-guard write — every other storeFact call (diffs doc is
+    // an OKF write, not config; watermark/idle-backoff) goes through normally.
+    (ctx.__mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+      async (params: { label: string; properties?: Record<string, unknown> }) => {
+        if (params.label === MATCHED_DRAFT_IDS_KEY) {
+          return { stored: false, action: 'conflict' as const };
+        }
+        ctx.__mem.__values.set(params.label, String(params.properties?.value ?? ''));
+        return { stored: true, action: 'created' as const };
+      },
+    );
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { watermark_advanced_to: number | null } }).data;
+    // The watermark must be HELD so the send is re-observed and the guard re-written next run.
+    expect(data.watermark_advanced_to).toBeNull();
+    expect(ctx.__mem.__values.has(MATCHED_DRAFT_IDS_KEY)).toBe(false);
+  });
+
   it('persists task-completion candidates for open CEO tasks', async () => {
     mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const u = String(url);

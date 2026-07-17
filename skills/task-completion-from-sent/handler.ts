@@ -69,6 +69,15 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
     let queuedConfirm = 0;
     let skipped = 0;
     const digestAdds: CompletionDigestItem[] = [];
+    // Pending auto-completions: populated by the loop below but NOT yet applied — completeTask
+    // only runs in the second pass after the digest write (carrying these tasks' undo notes) is
+    // confirmed durable. See the big comment above the digest write for why.
+    const toAutoComplete: Array<{
+      taskId: string;
+      candidateTaskId: string;
+      subject: string;
+      messageId: string;
+    }> = [];
 
     for (const candidate of candidates) {
       const task = await ctx.taskRepo.getTask(candidate.taskId);
@@ -127,30 +136,26 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
       const recipient = candidate.recipients[0] ?? 'them';
 
       if (action === 'auto_complete') {
-        try {
-          await ctx.taskRepo.completeTask(
-            task.id,
-            `Auto-completed from sent mail ${candidate.messageId} (${candidate.subject})`,
-            ctx.agentId,
-          );
-          digestAdds.push({
-            kind: 'undo',
-            taskId: task.id,
+        // Durable-undo-before-complete (Finding 6): record the undo note and the pending
+        // completion here, but do NOT call completeTask and do NOT delete the candidate from
+        // `remaining` yet. Both happen only in the second pass below, after the digest write
+        // carrying this note is confirmed durable — see the comment above that write.
+        digestAdds.push({
+          kind: 'undo',
+          taskId: task.id,
+          taskTitle: task.title || candidate.taskTitle,
+          note: composeUndoNote({
             taskTitle: task.title || candidate.taskTitle,
-            note: composeUndoNote({
-              taskTitle: task.title || candidate.taskTitle,
-              recipient,
-              sentAt: candidate.sentAt,
-            }),
-          });
-          delete remaining[candidate.taskId];
-          autoCompleted += 1;
-        } catch (err) {
-          ctx.log.error({ err, taskId: task.id }, 'task-completion-from-sent: auto-complete failed');
-          // Leave the candidate queued — completeTask failure is presumed transient (DB
-          // hiccup), so it stays in remaining and retries next run rather than being lost.
-          skipped += 1;
-        }
+            recipient,
+            sentAt: candidate.sentAt,
+          }),
+        });
+        toAutoComplete.push({
+          taskId: task.id,
+          candidateTaskId: candidate.taskId,
+          subject: candidate.subject,
+          messageId: candidate.messageId,
+        });
       } else {
         digestAdds.push({
           kind: 'confirm',
@@ -166,25 +171,30 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
       }
     }
 
-    // Digest-first ordering: write the undo/confirm digest items BEFORE consuming the
-    // candidate map. Neither write reads the other's result, so the happy path is
-    // unaffected — but if the process dies between the two writes, digest-first is the
-    // safer failure mode. A completed/skip-worthy task is already terminal (done, or no
-    // longer active) by the time we'd retry, so a lost candidate-consume write just makes
-    // the stale candidate get re-skipped next run (ineligible → removed, no re-complete,
-    // no duplicate digest item). Consume-first would instead silently drop the undo/confirm
-    // affordance the user needed while leaving no trace that one was ever queued.
+    // Durable-undo-before-complete ordering (Finding 6). The loop above populated `digestAdds`
+    // (undo/confirm notes) and `toAutoComplete` (pending auto-completions) WITHOUT calling
+    // completeTask and WITHOUT deleting auto-complete candidates from `remaining` — that only
+    // happens in the second pass below, gated on this digest write actually landing. This closes
+    // a gap in the previous ordering (complete → note → digest write): if the digest write
+    // soft-rejected AFTER an auto-complete, the task was already 'done' by the next run, got
+    // swept up as skipped_ineligible, and its undo note was gone with no recoverable trace. Under
+    // this ordering, an auto-completed task can never exist without a recoverable undo
+    // affordance already durably on record.
     //
-    // digestStored gates the candidate-consume write below: if the digest write soft-rejects
-    // (stored:false) we must NOT remove the just-completed/confirmed items from the candidate
-    // queue, or their undo/confirm affordance is lost with no trace it ever existed. Note this
-    // is not full completion+digest atomicity — an already-auto-completed task whose digest
-    // write then soft-fails will simply be re-evaluated next run: it's re-fetched (still 'done'),
-    // found ineligible (ACTIVE_TASK_STATUSES excludes 'done'), and cleaned up as skipped_ineligible
-    // — so its undo note is lost but the loss is logged, not silent. Confirm-queued items get a
-    // clean retry (task is still active, so it's simply re-classified next run). A larger
-    // restructure (e.g. a single combined write) would be needed for true atomicity here, out of
-    // scope for this fix.
+    // One transient wart remains: if completeTask itself throws AFTER this digest write lands,
+    // the digest briefly describes a task that isn't completed yet. This self-heals next run —
+    // the task is still active, so it's re-evaluated, re-completed, and the note is overwritten
+    // identically (composeUndoNote is a pure function of the same candidate fields).
+    //
+    // Confirm-queued and skip-ineligible items are unaffected by this restructure: they never
+    // call completeTask, so they're deleted from `remaining` in the first loop as before — a lost
+    // digest write there just means a clean re-classification (or re-skip) next run.
+    //
+    // digestStored also gates both the second-pass completion loop and the final candidate-
+    // consume write: if the digest write soft-rejects (stored:false), we complete NOTHING and
+    // consume NOTHING this run — every candidate (including ineligible-skip and confirm-queue
+    // removals already computed in `remaining`) retries next run rather than persisting a
+    // candidate-queue state that doesn't match what was actually recorded.
     let digestStored = true;
     if (digestAdds.length > 0) {
       const digestMap: CompletionDigestMap = await readCompletionDigest(store, ctx.log);
@@ -193,8 +203,30 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
       if (!digestStored) {
         ctx.log.warn(
           {},
-          'task-completion-from-sent: digest write soft-rejected — not consuming candidates so confirm items retry next run',
+          'task-completion-from-sent: digest write soft-rejected — digest not durable, so no completions were applied and no candidates consumed; all retry next run',
         );
+      }
+    }
+
+    // Second pass: only now that every pending auto-complete's undo note is confirmed durable is
+    // it safe to actually complete the tasks.
+    if (digestStored) {
+      for (const pending of toAutoComplete) {
+        try {
+          await ctx.taskRepo.completeTask(
+            pending.taskId,
+            `Auto-completed from sent mail ${pending.messageId} (${pending.subject})`,
+            ctx.agentId,
+          );
+          delete remaining[pending.candidateTaskId];
+          autoCompleted += 1;
+        } catch (err) {
+          ctx.log.error({ err, taskId: pending.taskId }, 'task-completion-from-sent: auto-complete failed');
+          // Leave the candidate queued — completeTask failure is presumed transient (DB
+          // hiccup), so it stays in `remaining` and retries next run. The undo note is already
+          // durable and will be overwritten identically on retry, so nothing is lost.
+          skipped += 1;
+        }
       }
     }
 
