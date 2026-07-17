@@ -80,26 +80,14 @@ export async function captureDraftSnapshot(
         conversationId: ctx.conversationId ?? null,
       });
       if (!result.ok) {
-        // Conflict — best-effort retry once with the conflict document's version.
-        const retry = await repo.update(path, {
-          frontmatter: {
-            ...result.document.frontmatter,
-            ...frontmatter,
-            created_at: result.document.frontmatter.created_at ?? frontmatter.created_at,
-            updated_at: new Date().toISOString(),
-          },
-          body: input.body,
-          expectedVersion: result.document.version,
-          agentId: ctx.agentId ?? null,
-          conversationId: ctx.conversationId ?? null,
-        });
-        if (!retry.ok) {
-          ctx.log.warn(
-            { draftId: input.draftId, path },
-            'voice-learning-capture: conflict on retry — leaving prior snapshot',
-          );
-          return false;
-        }
+        // Best-effort capture: on a version conflict, log and drop rather than retrying.
+        // Losing a snapshot is tolerated (draft creation is never blocked), and the next
+        // edit re-captures the current body anyway.
+        ctx.log.warn(
+          { draftId: input.draftId, path },
+          'voice-learning-capture: version conflict — dropping snapshot (best-effort)',
+        );
+        return false;
       }
     }
 
