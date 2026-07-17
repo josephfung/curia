@@ -8,7 +8,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 import { buildVoiceGuidePrompt, parsePendingDiffs } from '../_shared/voice-learn-logic.js';
-import { parseVoiceGuideProposal } from '../_shared/learning-digest.js';
+import { pruneGuideProposals } from '../_shared/learning-digest.js';
 import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
 import { VOICE_LEARNING_SCRATCH_PREFIX } from '../_shared/voice-learning-capture.js';
 
@@ -86,18 +86,13 @@ export class VoiceLearnHandler implements SkillHandler {
       };
     }
 
-    // Dedup: skip if a guide proposal is already pending. The diff doc is never
-    // consumed, so without this a still-open proposal would get re-proposed weekly.
-    // pending-proposals.md is APPEND-ONLY, so use the shared parser invariant rather than a
-    // raw regex: a non-null parse means a pending block exists somewhere in the doc even after
-    // earlier blocks were approved/dismissed (F1 — the raw regex only saw the FIRST block).
+    // Read the proposals doc so the write below can supersede any still-unapproved proposal
+    // (T2.1). We no longer gate the whole run on a pending proposal — the single-pending
+    // invariant is enforced at write time by pruning the old block, so a fresher proposal
+    // replaces a stale one instead of blocking it. (The checkpoint above already stops the
+    // SAME evidence being re-proposed; this handles genuinely new evidence arriving before the
+    // CEO acted on the prior proposal.)
     const existing = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
-    if (existing && parseVoiceGuideProposal(existing.body) !== null) {
-      return {
-        success: true,
-        data: { pairs_considered: newPairs.length, proposed: false, reason: 'proposal-pending' },
-      };
-    }
 
     // Respect the dismissal cooldown the digest writes on `dismiss voice`. Best-effort and
     // additive: only consulted when entityMemory is wired (guarded, not a hard capability), and
@@ -159,8 +154,11 @@ export class VoiceLearnHandler implements SkillHandler {
         agentId: ctx.agentId,
       });
     } else {
-      await ctx.workingDocs.append(PENDING_PROPOSALS_PATH, {
-        content: block,
+      // Prune any existing proposal block (pending or resolved) and write the fresh one, so at
+      // most one pending proposal ever lives in the doc and it never accumulates (T2.1).
+      const header = pruneGuideProposals(existing.body, { removePending: true }).trimEnd();
+      await ctx.workingDocs.update(PENDING_PROPOSALS_PATH, {
+        body: `${header}\n\n${block}`,
         expectedVersion: existing.version,
       });
     }

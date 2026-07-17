@@ -156,6 +156,17 @@ function makeCtx(opts: {
         docs.set(path, next);
         return { ok: true, document: next };
       }),
+      update: vi.fn(async (path: string, params: { body?: string; frontmatter?: Record<string, unknown>; expectedVersion: number }) => {
+        const cur = docs.get(path)!;
+        const next = {
+          ...cur,
+          ...(params.body !== undefined ? { body: params.body } : {}),
+          ...(params.frontmatter !== undefined ? { frontmatter: params.frontmatter } : {}),
+          version: cur.version + 1,
+        };
+        docs.set(path, next);
+        return { ok: true, document: next };
+      }),
     },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     __updates: updates,
@@ -182,6 +193,32 @@ describe('VoiceLearnHandler', () => {
     expect(proposals).toContain('Dry humour');
     // profile NOT written directly (human-in-the-loop)
     expect(ctx.__updates).toHaveLength(0);
+  });
+
+  it('supersedes an existing pending proposal instead of blocking the run', async () => {
+    // No entityMemory → no checkpoint gate, so the new diffs are fed and a fresh proposal is made.
+    const ctx = makeCtx({});
+    ctx.__docs.set(PENDING_PROPOSALS_PATH, {
+      path: PENDING_PROPOSALS_PATH,
+      type: 'voice-pending-proposals',
+      frontmatter: { title: 'Pending voice guide proposal' },
+      body: '# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-01T00:00:00.000Z\n\n- OLD stale guidance.\n\n---\n',
+      version: 3,
+    });
+    (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      text: '- Fresh guidance.',
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect((result as { data: Record<string, unknown> }).data).toMatchObject({ proposed: true });
+
+    const body = ctx.__docs.get(PENDING_PROPOSALS_PATH)!.body;
+    // Exactly one pending proposal remains, and it is the fresh one — the stale block is gone.
+    expect((body.match(/## Guide Proposal/g) ?? []).length).toBe(1);
+    expect(body).toContain('Fresh guidance.');
+    expect(body).not.toContain('OLD stale guidance.');
   });
 
   it('no pairs → no LLM call, no proposal', async () => {
