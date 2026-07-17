@@ -166,14 +166,22 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
       }
     }
 
-    if (Object.keys(remaining).length !== Object.keys(candidateMap).length) {
-      await writeCompletionCandidates(store, remaining);
-    }
-
+    // Digest-first ordering: write the undo/confirm digest items BEFORE consuming the
+    // candidate map. Neither write reads the other's result, so the happy path is
+    // unaffected — but if the process dies between the two writes, digest-first is the
+    // safer failure mode. A completed/skip-worthy task is already terminal (done, or no
+    // longer active) by the time we'd retry, so a lost candidate-consume write just makes
+    // the stale candidate get re-skipped next run (ineligible → removed, no re-complete,
+    // no duplicate digest item). Consume-first would instead silently drop the undo/confirm
+    // affordance the user needed while leaving no trace that one was ever queued.
     if (digestAdds.length > 0) {
       const digestMap: CompletionDigestMap = await readCompletionDigest(store);
       for (const item of digestAdds) digestMap[item.taskId] = item;
       await writeCompletionDigest(store, digestMap);
+    }
+
+    if (Object.keys(remaining).length !== Object.keys(candidateMap).length) {
+      await writeCompletionCandidates(store, remaining);
     }
 
     ctx.log.info(
