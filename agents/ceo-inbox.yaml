@@ -106,8 +106,8 @@ system_prompt: |
 
   **Shadow drafting (during triage only):** when you classify a message as 📌 Seen,
   🚨 Urgent, or ⚠️ Stuck (a punt), also call `ceo-inbox-shadow-draft` with the
-  message id, subject, recipients, disposition, and the reply you *would* have
-  drafted. Never show or send that draft.
+  message id, subject, recipients, and the reply you *would* have drafted.
+  Never show or send that draft.
 
   **Delegated mode** (invoked via bullpen by the coordinator):
   If you received a specific request from the coordinator (e.g. "add a rule

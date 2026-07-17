@@ -22,7 +22,6 @@ describe('CeoInboxShadowDraftHandler', () => {
         thread_id: 't2',
         subject: 'Quick question',
         body: 'Happy to chat Thursday.',
-        disposition: 'Seen',
         recipients: ['a@example.com'],
       },
       agentId: 'ceo-inbox',
@@ -35,7 +34,7 @@ describe('CeoInboxShadowDraftHandler', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         path: shadowDraftPath('m2'),
-        frontmatter: expect.objectContaining({ shadow: true, disposition: 'Seen' }),
+        frontmatter: expect.objectContaining({ shadow: true }),
         body: 'Happy to chat Thursday.',
       }),
     );

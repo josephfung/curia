@@ -35,7 +35,6 @@ export class CeoInboxShadowDraftHandler implements SkillHandler {
           thread_id: typeof input.thread_id === 'string' ? input.thread_id : '',
           subject,
           recipients,
-          disposition: typeof input.disposition === 'string' ? input.disposition : 'punt',
           created_at: new Date().toISOString(),
           shadow: true,
         },
