@@ -169,4 +169,36 @@ describe('ResolveLearningDigestHandler', () => {
     // The actioned item is removed from the queue doc so resolved items don't accumulate.
     expect(docs.get(COMPLETION_DIGEST_PATH)!.body).not.toContain('## Undo — task t1');
   });
+
+  it('fails and keeps the undo item when the task no longer exists (reopenTask returns null)', async () => {
+    const digestBody = `## Undo — task t1\n- status: undo_available\n- task_title: Follow up\n- note: Undo?\n---\n`;
+    const docs = new Map([
+      [
+        COMPLETION_DIGEST_PATH,
+        { path: COMPLETION_DIGEST_PATH, body: digestBody, version: 1, type: 'x', frontmatter: {} },
+      ],
+    ]);
+    // reopenTask returns null when the task is gone — the digest item must survive so the user
+    // still sees the undo affordance, and the result must report failure (not a silent success).
+    const reopenTask = vi.fn(async () => null);
+    const update = vi.fn();
+    const ctx = {
+      input: { action: 'undo_completion', task_id: 't1' },
+      workingDocs: {
+        read: vi.fn(async (p: string) => docs.get(p) ?? null),
+        update,
+      },
+      entityMemory: makeMem(),
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask, completeTask: vi.fn(), getTask: vi.fn() },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+
+    const result = await new ResolveLearningDigestHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    // The digest was never rewritten — the item is preserved for a retry.
+    expect(update).not.toHaveBeenCalled();
+    expect(docs.get(COMPLETION_DIGEST_PATH)!.body).toContain('## Undo — task t1');
+  });
 });

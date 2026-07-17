@@ -123,7 +123,17 @@ export class ResolveLearningDigestHandler implements SkillHandler {
     }
 
     if (action === 'undo_completion') {
-      await ctx.taskRepo.reopenTask(taskId, 'Undo auto-complete from sent mail', ctx.agentId);
+      // reopenTask returns null when the task no longer exists. Fail loudly and DON'T consume the
+      // digest item in that case — mirrors the confirm path's not-found guard below. Otherwise
+      // we'd drop the undo affordance and report success while having reopened nothing.
+      const reopened = await ctx.taskRepo.reopenTask(
+        taskId,
+        'Undo auto-complete from sent mail',
+        ctx.agentId,
+      );
+      if (!reopened) {
+        return { success: false, error: `Task ${taskId} not found; cannot undo completion` };
+      }
       // Remove the actioned item from the queue doc so resolved items don't accumulate.
       const updatedBody = removeCompletionBlock(digest.body, 'Undo', taskId);
       await ctx.workingDocs.update(COMPLETION_DIGEST_PATH, {
