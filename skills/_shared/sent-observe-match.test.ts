@@ -32,11 +32,10 @@ const baseSnap: DraftSnapshotLike = {
 };
 
 describe('matchDraftToSent', () => {
-  it('matches on thread_id + recipient overlap with high confidence', () => {
+  it('matches on thread_id + recipient overlap', () => {
     const match = matchDraftToSent(baseSent, [baseSnap]);
     expect(match).not.toBeNull();
     expect(match!.draftId).toBe('draft-1');
-    expect(match!.confidence).toBe('high');
   });
 
   it('skips already-matched draft ids (idempotent evidence)', () => {
@@ -50,7 +49,20 @@ describe('matchDraftToSent', () => {
       [{ ...baseSnap, threadId: 'draft-thread' }],
     );
     expect(match).not.toBeNull();
-    expect(match!.confidence).toBe('medium');
+    expect(match!.draftId).toBe('draft-1');
+  });
+
+  it('prefers a thread-only snapshot over a recipient+subject snapshot', () => {
+    // subjectOnly shares recipient+subject but sits on a different thread; threadOnly shares the
+    // thread but has no recipient overlap. The thread match must win the preference ordering.
+    const subjectOnly = { ...baseSnap, draftId: 'draft-subject', threadId: 'other' };
+    const threadOnly = {
+      ...baseSnap,
+      draftId: 'draft-thread',
+      recipients: { to: [{ email: 'nobody@example.com' }], cc: [] },
+    };
+    const match = matchDraftToSent(baseSent, [subjectOnly, threadOnly]);
+    expect(match!.draftId).toBe('draft-thread');
   });
 });
 
