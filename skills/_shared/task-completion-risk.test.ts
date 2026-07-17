@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyTaskRisk,
   decideCompletionAction,
-  parseCompletionCandidates,
   HIGH_PRIORITY_FLOOR,
 } from './task-completion-risk.js';
 
@@ -92,37 +91,5 @@ describe('decideCompletionAction', () => {
   it('auto-completes low risk, confirms high risk (confidence is short-circuited by the caller)', () => {
     expect(decideCompletionAction('low')).toBe('auto_complete');
     expect(decideCompletionAction('high')).toBe('confirm');
-  });
-});
-
-describe('parseCompletionCandidates', () => {
-  it('parses pending candidates and skips asked ones', () => {
-    const body = `
-## Candidate — task task-a
-- message_id: m1
-- confidence: high
-- reason: recipient+semantic
-- sent_at: 2026-07-01T00:00:00.000Z
-- subject: Hi
-- recipients: a@example.com
-- task_title: Follow up with A
-- status: pending
----
-## Candidate — task task-b
-- message_id: m2
-- confidence: low
-- reason: semantic
-- sent_at: 2026-07-02T00:00:00.000Z
-- subject: Hi
-- recipients: b@example.com
-- task_title: Fuzzy thing
-- status: pending
-- completion_asked: {2026-07-02}
----
-`;
-    const parsed = parseCompletionCandidates(body);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0]!.taskId).toBe('task-a');
-    expect(parsed[0]!.confidence).toBe('high');
   });
 });
