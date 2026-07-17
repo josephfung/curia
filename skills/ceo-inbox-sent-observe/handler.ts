@@ -15,7 +15,6 @@ import {
   VOICE_LEARNING_SCRATCH_PREFIX,
 } from '../_shared/voice-learning-capture.js';
 import {
-  formatCompletionCandidateBlock,
   formatDiffBlock,
   matchDraftToSent,
   matchTasksToSent,
@@ -30,14 +29,21 @@ import {
   type ShadowJudgePair,
   type ShadowSnapshot,
 } from '../_shared/shadow-draft.js';
+import {
+  readCompletionCandidates,
+  writeCompletionCandidates,
+  readIdSet,
+  writeIdSet,
+  ASKED_TASK_IDS_KEY,
+  type CompletionCandidateMap,
+  type CompletionCandidate,
+} from '../_shared/learning-state.js';
 
 export const CONFIG_NAMESPACE = 'ceo_inbox';
 export const WATERMARK_KEY = 'sent_observe.last_seen_at';
 export const IDLE_BACKOFF_KEY = 'sent_observe.last_run_found_nothing_at';
 export const PENDING_DIFFS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-diffs.md`;
-export const PENDING_COMPLETIONS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-completions.md`;
 export const PENDING_DIFFS_TYPE = 'voice-pending-diffs';
-export const PENDING_COMPLETIONS_TYPE = 'voice-pending-completions';
 
 /** Calendar-time retention bound for the rolling evidence docs (pending-diffs.md /
  *  pending-completions.md), per ADR-029: their sensitive full email bodies must not be retained
@@ -98,16 +104,6 @@ function parseSnapshot(doc: {
 function extractMatchedDraftIds(pendingDiffsBody: string): Set<string> {
   const ids = new Set<string>();
   for (const m of pendingDiffsBody.matchAll(/draft\s+([^\s↔]+)\s*↔/g)) {
-    if (m[1]) ids.add(m[1]);
-  }
-  return ids;
-}
-
-function extractAskedTaskIds(pendingCompletionsBody: string): Set<string> {
-  // Every candidate (including ones later stamped with a `completion_asked` marker)
-  // keeps its `## Candidate — task <id>` header, so this single pass covers them all.
-  const ids = new Set<string>();
-  for (const m of pendingCompletionsBody.matchAll(/## Candidate — task\s+(\S+)/g)) {
     if (m[1]) ids.add(m[1]);
   }
   return ids;
@@ -307,14 +303,9 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       .filter((s): s is DraftSnapshotLike => s !== null);
 
     const pendingDiffs = await ensureDoc(ctx, PENDING_DIFFS_PATH, PENDING_DIFFS_TYPE, 'Pending voice diffs');
-    const pendingCompletions = await ensureDoc(
-      ctx,
-      PENDING_COMPLETIONS_PATH,
-      PENDING_COMPLETIONS_TYPE,
-      'Pending task-completion candidates',
-    );
     const alreadyMatchedDraftIds = extractMatchedDraftIds(pendingDiffs.body);
-    const alreadyAskedTaskIds = extractAskedTaskIds(pendingCompletions.body);
+    // Seed the asked-guard from config (replaces the doc-derived extractAskedTaskIds scan).
+    const alreadyAskedTaskIds = await readIdSet(store, ASKED_TASK_IDS_KEY);
 
     const OPEN_TASK_LIMIT = 100;
     const openTasks = await ctx.taskRepo.listTasks({
@@ -346,7 +337,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // (see the watermark-advance block below) — minDate does NOT hold it back.
     let minDate = Number.POSITIVE_INFINITY;
     const diffChunks: string[] = [];
-    const completionChunks: string[] = [];
+    const newCandidates: CompletionCandidateMap = {};
 
     const shadowDocs = await ctx.workingDocs.listByPrefix(`${SHADOW_SCRATCH_PREFIX}/`);
     const shadows = shadowDocs
@@ -396,8 +387,16 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
 
       const taskMatches = matchTasksToSent(msg, openTasks, alreadyAskedTaskIds);
       for (const tm of taskMatches) {
+        newCandidates[tm.taskId] = {
+          messageId: tm.messageId,
+          confidence: tm.confidence,
+          reason: tm.reason,
+          sentAt: tm.sentAt,
+          subject: tm.sentSubject,
+          recipients: tm.sentRecipients,
+          taskTitle: tm.taskTitle,
+        } satisfies CompletionCandidate;
         alreadyAskedTaskIds.add(tm.taskId);
-        completionChunks.push(formatCompletionCandidateBlock(tm));
         taskCandidates += 1;
       }
     }
@@ -546,17 +545,44 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       diffChunks.join(''),
       cutoffIso,
     );
-    const completionsPersisted = await appendAndTrimDoc(
-      ctx,
-      PENDING_COMPLETIONS_PATH,
-      PENDING_COMPLETIONS_TYPE,
-      'Pending task-completion candidates',
-      completionChunks.join(''),
-      cutoffIso,
-    );
-    // If evidence didn't reach OKF, hold the watermark so those messages are re-observed
-    // next run (matching is idempotent via the already-matched/asked sets seeded from the
-    // docs, so the successful writes won't duplicate).
+    // Persist the candidate queue (config JSON) — replaces the pending-completions.md append.
+    // Merge onto a fresh read so we don't clobber a concurrent removal by task-completion; keyed
+    // by taskId so a held-watermark retry re-adds idempotently. A hard write failure holds the
+    // watermark (completionsPersisted=false) — the queue must persist before we forget the sends.
+    let completionsPersisted = true;
+    if (Object.keys(newCandidates).length > 0) {
+      try {
+        const existing = await readCompletionCandidates(store);
+        await writeCompletionCandidates(store, { ...existing, ...newCandidates });
+      } catch (err) {
+        completionsPersisted = false;
+        ctx.log.warn({ err }, 'ceo-inbox-sent-observe: completion-candidate write failed — holding watermark');
+      }
+    }
+
+    // Persist the asked-task guard AFTER the queue, and only when the queue persisted — writing
+    // the guard while the queue write failed would let next run skip re-matching and LOSE the
+    // candidate. Runs whenever completionsPersisted, independent of the watermark-advance
+    // decision below (a held watermark that still persisted the queue still wants a fresh guard).
+    // Prune to currently-open tasks (Joseph's retention choice): a completed/cancelled task drops
+    // out of the guard; re-surfacing a since-reopened task is harmless (original send is below the
+    // watermark; task-completion re-validates eligibility).
+    if (completionsPersisted) {
+      const openIds = new Set(openTasks.map((t) => t.id));
+      const prunedAsked = new Set([...alreadyAskedTaskIds].filter((id) => openIds.has(id)));
+      try {
+        await writeIdSet(store, ASKED_TASK_IDS_KEY, prunedAsked);
+      } catch (err) {
+        ctx.log.warn(
+          { err },
+          'ceo-inbox-sent-observe: asked-guard write failed (queue already persisted; guard re-derives next run)',
+        );
+      }
+    }
+
+    // If evidence didn't reach OKF/config, hold the watermark so those messages are re-observed
+    // next run (matching is idempotent via the already-matched/asked sets seeded above, so the
+    // successful writes won't duplicate).
     const evidencePersisted = diffsPersisted && completionsPersisted;
     // The watermark may only advance when the rolling evidence persisted AND every shadow batch
     // reconciled AND every matched draft's full body was fetched. Any of these failing holds the

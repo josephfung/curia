@@ -1,60 +1,89 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskCompletionFromSentHandler, COMPLETION_DIGEST_PATH } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
-import { PENDING_COMPLETIONS_PATH } from '../ceo-inbox-sent-observe/handler.js';
+import type { EntityMemory } from '../../src/memory/entity-memory.js';
+import { CONFIG_NAMESPACE } from '../ceo-inbox-sent-observe/handler.js';
+import { COMPLETION_CANDIDATES_KEY, type CompletionCandidateMap } from '../_shared/learning-state.js';
 
-const PENDING = `
-# Pending task-completion candidates
+const CANDIDATE_MAP: CompletionCandidateMap = {
+  '11111111-1111-4111-8111-111111111111': {
+    messageId: 'm-hi',
+    confidence: 'high',
+    reason: 'recipient+semantic',
+    sentAt: '2026-07-01T12:00:00.000Z',
+    subject: 'Follow up',
+    recipients: ['john@example.com'],
+    taskTitle: 'Follow up with John',
+  },
+  '22222222-2222-4222-8222-222222222222': {
+    messageId: 'm-agm',
+    confidence: 'high',
+    reason: 'recipient+semantic',
+    sentAt: '2026-07-02T12:00:00.000Z',
+    subject: 'AGM',
+    recipients: ['board@example.com'],
+    taskTitle: 'Plan AGM',
+  },
+  '33333333-3333-4333-8333-333333333333': {
+    messageId: 'm-fuzzy',
+    confidence: 'low',
+    reason: 'semantic',
+    sentAt: '2026-07-03T12:00:00.000Z',
+    subject: 'Stuff',
+    recipients: ['x@example.com'],
+    taskTitle: 'Maybe related',
+  },
+};
 
-## Candidate — task 11111111-1111-4111-8111-111111111111
-- message_id: m-hi
-- confidence: high
-- reason: recipient+semantic
-- sent_at: 2026-07-01T12:00:00.000Z
-- subject: Follow up
-- recipients: john@example.com
-- task_title: Follow up with John
-- status: pending
----
-## Candidate — task 22222222-2222-4222-8222-222222222222
-- message_id: m-agm
-- confidence: high
-- reason: recipient+semantic
-- sent_at: 2026-07-02T12:00:00.000Z
-- subject: AGM
-- recipients: board@example.com
-- task_title: Plan AGM
-- status: pending
----
-## Candidate — task 33333333-3333-4333-8333-333333333333
-- message_id: m-fuzzy
-- confidence: low
-- reason: semantic
-- sent_at: 2026-07-03T12:00:00.000Z
-- subject: Stuff
-- recipients: x@example.com
-- task_title: Maybe related
-- status: pending
----
-`;
+/** ConfigStore-backing entityMemory double. Same shape as the `makeMem` helper in
+ *  resolve-learning-digest/handler.test.ts and voice-learn/handler.test.ts —
+ *  `storeFact`/`getFacts` round-trip through a plain Map keyed by label. */
+function makeMem(seed: Record<string, string> = {}): EntityMemory & { __values: Map<string, string> } {
+  const values = new Map(Object.entries(seed));
+  const anchor = {
+    id: 'a1',
+    label: `config:${CONFIG_NAMESPACE}`,
+    temporal: {
+      createdAt: new Date(),
+      lastConfirmedAt: new Date(),
+      confidence: 0.9,
+      decayClass: 'permanent',
+      source: 't',
+    },
+  };
+  return {
+    __values: values,
+    findEntities: vi.fn(async () => [anchor]),
+    getFacts: vi.fn(async () =>
+      [...values.entries()].map(([key, value]) => ({
+        id: key,
+        label: key,
+        properties: { key, value, namespace: CONFIG_NAMESPACE },
+        temporal: {
+          createdAt: new Date(),
+          lastConfirmedAt: new Date(),
+          confidence: 0.9,
+          decayClass: 'permanent',
+          source: 't',
+        },
+      })),
+    ),
+    storeFact: vi.fn(async (p: { label: string; properties?: Record<string, unknown> }) => {
+      values.set(p.label, String(p.properties?.value ?? ''));
+      return { stored: true, action: 'created' };
+    }),
+    createEntity: vi.fn(async () => ({ entity: anchor, created: false })),
+  } as unknown as EntityMemory & { __values: Map<string, string> };
+}
 
 function makeCtx(): SkillContext & {
   __completed: string[];
+  __mem: ReturnType<typeof makeMem>;
   __docs: Map<string, { path: string; body: string; version: number; type: string; frontmatter: Record<string, unknown> }>;
 } {
   const completed: string[] = [];
-  const docs = new Map([
-    [
-      PENDING_COMPLETIONS_PATH,
-      {
-        path: PENDING_COMPLETIONS_PATH,
-        type: 'voice-pending-completions',
-        frontmatter: {},
-        body: PENDING,
-        version: 1,
-      },
-    ],
-  ]);
+  const mem = makeMem({ [COMPLETION_CANDIDATES_KEY]: JSON.stringify(CANDIDATE_MAP) });
+  const docs = new Map<string, { path: string; body: string; version: number; type: string; frontmatter: Record<string, unknown> }>();
 
   const tasks: Record<string, {
     id: string;
@@ -96,6 +125,7 @@ function makeCtx(): SkillContext & {
 
   return {
     agentId: 'ceo-inbox',
+    entityMemory: mem as unknown as EntityMemory,
     taskRepo: {
       getTask: vi.fn(async (id: string) => tasks[id] ?? null),
       listTasks: vi.fn(async () => []),
@@ -140,9 +170,11 @@ function makeCtx(): SkillContext & {
       classify: (text: string) => (/board|agm/i.test(text) ? 'restricted' : 'internal'),
     },
     __completed: completed,
+    __mem: mem,
     __docs: docs,
   } as unknown as SkillContext & {
     __completed: string[];
+    __mem: typeof mem;
     __docs: typeof docs;
   };
 }
@@ -165,37 +197,22 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(digest).toContain('Confirm — task 22222222-2222-4222-8222-222222222222');
     expect(digest).toContain('Confirm — task 33333333-3333-4333-8333-333333333333');
 
-    // Both confirmed candidates must receive their own completion_asked guard — a
-    // document-wide check previously marked only the first (#1429 CodeRabbit).
-    const pending = ctx.__docs.get(PENDING_COMPLETIONS_PATH)?.body ?? '';
-    const markerCount = (pending.match(/completion_asked:/g) ?? []).length;
-    expect(markerCount).toBe(2);
+    // All three candidates (auto-completed + both confirm-queued) are consumed from the
+    // config queue — the persistent asked_task_ids guard (written by sent-observe) is what
+    // prevents re-surfacing now, not an in-band marker.
+    const remaining = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!);
+    expect(remaining).toEqual({});
   });
 
   it('a low-confidence candidate skips the subtask lookup and the sensitivity classifier (T3.1)', async () => {
     const ctx = makeCtx();
     // Queue only the low-confidence candidate.
-    const onlyLow = `
-# Pending task-completion candidates
-
-## Candidate — task 33333333-3333-4333-8333-333333333333
-- message_id: m-fuzzy
-- confidence: low
-- reason: semantic
-- sent_at: 2026-07-03T12:00:00.000Z
-- subject: Stuff
-- recipients: x@example.com
-- task_title: Maybe related
-- status: pending
----
-`;
-    ctx.__docs.set(PENDING_COMPLETIONS_PATH, {
-      path: PENDING_COMPLETIONS_PATH,
-      type: 'voice-pending-completions',
-      frontmatter: {},
-      body: onlyLow,
-      version: 1,
-    });
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({
+        '33333333-3333-4333-8333-333333333333': CANDIDATE_MAP['33333333-3333-4333-8333-333333333333'],
+      }),
+    );
     const classifyFn = vi.fn((text: string) => (/board|agm/i.test(text) ? 'restricted' : 'internal'));
     (ctx as unknown as { sensitivityClassifier: { classify: typeof classifyFn } }).sensitivityClassifier = {
       classify: classifyFn,
@@ -230,8 +247,10 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(result.success).toBe(true);
     // The reassigned task must NOT be auto-completed.
     expect(ctx.__completed).not.toContain('11111111-1111-4111-8111-111111111111');
-    const pending = ctx.__docs.get(PENDING_COMPLETIONS_PATH)?.body ?? '';
-    expect(pending).toContain('skipped_ineligible');
+    // The ineligible candidate is removed from the config queue (consume-by-delete applies to
+    // skipped-ineligible too — the asked_task_ids guard, not an in-band marker, prevents re-ask).
+    const remaining = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!);
+    expect(remaining['11111111-1111-4111-8111-111111111111']).toBeUndefined();
   });
 
   it('reopenTask undoes an auto-complete (reversible path)', async () => {
