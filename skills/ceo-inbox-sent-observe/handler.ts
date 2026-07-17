@@ -333,6 +333,10 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     }
 
     let draftMatches = 0;
+    // Cleared to false if any draft's full Sent body can't be fetched. Holds the watermark (see
+    // advanceOk) so the send is re-observed next run rather than persisting a diff built from a
+    // truncated snippet — the same Finding-7 treatment the shadow-reconcile path already applies.
+    let draftEvidenceComplete = true;
     let taskCandidates = 0;
     let shadowReconciled = 0;
     let maxDate = watermark;
@@ -367,19 +371,27 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
 
       const draftMatch = matchDraftToSent(msg, snapshots, alreadyMatchedDraftIds);
       if (draftMatch) {
+        // Mark matched in-run (1:1 draft↔send) even if the fetch fails, so no other message in
+        // this window re-matches the same draft. Cross-run retry is safe: we hold the watermark
+        // AND don't persist a diff, so next run's alreadyMatchedDraftIds re-seed (from the diffs
+        // doc) excludes this draft and it re-matches for a fresh fetch.
         alreadyMatchedDraftIds.add(draftMatch.draftId);
         try {
           const full = await client.getMessage(msg.id);
           sentBody = htmlToPlainText(full.body) || full.snippet || sentBody;
           fetchedBodies.set(msg.id, sentBody);
+          // Only persist the diff and count the match once the full body is in hand — a diff
+          // built from the truncated snippet would poison the voice proposal and, once written +
+          // watermark-advanced, never be repaired.
+          diffChunks.push(formatDiffBlock(draftMatch, sentBody));
+          draftMatches += 1;
         } catch (err) {
+          draftEvidenceComplete = false;
           ctx.log.warn(
             { err, messageId: msg.id },
-            'ceo-inbox-sent-observe: getMessage failed — using snippet for sent body',
+            'ceo-inbox-sent-observe: getMessage failed — holding watermark for draft evidence retry',
           );
         }
-        diffChunks.push(formatDiffBlock(draftMatch, sentBody));
-        draftMatches += 1;
       }
 
       const taskMatches = matchTasksToSent(msg, openTasks, alreadyAskedTaskIds);
@@ -394,8 +406,9 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // can be matched to the *nearest eligible* send across the whole window rather than the
     // first newest same-thread message (Finding 6). shadowReconcileOk gates the watermark:
     // any un-scored / un-reconciled shadow flips it false so the carrying Sent message is
-    // re-observed next run (received_after is an exclusive lower bound). Declared here (not at
-    // the batch loop) so a body-fetch failure below can hold the watermark too.
+    // re-observed next run (the stored watermark is maxDate+1, so holding it keeps that message
+    // above the next poll's floor). Declared here (not at the batch loop) so a body-fetch failure
+    // below can hold the watermark too.
     let shadowReconcileOk = true;
     if (ctx.actionLogRepo) {
       for (const shadow of shadows) {
@@ -434,8 +447,8 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     }
 
     // Shadow-draft competence reconcile (#1419 / ADR-029): ONE LLM call per run over up to 40
-    // pairs. A failed batch leaves those shadow docs' reconciled_at unset — but `received_after`
-    // is an exclusive lower bound, so the carrying Sent message is only re-fetched next run if we
+    // pairs. A failed batch leaves those shadow docs' reconciled_at unset — but the stored
+    // watermark is maxDate+1, so the carrying Sent message is only re-fetched next run if we
     // HOLD the watermark. shadowReconcileOk tracks that: anything short of a clean, complete
     // response flips it false and the watermark-advance guard below blocks the advance. Retry is
     // idempotent because already-reconciled shadows are skipped (parseShadowDoc returns null once
@@ -545,16 +558,20 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // next run (matching is idempotent via the already-matched/asked sets seeded from the
     // docs, so the successful writes won't duplicate).
     const evidencePersisted = diffsPersisted && completionsPersisted;
-    // The watermark may only advance when BOTH the rolling evidence persisted AND every shadow
-    // batch reconciled. A failed shadow batch (shadowReconcileOk === false) holds it too, so the
-    // orphaned shadow's Sent message is re-fetched next run instead of being stranded past the
-    // exclusive `received_after` floor (its doc is otherwise TTL-swept after 7 idle days).
-    const advanceOk = evidencePersisted && shadowReconcileOk;
+    // The watermark may only advance when the rolling evidence persisted AND every shadow batch
+    // reconciled AND every matched draft's full body was fetched. Any of these failing holds the
+    // watermark so the carrying Sent message is re-observed next run instead of being stranded
+    // past the `received_after` floor (an orphaned shadow doc is otherwise TTL-swept after 7 idle
+    // days; a truncated draft diff would otherwise persist unrepaired).
+    const advanceOk = evidencePersisted && shadowReconcileOk && draftEvidenceComplete;
 
-    // Advance the watermark past the newest message seen (exclusive next poll).
+    // Advance the watermark past the newest message seen (next poll starts after it).
     //
-    // Nylas returns newest-first and `received_after` is an exclusive lower bound, so
-    // a single-floor poll can only ever walk *forward*. On truncation the un-fetched
+    // Nylas `received_after` is INCLUSIVE (returns messages with date >= the floor; Nylas
+    // timestamps are Unix seconds), so we store `maxDate + 1` to make the next poll's floor
+    // exclude the newest second we just processed — identical to the inbound email adapter's
+    // convention (see src/channels/email/email-adapter.ts, `this.lastSeenTimestamp = msg.date + 1`).
+    // Nylas returns newest-first, so a single-floor poll can only ever walk *forward*. On truncation the un-fetched
     // messages are the OLDEST in the window (date < minDate); there is no lower-bound
     // value that both advances and re-includes them, so we do not attempt a partial
     // hold (an earlier version did and simply stranded the tail while re-scanning the
@@ -569,15 +586,19 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       watermarkAdvancedTo = maxDate + 1;
       await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
     } else if (messages.length > 0 && !advanceOk) {
+      const holdReason = !evidencePersisted
+        ? 'ceo-inbox-sent-observe: evidence persistence failed — holding watermark for retry'
+        : !draftEvidenceComplete
+          ? 'ceo-inbox-sent-observe: draft body fetch failed — holding watermark for retry'
+          : 'ceo-inbox-sent-observe: shadow reconcile failed — holding watermark for retry';
       ctx.log.warn(
         {
           path: PENDING_DIFFS_PATH,
           evidencePersisted,
           shadowReconcileOk,
+          draftEvidenceComplete,
         },
-        !evidencePersisted
-          ? 'ceo-inbox-sent-observe: evidence persistence failed — holding watermark for retry'
-          : 'ceo-inbox-sent-observe: shadow reconcile failed — holding watermark for retry',
+        holdReason,
       );
     }
     if (truncated) {

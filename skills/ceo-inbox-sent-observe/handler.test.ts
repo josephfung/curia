@@ -309,6 +309,70 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(diffs?.body).toContain('msg-sent-1');
   });
 
+  it('holds the watermark and persists no diff when a matched draft body cannot be fetched (F8)', async () => {
+    // Same matched draft as above, but the full-message fetch fails. A diff built from the
+    // truncated snippet would poison the voice proposal, so we must NOT persist it, must NOT count
+    // the match, and must HOLD the watermark so the send is re-observed (and re-fetched) next run.
+    const listResponse = {
+      data: [
+        {
+          id: 'msg-sent-1',
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          from: [{ email: 'ceo@example.com' }],
+          to: [{ email: 'alice@example.com' }],
+          cc: [],
+          snippet: 'Thanks Alice',
+          date: 1_720_000_200,
+          unread: false,
+          folders: ['SENT'],
+          attachments: [],
+        },
+      ],
+    };
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-1')) {
+        // getMessage fails — the full body is unavailable this run.
+        return new Response('boom', { status: 500 });
+      }
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify(listResponse), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      snapshots: [
+        {
+          path: '/scratch/voice-learning/draft-1.md',
+          type: VOICE_LEARNING_DOC_TYPE,
+          frontmatter: {
+            draft_id: 'draft-1',
+            thread_id: 'thread-1',
+            subject: 'Re: Hello',
+            recipients: { to: [{ email: 'alice@example.com' }], cc: [] },
+            created_at: '2024-07-03T00:00:00.000Z',
+          },
+          body: 'Thanks Alice — following up.',
+        },
+      ],
+      tasks: [],
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: Record<string, unknown> }).data;
+    expect(data.draft_matches).toBe(0);
+    expect(data.watermark_advanced_to).toBeNull();
+    expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBeUndefined();
+    // No diff was persisted from the truncated snippet.
+    expect(ctx.__docs.get(PENDING_DIFFS_PATH)?.body ?? '').not.toContain('draft draft-1');
+  });
+
   it('persists task-completion candidates for open CEO tasks', async () => {
     mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
       const u = String(url);
