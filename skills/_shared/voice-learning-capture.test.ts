@@ -130,4 +130,21 @@ describe('captureDraftSnapshot', () => {
       }),
     );
   });
+
+  it('drops the snapshot on a version conflict without retrying (best-effort)', async () => {
+    const update = vi
+      .fn()
+      .mockResolvedValue({ ok: false, conflict: true, document: { version: 9, frontmatter: {} } });
+    const read = vi.fn().mockResolvedValue({
+      version: 2,
+      frontmatter: { created_at: '2026-07-01T00:00:00.000Z', draft_id: 'draft-abc' },
+      body: 'old',
+    });
+    const ctx = buildCtx({ read, create: vi.fn(), update });
+
+    const ok = await captureDraftSnapshot(ctx, { ...SNAPSHOT, body: 'revised' });
+    expect(ok).toBe(false);
+    expect(update).toHaveBeenCalledTimes(1); // no retry on conflict
+    expect(ctx.log.warn).toHaveBeenCalled();
+  });
 });
