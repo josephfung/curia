@@ -303,8 +303,9 @@ export function formatDiffBlock(match: DraftMatch, sentBody: string): string {
  *     default idle scratch sweep (purgeExpiredScratch). That single mechanism is their retention.
  *
  * Boundaries: each block starts at a real `## Diff — ` / `## Candidate — ` header and runs up to
- * (not including) the next such header — the same headers formatDiffBlock/formatCompletionCandidateBlock
- * produce and parsePendingDiffs/parseCompletionCandidates consume, so the result round-trips. We split
+ * (not including) the next such header — the same headers formatDiffBlock produces (and, historically,
+ * the retired completion-candidate formatter did) and parsePendingDiffs consumes, so the result
+ * round-trips. We split
  * on the namespaced headers, NOT any `## ` line, so a `## `-prefixed line inside a sent email body
  * (a markdown H2 surviving htmlToPlainText) stays part of its block instead of mis-splitting it and
  * leaving a timestamp-less tail behind. Any leading preamble/header before the first block is
@@ -336,24 +337,4 @@ export function trimEvidenceDoc(body: string, cutoffIso: string): string {
     kept.push(part);
   }
   return kept.join('');
-}
-
-/** Format a completion candidate block for pending-completions.md. */
-export function formatCompletionCandidateBlock(match: TaskMatch): string {
-  return [
-    '',
-    `## Candidate — task ${match.taskId}`,
-    '',
-    `- message_id: ${match.messageId}`,
-    `- confidence: ${match.confidence}`,
-    `- reason: ${match.reason}`,
-    `- sent_at: ${match.sentAt}`,
-    `- subject: ${match.sentSubject}`,
-    `- recipients: ${match.sentRecipients.join(', ')}`,
-    `- task_title: ${match.taskTitle}`,
-    `- status: pending`,
-    '',
-    '---',
-    '',
-  ].join('\n');
 }

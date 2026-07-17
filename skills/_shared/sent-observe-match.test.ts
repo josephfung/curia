@@ -3,14 +3,11 @@ import {
   matchDraftToSent,
   matchTasksToSent,
   formatDiffBlock,
-  formatCompletionCandidateBlock,
   trimEvidenceDoc,
   type DraftSnapshotLike,
   type SentMessageLike,
-  type TaskMatch,
 } from './sent-observe-match.js';
 import { parsePendingDiffs } from './voice-learn-logic.js';
-import { parseCompletionCandidates } from './task-completion-risk.js';
 
 const baseSent: SentMessageLike = {
   id: 'msg-1',
@@ -174,20 +171,6 @@ describe('trimEvidenceDoc', () => {
     return formatDiffBlock(match, SENT_BODY);
   }
 
-  function completionBlock(date: number, taskId: string): string {
-    const match: TaskMatch = {
-      messageId: `msg-${date}`,
-      taskId,
-      confidence: 'high',
-      reason: 'recipient+semantic',
-      sentSubject: 'Follow up',
-      sentRecipients: ['alice@example.com'],
-      sentAt: new Date(date * 1000).toISOString(),
-      taskTitle: 'Follow up with Alice',
-    };
-    return formatCompletionCandidateBlock(match);
-  }
-
   const OLD = 1_600_000_000; // 2020-09-13
   const NEW = 1_720_000_000; // 2024-07-03
   const CUTOFF = new Date(1_700_000_000_000).toISOString(); // 2023-11-14, between OLD and NEW
@@ -241,15 +224,6 @@ describe('trimEvidenceDoc', () => {
     const trimmed = trimEvidenceDoc(`# H\n${garbage}${missing}`, cutoff);
     expect(trimmed).toContain('draft dg');
     expect(trimmed).toContain('draft dm');
-  });
-
-  it('trims completion blocks too (re-parses via parseCompletionCandidates)', () => {
-    const body = `# Pending task-completion candidates\n${completionBlock(OLD, 'task-old')}${completionBlock(NEW, 'task-new')}`;
-    const trimmed = trimEvidenceDoc(body, CUTOFF);
-
-    const candidates = parseCompletionCandidates(trimmed);
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]!.taskId).toBe('task-new');
   });
 
   it('returns an empty / block-free body unchanged', () => {
