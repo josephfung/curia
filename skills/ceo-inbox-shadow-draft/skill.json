@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-shadow-draft",
   "description": "Store a non-surfaced, non-sent shadow draft for a punted inbox message (Seen / Urgent / Stuck). Never creates approvals, notifications, or Nylas drafts. Used during triage so later sent-observe can batch shadow/sent pairs through an LLM judge into autonomy_action_log.",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
