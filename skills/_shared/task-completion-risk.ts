@@ -6,12 +6,12 @@ import { readPlanBlock } from '../../src/db/plan-progress.js';
 // pattern in src/security/export-controls.ts).
 import { isConfidentialOrAbove } from '../../src/memory/sensitivity.js';
 import type { Sensitivity } from '../../src/memory/types.js';
+import type { MatchConfidence } from './sent-observe-match.js';
 
 export type TaskRisk = 'low' | 'high';
-export type MatchConfidence = 'high' | 'low';
 export type CompletionAction = 'auto_complete' | 'confirm';
 
-/** High priority threshold — matches common "high" band usage (lower number = higher priority in some systems; here higher number = higher priority per TaskRow default 50). */
+/** Priority at/above which a task is treated as high-risk (TaskRow priority default is 50). */
 export const HIGH_PRIORITY_FLOOR = 70;
 
 export interface RiskTaskLike {
@@ -51,12 +51,13 @@ export function classifyTaskRisk(
   return 'low';
 }
 
-export function decideCompletionAction(
-  risk: TaskRisk,
-  confidence: MatchConfidence,
-): CompletionAction {
-  if (risk === 'low' && confidence === 'high') return 'auto_complete';
-  return 'confirm';
+/**
+ * Decide auto-complete vs confirm from risk alone. Confidence no longer factors in here: the
+ * caller only reaches this for HIGH-confidence candidates (low-confidence ones short-circuit
+ * straight to confirm), so the whole decision collapses to "auto-complete iff low risk" (T3.1).
+ */
+export function decideCompletionAction(risk: TaskRisk): CompletionAction {
+  return risk === 'low' ? 'auto_complete' : 'confirm';
 }
 
 export interface ParsedCompletionCandidate {
@@ -127,14 +128,15 @@ export function formatConfirmNote(params: {
   recipient: string;
   sentAt: string;
   confidence: MatchConfidence;
-  risk: TaskRisk;
+  // Undefined for low-confidence candidates, whose risk is never classified (T3.1).
+  risk?: TaskRisk;
 }): string {
   return [
     '',
     `## Confirm — task ${params.taskId}`,
     '',
     `- status: pending_confirm`,
-    `- risk: ${params.risk}`,
+    `- risk: ${params.risk ?? 'unassessed'}`,
     `- confidence: ${params.confidence}`,
     `- task_title: ${params.taskTitle}`,
     `- note: Did emailing ${params.recipient} complete *${params.taskTitle}*?`,

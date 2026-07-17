@@ -172,6 +172,45 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(markerCount).toBe(2);
   });
 
+  it('a low-confidence candidate skips the subtask lookup and the sensitivity classifier (T3.1)', async () => {
+    const ctx = makeCtx();
+    // Queue only the low-confidence candidate.
+    const onlyLow = `
+# Pending task-completion candidates
+
+## Candidate — task 33333333-3333-4333-8333-333333333333
+- message_id: m-fuzzy
+- confidence: low
+- reason: semantic
+- sent_at: 2026-07-03T12:00:00.000Z
+- subject: Stuff
+- recipients: x@example.com
+- task_title: Maybe related
+- status: pending
+---
+`;
+    ctx.__docs.set(PENDING_COMPLETIONS_PATH, {
+      path: PENDING_COMPLETIONS_PATH,
+      type: 'voice-pending-completions',
+      frontmatter: {},
+      body: onlyLow,
+      version: 1,
+    });
+    const classifyFn = vi.fn((text: string) => (/board|agm/i.test(text) ? 'restricted' : 'internal'));
+    (ctx as unknown as { sensitivityClassifier: { classify: typeof classifyFn } }).sensitivityClassifier = {
+      classify: classifyFn,
+    };
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { auto_completed: number; queued_confirm: number } }).data;
+    expect(data.auto_completed).toBe(0);
+    expect(data.queued_confirm).toBe(1);
+    // Risk classification is short-circuited for low confidence: no subtask lookup, no classify.
+    expect(ctx.taskRepo!.listTasks).not.toHaveBeenCalled();
+    expect(classifyFn).not.toHaveBeenCalled();
+  });
+
   it('skips a candidate whose task is no longer CEO-owned', async () => {
     const ctx = makeCtx();
     // Reassign one task away from the CEO after observation.

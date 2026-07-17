@@ -44,10 +44,14 @@ export interface DraftMatch {
   sentAt: string;
 }
 
+/** Match strength for a sent-mail → task completion candidate. The single confidence vocabulary
+ *  shared by matchTasksToSent, the completion-candidate block format, and the parser. */
+export type MatchConfidence = 'high' | 'low';
+
 export interface TaskMatch {
   messageId: string;
   taskId: string;
-  confidence: 'high' | 'low';
+  confidence: MatchConfidence;
   reason: string;
   sentSubject: string;
   sentRecipients: string[];
