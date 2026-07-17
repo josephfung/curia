@@ -559,25 +559,31 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // diffed) so they re-match next run — mirroring the old re-derive-from-pending-diffs behavior.
     // Prune the carried-over set to drafts whose snapshot still exists (a snapshot TTL-sweeps
     // after 7 idle days; once gone it can't be re-matched, so retaining its id is pointless).
+    // Tracks whether the matched-draft guard write itself landed. Unlike the old doc-derived
+    // guard (which re-derived matched ids from the pending-diffs doc body on every run), the
+    // guard is now standalone config with no fallback — extractMatchedDraftIds was deleted.
+    // A lost write here means the NEXT run's seed is stale (missing this run's newly-diffed
+    // drafts), so matchDraftToSent could re-match an already-diffed draft and append a
+    // duplicate diff block. Holding the watermark on a soft-reject/throw re-observes the same
+    // Sent message next run, which re-derives and re-writes the guard from scratch.
+    let matchedGuardPersisted = true;
     if (diffsPersisted) {
       const snapshotIds = new Set(snapshots.map((s) => s.draftId));
       const nextMatched = new Set([...seedMatchedDraftIds].filter((id) => snapshotIds.has(id)));
       for (const id of newlyDiffedDraftIds) nextMatched.add(id);
       try {
-        // A guard soft-fail (stored:false) or thrown error is intentionally NOT held against the
-        // watermark: the guard just re-derives next run from the (already-persisted) diffs doc,
-        // worst case re-matching a draft that was already diffed — harmless, idempotent.
-        const matchedGuardPersisted = await writeIdSet(store, MATCHED_DRAFT_IDS_KEY, nextMatched);
+        matchedGuardPersisted = await writeIdSet(store, MATCHED_DRAFT_IDS_KEY, nextMatched);
         if (!matchedGuardPersisted) {
           ctx.log.warn(
             { path: MATCHED_DRAFT_IDS_KEY },
-            'ceo-inbox-sent-observe: matched-guard write soft-rejected (diffs persisted; guard re-derives next run)',
+            'ceo-inbox-sent-observe: matched-guard write soft-rejected — holding watermark for retry',
           );
         }
       } catch (err) {
+        matchedGuardPersisted = false;
         ctx.log.warn(
           { err },
-          'ceo-inbox-sent-observe: matched-guard write failed (diffs persisted; guard re-derives next run)',
+          'ceo-inbox-sent-observe: matched-guard write failed — holding watermark for retry',
         );
       }
     }
@@ -611,24 +617,28 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // Prune to currently-open tasks (Joseph's retention choice): a completed/cancelled task drops
     // out of the guard; re-surfacing a since-reopened task is harmless (original send is below the
     // watermark; task-completion re-validates eligibility).
+    // Same standalone-config reasoning as matchedGuardPersisted above: the asked-guard has no
+    // OKF-derived fallback either, so a lost write here means next run's seed is stale (missing
+    // this run's newly-asked task ids), and matchTasksToSent could re-match a task that already
+    // has a queued candidate — re-asking about it. Holding the watermark re-observes the
+    // carrying Sent message next run, which re-derives and re-writes the guard from scratch.
+    let askedGuardPersisted = true;
     if (completionsPersisted) {
       const openIds = new Set(openTasks.map((t) => t.id));
       const prunedAsked = new Set([...alreadyAskedTaskIds].filter((id) => openIds.has(id)));
       try {
-        // Same "don't hold the watermark" reasoning as the matched-guard write above: a soft-fail
-        // here just means task-completion re-derives eligibility next run — the queue itself
-        // (gated above) is what actually protects the candidate from being lost.
-        const askedGuardPersisted = await writeIdSet(store, ASKED_TASK_IDS_KEY, prunedAsked);
+        askedGuardPersisted = await writeIdSet(store, ASKED_TASK_IDS_KEY, prunedAsked);
         if (!askedGuardPersisted) {
           ctx.log.warn(
             { path: ASKED_TASK_IDS_KEY },
-            'ceo-inbox-sent-observe: asked-guard write soft-rejected (queue already persisted; guard re-derives next run)',
+            'ceo-inbox-sent-observe: asked-guard write soft-rejected — holding watermark for retry',
           );
         }
       } catch (err) {
+        askedGuardPersisted = false;
         ctx.log.warn(
           { err },
-          'ceo-inbox-sent-observe: asked-guard write failed (queue already persisted; guard re-derives next run)',
+          'ceo-inbox-sent-observe: asked-guard write failed — holding watermark for retry',
         );
       }
     }
@@ -638,11 +648,15 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // successful writes won't duplicate).
     const evidencePersisted = diffsPersisted && completionsPersisted;
     // The watermark may only advance when the rolling evidence persisted AND every shadow batch
-    // reconciled AND every matched draft's full body was fetched. Any of these failing holds the
-    // watermark so the carrying Sent message is re-observed next run instead of being stranded
-    // past the `received_after` floor (an orphaned shadow doc is otherwise TTL-swept after 7 idle
-    // days; a truncated draft diff would otherwise persist unrepaired).
-    const advanceOk = evidencePersisted && shadowReconcileOk && draftEvidenceComplete;
+    // reconciled AND every matched draft's full body was fetched AND both standalone guard
+    // writes (matched-draft, asked-task) landed. Any of these failing holds the watermark so the
+    // carrying Sent message is re-observed next run instead of being stranded past the
+    // `received_after` floor (an orphaned shadow doc is otherwise TTL-swept after 7 idle days; a
+    // truncated draft diff would otherwise persist unrepaired; a lost guard write would otherwise
+    // let a draft/task double-surface on a later run since neither guard re-derives from OKF any
+    // more — extractMatchedDraftIds/extractAskedTaskIds were both deleted in #1438).
+    const advanceOk =
+      evidencePersisted && shadowReconcileOk && draftEvidenceComplete && matchedGuardPersisted && askedGuardPersisted;
 
     // Advance the watermark past the newest message seen (next poll starts after it).
     //
@@ -669,13 +683,17 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         ? 'ceo-inbox-sent-observe: evidence persistence failed — holding watermark for retry'
         : !draftEvidenceComplete
           ? 'ceo-inbox-sent-observe: draft body fetch failed — holding watermark for retry'
-          : 'ceo-inbox-sent-observe: shadow reconcile failed — holding watermark for retry';
+          : !shadowReconcileOk
+            ? 'ceo-inbox-sent-observe: shadow reconcile failed — holding watermark for retry'
+            : 'ceo-inbox-sent-observe: guard write failed — holding watermark for retry';
       ctx.log.warn(
         {
           path: PENDING_DIFFS_PATH,
           evidencePersisted,
           shadowReconcileOk,
           draftEvidenceComplete,
+          matchedGuardPersisted,
+          askedGuardPersisted,
         },
         holdReason,
       );

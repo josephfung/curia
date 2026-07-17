@@ -63,21 +63,36 @@ function parseJson<T>(raw: string | null, onCorrupt?: () => void): T | null {
   }
 }
 
+/** Light top-level shape guard: distinguishes "a JSON object" from an array/primitive that
+ *  parsed fine but is the wrong top-level shape (e.g. a map key that somehow got a `"[]"`
+ *  written to it). Deliberately NOT a full per-entry validator — the values here are only ever
+ *  written by this module, so validating every field of every entry is out of scope; this just
+ *  catches a structurally-wrong top-level value before it's cast and handed to callers. */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
 /** Build the onCorrupt callback shared by every read accessor below: logs a warning (only when a
  *  logger was supplied — the param is optional so callers/tests without a ctx.log still compile)
- *  identifying the key and a truncated snippet of the unparseable value, without dumping the
- *  full (possibly large) raw string into logs. */
+ *  identifying the key and the raw value's length, without dumping the value's actual content —
+ *  which can carry PII (recipient addresses, subjects, task titles, proposal text) — into logs. */
 function corruptionLogger(key: string, raw: string, log?: Logger): () => void {
   return () =>
     log?.warn(
-      { key, rawSnippet: raw.slice(0, 120) },
+      { key, rawLength: raw.length },
       'learning-state: stored value failed to parse — treating as empty',
     );
 }
 
 export async function readCompletionCandidates(store: ConfigStore, log?: Logger): Promise<CompletionCandidateMap> {
   const raw = await store.get(LEARNING_STATE_NAMESPACE, COMPLETION_CANDIDATES_KEY);
-  return parseJson<CompletionCandidateMap>(raw, raw ? corruptionLogger(COMPLETION_CANDIDATES_KEY, raw, log) : undefined) ?? {};
+  const parsed = parseJson<unknown>(raw, raw ? corruptionLogger(COMPLETION_CANDIDATES_KEY, raw, log) : undefined);
+  if (parsed === null) return {};
+  if (!isPlainObject(parsed)) {
+    corruptionLogger(COMPLETION_CANDIDATES_KEY, raw!, log)();
+    return {};
+  }
+  return parsed as unknown as CompletionCandidateMap;
 }
 export async function writeCompletionCandidates(store: ConfigStore, map: CompletionCandidateMap): Promise<boolean> {
   return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_CANDIDATES_KEY, JSON.stringify(map))).stored;
@@ -85,7 +100,13 @@ export async function writeCompletionCandidates(store: ConfigStore, map: Complet
 
 export async function readCompletionDigest(store: ConfigStore, log?: Logger): Promise<CompletionDigestMap> {
   const raw = await store.get(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_KEY);
-  return parseJson<CompletionDigestMap>(raw, raw ? corruptionLogger(COMPLETION_DIGEST_KEY, raw, log) : undefined) ?? {};
+  const parsed = parseJson<unknown>(raw, raw ? corruptionLogger(COMPLETION_DIGEST_KEY, raw, log) : undefined);
+  if (parsed === null) return {};
+  if (!isPlainObject(parsed)) {
+    corruptionLogger(COMPLETION_DIGEST_KEY, raw!, log)();
+    return {};
+  }
+  return parsed as unknown as CompletionDigestMap;
 }
 export async function writeCompletionDigest(store: ConfigStore, map: CompletionDigestMap): Promise<boolean> {
   return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_KEY, JSON.stringify(map))).stored;
@@ -93,7 +114,13 @@ export async function writeCompletionDigest(store: ConfigStore, map: CompletionD
 
 export async function readVoiceProposal(store: ConfigStore, log?: Logger): Promise<VoiceGuideProposal | null> {
   const raw = await store.get(LEARNING_STATE_NAMESPACE, VOICE_PROPOSAL_KEY);
-  return parseJson<VoiceGuideProposal>(raw, raw ? corruptionLogger(VOICE_PROPOSAL_KEY, raw, log) : undefined);
+  const parsed = parseJson<unknown>(raw, raw ? corruptionLogger(VOICE_PROPOSAL_KEY, raw, log) : undefined);
+  if (parsed === null) return null;
+  if (!isPlainObject(parsed) || typeof parsed.guide !== 'string' || typeof parsed.status !== 'string') {
+    corruptionLogger(VOICE_PROPOSAL_KEY, raw!, log)();
+    return null;
+  }
+  return parsed as unknown as VoiceGuideProposal;
 }
 export async function writeVoiceProposal(store: ConfigStore, proposal: VoiceGuideProposal | null): Promise<boolean> {
   return (await store.set(LEARNING_STATE_NAMESPACE, VOICE_PROPOSAL_KEY, JSON.stringify(proposal))).stored;
@@ -101,8 +128,14 @@ export async function writeVoiceProposal(store: ConfigStore, proposal: VoiceGuid
 
 export async function readIdSet(store: ConfigStore, key: string, log?: Logger): Promise<Set<string>> {
   const raw = await store.get(LEARNING_STATE_NAMESPACE, key);
-  const arr = parseJson<string[]>(raw, raw ? corruptionLogger(key, raw, log) : undefined);
-  return new Set(Array.isArray(arr) ? arr : []);
+  const parsed = parseJson<unknown>(raw, raw ? corruptionLogger(key, raw, log) : undefined);
+  if (parsed !== null && !Array.isArray(parsed)) {
+    // Parsed fine but the wrong top-level shape (e.g. a map object stored under an id-set key) —
+    // route through the same corruption logger so this isn't a silent empty-set degrade.
+    corruptionLogger(key, raw!, log)();
+    return new Set();
+  }
+  return new Set(Array.isArray(parsed) ? (parsed as string[]) : []);
 }
 export async function writeIdSet(store: ConfigStore, key: string, ids: Set<string>): Promise<boolean> {
   return (await store.set(LEARNING_STATE_NAMESPACE, key, JSON.stringify([...ids]))).stored;

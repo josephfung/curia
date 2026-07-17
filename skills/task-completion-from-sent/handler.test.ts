@@ -299,45 +299,66 @@ describe('TaskCompletionFromSentHandler', () => {
     );
   });
 
-  it('does not consume a candidate when the digest write soft-rejects (stored:false, no throw)', async () => {
-    // The task auto-completes (completeTask succeeds), but the digest write that records its
-    // undo affordance soft-rejects — resolves normally with stored:false rather than throwing.
-    // digestStored must gate the candidate-consume write: if it doesn't, the candidate is
-    // deleted from the queue even though the digest item (the undo note) was never persisted,
-    // silently losing the user's undo affordance with no trace it ever existed.
-    const ctx = makeCtx();
-    // Queue only the high-confidence, low-risk candidate that auto-completes.
-    ctx.__mem.__values.set(
+  it('DOUBLE-RUN: a digest soft-reject blocks completion entirely; a later successful run completes it with the undo note durable (Finding 6)', async () => {
+    // Finding 6: under the OLD ordering, completeTask ran BEFORE the digest write, so a
+    // soft-rejected digest write after a successful auto-complete permanently lost the undo
+    // note (next run the task is 'done' → skipped_ineligible → candidate removed → note gone).
+    // The fix reorders this: the undo note must be durably written to the digest BEFORE the
+    // task is completed. Run 1 proves the task is NOT completed while the digest isn't durable
+    // (and the candidate survives for retry); run 2 (fresh ctx, digest write now succeeding)
+    // proves the same candidate is then completed AND its undo note lands in the digest — the
+    // undo affordance survived the soft-reject instead of being silently lost.
+    const ctx1 = makeCtx();
+    ctx1.__mem.__values.set(
       COMPLETION_CANDIDATES_KEY,
       JSON.stringify({
         '11111111-1111-4111-8111-111111111111': CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
       }),
     );
-    (ctx.__mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+    (ctx1.__mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
       async (p: { label: string; properties?: Record<string, unknown> }) => {
         if (p.label === COMPLETION_DIGEST_KEY) {
           return { stored: false, action: 'conflict' as const };
         }
-        ctx.__mem.__values.set(p.label, String(p.properties?.value ?? ''));
+        ctx1.__mem.__values.set(p.label, String(p.properties?.value ?? ''));
         return { stored: true, action: 'created' as const };
       },
     );
 
-    const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    const data = (result as { data: { auto_completed: number } }).data;
-    // The task itself is still completed (completeTask isn't gated on the digest write) — only
-    // the candidate-queue consume is held back.
-    expect(data.auto_completed).toBe(1);
-    expect(ctx.__completed).toContain('11111111-1111-4111-8111-111111111111');
-
-    // The digest write never actually landed.
-    expect(ctx.__mem.__values.has(COMPLETION_DIGEST_KEY)).toBe(false);
-    // The candidate must still be present in the queue — it was NOT consumed, since consuming it
-    // would permanently lose the undo affordance that never made it into the digest.
-    const remaining = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!) as CompletionCandidateMap;
-    expect(remaining['11111111-1111-4111-8111-111111111111']).toEqual(
+    const result1 = await handler.execute(ctx1);
+    expect(result1.success).toBe(true);
+    const data1 = (result1 as { data: { auto_completed: number } }).data;
+    // The task must NOT be completed — the digest (carrying its undo note) never became durable,
+    // so completing it now would leave a done task with no recoverable undo affordance.
+    expect(data1.auto_completed).toBe(0);
+    expect(ctx1.__completed).not.toContain('11111111-1111-4111-8111-111111111111');
+    expect(ctx1.__mem.__values.has(COMPLETION_DIGEST_KEY)).toBe(false);
+    // The candidate is retained for retry — nothing was consumed.
+    const remaining1 = JSON.parse(ctx1.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!) as CompletionCandidateMap;
+    expect(remaining1['11111111-1111-4111-8111-111111111111']).toEqual(
       CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
     );
+
+    // Run 2: fresh context, same candidate, digest write now succeeds normally.
+    const ctx2 = makeCtx();
+    ctx2.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({
+        '11111111-1111-4111-8111-111111111111': CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+      }),
+    );
+
+    const result2 = await handler.execute(ctx2);
+    expect(result2.success).toBe(true);
+    const data2 = (result2 as { data: { auto_completed: number } }).data;
+    expect(data2.auto_completed).toBe(1);
+    expect(ctx2.__completed).toContain('11111111-1111-4111-8111-111111111111');
+    // The undo note is now present in the digest — the affordance survived the earlier
+    // soft-reject instead of being permanently lost.
+    const digest2 = JSON.parse(ctx2.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest2['11111111-1111-4111-8111-111111111111'].kind).toBe('undo');
+    // And the candidate is finally consumed.
+    const remaining2 = JSON.parse(ctx2.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!) as CompletionCandidateMap;
+    expect(remaining2['11111111-1111-4111-8111-111111111111']).toBeUndefined();
   });
 });
