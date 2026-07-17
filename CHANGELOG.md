@@ -35,7 +35,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ceo-inbox-sent-observe`** — also hold the watermark when a shadow-judge LLM batch fails, so the signal is retried. (#1419)
 - **`ceo-inbox-sent-observe`** — bound rolling evidence-doc retention to 90 days so sensitive email bodies stop accumulating. (#1419)
 - **`task-completion-from-sent`** — re-check tasks are open and CEO-owned; fail closed on subtask-lookup errors. (#1419)
-- **Voice-learning capture** — a body-only draft edit no longer clears the snapshot's linked task ids. (#1419)
+- **Voice-learning capture** — a body-only draft edit refreshes the snapshot in place, preserving its original `created_at`. (#1419)
 - **`voice-learn`** — voice-guide approval loop no longer breaks after one cycle; honors dismiss cooldown. (#1419)
 
 ### Added
