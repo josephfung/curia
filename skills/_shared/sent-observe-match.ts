@@ -287,6 +287,17 @@ export function formatDiffBlock(match: DraftMatch, sentBody: string): string {
  * would otherwise accumulate forever, since appendDoc refreshes `updated_at` on every active run
  * and defeats the idle-TTL sweep.
  *
+ * Retention scheme — one mechanism per doc class (T2.2):
+ *   - Rolling evidence docs (pending-diffs.md / pending-completions.md): retained by THIS in-write
+ *     trim (a 90-day content window; see EVIDENCE_RETENTION_DAYS in the sent-observe handler). They
+ *     also carry an explicit `ttl_days: 90` frontmatter — NOT a restatement of the 7-day default
+ *     scratch sweep, but a deliberate override: voice-learn / task-completion consume these WEEKLY,
+ *     so the aggressive 7-day default sweep could delete still-unconsumed evidence during an idle
+ *     stretch. The 90-day idle backstop keeps unconsumed evidence alive (and cleans a truly
+ *     abandoned doc). Both layers are load-bearing.
+ *   - Per-item docs (draft snapshots, shadow docs): no in-write trim — retained solely by the
+ *     default idle scratch sweep (purgeExpiredScratch). That single mechanism is their retention.
+ *
  * Boundaries: each block starts at a real `## Diff — ` / `## Candidate — ` header and runs up to
  * (not including) the next such header — the same headers formatDiffBlock/formatCompletionCandidateBlock
  * produce and parsePendingDiffs/parseCompletionCandidates consume, so the result round-trips. We split
