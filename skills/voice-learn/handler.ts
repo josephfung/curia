@@ -8,15 +8,12 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 import { buildVoiceGuidePrompt, parsePendingDiffs } from '../_shared/voice-learn-logic.js';
-import { pruneGuideProposals } from '../_shared/learning-digest.js';
 import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
-import { VOICE_LEARNING_SCRATCH_PREFIX } from '../_shared/voice-learning-capture.js';
+import { writeVoiceProposal } from '../_shared/learning-state.js';
 
 // Kept for Task 9 (resolve-learning-digest) and cooldown bookkeeping, even though
 // this handler no longer reads/writes provenance directly.
 export const DISMISSED_KEY = 'voice_learn.dismissed';
-export const PENDING_PROPOSALS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-proposals.md`;
-export const PENDING_PROPOSALS_TYPE = 'voice-pending-proposals';
 export const CONFIG_NAMESPACE = 'ceo_inbox';
 
 // Checkpoint (ISO timestamp string) marking the newest `sentAt` among diff pairs already fed
@@ -94,14 +91,6 @@ export class VoiceLearnHandler implements SkillHandler {
       };
     }
 
-    // Read the proposals doc so the write below can supersede any still-unapproved proposal
-    // (T2.1). We no longer gate the whole run on a pending proposal — the single-pending
-    // invariant is enforced at write time by pruning the old block, so a fresher proposal
-    // replaces a stale one instead of blocking it. (The checkpoint above already stops the
-    // SAME evidence being re-proposed; this handles genuinely new evidence arriving before the
-    // CEO acted on the prior proposal.)
-    const existing = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
-
     // Respect the dismissal cooldown the digest writes on `dismiss voice`. Best-effort and
     // additive: only consulted when entityMemory is wired (guarded, not a hard capability), and
     // a missing/garbage record simply doesn't gate. Without this the cooldown was written but
@@ -173,24 +162,22 @@ export class VoiceLearnHandler implements SkillHandler {
       };
     }
 
-    const block = `## Guide Proposal\n- status: pending\n- generated_at: ${new Date().toISOString()}\n\n${guide}\n\n---\n`;
-    if (!existing) {
-      await ctx.workingDocs.create({
-        path: PENDING_PROPOSALS_PATH,
-        type: PENDING_PROPOSALS_TYPE,
-        frontmatter: { title: 'Pending voice guide proposal' },
-        body: `# Pending voice guide proposal\n\n${block}`,
-        agentId: ctx.agentId,
-      });
-    } else {
-      // Prune any existing proposal block (pending or resolved) and write the fresh one, so at
-      // most one pending proposal ever lives in the doc and it never accumulates (T2.1).
-      const header = pruneGuideProposals(existing.body, { removePending: true }).trimEnd();
-      await ctx.workingDocs.update(PENDING_PROPOSALS_PATH, {
-        body: `${header}\n\n${block}`,
-        expectedVersion: existing.version,
-      });
+    // Supersede any prior proposal by writing the single proposal object whole. The checkpoint
+    // (below) is what stops the SAME evidence being re-proposed; this write replaces a stale
+    // still-pending proposal with the fresher one. configStore is guaranteed here — a proposal
+    // requires entityMemory to persist state; if it's unavailable we cannot record the proposal.
+    if (!configStore) {
+      ctx.log.warn({}, 'voice-learn: config store unavailable — cannot record proposal this run');
+      return {
+        success: true,
+        data: { pairs_considered: newPairs.length, proposed: false, reason: 'no-config-store' },
+      };
     }
+    await writeVoiceProposal(configStore, {
+      status: 'pending',
+      generatedAt: new Date().toISOString(),
+      guide,
+    });
 
     // Advance the checkpoint only now that the proposal write above has succeeded — a failed
     // LLM call or empty guide already returned earlier without reaching here, so those cases

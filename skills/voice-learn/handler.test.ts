@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   VoiceLearnHandler,
-  PENDING_PROPOSALS_PATH,
   CONFIG_NAMESPACE,
   DIFFS_CHECKPOINT_KEY,
 } from './handler.js';
@@ -9,6 +8,7 @@ import type { SkillContext } from '../../src/skills/types.js';
 import type { ExecutiveProfile } from '../../src/executive/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
+import { VOICE_PROPOSAL_KEY } from '../_shared/learning-state.js';
 
 const DIFFS = `
 # Pending voice diffs
@@ -181,30 +181,37 @@ describe('VoiceLearnHandler', () => {
   const handler = new VoiceLearnHandler();
 
   it('proposes an updated guide from the diff corpus via the LLM', async () => {
-    const ctx = makeCtx({});
+    const mem = makeEntityMemory();
+    const ctx = makeCtx({ entityMemory: mem });
     (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       text: '- Writes short.\n- Dry humour.',
     });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
-    const proposals = ctx.__docs.get(PENDING_PROPOSALS_PATH)?.body ?? '';
-    expect(proposals).toContain('## Guide Proposal');
-    expect(proposals).toContain('Dry humour');
+    const stored = JSON.parse(mem.__values.get(VOICE_PROPOSAL_KEY)!) as {
+      status: string;
+      guide: string;
+    };
+    expect(stored.status).toBe('pending');
+    expect(stored.guide).toContain('Dry humour');
     // profile NOT written directly (human-in-the-loop)
     expect(ctx.__updates).toHaveLength(0);
   });
 
   it('supersedes an existing pending proposal instead of blocking the run', async () => {
-    // No entityMemory → no checkpoint gate, so the new diffs are fed and a fresh proposal is made.
-    const ctx = makeCtx({});
-    ctx.__docs.set(PENDING_PROPOSALS_PATH, {
-      path: PENDING_PROPOSALS_PATH,
-      type: 'voice-pending-proposals',
-      frontmatter: { title: 'Pending voice guide proposal' },
-      body: '# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-01T00:00:00.000Z\n\n- OLD stale guidance.\n\n---\n',
-      version: 3,
-    });
+    // Pre-seed a stale pending proposal directly in config, as if a prior run wrote it. No
+    // checkpoint is seeded, so the checkpoint filter doesn't gate this run's diffs either.
+    const mem = makeEntityMemory();
+    mem.__values.set(
+      VOICE_PROPOSAL_KEY,
+      JSON.stringify({
+        status: 'pending',
+        generatedAt: '2026-07-01T00:00:00.000Z',
+        guide: '- OLD stale guidance.',
+      }),
+    );
+    const ctx = makeCtx({ entityMemory: mem });
     (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       text: '- Fresh guidance.',
@@ -214,30 +221,35 @@ describe('VoiceLearnHandler', () => {
     expect(result.success).toBe(true);
     expect((result as { data: Record<string, unknown> }).data).toMatchObject({ proposed: true });
 
-    const body = ctx.__docs.get(PENDING_PROPOSALS_PATH)!.body;
-    // Exactly one pending proposal remains, and it is the fresh one — the stale block is gone.
-    expect((body.match(/## Guide Proposal/g) ?? []).length).toBe(1);
-    expect(body).toContain('Fresh guidance.');
-    expect(body).not.toContain('OLD stale guidance.');
+    // The whole-object config write supersedes the stale proposal — no accumulation, and the
+    // stale guide text is entirely gone (not just appended past).
+    const stored = JSON.parse(mem.__values.get(VOICE_PROPOSAL_KEY)!) as {
+      status: string;
+      guide: string;
+    };
+    expect(stored.guide).toContain('Fresh guidance.');
+    expect(stored.guide).not.toContain('OLD stale guidance.');
   });
 
   it('no pairs → no LLM call, no proposal', async () => {
-    const ctx = makeCtx({ diffs: '# empty\n' });
+    const mem = makeEntityMemory();
+    const ctx = makeCtx({ diffs: '# empty\n', entityMemory: mem });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     expect(ctx.infraLlm!.extract).not.toHaveBeenCalled();
-    expect(ctx.__docs.get(PENDING_PROPOSALS_PATH)).toBeUndefined();
+    expect(mem.__values.has(VOICE_PROPOSAL_KEY)).toBe(false);
   });
 
   it('LLM failure → no proposal, success result', async () => {
-    const ctx = makeCtx({});
+    const mem = makeEntityMemory();
+    const ctx = makeCtx({ entityMemory: mem });
     (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: false,
       error: 'timeout',
     });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
-    expect(ctx.__docs.get(PENDING_PROPOSALS_PATH)).toBeUndefined();
+    expect(mem.__values.has(VOICE_PROPOSAL_KEY)).toBe(false);
   });
 
   // CodeRabbit finding #11: without a consumption checkpoint, the never-consumed
@@ -298,7 +310,7 @@ describe('VoiceLearnHandler', () => {
       expect(mem.__values.get(DIFFS_CHECKPOINT_KEY)).toBe('2026-07-03T12:00:00.000Z');
     });
 
-    it('without entityMemory wired, falls back to feeding every accumulated pair (pre-fix behaviour)', async () => {
+    it('without entityMemory wired, falls back to feeding every accumulated pair, but cannot persist a proposal without a config store', async () => {
       const ctx = makeCtx({}); // no entityMemory
       (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
         ok: true,
@@ -306,9 +318,16 @@ describe('VoiceLearnHandler', () => {
       });
       const result = await handler.execute(ctx);
       expect(result.success).toBe(true);
+      // The checkpoint filter still falls back to feeding every accumulated pair
+      // (pairs_considered: 3, same as pre-migration). But the proposal now lives ONLY in config
+      // (no doc fallback), so without entityMemory there is nowhere to persist the LLM's output —
+      // `proposed` is false with `reason: 'no-config-store'`. This is a deliberate behavior change
+      // from pre-migration (which expected `proposed: true` here, since the doc write had no
+      // entityMemory dependency).
       expect((result as { data: Record<string, unknown> }).data).toMatchObject({
         pairs_considered: 3,
-        proposed: true,
+        proposed: false,
+        reason: 'no-config-store',
       });
     });
 
@@ -382,8 +401,18 @@ describe('VoiceLearnHandler', () => {
 
     it('a failing checkpoint WRITE does not fail the run after the proposal is written', async () => {
       const mem = makeEntityMemory();
-      // storeFact backs ConfigStore.set — make the checkpoint write throw.
-      (mem.storeFact as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('store down'));
+      // storeFact backs ConfigStore.set. Pre-migration, the proposal write went through
+      // ctx.workingDocs (independent of storeFact), so rejecting storeFact unconditionally only
+      // ever hit the checkpoint write. Now the proposal write ALSO goes through storeFact, so we
+      // reject only the checkpoint key here to keep isolating a checkpoint-write-only failure —
+      // the proposal write (this test's premise) must still succeed.
+      (mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+        async (p: { label: string; properties?: Record<string, unknown> }) => {
+          if (p.label === DIFFS_CHECKPOINT_KEY) throw new Error('store down');
+          mem.__values.set(p.label, String(p.properties?.value ?? ''));
+          return { stored: true, action: 'created' as const };
+        },
+      );
       const ctx = makeCtx({ entityMemory: mem });
       (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
         ok: true,
@@ -393,7 +422,8 @@ describe('VoiceLearnHandler', () => {
       expect(result.success).toBe(true);
       expect((result as { data: Record<string, unknown> }).data).toMatchObject({ proposed: true });
       // The proposal was still persisted despite the checkpoint write failing.
-      expect(ctx.__docs.get(PENDING_PROPOSALS_PATH)?.body ?? '').toContain('## Guide Proposal');
+      expect(mem.__values.get(VOICE_PROPOSAL_KEY)).toContain('Writes short.');
+      expect(mem.__values.has(DIFFS_CHECKPOINT_KEY)).toBe(false);
     });
   });
 });

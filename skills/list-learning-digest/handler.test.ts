@@ -1,8 +1,49 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ListLearningDigestHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
-import { PENDING_PROPOSALS_PATH } from '../voice-learn/handler.js';
 import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
+import { VOICE_PROPOSAL_KEY, LEARNING_STATE_NAMESPACE } from '../_shared/learning-state.js';
+import type { EntityMemory } from '../../src/memory/entity-memory.js';
+
+// Map-backed fake EntityMemory backing ConfigStore.get, same idiom used across the other
+// learning-subsystem handler tests (voice-learn, resolve-learning-digest).
+function makeMem(): EntityMemory & { __values: Map<string, string> } {
+  const values = new Map<string, string>();
+  const anchor = {
+    id: 'a1',
+    label: `config:${LEARNING_STATE_NAMESPACE}`,
+    temporal: {
+      createdAt: new Date(),
+      lastConfirmedAt: new Date(),
+      confidence: 0.9,
+      decayClass: 'permanent',
+      source: 't',
+    },
+  };
+  return {
+    __values: values,
+    findEntities: vi.fn(async () => (values.size > 0 ? [anchor] : [])),
+    getFacts: vi.fn(async () =>
+      [...values.entries()].map(([key, value]) => ({
+        id: key,
+        label: key,
+        properties: { key, value, namespace: LEARNING_STATE_NAMESPACE },
+        temporal: {
+          createdAt: new Date(),
+          lastConfirmedAt: new Date(),
+          confidence: 0.9,
+          decayClass: 'permanent',
+          source: 't',
+        },
+      })),
+    ),
+    storeFact: vi.fn(async (p: { label: string; properties?: Record<string, unknown> }) => {
+      values.set(p.label, String(p.properties?.value ?? ''));
+      return { stored: true, action: 'created' };
+    }),
+    createEntity: vi.fn(async () => ({ entity: anchor, created: false })),
+  } as unknown as EntityMemory & { __values: Map<string, string> };
+}
 
 describe('ListLearningDigestHandler', () => {
   it('returns empty message when no items', async () => {
@@ -20,15 +61,19 @@ describe('ListLearningDigestHandler', () => {
   });
 
   it('renders both sections when items exist', async () => {
+    const mem = makeMem();
+    mem.__values.set(
+      VOICE_PROPOSAL_KEY,
+      JSON.stringify({
+        status: 'pending',
+        generatedAt: '2026-07-16T00:00:00.000Z',
+        guide: '- Writes short.\n- Dry humour.',
+      }),
+    );
     const ctx = {
+      entityMemory: mem,
       workingDocs: {
         read: vi.fn(async (path: string) => {
-          if (path === PENDING_PROPOSALS_PATH) {
-            return {
-              body: `# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Dry humour.\n\n---\n`,
-              version: 1,
-            };
-          }
           if (path === COMPLETION_DIGEST_PATH) {
             return {
               body: `## Undo — task t1\n- status: undo_available\n- task_title: Follow up\n- note: Marked done. Undo?\n---\n`,
@@ -42,8 +87,32 @@ describe('ListLearningDigestHandler', () => {
     } as unknown as SkillContext;
     const result = await new ListLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
-    const data = (result as { data: { sections_markdown: string } }).data;
+    const data = (result as { data: { sections_markdown: string; voice_guide: string | null } }).data;
+    expect(data.voice_guide).toContain('Dry humour');
     expect(data.sections_markdown).toContain('### Proposed writing-voice update');
+    expect(data.sections_markdown).toContain('### Task completion from sent mail');
+  });
+
+  it('does not render the voice section when entityMemory is unavailable', async () => {
+    const ctx = {
+      workingDocs: {
+        read: vi.fn(async (path: string) => {
+          if (path === COMPLETION_DIGEST_PATH) {
+            return {
+              body: `## Undo — task t1\n- status: undo_available\n- task_title: Follow up\n- note: Marked done. Undo?\n---\n`,
+              version: 1,
+            };
+          }
+          return null;
+        }),
+      },
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+    const result = await new ListLearningDigestHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { sections_markdown: string; voice_guide: string | null } }).data;
+    expect(data.voice_guide).toBeNull();
+    expect(data.sections_markdown).not.toContain('### Proposed writing-voice update');
     expect(data.sections_markdown).toContain('### Task completion from sent mail');
   });
 });

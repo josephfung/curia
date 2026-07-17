@@ -13,6 +13,6 @@
   "permissions": [],
   "secrets": [],
   "timeout": 15000,
-  "capabilities": ["workingDocs"],
+  "capabilities": ["workingDocs", "entityMemory"],
   "allowed_callers": ["coordinator"]
 }
