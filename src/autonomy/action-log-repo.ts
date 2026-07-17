@@ -42,8 +42,10 @@ export class ActionLogRepo {
         row.description ?? null,
         row.parentActionId ?? null,
         row.competenceFlag ?? null,
-        row.commitmentFlag ?? null,
-        row.compatibility ?? null,
+        // commitment_flag / compatibility are never set at insert time — the Phase 3
+        // scoring-pass update populates them later. Pre-scored shadow rows leave them null.
+        null,
+        null,
         row.scoredBy ?? null,
       ],
     );

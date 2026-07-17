@@ -563,8 +563,6 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
               taskSummary: `Shadow vs sent (${j.sourceMessageId}): ${j.reason}`,
               payload: { shadow: true, source_message_id: j.sourceMessageId, competence_reason: j.reason },
               competenceFlag: j.sameDecision ? 1 : 0,
-              commitmentFlag: null,
-              compatibility: null,
               scoredBy: 'shadow-reconciler',
             });
           } catch (err) {

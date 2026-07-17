@@ -76,10 +76,12 @@ export interface ActionLogInsert {
   /** Links a re-execution row back to the approved row. Used by approve-action (#428). */
   parentActionId?: number;
 
-  /** Pre-scored flags (shadow-reconciler / #1426). When scoredBy is set, findUnscoredTerminal skips the row. */
+  /**
+   * Pre-scored flags (shadow-reconciler / #1426). When scoredBy is set, findUnscoredTerminal
+   * skips the row. Only competenceFlag is set at insert time; commitment_flag / compatibility
+   * are populated later by the Phase 3 scoring-pass update, never at insert.
+   */
   competenceFlag?: 0 | 1 | null;
-  commitmentFlag?: 0 | 1 | null;
-  compatibility?: 0 | 1 | null;
   scoredBy?: string;
 }
 
