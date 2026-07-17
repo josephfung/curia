@@ -136,4 +136,21 @@ describe('removeCompletionBlock', () => {
     expect(removeCompletionBlock(body, 'Confirm', 't7')).toContain('## Undo — task t7');
     expect(removeCompletionBlock(body, 'Undo', 't7')).not.toContain('## Undo — task t7');
   });
+
+  it('removes the actionable block, not a same-task historical block in another status', () => {
+    // A resolved/historical block for t8 precedes the live actionable one. Matching the header
+    // alone would drop the historical block and leave the actionable one to be replayed after the
+    // task mutation already ran; matching the status too removes the right one.
+    const body = `# Digest\n${undoBlock('t8', 'undone')}${undoBlock('t8', 'undo_available')}`;
+    const out = removeCompletionBlock(body, 'Undo', 't8');
+    // The actionable (undo_available) block is gone; the historical one is preserved.
+    expect(out).toContain('- status: undone');
+    expect(out).not.toContain('- status: undo_available');
+  });
+
+  it('is a no-op when the only same-task block is not in the actionable status', () => {
+    const body = `# Digest\n${confirmBlock('t9', 'pending_confirm_done')}`;
+    // No block matches header AND pending_confirm exactly, so nothing is removed.
+    expect(removeCompletionBlock(body, 'Confirm', 't9')).toBe(body);
+  });
 });
