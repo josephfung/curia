@@ -78,28 +78,46 @@ export function buildShadowJudgePrompt(pairs: ShadowJudgePair[]): string {
   ].join('\n');
 }
 
-/** Tolerant parse of the judge output — extracts the first JSON array, keeps well-formed entries. */
-export function parseShadowJudgeResult(text: string): ShadowJudgement[] {
+/**
+ * Strict, all-or-nothing parse of the judge output. Returns a map keyed by source_message_id
+ * ONLY when the response is a JSON array that covers `expectedIds` exactly — one well-formed
+ * verdict per expected pair, no malformed entries, no duplicates, no missing, no extras.
+ * Otherwise returns null, and the caller treats the whole batch as unreconciled (holds the
+ * watermark, retries next run). This is simpler than salvaging partial responses and, for a
+ * single-tenant daily run that near-always fits one call, costs at most a day of latency in a
+ * rare failure mode.
+ */
+export function parseShadowJudgeResult(
+  text: string,
+  expectedIds: string[],
+): Map<string, ShadowJudgement> | null {
   const start = text.indexOf('[');
   const end = text.lastIndexOf(']');
-  if (start < 0 || end <= start) return [];
+  if (start < 0 || end <= start) return null;
   let arr: unknown;
   try {
     arr = JSON.parse(text.slice(start, end + 1));
   } catch {
-    return [];
+    return null;
   }
-  if (!Array.isArray(arr)) return [];
-  const out: ShadowJudgement[] = [];
+  if (!Array.isArray(arr)) return null;
+
+  const byId = new Map<string, ShadowJudgement>();
   for (const raw of arr) {
-    if (!raw || typeof raw !== 'object') continue;
+    if (!raw || typeof raw !== 'object') return null; // malformed element → whole batch fails
     const r = raw as Record<string, unknown>;
-    if (typeof r.source_message_id !== 'string' || typeof r.same_decision !== 'boolean') continue;
-    out.push({
+    if (typeof r.source_message_id !== 'string' || typeof r.same_decision !== 'boolean') return null;
+    if (byId.has(r.source_message_id)) return null; // duplicate id → ambiguous
+    byId.set(r.source_message_id, {
       sourceMessageId: r.source_message_id,
       sameDecision: r.same_decision,
       reason: typeof r.reason === 'string' ? r.reason : '',
     });
   }
-  return out;
+
+  // Must cover exactly the expected batch — no missing, no extra.
+  const expected = new Set(expectedIds);
+  if (byId.size !== expected.size) return null;
+  for (const id of expected) if (!byId.has(id)) return null;
+  return byId;
 }
