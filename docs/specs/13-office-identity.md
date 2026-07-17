@@ -373,11 +373,13 @@ A weekly `voice-learn` job on `ceo-inbox` (cron `0 8 * * 1`) reads accumulated
 (`ctx.infraLlm.extract()`) over that accumulated evidence to produce an updated
 free-form `WritingVoice.guide`.
 
-The job never writes the profile directly. It queues a "## Guide Proposal"
-block (`status: pending`) in the digest for CEO review. The CEO approves via
-the `resolve-learning-digest` skill's `approve_voice` action, which calls
+The job never writes the profile directly. It records a single pending proposal
+object in `config-store` (`voice_learn.proposal`), surfaced in the digest for
+CEO review. The CEO approves via the `resolve-learning-digest` skill's
+`approve_voice` action, which calls
 `executiveProfileService.update({ writingVoice: { ...current, guide } })`.
-Dismissed proposals get a guard marker and cooldown before re-propose.
+Dismissed proposals set the `voice_learn.dismissed` config cooldown key before
+re-propose.
 
 The learned guide renders into agent prompts through `compileWritingVoiceBlock`,
 under a "How the executive actually writes (learned from their edits)" heading.
