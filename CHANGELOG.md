@@ -70,6 +70,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Install docs** — README points to `releases/latest/download/install.sh` and documents `CURIA_VERSION`.
 - **`00-overview.md` Spec Index** — dropped the `Status` column and "N of M Done" counts. (#1282)
 - **Spec audit fixes** — corrected stale claims: Node 24, console UI, secrets vault, setup story, fallback-provider prose. (#1282)
+- **Learning subsystem** — queue/status/guard state moved from OKF doc bodies to config-store JSON. (#1438)
 
 ### Removed
 
