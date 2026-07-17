@@ -13,5 +13,5 @@
   "permissions": [],
   "secrets": [],
   "timeout": 30000,
-  "capabilities": ["taskRepo", "workingDocs", "sensitivityClassifier"]
+  "capabilities": ["taskRepo", "workingDocs", "sensitivityClassifier", "entityMemory"]
 }

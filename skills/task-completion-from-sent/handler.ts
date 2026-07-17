@@ -1,17 +1,21 @@
 // task-completion-from-sent — risk-tiered completion from Sent matches (#1424).
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { PENDING_COMPLETIONS_PATH } from '../ceo-inbox-sent-observe/handler.js';
 import { VOICE_LEARNING_SCRATCH_PREFIX } from '../_shared/voice-learning-capture.js';
 import {
   classifyTaskRisk,
   decideCompletionAction,
   formatConfirmNote,
   formatUndoNote,
-  parseCompletionCandidates,
   type CompletionAction,
   type TaskRisk,
 } from '../_shared/task-completion-risk.js';
+import { ConfigStore } from '../../src/memory/config-store.js';
+import {
+  readCompletionCandidates,
+  writeCompletionCandidates,
+  type CompletionCandidateMap,
+} from '../_shared/learning-state.js';
 
 export const COMPLETION_DIGEST_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/completion-digest.md`;
 export const COMPLETION_DIGEST_TYPE = 'task-completion-digest';
@@ -42,27 +46,6 @@ async function appendDigest(ctx: SkillContext, content: string): Promise<void> {
   });
 }
 
-/** Extract a single candidate's markdown block (header to the next `## ` heading / EOF). */
-function candidateBlock(body: string, taskId: string): string {
-  const esc = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = body.match(new RegExp(`## Candidate — task ${esc}\\b[\\s\\S]*?(?=\\n## |$)`));
-  return m ? m[0] : '';
-}
-
-function markCandidateProcessed(body: string, taskId: string, marker: string): string {
-  const re = new RegExp(
-    `(## Candidate — task ${taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?)(- status:\\s*)pending`,
-  );
-  if (re.test(body)) {
-    return body.replace(re, `$1$2${marker}`);
-  }
-  // Fallback: append guard marker near the candidate header.
-  return body.replace(
-    `## Candidate — task ${taskId}`,
-    `## Candidate — task ${taskId}\n- ${marker}\n- completion_asked: {${new Date().toISOString().slice(0, 10)}}`,
-  );
-}
-
 export class TaskCompletionFromSentHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
     // Skill contract: never throw — normalize repo/document failures to a result.
@@ -78,10 +61,10 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
   }
 
   private async runCompletion(ctx: SkillContext): Promise<SkillResult> {
-    if (!ctx.taskRepo || !ctx.workingDocs || !ctx.sensitivityClassifier) {
+    if (!ctx.taskRepo || !ctx.workingDocs || !ctx.sensitivityClassifier || !ctx.entityMemory) {
       return {
         success: false,
-        error: 'task-completion-from-sent requires taskRepo, workingDocs, sensitivityClassifier',
+        error: 'task-completion-from-sent requires taskRepo, workingDocs, sensitivityClassifier, entityMemory',
       };
     }
     // Narrow closure over the classifier's classify() so classifyTaskRisk stays a pure,
@@ -90,19 +73,20 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
     // pass an empty properties bag (classify()'s second, required arg).
     const classify = (text: string) => ctx.sensitivityClassifier!.classify(text, {});
 
-    const pendingDoc = await ctx.workingDocs.read(PENDING_COMPLETIONS_PATH);
-    if (!pendingDoc) {
-      return {
-        success: true,
-        data: { auto_completed: 0, queued_confirm: 0, skipped: 0 },
-      };
+    const store = new ConfigStore(ctx.entityMemory, ctx.log);
+    const candidateMap = await readCompletionCandidates(store);
+    const candidates = Object.entries(candidateMap).map(([taskId, c]) => ({ taskId, ...c }));
+    if (candidates.length === 0) {
+      return { success: true, data: { auto_completed: 0, queued_confirm: 0, skipped: 0 } };
     }
-
-    const candidates = parseCompletionCandidates(pendingDoc.body);
+    // Consume-by-delete: every candidate processed below (auto-completed, confirm-queued, or
+    // skipped-ineligible) is removed here. The persistent asked_task_ids guard (written by
+    // sent-observe) is what stops a task from being re-surfaced, so removal is always safe —
+    // there's no in-band "already asked" marker to preserve any more.
+    const remaining: CompletionCandidateMap = { ...candidateMap };
     let autoCompleted = 0;
     let queuedConfirm = 0;
     let skipped = 0;
-    let body = pendingDoc.body;
     const digestChunks: string[] = [];
 
     for (const candidate of candidates) {
@@ -116,7 +100,7 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
         ACTIVE_TASK_STATUSES.has(task.status);
       if (!eligible) {
         skipped += 1;
-        body = markCandidateProcessed(body, candidate.taskId, 'skipped_ineligible');
+        delete remaining[candidate.taskId];
         continue;
       }
 
@@ -176,10 +160,12 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
               sentAt: candidate.sentAt,
             }),
           );
-          body = markCandidateProcessed(body, candidate.taskId, 'auto_completed');
+          delete remaining[candidate.taskId];
           autoCompleted += 1;
         } catch (err) {
           ctx.log.error({ err, taskId: task.id }, 'task-completion-from-sent: auto-complete failed');
+          // Leave the candidate queued — completeTask failure is presumed transient (DB
+          // hiccup), so it stays in remaining and retries next run rather than being lost.
           skipped += 1;
         }
       } else {
@@ -193,25 +179,13 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
             risk,
           }),
         );
-        body = markCandidateProcessed(body, candidate.taskId, 'confirm_queued');
-        // In-band guard so fuzzy candidates aren't re-surfaced — scoped to THIS
-        // candidate's block (a document-wide check let one candidate's marker suppress
-        // every later candidate's guard).
-        if (!/completion_asked:/i.test(candidateBlock(body, candidate.taskId))) {
-          body = body.replace(
-            `## Candidate — task ${candidate.taskId}`,
-            `## Candidate — task ${candidate.taskId}\n- completion_asked: {${new Date().toISOString().slice(0, 10)}}`,
-          );
-        }
+        delete remaining[candidate.taskId];
         queuedConfirm += 1;
       }
     }
 
-    if (body !== pendingDoc.body) {
-      await ctx.workingDocs.update(PENDING_COMPLETIONS_PATH, {
-        body,
-        expectedVersion: pendingDoc.version,
-      });
+    if (Object.keys(remaining).length !== Object.keys(candidateMap).length) {
+      await writeCompletionCandidates(store, remaining);
     }
 
     if (digestChunks.length > 0) {

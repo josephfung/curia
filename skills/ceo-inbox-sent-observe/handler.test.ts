@@ -5,7 +5,6 @@ import {
   WATERMARK_KEY,
   IDLE_BACKOFF_KEY,
   PENDING_DIFFS_PATH,
-  PENDING_COMPLETIONS_PATH,
 } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
@@ -13,6 +12,7 @@ import { VOICE_LEARNING_DOC_TYPE } from '../_shared/voice-learning-capture.js';
 import { SHADOW_DOC_TYPE, shadowDraftPath } from '../_shared/shadow-draft.js';
 import type { ActionLogInsert } from '../../src/autonomy/action-log-types.js';
 import type { InfraLlm } from '../../src/skills/infra-llm.js';
+import { COMPLETION_CANDIDATES_KEY, ASKED_TASK_IDS_KEY } from '../_shared/learning-state.js';
 
 function makeEntityMemory(seed: Record<string, string> = {}): EntityMemory & {
   __values: Map<string, string>;
@@ -443,8 +443,127 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(result.success).toBe(true);
     expect((result as { data: { task_candidates: number } }).data.task_candidates).toBe(1);
 
-    const pending = ctx.__docs.get(PENDING_COMPLETIONS_PATH);
-    expect(pending?.body).toContain('task-ceo-1');
+    const stored = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!);
+    expect(stored['task-ceo-1']).toBeDefined();
+    expect(stored['task-ceo-1'].confidence).toBe('high');
+    const asked = JSON.parse(ctx.__mem.__values.get(ASKED_TASK_IDS_KEY)!);
+    expect(asked).toContain('task-ceo-1');
+  });
+
+  it('does not persist the asked-guard when the candidate write is held (no candidate lost)', async () => {
+    // A matched task, but the completion_candidates config write throws → completionsPersisted
+    // is false. That must HOLD the watermark AND skip writing asked_task_ids — otherwise the next
+    // run's guard would already contain the task and matchTasksToSent would silently skip it,
+    // permanently losing the candidate that never made it into the queue.
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-2')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: 'msg-sent-2',
+              thread_id: 't2',
+              subject: 'Follow up',
+              from: [{ email: 'ceo@example.com' }],
+              to: [{ email: 'alice@example.com' }],
+              cc: [],
+              body: '<p>Following up on our chat</p>',
+              snippet: 'Following up',
+              date: 1_720_000_300,
+              unread: false,
+              folders: ['SENT'],
+              bcc: [],
+              labels: [],
+              attachments: [],
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes('/messages?')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: 'msg-sent-2',
+                thread_id: 't2',
+                subject: 'Follow up',
+                from: [{ email: 'ceo@example.com' }],
+                to: [{ email: 'alice@example.com' }],
+                cc: [],
+                snippet: 'Following up on our chat with Alice',
+                date: 1_720_000_300,
+                unread: false,
+                folders: ['SENT'],
+                attachments: [],
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      tasks: [
+        {
+          id: 'task-ceo-1',
+          title: 'Follow up with Alice',
+          description: 'Email alice@example.com about the chat',
+          tags: [],
+          priority: 40,
+        },
+      ],
+    });
+
+    // Drive the failure: reject only the completion-candidates config write, letting every
+    // other storeFact call (watermark, idle-backoff) through normally — mirrors the
+    // checkpoint-write-failure pattern in voice-learn's handler.test.ts.
+    (ctx.__mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+      async (params: { label: string; properties?: Record<string, unknown> }) => {
+        if (params.label === COMPLETION_CANDIDATES_KEY) throw new Error('store down');
+        ctx.__mem.__values.set(params.label, String(params.properties?.value ?? ''));
+        return { stored: true, action: 'created' as const };
+      },
+    );
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { watermark_advanced_to: number | null } }).data;
+    expect(data.watermark_advanced_to).toBeNull();
+    // The asked-guard was never written this run — next run re-matches and re-adds.
+    expect(ctx.__mem.__values.has(ASKED_TASK_IDS_KEY)).toBe(false);
+  });
+
+  it('prunes asked_task_ids to currently-open tasks on write', async () => {
+    // closed-task was asked about previously but is no longer open (completed/cancelled).
+    // task-ceo-1 is still open. After a run, the persisted guard should drop closed-task.
+    mockFetch.mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      seed: { [ASKED_TASK_IDS_KEY]: JSON.stringify(['closed-task', 'task-ceo-1']) },
+      tasks: [
+        {
+          id: 'task-ceo-1',
+          title: 'Follow up with Alice',
+          description: 'Email alice@example.com about the chat',
+          tags: [],
+          priority: 40,
+        },
+      ],
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    const asked = JSON.parse(ctx.__mem.__values.get(ASKED_TASK_IDS_KEY)!);
+    expect(asked).not.toContain('closed-task');
+    expect(asked).toContain('task-ceo-1');
   });
 
   it('reconciles shadow drafts via a batched LLM judge', async () => {
