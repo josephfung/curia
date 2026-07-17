@@ -396,11 +396,11 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     const shadows = shadowDocs
       .map((d) => parseShadowDoc(d))
       .filter((s): s is NonNullable<typeof s> => s !== null);
-    // Guard against scoring the same shadow twice when several sends share a thread
-    // in one run (the durable guard is the shadow doc's reconciled_at marker).
-    const claimedShadows = new Set<string>();
     // (shadow, sent) pairs collected during the message loop below, judged in a
     // single batched LLM call after the loop instead of one call per pair.
+    // Idempotency across runs is the shadow doc's reconciled_at marker (parseShadowDoc returns
+    // null once set); within a run each shadow doc is yielded once by listByPrefix, so no in-run
+    // claim set is needed — two distinct shadows answered by one CEO send are both scored.
     const judgePairs: ShadowJudgePair[] = [];
 
     // Full sent bodies fetched during the message loop (for draft diffs), keyed by
@@ -447,15 +447,12 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     let shadowReconcileOk = true;
     if (ctx.actionLogRepo) {
       for (const shadow of shadows) {
-        if (claimedShadows.has(shadow.sourceMessageId)) continue;
         const send = selectShadowSend(shadow, messages);
         if (!send) continue;
-        // Claim so two shadows or a later run can't re-score the same one this run.
-        claimedShadows.add(shadow.sourceMessageId);
 
         // Finding 7: never judge against a truncated snippet — the LLM would write a false
-        // competence score. If the full sent body can't be fetched, don't push the pair,
-        // release the claim, and hold the watermark so the send is re-observed next run.
+        // competence score. If the full sent body can't be fetched, don't push the pair and
+        // hold the watermark so the send is re-observed next run.
         const cachedBody = fetchedBodies.get(send.id);
         let sentBody: string;
         if (cachedBody !== undefined) {
@@ -469,7 +466,6 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
               { err, messageId: send.id, sourceMessageId: shadow.sourceMessageId },
               'ceo-inbox-sent-observe: getMessage failed for shadow reconcile — not scoring, holding watermark',
             );
-            claimedShadows.delete(shadow.sourceMessageId);
             shadowReconcileOk = false;
             continue;
           }
