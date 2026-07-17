@@ -343,9 +343,9 @@ for these learning surfaces are explicitly deferred.
   | High-confidence match | Auto-`task-complete` with reversible digest undo note | Confirm in digest |
   | Low-confidence match | Confirm in digest | Confirm in digest |
 
-  High-risk tasks (e.g. "Plan AGM") never auto-complete. Fuzzy candidates get a guard marker
-  (`completion_asked: {date}`) so they are not re-surfaced every run. Auto-completes remain
-  reversible via reopen from the digest undo note.
+  High-risk tasks (e.g. "Plan AGM") never auto-complete. Fuzzy candidates are recorded in the
+  `sent_observe.asked_task_ids` guard set (config-store, `ceo_inbox`) so they are not
+  re-surfaced every run. Auto-completes remain reversible via reopen from the digest undo note.
 - **Autonomy** ([spec 14](14-autonomy-engine.md)). The "execute the safe stuff, escalate
   the rest" behavior is the existing autonomy engine — `action_risk` per skill against the
   live score. Drafting (low) just happens; outbound (medium) is gated; spending money
