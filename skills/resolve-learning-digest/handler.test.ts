@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { ResolveLearningDigestHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import { CONFIG_NAMESPACE, DISMISSED_KEY } from '../voice-learn/handler.js';
-import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
-import { VOICE_PROPOSAL_KEY } from '../_shared/learning-state.js';
+import {
+  VOICE_PROPOSAL_KEY,
+  COMPLETION_DIGEST_KEY,
+  type CompletionDigestMap,
+} from '../_shared/learning-state.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 
 function makeMem(): EntityMemory & { __values: Map<string, string> } {
@@ -108,30 +111,18 @@ describe('ResolveLearningDigestHandler', () => {
   });
 
   it('undoes an auto-complete via reopenTask', async () => {
-    const docs = new Map([
-      [
-        COMPLETION_DIGEST_PATH,
-        {
-          path: COMPLETION_DIGEST_PATH,
-          body: `## Undo — task t1\n- status: undo_available\n- task_title: Follow up\n- note: Undo?\n---\n`,
-          version: 1,
-          type: 'x',
-          frontmatter: {},
-        },
-      ],
-    ]);
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
     const reopenTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
-      workingDocs: {
-        read: vi.fn(async (p: string) => docs.get(p) ?? null),
-        update: vi.fn(async (p: string, params: { body: string }) => {
-          const cur = docs.get(p)!;
-          docs.set(p, { ...cur, body: params.body, version: cur.version + 1 });
-          return { ok: true, document: docs.get(p) };
-        }),
-      },
-      entityMemory: makeMem(),
+      // Not read/written for completion actions any more (config-store only, #1438) — a
+      // minimal stub satisfies the handler's top-level capability guard.
+      workingDocs: { read: vi.fn(), update: vi.fn() },
+      entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask: vi.fn() },
       agentId: 'coordinator',
@@ -141,29 +132,24 @@ describe('ResolveLearningDigestHandler', () => {
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
     expect(reopenTask).toHaveBeenCalledWith('t1', expect.any(String), 'coordinator');
-    // The actioned item is removed from the queue doc so resolved items don't accumulate.
-    expect(docs.get(COMPLETION_DIGEST_PATH)!.body).not.toContain('## Undo — task t1');
+    // The actioned item is removed from the config map so resolved items don't accumulate.
+    const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(updated.t1).toBeUndefined();
   });
 
   it('fails and keeps the undo item when the task no longer exists (reopenTask returns null)', async () => {
-    const digestBody = `## Undo — task t1\n- status: undo_available\n- task_title: Follow up\n- note: Undo?\n---\n`;
-    const docs = new Map([
-      [
-        COMPLETION_DIGEST_PATH,
-        { path: COMPLETION_DIGEST_PATH, body: digestBody, version: 1, type: 'x', frontmatter: {} },
-      ],
-    ]);
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
     // reopenTask returns null when the task is gone — the digest item must survive so the user
     // still sees the undo affordance, and the result must report failure (not a silent success).
     const reopenTask = vi.fn(async () => null);
-    const update = vi.fn();
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
-      workingDocs: {
-        read: vi.fn(async (p: string) => docs.get(p) ?? null),
-        update,
-      },
-      entityMemory: makeMem(),
+      workingDocs: { read: vi.fn(), update: vi.fn() },
+      entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask: vi.fn() },
       agentId: 'coordinator',
@@ -172,8 +158,9 @@ describe('ResolveLearningDigestHandler', () => {
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(false);
-    // The digest was never rewritten — the item is preserved for a retry.
-    expect(update).not.toHaveBeenCalled();
-    expect(docs.get(COMPLETION_DIGEST_PATH)!.body).toContain('## Undo — task t1');
+    // writeCompletionDigest was never called — the item is preserved for a retry.
+    expect(mem.storeFact).not.toHaveBeenCalled();
+    const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(updated.t1).toEqual(digestMap.t1);
   });
 });

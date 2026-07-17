@@ -1,9 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TaskCompletionFromSentHandler, COMPLETION_DIGEST_PATH } from './handler.js';
+import { TaskCompletionFromSentHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import { CONFIG_NAMESPACE } from '../ceo-inbox-sent-observe/handler.js';
-import { COMPLETION_CANDIDATES_KEY, type CompletionCandidateMap } from '../_shared/learning-state.js';
+import {
+  COMPLETION_CANDIDATES_KEY,
+  COMPLETION_DIGEST_KEY,
+  type CompletionCandidateMap,
+} from '../_shared/learning-state.js';
 
 const CANDIDATE_MAP: CompletionCandidateMap = {
   '11111111-1111-4111-8111-111111111111': {
@@ -192,10 +196,10 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(ctx.__completed).toEqual(['11111111-1111-4111-8111-111111111111']);
     expect(ctx.__completed).not.toContain('22222222-2222-4222-8222-222222222222');
 
-    const digest = ctx.__docs.get(COMPLETION_DIGEST_PATH)?.body ?? '';
-    expect(digest).toContain('Undo — task 11111111-1111-4111-8111-111111111111');
-    expect(digest).toContain('Confirm — task 22222222-2222-4222-8222-222222222222');
-    expect(digest).toContain('Confirm — task 33333333-3333-4333-8333-333333333333');
+    const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest['11111111-1111-4111-8111-111111111111'].kind).toBe('undo');
+    expect(digest['22222222-2222-4222-8222-222222222222'].kind).toBe('confirm');
+    expect(digest['33333333-3333-4333-8333-333333333333'].kind).toBe('confirm');
 
     // All three candidates (auto-completed + both confirm-queued) are consumed from the
     // config queue — the persistent asked_task_ids guard (written by sent-observe) is what

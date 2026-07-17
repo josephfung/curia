@@ -1,12 +1,9 @@
 // task-completion-from-sent — risk-tiered completion from Sent matches (#1424).
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import { VOICE_LEARNING_SCRATCH_PREFIX } from '../_shared/voice-learning-capture.js';
 import {
   classifyTaskRisk,
   decideCompletionAction,
-  formatConfirmNote,
-  formatUndoNote,
   type CompletionAction,
   type TaskRisk,
 } from '../_shared/task-completion-risk.js';
@@ -14,11 +11,14 @@ import { ConfigStore } from '../../src/memory/config-store.js';
 import {
   readCompletionCandidates,
   writeCompletionCandidates,
+  readCompletionDigest,
+  writeCompletionDigest,
+  composeUndoNote,
+  composeConfirmNote,
   type CompletionCandidateMap,
+  type CompletionDigestMap,
+  type CompletionDigestItem,
 } from '../_shared/learning-state.js';
-
-export const COMPLETION_DIGEST_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/completion-digest.md`;
-export const COMPLETION_DIGEST_TYPE = 'task-completion-digest';
 
 // Active (non-terminal) task statuses eligible for sent-mail completion. Mirrors the
 // active-status set used by the scheduler/backlog queries (src/db/queries/tasks.ts).
@@ -26,25 +26,6 @@ export const COMPLETION_DIGEST_TYPE = 'task-completion-digest';
 // terminal statuses like 'failed' are skipped — a confident match must never resurrect
 // a terminated task as done.
 const ACTIVE_TASK_STATUSES = new Set(['open', 'in_progress', 'waiting', 'blocked']);
-
-async function appendDigest(ctx: SkillContext, content: string): Promise<void> {
-  const repo = ctx.workingDocs!;
-  const existing = await repo.read(COMPLETION_DIGEST_PATH);
-  if (!existing) {
-    await repo.create({
-      path: COMPLETION_DIGEST_PATH,
-      type: COMPLETION_DIGEST_TYPE,
-      frontmatter: { title: 'Task completion digest' },
-      body: `# Task completion digest\n\n${content}`,
-      agentId: ctx.agentId,
-    });
-    return;
-  }
-  await repo.append(COMPLETION_DIGEST_PATH, {
-    content,
-    expectedVersion: existing.version,
-  });
-}
 
 export class TaskCompletionFromSentHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -87,7 +68,7 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
     let autoCompleted = 0;
     let queuedConfirm = 0;
     let skipped = 0;
-    const digestChunks: string[] = [];
+    const digestAdds: CompletionDigestItem[] = [];
 
     for (const candidate of candidates) {
       const task = await ctx.taskRepo.getTask(candidate.taskId);
@@ -152,14 +133,16 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
             `Auto-completed from sent mail ${candidate.messageId} (${candidate.subject})`,
             ctx.agentId,
           );
-          digestChunks.push(
-            formatUndoNote({
-              taskId: task.id,
+          digestAdds.push({
+            kind: 'undo',
+            taskId: task.id,
+            taskTitle: task.title || candidate.taskTitle,
+            note: composeUndoNote({
               taskTitle: task.title || candidate.taskTitle,
               recipient,
               sentAt: candidate.sentAt,
             }),
-          );
+          });
           delete remaining[candidate.taskId];
           autoCompleted += 1;
         } catch (err) {
@@ -169,16 +152,15 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
           skipped += 1;
         }
       } else {
-        digestChunks.push(
-          formatConfirmNote({
-            taskId: task.id,
+        digestAdds.push({
+          kind: 'confirm',
+          taskId: task.id,
+          taskTitle: task.title || candidate.taskTitle,
+          note: composeConfirmNote({
             taskTitle: task.title || candidate.taskTitle,
             recipient,
-            sentAt: candidate.sentAt,
-            confidence: candidate.confidence,
-            risk,
           }),
-        );
+        });
         delete remaining[candidate.taskId];
         queuedConfirm += 1;
       }
@@ -188,8 +170,10 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
       await writeCompletionCandidates(store, remaining);
     }
 
-    if (digestChunks.length > 0) {
-      await appendDigest(ctx, digestChunks.join(''));
+    if (digestAdds.length > 0) {
+      const digestMap: CompletionDigestMap = await readCompletionDigest(store);
+      for (const item of digestAdds) digestMap[item.taskId] = item;
+      await writeCompletionDigest(store, digestMap);
     }
 
     ctx.log.info(

@@ -1,12 +1,7 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
-import { readVoiceProposal } from '../_shared/learning-state.js';
-import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
-import {
-  parseCompletionDigest,
-  renderCompletionSection,
-  renderVoiceGuideSection,
-} from '../_shared/learning-digest.js';
+import { readVoiceProposal, readCompletionDigest, digestMapToItems } from '../_shared/learning-state.js';
+import { renderCompletionSection, renderVoiceGuideSection } from '../_shared/learning-digest.js';
 
 export class ListLearningDigestHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -16,16 +11,12 @@ export class ListLearningDigestHandler implements SkillHandler {
 
     // Skill contract: never throw — a failed document read becomes a failure result.
     try {
-      // The voice proposal now lives in config (Task 1/2 of #1438); the completion digest
-      // stays a markdown doc for now (migrated in Task 4). Guarded on ctx.entityMemory since
-      // it's not a hard capability requirement of this skill — without it, no voice guide
-      // section renders (same net effect as an absent proposal).
-      const guide = ctx.entityMemory
-        ? await readVoiceProposal(new ConfigStore(ctx.entityMemory, ctx.log))
-        : null;
-      const completionsDoc = await ctx.workingDocs.read(COMPLETION_DIGEST_PATH);
-
-      const completion_items = parseCompletionDigest(completionsDoc?.body ?? '');
+      // Both the voice proposal and the completion digest now live in config (#1438).
+      // Guarded on ctx.entityMemory since it's not a hard capability requirement of this
+      // skill — without it, neither section renders (same net effect as both being absent).
+      const store = ctx.entityMemory ? new ConfigStore(ctx.entityMemory, ctx.log) : null;
+      const guide = store ? await readVoiceProposal(store) : null;
+      const completion_items = store ? digestMapToItems(await readCompletionDigest(store)) : [];
       const guideText = guide?.status === 'pending' ? guide.guide : null;
 
       const sections = [
