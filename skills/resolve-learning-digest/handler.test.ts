@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ResolveLearningDigestHandler } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
-import { PENDING_PROPOSALS_PATH, CONFIG_NAMESPACE, DISMISSED_KEY } from '../voice-learn/handler.js';
+import { CONFIG_NAMESPACE, DISMISSED_KEY } from '../voice-learn/handler.js';
 import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
+import { VOICE_PROPOSAL_KEY } from '../_shared/learning-state.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 
 function makeMem(): EntityMemory & { __values: Map<string, string> } {
@@ -31,33 +32,22 @@ function makeMem(): EntityMemory & { __values: Map<string, string> } {
   } as unknown as EntityMemory & { __values: Map<string, string> };
 }
 
-const GUIDE_BODY = `# Pending voice guide proposal\n\n## Guide Proposal\n- status: pending\n- generated_at: 2026-07-16T00:00:00.000Z\n\n- Writes short.\n- Dry humour.\n\n---\n`;
+const GUIDE_PROPOSAL = JSON.stringify({
+  status: 'pending',
+  generatedAt: '2026-07-16T00:00:00.000Z',
+  guide: '- Writes short.\n- Dry humour.',
+});
 
 describe('ResolveLearningDigestHandler', () => {
   it('approves a voice guide proposal and writes it into WritingVoice.guide', async () => {
-    const docs = new Map([
-      [
-        PENDING_PROPOSALS_PATH,
-        {
-          path: PENDING_PROPOSALS_PATH,
-          body: GUIDE_BODY,
-          version: 1,
-          type: 'x',
-          frontmatter: {},
-        },
-      ],
-    ]);
     const mem = makeMem();
+    mem.__values.set(VOICE_PROPOSAL_KEY, GUIDE_PROPOSAL);
     const update = vi.fn();
     const ctx = {
       input: { action: 'approve_voice' },
       workingDocs: {
-        read: vi.fn(async (p: string) => docs.get(p) ?? null),
-        update: vi.fn(async (p: string, params: { body: string }) => {
-          const cur = docs.get(p)!;
-          docs.set(p, { ...cur, body: params.body, version: cur.version + 1 });
-          return { ok: true, document: docs.get(p) };
-        }),
+        read: vi.fn(),
+        update: vi.fn(),
       },
       entityMemory: mem,
       executiveProfileService: {
@@ -86,34 +76,19 @@ describe('ResolveLearningDigestHandler', () => {
       'skill',
       expect.any(String),
     );
-    // The resolved proposal is removed from the queue doc (the approved guide now lives in
-    // the versioned profile), so the doc doesn't accumulate actioned proposals.
-    expect(docs.get(PENDING_PROPOSALS_PATH)!.body).not.toContain('## Guide Proposal');
+    // The resolved proposal is cleared from config (the approved guide now lives in the
+    // versioned profile), so it doesn't stay "pending" and get re-surfaced in the digest.
+    expect(mem.__values.get(VOICE_PROPOSAL_KEY)).toBe('null');
   });
 
   it('dismisses a voice guide proposal and writes dismissal guard', async () => {
-    const docs = new Map([
-      [
-        PENDING_PROPOSALS_PATH,
-        {
-          path: PENDING_PROPOSALS_PATH,
-          body: GUIDE_BODY,
-          version: 1,
-          type: 'x',
-          frontmatter: {},
-        },
-      ],
-    ]);
     const mem = makeMem();
+    mem.__values.set(VOICE_PROPOSAL_KEY, GUIDE_PROPOSAL);
     const ctx = {
       input: { action: 'dismiss_voice' },
       workingDocs: {
-        read: vi.fn(async (p: string) => docs.get(p) ?? null),
-        update: vi.fn(async (p: string, params: { body: string }) => {
-          const cur = docs.get(p)!;
-          docs.set(p, { ...cur, body: params.body, version: cur.version + 1 });
-          return { ok: true, document: docs.get(p) };
-        }),
+        read: vi.fn(),
+        update: vi.fn(),
       },
       entityMemory: mem,
       executiveProfileService: {
@@ -126,9 +101,9 @@ describe('ResolveLearningDigestHandler', () => {
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
-    // The dismissed proposal is removed from the queue doc; the dismiss cooldown is what
-    // suppresses re-proposal, and it lives in config (asserted below).
-    expect(docs.get(PENDING_PROPOSALS_PATH)!.body).not.toContain('## Guide Proposal');
+    // The dismissed proposal is cleared from config; the dismiss cooldown is what suppresses
+    // re-proposal, and it lives in config too (asserted below).
+    expect(mem.__values.get(VOICE_PROPOSAL_KEY)).toBe('null');
     expect(mem.__values.get(DISMISSED_KEY)).toContain('guide');
   });
 

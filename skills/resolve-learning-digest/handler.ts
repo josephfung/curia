@@ -1,17 +1,9 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
-import {
-  CONFIG_NAMESPACE as VOICE_NS,
-  DISMISSED_KEY,
-  PENDING_PROPOSALS_PATH,
-} from '../voice-learn/handler.js';
+import { CONFIG_NAMESPACE as VOICE_NS, DISMISSED_KEY } from '../voice-learn/handler.js';
+import { readVoiceProposal, writeVoiceProposal } from '../_shared/learning-state.js';
 import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
-import {
-  pruneGuideProposals,
-  removeCompletionBlock,
-  parseCompletionDigest,
-  parseVoiceGuideProposal,
-} from '../_shared/learning-digest.js';
+import { removeCompletionBlock, parseCompletionDigest } from '../_shared/learning-digest.js';
 
 const ACTIONS = new Set([
   'approve_voice',
@@ -55,9 +47,13 @@ export class ResolveLearningDigestHandler implements SkillHandler {
     }
 
     if (action === 'approve_voice' || action === 'dismiss_voice') {
-      const doc = await ctx.workingDocs.read(PENDING_PROPOSALS_PATH);
-      const proposal = doc ? parseVoiceGuideProposal(doc.body) : null;
-      if (!doc || !proposal) return { success: false, error: 'No pending voice guide proposal' };
+      // Built once — reused for the proposal read/clear below and (on dismiss) the cooldown
+      // write, all against the same 'ceo_inbox' namespace.
+      const store = new ConfigStore(ctx.entityMemory, ctx.log);
+      const proposal = await readVoiceProposal(store);
+      if (!proposal || proposal.status !== 'pending') {
+        return { success: false, error: 'No pending voice guide proposal' };
+      }
 
       if (action === 'approve_voice') {
         const current = ctx.executiveProfileService.get().writingVoice;
@@ -67,19 +63,14 @@ export class ResolveLearningDigestHandler implements SkillHandler {
           'voice guide approved',
         );
 
-        // Remove the resolved proposal from the queue doc so it doesn't accumulate — the
-        // approved guide now lives in the versioned profile.
-        const updatedBody = pruneGuideProposals(doc.body, { removePending: true });
-        await ctx.workingDocs.update(PENDING_PROPOSALS_PATH, {
-          body: updatedBody,
-          expectedVersion: doc.version,
-        });
+        // Clear the resolved proposal so it doesn't stay "pending" forever — the approved
+        // guide now lives in the versioned profile, which is the real audit trail.
+        await writeVoiceProposal(store, null);
         return { success: true, data: { resolved: true, detail: 'Approved voice guide' } };
       }
 
       // dismiss: keep the existing DISMISSED_KEY cooldown write. There's only one guide
       // dimension now (no per-field proposals), so the cooldown entry uses a fixed key.
-      const store = new ConfigStore(ctx.entityMemory, ctx.log);
       const rawDismissed = await store.get(VOICE_NS, DISMISSED_KEY);
       let dismissed: Array<{ dimension: string; until: string }> = [];
       if (rawDismissed) {
@@ -94,13 +85,9 @@ export class ResolveLearningDigestHandler implements SkillHandler {
       dismissed.push({ dimension: 'guide', until });
       await store.set(VOICE_NS, DISMISSED_KEY, JSON.stringify(dismissed));
 
-      // Remove the resolved proposal from the queue doc — the dismiss cooldown is tracked
-      // in config, so the block itself serves no further purpose.
-      const updatedBody = pruneGuideProposals(doc.body, { removePending: true });
-      await ctx.workingDocs.update(PENDING_PROPOSALS_PATH, {
-        body: updatedBody,
-        expectedVersion: doc.version,
-      });
+      // Clear the resolved proposal — the dismiss cooldown is tracked in config, so the
+      // proposal record itself serves no further purpose.
+      await writeVoiceProposal(store, null);
       return { success: true, data: { resolved: true, detail: 'Dismissed voice guide' } };
     }
 
