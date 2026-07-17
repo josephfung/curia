@@ -7,8 +7,7 @@
   "inputs": {
     "reply_to_message_id": "string (Nylas message ID of the message being replied to)",
     "body": "string (email body — write in plain text or markdown, never HTML; converted to HTML automatically)",
-    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)",
-    "linked_task_ids": "string[]? (optional task ids this draft fulfils — recorded on the voice-learning snapshot)"
+    "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string}. file_url must be a file:// URL from ceo-inbox-download-attachment or similar. Max 10 attachments, 20 MB total.)"
   },
   "outputs": {
     "draft_id": "string (Nylas draft ID)",

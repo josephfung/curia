@@ -9,8 +9,7 @@
     "to": "string[]? (new recipient email addresses — replaces the existing to list)",
     "cc": "string[]? (new CC email addresses — replaces the existing cc list; pass [] to clear)",
     "subject": "string? (new subject line)",
-    "body": "string? (new email body; markdown supported, converted to HTML automatically)",
-    "linked_task_ids": "string[]? (optional task ids this draft fulfils — recorded on the voice-learning snapshot)"
+    "body": "string? (new email body; markdown supported, converted to HTML automatically)"
   },
   "outputs": {
     "draft_id": "string (Nylas draft ID)",

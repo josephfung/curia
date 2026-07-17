@@ -3,7 +3,7 @@ import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../
 import { markdownToHtml } from '../../src/format/markdown-to-html.js';
 import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../src/skills/_shared/read-attachments.js';
-import { captureDraftSnapshot, parseLinkedTaskIds } from '../_shared/voice-learning-capture.js';
+import { captureDraftSnapshot } from '../_shared/voice-learning-capture.js';
 
 const MAX_BODY_LENGTH = 50_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -117,8 +117,6 @@ export class CeoInboxDraftComposeHandler implements SkillHandler {
         to: draft.to,
         cc: draft.cc,
         body,
-        agentVersion: ctx.skillVersion,
-        linkedTaskIds: parseLinkedTaskIds(input.linked_task_ids),
       }).catch((err) =>
         ctx.log.error({ err }, 'ceo-inbox-draft-compose: voice snapshot capture rejected'),
       );
