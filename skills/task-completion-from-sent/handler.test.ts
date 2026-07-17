@@ -258,4 +258,40 @@ describe('TaskCompletionFromSentHandler', () => {
     // Lightweight behavioural check that reopenTask exists and rejects non-done.
     expect(typeof TaskRepo.prototype.reopenTask).toBe('function');
   });
+
+  it('CRITICAL: a completeTask failure during auto-complete leaves the candidate queued for retry', async () => {
+    const ctx = makeCtx();
+    // Queue only the high-confidence, low-risk candidate that would otherwise auto-complete
+    // (same task as the first test's auto-complete case, isolated here so the retry-survival
+    // assertion below is unambiguous).
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({
+        '11111111-1111-4111-8111-111111111111': CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+      }),
+    );
+    // Simulate a transient DB failure (e.g. connection hiccup) during completeTask — the
+    // handler's catch path must treat this as retryable, not as "handled".
+    (ctx.taskRepo as unknown as { completeTask: (...args: unknown[]) => Promise<unknown> }).completeTask =
+      vi.fn(async () => {
+        throw new Error('db hiccup');
+      });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { auto_completed: number; queued_confirm: number; skipped: number } }).data;
+    expect(data.auto_completed).toBe(0);
+    expect(data.skipped).toBe(1);
+
+    // The candidate must survive the failure — it stays in the config queue for retry next
+    // run rather than being consumed by the `delete remaining[taskId]` that only runs on the
+    // success path. If that delete were hoisted above the try (or into a `finally`), this
+    // candidate would vanish from `remaining`, the queue length would shrink, the handler
+    // would call writeCompletionCandidates with the now-empty map, and this assertion would
+    // fail (the key would be undefined instead of round-tripping the seeded candidate).
+    const remaining = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!) as CompletionCandidateMap;
+    expect(remaining['11111111-1111-4111-8111-111111111111']).toEqual(
+      CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+    );
+  });
 });
