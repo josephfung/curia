@@ -1,9 +1,12 @@
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 import { CONFIG_NAMESPACE as VOICE_NS, DISMISSED_KEY } from '../voice-learn/handler.js';
-import { readVoiceProposal, writeVoiceProposal } from '../_shared/learning-state.js';
-import { COMPLETION_DIGEST_PATH } from '../task-completion-from-sent/handler.js';
-import { removeCompletionBlock, parseCompletionDigest } from '../_shared/learning-digest.js';
+import {
+  readVoiceProposal,
+  writeVoiceProposal,
+  readCompletionDigest,
+  writeCompletionDigest,
+} from '../_shared/learning-state.js';
 
 const ACTIONS = new Set([
   'approve_voice',
@@ -95,17 +98,15 @@ export class ResolveLearningDigestHandler implements SkillHandler {
     const taskId = typeof input.task_id === 'string' ? input.task_id.trim() : '';
     if (!taskId) return { success: false, error: 'task_id is required for completion actions' };
 
-    const digest = await ctx.workingDocs.read(COMPLETION_DIGEST_PATH);
-    if (!digest) return { success: false, error: 'No completion digest items' };
+    const store = new ConfigStore(ctx.entityMemory, ctx.log);
+    const digestMap = await readCompletionDigest(store);
+    const item = digestMap[taskId];
 
     // Require an actionable digest item of the matching kind before mutating a task —
     // otherwise undo/confirm would reopen/complete ANY task id the caller supplies, and
     // still report success even when the digest held no such item.
     const expectedKind = action === 'undo_completion' ? 'undo' : 'confirm';
-    const item = parseCompletionDigest(digest.body).find(
-      (candidate) => candidate.taskId === taskId && candidate.kind === expectedKind,
-    );
-    if (!item) {
+    if (!item || item.kind !== expectedKind) {
       return { success: false, error: `No actionable ${expectedKind} item for task ${taskId}` };
     }
 
@@ -121,12 +122,10 @@ export class ResolveLearningDigestHandler implements SkillHandler {
       if (!reopened) {
         return { success: false, error: `Task ${taskId} not found; cannot undo completion` };
       }
-      // Remove the actioned item from the queue doc so resolved items don't accumulate.
-      const updatedBody = removeCompletionBlock(digest.body, 'Undo', taskId);
-      await ctx.workingDocs.update(COMPLETION_DIGEST_PATH, {
-        body: updatedBody,
-        expectedVersion: digest.version,
-      });
+      // Remove the actioned item from the config map so resolved items don't accumulate.
+      const { [taskId]: _removed, ...rest } = digestMap;
+      void _removed;
+      await writeCompletionDigest(store, rest);
       return { success: true, data: { resolved: true, detail: `Reopened task ${taskId}` } };
     }
 
@@ -144,20 +143,16 @@ export class ResolveLearningDigestHandler implements SkillHandler {
           ctx.agentId,
         );
       }
-      const updatedBody = removeCompletionBlock(digest.body, 'Confirm', taskId);
-      await ctx.workingDocs.update(COMPLETION_DIGEST_PATH, {
-        body: updatedBody,
-        expectedVersion: digest.version,
-      });
+      const { [taskId]: _removed, ...rest } = digestMap;
+      void _removed;
+      await writeCompletionDigest(store, rest);
       return { success: true, data: { resolved: true, detail: `Confirmed completion ${taskId}` } };
     }
 
     // dismiss_completion
-    const updatedBody = removeCompletionBlock(digest.body, 'Confirm', taskId);
-    await ctx.workingDocs.update(COMPLETION_DIGEST_PATH, {
-      body: updatedBody,
-      expectedVersion: digest.version,
-    });
+    const { [taskId]: _removed, ...rest } = digestMap;
+    void _removed;
+    await writeCompletionDigest(store, rest);
     return { success: true, data: { resolved: true, detail: `Dismissed completion ${taskId}` } };
   }
 }

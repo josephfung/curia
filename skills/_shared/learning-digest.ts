@@ -1,16 +1,12 @@
 // Shared parsers/renderers for voice proposals + task-completion digest sections (#1425).
 
+// CompletionDigestItem now lives in learning-state.ts (#1438) since it's also the config-store
+// map value type. renderCompletionSection reads only kind/taskId/note, all present there.
+import type { CompletionDigestItem } from './learning-state.js';
+
 export interface VoiceGuideProposal {
   status: string;
   guide: string;
-}
-
-export interface CompletionDigestItem {
-  kind: 'undo' | 'confirm';
-  taskId: string;
-  taskTitle: string;
-  note: string;
-  status: string;
 }
 
 /** Split a pending-proposals body into its `## Guide Proposal` blocks. voice-learn appends a
@@ -40,7 +36,10 @@ export function parseVoiceGuideProposal(body: string): VoiceGuideProposal | null
 }
 
 export function parseCompletionDigest(body: string): CompletionDigestItem[] {
-  const items: CompletionDigestItem[] = [];
+  // Local items carry `status` for the in-function filter logic below; the shared
+  // CompletionDigestItem type (config-store map value) no longer has that field, so widen
+  // the element type here rather than dropping the field parseCompletionDigest still needs.
+  const items: Array<CompletionDigestItem & { status: string }> = [];
   for (const section of body.split(/^## /m).slice(1)) {
     const header = section.split('\n')[0] ?? '';
     const headerMatch = header.match(/^(Undo|Confirm) — task\s+(\S+)/);
