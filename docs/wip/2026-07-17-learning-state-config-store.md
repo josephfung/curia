@@ -386,9 +386,9 @@ In the `approve_voice`/`dismiss_voice` branch (currently reads `PENDING_PROPOSAL
 Run: `pnpm -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json test skills/voice-learn skills/list-learning-digest skills/resolve-learning-digest`
 Expected: PASS. (`resolve` completion-digest cases still use markdown here — untouched until Task 4.)
 
-- [ ] **Step 8: Typecheck + bump versions + commit**
+- [ ] **Step 8: Typecheck + commit**
 
-Bump `version` (patch) in `skills/voice-learn/skill.json`, `skills/list-learning-digest/skill.json`, `skills/resolve-learning-digest/skill.json`.
+(Version bumps are deferred to Task 8 — one bump per skill per PR, not per task/commit.)
 
 Run typecheck, then:
 ```bash
@@ -551,9 +551,9 @@ Replace the `PENDING` markdown doc seed with a config candidate map seed. Add th
 Run: `pnpm -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json test skills/ceo-inbox-sent-observe skills/task-completion-from-sent`
 Expected: PASS.
 
-- [ ] **Step 7: Typecheck + bump versions + commit**
+- [ ] **Step 7: Typecheck + commit**
 
-Bump `version` (patch) in `skills/ceo-inbox-sent-observe/skill.json` and `skills/task-completion-from-sent/skill.json`.
+(Version bumps deferred to Task 8.)
 
 ```bash
 git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json add skills/ceo-inbox-sent-observe skills/task-completion-from-sent
@@ -660,9 +660,9 @@ Keep the ordering: for `undo_completion`, still call `reopenTask` first and bail
 Run: `pnpm -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json test skills/task-completion-from-sent skills/list-learning-digest skills/resolve-learning-digest`
 Expected: PASS.
 
-- [ ] **Step 8: Typecheck + bump versions + commit**
+- [ ] **Step 8: Typecheck + commit**
 
-Bump `version` (patch) in `skills/task-completion-from-sent/skill.json`, `skills/list-learning-digest/skill.json`, `skills/resolve-learning-digest/skill.json` (second bump this PR is fine — still one release).
+(Version bumps deferred to Task 8.)
 
 ```bash
 git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json add skills/task-completion-from-sent skills/list-learning-digest skills/resolve-learning-digest skills/_shared/learning-digest.ts
@@ -744,9 +744,9 @@ if (diffsPersisted) {
 Run: `pnpm -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json test skills/ceo-inbox-sent-observe/handler.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck + bump version + commit**
+- [ ] **Step 5: Typecheck + commit**
 
-Bump `version` (patch) in `skills/ceo-inbox-sent-observe/skill.json` (second bump this PR — fine).
+(Version bumps deferred to Task 8.)
 
 ```bash
 git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json add skills/ceo-inbox-sent-observe
@@ -840,24 +840,31 @@ git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-sta
 
 ---
 
-## Task 8: CHANGELOG
+## Task 8: CHANGELOG + version bumps
 
 **Files:**
-- Modify: `CHANGELOG.md`
+- Modify: `CHANGELOG.md`, and the five touched `skill.json` files.
 
 - [ ] **Step 1: Add an Unreleased entry**
 
-Under `## [Unreleased]` → `### Changed` (create the section if absent), add one bullet (≤15 words after the em-dash... use a period; hard cap enforced):
+Under `## [Unreleased]` → `### Changed` (create the section if absent), add one bullet (≤15 words after the dash; use a period, hard cap enforced):
 
 ```
 - **Learning subsystem** — queue/status/guard state moved from OKF doc bodies to config-store JSON. (#1438)
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: Bump each touched skill's version exactly once (patch)**
+
+Per Joseph's standing rule, bump each `skill.json` **once per PR**, not per commit. Increment the patch component of `version` in each of:
+`skills/voice-learn/skill.json`, `skills/list-learning-digest/skill.json`, `skills/resolve-learning-digest/skill.json`, `skills/ceo-inbox-sent-observe/skill.json`, `skills/task-completion-from-sent/skill.json`.
+
+(A behavior-preserving storage refactor is a patch-level meaningful change — worth correlating prod behavior with a known config state, but no interface change.)
+
+- [ ] **Step 3: Commit**
 
 ```bash
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json add CHANGELOG.md
-git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json commit -s -m "chore(changelog): learning-state config-store migration (#1438)"
+git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json add CHANGELOG.md skills/voice-learn/skill.json skills/list-learning-digest/skill.json skills/resolve-learning-digest/skill.json skills/ceo-inbox-sent-observe/skill.json skills/task-completion-from-sent/skill.json
+git -C /Users/josephfung/Projects/office-of-the-ceo/worktrees/curia-learning-state-json commit -s -m "chore: changelog + skill version bumps for learning-state migration (#1438)"
 ```
 
 ---
