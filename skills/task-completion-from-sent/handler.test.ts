@@ -298,4 +298,46 @@ describe('TaskCompletionFromSentHandler', () => {
       CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
     );
   });
+
+  it('does not consume a candidate when the digest write soft-rejects (stored:false, no throw)', async () => {
+    // The task auto-completes (completeTask succeeds), but the digest write that records its
+    // undo affordance soft-rejects — resolves normally with stored:false rather than throwing.
+    // digestStored must gate the candidate-consume write: if it doesn't, the candidate is
+    // deleted from the queue even though the digest item (the undo note) was never persisted,
+    // silently losing the user's undo affordance with no trace it ever existed.
+    const ctx = makeCtx();
+    // Queue only the high-confidence, low-risk candidate that auto-completes.
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({
+        '11111111-1111-4111-8111-111111111111': CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+      }),
+    );
+    (ctx.__mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+      async (p: { label: string; properties?: Record<string, unknown> }) => {
+        if (p.label === COMPLETION_DIGEST_KEY) {
+          return { stored: false, action: 'conflict' as const };
+        }
+        ctx.__mem.__values.set(p.label, String(p.properties?.value ?? ''));
+        return { stored: true, action: 'created' as const };
+      },
+    );
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { auto_completed: number } }).data;
+    // The task itself is still completed (completeTask isn't gated on the digest write) — only
+    // the candidate-queue consume is held back.
+    expect(data.auto_completed).toBe(1);
+    expect(ctx.__completed).toContain('11111111-1111-4111-8111-111111111111');
+
+    // The digest write never actually landed.
+    expect(ctx.__mem.__values.has(COMPLETION_DIGEST_KEY)).toBe(false);
+    // The candidate must still be present in the queue — it was NOT consumed, since consuming it
+    // would permanently lose the undo affordance that never made it into the digest.
+    const remaining = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!) as CompletionCandidateMap;
+    expect(remaining['11111111-1111-4111-8111-111111111111']).toEqual(
+      CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+    );
+  });
 });

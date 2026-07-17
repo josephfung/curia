@@ -69,9 +69,12 @@ export class ConfigStore {
    * Write or update a value. Propagates infrastructure errors after logging so
    * callers (e.g. EmailAdapter.poll) can catch and emit their own diagnostic.
    * A soft storeFact rejection (result.stored === false) is logged as a warning
-   * and does not throw — the prior value is still valid in that case.
+   * and does not throw — the prior value is still valid in that case. Returns
+   * `{ stored }` so callers that need to react to a soft-reject (e.g. hold a
+   * watermark rather than advance it) can do so; existing callers that just
+   * `await` this and discard the result are unaffected (additive change).
    */
-  async set(namespace: string, key: string, value: string): Promise<void> {
+  async set(namespace: string, key: string, value: string): Promise<{ stored: boolean }> {
     try {
       const anchor = await this.findOrCreateAnchor(namespace);
 
@@ -97,6 +100,8 @@ export class ConfigStore {
           'ConfigStore.set: storeFact rejected the write — prior value still in effect',
         );
       }
+
+      return { stored: result.stored };
     } catch (err) {
       // Log at the ConfigStore level for observability, then rethrow so callers
       // can emit their own domain-specific diagnostic (e.g. "failed to persist

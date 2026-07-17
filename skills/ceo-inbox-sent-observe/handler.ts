@@ -36,6 +36,7 @@ import {
   writeIdSet,
   ASKED_TASK_IDS_KEY,
   MATCHED_DRAFT_IDS_KEY,
+  COMPLETION_CANDIDATES_KEY,
   type CompletionCandidateMap,
   type CompletionCandidate,
 } from '../_shared/learning-state.js';
@@ -304,10 +305,10 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // alreadyMatchedDraftIds (the mutable in-run guard matchDraftToSent adds to below) so the
     // final write can be built from the seed + only-this-run's successfully diffed drafts,
     // deliberately excluding any draft matched-but-failed-to-fetch this run (see the write below).
-    const seedMatchedDraftIds = await readIdSet(store, MATCHED_DRAFT_IDS_KEY);
+    const seedMatchedDraftIds = await readIdSet(store, MATCHED_DRAFT_IDS_KEY, ctx.log);
     const alreadyMatchedDraftIds = new Set(seedMatchedDraftIds);
     // Seed the asked-guard from config (replaces the doc-derived extractAskedTaskIds scan).
-    const alreadyAskedTaskIds = await readIdSet(store, ASKED_TASK_IDS_KEY);
+    const alreadyAskedTaskIds = await readIdSet(store, ASKED_TASK_IDS_KEY, ctx.log);
 
     const OPEN_TASK_LIMIT = 100;
     const openTasks = await ctx.taskRepo.listTasks({
@@ -563,7 +564,16 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       const nextMatched = new Set([...seedMatchedDraftIds].filter((id) => snapshotIds.has(id)));
       for (const id of newlyDiffedDraftIds) nextMatched.add(id);
       try {
-        await writeIdSet(store, MATCHED_DRAFT_IDS_KEY, nextMatched);
+        // A guard soft-fail (stored:false) or thrown error is intentionally NOT held against the
+        // watermark: the guard just re-derives next run from the (already-persisted) diffs doc,
+        // worst case re-matching a draft that was already diffed — harmless, idempotent.
+        const matchedGuardPersisted = await writeIdSet(store, MATCHED_DRAFT_IDS_KEY, nextMatched);
+        if (!matchedGuardPersisted) {
+          ctx.log.warn(
+            { path: MATCHED_DRAFT_IDS_KEY },
+            'ceo-inbox-sent-observe: matched-guard write soft-rejected (diffs persisted; guard re-derives next run)',
+          );
+        }
       } catch (err) {
         ctx.log.warn(
           { err },
@@ -573,13 +583,21 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     }
     // Persist the candidate queue (config JSON) — replaces the pending-completions.md append.
     // Merge onto a fresh read so we don't clobber a concurrent removal by task-completion; keyed
-    // by taskId so a held-watermark retry re-adds idempotently. A hard write failure holds the
-    // watermark (completionsPersisted=false) — the queue must persist before we forget the sends.
+    // by taskId so a held-watermark retry re-adds idempotently. completionsPersisted is driven by
+    // the accessor's own boolean return (not just the catch path) so a storeFact SOFT-reject
+    // (dedup 'conflict'/'auto_rejected', result.stored===false with no thrown error) also holds
+    // the watermark for retry — a caught-error-only gate would silently advance past a lost write.
     let completionsPersisted = true;
     if (Object.keys(newCandidates).length > 0) {
       try {
-        const existing = await readCompletionCandidates(store);
-        await writeCompletionCandidates(store, { ...existing, ...newCandidates });
+        const existing = await readCompletionCandidates(store, ctx.log);
+        completionsPersisted = await writeCompletionCandidates(store, { ...existing, ...newCandidates });
+        if (!completionsPersisted) {
+          ctx.log.warn(
+            { path: COMPLETION_CANDIDATES_KEY },
+            'ceo-inbox-sent-observe: completion-candidate write soft-rejected (not persisted) — holding watermark for retry',
+          );
+        }
       } catch (err) {
         completionsPersisted = false;
         ctx.log.warn({ err }, 'ceo-inbox-sent-observe: completion-candidate write failed — holding watermark');
@@ -597,7 +615,16 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       const openIds = new Set(openTasks.map((t) => t.id));
       const prunedAsked = new Set([...alreadyAskedTaskIds].filter((id) => openIds.has(id)));
       try {
-        await writeIdSet(store, ASKED_TASK_IDS_KEY, prunedAsked);
+        // Same "don't hold the watermark" reasoning as the matched-guard write above: a soft-fail
+        // here just means task-completion re-derives eligibility next run — the queue itself
+        // (gated above) is what actually protects the candidate from being lost.
+        const askedGuardPersisted = await writeIdSet(store, ASKED_TASK_IDS_KEY, prunedAsked);
+        if (!askedGuardPersisted) {
+          ctx.log.warn(
+            { path: ASKED_TASK_IDS_KEY },
+            'ceo-inbox-sent-observe: asked-guard write soft-rejected (queue already persisted; guard re-derives next run)',
+          );
+        }
       } catch (err) {
         ctx.log.warn(
           { err },

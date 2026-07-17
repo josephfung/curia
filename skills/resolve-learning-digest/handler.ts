@@ -53,7 +53,7 @@ export class ResolveLearningDigestHandler implements SkillHandler {
       // Built once — reused for the proposal read/clear below and (on dismiss) the cooldown
       // write, all against the same 'ceo_inbox' namespace.
       const store = new ConfigStore(ctx.entityMemory, ctx.log);
-      const proposal = await readVoiceProposal(store);
+      const proposal = await readVoiceProposal(store, ctx.log);
       if (!proposal || proposal.status !== 'pending') {
         return { success: false, error: 'No pending voice guide proposal' };
       }
@@ -99,7 +99,7 @@ export class ResolveLearningDigestHandler implements SkillHandler {
     if (!taskId) return { success: false, error: 'task_id is required for completion actions' };
 
     const store = new ConfigStore(ctx.entityMemory, ctx.log);
-    const digestMap = await readCompletionDigest(store);
+    const digestMap = await readCompletionDigest(store, ctx.log);
     const item = digestMap[taskId];
 
     // Require an actionable digest item of the matching kind before mutating a task —
