@@ -27,8 +27,9 @@ export const CONFIG_NAMESPACE = 'ceo_inbox';
 // itself, so a doc-write failure can never desync the checkpoint from what was actually read.
 export const DIFFS_CHECKPOINT_KEY = 'voice_learn.diffs_checkpoint';
 
-/** Most-recent diff pairs fed into a single LLM guide-refinement call. Bounded to keep the
- *  prompt (and cost) predictable regardless of how large the never-consumed diff doc grows. */
+/** Max diff pairs fed into a single LLM guide-refinement call. The OLDEST eligible pairs are
+ *  taken (see the batch selection below), bounding prompt size/cost while draining any backlog
+ *  oldest-first across runs so nothing is stranded past the checkpoint. */
 const MAX_PAIRS = 40;
 
 export class VoiceLearnHandler implements SkillHandler {
@@ -67,8 +68,15 @@ export class VoiceLearnHandler implements SkillHandler {
     let checkpointMs = NaN;
     if (ctx.entityMemory) {
       configStore = new ConfigStore(ctx.entityMemory, ctx.log);
-      const checkpointRaw = await configStore.get(CONFIG_NAMESPACE, DIFFS_CHECKPOINT_KEY);
-      checkpointMs = checkpointRaw ? Date.parse(checkpointRaw) : NaN;
+      try {
+        const checkpointRaw = await configStore.get(CONFIG_NAMESPACE, DIFFS_CHECKPOINT_KEY);
+        checkpointMs = checkpointRaw ? Date.parse(checkpointRaw) : NaN;
+      } catch (err) {
+        // Genuinely best-effort: ConfigStore.get propagates infra failures, so a checkpoint-store
+        // outage must be swallowed here — otherwise it escapes to the outer catch and fails the
+        // whole run. Fall back to feeding every accumulated pair (checkpointMs stays NaN).
+        ctx.log.warn({ err }, 'voice-learn: checkpoint read failed — proceeding without checkpoint filter');
+      }
     }
     // A pair with an unparsable sentAt fails open (treated as new) so a malformed
     // `- sent_at:` line can never silently drop real evidence from the LLM pass.
@@ -101,7 +109,15 @@ export class VoiceLearnHandler implements SkillHandler {
     // Reuses `configStore` from the checkpoint read above (same guard, same ConfigStore instance)
     // rather than constructing a second one.
     if (configStore) {
-      const rawDismissed = await configStore.get(CONFIG_NAMESPACE, DISMISSED_KEY);
+      let rawDismissed: string | null = null;
+      try {
+        rawDismissed = await configStore.get(CONFIG_NAMESPACE, DISMISSED_KEY);
+      } catch (err) {
+        // Best-effort, same rationale as the checkpoint read: a store outage must not fail the
+        // run. Without a cooldown record we simply don't gate — worst case a dismissed guide is
+        // re-proposed one run early, which is far better than aborting learning entirely.
+        ctx.log.warn({ err }, 'voice-learn: dismissal read failed — not gating on cooldown this run');
+      }
       let dismissed: Array<{ dimension: string; until: string }> = [];
       if (rawDismissed) {
         try {
@@ -124,7 +140,20 @@ export class VoiceLearnHandler implements SkillHandler {
     }
 
     const currentGuide = ctx.executiveProfileService.get().writingVoice.guide ?? '';
-    const batch = newPairs.slice(-MAX_PAIRS);
+    // Process the OLDEST eligible pairs, not the newest. The checkpoint below advances to this
+    // batch's newest sentAt, so every pair we leave out must be NEWER than everything we processed
+    // — otherwise an excluded pair would fall at/under the new checkpoint and be dropped forever
+    // (the bug with the old `slice(-MAX_PAIRS)`, which processed the newest and stranded the rest).
+    // Sort ascending by sentAt first because the diff doc is not globally ordered: each run appends
+    // a newest-first block, so document order alone wouldn't put the oldest pairs at the front.
+    // Unparsable sentAt sorts oldest so a malformed line is attempted, never used to gate the batch.
+    const batch = [...newPairs]
+      .sort((a, b) => {
+        const ta = Date.parse(a.sentAt);
+        const tb = Date.parse(b.sentAt);
+        return (Number.isFinite(ta) ? ta : -Infinity) - (Number.isFinite(tb) ? tb : -Infinity);
+      })
+      .slice(0, MAX_PAIRS);
     const res = await ctx.infraLlm.extract(buildVoiceGuidePrompt(currentGuide, batch), {
       maxTokens: 1200,
     });
@@ -166,8 +195,9 @@ export class VoiceLearnHandler implements SkillHandler {
     // Advance the checkpoint only now that the proposal write above has succeeded — a failed
     // LLM call or empty guide already returned earlier without reaching here, so those cases
     // correctly leave the checkpoint untouched and the same evidence gets retried next run.
-    // Checkpoint = newest sentAt among the pairs actually fed to the LLM (`batch`), not all of
-    // `newPairs` — anything beyond MAX_PAIRS wasn't used yet and must stay eligible next run.
+    // Checkpoint = newest sentAt among the pairs actually fed to the LLM (`batch` = the oldest
+    // MAX_PAIRS), not all of `newPairs` — anything beyond MAX_PAIRS is strictly newer and must
+    // stay eligible next run.
     if (configStore) {
       const newestSentAt = batch.reduce<string>((newest, p) => {
         const t = Date.parse(p.sentAt);
@@ -175,7 +205,14 @@ export class VoiceLearnHandler implements SkillHandler {
         return !newest || t > Date.parse(newest) ? p.sentAt : newest;
       }, '');
       if (newestSentAt) {
-        await configStore.set(CONFIG_NAMESPACE, DIFFS_CHECKPOINT_KEY, newestSentAt);
+        try {
+          await configStore.set(CONFIG_NAMESPACE, DIFFS_CHECKPOINT_KEY, newestSentAt);
+        } catch (err) {
+          // Best-effort: the proposal is already written, so a failed checkpoint write only means
+          // this batch may be reconsidered next run — the write-time prune/supersede keeps that
+          // from producing a duplicate proposal. Never fail the run after a successful proposal.
+          ctx.log.warn({ err }, 'voice-learn: checkpoint write failed — batch may be reconsidered next run');
+        }
       }
     }
 
