@@ -9,7 +9,7 @@ import {
 import type { SkillContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import { VOICE_LEARNING_DOC_TYPE } from '../_shared/voice-learning-capture.js';
-import { SHADOW_DOC_TYPE, shadowDraftPath } from '../_shared/shadow-draft.js';
+import { SHADOW_DOC_TYPE, shadowDraftPath, SHADOW_SCRATCH_PREFIX } from '../_shared/shadow-draft.js';
 import type { ActionLogInsert } from '../../src/autonomy/action-log-types.js';
 import type { InfraLlm } from '../../src/skills/infra-llm.js';
 import { COMPLETION_CANDIDATES_KEY, ASKED_TASK_IDS_KEY, MATCHED_DRAFT_IDS_KEY } from '../_shared/learning-state.js';
@@ -188,6 +188,18 @@ function buildCtx(overrides: {
       ? {
           actionLogRepo: {
             insert: vi.fn(async (row: ActionLogInsert) => {
+              actionLog.push(row);
+              return actionLog.length;
+            }),
+            // Mirror the migration-074 partial unique index: one row per source_message_id.
+            // Returns null on a duplicate (ON CONFLICT DO NOTHING), just like the real method.
+            insertShadowEvaluated: vi.fn(async (row: ActionLogInsert) => {
+              const src = (row.payload as { source_message_id?: string } | undefined)?.source_message_id;
+              if (src !== undefined && actionLog.some(
+                (r) => (r.payload as { source_message_id?: string } | undefined)?.source_message_id === src,
+              )) {
+                return null; // already recorded — dedup
+              }
               actionLog.push(row);
               return actionLog.length;
             }),
@@ -989,6 +1001,90 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(data.shadow_reconciled).toBe(0);
     const shadowDoc = ctx.__docs.get(shadowDraftPath('src-1'));
     expect(shadowDoc?.frontmatter.reconciled_at).toBeUndefined();
+  });
+
+  it('does not double-insert a shadow row when the reconciled_at mark fails, then re-runs (#1432)', async () => {
+    // Run 1: judge succeeds, insert lands, but the reconciled_at mark FAILS → watermark held.
+    // Run 2: the same Sent message is re-observed and re-judged, but insertShadowEvaluated dedups
+    // on source_message_id, so exactly one shadow row exists across both runs.
+    const listResponse = {
+      data: [
+        {
+          id: 'msg-sent-1',
+          thread_id: 'thread-1',
+          subject: 'Re: Hello',
+          from: [{ email: 'ceo@example.com' }],
+          to: [{ email: 'alice@example.com' }],
+          cc: [],
+          snippet: 'Thanks Alice',
+          date: 1_720_000_500,
+          unread: false,
+          folders: ['SENT'],
+          attachments: [],
+        },
+      ],
+    };
+    const fullResponse = {
+      data: { ...listResponse.data[0], body: '<p>Thanks Alice, Tuesday works.</p>', bcc: [], labels: [] },
+    };
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-1')) return new Response(JSON.stringify(fullResponse), { status: 200 });
+      if (u.includes('/messages?')) return new Response(JSON.stringify(listResponse), { status: 200 });
+      throw new Error(`unexpected ${u}`);
+    });
+    const extract = vi.fn(async () => ({
+      ok: true as const,
+      text: '[{"source_message_id":"src-1","same_decision":true,"reason":"same"}]',
+    }));
+
+    const ctx = buildCtx({
+      force: true,
+      nowMs: 1_720_100_000_000,
+      infraLlm: { extract, classify: vi.fn() },
+      withActionLogRepo: true,
+      snapshots: [
+        {
+          path: shadowDraftPath('src-1'),
+          type: SHADOW_DOC_TYPE,
+          frontmatter: {
+            source_message_id: 'src-1',
+            thread_id: 'thread-1',
+            subject: 'Re: Hello',
+            recipients: ['alice@example.com'],
+            created_at: '2024-07-03T00:00:00.000Z',
+          },
+          body: 'Thanks Alice, how about Wednesday?',
+        },
+      ],
+      tasks: [],
+    });
+
+    // Force the reconciled_at mark to fail on run 1 only (shadow-doc path), then restore.
+    const realUpdate = ctx.workingDocs!.update;
+    let failMark = true;
+    ctx.workingDocs!.update = vi.fn(async (path: string, params: { frontmatter?: Record<string, unknown>; body?: string; expectedVersion: number }) => {
+      if (failMark && path.startsWith(`${SHADOW_SCRATCH_PREFIX}/`)) {
+        const cur = ctx.__docs.get(path)!;
+        return { ok: false as const, conflict: true as const, document: cur };
+      }
+      return realUpdate(path, params);
+    }) as typeof realUpdate;
+
+    // Run 1 — insert lands, mark fails, watermark held.
+    const r1 = await handler.execute(ctx);
+    expect(r1.success).toBe(true);
+    expect((r1 as { data: { watermark_advanced_to: number | null } }).data.watermark_advanced_to).toBeNull();
+    expect(ctx.__actionLog).toHaveLength(1);
+    expect(ctx.__docs.get(shadowDraftPath('src-1'))?.frontmatter.reconciled_at).toBeUndefined();
+
+    // Run 2 — mark now succeeds; the re-judged shadow must NOT create a second row.
+    failMark = false;
+    const r2 = await handler.execute(ctx);
+    expect(r2.success).toBe(true);
+    expect(ctx.__actionLog).toHaveLength(1); // deduped — no double-score
+    expect(ctx.__docs.get(shadowDraftPath('src-1'))?.frontmatter.reconciled_at).toBeTruthy();
+    expect((r2 as { data: { watermark_advanced_to: number | null } }).data.watermark_advanced_to).toBe(1_720_000_501);
   });
 
   it('matches a shadow to the nearest eligible send, not a later unrelated one (F6)', async () => {
