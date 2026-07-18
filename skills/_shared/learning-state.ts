@@ -197,7 +197,19 @@ export async function readIdSet(store: ConfigStore, key: string, log?: Logger): 
     corruptionLogger(key, raw!, log)();
     return new Set();
   }
-  return new Set(Array.isArray(parsed) ? (parsed as string[]) : []);
+  if (!Array.isArray(parsed)) return new Set(); // null/unset — absence, not corruption
+  // Validate every MEMBER is a string, not just that the top level is an array. A non-string member
+  // (e.g. `[42]` or `["t1", null]`) wouldn't throw — it'd silently sit in the Set and bypass the
+  // guard, since `set.has("42")` never matches the numeric `42`. Drop non-strings, logging a
+  // PII-safe count, so a corrupt/skewed member can't quietly defeat an idempotency guard.
+  const valid = parsed.filter((v): v is string => typeof v === 'string');
+  if (valid.length !== parsed.length) {
+    log?.warn(
+      { key, dropped: parsed.length - valid.length },
+      'learning-state: dropped non-string entries from a stored id set — treating them as absent',
+    );
+  }
+  return new Set(valid);
 }
 export async function writeIdSet(store: ConfigStore, key: string, ids: Set<string>): Promise<boolean> {
   return (await store.set(LEARNING_STATE_NAMESPACE, key, JSON.stringify([...ids]))).stored;
