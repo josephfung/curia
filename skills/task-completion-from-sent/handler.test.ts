@@ -361,4 +361,78 @@ describe('TaskCompletionFromSentHandler', () => {
     const remaining2 = JSON.parse(ctx2.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!) as CompletionCandidateMap;
     expect(remaining2['11111111-1111-4111-8111-111111111111']).toBeUndefined();
   });
+
+  it('completeTask throws after the digest write lands → undo note durable in digest before the failure, candidate retained for retry (#1432)', async () => {
+    // Distinct from the CRITICAL test above: that test proves the candidate survives a
+    // completeTask failure but never inspects the digest. This test proves the actual
+    // digest-first *ordering* guarantee — the undo note is durably recorded in the digest
+    // even though the completion that note describes never actually happened, which is
+    // exactly the "transient wart" the handler's own comment (above the digest write) calls
+    // out as self-healing on the next run.
+    const ctx = makeCtx();
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({
+        '11111111-1111-4111-8111-111111111111': CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+      }),
+    );
+    // Digest write succeeds normally this time (unlike the DOUBLE-RUN soft-reject case) —
+    // only completeTask fails, after the digest write has already landed.
+    (ctx.taskRepo as unknown as { completeTask: (...args: unknown[]) => Promise<unknown> }).completeTask =
+      vi.fn(async () => {
+        throw new Error('db hiccup after digest write');
+      });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const data = (result as { data: { auto_completed: number; skipped: number } }).data;
+    expect(data.auto_completed).toBe(0);
+    expect(data.skipped).toBe(1);
+
+    // The undo note is durable in the digest despite the completion failing — proof that the
+    // write happened BEFORE completeTask ran, not after.
+    const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest['11111111-1111-4111-8111-111111111111']).toMatchObject({
+      kind: 'undo',
+      taskId: '11111111-1111-4111-8111-111111111111',
+    });
+
+    // The candidate is retained (not consumed) so it retries next run — the note is already
+    // durable and will be overwritten identically on retry (composeUndoNote is pure).
+    const remaining = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!) as CompletionCandidateMap;
+    expect(remaining['11111111-1111-4111-8111-111111111111']).toEqual(
+      CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+    );
+  });
+
+  it('clean replay after a successful run consumes the candidate; a second run on the same state sees an empty queue and does not re-complete (#1432)', async () => {
+    // Unlike the DOUBLE-RUN test above (which replays across two fresh ctx objects to prove
+    // self-healing after a soft-reject), this replays the SAME ctx/config-store state twice —
+    // the shape of an idempotent re-run of the same job with no partial failure involved.
+    const ctx = makeCtx();
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({
+        '11111111-1111-4111-8111-111111111111': CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+      }),
+    );
+
+    const result1 = await handler.execute(ctx);
+    expect(result1.success).toBe(true);
+    const data1 = (result1 as { data: { auto_completed: number } }).data;
+    expect(data1.auto_completed).toBe(1);
+    expect(ctx.__completed).toEqual(['11111111-1111-4111-8111-111111111111']);
+    const remaining1 = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!) as CompletionCandidateMap;
+    expect(remaining1['11111111-1111-4111-8111-111111111111']).toBeUndefined();
+
+    // Run 2 against the same underlying config-store map: run 1 already consumed the candidate,
+    // so this must be a no-op rather than re-completing the (now already-done) task.
+    const result2 = await handler.execute(ctx);
+    expect(result2.success).toBe(true);
+    const data2 = (result2 as { data: { auto_completed: number } }).data;
+    expect(data2.auto_completed).toBe(0);
+    // completeTask must not have been called again — exactly one call total across both runs.
+    expect(ctx.__completed).toEqual(['11111111-1111-4111-8111-111111111111']);
+    expect((ctx.taskRepo!.completeTask as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
 });
