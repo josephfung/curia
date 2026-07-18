@@ -130,6 +130,69 @@ describe('ResolveLearningDigestHandler', () => {
     expect(update).toHaveBeenCalled();
   });
 
+  it('approve_voice: replay after a soft-rejected clear converges without re-corrupting the profile (#1432)', async () => {
+    // Proves AC #2: replaying the action after a mid-saga failure (the clear soft-rejects)
+    // does not double-apply the profile mutation. Run 1's profile write is the primary side
+    // effect; the clear soft-rejects so the proposal survives for a retry. Run 2 (the replay)
+    // re-applies the identical guide (content-idempotent) and the clear now lands.
+    const mem = makeMem();
+    mem.__values.set(VOICE_PROPOSAL_KEY, GUIDE_PROPOSAL);
+    const update = vi.fn();
+    const ctx = {
+      input: { action: 'approve_voice' },
+      workingDocs: { read: vi.fn(), update: vi.fn() },
+      entityMemory: mem,
+      executiveProfileService: {
+        get: () => ({
+          writingVoice: {
+            tone: [],
+            formality: 50,
+            patterns: [],
+            vocabulary: { prefer: [], avoid: [] },
+            signOff: '',
+            guide: '',
+          },
+        }),
+        update,
+      },
+      taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+
+    // The proposal clear soft-rejects on the first write, then lands on the second (replay).
+    let clearCallCount = 0;
+    (mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+      async (p: { label: string; properties?: Record<string, unknown> }) => {
+        if (p.label === VOICE_PROPOSAL_KEY) {
+          clearCallCount += 1;
+          if (clearCallCount === 1) return { stored: false, action: 'conflict' as const };
+        }
+        mem.__values.set(p.label, String(p.properties?.value ?? ''));
+        return { stored: true, action: 'created' as const };
+      },
+    );
+
+    const handler = new ResolveLearningDigestHandler();
+
+    // Run 1 — profile updated, but the clear soft-rejects → success:false, proposal still pending.
+    const r1 = await handler.execute(ctx);
+    expect(r1.success).toBe(false);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(mem.__values.get(VOICE_PROPOSAL_KEY)).toBe(GUIDE_PROPOSAL);
+
+    // Run 2 (replay) — the proposal is still pending so it re-applies; the clear now lands.
+    const r2 = await handler.execute(ctx);
+    expect(r2.success).toBe(true);
+    expect((r2 as { data: { resolved: boolean } }).data.resolved).toBe(true);
+    expect(update).toHaveBeenCalledTimes(2);
+    // The guide written on replay equals the guide written on run 1 — content-idempotent, so
+    // the double `update()` call doesn't corrupt the profile with a different value.
+    const firstGuide = (update.mock.calls[0]![0] as { writingVoice: { guide: string } }).writingVoice.guide;
+    const secondGuide = (update.mock.calls[1]![0] as { writingVoice: { guide: string } }).writingVoice.guide;
+    expect(secondGuide).toBe(firstGuide);
+    expect(mem.__values.get(VOICE_PROPOSAL_KEY)).toBe('null');
+  });
+
   it('dismisses a voice guide proposal and writes dismissal guard', async () => {
     const mem = makeMem();
     mem.__values.set(VOICE_PROPOSAL_KEY, GUIDE_PROPOSAL);
@@ -218,6 +281,59 @@ describe('ResolveLearningDigestHandler', () => {
     expect(reopenTask).toHaveBeenCalledWith('t1', expect.any(String), 'coordinator');
   });
 
+  it('undo_completion: replay after a soft-rejected clear reopens idempotently and clears the digest item (#1432)', async () => {
+    // Proves AC #2 for undo_completion: run 1's reopenTask (the primary side effect) succeeds,
+    // but the digest clear soft-rejects, so the item survives for a retry. Run 2 (the replay)
+    // reopens again with the identical args — a no-op at the taskRepo level for an already-open
+    // task, out of scope for this handler test — and the clear now lands.
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const reopenTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
+    const ctx = {
+      input: { action: 'undo_completion', task_id: 't1' },
+      workingDocs: { read: vi.fn(), update: vi.fn() },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask, completeTask: vi.fn(), getTask: vi.fn() },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+
+    // The digest clear soft-rejects on the first write, then lands on the second (replay).
+    let clearCallCount = 0;
+    (mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+      async (p: { label: string; properties?: Record<string, unknown> }) => {
+        if (p.label === COMPLETION_DIGEST_KEY) {
+          clearCallCount += 1;
+          if (clearCallCount === 1) return { stored: false, action: 'conflict' as const };
+        }
+        mem.__values.set(p.label, String(p.properties?.value ?? ''));
+        return { stored: true, action: 'created' as const };
+      },
+    );
+
+    const handler = new ResolveLearningDigestHandler();
+
+    const r1 = await handler.execute(ctx);
+    expect(r1.success).toBe(false);
+    expect(reopenTask).toHaveBeenCalledTimes(1);
+    const afterR1 = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(afterR1.t1).toEqual(digestMap.t1);
+
+    const r2 = await handler.execute(ctx);
+    expect(r2.success).toBe(true);
+    expect((r2 as { data: { resolved: boolean } }).data.resolved).toBe(true);
+    // reopenTask fires again on replay with the identical args — the handler has no status
+    // guard for undo (unlike confirm_completion below), so it re-issues the same reopen call.
+    expect(reopenTask).toHaveBeenCalledTimes(2);
+    expect(reopenTask).toHaveBeenNthCalledWith(2, 't1', expect.any(String), 'coordinator');
+    const afterR2 = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(afterR2.t1).toBeUndefined();
+  });
+
   it('fails and keeps the undo item when the task no longer exists (reopenTask returns null)', async () => {
     const mem = makeMem();
     const digestMap: CompletionDigestMap = {
@@ -295,6 +411,65 @@ describe('ResolveLearningDigestHandler', () => {
     // writeCompletionDigest was never called — the item is preserved for a retry.
     const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
     expect(updated.t1).toEqual(digestMap.t1);
+  });
+
+  it('confirm_completion: replay after a soft-rejected clear does not re-complete an already-done task (#1432)', async () => {
+    // Proves AC #2 for confirm_completion: run 1's completeTask (the primary side effect)
+    // fires because the task is 'open', but the digest clear soft-rejects, so the item
+    // survives for a retry. Run 2 (the replay) sees the task is now 'done' — the
+    // `task.status !== 'done'` guard in handler.ts skips a second completeTask call — and the
+    // clear now lands.
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'confirm', taskId: 't1', taskTitle: 'Follow up', note: 'Did emailing them complete it?' },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    // getTask returns 'open' on run 1 (so completeTask fires), then 'done' on the replay —
+    // reflecting that run 1's completeTask call already landed even though the overall result
+    // reported failure.
+    const getTask = vi
+      .fn()
+      .mockResolvedValueOnce({ id: 't1', status: 'open' })
+      .mockResolvedValueOnce({ id: 't1', status: 'done' });
+    const completeTask = vi.fn(async () => undefined);
+    const ctx = {
+      input: { action: 'confirm_completion', task_id: 't1' },
+      workingDocs: { read: vi.fn(), update: vi.fn() },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+
+    // The digest clear soft-rejects on the first write, then lands on the second (replay).
+    let clearCallCount = 0;
+    (mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
+      async (p: { label: string; properties?: Record<string, unknown> }) => {
+        if (p.label === COMPLETION_DIGEST_KEY) {
+          clearCallCount += 1;
+          if (clearCallCount === 1) return { stored: false, action: 'conflict' as const };
+        }
+        mem.__values.set(p.label, String(p.properties?.value ?? ''));
+        return { stored: true, action: 'created' as const };
+      },
+    );
+
+    const handler = new ResolveLearningDigestHandler();
+
+    const r1 = await handler.execute(ctx);
+    expect(r1.success).toBe(false);
+    expect(completeTask).toHaveBeenCalledTimes(1);
+    const afterR1 = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(afterR1.t1).toEqual(digestMap.t1);
+
+    const r2 = await handler.execute(ctx);
+    expect(r2.success).toBe(true);
+    expect((r2 as { data: { resolved: boolean } }).data.resolved).toBe(true);
+    // Task was already 'done' on replay → the status guard skips completeTask; no double-complete.
+    expect(completeTask).toHaveBeenCalledTimes(1);
+    const afterR2 = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(afterR2.t1).toBeUndefined();
   });
 
   it('dismisses a queued confirm item without touching the task', async () => {
