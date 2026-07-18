@@ -183,6 +183,20 @@ describe('learning-state config accessors', () => {
     expect(warnCalls[0]![0]).toEqual({ key: COMPLETION_DIGEST_KEY, dropped: 1 });
   });
 
+  it('drops non-string members from a stored id set (a numeric id would silently bypass the guard)', async () => {
+    // `set.has("42")` never matches a numeric 42, so a non-string member would quietly defeat the
+    // idempotency guard rather than throw. Drop them, keep the valid string ids, log a count.
+    const { store } = fakeStore({
+      [ASKED_TASK_IDS_KEY]: JSON.stringify(['a', 42, 'b', null]),
+    });
+    const { logger, warnCalls } = fakeLogger();
+    const result = await readIdSet(store, ASKED_TASK_IDS_KEY, logger);
+    expect([...result].sort()).toEqual(['a', 'b']);
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![0]).toEqual({ key: ASKED_TASK_IDS_KEY, dropped: 2 });
+    expect(warnCalls[0]![1]).toMatch(/non-string/);
+  });
+
   it('rejects a voice proposal missing generatedAt (incomplete contract)', async () => {
     const { store } = fakeStore({
       [VOICE_PROPOSAL_KEY]: JSON.stringify({ status: 'pending', guide: 'g' }),
