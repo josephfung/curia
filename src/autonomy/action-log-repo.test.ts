@@ -76,6 +76,43 @@ describe('ActionLogRepo', () => {
     });
   });
 
+  describe('insertShadowEvaluated', () => {
+    it('inserts with ON CONFLICT DO NOTHING and returns the id', async () => {
+      const { pool, queries } = makePool([{ id: 7 }]);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const id = await repo.insertShadowEvaluated({
+        taskId: 'shadow:src-1',
+        skillName: 'shadow-draft-eval',
+        actionRisk: 'none',
+        outcome: 'shadow_evaluated',
+        payload: { shadow: true, source_message_id: 'src-1' },
+        competenceFlag: 1,
+        scoredBy: 'shadow-reconciler',
+      });
+      expect(id).toBe(7);
+      expect(queries).toHaveLength(1);
+      expect(queries[0]!.sql).toContain('ON CONFLICT');
+      expect(queries[0]!.sql).toContain("payload->>'source_message_id'");
+      expect(queries[0]!.sql).toContain('DO NOTHING');
+    });
+
+    it('returns null when the insert is a no-op (conflict — row already exists)', async () => {
+      // ON CONFLICT DO NOTHING returns zero rows when the row already exists.
+      const { pool } = makePool([], 0);
+      const repo = new ActionLogRepo(pool, createSilentLogger());
+      const id = await repo.insertShadowEvaluated({
+        taskId: 'shadow:src-1',
+        skillName: 'shadow-draft-eval',
+        actionRisk: 'none',
+        outcome: 'shadow_evaluated',
+        payload: { shadow: true, source_message_id: 'src-1' },
+        competenceFlag: 1,
+        scoredBy: 'shadow-reconciler',
+      });
+      expect(id).toBeNull();
+    });
+  });
+
   describe('findUnscoredTerminal', () => {
     it('returns rows ordered by created_at asc with limit', async () => {
       const now = new Date();

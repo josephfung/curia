@@ -20,16 +20,16 @@ export class ActionLogRepo {
     private readonly logger: Logger,
   ) {}
 
-  /** Insert a new row and return the generated id. */
-  async insert(row: ActionLogInsert): Promise<number> {
-    const result = await this.pool.query<{ id: number }>(
-      `INSERT INTO autonomy_action_log
-         (task_id, conversation_id, skill_name, action_risk, outcome, task_summary,
-          payload, expires_at, short_ref, description, parent_action_id,
-          competence_flag, commitment_flag, compatibility, scored_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-       RETURNING id`,
-      [
+  /** Column list + positional VALUES tuple shared by insert() and insertShadowEvaluated().
+   *  Kept in one place so the two insert paths cannot drift. */
+  private insertColumnsAndParams(row: ActionLogInsert): { columns: string; values: string; params: unknown[] } {
+    return {
+      columns:
+        '(task_id, conversation_id, skill_name, action_risk, outcome, task_summary, ' +
+        'payload, expires_at, short_ref, description, parent_action_id, ' +
+        'competence_flag, commitment_flag, compatibility, scored_by)',
+      values: 'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+      params: [
         row.taskId,
         row.conversationId ?? null,
         row.skillName,
@@ -48,9 +48,39 @@ export class ActionLogRepo {
         null,
         row.scoredBy ?? null,
       ],
+    };
+  }
+
+  /** Insert a new row and return the generated id. */
+  async insert(row: ActionLogInsert): Promise<number> {
+    const { columns, values, params } = this.insertColumnsAndParams(row);
+    const result = await this.pool.query<{ id: number }>(
+      `INSERT INTO autonomy_action_log ${columns} ${values} RETURNING id`,
+      params,
     );
     this.logger.debug({ id: result.rows[0]!.id, skillName: row.skillName, outcome: row.outcome }, 'action-log-repo: inserted row');
     return result.rows[0]!.id;
+  }
+
+  /**
+   * Insert a pre-scored shadow-eval row idempotently (#1432). The partial unique index
+   * idx_aal_shadow_source (migration 074) enforces one 'shadow_evaluated' row per
+   * source_message_id, so ON CONFLICT DO NOTHING makes a re-run a no-op instead of a duplicate.
+   * Returns the new id, or `null` when a row for this source_message_id already exists — the
+   * caller treats null as "already durably recorded", NOT an error.
+   */
+  async insertShadowEvaluated(row: ActionLogInsert): Promise<number | null> {
+    const { columns, values, params } = this.insertColumnsAndParams(row);
+    const result = await this.pool.query<{ id: number }>(
+      `INSERT INTO autonomy_action_log ${columns} ${values}
+       ON CONFLICT ((payload->>'source_message_id')) WHERE outcome = 'shadow_evaluated'
+       DO NOTHING
+       RETURNING id`,
+      params,
+    );
+    const id = result.rows[0]?.id ?? null;
+    this.logger.debug({ id, skillName: row.skillName, deduped: id === null }, 'action-log-repo: shadow insert');
+    return id;
   }
 
   /**
