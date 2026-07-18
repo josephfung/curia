@@ -3,6 +3,7 @@ import type { ConfigStore } from '../../src/memory/config-store.js';
 import {
   LEARNING_STATE_NAMESPACE,
   COMPLETION_CANDIDATES_KEY,
+  COMPLETION_DIGEST_KEY,
   VOICE_PROPOSAL_KEY,
   ASKED_TASK_IDS_KEY,
   readCompletionCandidates,
@@ -152,6 +153,44 @@ describe('learning-state config accessors', () => {
     const result = await readCompletionCandidates(store, logger);
     expect(result).toEqual({});
     expect(warnCalls).toHaveLength(0);
+  });
+
+  it('drops a malformed candidate entry (would crash the consumer) but keeps the valid ones', async () => {
+    // `{"bad": {}}` is a structurally-valid map with a malformed value: task-completion would
+    // throw on `candidate.recipients[0]`. The reader drops it, keeps the good entry, and logs a
+    // PII-safe count (never the dropped content).
+    const good = { messageId: 'm1', confidence: 'high', reason: 'r', sentAt: 's', subject: 'sub', recipients: ['a@x'], taskTitle: 'T1' };
+    const { store } = fakeStore({
+      [COMPLETION_CANDIDATES_KEY]: JSON.stringify({ good, bad: {} }),
+    });
+    const { logger, warnCalls } = fakeLogger();
+    const result = await readCompletionCandidates(store, logger);
+    expect(result.good).toEqual(good);
+    expect(result.bad).toBeUndefined();
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![0]).toEqual({ key: COMPLETION_CANDIDATES_KEY, dropped: 1 });
+    expect(warnCalls[0]![1]).toMatch(/dropped malformed/);
+  });
+
+  it('drops a null digest entry (would crash renderCompletionSection) rather than surfacing it', async () => {
+    const { store } = fakeStore({
+      [COMPLETION_DIGEST_KEY]: JSON.stringify({ t1: null }),
+    });
+    const { logger, warnCalls } = fakeLogger();
+    const result = await readCompletionDigest(store, logger);
+    expect(result).toEqual({});
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![0]).toEqual({ key: COMPLETION_DIGEST_KEY, dropped: 1 });
+  });
+
+  it('rejects a voice proposal missing generatedAt (incomplete contract)', async () => {
+    const { store } = fakeStore({
+      [VOICE_PROPOSAL_KEY]: JSON.stringify({ status: 'pending', guide: 'g' }),
+    });
+    const { logger, warnCalls } = fakeLogger();
+    expect(await readVoiceProposal(store, logger)).toBeNull();
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![0]).toMatchObject({ key: VOICE_PROPOSAL_KEY });
   });
 
   it('composes undo/confirm note text verbatim to the pre-migration copy', () => {
