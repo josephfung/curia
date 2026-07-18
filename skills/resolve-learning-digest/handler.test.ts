@@ -226,6 +226,9 @@ describe('ResolveLearningDigestHandler', () => {
     };
     mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
     const reopenTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
+    // getTask must return the task in 'done' status — the handler's idempotency guard
+    // (#1432) only calls reopenTask when the task is currently 'done'.
+    const getTask = vi.fn(async () => ({ id: 't1', status: 'done' }));
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
       // Not read/written for completion actions any more (config-store only, #1438) — a
@@ -233,7 +236,7 @@ describe('ResolveLearningDigestHandler', () => {
       workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
-      taskRepo: { reopenTask, completeTask: vi.fn(), getTask: vi.fn() },
+      taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as SkillContext;
@@ -256,12 +259,14 @@ describe('ResolveLearningDigestHandler', () => {
     };
     mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
     const reopenTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
+    // getTask must return 'done' so the idempotency guard (#1432) lets reopenTask fire.
+    const getTask = vi.fn(async () => ({ id: 't1', status: 'done' }));
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
       workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
-      taskRepo: { reopenTask, completeTask: vi.fn(), getTask: vi.fn() },
+      taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as SkillContext;
@@ -284,20 +289,28 @@ describe('ResolveLearningDigestHandler', () => {
   it('undo_completion: replay after a soft-rejected clear reopens idempotently and clears the digest item (#1432)', async () => {
     // Proves AC #2 for undo_completion: run 1's reopenTask (the primary side effect) succeeds,
     // but the digest clear soft-rejects, so the item survives for a retry. Run 2 (the replay)
-    // reopens again with the identical args — a no-op at the taskRepo level for an already-open
-    // task, out of scope for this handler test — and the clear now lands.
+    // sees the task is now 'open' — the handler's status guard (mirrors confirm_completion)
+    // skips a second reopenTask call, since calling it again would THROW (task-repo.ts only
+    // allows reopening a 'done' task) and wedge the digest item forever — and the clear lands.
     const mem = makeMem();
     const digestMap: CompletionDigestMap = {
       t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
     };
     mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
     const reopenTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
+    // getTask returns 'done' on run 1 (so reopenTask fires), then 'open' on the replay —
+    // reflecting that run 1's reopenTask call already landed even though the overall result
+    // reported failure.
+    const getTask = vi
+      .fn()
+      .mockResolvedValueOnce({ id: 't1', status: 'done' })
+      .mockResolvedValueOnce({ id: 't1', status: 'open' });
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
       workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
-      taskRepo: { reopenTask, completeTask: vi.fn(), getTask: vi.fn() },
+      taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as SkillContext;
@@ -326,35 +339,36 @@ describe('ResolveLearningDigestHandler', () => {
     const r2 = await handler.execute(ctx);
     expect(r2.success).toBe(true);
     expect((r2 as { data: { resolved: boolean } }).data.resolved).toBe(true);
-    // reopenTask fires again on replay with the identical args — the handler has no status
-    // guard for undo (unlike confirm_completion below), so it re-issues the same reopen call.
-    expect(reopenTask).toHaveBeenCalledTimes(2);
-    expect(reopenTask).toHaveBeenNthCalledWith(2, 't1', expect.any(String), 'coordinator');
+    // Task was already 'open' on replay → the status guard skips reopenTask; no second (throwing) call.
+    expect(reopenTask).toHaveBeenCalledTimes(1);
     const afterR2 = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
     expect(afterR2.t1).toBeUndefined();
   });
 
-  it('fails and keeps the undo item when the task no longer exists (reopenTask returns null)', async () => {
+  it('fails and keeps the undo item when the task no longer exists (getTask returns null)', async () => {
     const mem = makeMem();
     const digestMap: CompletionDigestMap = {
       t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
     };
     mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
-    // reopenTask returns null when the task is gone — the digest item must survive so the user
-    // still sees the undo affordance, and the result must report failure (not a silent success).
-    const reopenTask = vi.fn(async () => null);
+    // getTask returns null when the task is gone — the guard (#1432) fails loud before ever
+    // calling reopenTask, and the digest item must survive so the user still sees the undo
+    // affordance.
+    const getTask = vi.fn(async () => null);
+    const reopenTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
       workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
-      taskRepo: { reopenTask, completeTask: vi.fn(), getTask: vi.fn() },
+      taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as SkillContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(false);
+    expect(reopenTask).not.toHaveBeenCalled();
     // writeCompletionDigest was never called — the item is preserved for a retry.
     expect(mem.storeFact).not.toHaveBeenCalled();
     const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;

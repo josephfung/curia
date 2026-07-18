@@ -531,6 +531,10 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
             );
             continue;
           }
+          // The autonomy_action_log row inserted above is the authoritative competence signal
+          // for scoring (dedup'd by the #1432 unique index). This frontmatter competence_flag
+          // is informational only — it may reflect a later re-judge that a deduped (ON CONFLICT
+          // DO NOTHING) DB row never recorded, so don't treat it as a source of truth.
           const upd = await ctx.workingDocs.update(path, {
             frontmatter: { ...doc.frontmatter, reconciled_at: new Date().toISOString(), competence_flag: j.sameDecision ? 1 : 0 },
             expectedVersion: doc.version,

@@ -21,6 +21,9 @@
 -- non-transactional migration using CREATE INDEX CONCURRENTLY.
 
 -- Remove all but the lowest-id row per source_message_id among existing shadow rows.
+-- This self-join runs before any index on payload->>'source_message_id' exists (the unique
+-- index below is created after), so it is a sequential self-join; acceptable at the current
+-- single-tenant table size, but worth watching if this table grows large.
 DELETE FROM autonomy_action_log a
 USING autonomy_action_log b
 WHERE a.outcome = 'shadow_evaluated'
