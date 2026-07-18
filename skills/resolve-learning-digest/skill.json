@@ -1,7 +1,7 @@
 {
   "name": "resolve-learning-digest",
   "description": "Resolve a learning-digest item: approve/dismiss a voice proposal, undo an auto-completed task, or confirm/dismiss a task-completion candidate.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {

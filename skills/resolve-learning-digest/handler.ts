@@ -132,20 +132,31 @@ export class ResolveLearningDigestHandler implements SkillHandler {
     }
 
     if (action === 'undo_completion') {
-      // reopenTask returns null when the task no longer exists. Fail loudly and DON'T consume the
-      // digest item in that case — mirrors the confirm path's not-found guard below. Otherwise
-      // we'd drop the undo affordance and report success while having reopened nothing.
-      const reopened = await ctx.taskRepo.reopenTask(
-        taskId,
-        'Undo auto-complete from sent mail',
-        ctx.agentId,
-      );
-      if (!reopened) {
+      // Idempotency guard (mirrors confirm_completion below): reopenTask THROWS on any status other
+      // than 'done' (src/db/task-repo.ts). On a replay after a soft-rejected clear, run 1 already
+      // reopened the task (done -> open), so calling reopenTask again would throw and wedge the
+      // digest item forever. Reopen only when the task is still 'done'; an already-open task means
+      // run 1's reopen landed, so fall through to clear the item. A missing task fails loud (the
+      // item is kept so the user can see it didn't apply), same as the confirm path.
+      const task = await ctx.taskRepo.getTask(taskId);
+      if (!task) {
         return { success: false, error: `Task ${taskId} not found; cannot undo completion` };
       }
-      // Remove the actioned item from the config map so resolved items don't accumulate. The
-      // task is already reopened by this point, so a soft-reject on the clear only means the
-      // digest item may reappear — reopening an already-open task next retry is a no-op.
+      if (task.status === 'done') {
+        const reopened = await ctx.taskRepo.reopenTask(
+          taskId,
+          'Undo auto-complete from sent mail',
+          ctx.agentId,
+        );
+        // reopenTask returns null when the row vanished / raced to non-done between the read and
+        // the UPDATE — fail loud and DON'T consume the digest item, so the undo affordance survives.
+        if (!reopened) {
+          return { success: false, error: `Task ${taskId} could not be reopened (it may have changed); retry` };
+        }
+      }
+      // Remove the actioned item from the config map so resolved items don't accumulate. The task is
+      // reopened (or already open) by this point, so a soft-reject on the clear only means the digest
+      // item may reappear — a retry re-checks status and clears idempotently.
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
       const cleared = await writeCompletionDigest(store, rest);
