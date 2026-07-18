@@ -488,13 +488,19 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
           'sent-observe: shadow judge failed or returned an unusable response — holding watermark',
         );
       } else {
-        // Clean response — per-pair insert + durable reconciled_at mark. A per-pair insert/mark
-        // failure holds the watermark for that pair (it re-judges next run) without discarding
-        // the pairs that did land.
+        // Clean response — per-pair idempotent insert (#1432: migration-074 unique index is the
+        // durable dedup) + reconciled_at mark (the efficiency guard that lets the watermark advance
+        // and skips re-judging next run). A per-pair insert/mark failure holds the watermark for
+        // that pair (it re-judges next run) without discarding the pairs that did land.
         for (const pair of batch) {
           const j = judged.get(pair.sourceMessageId)!; // strict parse guarantees exact coverage
           try {
-            await ctx.actionLogRepo.insert({
+            // Idempotent insert (#1432): the migration-074 partial unique index guarantees one
+            // 'shadow_evaluated' row per source_message_id, so a re-run after a failed mark can't
+            // double-score. A null return means the row already exists (recorded on a prior run) —
+            // that's not an error; we still fall through to mark reconciled_at so the re-run
+            // converges. Only a THROW holds the watermark.
+            await ctx.actionLogRepo.insertShadowEvaluated({
               taskId: ctx.taskEventId ?? `shadow:${j.sourceMessageId}`,
               conversationId: ctx.conversationId,
               skillName: 'shadow-draft-eval',
