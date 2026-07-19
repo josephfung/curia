@@ -20,6 +20,11 @@ import { jitteredDelay, simulateHumanPresence, humanClick, humanType } from '../
 // Prevents token blowout on content-heavy pages.
 const MAX_CONTENT_LENGTH = 15_000;
 
+// Max interactable elements to tag with a ref and list per frame before truncating.
+// A module constant (not config) to match MAX_CONTENT_LENGTH above; both are halves of
+// one content budget. Passed into the in-browser extractor since it can't import this.
+const MAX_INTERACTABLE_REFS = 200;
+
 // How long to wait for network activity to quiesce after a navigation. Heavy SPAs
 // (e.g. OpenTable's date picker) hydrate well after `domcontentloaded`, so we give
 // them a moment to settle — but many sites never reach full idle, so this is
@@ -497,6 +502,31 @@ async function isLikelyEmpty(page: Page, log: SkillContext['log']): Promise<bool
  * unguarded: a detached main frame is a genuine failure the caller should surface.
  */
 async function resolveLocator(page: Page, selector: string, log: SkillContext['log']): Promise<Locator> {
+  // Ref fast-path: a data-curia-ref token (f<frame>e<n>, emitted by extractFrameContent)
+  // identifies exactly one element in the last snapshot. Resolve it by attribute and skip
+  // the fuzzy accessible-name cascade entirely — this is how the agent disambiguates
+  // duplicate labels. If it matches nothing (element gone since the snapshot), return the
+  // non-matching ref locator so the action throws a clean "element not found" rather than
+  // degrading to fuzzy matching and clicking the WRONG element.
+  if (/^f\d+e\d+$/.test(selector)) {
+    const attrSelector = `[data-curia-ref="${selector}"]`;
+    const mainRef = page.locator(attrSelector);
+    if ((await mainRef.count()) > 0) return mainRef.first();
+    const refMainFrame = page.mainFrame();
+    const refChildFrames = page.frames().filter(
+      (frame) => frame !== refMainFrame && !isBlockedFrameUrl(frame.url()),
+    );
+    for (const frame of refChildFrames) {
+      try {
+        const inFrame = frame.locator(attrSelector);
+        if ((await inFrame.count()) > 0) return inFrame.first();
+      } catch (err) {
+        log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during ref resolution (detached/error)');
+      }
+    }
+    return mainRef;
+  }
+
   // Main frame first (the common case, and the cheapest).
   const top = await resolveInScope(page, selector, log);
   if (top) return top;
@@ -620,7 +650,9 @@ async function getCleanedContent(page: Page, log: SkillContext['log']): Promise<
   let extracted = 0;
   let failed = 0;
 
-  for (const frame of page.frames()) {
+  const frames = page.frames();
+  for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+    const frame = frames[frameIndex]!;
     // SSRF: skip frames pointing at private/internal hosts. The navigate guard only
     // validates the top-level URL, so without this an attacker page could embed
     // <iframe src="http://169.254.169.254/..."> and we'd read internal content here.
@@ -631,7 +663,7 @@ async function getCleanedContent(page: Page, log: SkillContext['log']): Promise<
 
     let raw: string;
     try {
-      raw = await frame.evaluate(extractFrameContent);
+      raw = await frame.evaluate(extractFrameContent, { frameIndex, maxRefs: MAX_INTERACTABLE_REFS });
     } catch (err) {
       // A frame can detach mid-read or refuse evaluation; skip it but remember it failed
       // so an all-failed read surfaces as an error rather than a clean empty success.

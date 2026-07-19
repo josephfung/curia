@@ -917,3 +917,106 @@ describe('web-browser navigate — challenge poll (#1053+)', () => {
     expect(vi.mocked(simulateHumanPresence)).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('web-browser ref-based selectors', () => {
+  // Build a ctx around a caller-supplied mock page so the test can assert on how the
+  // page's locator methods were called (makeSkillContext hides its page).
+  function ctxFor(page: ReturnType<typeof makeMockPage>, input: Record<string, unknown>) {
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-1', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    return { input, log: logger, browserService } as unknown as SkillContext;
+  }
+
+  it('resolves an fNeM ref via data-curia-ref, bypassing the fuzzy cascade', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('page body', fill, 'https://example.com/');
+    const ctx = ctxFor(page, { action: 'click', selector: 'f0e3', session_id: 'sess-1' });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    // The ref resolved by attribute...
+    expect(page.locator).toHaveBeenCalledWith('[data-curia-ref="f0e3"]');
+    // ...and did NOT fall through to accessible-name matching (which could hit a duplicate).
+    expect(page.getByRole).not.toHaveBeenCalled();
+    expect(page.getByText).not.toHaveBeenCalled();
+  });
+
+  it('does not fuzzy-fall-back when a ref matches nothing (no wrong-element click)', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('page body', fill, 'https://example.com/');
+    // Model an element removed since the snapshot: the ref attribute matches nothing.
+    const zero = {
+      count: vi.fn().mockResolvedValue(0),
+      first: vi.fn().mockReturnThis(),
+      nth: vi.fn().mockReturnThis(),
+      isVisible: vi.fn().mockResolvedValue(false),
+      locator: vi.fn().mockReturnThis(),
+      click: vi.fn().mockResolvedValue(undefined),
+      hover: vi.fn().mockResolvedValue(undefined),
+      waitFor: vi.fn().mockResolvedValue(undefined),
+      scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
+      selectOption: vi.fn().mockResolvedValue(undefined),
+      fill,
+    };
+    page.locator = vi.fn().mockReturnValue(zero);
+    const ctx = ctxFor(page, { action: 'click', selector: 'f0e9', session_id: 'sess-1' });
+
+    await new WebBrowserHandler().execute(ctx);
+
+    // Resolution stayed on the ref path; it never degraded to fuzzy role/text matching.
+    expect(page.locator).toHaveBeenCalledWith('[data-curia-ref="f0e9"]');
+    expect(page.getByRole).not.toHaveBeenCalled();
+    expect(page.getByText).not.toHaveBeenCalled();
+  });
+
+  it('still resolves a plain label selector via the existing cascade (back-compat)', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('page body', fill, 'https://example.com/');
+    const ctx = ctxFor(page, { action: 'click', selector: 'Save', session_id: 'sess-1' });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(page.getByRole).toHaveBeenCalled();               // fuzzy path used
+    expect(page.locator).not.toHaveBeenCalledWith('[data-curia-ref="Save"]');
+  });
+
+  it('resolves a ref that lives inside a child iframe', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('outer page', fill, 'https://example.com/');
+    // Main frame: the ref matches nothing (the element is in the iframe).
+    page.locator = vi.fn().mockReturnValue({
+      count: vi.fn().mockResolvedValue(0),
+      first: vi.fn().mockReturnThis(),
+    });
+    // Child frame: the ref matches exactly one element there.
+    const childLoc = {
+      count: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockReturnThis(),
+      nth: vi.fn().mockReturnThis(),
+      isVisible: vi.fn().mockResolvedValue(true),
+      locator: vi.fn().mockReturnThis(),
+      click: vi.fn().mockResolvedValue(undefined),
+      fill,
+    };
+    const childFrame = {
+      url: vi.fn().mockReturnValue('https://widget.example.com/'),
+      name: vi.fn().mockReturnValue('widget'),
+      evaluate: vi.fn().mockResolvedValue('widget body'),
+      getByRole: vi.fn(), getByLabel: vi.fn(), getByText: vi.fn(),
+      locator: vi.fn().mockReturnValue(childLoc),
+    };
+    const mainFrame = page.mainFrame();
+    page.frames = vi.fn().mockReturnValue([mainFrame, childFrame]);
+    const ctx = ctxFor(page, { action: 'click', selector: 'f1e2', session_id: 'sess-1' });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(childFrame.locator).toHaveBeenCalledWith('[data-curia-ref="f1e2"]');
+  });
+});
