@@ -1577,6 +1577,28 @@ describe('CeoInboxSentObserveHandler', () => {
       expect(ctx.__mem.__values.get(BACKFILL_TARGET_KEY)).toBeUndefined();
     });
 
+    it('floor-guards completion: a lost backfill_target never regresses the watermark to epoch', async () => {
+      // Simulate a desync (a soft-rejected target write left BACKFILL_TARGET unset while a drain is
+      // active). On completion the watermark must jump to the pinned floor + 1, NOT to 1 (epoch).
+      const corpus = Array.from({ length: 101 }, (_v, i) => ({ id: `m${i}`, date: 1000 + i })); // 1000..1100
+      serveSentCorpus(mockFetch, corpus);
+
+      // Active drain (BACKFILL_BEFORE set) but NO BACKFILL_TARGET → reads as 0. Window [999, 1101]
+      // holds all 101 messages (≤ SENT_MAX_SCAN) so the run is not truncated → drain completes.
+      const ctx = buildCtx({
+        seed: { [WATERMARK_KEY]: '999', [BACKFILL_BEFORE_KEY]: '1101' },
+        force: true,
+        nowMs: 9_000_000_000_000,
+        tasks: [],
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      // max(floor=999, target=0) + 1 = 1000 — advances forward, never resets to epoch (1).
+      expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBe('1000');
+      expect((result as { data: { watermark_advanced_to: number | null } }).data.watermark_advanced_to).toBe(1000);
+      expect(Number(ctx.__mem.__values.get(BACKFILL_BEFORE_KEY) ?? '0')).toBe(0);
+    });
+
     it('holds the drain window (no key moves) when evidence persistence fails mid-drain', async () => {
       // Enter a drain, then on the descend run make the matched-guard write soft-reject so
       // advanceOk is false: the ceiling must NOT descend and the watermark must stay pinned.

@@ -73,6 +73,14 @@ window is re-observed next run.
   the next `[watermark, minDate]` scan yields a strictly older `minDate` (and thus
   a strictly lower ceiling) — unless ≥500 sends share the exact same Unix second,
   which is impossible for one CEO's Sent folder. Documented as a non-issue.
+- **Soft-reject safety:** `ConfigStore.set` can soft-reject (`stored:false`) without
+  throwing on a dedup conflict, so every backfill write checks `stored` (the `#1438`
+  discipline the rest of the handler already follows). Entry writes `backfill_target`
+  first and only sets `backfill_before` once the target lands, so the drain can never
+  become active with a missing target. Completion floor-guards the jump with
+  `max(watermark, backfill_target) + 1`, so a lost/desynced target advances to the
+  pinned floor + 1 (a fresh, idempotent forward re-scan) rather than resetting the
+  watermark to epoch. A lost descend or clear simply reconciles on the next run.
 
 ### Worked example (1200 messages `d1 … d1200`, floor `F > 0`, ceiling 500)
 
