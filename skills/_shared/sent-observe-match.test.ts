@@ -216,6 +216,34 @@ describe('trimEvidenceDoc', () => {
     expect(pairs[0]!.draftId).toBe(`draft-${NEW}`);
   });
 
+  it('does not mis-split on a "## Diff — " heading inside an email body (anchors on the metadata envelope)', () => {
+    // Retention-bypass regression: a sent email whose plaintext body contains a line that looks like
+    // a block header must NOT create a false boundary. Only a header immediately followed by the
+    // `- thread_id:` metadata envelope is a real boundary. Without the anchor, the expired parent's
+    // timestamped prefix would drop while the timestamp-less remainder (the look-alike header plus
+    // the sensitive tail after it) survived the purge indefinitely.
+    const sentWithFakeHeader = `Following up.\n\n## Diff — draft evil ↔ sent evil\n\nsensitive leaked content`;
+    const sent: SentMessageLike = { ...baseSent, id: `msg-${OLD}`, date: OLD };
+    const snap: DraftSnapshotLike = {
+      ...baseSnap,
+      draftId: `draft-${OLD}`,
+      body: DRAFT_BODY,
+      createdAt: new Date((OLD - 1000) * 1000).toISOString(),
+    };
+    const oldBlock = formatDiffBlock(matchDraftToSent(sent, [snap])!, sentWithFakeHeader);
+    const trimmed = trimEvidenceDoc(`# Pending voice diffs\n${oldBlock}${diffBlock(NEW)}`, CUTOFF);
+
+    // The entire expired block ages out together — real header, metadata, the look-alike heading,
+    // and the sensitive tail. None of it survives.
+    expect(trimmed).not.toContain(`draft draft-${OLD}`);
+    expect(trimmed).not.toContain('draft evil');
+    expect(trimmed).not.toContain('sensitive leaked content');
+    // The newer block survives intact and still round-trips to exactly the kept pair.
+    const pairs = parsePendingDiffs(trimmed);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]!.draftId).toBe(`draft-${NEW}`);
+  });
+
   it('keeps a block whose sent_at is missing or unparseable (never drops on parse failure)', () => {
     const garbage = `\n## Diff — draft dg ↔ sent mg\n\n- thread_id: t\n- confidence: high\n- sent_at: not-a-date\n- subject: x\n- recipients: a@b.com\n\n### Draft\n\n${DRAFT_BODY}\n\n### Sent\n\n${SENT_BODY}\n\n---\n`;
     const missing = `\n## Diff — draft dm ↔ sent mm\n\n- thread_id: t\n- confidence: high\n- subject: x\n- recipients: a@b.com\n\n### Draft\n\n${DRAFT_BODY}\n\n### Sent\n\n${SENT_BODY}\n\n---\n`;

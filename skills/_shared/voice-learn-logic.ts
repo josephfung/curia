@@ -14,7 +14,14 @@ export interface ParsedDiffPair {
 /** Parse rolling pending-diffs.md into (draft, sent) pairs. */
 export function parsePendingDiffs(body: string): ParsedDiffPair[] {
   const pairs: ParsedDiffPair[] = [];
-  const sections = body.split(/^## Diff — /m).slice(1);
+  // Split on the `## Diff — ` header only when it is anchored to the metadata envelope
+  // formatDiffBlock emits (followed, allowing one blank line, by a `- ` metadata bullet). A bare
+  // `## Diff — ` line inside a sent email body is followed by prose, not that bulleted envelope, so
+  // it is NOT a real block boundary; splitting on it would truncate the real block's captured body at
+  // the look-alike line. The lookahead is zero-width, so each `section` still begins right after the
+  // consumed `## Diff — ` exactly as before. This mirrors trimEvidenceDoc's boundary anchoring so
+  // parse and retention agree on where blocks begin.
+  const sections = body.split(/^## Diff — (?=.*\n\n?- )/m).slice(1);
   for (const section of sections) {
     const header = section.split('\n')[0] ?? '';
     const draftMatch = header.match(/draft\s+(\S+)\s*↔\s*sent\s+(\S+)/);
