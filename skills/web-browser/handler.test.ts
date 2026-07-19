@@ -945,32 +945,44 @@ describe('web-browser ref-based selectors', () => {
     expect(page.getByText).not.toHaveBeenCalled();
   });
 
-  it('does not fuzzy-fall-back when a ref matches nothing (no wrong-element click)', async () => {
+  it('does not fuzzy-fall-back when a ref matches nothing, and surfaces a clean failure', async () => {
     const fill = vi.fn().mockResolvedValue(undefined);
     const page = makeMockPage('page body', fill, 'https://example.com/');
-    // Model an element removed since the snapshot: the ref attribute matches nothing.
+    // Model an element removed since the snapshot: the ref attribute matches nothing, and
+    // (like real Playwright) an action on a zero-element locator rejects with a timeout
+    // that names the selector, rather than silently succeeding.
+    //
+    // Driven via action: 'wait_for' rather than 'click': the handler's click path calls
+    // humanClick(page, target, ...), and humanClick is mocked to a no-op at the top of this
+    // file — a rejection on the locator's own `click` would never be reached through that
+    // mock, so it couldn't prove the failure propagates. wait_for calls `target.waitFor(...)`
+    // directly (no human-behavior wrapper in between), so a rejection there really does reach
+    // the handler's try/catch and exercises the code path this test is meant to guard.
     const zero = {
       count: vi.fn().mockResolvedValue(0),
       first: vi.fn().mockReturnThis(),
       nth: vi.fn().mockReturnThis(),
       isVisible: vi.fn().mockResolvedValue(false),
       locator: vi.fn().mockReturnThis(),
-      click: vi.fn().mockResolvedValue(undefined),
-      hover: vi.fn().mockResolvedValue(undefined),
-      waitFor: vi.fn().mockResolvedValue(undefined),
+      click: vi.fn().mockRejectedValue(new Error('Timeout 10000ms exceeded waiting for locator([data-curia-ref="f0e9"])')),
+      hover: vi.fn().mockRejectedValue(new Error('Timeout 10000ms exceeded waiting for locator([data-curia-ref="f0e9"])')),
+      waitFor: vi.fn().mockRejectedValue(new Error('Timeout 10000ms exceeded waiting for locator([data-curia-ref="f0e9"])')),
       scrollIntoViewIfNeeded: vi.fn().mockResolvedValue(undefined),
       selectOption: vi.fn().mockResolvedValue(undefined),
       fill,
     };
     page.locator = vi.fn().mockReturnValue(zero);
-    const ctx = ctxFor(page, { action: 'click', selector: 'f0e9', session_id: 'sess-1' });
+    const ctx = ctxFor(page, { action: 'wait_for', selector: 'f0e9', session_id: 'sess-1' });
 
-    await new WebBrowserHandler().execute(ctx);
+    const result = await new WebBrowserHandler().execute(ctx);
 
-    // Resolution stayed on the ref path; it never degraded to fuzzy role/text matching.
+    // Resolution stayed on the ref path; it never degraded to fuzzy role/text matching...
     expect(page.locator).toHaveBeenCalledWith('[data-curia-ref="f0e9"]');
     expect(page.getByRole).not.toHaveBeenCalled();
     expect(page.getByText).not.toHaveBeenCalled();
+    // ...and the dead ref surfaced a clean failure that names it, not a silent success.
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/f0e9/);
   });
 
   it('still resolves a plain label selector via the existing cascade (back-compat)', async () => {
@@ -1018,5 +1030,24 @@ describe('web-browser ref-based selectors', () => {
 
     expect(result.success).toBe(true);
     expect(childFrame.locator).toHaveBeenCalledWith('[data-curia-ref="f1e2"]');
+  });
+
+  it('preserves the interactable ref list when the page body exceeds the budget', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const hugeBody = 'x'.repeat(20_000);
+    const refList = '[f0e1] button "Submit"\n[f0e2] link "Next"';
+    const raw = `${hugeBody}\n\n--- Interactable elements ---\n${refList}`;
+    const page = makeMockPage(raw, fill, 'https://example.com/');
+    const ctx = ctxFor(page, { action: 'get_content', session_id: 'sess-1' });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const content = (result.data as { content: string }).content;
+      expect(content).toContain('[content truncated]');       // body was truncated...
+      expect(content).toContain('[f0e1] button "Submit"');    // ...but refs survived (the point)
+      expect(content).toContain('[f0e2] link "Next"');
+    }
   });
 });
