@@ -40,6 +40,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Learning-subsystem config writes** — soft-rejected `ConfigStore` writes now hold state instead of silently advancing. (#1438)
 - **`resolve-learning-digest`** undo now guards on task status, so a failed clear can't wedge the item. (#1432)
 - **`sent-observe`** shadow reconciliation now dedups on a DB unique index; a failed marker write can't double-score. (#1432)
+- **`ceo-inbox-sent-observe`** — drains Sent backlogs over `SENT_MAX_SCAN` oldest-first; first run stays forward-only. (#1431)
 
 ### Added
 
