@@ -44,6 +44,14 @@ import {
 export const CONFIG_NAMESPACE = 'ceo_inbox';
 export const WATERMARK_KEY = 'sent_observe.last_seen_at';
 export const IDLE_BACKOFF_KEY = 'sent_observe.last_run_found_nothing_at';
+/** Descending `received_before` ceiling for an in-progress oldest-first backlog drain (#1431). A
+ *  value > EPOCH means a drain is underway; it walks down toward WATERMARK across successive runs.
+ *  See the watermark/backfill state machine below and docs/wip/2026-07-19-sent-observe-backfill-design.md. */
+export const BACKFILL_BEFORE_KEY = 'sent_observe.backfill_before';
+/** Newest message date captured when a >SENT_MAX_SCAN backlog was first detected (#1431). The
+ *  watermark jumps to backfill_target + 1 only once the drain reaches its oldest sub-window, so the
+ *  watermark never sits above an un-drained message. */
+export const BACKFILL_TARGET_KEY = 'sent_observe.backfill_target';
 export const PENDING_DIFFS_PATH = `${VOICE_LEARNING_SCRATCH_PREFIX}/pending-diffs.md`;
 export const PENDING_DIFFS_TYPE = 'voice-pending-diffs';
 
@@ -268,6 +276,9 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
               task_candidates: 0,
               shadow_reconciled: 0,
               watermark_advanced_to: null,
+              // The idle-backoff skip never runs mid-drain (a drain finds messages, so it never
+              // registers the idle backoff that would gate this early return).
+              backfill_active: false,
               skipped_backoff: true,
             },
           };
@@ -280,13 +291,32 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
       ? Number(watermarkRaw)
       : 0;
 
+    // Oldest-first backlog drain state (#1431). When a forward poll finds more than SENT_MAX_SCAN
+    // messages above a real floor, we can't reach the older tail via a single newest-first floor,
+    // so we record a descending `received_before` ceiling (backfillBefore) and the newest date seen
+    // (backfillTarget). While a drain is active the watermark stays pinned to its floor and each run
+    // scans [watermark, backfillBefore], walking the ceiling down until the window fits — then the
+    // watermark jumps to backfillTarget + 1. EPOCH ('0') means the key is unset (a real ceiling /
+    // target is always a Unix-second value > 0).
+    const backfillBeforeRaw = await store.get(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY);
+    const backfillBefore = backfillBeforeRaw && Number.isFinite(Number(backfillBeforeRaw))
+      ? Number(backfillBeforeRaw)
+      : 0;
+    const backfillTargetRaw = await store.get(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY);
+    const backfillTarget = backfillTargetRaw && Number.isFinite(Number(backfillTargetRaw))
+      ? Number(backfillTargetRaw)
+      : 0;
+    const backfillActive = backfillBefore > 0;
+
     const client = new CeoNylasClient(apiKey, grantId, ctx.log);
     // Paginate the whole watermark window — a single fixed-limit page silently drops
     // everything past the newest 20 on a busy Sent folder (#1429 review). `truncated`
-    // means the maxScan ceiling was hit and older sends remain unseen this run.
+    // means the maxScan ceiling was hit and older sends remain unseen this run. During a
+    // drain (#1431) receivedBefore caps the window from the top so we work oldest-ward.
     const { messages, truncated } = await client.listAllMessages({
       folder: 'SENT',
       ...(watermark > 0 ? { receivedAfter: watermark } : {}),
+      ...(backfillActive ? { receivedBefore: backfillBefore } : {}),
       maxScan: SENT_MAX_SCAN,
     });
 
@@ -668,27 +698,61 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     const advanceOk =
       evidencePersisted && shadowReconcileOk && draftEvidenceComplete && matchedGuardPersisted && askedGuardPersisted;
 
-    // Advance the watermark past the newest message seen (next poll starts after it).
+    // Watermark / backfill state transition (#1431).
     //
-    // Nylas `received_after` is INCLUSIVE (returns messages with date >= the floor; Nylas
-    // timestamps are Unix seconds), so we store `maxDate + 1` to make the next poll's floor
-    // exclude the newest second we just processed — identical to the inbound email adapter's
-    // convention (see src/channels/email/email-adapter.ts, `this.lastSeenTimestamp = msg.date + 1`).
-    // Nylas returns newest-first, so a single-floor poll can only ever walk *forward*. On truncation the un-fetched
-    // messages are the OLDEST in the window (date < minDate); there is no lower-bound
-    // value that both advances and re-includes them, so we do not attempt a partial
-    // hold (an earlier version did and simply stranded the tail while re-scanning the
-    // newest 500 forever). Instead we advance to the newest seen and log — loudly and
-    // accurately — that older messages were skipped. This is realistically only a
-    // first-run/backfill event against a large existing mailbox; day-to-day Sent volume
-    // never approaches SENT_MAX_SCAN, and back-mining old history is not a goal of a
-    // forward-looking observer. Draining a true >ceiling backlog would need oldest-first
-    // paging (received_before), deliberately out of scope here.
+    // Nylas `received_after`/`received_before` are INCLUSIVE Unix-second bounds, and Nylas returns
+    // newest-first — so a single forward floor can only ever walk *forward*, and on truncation the
+    // un-fetched messages are the OLDEST in the window (date < minDate). To drain a >SENT_MAX_SCAN
+    // backlog without stranding that tail we keep the watermark PINNED at its floor and walk a
+    // descending `received_before` ceiling (backfillBefore) down toward it across runs, jumping the
+    // watermark to backfillTarget + 1 only once the oldest sub-window is drained. That way the
+    // watermark never sits above an un-drained message.
+    //
+    // `advanceOk` still gates everything: any evidence-persist / shadow / guard failure holds ALL
+    // state (no watermark move, no backfill-key move) so the same window is re-observed next run
+    // (matching is idempotent via the already-matched/asked/reconciled guards).
     let watermarkAdvancedTo: number | null = null;
-    if (messages.length > 0 && maxDate >= watermark && advanceOk) {
-      watermarkAdvancedTo = maxDate + 1;
-      await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
-    } else if (messages.length > 0 && !advanceOk) {
+    // True after this run if a drain is still underway (fed to the caller/logs).
+    let backfillStillActive = backfillActive;
+    if (advanceOk) {
+      if (backfillActive) {
+        if (messages.length > 0 && truncated) {
+          // Still an older tail below minDate — descend the ceiling; watermark stays pinned.
+          // minDate is INCLUSIVE, so the boundary second is re-scanned next run; this guarantees a
+          // same-second group split by the SENT_MAX_SCAN ceiling is never lost (the re-scan is
+          // idempotent via the matched/asked/reconciled guards). Progress is guaranteed because
+          // truncation means messages strictly older than minDate exist, so the next scan yields a
+          // strictly lower minDate — barring ≥500 sends in one second, impossible for one Sent box.
+          await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, String(minDate));
+          backfillStillActive = true;
+        } else {
+          // Drain complete (window fully scanned, or emptied by deletions). Jump the watermark past
+          // the newest date captured when the backlog was detected, then clear the backfill keys.
+          watermarkAdvancedTo = backfillTarget + 1;
+          await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
+          await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, EPOCH);
+          await store.set(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY, EPOCH);
+          backfillStillActive = false;
+        }
+      } else if (messages.length > 0) {
+        if (truncated && watermark > 0) {
+          // A real gap above a known floor exceeded the scan ceiling: begin an oldest-first drain.
+          // Record the newest date (the watermark jumps here on completion) and set the first
+          // ceiling to this batch's oldest. The watermark is NOT advanced — it stays the drain's
+          // floor, so it never sits above an un-drained message.
+          await store.set(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY, String(maxDate));
+          await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, String(minDate));
+          backfillStillActive = true;
+        } else {
+          // Normal forward advance to newest + 1 (mirrors the inbound email adapter's
+          // `this.lastSeenTimestamp = msg.date + 1`). Covers the non-truncated steady state AND the
+          // first-ever run (watermark 0): forward-only observation — historical mail is
+          // intentionally NOT backfilled (a forward-looking observer; confirmed product decision).
+          watermarkAdvancedTo = maxDate + 1;
+          await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
+        }
+      }
+    } else if (messages.length > 0) {
       const holdReason = !evidencePersisted
         ? 'ceo-inbox-sent-observe: evidence persistence failed — holding watermark for retry'
         : !draftEvidenceComplete
@@ -708,21 +772,40 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         holdReason,
       );
     }
+
+    // Truncation is loud until the backlog is drained (#1431). With a real floor it means a drain is
+    // in progress (older tail still to come); on the first-ever run (watermark 0) it means history
+    // is intentionally skipped.
     if (truncated) {
-      ctx.log.warn(
-        {
-          scanned: messages.length,
-          maxScan: SENT_MAX_SCAN,
-          oldestScannedAt: Number.isFinite(minDate) ? minDate : null,
-          advancedTo: watermarkAdvancedTo,
-        },
-        `ceo-inbox-sent-observe: Sent window exceeded the ${SENT_MAX_SCAN}-message scan ceiling — ` +
-          'messages older than the newest batch were NOT observed and will not be revisited ' +
-          '(expected only on first run against a large mailbox).',
-      );
+      if (watermark > 0) {
+        ctx.log.warn(
+          {
+            scanned: messages.length,
+            maxScan: SENT_MAX_SCAN,
+            floor: watermark,
+            ceiling: backfillActive ? backfillBefore : null,
+            nextCeiling: Number.isFinite(minDate) ? minDate : null,
+            backfillTarget: backfillActive ? backfillTarget : maxDate,
+          },
+          `ceo-inbox-sent-observe: Sent window exceeded the ${SENT_MAX_SCAN}-message scan ceiling — ` +
+            'draining the older tail oldest-first across successive runs (backfill in progress).',
+        );
+      } else {
+        ctx.log.warn(
+          {
+            scanned: messages.length,
+            maxScan: SENT_MAX_SCAN,
+            advancedTo: watermarkAdvancedTo,
+          },
+          `ceo-inbox-sent-observe: first run against a large mailbox exceeded the ${SENT_MAX_SCAN}-message ` +
+            'scan ceiling — observing forward-only; historical mail is intentionally not backfilled.',
+        );
+      }
     }
 
-    if (messages.length === 0) {
+    // A mid-drain empty window is not "idle" — it completes the drain (handled above), so only a
+    // genuinely empty forward poll registers the idle backoff.
+    if (messages.length === 0 && !backfillActive) {
       await store.set(CONFIG_NAMESPACE, IDLE_BACKOFF_KEY, String(nowMs));
     } else {
       await store.set(CONFIG_NAMESPACE, IDLE_BACKOFF_KEY, EPOCH);
@@ -735,6 +818,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         taskCandidates,
         shadowReconciled,
         watermarkAdvancedTo,
+        backfillStillActive,
       },
       'ceo-inbox-sent-observe: run complete',
     );
@@ -747,6 +831,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         task_candidates: taskCandidates,
         shadow_reconciled: shadowReconciled,
         watermark_advanced_to: watermarkAdvancedTo,
+        backfill_active: backfillStillActive,
         skipped_backoff: false,
       },
     };

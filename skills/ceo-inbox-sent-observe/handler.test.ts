@@ -5,6 +5,8 @@ import {
   WATERMARK_KEY,
   IDLE_BACKOFF_KEY,
   PENDING_DIFFS_PATH,
+  BACKFILL_BEFORE_KEY,
+  BACKFILL_TARGET_KEY,
 } from './handler.js';
 import type { SkillContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
@@ -1431,5 +1433,172 @@ describe('CeoInboxSentObserveHandler', () => {
       (c) => String(c[1]),
     );
     expect(warnMsgs.some((m) => /scan ceiling/i.test(m))).toBe(true);
+    // First-ever run (watermark 0) is forward-only: NO backfill drain is initiated (#1431).
+    expect(ctx.__mem.__values.get(BACKFILL_BEFORE_KEY)).toBeUndefined();
+    expect(ctx.__mem.__values.get(BACKFILL_TARGET_KEY)).toBeUndefined();
+  });
+
+  // ── #1431: oldest-first backlog drain ──────────────────────────────────────
+  describe('#1431 oldest-first backlog drain', () => {
+    // A Sent message summary (matches nothing — no snapshots/tasks/shadows in these tests, so the
+    // matching pipeline is a no-op and only the watermark/backfill state machine is exercised).
+    function sentMsg(id: string, date: number) {
+      return {
+        id,
+        thread_id: '',
+        subject: `s-${id}`,
+        from: [{ email: 'ceo@example.com' }],
+        to: [{ email: 'a@example.com' }],
+        cc: [],
+        snippet: '',
+        date,
+        unread: false,
+        folders: ['SENT'],
+        attachments: [],
+      };
+    }
+
+    // Serve a fixed corpus newest-first, honoring received_after (>=), received_before (<=), limit,
+    // and page_token. The cursor encodes `${nextOffset}:${after}:${before}` so a page_token request
+    // (which omits the filters — Nylas carries them on the cursor) still filters correctly. When
+    // `observed` is supplied, every date served in a list page is recorded, so a test can assert no
+    // message was ever skipped across the drain.
+    function serveSentCorpus(
+      fetchSpy: ReturnType<typeof vi.spyOn>,
+      corpus: Array<{ id: string; date: number }>,
+      observed?: Set<number>,
+    ): void {
+      const sorted = [...corpus].sort((a, b) => b.date - a.date);
+      fetchSpy.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+        const u = new URL(String(url));
+        // getMessage — never hit here (nothing matches), but answer with a valid envelope.
+        if (/\/messages\/[^?]+$/.test(u.pathname)) {
+          return new Response(
+            JSON.stringify({ data: { id: 'x', date: 0, body: '', bcc: [], labels: [], folders: ['SENT'] } }),
+            { status: 200 },
+          );
+        }
+        const token = u.searchParams.get('page_token');
+        let start: number;
+        let after: number | null;
+        let before: number | null;
+        if (token) {
+          const [s, a, b] = token.split(':');
+          start = Number(s);
+          after = a === '' ? null : Number(a);
+          before = b === '' ? null : Number(b);
+        } else {
+          start = 0;
+          const a = u.searchParams.get('received_after');
+          const b = u.searchParams.get('received_before');
+          after = a === null ? null : Number(a);
+          before = b === null ? null : Number(b);
+        }
+        const filtered = sorted.filter(
+          (m) => (after === null || m.date >= after) && (before === null || m.date <= before),
+        );
+        const limit = Number(u.searchParams.get('limit') ?? '20');
+        const slice = filtered.slice(start, start + limit);
+        if (observed) for (const m of slice) observed.add(m.date);
+        const nextStart = start + limit;
+        const body: Record<string, unknown> = { data: slice.map((m) => sentMsg(m.id, m.date)) };
+        if (nextStart < filtered.length) body.next_cursor = `${nextStart}:${after ?? ''}:${before ?? ''}`;
+        return new Response(JSON.stringify(body), { status: 200 });
+      });
+    }
+
+    it('drains a >SENT_MAX_SCAN backlog across runs with no message skipped', async () => {
+      // 1100 messages (dates 1000..2099, unique seconds) above a real floor watermark = 999.
+      // SENT_MAX_SCAN is 500, so this needs 3 runs: [1600..2099], [1101..1600], [1000..1101].
+      const corpus = Array.from({ length: 1100 }, (_v, i) => ({ id: `m${i}`, date: 1000 + i }));
+      const observed = new Set<number>();
+      serveSentCorpus(mockFetch, corpus, observed);
+
+      const seed: Record<string, string> = { [WATERMARK_KEY]: '999' };
+      for (let run = 0; run < 10; run++) {
+        const ctx = buildCtx({ seed: { ...seed }, force: true, nowMs: 9_000_000_000_000, tasks: [] });
+        const result = await handler.execute(ctx);
+        expect(result.success).toBe(true);
+        // Carry the resulting config state into the next run.
+        for (const [k, v] of ctx.__mem.__values.entries()) seed[k] = v;
+        if (!(Number(seed[BACKFILL_BEFORE_KEY] ?? '0') > 0)) break;
+      }
+
+      // Every message date was observed at least once — nothing permanently skipped.
+      for (let d = 1000; d <= 2099; d++) expect(observed.has(d)).toBe(true);
+      // The watermark jumps past the newest only after the whole range is drained.
+      expect(seed[WATERMARK_KEY]).toBe('2100');
+      // Backfill keys are cleared once the drain completes.
+      expect(Number(seed[BACKFILL_BEFORE_KEY] ?? '0')).toBe(0);
+      expect(Number(seed[BACKFILL_TARGET_KEY] ?? '0')).toBe(0);
+    });
+
+    it('pins the watermark during the drain and only jumps it on completion', async () => {
+      const corpus = Array.from({ length: 1100 }, (_v, i) => ({ id: `m${i}`, date: 1000 + i }));
+      serveSentCorpus(mockFetch, corpus);
+      const seed: Record<string, string> = { [WATERMARK_KEY]: '999' };
+
+      // Run 1: enters backfill. Watermark stays pinned at 999; target/ceiling recorded.
+      let ctx = buildCtx({ seed: { ...seed }, force: true, nowMs: 9_000_000_000_000, tasks: [] });
+      let result = await handler.execute(ctx);
+      expect((result as { data: { watermark_advanced_to: number | null; backfill_active: boolean } }).data.watermark_advanced_to).toBeNull();
+      expect((result as { data: { backfill_active: boolean } }).data.backfill_active).toBe(true);
+      expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBe('999');
+      expect(ctx.__mem.__values.get(BACKFILL_TARGET_KEY)).toBe('2099');
+      expect(ctx.__mem.__values.get(BACKFILL_BEFORE_KEY)).toBe('1600');
+      for (const [k, v] of ctx.__mem.__values.entries()) seed[k] = v;
+
+      // Run 2: descends the ceiling; watermark still pinned.
+      ctx = buildCtx({ seed: { ...seed }, force: true, nowMs: 9_000_000_000_000, tasks: [] });
+      await handler.execute(ctx);
+      expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBe('999');
+      expect(ctx.__mem.__values.get(BACKFILL_BEFORE_KEY)).toBe('1101');
+      for (const [k, v] of ctx.__mem.__values.entries()) seed[k] = v;
+
+      // Run 3: drains the oldest sub-window → watermark jumps to target+1, keys cleared.
+      ctx = buildCtx({ seed: { ...seed }, force: true, nowMs: 9_000_000_000_000, tasks: [] });
+      result = await handler.execute(ctx);
+      expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBe('2100');
+      expect((result as { data: { backfill_active: boolean } }).data.backfill_active).toBe(false);
+      expect(Number(ctx.__mem.__values.get(BACKFILL_BEFORE_KEY) ?? '0')).toBe(0);
+    });
+
+    it('first-ever run (watermark 0) is forward-only — no backfill initiated', async () => {
+      const corpus = Array.from({ length: 1100 }, (_v, i) => ({ id: `m${i}`, date: 1000 + i }));
+      serveSentCorpus(mockFetch, corpus);
+
+      const ctx = buildCtx({ force: true, nowMs: 9_000_000_000_000, tasks: [] }); // no seed → watermark 0
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      // Advanced to the newest seen; NO backfill drain of history was started.
+      expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBe('2100');
+      expect((result as { data: { backfill_active: boolean } }).data.backfill_active).toBe(false);
+      expect(ctx.__mem.__values.get(BACKFILL_BEFORE_KEY)).toBeUndefined();
+      expect(ctx.__mem.__values.get(BACKFILL_TARGET_KEY)).toBeUndefined();
+    });
+
+    it('holds the drain window (no key moves) when evidence persistence fails mid-drain', async () => {
+      // Enter a drain, then on the descend run make the matched-guard write soft-reject so
+      // advanceOk is false: the ceiling must NOT descend and the watermark must stay pinned.
+      const corpus = Array.from({ length: 1100 }, (_v, i) => ({ id: `m${i}`, date: 1000 + i }));
+      serveSentCorpus(mockFetch, corpus);
+      const seed: Record<string, string> = { [WATERMARK_KEY]: '999' };
+
+      // Run 1 enters backfill (ceiling 1600).
+      let ctx = buildCtx({ seed: { ...seed }, force: true, nowMs: 9_000_000_000_000, tasks: [] });
+      await handler.execute(ctx);
+      for (const [k, v] of ctx.__mem.__values.entries()) seed[k] = v;
+      expect(seed[BACKFILL_BEFORE_KEY]).toBe('1600');
+
+      // Run 2: force every storeFact to soft-reject (stored:false) → guard writes fail → advanceOk false.
+      ctx = buildCtx({ seed: { ...seed }, force: true, nowMs: 9_000_000_000_000, tasks: [] });
+      (ctx.__mem.storeFact as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        async () => ({ stored: false, action: 'conflict' as const }),
+      );
+      await handler.execute(ctx);
+      // Ceiling did NOT descend and the watermark stayed pinned — the window retries next run.
+      expect(ctx.__mem.__values.get(BACKFILL_BEFORE_KEY)).toBe('1600');
+      expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBe('999');
+    });
   });
 });
