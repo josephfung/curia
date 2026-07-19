@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`TaskRepo.reopenTask` tests** — cover non-`done` rejection, `progress.notes` audit note, and `task.updated` emission. (#1434)
+
 ### Security
 
 - **KG trust gates** — checkpoint extraction and `memory-store` block untrusted inbound senders. (#1290)
