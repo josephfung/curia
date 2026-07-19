@@ -46,6 +46,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`sent-observe`** shadow reconciliation now dedups on a DB unique index; a failed marker write can't double-score. (#1432)
 - **`ceo-inbox-sent-observe`** — drains Sent backlogs over `SENT_MAX_SCAN` oldest-first; first run stays forward-only. (#1431)
 - **`ceo-inbox-sent-observe`** — completion matching walks all open CEO tasks via keyset paging instead of capping at 100. (#1433)
+- **`setup-defer`** — reports a retryable failure instead of false success when the deferrals write soft-rejects. (#1444)
+- **Email poll watermark** — warns when a soft-rejected watermark write leaves the durable value stale. (#1444)
+
+### Removed
+
+- **Vestigial `workingDocs` capabilities** — dropped from three learning-digest skills; their state moved to config-store. (#1444)
+- **Dead `## Candidate —` trim branch** — `trimEvidenceDoc` now handles only `## Diff —` diff blocks. (#1444)
 
 ### Added
 

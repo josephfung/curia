@@ -126,6 +126,22 @@ describe('setup-defer', () => {
     expect(result.success).toBe(false);
   });
 
+  it('reports failure (not a false success) when the config write soft-rejects', async () => {
+    // ConfigStore.set soft-rejects (stored:false) on a storeFact dedup conflict without throwing
+    // (#1438). The deferral change never persisted, so returning success would be a lie — the CEO
+    // must get a retryable failure instead.
+    const mem = makeEntityMemory() as unknown as { storeFact: ReturnType<typeof vi.fn> };
+    mem.storeFact.mockResolvedValue({ stored: false, action: 'conflict' });
+    const ctx = {
+      input: { task_id: 'email', action: 'defer' },
+      entityMemory: mem as unknown as EntityMemory,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+    } as unknown as SkillContext;
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    expect((result as { success: false; error: string }).error).toMatch(/retry/i);
+  });
+
   it('returns error when entityMemory is absent', async () => {
     const ctx = {
       input: { task_id: 'email', action: 'defer' },

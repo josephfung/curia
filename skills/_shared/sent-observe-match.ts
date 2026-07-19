@@ -285,27 +285,26 @@ export function formatDiffBlock(match: DraftMatch, sentBody: string): string {
 }
 
 /**
- * Bound calendar-time retention of a rolling evidence doc (pending-diffs.md /
- * pending-completions.md) by dropping blocks whose `- sent_at:` predates `cutoffIso` (#1419,
+ * Bound calendar-time retention of the rolling evidence doc (pending-diffs.md) by dropping
+ * blocks whose `- sent_at:` predates `cutoffIso` (#1419,
  * ADR-029: consumed evidence must not be retained indefinitely). Sensitive full email bodies
  * would otherwise accumulate forever, since appendDoc refreshes `updated_at` on every active run
  * and defeats the idle-TTL sweep.
  *
  * Retention scheme — one mechanism per doc class (T2.2):
- *   - Rolling evidence docs (pending-diffs.md / pending-completions.md): retained by THIS in-write
- *     trim (a 90-day content window; see EVIDENCE_RETENTION_DAYS in the sent-observe handler). They
- *     also carry an explicit `ttl_days: 90` frontmatter — NOT a restatement of the 7-day default
- *     scratch sweep, but a deliberate override: voice-learn / task-completion consume these WEEKLY,
+ *   - The rolling evidence doc (pending-diffs.md): retained by THIS in-write
+ *     trim (a 90-day content window; see EVIDENCE_RETENTION_DAYS in the sent-observe handler). It
+ *     also carries an explicit `ttl_days: 90` frontmatter — NOT a restatement of the 7-day default
+ *     scratch sweep, but a deliberate override: voice-learn consumes it WEEKLY,
  *     so the aggressive 7-day default sweep could delete still-unconsumed evidence during an idle
  *     stretch. The 90-day idle backstop keeps unconsumed evidence alive (and cleans a truly
  *     abandoned doc). Both layers are load-bearing.
  *   - Per-item docs (draft snapshots, shadow docs): no in-write trim — retained solely by the
  *     default idle scratch sweep (purgeExpiredScratch). That single mechanism is their retention.
  *
- * Boundaries: each block starts at a real `## Diff — ` / `## Candidate — ` header and runs up to
- * (not including) the next such header — the same headers formatDiffBlock produces (and, historically,
- * the retired completion-candidate formatter did) and parsePendingDiffs consumes, so the result
- * round-trips. We split
+ * Boundaries: each block starts at a real `## Diff — ` header and runs up to
+ * (not including) the next such header — the same header formatDiffBlock produces and
+ * parsePendingDiffs consumes, so the result round-trips. We split
  * on the namespaced headers, NOT any `## ` line, so a `## `-prefixed line inside a sent email body
  * (a markdown H2 surviving htmlToPlainText) stays part of its block instead of mis-splitting it and
  * leaving a timestamp-less tail behind. Any leading preamble/header before the first block is
@@ -318,11 +317,11 @@ export function trimEvidenceDoc(body: string, cutoffIso: string): string {
 
   // Lookahead split keeps the header delimiters, so the surviving pieces re-join to the exact
   // original bytes (each block carries its own trailing `---` and blank line). Split only on the
-  // real block headers (`## Diff — ` / `## Candidate — `), never a bare `## ` — see the doc comment.
-  const parts = body.split(/(?=^## (?:Diff|Candidate) — )/m);
+  // real block header (`## Diff — `), never a bare `## ` — see the doc comment.
+  const parts = body.split(/(?=^## Diff — )/m);
   const kept: string[] = [];
   for (const part of parts) {
-    if (!/^## (?:Diff|Candidate) — /.test(part)) {
+    if (!/^## Diff — /.test(part)) {
       kept.push(part); // leading preamble / doc header
       continue;
     }

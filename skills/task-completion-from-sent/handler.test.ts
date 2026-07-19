@@ -83,11 +83,9 @@ function makeMem(seed: Record<string, string> = {}): EntityMemory & { __values: 
 function makeCtx(): SkillContext & {
   __completed: string[];
   __mem: ReturnType<typeof makeMem>;
-  __docs: Map<string, { path: string; body: string; version: number; type: string; frontmatter: Record<string, unknown> }>;
 } {
   const completed: string[] = [];
   const mem = makeMem({ [COMPLETION_CANDIDATES_KEY]: JSON.stringify(CANDIDATE_MAP) });
-  const docs = new Map<string, { path: string; body: string; version: number; type: string; frontmatter: Record<string, unknown> }>();
 
   const tasks: Record<string, {
     id: string;
@@ -140,32 +138,6 @@ function makeCtx(): SkillContext & {
         return t;
       }),
     },
-    workingDocs: {
-      read: vi.fn(async (path: string) => docs.get(path) ?? null),
-      create: vi.fn(async (p: { path: string; type: string; body?: string; frontmatter?: Record<string, unknown> }) => {
-        const row = {
-          path: p.path,
-          type: p.type,
-          body: p.body ?? '',
-          frontmatter: p.frontmatter ?? {},
-          version: 1,
-        };
-        docs.set(p.path, row);
-        return row;
-      }),
-      append: vi.fn(async (path: string, params: { content: string; expectedVersion: number }) => {
-        const cur = docs.get(path)!;
-        const next = { ...cur, body: cur.body + params.content, version: cur.version + 1 };
-        docs.set(path, next);
-        return { ok: true, document: next };
-      }),
-      update: vi.fn(async (path: string, params: { body: string; expectedVersion: number }) => {
-        const cur = docs.get(path)!;
-        const next = { ...cur, body: params.body, version: cur.version + 1 };
-        docs.set(path, next);
-        return { ok: true, document: next };
-      }),
-    },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     // Fake classifier: 'restricted' for board/agm text (covers the "Plan AGM" high-risk
     // case below), 'internal' for everything else — mirrors the real SensitivityClassifier's
@@ -175,11 +147,9 @@ function makeCtx(): SkillContext & {
     },
     __completed: completed,
     __mem: mem,
-    __docs: docs,
   } as unknown as SkillContext & {
     __completed: string[];
     __mem: typeof mem;
-    __docs: typeof docs;
   };
 }
 

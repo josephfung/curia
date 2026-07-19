@@ -32,10 +32,10 @@ export class ResolveLearningDigestHandler implements SkillHandler {
   }
 
   private async runResolve(ctx: SkillContext): Promise<SkillResult> {
-    if (!ctx.workingDocs || !ctx.taskRepo || !ctx.entityMemory || !ctx.executiveProfileService) {
+    if (!ctx.taskRepo || !ctx.entityMemory || !ctx.executiveProfileService) {
       return {
         success: false,
-        error: 'resolve-learning-digest requires workingDocs, taskRepo, entityMemory, executiveProfileService',
+        error: 'resolve-learning-digest requires taskRepo, entityMemory, executiveProfileService',
       };
     }
 
