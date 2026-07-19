@@ -723,16 +723,37 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
           // idempotent via the matched/asked/reconciled guards). Progress is guaranteed because
           // truncation means messages strictly older than minDate exist, so the next scan yields a
           // strictly lower minDate — barring ≥500 sends in one second, impossible for one Sent box.
-          await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, String(minDate));
+          // ConfigStore.set can SOFT-REJECT (stored:false) without throwing (#1438); a lost descend
+          // just re-scans the same window next run (idempotent), but we log it so a stalled drain
+          // (ceiling never moving) is visible rather than silent.
+          const res = await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, String(minDate));
+          if (!res.stored) {
+            ctx.log.warn(
+              { floor: watermark, ceiling: backfillBefore, nextCeiling: minDate },
+              'ceo-inbox-sent-observe: backfill ceiling descend not persisted — re-scanning same window next run',
+            );
+          }
           backfillStillActive = true;
         } else {
           // Drain complete (window fully scanned, or emptied by deletions). Jump the watermark past
           // the newest date captured when the backlog was detected, then clear the backfill keys.
-          watermarkAdvancedTo = backfillTarget + 1;
-          await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
-          await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, EPOCH);
-          await store.set(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY, EPOCH);
-          backfillStillActive = false;
+          // Math.max(watermark, backfillTarget) FLOOR-GUARDS the jump: the watermark must never move
+          // backward, so even a desynced/lost target (read as 0 after a soft-rejected write) advances
+          // to the pinned floor + 1 — triggering a fresh forward re-scan (idempotent), never a reset
+          // to epoch. Each write is checked (#1438): the drain only counts as finished once the
+          // BACKFILL_BEFORE key actually clears, so a lost clear re-completes next run (empty window,
+          // monotonically increasing watermark) instead of silently stranding an active-but-stale drain.
+          watermarkAdvancedTo = Math.max(watermark, backfillTarget) + 1;
+          const wRes = await store.set(CONFIG_NAMESPACE, WATERMARK_KEY, String(watermarkAdvancedTo));
+          const bRes = await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, EPOCH);
+          const tRes = await store.set(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY, EPOCH);
+          backfillStillActive = !bRes.stored; // still "active" next run if the ceiling didn't clear
+          if (!wRes.stored || !bRes.stored || !tRes.stored) {
+            ctx.log.warn(
+              { watermarkStored: wRes.stored, beforeCleared: bRes.stored, targetCleared: tRes.stored, watermarkAdvancedTo },
+              'ceo-inbox-sent-observe: backfill completion writes only partially persisted — will reconcile next run',
+            );
+          }
         }
       } else if (messages.length > 0) {
         if (truncated && watermark > 0) {
@@ -740,9 +761,24 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
           // Record the newest date (the watermark jumps here on completion) and set the first
           // ceiling to this batch's oldest. The watermark is NOT advanced — it stays the drain's
           // floor, so it never sits above an un-drained message.
-          await store.set(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY, String(maxDate));
-          await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, String(minDate));
-          backfillStillActive = true;
+          //
+          // Order + guard matters (#1438): the TARGET write can SOFT-REJECT (stored:false) — e.g.
+          // overwriting the EPOCH sentinel a prior drain left. We write TARGET first and only set the
+          // BEFORE ceiling once TARGET has actually landed, so the drain can never become active with
+          // a missing target (the (before>0, target=0) state that would later reset the watermark to
+          // epoch on completion). If TARGET doesn't land, we hold: the watermark is already pinned, so
+          // next run re-scans the same truncated window and retries entry.
+          const tRes = await store.set(CONFIG_NAMESPACE, BACKFILL_TARGET_KEY, String(maxDate));
+          const bRes = tRes.stored
+            ? await store.set(CONFIG_NAMESPACE, BACKFILL_BEFORE_KEY, String(minDate))
+            : { stored: false };
+          backfillStillActive = bRes.stored;
+          if (!tRes.stored || !bRes.stored) {
+            ctx.log.warn(
+              { targetStored: tRes.stored, ceilingStored: bRes.stored, maxDate, minDate },
+              'ceo-inbox-sent-observe: could not fully persist backfill entry — watermark held, retrying next run',
+            );
+          }
         } else {
           // Normal forward advance to newest + 1 (mirrors the inbound email adapter's
           // `this.lastSeenTimestamp = msg.date + 1`). Covers the non-truncated steady state AND the
