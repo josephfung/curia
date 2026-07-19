@@ -83,6 +83,8 @@ function buildCtx(overrides: {
     tags: string[];
     priority: number;
   }>;
+  /** Simulate listAllTasks hitting its pagination safety ceiling (#1433). */
+  tasksTruncated?: boolean;
   force?: boolean;
   nowMs?: number;
   infraLlm?: InfraLlm;
@@ -174,8 +176,11 @@ function buildCtx(overrides: {
     taskRepo: {
       // The handler now walks the full open-task set via listAllTasks (#1433). The mock returns
       // every provided task in one shot — the DB-level keyset paging is exercised in the
-      // task-repo integration test, not here.
-      listAllTasks: vi.fn(async () => overrides.tasks ?? []),
+      // task-repo integration test, not here. `truncated` mirrors the real result shape.
+      listAllTasks: vi.fn(async () => ({
+        tasks: overrides.tasks ?? [],
+        truncated: overrides.tasksTruncated ?? false,
+      })),
     },
     bus: {
       publish: vi.fn(async (_layer: string, event: { type: string; payload: Record<string, unknown> }) => {
@@ -711,6 +716,27 @@ describe('CeoInboxSentObserveHandler', () => {
     const stored = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!);
     expect(stored['task-ceo-1']).toBeDefined();
     expect(stored['task-ceo-1'].confidence).toBe('high');
+  });
+
+  it('surfaces tasks_truncated and warns when the open-task set hits the pagination ceiling (#1433)', async () => {
+    // When listAllTasks reports truncated, the run must not present a partial task set as full
+    // coverage: it logs a warning and threads tasks_truncated into its result data.
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages?')) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    const ctx = buildCtx({ force: true, nowMs: 1_720_100_000_000, tasks: [], tasksTruncated: true });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect((result as { data: { tasks_truncated: boolean } }).data.tasks_truncated).toBe(true);
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ openTasksConsidered: expect.any(Number) }),
+      expect.stringContaining('pagination safety ceiling'),
+    );
   });
 
   it('does not persist the asked-guard when the candidate write is held (no candidate lost)', async () => {

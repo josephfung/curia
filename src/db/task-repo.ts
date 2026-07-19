@@ -139,9 +139,19 @@ export interface TaskListCursor {
 export interface ListAllTasksOptions {
   /** Rows fetched per keyset page. Default 500. */
   pageSize?: number;
-  /** Hard ceiling on the total rows returned across all pages — a safety valve against
-   *  pathological task volumes. When reached, iteration stops and a warning is logged. Default 5000. */
+  /** Hard ceiling on the total rows returned across all pages — a safety valve so a runaway task
+   *  volume can't turn one poll into an unbounded scan. When reached, iteration stops, a warning is
+   *  logged, and the result's `truncated` flag is set. Default 5000. */
   maxTasks?: number;
+}
+
+/** Result of {@link TaskRepo.listAllTasks} (#1433). `truncated` is true when the safety ceiling was
+ *  hit before the result set was exhausted, so `tasks` is a partial view and the caller should treat
+ *  its answer as incomplete (mirrors the `{ messages, truncated }` shape sent-observe already
+ *  consumes from listAllMessages). */
+export interface ListAllTasksResult {
+  tasks: TaskListRow[];
+  truncated: boolean;
 }
 
 // Extended row returned by list — includes the next pending wake-up time if any.
@@ -440,14 +450,14 @@ export class TaskRepo {
    * single page is bounded by `limit`.
    *
    * Ordering is the deterministic total order from listTasks (priority DESC, due_at ASC NULLS LAST,
-   * id ASC), so no row is skipped or duplicated across pages. `maxTasks` is a safety ceiling
-   * against pathological volumes: when reached, iteration stops and a warning is logged rather than
-   * looping unboundedly.
+   * id ASC), so no row is skipped or duplicated across pages. `maxTasks` is a safety ceiling: when
+   * reached, iteration stops, a warning is logged, and the result's `truncated` flag is set so the
+   * caller can react rather than silently trusting a partial view.
    */
   async listAllTasks(
     filters: Omit<ListTasksFilters, 'limit' | 'cursor'> = {},
     options: ListAllTasksOptions = {},
-  ): Promise<TaskListRow[]> {
+  ): Promise<ListAllTasksResult> {
     const pageSize = options.pageSize ?? 500;
     const maxTasks = options.maxTasks ?? 5000;
     const all: TaskListRow[] = [];
@@ -461,15 +471,15 @@ export class TaskRepo {
       const rows = await this.listTasks({ ...filters, limit: pageSize, cursor });
       all.push(...rows);
 
-      // A short page means the result set is drained — this is the last page.
-      if (rows.length < pageSize) return all;
+      // A short page means the result set is drained — this is the last page, nothing truncated.
+      if (rows.length < pageSize) return { tasks: all, truncated: false };
 
       if (all.length >= maxTasks) {
         this.logger.warn(
           { maxTasks, fetched: all.length, filters },
           'task-repo: listAllTasks hit the safety ceiling — remaining tasks were not fetched',
         );
-        return all.slice(0, maxTasks);
+        return { tasks: all.slice(0, maxTasks), truncated: true };
       }
 
       const last = rows[rows.length - 1]!;
@@ -481,7 +491,7 @@ export class TaskRepo {
       { maxTasks, fetched: all.length, filters },
       'task-repo: listAllTasks exhausted its page budget — remaining tasks were not fetched',
     );
-    return all.slice(0, maxTasks);
+    return { tasks: all.slice(0, maxTasks), truncated: true };
   }
 
   /**

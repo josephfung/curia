@@ -341,12 +341,20 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     const alreadyAskedTaskIds = await readIdSet(store, ASKED_TASK_IDS_KEY, ctx.log);
 
     // Consider every open/in-progress CEO task for completion matching. listAllTasks walks
-    // keyset pages so we no longer silently truncate at the old 100-task cap (#1433); its own
-    // safety ceiling logs a warning if a pathological task volume is ever reached.
-    const openTasks = await ctx.taskRepo.listAllTasks({
+    // keyset pages so we no longer silently truncate at the old 100-task cap (#1433). If its
+    // safety ceiling is hit, `truncated` is true — surface it here (and in the result) so a
+    // partial task set is visible rather than mistaken for full coverage.
+    const { tasks: openTasks, truncated: openTasksTruncated } = await ctx.taskRepo.listAllTasks({
       owner: 'ceo',
       statuses: ['open', 'in_progress'],
     });
+    if (openTasksTruncated) {
+      ctx.log.warn(
+        { openTasksConsidered: openTasks.length },
+        'ceo-inbox-sent-observe: open CEO task set hit the pagination safety ceiling — ' +
+          'completion matching ran against a partial set; lowest-priority tasks past the ceiling were not considered',
+      );
+    }
 
     let draftMatches = 0;
     // Cleared to false if any draft's full Sent body can't be fetched. Holds the watermark (see
@@ -872,6 +880,9 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
         shadow_reconciled: shadowReconciled,
         watermark_advanced_to: watermarkAdvancedTo,
         backfill_active: backfillStillActive,
+        // True when the open-task set exceeded the pagination safety ceiling, so task-completion
+        // matching this run considered only a partial set (#1433).
+        tasks_truncated: openTasksTruncated,
         skipped_backoff: false,
       },
     };
