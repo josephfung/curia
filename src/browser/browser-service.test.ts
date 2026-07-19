@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isXServerBinary } from './browser-service.js';
+import { BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isXServerBinary, parseProxyConfig } from './browser-service.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -201,6 +201,48 @@ describe('BrowserService (unit — mocked browser)', () => {
 
   it('reports channel fallback inactive by default', () => {
     expect(service.isChannelFallbackActive()).toBe(false);
+  });
+
+  // Proxy propagation: the incognito path calls browser.newContext(buildContextOptions()),
+  // which is the same fingerprint-options builder the persistent launch uses. Asserting the
+  // options here proves the configured proxy reaches BOTH context types (real
+  // launchPersistentContext takes the same object). No proxy configured on the outer
+  // `service`, so these tests spin up dedicated instances.
+  it('propagates a configured proxy (with credentials) into context options', async () => {
+    const page = makeMockPage();
+    const browser = makeMockBrowser();
+    const ctx = makeMockContext(page, browser);
+    const incognitoCtx = { newPage: vi.fn().mockResolvedValue(makeMockPage()), close: vi.fn().mockResolvedValue(undefined), browser: vi.fn().mockReturnValue(browser), on: vi.fn() };
+    browser.newContext.mockResolvedValue(incognitoCtx as never);
+
+    const svc = new BrowserService({
+      logger,
+      sessionTtlMs: 1000,
+      sweepIntervalMs: 60000,
+      proxy: 'http://wguser:wgpass@browser-proxy:8888',
+      contextFactory: async () => ctx as never,
+    });
+    await svc.start();
+    await svc.getOrCreateSession(undefined, { incognito: true });
+
+    expect(browser.newContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxy: { server: 'http://browser-proxy:8888', username: 'wguser', password: 'wgpass' },
+      }),
+    );
+    await svc.stop();
+  });
+
+  it('sets no proxy in context options when none is configured', async () => {
+    // The outer `service` has no proxy. Exercise the same incognito seam and assert absence.
+    const incognitoPage = makeMockPage();
+    const incognitoContext = { newPage: vi.fn().mockResolvedValue(incognitoPage), close: vi.fn().mockResolvedValue(undefined), browser: vi.fn().mockReturnValue(mockBrowser), on: vi.fn() };
+    mockBrowser.newContext.mockResolvedValue(incognitoContext as never);
+
+    await service.getOrCreateSession(undefined, { incognito: true });
+
+    const opts = mockBrowser.newContext.mock.calls[0]![0] as { proxy?: unknown };
+    expect(opts.proxy).toBeUndefined();
   });
 
   it('does not restart the browser when a disconnect fires after stop()', async () => {
@@ -453,6 +495,45 @@ describe('isXServerBinary', () => {
     for (const binary of ['node', 'bash', 'xterm', 'Xfce4-session', 'chrome']) {
       expect(isXServerBinary(binary)).toBe(false);
     }
+  });
+});
+
+// --- parseProxyConfig (proxy URL → Playwright ProxySettings) ---
+
+describe('parseProxyConfig', () => {
+  it('returns undefined for empty/absent input (direct egress)', () => {
+    expect(parseProxyConfig(undefined)).toBeUndefined();
+    expect(parseProxyConfig('')).toBeUndefined();
+    expect(parseProxyConfig('   ')).toBeUndefined();
+  });
+
+  it('parses a bare scheme://host:port with no credentials', () => {
+    expect(parseProxyConfig('http://browser-proxy:8888')).toEqual({ server: 'http://browser-proxy:8888' });
+  });
+
+  it('splits embedded credentials out of the server field', () => {
+    // Playwright wants `server` credential-free and username/password separate.
+    expect(parseProxyConfig('http://user:pass@10.0.0.5:3128')).toEqual({
+      server: 'http://10.0.0.5:3128',
+      username: 'user',
+      password: 'pass',
+    });
+  });
+
+  it('URL-decodes percent-encoded credentials', () => {
+    expect(parseProxyConfig('http://us%40er:p%3Ass@host:8888')).toEqual({
+      server: 'http://host:8888',
+      username: 'us@er',
+      password: 'p:ss',
+    });
+  });
+
+  it('supports socks5 proxies (no auth field)', () => {
+    expect(parseProxyConfig('socks5://host:1080')).toEqual({ server: 'socks5://host:1080' });
+  });
+
+  it('treats a bare host:port as http (normalizes to a scheme)', () => {
+    expect(parseProxyConfig('browser-proxy:8888')).toEqual({ server: 'http://browser-proxy:8888' });
   });
 });
 
