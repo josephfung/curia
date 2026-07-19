@@ -10,6 +10,7 @@ import pino from 'pino';
 import { TaskRepo } from '../../src/db/task-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { BusEvent, TaskUpdatedEvent } from '../../src/bus/events.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -54,13 +55,22 @@ async function wakeRowsFor(pool: pg.Pool, taskId: string) {
 describeIf('TaskRepo.reopenTask wake revival', () => {
   let pool: pg.Pool;
   let repo: TaskRepo;
+  // Set true only after requireCuriaTestDatabase confirms we're on curia_test. cleanup()'s
+  // DELETEs are PREFIX-scoped, but vitest still fires afterAll after a FAILED beforeAll, so
+  // without this flag a guard abort against a mispointed DATABASE_URL would still run the
+  // teardown DELETEs against whatever database it found. With it, no DELETE runs unguarded.
+  let onTestDb = false;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    // Throws HERE (before onTestDb is set, before any DELETE) if DATABASE_URL points anywhere
+    // but the canonical isolated curia_test database.
+    await requireCuriaTestDatabase(pool);
+    onTestDb = true;
     repo = new TaskRepo(pool, capturingBus, logger as never, 'UTC');
   });
-  afterAll(async () => { await cleanup(pool); await pool.end(); });
-  beforeEach(async () => { await cleanup(pool); published.length = 0; });
+  afterAll(async () => { if (onTestDb) await cleanup(pool); await pool.end(); });
+  beforeEach(async () => { if (!onTestDb) return; await cleanup(pool); published.length = 0; });
 
   it('revives the wake that completeTask cancelled, preserving its original schedule', async () => {
     const wakeAt = new Date(Date.now() + 3_600_000);
