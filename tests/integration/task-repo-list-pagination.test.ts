@@ -14,6 +14,9 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
 const PREFIX = 'TaskRepoPage Test';
+// Unique tag on every seeded row so a filter can isolate exactly this suite's tasks (the shared DB
+// may hold unrelated ceo/open rows), which the exact-boundary test needs for a deterministic count.
+const TAG = 'taskrepo-page-test';
 const logger = pino({ level: 'silent' });
 const noopBus = { publish: async () => {}, subscribe: () => {} } as unknown as EventBus;
 
@@ -43,6 +46,7 @@ describeIf('TaskRepo keyset pagination (#1433)', () => {
         source: 'coordinator',
         priority,
         dueAt,
+        tags: [TAG],
       });
     }
   });
@@ -122,5 +126,25 @@ describeIf('TaskRepo keyset pagination (#1433)', () => {
     expect(capped.tasks).toHaveLength(100);
     expect(capped.truncated).toBe(true);
     expect(warnings.some((w) => JSON.stringify(w).includes('safety ceiling'))).toBe(true);
+  });
+
+  it('does not report truncated when the full set lands exactly on the ceiling boundary', async () => {
+    // Exact-boundary regression (CodeRabbit): TOTAL rows, pageSize divides TOTAL, and maxTasks ===
+    // TOTAL. The last full page brings the count to exactly maxTasks — with a `>=` check that would
+    // falsely warn + report truncated:true. The tag filter isolates precisely this suite's rows so
+    // the count is deterministic on the shared DB.
+    const warnings: unknown[] = [];
+    const boundaryLogger = pino(
+      { level: 'warn' },
+      { write: (msg: string) => warnings.push(JSON.parse(msg)) },
+    );
+    const boundaryRepo = new TaskRepo(pool, noopBus, boundaryLogger as never, 'UTC');
+    const result = await boundaryRepo.listAllTasks(
+      { tag: TAG, statuses: ['open'] },
+      { pageSize: 50, maxTasks: TOTAL }, // 250 / 50 = 5 exact pages, ceiling === full-set size
+    );
+    expect(result.tasks).toHaveLength(TOTAL);
+    expect(result.truncated).toBe(false);
+    expect(warnings).toHaveLength(0); // no spurious "safety ceiling" warning
   });
 });
