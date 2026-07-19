@@ -375,6 +375,36 @@ describe('ResolveLearningDigestHandler', () => {
     expect(updated.t1).toEqual(digestMap.t1);
   });
 
+  it('fails without clearing (or falsely reporting a reopen) when the task is in a non-open terminal state (#1432)', async () => {
+    // A task that moved to 'cancelled' (or 'failed', etc.) between auto-complete and undo is neither
+    // 'done' (reopenable) nor 'open' (already reopened). The guard must NOT call reopenTask (it would
+    // throw), must NOT clear the digest item, and must NOT report a phantom "Reopened". The user can
+    // still drop the stale item via dismiss_completion.
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const getTask = vi.fn(async () => ({ id: 't1', status: 'cancelled' }));
+    const reopenTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
+    const ctx = {
+      input: { action: 'undo_completion', task_id: 't1' },
+      workingDocs: { read: vi.fn(), update: vi.fn() },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as SkillContext;
+
+    const result = await new ResolveLearningDigestHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    expect(reopenTask).not.toHaveBeenCalled(); // never call the throwing reopen on a non-done task
+    expect(mem.storeFact).not.toHaveBeenCalled(); // digest item NOT cleared
+    const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(updated.t1).toEqual(digestMap.t1);
+  });
+
   it('confirms completion via completeTask and removes the digest item', async () => {
     const mem = makeMem();
     const digestMap: CompletionDigestMap = {
