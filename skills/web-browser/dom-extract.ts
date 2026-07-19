@@ -118,6 +118,10 @@ export function extractFrameContent(opts: ExtractOpts): string {
   const overflow = interactables.length > maxRefs
     ? `\n(${interactables.length - maxRefs} more interactable elements not shown; scroll or refine)`
     : '';
+  // NOTE: this '\n\n--- Interactable elements ---\n' header is load-bearing downstream:
+  // getCleanedContent in handler.ts splits on it (as REF_SECTION_SENTINEL) to budget prose
+  // and the ref list separately. If you change the text here, change it there too — a
+  // mismatch silently folds the whole ref list back into the body budget (no test signal).
   const refSummary = refLines.length > 0
     ? '\n\n--- Interactable elements ---\n' + refLines.join('\n') + overflow
     : '';
