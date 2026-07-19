@@ -66,4 +66,16 @@ describe('parseProxyConfig', () => {
     // Regression for the boot-crash finding: decodeURIComponent throws URIError on "%ss".
     expect(() => parseProxyConfig('http://user:pa%ss@host:8888')).toThrow(/percent-encoding/);
   });
+
+  it('never leaks the password in the error for an invalid proxy that carries credentials', () => {
+    // The thrown message is wrapped by loadYamlConfig and may be logged at startup, so a
+    // malformed value with userinfo must not echo the secret. (CodeRabbit security finding)
+    try {
+      parseProxyConfig('http://user:sup3rsecret@'); // no host → throws
+      throw new Error('expected parseProxyConfig to throw');
+    } catch (err) {
+      expect((err as Error).message).not.toContain('sup3rsecret');
+      expect((err as Error).message).not.toContain('user:');
+    }
+  });
 });

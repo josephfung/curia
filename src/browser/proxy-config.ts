@@ -36,12 +36,15 @@ export function parseProxyConfig(raw: string | undefined): ProxyConfig | undefin
   try {
     url = new URL(withScheme);
   } catch {
-    throw new Error(`browser.proxy is not a valid proxy URL: ${JSON.stringify(raw)}`);
+    // Never echo the raw value: a malformed proxy can still carry userinfo
+    // (http://user:secret@…), and this message is wrapped by loadYamlConfig and may be
+    // logged at startup. Keep it credential-free.
+    throw new Error('browser.proxy is not a valid proxy URL');
   }
   // new URL('http://') succeeds with an empty host; reject it rather than emitting a bogus
-  // server like "http://http".
+  // server like "http://http". Credential-free for the same reason as above.
   if (!url.hostname) {
-    throw new Error(`browser.proxy has no host: ${JSON.stringify(raw)}`);
+    throw new Error('browser.proxy has no host');
   }
 
   // decodeURIComponent throws URIError on a bare '%' (a common char in generated passwords
