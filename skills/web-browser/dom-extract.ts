@@ -23,6 +23,9 @@ interface ExtractOpts {
   // Max interactables to tag + list before truncating. Passed in because this function
   // runs in-browser and cannot import the handler's module constant.
   maxRefs: number;
+  // Per-extraction generation, stamped into every ref so a ref outlives no snapshot: a ref
+  // from an earlier extraction carries an older generation and matches no current attribute.
+  generation: number;
 }
 
 /**
@@ -38,7 +41,7 @@ interface ExtractOpts {
  * inside the function so they serialize with it.
  */
 export function extractFrameContent(opts: ExtractOpts): string {
-  const { frameIndex, maxRefs } = opts;
+  const { frameIndex, maxRefs, generation } = opts;
 
   // --- bodyText: clone the body, strip noise, prefer the main content root. (unchanged) ---
   const root = document.body?.cloneNode(true) as HTMLBodyElement | null;
@@ -108,7 +111,7 @@ export function extractFrameContent(opts: ExtractOpts): string {
   const refLines: string[] = [];
   for (let i = 0; i < shown; i++) {
     const el = interactables[i]!;
-    const ref = `f${frameIndex}e${i + 1}`;
+    const ref = `g${generation}f${frameIndex}e${i + 1}`;
     el.setAttribute('data-curia-ref', ref);
     const name = nameOf(el).replace(/\s+/g, ' ').slice(0, 100);
     const legend = el.closest('fieldset')?.querySelector('legend')?.textContent?.trim();
