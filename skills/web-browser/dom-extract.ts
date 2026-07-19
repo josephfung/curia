@@ -12,83 +12,115 @@
 // where this module's scope does not exist. Keep it that way.
 
 /**
- * DOM-extraction routine run *inside the browser* for one frame. Returns cleaned,
- * LLM-friendly text (rendered DOM, not raw HTML) plus a labelled list of form fields.
- * Defined once and passed to each frame's evaluate() so main-frame and iframe content
- * are extracted identically.
+ * Options passed in from the handler. Type-only (erased at compile), so referencing it
+ * here does not violate the "no module-scope value references" rule for a serialized fn.
  */
-export function extractFrameContent(): string {
-  // Clone the body before stripping noise elements — mutating the live DOM would
-  // destroy scripts/styles/etc. for subsequent actions in the same session.
+interface ExtractOpts {
+  // Index of this frame within page.frames(); makes refs unique across frames without
+  // threading a global counter back to the handler (which would force an object return
+  // and break the string-returning frame mocks in handler.test.ts).
+  frameIndex: number;
+  // Max interactables to tag + list before truncating. Passed in because this function
+  // runs in-browser and cannot import the handler's module constant.
+  maxRefs: number;
+}
+
+/**
+ * DOM-extraction routine run *inside the browser* for one frame. Returns cleaned,
+ * LLM-friendly text (rendered DOM, not raw HTML) followed by a list of interactable
+ * elements, each tagged with a stable `data-curia-ref` the agent can use as an exact
+ * click/type selector. Assigning refs here (rather than resolving by fuzzy label) is
+ * what lets the agent disambiguate duplicate labels — e.g. a survey's repeated "Agree"
+ * radios, each of which becomes a distinct ref tied to its own question group.
+ *
+ * Must stay self-contained (no imports, no module-scope *value* references, no closures):
+ * Playwright serializes it to source and runs it in the page. Helpers below are declared
+ * inside the function so they serialize with it.
+ */
+export function extractFrameContent(opts: ExtractOpts): string {
+  const { frameIndex, maxRefs } = opts;
+
+  // --- bodyText: clone the body, strip noise, prefer the main content root. (unchanged) ---
   const root = document.body?.cloneNode(true) as HTMLBodyElement | null;
   if (!root) return '';
-
-  // Remove noise elements from the clone — we want content, not chrome. (iframe
-  // elements are stripped here too: their *contents* are extracted separately per
-  // frame, so leaving the empty <iframe> shell in would add nothing.)
   const noiseSelectors = ['script', 'style', 'noscript', 'svg', 'iframe', 'template'];
   for (const sel of noiseSelectors) {
     root.querySelectorAll(sel).forEach(el => el.remove());
   }
-
-  // Extract form fields with their labels — the LLM needs to know what
-  // fields exist and what they're called to fill them correctly.
-  // Query the live DOM for form fields so we can look up labels by ID.
-  const formFields: string[] = [];
-  const seenGroups = new Set<string>();
-
-  // Group radios/checkboxes by fieldset legend or aria-labelledby so quiz widgets
-  // (e.g. 16personalities) expose "Question N: …" plus clickable option labels.
-  document.querySelectorAll('fieldset').forEach(fieldset => {
-    const legend = fieldset.querySelector('legend')?.textContent?.trim();
-    if (!legend) return;
-    const key = legend.slice(0, 120);
-    if (seenGroups.has(key)) return;
-    seenGroups.add(key);
-    const options: string[] = [];
-    fieldset.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(el => {
-      const input = el as HTMLInputElement;
-      const opt = input.getAttribute('aria-label')
-        ?? input.getAttribute('value')
-        ?? input.id;
-      if (opt) options.push(opt);
-    });
-    if (options.length > 0) {
-      formFields.push(`[question: ${legend}]`);
-      options.forEach(o => formFields.push(`  (option: ${o})`));
-    }
-  });
-
-  document.querySelectorAll('input, select, textarea').forEach(el => {
-    const input = el as HTMLInputElement;
-    if (input.type === 'hidden') return;
-    const fieldset = input.closest('fieldset');
-    const legend = fieldset?.querySelector('legend')?.textContent?.trim();
-    const groupedKey = legend?.slice(0, 120);
-    const id = input.id;
-    const labelEl = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
-    const label = input.getAttribute('aria-label')
-      ?? labelEl?.textContent?.trim()
-      ?? input.getAttribute('placeholder')
-      ?? input.getAttribute('name')
-      ?? input.type;
-    const entry = `[${input.type ?? 'field'}: ${label}]`;
-    // Skip only radios/checkboxes already covered by their own fieldset group.
-    if (
-      (input.type === 'radio' || input.type === 'checkbox')
-      && groupedKey
-      && seenGroups.has(groupedKey)
-    ) return;
-    formFields.push(entry);
-  });
-
-  // Prefer main/article content over chrome when the page has a clear content root.
   const contentRoot = (document.querySelector('main, [role="main"], article, .sp-card')
     ?? root) as HTMLElement;
   const bodyText = (contentRoot.innerText ?? contentRoot.textContent ?? root.innerText ?? '').trim();
-  const formSummary = formFields.length > 0
-    ? '\n\n--- Form fields ---\n' + formFields.join('\n')
+
+  // --- Interactable elements: tag each with a stable ref on the LIVE DOM ---
+  // Clear refs from a prior extraction first, so this snapshot's refs are the only ones
+  // present. A ref never outlives the snapshot that issued it: an element removed since
+  // the last snapshot leaves no stale ref for the resolver to match.
+  document.querySelectorAll('[data-curia-ref]').forEach(el => el.removeAttribute('data-curia-ref'));
+
+  const INTERACTABLE_SELECTOR = [
+    'button', 'a[href]', 'input:not([type="hidden"])', 'select', 'textarea',
+    '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
+    '[role="tab"]', '[role="menuitem"]', '[role="option"]', '[role="combobox"]',
+    '[role="switch"]',
+  ].join(',');
+
+  // ARIA role for display: explicit role attribute wins, else derive from the tag.
+  const roleOf = (el: Element): string => {
+    const explicit = el.getAttribute('role');
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'a') return 'link';
+    if (tag === 'button') return 'button';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'input') {
+      const t = (el.getAttribute('type') ?? 'text').toLowerCase();
+      if (t === 'radio') return 'radio';
+      if (t === 'checkbox') return 'checkbox';
+      if (t === 'button' || t === 'submit' || t === 'reset') return 'button';
+      return 'textbox';
+    }
+    return 'element';
+  };
+
+  // Accessible name, same precedence the old form-fields list used, extended to buttons/
+  // links (their visible text). Empty is acceptable — ref + role still address the element.
+  const nameOf = (el: Element): string => {
+    const aria = el.getAttribute('aria-label');
+    if (aria && aria.trim()) return aria.trim();
+    const id = (el as HTMLElement).id;
+    if (id) {
+      const lbl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+      const lblText = lbl?.textContent?.trim();
+      if (lblText) return lblText;
+    }
+    const text = (el.textContent ?? '').trim();
+    if (text) return text;
+    return el.getAttribute('placeholder')
+      ?? el.getAttribute('value')
+      ?? el.getAttribute('name')
+      ?? el.getAttribute('title')
+      ?? '';
+  };
+
+  const interactables = Array.from(document.querySelectorAll(INTERACTABLE_SELECTOR));
+  const shown = Math.min(interactables.length, maxRefs);
+  const refLines: string[] = [];
+  for (let i = 0; i < shown; i++) {
+    const el = interactables[i]!;
+    const ref = `f${frameIndex}e${i + 1}`;
+    el.setAttribute('data-curia-ref', ref);
+    const name = nameOf(el).replace(/\s+/g, ' ').slice(0, 100);
+    const legend = el.closest('fieldset')?.querySelector('legend')?.textContent?.trim();
+    const group = legend ? ` (group: "${legend.slice(0, 120)}")` : '';
+    refLines.push(`[${ref}] ${roleOf(el)} "${name}"${group}`);
+  }
+  const overflow = interactables.length > maxRefs
+    ? `\n(${interactables.length - maxRefs} more interactable elements not shown; scroll or refine)`
+    : '';
+  const refSummary = refLines.length > 0
+    ? '\n\n--- Interactable elements ---\n' + refLines.join('\n') + overflow
     : '';
 
-  return bodyText + formSummary;
+  return bodyText + refSummary;
 }
