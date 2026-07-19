@@ -47,6 +47,7 @@
         "sweepIntervalMs": { "type": "integer", "minimum": 1 },
         "profileDir": { "type": "string" },
         "channel": { "type": "string" },
+        "proxy": { "type": "string" },
         "locale": { "type": "string" }
       }
     },
