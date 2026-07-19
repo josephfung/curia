@@ -172,7 +172,10 @@ function buildCtx(overrides: {
     entityMemory: mem as unknown as EntityMemory,
     workingDocs,
     taskRepo: {
-      listTasks: vi.fn(async () => overrides.tasks ?? []),
+      // The handler now walks the full open-task set via listAllTasks (#1433). The mock returns
+      // every provided task in one shot — the DB-level keyset paging is exercised in the
+      // task-repo integration test, not here.
+      listAllTasks: vi.fn(async () => overrides.tasks ?? []),
     },
     bus: {
       publish: vi.fn(async (_layer: string, event: { type: string; payload: Record<string, unknown> }) => {
@@ -622,6 +625,92 @@ describe('CeoInboxSentObserveHandler', () => {
     expect(stored['task-ceo-1'].confidence).toBe('high');
     const asked = JSON.parse(ctx.__mem.__values.get(ASKED_TASK_IDS_KEY)!);
     expect(asked).toContain('task-ceo-1');
+  });
+
+  it('matches a task beyond the old 100-task cap (>100 open tasks, #1433)', async () => {
+    // Regression guard for the pre-#1433 truncation: the handler capped the open-task fetch at
+    // 100, so a matching task past that index was silently never considered. It now walks the
+    // full set via listAllTasks, so a match at index 130 of 150 must still produce a candidate.
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const u = String(url);
+      if (u.includes('/messages/msg-sent-2')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: 'msg-sent-2',
+              thread_id: 't2',
+              subject: 'Follow up',
+              from: [{ email: 'ceo@example.com' }],
+              to: [{ email: 'alice@example.com' }],
+              cc: [],
+              body: '<p>Following up on our chat</p>',
+              snippet: 'Following up',
+              date: 1_720_000_300,
+              unread: false,
+              folders: ['SENT'],
+              bcc: [],
+              labels: [],
+              attachments: [],
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (u.includes('/messages?')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: 'msg-sent-2',
+                thread_id: 't2',
+                subject: 'Follow up',
+                from: [{ email: 'ceo@example.com' }],
+                to: [{ email: 'alice@example.com' }],
+                cc: [],
+                snippet: 'Following up on our chat with Alice',
+                date: 1_720_000_300,
+                unread: false,
+                folders: ['SENT'],
+                attachments: [],
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected ${u}`);
+    });
+
+    // 149 unrelated filler tasks (no recipient/token overlap with the Alice send) plus the real
+    // match dropped in at index 130 — well past the old 100 cap.
+    const filler = Array.from({ length: 149 }, (_, i) => ({
+      id: `filler-${i}`,
+      title: `Quarterly budget review section ${i}`,
+      description: 'Unrelated internal planning item',
+      tags: [],
+      priority: 30,
+    }));
+    const tasks = [
+      ...filler.slice(0, 130),
+      {
+        id: 'task-ceo-1',
+        title: 'Follow up with Alice',
+        description: 'Email alice@example.com about the chat',
+        tags: [],
+        priority: 40,
+      },
+      ...filler.slice(130),
+    ];
+
+    const ctx = buildCtx({ force: true, nowMs: 1_720_100_000_000, tasks });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect((result as { data: { task_candidates: number } }).data.task_candidates).toBe(1);
+
+    const stored = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!);
+    expect(stored['task-ceo-1']).toBeDefined();
+    expect(stored['task-ceo-1'].confidence).toBe('high');
   });
 
   it('does not persist the asked-guard when the candidate write is held (no candidate lost)', async () => {

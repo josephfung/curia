@@ -340,21 +340,13 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     // Seed the asked-guard from config (replaces the doc-derived extractAskedTaskIds scan).
     const alreadyAskedTaskIds = await readIdSet(store, ASKED_TASK_IDS_KEY, ctx.log);
 
-    const OPEN_TASK_LIMIT = 100;
-    const openTasks = await ctx.taskRepo.listTasks({
+    // Consider every open/in-progress CEO task for completion matching. listAllTasks walks
+    // keyset pages so we no longer silently truncate at the old 100-task cap (#1433); its own
+    // safety ceiling logs a warning if a pathological task volume is ever reached.
+    const openTasks = await ctx.taskRepo.listAllTasks({
       owner: 'ceo',
       statuses: ['open', 'in_progress'],
-      limit: OPEN_TASK_LIMIT,
     });
-    // taskRepo.listTasks has no keyset/pagination, so completion matching considers at
-    // most OPEN_TASK_LIMIT tasks. Log when the cap is hit so a silently-partial match set
-    // is visible rather than mistaken for full coverage (keyset paging tracked separately).
-    if (openTasks.length >= OPEN_TASK_LIMIT) {
-      ctx.log.warn(
-        { openTaskLimit: OPEN_TASK_LIMIT },
-        'ceo-inbox-sent-observe: open CEO task list hit the fetch cap — some tasks were not considered for completion',
-      );
-    }
 
     let draftMatches = 0;
     // Cleared to false if any draft's full Sent body can't be fetched. Holds the watermark (see
