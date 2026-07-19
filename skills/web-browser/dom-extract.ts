@@ -67,44 +67,14 @@ export function extractFrameContent(opts: ExtractOpts): string {
     '[role="switch"]',
   ].join(',');
 
-  // ARIA role for display: explicit role attribute wins, else derive from the tag.
-  const roleOf = (el: Element): string => {
-    const explicit = el.getAttribute('role');
-    if (explicit) return explicit;
-    const tag = el.tagName.toLowerCase();
-    if (tag === 'a') return 'link';
-    if (tag === 'button') return 'button';
-    if (tag === 'select') return 'combobox';
-    if (tag === 'textarea') return 'textbox';
-    if (tag === 'input') {
-      const t = (el.getAttribute('type') ?? 'text').toLowerCase();
-      if (t === 'radio') return 'radio';
-      if (t === 'checkbox') return 'checkbox';
-      if (t === 'button' || t === 'submit' || t === 'reset') return 'button';
-      return 'textbox';
-    }
-    return 'element';
-  };
-
-  // Accessible name, same precedence the old form-fields list used, extended to buttons/
-  // links (their visible text). Empty is acceptable — ref + role still address the element.
-  const nameOf = (el: Element): string => {
-    const aria = el.getAttribute('aria-label');
-    if (aria && aria.trim()) return aria.trim();
-    const id = (el as HTMLElement).id;
-    if (id) {
-      const lbl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
-      const lblText = lbl?.textContent?.trim();
-      if (lblText) return lblText;
-    }
-    const text = (el.textContent ?? '').trim();
-    if (text) return text;
-    return el.getAttribute('placeholder')
-      ?? el.getAttribute('value')
-      ?? el.getAttribute('name')
-      ?? el.getAttribute('title')
-      ?? '';
-  };
+  // Role and accessible-name are computed INLINE below, deliberately NOT via named helper
+  // functions. Playwright serializes this function into the browser page via
+  // frame.evaluate(); the tsx/esbuild `keepNames` transform wraps any named inner function
+  // in a module-scope `__name(...)` helper that does NOT exist in the page, so a named inner
+  // function throws `ReferenceError: __name is not defined` on every frame (this took down
+  // all browser page-reads in prod once). Keep this function free of named inner functions;
+  // the keepNames regression test in dom-extract.test.ts guards it. Anonymous forEach/arrow
+  // callbacks are fine — keepNames only wraps functions bound to a name.
 
   const interactables = Array.from(document.querySelectorAll(INTERACTABLE_SELECTOR));
   const shown = Math.min(interactables.length, maxRefs);
@@ -113,10 +83,50 @@ export function extractFrameContent(opts: ExtractOpts): string {
     const el = interactables[i]!;
     const ref = `g${generation}f${frameIndex}e${i + 1}`;
     el.setAttribute('data-curia-ref', ref);
-    const name = nameOf(el).replace(/\s+/g, ' ').slice(0, 100);
+
+    // ARIA role for display: explicit role attribute wins, else derive from the tag.
+    let role = el.getAttribute('role') ?? '';
+    if (!role) {
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'a') role = 'link';
+      else if (tag === 'button') role = 'button';
+      else if (tag === 'select') role = 'combobox';
+      else if (tag === 'textarea') role = 'textbox';
+      else if (tag === 'input') {
+        const t = (el.getAttribute('type') ?? 'text').toLowerCase();
+        role = t === 'radio' ? 'radio'
+          : t === 'checkbox' ? 'checkbox'
+          : (t === 'button' || t === 'submit' || t === 'reset') ? 'button'
+          : 'textbox';
+      } else {
+        role = 'element';
+      }
+    }
+
+    // Accessible name, same precedence as before: aria-label, <label for>, visible text,
+    // then placeholder/value/name/title. Empty is acceptable — ref + role still address it.
+    let name = '';
+    const aria = el.getAttribute('aria-label');
+    if (aria && aria.trim()) {
+      name = aria.trim();
+    } else {
+      const id = (el as HTMLElement).id;
+      const lbl = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
+      const lblText = lbl?.textContent?.trim();
+      const text = (el.textContent ?? '').trim();
+      if (lblText) name = lblText;
+      else if (text) name = text;
+      else name = el.getAttribute('placeholder')
+        ?? el.getAttribute('value')
+        ?? el.getAttribute('name')
+        ?? el.getAttribute('title')
+        ?? '';
+    }
+    name = name.replace(/\s+/g, ' ').slice(0, 100);
+
     const legend = el.closest('fieldset')?.querySelector('legend')?.textContent?.trim();
     const group = legend ? ` (group: "${legend.slice(0, 120)}")` : '';
-    refLines.push(`[${ref}] ${roleOf(el)} "${name}"${group}`);
+    refLines.push(`[${ref}] ${role} "${name}"${group}`);
   }
   const overflow = interactables.length > maxRefs
     ? `\n(${interactables.length - maxRefs} more interactable elements not shown; scroll or refine)`
