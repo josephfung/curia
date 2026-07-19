@@ -13,7 +13,6 @@ const MIGRATION_SQL_URL = new URL(
   '../../src/db/migrations/074_shadow_eval_idempotency.sql',
   import.meta.url,
 );
-const INDEX = 'idx_aal_shadow_source';
 // Test rows use source_message_id values under this prefix so cleanup never deletes real rows.
 const PFX = 'itest-shadow-idem-';
 
@@ -38,19 +37,33 @@ describeIf('migration 074: shadow-eval idempotency', () => {
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
+    // Safety rail: this suite runs the migration's UNSCOPED, table-wide dedup DELETE + CREATE INDEX,
+    // so it must never touch a real database. Refuse to run unless connected to a *test* database —
+    // a mispointed DATABASE_URL (e.g. prod) fails loudly HERE, before any DDL executes. (No shared
+    // curia_test fixture exists in the repo yet; this in-file guard is the minimal safeguard.)
+    const { rows } = await pool.query<{ db: string }>('SELECT current_database() AS db');
+    const dbName = rows[0]!.db;
+    if (!/test/i.test(dbName)) {
+      await pool.end();
+      throw new Error(
+        `Refusing to run the destructive migration-074 integration test against database "${dbName}". ` +
+          'Point DATABASE_URL at a test database (its name must contain "test").',
+      );
+    }
     const full = await readFile(MIGRATION_SQL_URL, 'utf8');
     // Run only the Up half — the Down's DROP INDEX would otherwise remove what we assert.
     upSql = full.split('-- Down Migration')[0]!;
   });
 
-  // Clean slate: drop the index and delete only our scoped rows before each case.
+  // Clean slate: drop the index and delete only our scoped rows before each case. The index name is
+  // a fixed literal (not interpolated) to keep the DDL out of the parameterized-query lint's sights.
   beforeEach(async () => {
-    await pool.query(`DROP INDEX IF EXISTS ${INDEX}`);
+    await pool.query('DROP INDEX IF EXISTS idx_aal_shadow_source');
     await pool.query(`DELETE FROM autonomy_action_log WHERE payload->>'source_message_id' LIKE $1`, [`${PFX}%`]);
   });
 
   afterAll(async () => {
-    await pool.query(`DROP INDEX IF EXISTS ${INDEX}`);
+    await pool.query('DROP INDEX IF EXISTS idx_aal_shadow_source');
     await pool.query(`DELETE FROM autonomy_action_log WHERE payload->>'source_message_id' LIKE $1`, [`${PFX}%`]);
     await pool.end();
   });

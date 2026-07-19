@@ -54,12 +54,16 @@ export class ActionLogRepo {
   /** Insert a new row and return the generated id. */
   async insert(row: ActionLogInsert): Promise<number> {
     const { columns, values, params } = this.insertColumnsAndParams(row);
-    const result = await this.pool.query<{ id: number }>(
+    // `id` is BIGSERIAL; node-postgres returns int8 as a STRING (no global bigint type-parser is
+    // registered), so coerce to number at the repository boundary to honor the declared return
+    // type. autonomy_action_log ids never approach Number.MAX_SAFE_INTEGER at single-tenant scale.
+    const result = await this.pool.query<{ id: string }>(
       `INSERT INTO autonomy_action_log ${columns} ${values} RETURNING id`,
       params,
     );
-    this.logger.debug({ id: result.rows[0]!.id, skillName: row.skillName, outcome: row.outcome }, 'action-log-repo: inserted row');
-    return result.rows[0]!.id;
+    const id = Number(result.rows[0]!.id);
+    this.logger.debug({ id, skillName: row.skillName, outcome: row.outcome }, 'action-log-repo: inserted row');
+    return id;
   }
 
   /**
@@ -71,14 +75,16 @@ export class ActionLogRepo {
    */
   async insertShadowEvaluated(row: ActionLogInsert): Promise<number | null> {
     const { columns, values, params } = this.insertColumnsAndParams(row);
-    const result = await this.pool.query<{ id: number }>(
+    const result = await this.pool.query<{ id: string }>(
       `INSERT INTO autonomy_action_log ${columns} ${values}
        ON CONFLICT ((payload->>'source_message_id')) WHERE outcome = 'shadow_evaluated'
        DO NOTHING
        RETURNING id`,
       params,
     );
-    const id = result.rows[0]?.id ?? null;
+    // int8 -> number at the boundary (see insert()); a dedup no-op returns no row, preserved as null.
+    const raw = result.rows[0]?.id;
+    const id = raw === undefined ? null : Number(raw);
     this.logger.debug({ id, skillName: row.skillName, deduped: id === null }, 'action-log-repo: shadow insert');
     return id;
   }

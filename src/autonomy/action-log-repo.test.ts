@@ -42,8 +42,9 @@ function makeSequentialPool(
 
 describe('ActionLogRepo', () => {
   describe('insert', () => {
-    it('inserts a row and returns the id', async () => {
-      const { pool, queries } = makePool([{ id: 42 }]);
+    it('inserts a row and returns the id coerced from pg\'s int8 string', async () => {
+      // pg returns the BIGSERIAL id as a string; the repo coerces it to a number at the boundary.
+      const { pool, queries } = makePool([{ id: '42' }]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
       const id = await repo.insert({
         taskId: 'task-1',
@@ -77,8 +78,10 @@ describe('ActionLogRepo', () => {
   });
 
   describe('insertShadowEvaluated', () => {
-    it('inserts with ON CONFLICT DO NOTHING and returns the id', async () => {
-      const { pool, queries } = makePool([{ id: 7 }]);
+    it('inserts with ON CONFLICT DO NOTHING and returns the id coerced from pg\'s int8 string', async () => {
+      // node-postgres returns BIGSERIAL/int8 as a STRING; the fixture mirrors that so the assertion
+      // proves the repo coerces it to a number at the boundary (id === 7, not '7').
+      const { pool, queries } = makePool([{ id: '7' }]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
       const id = await repo.insertShadowEvaluated({
         taskId: 'shadow:src-1',
