@@ -458,7 +458,9 @@ export class TaskRepo {
     filters: Omit<ListTasksFilters, 'limit' | 'cursor'> = {},
     options: ListAllTasksOptions = {},
   ): Promise<ListAllTasksResult> {
-    const pageSize = options.pageSize ?? 500;
+    // Normalize pageSize to >= 1: a LIMIT 0 page is always short-but-nonempty in the loop's eyes
+    // (0 < 0 is false), so it would fall through to the cursor build and crash on rows[-1].
+    const pageSize = Math.max(1, options.pageSize ?? 500);
     const maxTasks = options.maxTasks ?? 5000;
     const all: TaskListRow[] = [];
     let cursor: TaskListCursor | undefined;
@@ -474,7 +476,10 @@ export class TaskRepo {
       // A short page means the result set is drained — this is the last page, nothing truncated.
       if (rows.length < pageSize) return { tasks: all, truncated: false };
 
-      if (all.length >= maxTasks) {
+      // Strict `>`, not `>=`: a full page landing *exactly* on the ceiling might be the last page
+      // that exists. Let the slack iteration fetch its (short/empty) successor to confirm drainage,
+      // so an exact-boundary dataset reports truncated:false instead of a spurious ceiling hit.
+      if (all.length > maxTasks) {
         this.logger.warn(
           { maxTasks, fetched: all.length, filters },
           'task-repo: listAllTasks hit the safety ceiling — remaining tasks were not fetched',
