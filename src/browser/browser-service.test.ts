@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isXServerBinary, parseProxyConfig } from './browser-service.js';
+import { BrowserService, clearStaleX11Lock, clearStaleSingletonLock, isXServerBinary } from './browser-service.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -495,45 +495,6 @@ describe('isXServerBinary', () => {
     for (const binary of ['node', 'bash', 'xterm', 'Xfce4-session', 'chrome']) {
       expect(isXServerBinary(binary)).toBe(false);
     }
-  });
-});
-
-// --- parseProxyConfig (proxy URL → Playwright ProxySettings) ---
-
-describe('parseProxyConfig', () => {
-  it('returns undefined for empty/absent input (direct egress)', () => {
-    expect(parseProxyConfig(undefined)).toBeUndefined();
-    expect(parseProxyConfig('')).toBeUndefined();
-    expect(parseProxyConfig('   ')).toBeUndefined();
-  });
-
-  it('parses a bare scheme://host:port with no credentials', () => {
-    expect(parseProxyConfig('http://browser-proxy:8888')).toEqual({ server: 'http://browser-proxy:8888' });
-  });
-
-  it('splits embedded credentials out of the server field', () => {
-    // Playwright wants `server` credential-free and username/password separate.
-    expect(parseProxyConfig('http://user:pass@10.0.0.5:3128')).toEqual({
-      server: 'http://10.0.0.5:3128',
-      username: 'user',
-      password: 'pass',
-    });
-  });
-
-  it('URL-decodes percent-encoded credentials', () => {
-    expect(parseProxyConfig('http://us%40er:p%3Ass@host:8888')).toEqual({
-      server: 'http://host:8888',
-      username: 'us@er',
-      password: 'p:ss',
-    });
-  });
-
-  it('supports socks5 proxies (no auth field)', () => {
-    expect(parseProxyConfig('socks5://host:1080')).toEqual({ server: 'socks5://host:1080' });
-  });
-
-  it('treats a bare host:port as http (normalizes to a scheme)', () => {
-    expect(parseProxyConfig('browser-proxy:8888')).toEqual({ server: 'http://browser-proxy:8888' });
   });
 });
 

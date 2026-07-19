@@ -42,4 +42,21 @@ describe('loadYamlConfig: browser block validation', () => {
     const dir = writeTempConfig(`browser:\n  channel: 123\n`);
     expect(() => loadYamlConfig(dir)).toThrow('browser.channel');
   });
+
+  it('accepts a valid proxy', () => {
+    const dir = writeTempConfig(`browser:\n  proxy: "http://browser-wg:8888"\n`);
+    expect(loadYamlConfig(dir).browser?.proxy).toBe('http://browser-wg:8888');
+  });
+
+  it('accepts an empty proxy (direct egress)', () => {
+    const dir = writeTempConfig(`browser:\n  proxy: ""\n`);
+    expect(() => loadYamlConfig(dir)).not.toThrow();
+  });
+
+  // Fail-closed: a set-but-unparseable proxy must abort boot rather than silently egress
+  // directly and leak the datacenter IP the proxy exists to hide.
+  it('rejects a non-empty but unparseable proxy (fail closed, no silent direct egress)', () => {
+    const dir = writeTempConfig(`browser:\n  proxy: "http://browser-wg :8888"\n`);
+    expect(() => loadYamlConfig(dir)).toThrow('browser.proxy is set but invalid');
+  });
 });

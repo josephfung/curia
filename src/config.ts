@@ -2,6 +2,7 @@ import * as yaml from 'js-yaml';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { parseSensitivityRules, type SensitivityRule } from './memory/sensitivity.js';
+import { parseProxyConfig } from './browser/proxy-config.js';
 
 // ---------------------------------------------------------------------------
 // Multi-account email config types
@@ -729,6 +730,20 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     for (const [key, value] of [['profileDir', profileDir], ['channel', channel], ['proxy', proxy], ['locale', locale]] as const) {
       if (value !== undefined && typeof value !== 'string') {
         throw new Error(`browser.${key} must be a string, got: ${typeof value}`);
+      }
+    }
+    // Fail closed on a misconfigured proxy: browser.proxy exists so the web-browser skill
+    // egresses through a residential exit instead of the datacenter IP. A non-empty but
+    // unparseable value must abort boot loudly — NOT silently resolve to "no proxy" and let
+    // the browser leak the real IP. parseProxyConfig throws on a bad non-empty value.
+    if (typeof proxy === 'string' && proxy.trim().length > 0) {
+      try {
+        parseProxyConfig(proxy);
+      } catch (err) {
+        throw new Error(
+          `browser.proxy is set but invalid — refusing to start (an unparseable proxy would ` +
+          `egress directly and leak the real IP): ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
   }
