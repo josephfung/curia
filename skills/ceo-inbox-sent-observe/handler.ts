@@ -734,6 +734,18 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
             );
           }
           backfillStillActive = true;
+        } else if (truncated) {
+          // Anomalous empty page carrying a lingering cursor: listAllMessages reports
+          // truncated=true with zero messages (see its "empty page with a cursor" guard), and its
+          // comment is explicit that this must NOT be read as a fully-drained window. With no
+          // messages there's no new minDate to descend to, so hold everything — no watermark jump,
+          // no key clear — and retry next run, exactly like the !advanceOk path. Completing here
+          // would strand the un-walked tail, the precise failure this drain exists to prevent.
+          ctx.log.warn(
+            { floor: watermark, ceiling: backfillBefore },
+            'ceo-inbox-sent-observe: backfill page reported truncated with zero messages — holding, retrying next run',
+          );
+          backfillStillActive = true;
         } else {
           // Drain complete (window fully scanned, or emptied by deletions). Jump the watermark past
           // the newest date captured when the backlog was detected, then clear the backfill keys.

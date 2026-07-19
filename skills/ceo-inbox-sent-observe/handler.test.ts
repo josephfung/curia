@@ -1577,6 +1577,35 @@ describe('CeoInboxSentObserveHandler', () => {
       expect(ctx.__mem.__values.get(BACKFILL_TARGET_KEY)).toBeUndefined();
     });
 
+    it('holds the drain (no completion) on an empty page with a lingering cursor (truncated, 0 messages)', async () => {
+      // listAllMessages reports truncated=true even for an empty page that still carries a cursor —
+      // an incomplete walk that must NOT be read as fully drained. A backfill run seeing that shape
+      // must hold (no watermark jump, no key clear), not declare the drain complete.
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+        const u = String(url);
+        if (/\/messages\/[^?]+$/.test(new URL(u).pathname)) {
+          return new Response(JSON.stringify({ data: { id: 'x', date: 0, body: '', bcc: [], labels: [], folders: ['SENT'] } }), { status: 200 });
+        }
+        // Empty data + a lingering next_cursor → listAllMessages returns { messages: [], truncated: true }.
+        return new Response(JSON.stringify({ data: [], next_cursor: 'LINGER' }), { status: 200 });
+      });
+
+      const ctx = buildCtx({
+        seed: { [WATERMARK_KEY]: '999', [BACKFILL_BEFORE_KEY]: '1600', [BACKFILL_TARGET_KEY]: '2099' },
+        force: true,
+        nowMs: 9_000_000_000_000,
+        tasks: [],
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      // Everything held: watermark pinned, keys unchanged, drain still active — retries next run.
+      expect(ctx.__mem.__values.get(WATERMARK_KEY)).toBe('999');
+      expect(ctx.__mem.__values.get(BACKFILL_BEFORE_KEY)).toBe('1600');
+      expect(ctx.__mem.__values.get(BACKFILL_TARGET_KEY)).toBe('2099');
+      expect((result as { data: { watermark_advanced_to: number | null; backfill_active: boolean } }).data.watermark_advanced_to).toBeNull();
+      expect((result as { data: { backfill_active: boolean } }).data.backfill_active).toBe(true);
+    });
+
     it('floor-guards completion: a lost backfill_target never regresses the watermark to epoch', async () => {
       // Simulate a desync (a soft-rejected target write left BACKFILL_TARGET unset while a drain is
       // active). On completion the watermark must jump to the pinned floor + 1, NOT to 1 (epoch).
