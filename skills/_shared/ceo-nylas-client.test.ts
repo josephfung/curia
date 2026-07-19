@@ -382,3 +382,52 @@ describe('CeoNylasClient — list limit clamping (≤ 20)', () => {
     expect(calledUrl.searchParams.get('limit')).toBe('20');
   });
 });
+
+// ── received_before (oldest-first paging, #1431) ────────────────────────────
+describe('CeoNylasClient — received_before filter', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sends received_before on listMessages', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(successResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = makeClient();
+    await client.listMessages({ folder: 'SENT', receivedAfter: 50, receivedBefore: 200 });
+
+    const calledUrl = new URL(fetchMock.mock.calls[0]![0] as string);
+    expect(calledUrl.searchParams.get('received_before')).toBe('200');
+    expect(calledUrl.searchParams.get('received_after')).toBe('50');
+  });
+
+  it('listAllMessages sends received_before on page 1 and not on cursor pages', async () => {
+    // Page 1: one message + a cursor. Page 2 (page_token present): empty, no cursor → loop exits.
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (String(url).includes('page_token')) {
+        return makeResponse(200, { data: [] });
+      }
+      return makeResponse(200, {
+        data: [{ id: 'm1', date: 100, folders: ['SENT'] }],
+        next_cursor: 'CUR',
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = makeClient();
+    const { messages } = await client.listAllMessages({
+      folder: 'SENT',
+      receivedAfter: 50,
+      receivedBefore: 200,
+      maxScan: 500,
+    });
+
+    expect(messages).toHaveLength(1);
+    const page1 = new URL(fetchMock.mock.calls[0]![0] as string);
+    const page2 = new URL(fetchMock.mock.calls[1]![0] as string);
+    expect(page1.searchParams.get('received_before')).toBe('200');
+    expect(page1.searchParams.get('received_after')).toBe('50');
+    expect(page2.searchParams.get('page_token')).toBe('CUR');
+    expect(page2.searchParams.has('received_before')).toBe(false);
+  });
+});

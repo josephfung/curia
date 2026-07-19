@@ -120,6 +120,9 @@ export interface ListMessagesOptions {
   unread?: boolean;
   query?: string;
   receivedAfter?: number;
+  /** Inclusive upper bound (Unix seconds). Nylas returns messages with date <= this. Paired with
+   *  receivedAfter, this bounds a sub-window for oldest-first backlog draining (#1431). */
+  receivedBefore?: number;
 }
 
 // Gmail system labels use specific IDs that don't always match the display
@@ -179,10 +182,10 @@ export class CeoNylasClient {
       // Nylas v3: search_query_native cannot be combined with any other filter
       // param except limit and page_token — sending in/unread/received_after
       // alongside it returns HTTP 400 "invalid_request_error".
-      if (options.folder || options.unread !== undefined || options.receivedAfter !== undefined) {
+      if (options.folder || options.unread !== undefined || options.receivedAfter !== undefined || options.receivedBefore !== undefined) {
         this.log.warn(
-          { suppressedOptions: { folder: options.folder, unread: options.unread, receivedAfter: options.receivedAfter } },
-          'nylas: listMessages — folder/unread/receivedAfter ignored because search_query_native is set (Nylas v3 limitation)',
+          { suppressedOptions: { folder: options.folder, unread: options.unread, receivedAfter: options.receivedAfter, receivedBefore: options.receivedBefore } },
+          'nylas: listMessages — folder/unread/receivedAfter/receivedBefore ignored because search_query_native is set (Nylas v3 limitation)',
         );
       }
       params.set('search_query_native', options.query);
@@ -199,6 +202,7 @@ export class CeoNylasClient {
       }
       if (options.unread !== undefined) params.set('unread', String(options.unread));
       if (options.receivedAfter !== undefined) params.set('received_after', String(options.receivedAfter));
+      if (options.receivedBefore !== undefined) params.set('received_before', String(options.receivedBefore));
     }
 
     const url = `${this.baseUrl}/messages?${params}`;
@@ -213,7 +217,7 @@ export class CeoNylasClient {
   // Sent folder that means lost observations (issue: #1429 review). This walks all
   // pages so a watermark-scoped poll actually sees every message in the window.
   //
-  // Filters (in/received_after) are only sent on the first request; Nylas's cursor
+  // Filters (in/received_after/received_before) are only sent on the first request; Nylas's cursor
   // encodes the original query, so subsequent pages carry the filter automatically
   // (same contract listAllDrafts relies on). `truncated` is true when the maxScan
   // ceiling was hit with more pages still available — callers must NOT treat the
@@ -242,6 +246,9 @@ export class CeoNylasClient {
         if (options.unread !== undefined) params.set('unread', String(options.unread));
         if (options.receivedAfter !== undefined) {
           params.set('received_after', String(options.receivedAfter));
+        }
+        if (options.receivedBefore !== undefined) {
+          params.set('received_before', String(options.receivedBefore));
         }
       }
       const url = `${this.baseUrl}/messages?${params}`;
