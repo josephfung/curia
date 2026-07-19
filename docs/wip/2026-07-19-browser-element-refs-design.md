@@ -99,6 +99,13 @@ keeps its ~15k-char budget; the ref list gets its own allocation so a large page
 cannot starve it. (Exact split tuned during implementation; both are constants at the top
 of `handler.ts`.)
 
+`MAX_REFS` is a **module constant, not config** — deliberately, to match the sibling
+`bodyText` char cap which is also hardcoded. Making only the ref cap deployment-configurable
+would asymmetrically split one content budget across a config field and a constant. If a
+deployment on a tighter-context model ever needs to tune it, promote both budgets to
+`browser.*` config together (via the same pattern as `browser.proxy`) — a small, isolated
+follow-up. Not doing it now (YAGNI: no deployment has needed it).
+
 ### 3. Resolution (`handler.ts`, `resolveLocator`)
 
 Add a ref branch at the top of `resolveLocator`:
