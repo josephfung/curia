@@ -302,12 +302,17 @@ export function formatDiffBlock(match: DraftMatch, sentBody: string): string {
  *   - Per-item docs (draft snapshots, shadow docs): no in-write trim — retained solely by the
  *     default idle scratch sweep (purgeExpiredScratch). That single mechanism is their retention.
  *
- * Boundaries: each block starts at a real `## Diff — ` header and runs up to
- * (not including) the next such header — the same header formatDiffBlock produces and
- * parsePendingDiffs consumes, so the result round-trips. We split
- * on the namespaced headers, NOT any `## ` line, so a `## `-prefixed line inside a sent email body
- * (a markdown H2 surviving htmlToPlainText) stays part of its block instead of mis-splitting it and
- * leaving a timestamp-less tail behind. Any leading preamble/header before the first block is
+ * Boundaries: each block starts at a real `## Diff — ` header — recognized ONLY when it is
+ * followed (allowing one blank line) by the metadata envelope formatDiffBlock emits (a `- ` metadata
+ * bullet) — and runs up to (not including) the next such header. parsePendingDiffs anchors
+ * on the same envelope, so the result round-trips. Anchoring on the envelope (not a bare
+ * `## Diff — ` line) is load-bearing for the retention guarantee: a `## Diff — ` line appearing
+ * inside a sent email body (surviving htmlToPlainText) would otherwise be treated as a boundary,
+ * and when the real parent block is expired its timestamped prefix would drop while the
+ * timestamp-less remainder — real, sensitive email content — survived the purge indefinitely.
+ * Requiring the envelope keeps such an in-body heading part of its parent block, so it ages out
+ * with it. (A `## `-prefixed body line that is not `## Diff — ` at all, e.g. a surviving markdown
+ * H2, is likewise never a boundary.) Any leading preamble/header before the first block is
  * preserved. Blocks with a missing or unparseable `sent_at` are KEPT (never drop on parse failure —
  * data loss is worse than over-retention), as is the whole body when `cutoffIso` itself is unparseable.
  */
@@ -316,11 +321,17 @@ export function trimEvidenceDoc(body: string, cutoffIso: string): string {
   if (!Number.isFinite(cutoffMs)) return body;
 
   // Lookahead split keeps the header delimiters, so the surviving pieces re-join to the exact
-  // original bytes (each block carries its own trailing `---` and blank line). Split only on the
-  // real block header (`## Diff — `), never a bare `## ` — see the doc comment.
-  const parts = body.split(/(?=^## Diff — )/m);
+  // original bytes (each block carries its own trailing `---` and blank line). A boundary is a
+  // `## Diff — ` header ANCHORED to the metadata envelope formatDiffBlock emits — the header line
+  // followed (allowing one blank line) by a `- ` metadata bullet (`- thread_id:`, `- sent_at:`, …).
+  // A bare `## Diff — ` line inside a sent email body is followed by prose, not that bulleted
+  // envelope, so it is NOT a boundary and stays with its parent block (which ages out together) —
+  // see the doc comment for why this closes a retention-bypass leak.
+  const parts = body.split(/(?=^## Diff — .*\n\n?- )/m);
   const kept: string[] = [];
   for (const part of parts) {
+    // Split only happens at anchored boundaries, so any part that starts with `## Diff — ` is a
+    // real block; everything else (doc preamble, or junk not matching the envelope) is passed through.
     if (!/^## Diff — /.test(part)) {
       kept.push(part); // leading preamble / doc header
       continue;

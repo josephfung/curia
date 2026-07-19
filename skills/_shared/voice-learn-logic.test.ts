@@ -114,6 +114,40 @@ Sent from my phone. Thanks!
     expect(pairs[0]!.sentBody).toContain('Sent from my phone');
   });
 
+  it('does not split on a "## Diff — " line inside the sent body (anchors on the metadata envelope)', () => {
+    // A sent email body can contain a line that looks like a block header. It is followed by prose,
+    // not the `- ` metadata envelope, so it must not be treated as a boundary — otherwise the real
+    // block's captured body would be truncated at the look-alike line and a spurious second section
+    // introduced. Mirrors trimEvidenceDoc's boundary anchoring.
+    const withFakeHeader = `
+## Diff — draft d11 ↔ sent m11
+
+- thread_id: t11
+- sent_at: 2026-07-07T12:00:00.000Z
+- subject: Recap
+
+### Draft
+
+Here is the recap you asked for, with the section below.
+
+### Sent
+
+Here is the recap, with the section below.
+
+## Diff — draft evil ↔ sent evil
+
+and the trailing detail after the look-alike heading.
+
+---
+`;
+    const pairs = parsePendingDiffs(withFakeHeader);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]!.draftId).toBe('d11');
+    // The look-alike heading and everything after it stay part of this one block's sent body.
+    expect(pairs[0]!.sentBody).toContain('## Diff — draft evil');
+    expect(pairs[0]!.sentBody).toContain('trailing detail after the look-alike heading');
+  });
+
   it('excludes an equal-length but unrelated rewrite (not shared-prefix based)', () => {
     // Draft and sent are the same length yet share almost no vocabulary — must be
     // treated as a near-total rewrite and dropped, not fed to learning.

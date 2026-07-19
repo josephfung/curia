@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Evidence-doc retention** — anchor `## Diff —` boundaries to the metadata envelope so an email-body heading can't dodge the purge. (#1444)
 - **KG trust gates** — checkpoint extraction and `memory-store` block untrusted inbound senders. (#1290)
 - **Release verification docs** — README documents `cosign verify-blob` for signed release artifacts. (#929)
 
