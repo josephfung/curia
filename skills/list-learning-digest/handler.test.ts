@@ -52,9 +52,6 @@ function makeMem(): EntityMemory & { __values: Map<string, string> } {
 describe('ListLearningDigestHandler', () => {
   it('returns empty message when no items', async () => {
     const ctx = {
-      workingDocs: {
-        read: vi.fn().mockResolvedValue(null),
-      },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as SkillContext;
     const result = await new ListLearningDigestHandler().execute(ctx);
@@ -80,7 +77,6 @@ describe('ListLearningDigestHandler', () => {
     mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
     const ctx = {
       entityMemory: mem,
-      workingDocs: { read: vi.fn().mockResolvedValue(null) },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as SkillContext;
     const result = await new ListLearningDigestHandler().execute(ctx);
@@ -95,7 +91,6 @@ describe('ListLearningDigestHandler', () => {
 
   it('does not render the voice section when entityMemory is unavailable', async () => {
     const ctx = {
-      workingDocs: { read: vi.fn().mockResolvedValue(null) },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as SkillContext;
     const result = await new ListLearningDigestHandler().execute(ctx);
@@ -116,7 +111,6 @@ describe('ListLearningDigestHandler', () => {
     mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
     const ctx = {
       entityMemory: mem,
-      workingDocs: { read: vi.fn().mockResolvedValue(null) },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as SkillContext;
     const result = await new ListLearningDigestHandler().execute(ctx);

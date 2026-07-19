@@ -192,7 +192,7 @@ describe('trimEvidenceDoc', () => {
 
   it('drops an old block whose body contains a "## " line without leaving a tail (splits on real headers only)', () => {
     // A sent email body can legitimately contain a markdown H2 that survives htmlToPlainText.
-    // The block boundary must be the real Diff/Candidate header, not any `## ` line — otherwise
+    // The block boundary must be the real Diff header, not any `## ` line — otherwise
     // the old block's tail (which has no `sent_at`) is wrongly retained, partially defeating the
     // retention bound for exactly the sensitive bodies F3 is meant to age out.
     const sentWithHeading = `Here's the plan.\n\n## Agenda\n\n- item one\n- item two`;

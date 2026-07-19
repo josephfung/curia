@@ -42,10 +42,10 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
   }
 
   private async runCompletion(ctx: SkillContext): Promise<SkillResult> {
-    if (!ctx.taskRepo || !ctx.workingDocs || !ctx.sensitivityClassifier || !ctx.entityMemory) {
+    if (!ctx.taskRepo || !ctx.sensitivityClassifier || !ctx.entityMemory) {
       return {
         success: false,
-        error: 'task-completion-from-sent requires taskRepo, workingDocs, sensitivityClassifier, entityMemory',
+        error: 'task-completion-from-sent requires taskRepo, sensitivityClassifier, entityMemory',
       };
     }
     // Narrow closure over the classifier's classify() so classifyTaskRisk stays a pure,

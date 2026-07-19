@@ -1,7 +1,7 @@
 {
   "name": "task-completion-from-sent",
   "description": "Consume sent-mail task-completion candidates: auto-complete low-risk high-confidence matches with a reversible undo note; queue confirmations for high-risk or fuzzy matches. Writes digest surfaces to the config-store key sent_observe.completion_digest. Intended to run after ceo-inbox-sent-observe on the daily cron.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {},
@@ -13,5 +13,5 @@
   "permissions": [],
   "secrets": [],
   "timeout": 30000,
-  "capabilities": ["taskRepo", "workingDocs", "sensitivityClassifier", "entityMemory"]
+  "capabilities": ["taskRepo", "sensitivityClassifier", "entityMemory"]
 }

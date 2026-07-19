@@ -536,11 +536,22 @@ export class EmailAdapter implements Channel {
     // poll loop — the in-memory watermark remains correct for the current run.
     if (this.lastSeenTimestamp !== prevWatermark && this.config.configStore) {
       try {
-        await this.config.configStore.set(
+        const { stored } = await this.config.configStore.set(
           POLL_STATE_NAMESPACE,
           lastSeenKey(this.config.accountId),
           String(this.lastSeenTimestamp),
         );
+        if (!stored) {
+          // Soft-reject (storeFact dedup 'conflict'/'auto_rejected' — no throw, so the catch below
+          // never fires). The durable watermark stayed at its prior value: a restart would re-fetch
+          // from there and reprocess already-seen mail. That's harmless (message processing dedups by
+          // id) but wasteful, and otherwise entirely silent. Warn so operators can spot a stuck
+          // watermark; the in-memory value remains correct for this run and the next advance retries.
+          this.config.logger.warn(
+            { accountId: this.config.accountId, lastSeenTimestamp: this.lastSeenTimestamp },
+            'Email adapter: poll watermark write soft-rejected — durable watermark not advanced (in-memory value still current)',
+          );
+        }
       } catch (err) {
         this.config.logger.error(
           { err, accountId: this.config.accountId, lastSeenTimestamp: this.lastSeenTimestamp },

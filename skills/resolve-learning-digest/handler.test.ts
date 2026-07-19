@@ -48,10 +48,6 @@ describe('ResolveLearningDigestHandler', () => {
     const update = vi.fn();
     const ctx = {
       input: { action: 'approve_voice' },
-      workingDocs: {
-        read: vi.fn(),
-        update: vi.fn(),
-      },
       entityMemory: mem,
       executiveProfileService: {
         get: () => ({
@@ -94,7 +90,6 @@ describe('ResolveLearningDigestHandler', () => {
     const update = vi.fn();
     const ctx = {
       input: { action: 'approve_voice' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: {
         get: () => ({
@@ -140,7 +135,6 @@ describe('ResolveLearningDigestHandler', () => {
     const update = vi.fn();
     const ctx = {
       input: { action: 'approve_voice' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: {
         get: () => ({
@@ -198,10 +192,6 @@ describe('ResolveLearningDigestHandler', () => {
     mem.__values.set(VOICE_PROPOSAL_KEY, GUIDE_PROPOSAL);
     const ctx = {
       input: { action: 'dismiss_voice' },
-      workingDocs: {
-        read: vi.fn(),
-        update: vi.fn(),
-      },
       entityMemory: mem,
       executiveProfileService: {
         get: () => ({ writingVoice: { tone: [], formality: 50, patterns: [], vocabulary: { prefer: [], avoid: [] }, signOff: '' } }),
@@ -233,7 +223,6 @@ describe('ResolveLearningDigestHandler', () => {
       input: { action: 'undo_completion', task_id: 't1' },
       // Not read/written for completion actions any more (config-store only, #1438) — a
       // minimal stub satisfies the handler's top-level capability guard.
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
@@ -263,7 +252,6 @@ describe('ResolveLearningDigestHandler', () => {
     const getTask = vi.fn(async () => ({ id: 't1', status: 'done' }));
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
@@ -307,7 +295,6 @@ describe('ResolveLearningDigestHandler', () => {
       .mockResolvedValueOnce({ id: 't1', status: 'open' });
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
@@ -358,7 +345,6 @@ describe('ResolveLearningDigestHandler', () => {
     const reopenTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
@@ -389,7 +375,6 @@ describe('ResolveLearningDigestHandler', () => {
     const reopenTask = vi.fn(async () => ({ id: 't1', status: 'open' }));
     const ctx = {
       input: { action: 'undo_completion', task_id: 't1' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
@@ -415,7 +400,6 @@ describe('ResolveLearningDigestHandler', () => {
     const completeTask = vi.fn(async () => undefined);
     const ctx = {
       input: { action: 'confirm_completion', task_id: 't1' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
@@ -441,7 +425,6 @@ describe('ResolveLearningDigestHandler', () => {
     const completeTask = vi.fn();
     const ctx = {
       input: { action: 'confirm_completion', task_id: 't1' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
@@ -478,7 +461,6 @@ describe('ResolveLearningDigestHandler', () => {
     const completeTask = vi.fn(async () => undefined);
     const ctx = {
       input: { action: 'confirm_completion', task_id: 't1' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
@@ -527,7 +509,6 @@ describe('ResolveLearningDigestHandler', () => {
     const reopenTask = vi.fn();
     const ctx = {
       input: { action: 'dismiss_completion', task_id: 't1' },
-      workingDocs: { read: vi.fn(), update: vi.fn() },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask, completeTask, getTask },

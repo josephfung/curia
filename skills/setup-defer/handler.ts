@@ -77,7 +77,18 @@ export class SetupDeferHandler implements SkillHandler {
         deferred = deferred.filter(id => id !== tid);
       }
 
-      await configStore.set(NAMESPACE, KEY, JSON.stringify(deferred));
+      // ConfigStore.set can soft-reject (stored:false) without throwing on a storeFact dedup
+      // conflict (#1438). If that happens here the deferrals array did NOT persist, so setup-status
+      // would keep reading the prior value and the CEO's defer/resume is silently lost. Report a
+      // retryable failure rather than claiming success on a write that never landed.
+      const { stored: didStore } = await configStore.set(NAMESPACE, KEY, JSON.stringify(deferred));
+      if (!didStore) {
+        ctx.log.warn({ task_id: tid, action }, 'setup-defer: deferrals write soft-rejected — change not persisted');
+        return {
+          success: false,
+          error: `Could not persist the deferral change for "${tid}" (transient) — please retry.`,
+        };
+      }
 
       return {
         success: true,

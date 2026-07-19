@@ -5,10 +5,6 @@ import { renderCompletionSection, renderVoiceGuideSection } from '../_shared/lea
 
 export class ListLearningDigestHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
-    if (!ctx.workingDocs) {
-      return { success: false, error: 'list-learning-digest requires workingDocs' };
-    }
-
     // Skill contract: never throw — a failed document read becomes a failure result.
     try {
       // Both the voice proposal and the completion digest now live in config (#1438).

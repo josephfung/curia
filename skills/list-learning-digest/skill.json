@@ -1,7 +1,7 @@
 {
   "name": "list-learning-digest",
   "description": "List the pending voice-guide proposal and sent-mail task-completion undo/confirm items for the daily CEO digest. Returns structured items plus pre-rendered markdown sections (omitted when empty).",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {},
@@ -13,6 +13,6 @@
   "permissions": [],
   "secrets": [],
   "timeout": 15000,
-  "capabilities": ["workingDocs", "entityMemory"],
+  "capabilities": ["entityMemory"],
   "allowed_callers": ["coordinator"]
 }

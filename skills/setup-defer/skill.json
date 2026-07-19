@@ -1,7 +1,7 @@
 {
   "name": "setup-defer",
   "description": "Record or clear a setup-wizard task deferral. Use when the principal says they want to skip a setup task for now. Deferred tasks resurface as 'pending (deferred)' on the next setup-status call — never as done. Use action 'resume' to clear a deferral when the principal is ready to tackle it.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
