@@ -43,42 +43,7 @@ import { PlaywrightBlocker } from '@ghostery/adblocker-playwright';
 import type { Logger } from '../logger.js';
 import { BrowserSession } from './browser-session.js';
 import type { SessionId } from './types.js';
-
-/** Playwright's proxy shape: a credential-free `server` plus optional auth. */
-type ProxyConfig = NonNullable<BrowserContextOptions['proxy']>;
-
-/**
- * Parse a proxy config string into Playwright's ProxySettings. Accepts a full URL
- * (`http://user:pass@host:port`, `socks5://host:1080`) or a bare `host:port` (assumed http).
- * Credentials embedded in the URL are split out because Playwright wants `server` WITHOUT
- * credentials and `username`/`password` as separate fields. Empty/absent → undefined
- * (direct egress). Exported for unit testing. (residential-proxy support)
- */
-export function parseProxyConfig(raw: string | undefined): ProxyConfig | undefined {
-  if (!raw || raw.trim().length === 0) return undefined;
-  const trimmed = raw.trim();
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-    // A bare "host:port" parses as a URL with an empty host (scheme becomes "host"),
-    // so fall through to the http:// normalization below.
-    if (!url.host) throw new Error('no host');
-  } catch {
-    try {
-      url = new URL(`http://${trimmed}`);
-    } catch {
-      return undefined;
-    }
-  }
-  const username = url.username ? decodeURIComponent(url.username) : undefined;
-  const password = url.password ? decodeURIComponent(url.password) : undefined;
-  return {
-    // url.protocol includes the trailing colon; url.host includes the port.
-    server: `${url.protocol}//${url.host}`,
-    ...(username ? { username } : {}),
-    ...(password ? { password } : {}),
-  };
-}
+import { parseProxyConfig, type ProxyConfig } from './proxy-config.js';
 
 interface BrowserServiceOptions {
   logger: Logger;
