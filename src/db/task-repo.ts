@@ -117,6 +117,31 @@ export interface ListTasksFilters {
   parentTaskId?: string;
   dueBefore?: Date;
   limit?: number;
+  /** Keyset pagination cursor (#1433). When set, only rows strictly *after* this row in the
+   *  (priority DESC, due_at ASC NULLS LAST, id ASC) ordering are returned. Build it from the
+   *  last row of the previous page. */
+  cursor?: TaskListCursor;
+}
+
+/**
+ * Opaque keyset-pagination cursor for {@link TaskRepo.listTasks} (#1433). Encodes the sort key of
+ * the last row returned — (priority, due_at, id) — so the next page can resume without skipping or
+ * duplicating rows. `id` is the total-ordering tiebreaker that makes the sort deterministic even
+ * when priority and due_at tie.
+ */
+export interface TaskListCursor {
+  priority: number;
+  dueAt: string | null;
+  id: string;
+}
+
+/** Options for {@link TaskRepo.listAllTasks} (#1433). */
+export interface ListAllTasksOptions {
+  /** Rows fetched per keyset page. Default 500. */
+  pageSize?: number;
+  /** Hard ceiling on the total rows returned across all pages — a safety valve against
+   *  pathological task volumes. When reached, iteration stops and a warning is logged. Default 5000. */
+  maxTasks?: number;
 }
 
 // Extended row returned by list — includes the next pending wake-up time if any.
@@ -322,11 +347,14 @@ export class TaskRepo {
   }
 
   /**
-   * List tasks with optional filters. Returns rows ordered by priority DESC, due_at ASC NULLS LAST.
+   * List tasks with optional filters. Returns rows in a deterministic total order:
+   * priority DESC, due_at ASC NULLS LAST, id ASC. The id tiebreaker makes the ordering stable so
+   * a `cursor` (#1433) can page through the full result set without skipping or duplicating rows —
+   * see {@link listAllTasks} for the paging loop.
    * Joins with scheduled_jobs to include the next pending wake-up time.
    */
   async listTasks(filters: ListTasksFilters = {}): Promise<TaskListRow[]> {
-    const { statuses, owner, tag, parentTaskId, dueBefore, limit = 25 } = filters;
+    const { statuses, owner, tag, parentTaskId, dueBefore, cursor, limit = 25 } = filters;
 
     const conditions: string[] = [];
     const queryParams: unknown[] = [];
@@ -352,6 +380,30 @@ export class TaskRepo {
       conditions.push(`t.due_at < $${idx++}`);
       queryParams.push(dueBefore);
     }
+    if (cursor) {
+      // Keyset predicate: keep only rows strictly *after* the cursor row in the
+      // (priority DESC, due_at ASC NULLS LAST, id ASC) ordering. Placeholders are reused for
+      // the same value (Postgres allows referencing $N multiple times).
+      const pIdx = idx++;
+      queryParams.push(cursor.priority);
+      const iIdx = idx++;
+      queryParams.push(cursor.id);
+      if (cursor.dueAt === null) {
+        // Cursor sits in the NULLS-LAST tail: the only later rows are lower-priority rows, or
+        // same-priority rows that are also null-due with a greater id (any non-null due_at sorts
+        // *before* the nulls, so it's already been paged past).
+        conditions.push(
+          `(t.priority < $${pIdx} OR (t.priority = $${pIdx} AND t.due_at IS NULL AND t.id > $${iIdx}))`,
+        );
+      } else {
+        const dIdx = idx++;
+        queryParams.push(cursor.dueAt);
+        conditions.push(
+          `(t.priority < $${pIdx} OR (t.priority = $${pIdx} AND ` +
+            `(t.due_at IS NULL OR t.due_at > $${dIdx} OR (t.due_at = $${dIdx} AND t.id > $${iIdx}))))`,
+        );
+      }
+    }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -370,7 +422,7 @@ export class TaskRepo {
         ) AS next_wake_at
       FROM tasks t
       ${whereClause}
-      ORDER BY t.priority DESC, t.due_at ASC NULLS LAST
+      ORDER BY t.priority DESC, t.due_at ASC NULLS LAST, t.id ASC
       LIMIT $${idx}
     `;
 
@@ -379,6 +431,57 @@ export class TaskRepo {
       ...mapTaskRow(r),
       nextWakeAt: r.next_wake_at,
     }));
+  }
+
+  /**
+   * Fetch ALL tasks matching the filters by walking keyset pages (#1433). Callers that must
+   * consider every eligible task — e.g. sent-observe completion matching, which previously capped
+   * at 100 and silently ignored the rest — should use this instead of {@link listTasks}, whose
+   * single page is bounded by `limit`.
+   *
+   * Ordering is the deterministic total order from listTasks (priority DESC, due_at ASC NULLS LAST,
+   * id ASC), so no row is skipped or duplicated across pages. `maxTasks` is a safety ceiling
+   * against pathological volumes: when reached, iteration stops and a warning is logged rather than
+   * looping unboundedly.
+   */
+  async listAllTasks(
+    filters: Omit<ListTasksFilters, 'limit' | 'cursor'> = {},
+    options: ListAllTasksOptions = {},
+  ): Promise<TaskListRow[]> {
+    const pageSize = options.pageSize ?? 500;
+    const maxTasks = options.maxTasks ?? 5000;
+    const all: TaskListRow[] = [];
+    let cursor: TaskListCursor | undefined;
+
+    // Bound the loop by the ceiling so a bug in cursor advancement can never spin forever.
+    // +1 slack lets a full final page (rows.length === pageSize) still terminate via its short
+    // successor before the ceiling logic fires.
+    const maxPages = Math.ceil(maxTasks / pageSize) + 1;
+    for (let page = 0; page < maxPages; page++) {
+      const rows = await this.listTasks({ ...filters, limit: pageSize, cursor });
+      all.push(...rows);
+
+      // A short page means the result set is drained — this is the last page.
+      if (rows.length < pageSize) return all;
+
+      if (all.length >= maxTasks) {
+        this.logger.warn(
+          { maxTasks, fetched: all.length, filters },
+          'task-repo: listAllTasks hit the safety ceiling — remaining tasks were not fetched',
+        );
+        return all.slice(0, maxTasks);
+      }
+
+      const last = rows[rows.length - 1]!;
+      cursor = { priority: last.priority, dueAt: last.dueAt, id: last.id };
+    }
+
+    // Exhausted the page budget without a short page — treat as the ceiling being hit.
+    this.logger.warn(
+      { maxTasks, fetched: all.length, filters },
+      'task-repo: listAllTasks exhausted its page budget — remaining tasks were not fetched',
+    );
+    return all.slice(0, maxTasks);
   }
 
   /**
