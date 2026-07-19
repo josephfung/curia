@@ -5,6 +5,9 @@
 // exist — this function was previously only exercised in a real browser via
 // frame.evaluate(), so these are its first direct tests.
 import { describe, it, expect, beforeEach } from 'vitest';
+import { transformWithEsbuild } from 'vite';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { extractFrameContent } from './dom-extract.js';
 
 const OPTS = { frameIndex: 0, maxRefs: 200, generation: 1 };
@@ -91,5 +94,34 @@ describe('extractFrameContent — interactable refs', () => {
     expect(document.querySelector('[data-curia-ref="g1f0e1"]')).toBeNull();
     // New refs carry generation 2; e1 is the newly-prepended Z, not A.
     expect(document.querySelector('[data-curia-ref="g2f0e1"]')!.textContent).toBe('Z');
+  });
+
+  // Regression: extractFrameContent is shipped to the browser via Playwright's
+  // frame.evaluate(), which serializes it with .toString() and re-parses it in the page's
+  // scope. Prod loads skills via tsx (esbuild keepNames: true), which wraps named inner
+  // functions in __name(...) — a module-scope helper that does NOT exist in the page, so a
+  // named inner function throws `__name is not defined` on every frame. vitest's own
+  // transpile has keepNames OFF, so a plain import can't catch this; we transpile the source
+  // the way prod does, then run the function in a fresh scope like frame.evaluate.
+  it('stays self-contained when serialized into a page after a keepNames transpile (prod pipeline)', async () => {
+    // Resolve via cwd (worktree root under `pnpm -C`, repo root in CI) rather than
+    // import.meta.url — happy-dom gives a non-file: import.meta.url here.
+    const srcPath = resolve(process.cwd(), 'skills/web-browser/dom-extract.ts');
+    const { code } = await transformWithEsbuild(readFileSync(srcPath, 'utf8'), srcPath, {
+      keepNames: true, loader: 'ts', format: 'cjs',
+    });
+    // Execute the transpiled CJS to get the keepNames-wrapped function. Its own module scope
+    // defines __name, so it works when called normally here.
+    const shim: { exports: Record<string, unknown> } = { exports: {} };
+    new Function('module', 'exports', code)(shim, shim.exports);
+    const transpiled = shim.exports.extractFrameContent as typeof extractFrameContent;
+    // Rehydrate exactly as frame.evaluate does: serialize -> re-parse in a fresh scope with
+    // no access to the module's __name helper. A named inner function throws `__name is not
+    // defined` here.
+    const rehydrated = new Function(`return (${transpiled.toString()})`)() as typeof extractFrameContent;
+    document.body.innerHTML = '<button>Go</button>';
+    let out = '';
+    expect(() => { out = rehydrated({ frameIndex: 0, maxRefs: 200, generation: 1 }); }).not.toThrow();
+    expect(out).toContain('[g1f0e1] button "Go"');
   });
 });
