@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import pg from 'pg';
 import { readFile } from 'node:fs/promises';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
@@ -34,22 +35,19 @@ async function insertShadow(pool: pg.Pool, src: string): Promise<number> {
 describeIf('migration 074: shadow-eval idempotency', () => {
   let pool: pg.Pool;
   let upSql: string;
+  // Set true only after requireCuriaTestDatabase confirms we're on curia_test. beforeEach/afterAll
+  // gate their destructive DDL on this: vitest still fires afterAll after a FAILED beforeAll, so
+  // without this flag a guard abort against a mispointed DB would still run `DROP INDEX` — and drop
+  // the real production index. With it, no destructive statement runs unless the guard passed.
+  let onTestDb = false;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
     // Safety rail: this suite runs the migration's UNSCOPED, table-wide dedup DELETE + CREATE INDEX,
-    // so it must never touch a real database. Refuse to run unless connected to a *test* database —
-    // a mispointed DATABASE_URL (e.g. prod) fails loudly HERE, before any DDL executes. (No shared
-    // curia_test fixture exists in the repo yet; this in-file guard is the minimal safeguard.)
-    const { rows } = await pool.query<{ db: string }>('SELECT current_database() AS db');
-    const dbName = rows[0]!.db;
-    if (!/test/i.test(dbName)) {
-      await pool.end();
-      throw new Error(
-        `Refusing to run the destructive migration-074 integration test against database "${dbName}". ` +
-          'Point DATABASE_URL at a test database (its name must contain "test").',
-      );
-    }
+    // so it must never touch a real database. The shared guard throws HERE (before onTestDb is set,
+    // and before any DDL) if DATABASE_URL points anywhere but the canonical isolated `curia_test`.
+    await requireCuriaTestDatabase(pool);
+    onTestDb = true;
     const full = await readFile(MIGRATION_SQL_URL, 'utf8');
     // Run only the Up half — the Down's DROP INDEX would otherwise remove what we assert.
     upSql = full.split('-- Down Migration')[0]!;
@@ -58,14 +56,19 @@ describeIf('migration 074: shadow-eval idempotency', () => {
   // Clean slate: drop the index and delete only our scoped rows before each case. The index name is
   // a fixed literal (not interpolated) to keep the DDL out of the parameterized-query lint's sights.
   beforeEach(async () => {
+    if (!onTestDb) return;
     await pool.query('DROP INDEX IF EXISTS idx_aal_shadow_source');
     await pool.query(`DELETE FROM autonomy_action_log WHERE payload->>'source_message_id' LIKE $1`, [`${PFX}%`]);
   });
 
   afterAll(async () => {
-    await pool.query('DROP INDEX IF EXISTS idx_aal_shadow_source');
-    await pool.query(`DELETE FROM autonomy_action_log WHERE payload->>'source_message_id' LIKE $1`, [`${PFX}%`]);
-    await pool.end();
+    // Only clean up (destructive DDL) when the guard confirmed the test database; always close the
+    // pool if it was opened, even on the guard-abort path, so a failed run leaks no connection.
+    if (onTestDb) {
+      await pool.query('DROP INDEX IF EXISTS idx_aal_shadow_source');
+      await pool.query(`DELETE FROM autonomy_action_log WHERE payload->>'source_message_id' LIKE $1`, [`${PFX}%`]);
+    }
+    if (pool) await pool.end();
   });
 
   it('deletes duplicate shadow rows (keeping the lowest id) before creating the index', async () => {
