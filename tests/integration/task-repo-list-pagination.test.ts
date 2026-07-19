@@ -3,7 +3,7 @@
 // deterministic (no skipped or duplicated rows), order-equivalent to a single unbounded fetch,
 // and that the listAllTasks safety ceiling caps the total with a logged warning.
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import pg from 'pg';
 import pino from 'pino';
 import { TaskRepo } from '../../src/db/task-repo.js';
