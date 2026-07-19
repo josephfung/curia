@@ -49,12 +49,13 @@ describeIf('TaskRepo keyset pagination (#1433)', () => {
   afterAll(async () => { await cleanup(pool); await pool.end(); });
 
   it('listAllTasks returns every matching row with no skips or duplicates', async () => {
-    const all = await repo.listAllTasks(
+    const { tasks, truncated } = await repo.listAllTasks(
       { owner: 'ceo', statuses: ['open'] },
       { pageSize: 40 },
     );
+    expect(truncated).toBe(false); // drained fully, well under the default ceiling
     // Restrict to this test's rows (the shared DB may hold unrelated ceo tasks).
-    const mine = all.filter((t) => t.title.startsWith(PREFIX));
+    const mine = tasks.filter((t) => t.title.startsWith(PREFIX));
     expect(mine).toHaveLength(TOTAL);
     const ids = new Set(mine.map((t) => t.id));
     expect(ids.size).toBe(TOTAL); // no duplicates
@@ -65,7 +66,7 @@ describeIf('TaskRepo keyset pagination (#1433)', () => {
     const single = (await repo.listTasks({ owner: 'ceo', statuses: ['open'], limit: 10_000 }))
       .filter((t) => t.title.startsWith(PREFIX));
     const paged = (await repo.listAllTasks({ owner: 'ceo', statuses: ['open'] }, { pageSize: 37 }))
-      .filter((t) => t.title.startsWith(PREFIX));
+      .tasks.filter((t) => t.title.startsWith(PREFIX));
     expect(paged.map((t) => t.id)).toEqual(single.map((t) => t.id));
 
     // And the order actually honors priority DESC, due_at ASC NULLS LAST, id ASC.
@@ -118,7 +119,8 @@ describeIf('TaskRepo keyset pagination (#1433)', () => {
       { owner: 'ceo', statuses: ['open'] },
       { pageSize: 40, maxTasks: 100 },
     );
-    expect(capped).toHaveLength(100);
+    expect(capped.tasks).toHaveLength(100);
+    expect(capped.truncated).toBe(true);
     expect(warnings.some((w) => JSON.stringify(w).includes('safety ceiling'))).toBe(true);
   });
 });
