@@ -38,6 +38,10 @@ browser:
   # Browser channel: "chrome" for real Chrome (must be installed in the image),
   # empty for the bundled Playwright Chromium.
   channel: ""
+  # Optional egress proxy for browser traffic. Full URL or bare host:port
+  # (e.g. "http://browser-proxy:8888"). Empty → direct egress. Set this per-deployment
+  # to route the browser through a residential exit and avoid a datacenter-IP bot signal.
+  proxy: ""
   # Context locale (BCP 47).
   locale: "en-US"
 

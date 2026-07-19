@@ -44,6 +44,42 @@ import type { Logger } from '../logger.js';
 import { BrowserSession } from './browser-session.js';
 import type { SessionId } from './types.js';
 
+/** Playwright's proxy shape: a credential-free `server` plus optional auth. */
+type ProxyConfig = NonNullable<BrowserContextOptions['proxy']>;
+
+/**
+ * Parse a proxy config string into Playwright's ProxySettings. Accepts a full URL
+ * (`http://user:pass@host:port`, `socks5://host:1080`) or a bare `host:port` (assumed http).
+ * Credentials embedded in the URL are split out because Playwright wants `server` WITHOUT
+ * credentials and `username`/`password` as separate fields. Empty/absent → undefined
+ * (direct egress). Exported for unit testing. (residential-proxy support)
+ */
+export function parseProxyConfig(raw: string | undefined): ProxyConfig | undefined {
+  if (!raw || raw.trim().length === 0) return undefined;
+  const trimmed = raw.trim();
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+    // A bare "host:port" parses as a URL with an empty host (scheme becomes "host"),
+    // so fall through to the http:// normalization below.
+    if (!url.host) throw new Error('no host');
+  } catch {
+    try {
+      url = new URL(`http://${trimmed}`);
+    } catch {
+      return undefined;
+    }
+  }
+  const username = url.username ? decodeURIComponent(url.username) : undefined;
+  const password = url.password ? decodeURIComponent(url.password) : undefined;
+  return {
+    // url.protocol includes the trailing colon; url.host includes the port.
+    server: `${url.protocol}//${url.host}`,
+    ...(username ? { username } : {}),
+    ...(password ? { password } : {}),
+  };
+}
+
 interface BrowserServiceOptions {
   logger: Logger;
   /** Session idle TTL in ms. Default: 600_000 (10 minutes). */
@@ -54,6 +90,11 @@ interface BrowserServiceOptions {
   profileDir?: string;
   /** Browser channel, e.g. 'chrome' for real Chrome. Absent → bundled Chromium. */
   channel?: string;
+  /**
+   * Optional egress proxy for browser traffic (e.g. a residential home-network exit).
+   * Full URL or bare host:port. Absent/empty → direct egress. See parseProxyConfig.
+   */
+  proxy?: string;
   /** Context locale (BCP 47). Default 'en-US'. */
   locale?: string;
   /** IANA timezone for the context, aligned to the principal. */
@@ -71,6 +112,9 @@ export class BrowserService {
   private sweepIntervalMs: number;
   private profileDir: string;
   private channel: string | undefined;
+  // Parsed once in the constructor; spread into every context's options and used to gate
+  // the WebRTC-leak launch flag. Undefined → direct egress.
+  private proxy: ProxyConfig | undefined;
   private locale: string;
   private timezone: string | undefined;
   private contextFactory: () => Promise<BrowserContext>;
@@ -108,6 +152,7 @@ export class BrowserService {
       ? options.profileDir
       : join(homedir(), '.curia', 'browser-profile');
     this.channel = options.channel && options.channel.length > 0 ? options.channel : undefined;
+    this.proxy = parseProxyConfig(options.proxy);
     this.locale = options.locale && options.locale.length > 0 ? options.locale : 'en-US';
     this.timezone = options.timezone;
     this.contextFactory = options.contextFactory ?? (() => this.launchPersistentContext());
@@ -402,6 +447,10 @@ export class BrowserService {
    * inconsistency detection keys on — and a hardcoded UA goes stale into a bot tell (#987).
    * timezoneId is set only when a timezone is configured, aligning the context with the
    * principal. (#1053)
+   *
+   * The proxy (when configured) is spread here so it applies to BOTH the persistent context
+   * (launchPersistentContext) and any incognito context (browser.newContext) — routing all
+   * browser egress through, e.g., a residential home-network exit. (residential-proxy support)
    */
   private buildContextOptions(): BrowserContextOptions {
     return {
@@ -409,6 +458,7 @@ export class BrowserService {
       locale: this.locale,
       colorScheme: 'light',
       ...(this.timezone ? { timezoneId: this.timezone } : {}),
+      ...(this.proxy ? { proxy: this.proxy } : {}),
     };
   }
 
@@ -457,6 +507,11 @@ export class BrowserService {
         // manages is a documented anti-pattern). These two are container requirements. (#1053)
         '--no-sandbox',
         '--disable-dev-shm-usage',
+        // When egressing through a proxy, force WebRTC to only use proxied UDP so a STUN
+        // candidate can't leak the real (datacenter) IP behind the residential exit. This is
+        // a browser-process-level flag, so it also covers incognito contexts spun off this
+        // launch. Only added when a proxy is set. (residential-proxy support)
+        ...(this.proxy ? ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] : []),
       ],
       ...this.buildContextOptions(),
     };
@@ -498,7 +553,12 @@ export class BrowserService {
   /** Log the resolved channel + real browser version for observability (UA traceability). */
   private logChannel(context: BrowserContext, channel: string | undefined): void {
     const version = context.browser()?.version();
-    this.logger.info({ channel: channel ?? 'chromium', version, profileDir: this.profileDir }, 'Persistent browser context launched');
+    // Log the proxy server (never the credentials) so the egress posture is greppable —
+    // a residential exit vs. direct datacenter egress is exactly what we want observable.
+    this.logger.info(
+      { channel: channel ?? 'chromium', version, profileDir: this.profileDir, proxy: this.proxy?.server ?? null },
+      'Persistent browser context launched',
+    );
   }
 
   /**

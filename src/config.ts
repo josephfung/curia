@@ -245,6 +245,12 @@ export interface YamlConfig {
     profileDir?: string;
     /** Browser channel, e.g. "chrome" for real Chrome. Empty/absent → bundled Chromium. */
     channel?: string;
+    /**
+     * Optional egress proxy for browser traffic (full URL or bare host:port, e.g.
+     * "http://browser-proxy:8888"). Empty/absent → direct egress. Set per-deployment to
+     * route the browser through a residential exit and avoid a datacenter-IP bot signal.
+     */
+    proxy?: string;
     /** Context locale (BCP 47). Default "en-US". */
     locale?: string;
   };
@@ -713,14 +719,14 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   // reach BrowserService and schedule near-continuous sweeps. Reject malformed values here.
   const browser = config.browser;
   if (browser !== undefined) {
-    const { sessionTtlMs, sweepIntervalMs, profileDir, channel, locale } = browser;
+    const { sessionTtlMs, sweepIntervalMs, profileDir, channel, proxy, locale } = browser;
     if (sessionTtlMs !== undefined && (!Number.isInteger(sessionTtlMs) || sessionTtlMs <= 0)) {
       throw new Error(`browser.sessionTtlMs must be a positive integer, got: ${sessionTtlMs}`);
     }
     if (sweepIntervalMs !== undefined && (!Number.isInteger(sweepIntervalMs) || sweepIntervalMs <= 0)) {
       throw new Error(`browser.sweepIntervalMs must be a positive integer, got: ${sweepIntervalMs}`);
     }
-    for (const [key, value] of [['profileDir', profileDir], ['channel', channel], ['locale', locale]] as const) {
+    for (const [key, value] of [['profileDir', profileDir], ['channel', channel], ['proxy', proxy], ['locale', locale]] as const) {
       if (value !== undefined && typeof value !== 'string') {
         throw new Error(`browser.${key} must be a string, got: ${typeof value}`);
       }

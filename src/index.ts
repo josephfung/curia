@@ -840,6 +840,9 @@ async function main(): Promise<void> {
       sweepIntervalMs: browserConfig?.sweepIntervalMs ?? 120_000,
       profileDir: browserConfig?.profileDir,
       channel: browserConfig?.channel,
+      // Optional egress proxy (e.g. a residential home-network exit) so the browser doesn't
+      // present a datacenter IP to anti-bot systems. Empty in core; set per-deployment.
+      proxy: browserConfig?.proxy,
       locale: browserConfig?.locale,
       // Align the browser timezone with the principal's configured timezone.
       timezone: config.timezone,

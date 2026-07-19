@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`web-browser`** — optional egress proxy (`browser.proxy`) routes browsing through a residential exit, plus a WebRTC-leak guard.
 - **`TaskRepo.reopenTask` tests** — cover non-`done` rejection, `progress.notes` audit note, and `task.updated` emission. (#1434)
 
 ### Security
