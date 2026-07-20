@@ -30,6 +30,7 @@ import type { ContactTier, ChannelIdentity } from '../contacts/types.js';
 import {
   isPrincipalEmail as checkPrincipalEmail,
   isPrincipalSignal as checkPrincipalSignal,
+  isPrincipalSlack as checkPrincipalSlack,
   computePrincipalIsSoleRecipient,
 } from '../contacts/principal-recipient.js';
 import type { OutboundContentFilter, FilterRecipient } from '../dispatch/outbound-filter.js';
@@ -38,6 +39,7 @@ import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
+import { markdownToMrkdwn } from '../format/markdown-to-mrkdwn.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
 import { generateShortRef } from '../autonomy/approval-trigger.js';
 import {
@@ -105,9 +107,15 @@ export interface SlackOutboundRequest {
   channel: 'slack';
   /** Slack conversation id (D… for DM, C…/G… for channel). */
   slackChannelId: string;
-  /** When set, reply in this thread (channel mentions). */
+  /** When set, reply in this thread (channel mentions / DM threads). */
   threadTs?: string;
   message: string;
+  /**
+   * Slack user id (U…) of the human recipient when known (DM peer or
+   * dispatcher-stamped recipientId). Used for principal checks, blocked-contact
+   * resolution, and disclosure tier — never the D…/C… conversation id.
+   */
+  slackUserId?: string;
 }
 
 /**
@@ -609,11 +617,11 @@ export class OutboundGateway {
 
     // Derive a stable recipient identifier for the blocked-contact check and logging.
     // Email: the To address. Signal: phone number (1:1) or base64 group ID.
-    // Slack: conversation channel id (D…/C…).
+    // Slack: prefer the peer user id (U…); fall back to conversation id only for logging.
     const recipientId = request.channel === 'email'
       ? request.to
       : request.channel === 'slack'
-        ? request.slackChannelId
+        ? (request.slackUserId ?? request.slackChannelId)
         : (request.recipient ?? request.groupId ?? '');
 
     // The message body field differs between channel types.
@@ -1093,8 +1101,8 @@ export class OutboundGateway {
 
     if (request.channel === 'slack') {
       const result = await this.dispatchSlack({ ...request, message: redactedBody });
-      // Slack channel/DM ids are not contact identifiers — skip promoteOrCreate.
-      // Inbound already auto-creates contacts from Slack user ids.
+      // Contact resolution uses slackUserId (U…) when provided; inbound auto-creates
+      // contacts from Slack user ids. Skip promoteOrCreate on conversation ids.
       if (result.success) {
         await this.publishDelivered({
           channel: 'slack',
@@ -1231,10 +1239,9 @@ export class OutboundGateway {
     if (request.channel === 'signal' && 'recipient' in request && request.recipient) {
       return checkPrincipalSignal(request.recipient, this.principalIdentities);
     }
-    // Slack conversation ids are not principal user ids — never treat a channel/DM
-    // target as the principal for autonomy carve-outs (fail closed).
+    // Slack: trust the sender/recipient U…, never the D…/C… conversation id.
     if (request.channel === 'slack') {
-      return false;
+      return checkPrincipalSlack(request.slackUserId, this.principalIdentities);
     }
     return false;
   }
@@ -1257,15 +1264,21 @@ export class OutboundGateway {
     return checkPrincipalSignal(identifier, this.principalIdentities);
   }
 
+  private isPrincipalSlack(identifier: string | undefined | null): boolean {
+    return checkPrincipalSlack(identifier, this.principalIdentities);
+  }
+
   /**
    * Build the structural recipient set for the content filter's Stage 2 judge.
    * `isPrincipal` is computed from the principal's verified channel identities —
-   * channel-aware (email matcher for email, Signal matcher for Signal) — NOT the
-   * free-text contact role.
+   * channel-aware (email matcher for email, Signal matcher for Signal, Slack
+   * matcher for Slack user ids) — NOT the free-text contact role.
    *
    * For email: To + CC merged, in order. For Signal: the single recipient (matched
    * via the principal's Signal identity) or a groupId (never a sole-principal channel,
    * since a group carries other members, so isPrincipal is false there).
+   * For Slack: the peer U… when known; channel targets without a user id are
+   * non-principal (fail closed).
    */
   private buildFilterRecipients(request: OutboundSendRequest): {
     recipients: FilterRecipient[];
@@ -1279,10 +1292,12 @@ export class OutboundGateway {
         .filter((e) => e.length > 0)
         .map((email) => ({ email, isPrincipal: this.isPrincipalEmail(email) }));
     } else if (request.channel === 'slack') {
-      // Slack outbound targets a conversation, not a verified principal user id.
-      // Tag as non-principal so content-filter Stage 2 treats the audience conservatively.
-      tagged = request.slackChannelId.length > 0
-        ? [{ email: request.slackChannelId, isPrincipal: false }]
+      const identifier = request.slackUserId ?? request.slackChannelId;
+      const isPrincipal = request.slackUserId
+        ? this.isPrincipalSlack(request.slackUserId)
+        : false;
+      tagged = identifier.length > 0
+        ? [{ email: identifier, isPrincipal }]
         : [];
     } else {
       // Signal: tag via the principal's verified Signal identity. A groupId is never
@@ -2288,6 +2303,7 @@ export class OutboundGateway {
 
   /**
    * Dispatch a send request to Slack via chat.postMessage.
+   * Converts agent markdown → Slack mrkdwn before posting.
    */
   private async dispatchSlack(request: SlackOutboundRequest): Promise<OutboundSendResult> {
     if (!this.slackClient) {
@@ -2299,9 +2315,10 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'Slack send requires slackChannelId' };
     }
 
+    const mrkdwn = markdownToMrkdwn(request.message);
     const result = await this.slackClient.postMessage({
       channel: request.slackChannelId,
-      text: request.message,
+      text: mrkdwn,
       threadTs: request.threadTs,
     });
 

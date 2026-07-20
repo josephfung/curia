@@ -113,7 +113,7 @@ CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 | `ceo_stated` | CEO explicitly provided the identifier ("Jenna's email is jenna@acme.com") | Yes |
 | `email_participant` | Extracted from To/CC on an email the CEO sent or was part of | Yes |
 | `signal_participant` | Extracted from a Signal sender (E.164) on inbound | Yes |
-| `slack_participant` | Extracted from a Slack user id (`U…`) on inbound DM/@mention | Yes |
+| `slack_participant` | Extracted from a Slack user id (`U…`) on inbound DM/@mention/thread/reaction | Yes |
 | `crm_import` | Pulled from the CEO's CRM during an action | Yes |
 | `calendar_attendee` | Extracted from a calendar event | Yes |
 | `self_claimed` | The sender identified themselves ("Hi, it's Jenna") | No |

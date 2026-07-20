@@ -9,10 +9,13 @@
 # 1. Enable Socket Mode and create an App-Level Token with scope `connections:write` (xapp-…).
 # 2. Install the app to your workspace and copy the Bot User OAuth Token (xoxb-…).
 # 3. Enter both tokens in Curia → Settings → Channels → Slack, then enable Slack and restart.
+#
+# If you already installed an earlier manifest, re-install after updating events/scopes
+# (needed for message.channels / message.groups / reaction_added).
 
 display_information:
   name: YOUR_OFFICE_IDENTITY_NAME
-  description: Curia agent for this workspace — DMs and @mentions.
+  description: Curia agent for this workspace — DMs, @mentions, and in-thread replies.
   background_color: "#1A6B5E"
 
 features:
@@ -35,12 +38,16 @@ oauth_config:
       - channels:history
       - groups:history
       - users:read
+      - reactions:read
 
 settings:
   event_subscriptions:
     bot_events:
       - app_mention
       - message.im
+      - message.channels
+      - message.groups
+      - reaction_added
   interactivity:
     is_enabled: false
   org_deploy_enabled: false
