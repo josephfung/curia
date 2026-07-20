@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Daily digest** — the built-in 8am digest is now an on-demand, chat-editable morning-briefing example.
+- **`ceo-inbox`** — voice-learn queues its guide proposal as a pending learning item, not the removed digest.
 
 ### Security
 
