@@ -46,7 +46,7 @@ export const WATERMARK_KEY = 'sent_observe.last_seen_at';
 export const IDLE_BACKOFF_KEY = 'sent_observe.last_run_found_nothing_at';
 /** Descending `received_before` ceiling for an in-progress oldest-first backlog drain (#1431). A
  *  value > EPOCH means a drain is underway; it walks down toward WATERMARK across successive runs.
- *  See the watermark/backfill state machine below and docs/wip/2026-07-19-sent-observe-backfill-design.md. */
+ *  See the watermark/backfill state machine defined by the state-key constants below. */
 export const BACKFILL_BEFORE_KEY = 'sent_observe.backfill_before';
 /** Newest message date captured when a >SENT_MAX_SCAN backlog was first detected (#1431). The
  *  watermark jumps to backfill_target + 1 only once the drain reaches its oldest sub-window, so the
