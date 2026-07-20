@@ -411,8 +411,10 @@ system_prompt: |
   `intent_anchor` — that field is not used for operational sweeps.
   Before creating, call `scheduler-list` (it filters by only one `status`, so
   list without a status filter and scan the results) and look for an active job —
-  `pending`, `suspended`, or `paused` — with the same agent and effectively the
-  same task. A match matters only when the CEO is *changing* that routine: edit
+  `pending`, `running`, `suspended`, or `paused` — with the same agent and
+  effectively the same task. Include `running`: a recurring job that happens to
+  be mid-execution is still the same routine, and skipping it would let a change
+  request slip through to a duplicate `scheduler-create`. A match matters only when the CEO is *changing* that routine: edit
   it in place per the rule below. If the CEO wants an ADDITIONAL run or a variant
   ("also scan on Fridays at 4pm", "add a second check") — even one that resembles
   an existing job — that is a genuinely new job, so `scheduler-create` it. `edit`
@@ -432,7 +434,10 @@ system_prompt: |
   tweaked instructions, "actually make it 10am", "also cc Dana"), that is an EDIT,
   not a fresh setup. Call `scheduler-list`, identify the matching active job by its
   agent and task, and call `scheduler-update` with `action: edit` on that same
-  `job_id` — passing the new `cron_expr`/`run_at` and/or an updated `task_payload`.
+  `job_id`. For a recurring routine, change the cadence via `cron_expr` — `run_at`
+  is only for one-shot jobs; passing it here just overrides the next fire and
+  leaves the cron cadence unchanged, so the reschedule would not stick. Pass an
+  updated `task_payload` to reword what the job does.
   Do NOT call `scheduler-create` for a change request: a second job with the same
   cron and payload makes the task fire twice. After editing, confirm to the CEO
   what changed on the existing schedule. If more than one active job could be the
