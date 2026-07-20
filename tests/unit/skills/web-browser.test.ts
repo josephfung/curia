@@ -75,6 +75,14 @@ function makeMockBrowserService(): BrowserService {
     // sufficient for the non-secret paths exercised here.
     registerInjectedSecret: vi.fn(),
     redactInjectedSecrets: vi.fn((text: string) => text),
+    // Circuit-breaker surface: the handler calls isTripped() before an interaction action and
+    // records success/failure around every action. A never-tripped stub keeps these
+    // (non-breaker) tests on the normal path; the breaker's own behavior is covered in
+    // skills/web-browser/handler.test.ts against a real BrowserSession.
+    consecutiveFailures: 0,
+    isTripped: vi.fn().mockReturnValue(false),
+    recordFailure: vi.fn(),
+    recordSuccess: vi.fn(),
   };
 
   return {
