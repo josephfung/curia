@@ -19,6 +19,8 @@ import {
   type CompletionDigestMap,
   type CompletionDigestItem,
 } from '../_shared/learning-state.js';
+import { buildCompletionDigestNotification } from '../_shared/learning-digest.js';
+import { notifyLearningProposal } from '../_shared/learning-notify.js';
 
 // Active (non-terminal) task statuses eligible for sent-mail completion. Mirrors the
 // active-status set used by the scheduler/backlog queries (src/db/queries/tasks.ts).
@@ -232,6 +234,15 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
 
     if (digestStored && Object.keys(remaining).length !== Object.keys(candidateMap).length) {
       await writeCompletionCandidates(store, remaining);
+    }
+
+    // Surface this run's newly produced undo/confirm items to the CEO the moment they're durably
+    // written (#1466). After #1464 removed the scheduled digest, this event-driven notification is
+    // the only path that reaches the CEO for undo/confirm/dismiss. Gated on digestStored (the
+    // durable digest the CEO's reply resolves against) and on there being new items, so an
+    // empty/soft-rejected run stays silent. Best-effort — notifyLearningProposal never fails the run.
+    if (digestStored && digestAdds.length > 0) {
+      await notifyLearningProposal(ctx, buildCompletionDigestNotification(digestAdds));
     }
 
     ctx.log.info(

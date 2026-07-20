@@ -97,6 +97,7 @@ function makeCtx(opts: {
 }): SkillContext & {
   __updates: unknown[];
   __docs: Map<string, { body: string; version: number; type: string; path: string; frontmatter: Record<string, unknown> }>;
+  __sendNotification: ReturnType<typeof vi.fn>;
 } {
   const voice = {
     tone: ['direct', 'warm'],
@@ -109,6 +110,9 @@ function makeCtx(opts: {
   };
   const profile: ExecutiveProfile = { writingVoice: voice };
   const updates: unknown[] = [];
+  // Event-driven CEO notification (#1466): a mocked gateway + principal-resolving contactService,
+  // so a produced proposal fires notifyLearningProposal. Exposed as __sendNotification for asserts.
+  const sendNotification = vi.fn().mockResolvedValue(true);
   const docs = new Map<string, { body: string; version: number; type: string; path: string; frontmatter: Record<string, unknown> }>();
   if (opts.diffs !== '') {
     docs.set(PENDING_DIFFS_PATH, {
@@ -169,11 +173,22 @@ function makeCtx(opts: {
       }),
     },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    outboundGateway: { sendNotification } as unknown as SkillContext['outboundGateway'],
+    contactService: {
+      findContactBySystemRole: vi.fn().mockResolvedValue({ id: 'principal-1' }),
+      getContactWithIdentities: vi.fn().mockResolvedValue({
+        identities: [
+          { channel: 'email', verified: true, status: 'active', channelIdentifier: 'ceo@example.com' },
+        ],
+      }),
+    } as unknown as SkillContext['contactService'],
     __updates: updates,
     __docs: docs,
+    __sendNotification: sendNotification,
   } as unknown as SkillContext & {
     __updates: unknown[];
     __docs: typeof docs;
+    __sendNotification: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -238,6 +253,57 @@ describe('VoiceLearnHandler', () => {
     expect(result.success).toBe(true);
     expect(ctx.infraLlm!.extract).not.toHaveBeenCalled();
     expect(mem.__values.has(VOICE_PROPOSAL_KEY)).toBe(false);
+  });
+
+  // Event-driven surfacing (#1466): a produced proposal notifies the CEO; a run that produces
+  // nothing stays silent (no notification).
+  it('notifies the CEO with the inlined guide when a proposal is produced', async () => {
+    const mem = makeEntityMemory();
+    const ctx = makeCtx({ entityMemory: mem });
+    (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      text: '- Writes short.\n- Dry humour.',
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(ctx.__sendNotification).toHaveBeenCalledTimes(1);
+    const payload = ctx.__sendNotification.mock.calls[0]![0];
+    expect(payload.notificationType).toBe('learning_proposal');
+    expect(payload.ceoEmail).toBe('ceo@example.com');
+    // The reviewable guide is inlined so the CEO can approve/dismiss straight from the email.
+    expect(payload.body).toContain('Dry humour');
+    expect(payload.body).toContain('Reply `approve voice` or `dismiss voice`.');
+  });
+
+  it('does NOT notify when the run produces no proposal (empty diffs)', async () => {
+    const mem = makeEntityMemory();
+    const ctx = makeCtx({ diffs: '# empty\n', entityMemory: mem });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(ctx.__sendNotification).not.toHaveBeenCalled();
+  });
+
+  it('does NOT notify when the LLM fails to produce a proposal', async () => {
+    const mem = makeEntityMemory();
+    const ctx = makeCtx({ entityMemory: mem });
+    (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: 'timeout' });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(ctx.__sendNotification).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fail the run when the notification send fails (best-effort)', async () => {
+    const mem = makeEntityMemory();
+    const ctx = makeCtx({ entityMemory: mem });
+    ctx.__sendNotification.mockResolvedValue(false);
+    (ctx.infraLlm!.extract as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      text: '- Writes short.',
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    // The proposal was still persisted despite the notification not landing.
+    expect(mem.__values.get(VOICE_PROPOSAL_KEY)).toContain('Writes short.');
   });
 
   it('LLM failure → no proposal, success result', async () => {
