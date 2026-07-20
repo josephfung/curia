@@ -25,9 +25,9 @@ Two architectural questions had to be settled before implementation:
 2. Treat shadow drafts as a valid Competence input to the *existing* Phase 3 scoring pass (`autonomy_action_log` → `computeCapabilityScore`), with no new score dial.
 3. Defer capability growth until a separate autonomy redesign.
 
-Design: `docs/wip/2026-07-16-email-observation-llm-redesign-design.md` (the current
-design of record; supersedes the original `docs/wip/2026-07-15-email-observation-learning-design.md`).
-Epic #1419.
+Design of record: this ADR together with specs 04 (channels), 13 (office identity),
+14 (autonomy engine), and 19 (tasks and backlog), where the observe → reflect → remember
+loop and its store mapping are specified. Epic #1419.
 
 ## Decision
 
