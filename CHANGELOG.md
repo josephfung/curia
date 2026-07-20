@@ -17,7 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`web-browser`** — optional egress proxy (`browser.proxy`) routes browsing through a residential exit, plus a WebRTC-leak guard.
 - **`web-browser`** — stable per-element refs let the agent disambiguate duplicate labels (e.g. survey radios).
-- **`web-browser`** — circuit-breaker stops interaction after 4 consecutive failures to avoid futile budget-draining loops.
+- **`web-browser`** — circuit-breaker halts interaction after 4 consecutive failures to curb futile retry loops.
 - **`TaskRepo.reopenTask` tests** — cover non-`done` rejection, `progress.notes` audit note, and `task.updated` emission. (#1434)
 
 ### Security
