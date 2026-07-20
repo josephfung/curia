@@ -47,6 +47,16 @@ export const CHANNEL_CATALOG: ChannelDescriptor[] = [
     requiredSecretKeys: ['socket_path', 'phone_number'],
   },
   {
+    name: 'slack',
+    description: 'Slack bot via Socket Mode. DMs and @mentions in the principal\'s workspace.',
+    isToggleable: true,
+    credentialFields: [
+      { key: 'bot_token', label: 'Bot User OAuth Token', secret: true, envFallback: 'SLACK_BOT_TOKEN' },
+      { key: 'app_token', label: 'App-Level Token', secret: true, envFallback: 'SLACK_APP_TOKEN' },
+    ],
+    requiredSecretKeys: ['bot_token', 'app_token'],
+  },
+  {
     name: 'http',
     description: 'HTTP API channel. Always on — serves the web console and API.',
     isToggleable: false,

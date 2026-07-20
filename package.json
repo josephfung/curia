@@ -48,6 +48,8 @@
     "@fastify/static": "^10.1.0",
     "@ghostery/adblocker-playwright": "^2.18.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@slack/socket-mode": "^3.0.0",
+    "@slack/web-api": "^8.0.0",
     "ajv": "^8.20.0",
     "chokidar": "^5.0.0",
     "cose-base": "^2.2.0",

@@ -1,0 +1,48 @@
+# Slack App Manifest (importable)
+#
+# Create a workspace-owned Slack app at https://api.slack.com/apps → "From a manifest".
+# Replace display_name / bot_user.display_name with your office identity
+# (e.g. "Nathan Curia" → display_name "Nathan Curia", bot username "nathancuria").
+# Curia never hardcodes @curia — the @handle comes from these Slack settings (ADR-033).
+#
+# After creating the app:
+# 1. Enable Socket Mode and create an App-Level Token with scope `connections:write` (xapp-…).
+# 2. Install the app to your workspace and copy the Bot User OAuth Token (xoxb-…).
+# 3. Enter both tokens in Curia → Settings → Channels → Slack, then enable Slack and restart.
+
+display_information:
+  name: YOUR_OFFICE_IDENTITY_NAME
+  description: Curia agent for this workspace — DMs and @mentions.
+  background_color: "#1A6B5E"
+
+features:
+  bot_user:
+    display_name: YOUR_OFFICE_IDENTITY_NAME
+    always_online: true
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - im:history
+      - im:read
+      - im:write
+      - channels:history
+      - groups:history
+      - users:read
+
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

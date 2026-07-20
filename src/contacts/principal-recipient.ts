@@ -43,6 +43,17 @@ export function isPrincipalSignal(
   );
 }
 
+/** Whether a Slack user id (U…) matches the principal's verified Slack identity. */
+export function isPrincipalSlack(
+  identifier: string | undefined | null,
+  principalIdentities: readonly ChannelIdentity[],
+): boolean {
+  if (!identifier || principalIdentities.length === 0) return false;
+  return principalIdentities.some(
+    (id) => id.channel === 'slack' && id.channelIdentifier === identifier,
+  );
+}
+
 /**
  * After deduplicating by case-insensitive identifier, true only when exactly one
  * recipient remains and it is the principal.

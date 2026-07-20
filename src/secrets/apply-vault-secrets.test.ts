@@ -26,6 +26,8 @@ function baseConfig(): Config {
     ceoSignalNumber: undefined,
     signalSocketPath: undefined,
     signalPhoneNumber: undefined,
+    slackBotToken: undefined,
+    slackAppToken: undefined,
   };
 }
 
