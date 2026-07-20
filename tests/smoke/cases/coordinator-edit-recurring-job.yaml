@@ -1,0 +1,54 @@
+name: Coordinator edits an existing recurring job instead of duplicating it
+description: >
+  When the CEO sets up a recurring ad-hoc job and then, in a later turn, asks to
+  change its time, the coordinator must EDIT the existing job in place
+  (scheduler-list to find it, then scheduler-update action: edit) rather than
+  calling scheduler-create again and leaving two overlapping jobs that fire the
+  task twice. See issue #1465 — observed in prod as a cancelled + pending pair
+  with the same daily cron and payload.
+tags:
+  - scheduling
+  - scheduler-update
+  - multi-turn
+  - no-duplicate
+
+turns:
+  - role: user
+    content: |
+      Set up a recurring check every weekday morning at 9am — scan my inbox for
+      anything from investors and flag it for me.
+  - role: user
+    delay_ms: 2000
+    content: |
+      Actually, make that 10am instead of 9am. Same thing otherwise.
+
+expected_behaviors:
+  - id: edits_in_place_not_duplicate
+    description: >
+      In response to the second turn, the coordinator changes the SAME existing
+      job to 10am rather than standing up a brand-new schedule. The response
+      should read as an update to the routine already set up in turn 1 (e.g.
+      "I've moved your morning investor check to 10am"), not as creating a second
+      schedule. It must not describe now having two schedules, and must not imply
+      the 9am job still exists alongside a new 10am one.
+    weight: critical
+  - id: single_active_routine_at_new_time
+    description: >
+      After the change, the coordinator conveys that there is exactly one active
+      recurring job and it runs at 10am on weekday mornings. It does not confirm
+      or leave the impression that the task will fire twice (once at 9am and once
+      at 10am).
+    weight: critical
+  - id: confirms_the_change
+    description: >
+      The coordinator confirms to the CEO what changed on the existing schedule
+      (the new 10am time), closing the loop rather than silently editing.
+    weight: important
+
+failure_modes:
+  - Coordinator calls scheduler-create for the second turn, creating a duplicate
+    overlapping job so the investor scan runs twice each morning.
+  - Response describes two schedules (a 9am one and a 10am one) instead of one
+    edited job.
+  - Coordinator tells the CEO to change it themselves in the web UI instead of
+    editing the job directly.
