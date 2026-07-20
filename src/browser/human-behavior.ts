@@ -213,9 +213,11 @@ export async function humanClick(page: Page, locator: Locator, opts: BehaviorOpt
     try {
       await locator.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' }));
     } catch (scrollErr) {
-      // Recenter is best-effort; if it fails we still retry the click (the overlay may have
-      // moved on its own, e.g. a banner that auto-dismisses).
-      log?.debug({ scrollErr }, 'humanClick: recenter scroll failed — retrying click anyway');
+      // Recenter is our only recovery from occlusion. If it fails (element detached, page
+      // navigated away), the click can't succeed either — surface the failure rather than
+      // retrying blind against an unknown target state. Log first so the cause is observable.
+      log?.debug({ scrollErr }, 'humanClick: recenter scroll failed — surfacing, not retrying');
+      throw scrollErr;
     }
     await sleep(computeJitter(80, 200, rng));
     await locator.click(clickOpts);

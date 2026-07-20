@@ -184,6 +184,25 @@ describe('humanClick', () => {
     expect(click).toHaveBeenCalledTimes(2);    // and retried the click
   });
 
+  it('surfaces a recenter failure instead of retrying the click blind', async () => {
+    const page = mockPage();
+    // The click is intercepted, so we enter the recenter path; the recenter itself then fails
+    // (element detached). We must propagate that, not retry the click against an unknown state.
+    const click = vi.fn().mockRejectedValue(new Error(
+      'locator.click: Timeout 10000ms exceeded.\n  <div id="js-navbar"> intercepts pointer events'));
+    const evaluate = vi.fn().mockRejectedValue(new Error('Element is not attached to the DOM'));
+    const locator = {
+      boundingBox: vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 }),
+      isVisible: vi.fn().mockResolvedValue(true),
+      click,
+      evaluate,
+    } as unknown as Locator;
+    await expect(humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 }))
+      .rejects.toThrow('not attached');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(click).toHaveBeenCalledTimes(1); // only the intercepted click — no blind retry
+  });
+
   it('bounds the boundingBox wait so a vanished element cannot hang the default 30s', async () => {
     const page = mockPage();
     const boundingBox = vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 });
