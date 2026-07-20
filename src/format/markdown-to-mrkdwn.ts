@@ -89,11 +89,7 @@ export function inlineMarkdownToMrkdwn(input: string): string {
   text = text.replace(/(^|[^\w*])\*([^*\n]+)\*(?!\*)/g, (_m, pre: string, inner: string) => {
     return `${pre}_${inner}_`;
   });
-  text = text.replace(/(^|[^\w_])_([^_\n]+)_(?!_)/g, (_m, pre: string, inner: string) => {
-    // Avoid double-wrapping already-converted italics.
-    if (inner.startsWith('\u0000')) return `${pre}_${inner}_`;
-    return `${pre}_${inner}_`;
-  });
+  // Markdown `_italic_` is already Slack mrkdwn italic — no rewrite needed.
 
   // 5. Restore placeholders.
   text = text.replace(/\u0000P(\d+)\u0000/g, (_m, idx: string) => placeholders[Number(idx)] ?? '');

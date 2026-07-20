@@ -21,6 +21,7 @@ import {
 } from './message-converter.js';
 import { isSlackChannelAllowed } from './channel-allowlist.js';
 import type { SlackInboundEvent, SlackInboundKind } from './types.js';
+import { BoundedTtlMap } from './bounded-ttl-map.js';
 
 export interface SlackAdapterConfig {
   bus: EventBus;
@@ -45,13 +46,20 @@ export class SlackAdapter implements Channel {
    */
   private readonly recentDedupeKeys = new Map<string, number>();
   private static readonly DEDUPE_TTL_MS = 60_000;
-  /**
-   * Threads Curia is active in (`channel:thread_ts`). In-memory for v1 —
-   * restarted processes require a fresh @mention to re-activate a thread.
-   */
-  private readonly activeThreads = new Set<string>();
+  /** Active channel threads (`channel:thread_ts`) — TTL + size-capped. */
+  private static readonly ACTIVE_THREAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  private static readonly ACTIVE_THREAD_MAX = 500;
+  private readonly activeThreads = new BoundedTtlMap<true>(
+    SlackAdapter.ACTIVE_THREAD_TTL_MS,
+    SlackAdapter.ACTIVE_THREAD_MAX,
+  );
   /** DM conversation id (D…) → peer Slack user id (U…), learned on inbound. */
-  private readonly dmPeerByChannel = new Map<string, string>();
+  private static readonly DM_PEER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  private static readonly DM_PEER_MAX = 1_000;
+  private readonly dmPeerByChannel = new BoundedTtlMap<string>(
+    SlackAdapter.DM_PEER_TTL_MS,
+    SlackAdapter.DM_PEER_MAX,
+  );
 
   constructor(config: SlackAdapterConfig) {
     this.config = config;
@@ -142,13 +150,14 @@ export class SlackAdapter implements Channel {
     const { conversationId, senderId, content, metadata } = converted;
 
     // Remember DM peer U… so outbound principal checks can resolve D… → U….
+    // Ephemeral: lost on restart; reply path prefers dispatcher recipientId (U…).
     if (metadata.isDm) {
       this.dmPeerByChannel.set(metadata.slackChannel, senderId);
     }
 
     // Activate channel threads on @mention (and keep them active on replies).
     if (metadata.threadTs && !metadata.isDm) {
-      this.activeThreads.add(slackThreadKey(metadata.slackChannel, metadata.threadTs));
+      this.activeThreads.set(slackThreadKey(metadata.slackChannel, metadata.threadTs), true);
     }
 
     await this.ensureSlackContact(senderId);
@@ -282,14 +291,15 @@ export class SlackAdapter implements Channel {
       return;
     }
 
-    // Prefer dispatcher-stamped recipientId (U…); fall back to learned DM peer.
+    // Prefer dispatcher-stamped recipientId (always the inbound senderId / U… on
+    // reply path). Fall back to the learned DM peer map (ephemeral across restarts).
     const slackUserId =
       outbound.payload.recipientId?.startsWith('U')
         ? outbound.payload.recipientId
         : this.dmPeerByChannel.get(parsed.channel);
 
     if (parsed.threadTs && !parsed.isDm) {
-      this.activeThreads.add(slackThreadKey(parsed.channel, parsed.threadTs));
+      this.activeThreads.set(slackThreadKey(parsed.channel, parsed.threadTs), true);
     }
 
     const result = await outboundGateway.send(
