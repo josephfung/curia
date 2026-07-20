@@ -836,7 +836,7 @@ async function main(): Promise<void> {
     const browserConfig = yamlConfig.browser;
     browserService = new BrowserService({
       logger,
-      sessionTtlMs: browserConfig?.sessionTtlMs ?? 600_000,
+      sessionTtlMs: browserConfig?.sessionTtlMs ?? 1_800_000, // 30 min — see BrowserServiceOptions
       sweepIntervalMs: browserConfig?.sweepIntervalMs ?? 120_000,
       profileDir: browserConfig?.profileDir,
       channel: browserConfig?.channel,
