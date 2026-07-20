@@ -1069,4 +1069,68 @@ describe('web-browser ref-based selectors', () => {
       expect(content).toContain('[g1f0e2] link "Next"');
     }
   });
+
+  it('does not truncate the ref list when the whole page fits the budget (small body, long list)', async () => {
+    // Regression for the 16personalities survey bug: a survey page has a tiny body but a
+    // long interactable list (dozens of radios), with the "Next" button LAST in DOM order.
+    // The list exceeded the old 6,000-char ref ceiling, so the tail-slice dropped Next —
+    // even though body + refs together sat well under the 15,000-char page budget (43% unused).
+    // With a floor (not a ceiling), the ref list may grow into the budget the body leaves free.
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const body = 'You regularly make new friends.';
+    // ~78 chars/line × 100 ≈ 7,800 chars: over the old ceiling, under the page budget.
+    const radios = Array.from({ length: 100 }, (_, i) =>
+      `[g1f0e${i + 1}] radio "I strongly agree" (group: "You regularly make new friends.")`).join('\n');
+    const nextBtn = '[g1f0e999] button "Next"'; // the navigation control, last in DOM order
+    const refList = `${radios}\n${nextBtn}`;
+    // Guard the premise: the list overflows the old ceiling, yet the whole page fits the budget.
+    expect(refList.length).toBeGreaterThan(6_000);
+    expect(body.length + refList.length).toBeLessThan(15_000);
+    const raw = `${body}\n\n--- Interactable elements ---\n${refList}`;
+    const page = makeMockPage(raw, fill, 'https://www.16personalities.com/');
+    const ctx = ctxFor(page, { action: 'get_content', session_id: 'sess-1' });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const content = (result.data as { content: string }).content;
+      // The Next button at the tail survives — the whole point of the fix.
+      expect(content).toContain('[g1f0e999] button "Next"');
+      // Nothing was cut: the total fit under the page budget, so neither side truncates.
+      expect(content).not.toContain('[interactable list truncated]');
+      expect(content).not.toContain('[content truncated]');
+    }
+  });
+
+  it('guarantees the ref-list floor when the body alone exceeds the budget', async () => {
+    // The other half of the fix's contract: 6,000 is a FLOOR. When the body alone is larger
+    // than the whole 15,000-char budget, the ref list must still get at least the floor — a
+    // giant page body can never starve the agent's selectors to nothing.
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const hugeBody = 'x'.repeat(20_000); // exceeds MAX_CONTENT_LENGTH on its own
+    // A ref list longer than the floor, with a distinctive control FIRST (must survive within
+    // the floor) followed by filler that overflows past it.
+    const early = '[g1f0e1] button "Submit"';
+    const filler = Array.from({ length: 100 }, (_, i) =>
+      `[g1f0e${i + 2}] radio "I strongly agree" (group: "You regularly make new friends.")`).join('\n');
+    const refList = `${early}\n${filler}`;
+    expect(refList.length).toBeGreaterThan(6_000);
+    const raw = `${hugeBody}\n\n--- Interactable elements ---\n${refList}`;
+    const page = makeMockPage(raw, fill, 'https://example.com/');
+    const ctx = ctxFor(page, { action: 'get_content', session_id: 'sess-1' });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const content = (result.data as { content: string }).content;
+      // Body truncated (it alone exceeds the budget)...
+      expect(content).toContain('[content truncated]');
+      // ...but the ref list still gets its guaranteed floor: the leading control survives,
+      // and the overflow past the floor is truncated and marked (not silently dropped).
+      expect(content).toContain('[g1f0e1] button "Submit"');
+      expect(content).toContain('[interactable list truncated]');
+    }
+  });
 });

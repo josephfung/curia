@@ -29,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`web-browser`** — fix a regression that broke every browser page read after the element-refs change.
 - **`web-browser`** — element refs now resolve when passed with brackets and stay valid across later actions.
+- **`web-browser`** — the interactable list no longer drops trailing controls (e.g. "Next") when the page fits budget.
 - **Scheduler** — a run finishing after a concurrent pause/cancel no longer overwrites that state. (#1409)
 - **Coordinator** — external replies use first-person single-voice; internal specialist names forbidden. (#1354)
 - **Dispatcher** — content-filter blocks on relayed replies retry with reason, then salvage draft. (#1355)
