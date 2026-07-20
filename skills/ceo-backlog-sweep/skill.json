@@ -1,0 +1,17 @@
+{
+  "name": "ceo-backlog-sweep",
+  "description": "Operational backstop sweep: find CEO-owned tasks that are overdue or due today and still open, and send the CEO one terse nudge when any exist. Silent when none. Not a personalized digest — counts plus how to get detail only. Intended to run on a low-frequency system schedule.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {},
+  "outputs": {
+    "overdue": "number — count of open CEO tasks whose due date is before today",
+    "dueToday": "number — count of open CEO tasks due today",
+    "notified": "number — count of tasks included in the nudge (0 when nothing sent)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": ["taskRepo", "outboundGateway"]
+}

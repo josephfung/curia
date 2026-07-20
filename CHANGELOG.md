@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Learning-item surfacing** — voice-guide proposals and sent-mail task completions now notify the CEO directly, not via a digest. (#1466)
 - **`outbound.notification`** — new `learning_proposal` `notificationType` on the bus event (public API). (#1466)
+- **`ceo-backlog-sweep`** — declarative sweep nudges the CEO when owned tasks are overdue or due today. (#1467)
 - **`web-browser`** — optional egress proxy (`browser.proxy`) routes browsing through a residential exit, plus a WebRTC-leak guard.
 - **`web-browser`** — stable per-element refs let the agent disambiguate duplicate labels (e.g. survey radios).
 - **`web-browser`** — circuit-breaker halts interaction after 4 consecutive failures to curb futile retry loops.
@@ -26,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Daily digest** — the built-in 8am digest is now an on-demand, chat-editable morning-briefing example.
 - **`ceo-inbox`** — voice-learn queues its guide proposal as a pending learning item, not the removed digest.
+- **`OutboundNotificationPayload`** — new `ceo_backlog_nudge` notificationType member (public bus API). (#1467)
 
 ### Security
 

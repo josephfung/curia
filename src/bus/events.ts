@@ -232,6 +232,7 @@ interface OutboundSuppressedDuplicatePayload {
 //   - 'learning_proposal':  CEO alert surfacing a learning-digest item (voice-guide proposal or sent-mail
 //                           task-completion undo/confirm) event-driven when produced, after #1464 removed
 //                           the scheduled digest that used to surface them (#1466)
+//   - 'ceo_backlog_nudge': terse nudge that CEO-owned tasks are overdue or due today (ceo-backlog-sweep, #1467)
 export interface OutboundNotificationPayload {
   notificationType:
     | 'blocked_content'
@@ -240,7 +241,8 @@ export interface OutboundNotificationPayload {
     | 'approval_expired'        // batched expiry notification (approval-expiry-sweep)
     | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
     | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
-    | 'learning_proposal';      // learning-digest item surfaced event-driven when produced (#1466)
+    | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
+    | 'ceo_backlog_nudge';      // overdue/due-today CEO tasks backstop nudge (ceo-backlog-sweep, #1467)
   /** Recipient email for this notification (always the CEO email today). */
   ceoEmail: string;
   subject: string;

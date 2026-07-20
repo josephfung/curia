@@ -86,6 +86,7 @@ skills:
   - list-pending-actions
   - activity-log
   - approval-expiry-sweep
+  - ceo-backlog-sweep
   # NOTE: diagnostics skills (audit-query, audit-trace, ops-lookup) excluded — they
   #        read internal audit + operational state and are the principal-only
   #        diagnostics agent's toolset. Opt-in: enable them alongside the diagnostics

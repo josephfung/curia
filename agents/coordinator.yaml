@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.14.1"
+version: "0.15.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -735,6 +735,7 @@ pinned_skills:
   - activity-log
   - task-list
   - approval-expiry-sweep
+  - ceo-backlog-sweep
   - scheduler-report
   - secret-capture-request
 allow_discovery: true
@@ -746,3 +747,6 @@ schedule:
   - cron: "0 * * * *"
     task: "Run the approval expiry sweep — find and expire any pending approval requests that have passed their expiry time."
     expectedDurationSeconds: 360
+  - cron: "0 8 * * *"
+    task: "Run the ceo-backlog-sweep skill — find CEO-owned tasks that are overdue or due today and still open, and send the CEO one terse nudge if there are any. It is silent when there are none; do not compose your own message, just invoke the skill."
+    expectedDurationSeconds: 60
