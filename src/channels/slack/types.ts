@@ -28,7 +28,26 @@ export interface SlackAppMentionEvent {
   bot_id?: string;
 }
 
-export type SlackInboundEvent = SlackMessageEvent | SlackAppMentionEvent;
+/** reaction_added event payload (emoji → intent is NOT decided here). */
+export interface SlackReactionAddedEvent {
+  type: 'reaction_added';
+  user: string;
+  reaction: string;
+  item_user?: string;
+  item: {
+    type: string;
+    channel: string;
+    ts: string;
+  };
+  event_ts?: string;
+}
+
+export type SlackInboundEvent =
+  | SlackMessageEvent
+  | SlackAppMentionEvent
+  | SlackReactionAddedEvent;
+
+export type SlackInboundKind = 'dm' | 'mention' | 'thread' | 'reaction';
 
 export interface SlackAuthIdentity {
   /** Bot user id (U…) — used to ignore own messages. */

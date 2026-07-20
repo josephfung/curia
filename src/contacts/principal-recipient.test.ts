@@ -3,6 +3,7 @@ import type { ChannelIdentity } from './types.js';
 import {
   isPrincipalEmail,
   isPrincipalSignal,
+  isPrincipalSlack,
   computePrincipalIsSoleRecipient,
   resolvePrincipalIsSoleRecipientFromSkillInput,
 } from './principal-recipient.js';
@@ -26,6 +27,7 @@ function makeIdentity(channel: string, identifier: string): ChannelIdentity {
 const PRINCIPAL_IDENTITIES = [
   makeIdentity('email', 'ceo@example.com'),
   makeIdentity('signal', '+15551234567'),
+  makeIdentity('slack', 'U_CEO'),
 ];
 
 describe('principal-recipient', () => {
@@ -46,6 +48,20 @@ describe('principal-recipient', () => {
 
     it('rejects a different phone number', () => {
       expect(isPrincipalSignal('+15559999999', PRINCIPAL_IDENTITIES)).toBe(false);
+    });
+  });
+
+  describe('isPrincipalSlack', () => {
+    it('matches verified principal Slack user id exactly', () => {
+      expect(isPrincipalSlack('U_CEO', PRINCIPAL_IDENTITIES)).toBe(true);
+    });
+
+    it('rejects a different Slack user id', () => {
+      expect(isPrincipalSlack('U_OTHER', PRINCIPAL_IDENTITIES)).toBe(false);
+    });
+
+    it('rejects conversation ids (D…/C…)', () => {
+      expect(isPrincipalSlack('D123', PRINCIPAL_IDENTITIES)).toBe(false);
     });
   });
 

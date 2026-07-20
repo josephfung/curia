@@ -18,8 +18,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Imported Anthropic skills** — drop an unmodified `SKILL.md` + `references/` folder; discover/activate with inert scripts warned. (#1490)
 - **Skills-as-bundles** — `SKILL.md` + nested `tools/`; `pinned_skills` expands a bundle to its member tools + instructions; `skill_registry` table. Native bundles: email, ceo-inbox, contacts, autonomy, diagnostics, scheduler, web, memory, learning, context-bridge, executive-profile, setup. (#1489, #1494)
 - **Runtime skill activation & MCP-as-skill** — `toolSearch` returns `kind:"skill"`; `skill-activate` loads a skill's tools + instructions (Tier 1 persists in `progress.activeSkills`); each connected MCP server projects a pinnable skill. (#1494, #1495)
-- **Slack channel** — Socket Mode DMs and @mentions via a workspace-owned Slack app (ADR-033). (#1477)
+- **Slack channel** — Socket Mode DMs, @mentions, in-thread replies; `inbound.reaction` bus event (ADR-033). (#1477)
 - **`OutboundSendRequest`** — new `slack` variant for gateway `chat.postMessage` delivery (public API).
+- **`inbound.reaction`** — channel-agnostic reaction signal for approval UX (emoji→intent in dispatch).
 
 ### Changed
 

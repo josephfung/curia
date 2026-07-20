@@ -33,6 +33,23 @@ interface InboundMessagePayload {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Channel-agnostic reaction signal (emoji on a prior outbound/inbound message).
+ * Adapters normalize platform reaction events into this shape; emoji→intent
+ * mapping (e.g. 👍 → approve) lives in dispatch/approval — never in adapters.
+ */
+interface InboundReactionPayload {
+  conversationId: string;
+  channelId: string;
+  /** Platform sender id (Slack U…, Signal ACI, …). Resolve via contacts/tier. */
+  senderId: string;
+  /** Emoji shortcode or unicode without surrounding colons (e.g. "thumbsup"). */
+  emoji: string;
+  /** Provider message id of the reacted-to message (Slack ts, …). */
+  targetMessageId: string;
+  metadata?: Record<string, unknown>;
+}
+
 interface AgentTaskPayload {
   agentId: string;
   conversationId: string;
@@ -673,6 +690,12 @@ export interface InboundMessageEvent extends BaseEvent {
   payload: InboundMessagePayload;
 }
 
+export interface InboundReactionEvent extends BaseEvent {
+  type: 'inbound.reaction';
+  sourceLayer: 'channel';
+  payload: InboundReactionPayload;
+}
+
 export interface AgentTaskEvent extends BaseEvent {
   type: 'agent.task';
   sourceLayer: 'dispatch';
@@ -1155,6 +1178,7 @@ export interface ChannelStalledEvent extends BaseEvent {
 
 export type BusEvent =
   | InboundMessageEvent
+  | InboundReactionEvent
   | AgentTaskEvent
   | AgentResponseEvent
   | OutboundMessageEvent
@@ -1217,6 +1241,20 @@ export function createInboundMessage(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'inbound.message',
+    sourceLayer: 'channel',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createInboundReaction(
+  payload: InboundReactionPayload,
+  parentEventId?: string,
+): InboundReactionEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'inbound.reaction',
     sourceLayer: 'channel',
     payload,
     parentEventId,

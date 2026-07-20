@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
   convertSlackEvent,
+  convertSlackReaction,
   buildSlackConversationId,
   parseSlackConversationId,
+  slackThreadKey,
 } from '../../../../src/channels/slack/message-converter.js';
-import type { SlackAppMentionEvent, SlackMessageEvent } from '../../../../src/channels/slack/types.js';
+import type {
+  SlackAppMentionEvent,
+  SlackMessageEvent,
+  SlackReactionAddedEvent,
+} from '../../../../src/channels/slack/types.js';
 
 const BOT = 'U_BOT';
 
@@ -38,6 +44,16 @@ describe('buildSlackConversationId / parseSlackConversationId', () => {
     expect(parseSlackConversationId(id)).toEqual({ channel: 'D123', isDm: true });
   });
 
+  it('keys DM threads when thread_ts is present', () => {
+    const id = buildSlackConversationId('D123', '1710000000.000050', true);
+    expect(id).toBe('slack:D123:1710000000.000050');
+    expect(parseSlackConversationId(id)).toEqual({
+      channel: 'D123',
+      threadTs: '1710000000.000050',
+      isDm: true,
+    });
+  });
+
   it('builds and parses channel thread ids', () => {
     const id = buildSlackConversationId('C999', '1710000000.000200', false);
     expect(id).toBe('slack:C999:1710000000.000200');
@@ -64,12 +80,22 @@ describe('convertSlackEvent', () => {
     expect(result!.metadata.eventType).toBe('message');
   });
 
-  it('converts an app_mention and starts a thread on ts', () => {
+  it('keys threaded DMs', () => {
+    const result = convertSlackEvent(
+      makeDm({ thread_ts: '1710000000.000050', text: 'follow-up' }),
+      BOT,
+      'dm',
+    );
+    expect(result!.conversationId).toBe('slack:D123:1710000000.000050');
+  });
+
+  it('converts an app_mention, starts a thread on ts, and strips bot mention', () => {
     const result = convertSlackEvent(makeMention(), BOT, 'mention');
     expect(result).not.toBeNull();
     expect(result!.conversationId).toBe('slack:C999:1710000000.000200');
     expect(result!.metadata.threadTs).toBe('1710000000.000200');
     expect(result!.metadata.isDm).toBe(false);
+    expect(result!.content).toBe('schedule a sync');
   });
 
   it('uses existing thread_ts for mentions inside a thread', () => {
@@ -80,6 +106,46 @@ describe('convertSlackEvent', () => {
     );
     expect(result!.conversationId).toBe('slack:C999:1710000000.000050');
     expect(result!.metadata.threadTs).toBe('1710000000.000050');
+  });
+
+  it('delivers channel thread replies only when the thread is active', () => {
+    const active = new Set([slackThreadKey('C999', '1710000000.000050')]);
+    const result = convertSlackEvent(
+      {
+        type: 'message',
+        user: 'U_ALICE',
+        text: 'and make it 4pm',
+        channel: 'C999',
+        ts: '1710000000.000400',
+        thread_ts: '1710000000.000050',
+        channel_type: 'channel',
+      },
+      BOT,
+      'thread',
+      active,
+    );
+    expect(result).not.toBeNull();
+    expect(result!.metadata.eventType).toBe('thread_reply');
+    expect(result!.conversationId).toBe('slack:C999:1710000000.000050');
+  });
+
+  it('ignores channel thread replies outside active threads', () => {
+    expect(
+      convertSlackEvent(
+        {
+          type: 'message',
+          user: 'U_ALICE',
+          text: 'noise',
+          channel: 'C999',
+          ts: '1710000000.000400',
+          thread_ts: '1710000000.000050',
+          channel_type: 'channel',
+        },
+        BOT,
+        'thread',
+        new Set(),
+      ),
+    ).toBeNull();
   });
 
   it('ignores bot messages', () => {
@@ -104,8 +170,46 @@ describe('convertSlackEvent', () => {
     expect(convertSlackEvent(makeDm({ text: '   ' }), BOT, 'dm')).toBeNull();
   });
 
-  it('trims content', () => {
-    const result = convertSlackEvent(makeDm({ text: '  hi  ' }), BOT, 'dm');
-    expect(result!.content).toBe('hi');
+  it('decodes Slack entities in content', () => {
+    const result = convertSlackEvent(
+      makeDm({ text: 'see <https://example.com|docs> &amp; <@U9|bob>' }),
+      BOT,
+      'dm',
+    );
+    expect(result!.content).toBe('see docs & @bob');
+  });
+});
+
+describe('convertSlackReaction', () => {
+  it('normalizes reaction_added without mapping intent', () => {
+    const event: SlackReactionAddedEvent = {
+      type: 'reaction_added',
+      user: 'U_ALICE',
+      reaction: 'thumbsup',
+      item: { type: 'message', channel: 'C999', ts: '1710000000.000200' },
+    };
+    const result = convertSlackReaction(event, BOT);
+    expect(result).toEqual(
+      expect.objectContaining({
+        senderId: 'U_ALICE',
+        emoji: 'thumbsup',
+        targetMessageId: '1710000000.000200',
+        channelId: 'slack',
+      }),
+    );
+  });
+
+  it('ignores reactions from the bot', () => {
+    expect(
+      convertSlackReaction(
+        {
+          type: 'reaction_added',
+          user: BOT,
+          reaction: '+1',
+          item: { type: 'message', channel: 'D1', ts: '1.1' },
+        },
+        BOT,
+      ),
+    ).toBeNull();
   });
 });

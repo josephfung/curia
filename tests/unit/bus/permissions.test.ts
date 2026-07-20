@@ -5,6 +5,12 @@ describe('Bus Permissions', () => {
   it('allows channel to publish inbound.message', () => {
     expect(canPublish('channel', 'inbound.message')).toBe(true);
   });
+  it('allows channel to publish inbound.reaction', () => {
+    expect(canPublish('channel', 'inbound.reaction')).toBe(true);
+  });
+  it('allows dispatch to subscribe to inbound.reaction', () => {
+    expect(canSubscribe('dispatch', 'inbound.reaction')).toBe(true);
+  });
   it('blocks channel from publishing agent.task', () => {
     expect(canPublish('channel', 'agent.task')).toBe(false);
   });

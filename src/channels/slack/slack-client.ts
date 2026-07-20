@@ -11,6 +11,8 @@ import type { Logger } from '../../logger.js';
 import type {
   SlackAuthIdentity,
   SlackInboundEvent,
+  SlackInboundKind,
+  SlackMessageEvent,
   SlackPostMessageParams,
   SlackPostMessageResult,
   SlackUserInfo,
@@ -25,8 +27,8 @@ export interface SlackClientConfig {
 export interface SlackClientEvents {
   connected: [];
   disconnected: [];
-  /** kind distinguishes DM message events from app_mention for the converter. */
-  event: [event: SlackInboundEvent, kind: 'dm' | 'mention'];
+  /** kind distinguishes DM / mention / thread reply / reaction for the converter. */
+  event: [event: SlackInboundEvent, kind: SlackInboundKind];
 }
 
 export class SlackClient extends EventEmitter {
@@ -87,7 +89,7 @@ export class SlackClient extends EventEmitter {
       this.emit('disconnected');
     });
 
-    // DM path: message events in IM channels.
+    // message events: DMs (im) and channel/group traffic (for active-thread replies).
     this.socket.on('message', async ({ event, ack }) => {
       try {
         await ack();
@@ -96,9 +98,13 @@ export class SlackClient extends EventEmitter {
       }
       if (this.stopping) return;
       if (!event || typeof event !== 'object') return;
-      const payload = event as SlackInboundEvent;
+      const payload = event as SlackMessageEvent;
       if (payload.type !== 'message') return;
-      this.emit('event', payload, 'dm');
+
+      const isDm =
+        payload.channel?.startsWith('D') ||
+        payload.channel_type === 'im';
+      this.emit('event', payload, isDm ? 'dm' : 'thread');
     });
 
     // Channel @mentions.
@@ -113,6 +119,20 @@ export class SlackClient extends EventEmitter {
       const payload = event as SlackInboundEvent;
       if (payload.type !== 'app_mention') return;
       this.emit('event', payload, 'mention');
+    });
+
+    // Reactions — normalized to inbound.reaction; emoji→intent is dispatch-side.
+    this.socket.on('reaction_added', async ({ event, ack }) => {
+      try {
+        await ack();
+      } catch (err) {
+        this.log.warn({ err }, 'Slack Socket Mode ack failed for reaction_added event');
+      }
+      if (this.stopping) return;
+      if (!event || typeof event !== 'object') return;
+      const payload = event as SlackInboundEvent;
+      if (payload.type !== 'reaction_added') return;
+      this.emit('event', payload, 'reaction');
     });
 
     this.started = true;

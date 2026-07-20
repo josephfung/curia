@@ -26,15 +26,21 @@ App distribution alternatives:
 ## Decision
 
 1. **Slack is a toggleable, medium-trust channel** (`unknown_sender: allow`, `threaded: true`) using **Socket Mode** (`@slack/socket-mode` + `@slack/web-api`).
-2. **v1 surface:** DMs and `@mentions` only; replies go in-thread for channel mentions.
-3. **One Slack workspace per Curia instance.** Bot display name / @handle is chosen by the principal in Slack app settings (typically from office identity); Curia never hardcodes `@curia` and ignores its own messages by bot user id from `auth.test`.
-4. **Ship an importable Slack app manifest** for workspace-owned apps. Do not ship a Curia-Inc distributed app in v1.
-5. **Outbound** goes through `OutboundGateway` (same as email/Signal). Conversation ids are reversible (`slack:D…`, `slack:C…:<thread_ts>`) per ADR-025.
-6. **Identities** use Slack user id (`U…`) with source `slack_participant` (auto-verified like `email_participant` / `signal_participant`).
+2. **v1 surface:** DMs, `@mentions`, and **in-thread continuation** once Curia is active in a thread (subscribe to `message.channels` / `message.groups`; track active `thread_ts`). Replies go in-thread. DM threads are keyed when `thread_ts` is present (`slack:D…:<thread_ts>`).
+3. **Trust the sender, not the conversation.** Every trust decision resolves Slack user id `U…` → `contact_channel_identities` → contact tier (same ledger as email/Signal). Channel floor is `medium`; a principal whose Slack identity is linked gets principal-tier override via `trust-scorer`. Outbound principal carve-outs use `isPrincipalSlack(U…)` — never `D…`/`C…`.
+4. **Unknown DMers** auto-create as `tier: unknown` (parity with unknown emailers). Cross-channel identity unifies when the same person’s Slack `U…` is linked onto an existing contact.
+5. **Reactions** normalize to bus event `inbound.reaction` (channel-agnostic). Emoji→intent (e.g. 👍 → approve) lives in dispatch/approval, not the Slack adapter. Manifest includes `reaction_added` + `reactions:read` now; approval correlation is a tracked follow-up.
+6. **Markdown ↔ mrkdwn** both ways: outbound Markdown→mrkdwn before `chat.postMessage`; inbound Slack entities decoded before the agent sees text.
+7. **One Slack workspace per Curia instance.** Bot display name / @handle is chosen by the principal in Slack app settings (typically from office identity); Curia never hardcodes `@curia` and ignores its own messages by bot user id from `auth.test`.
+8. **Ship an importable Slack app manifest** for workspace-owned apps. Do not ship a Curia-Inc distributed app in v1.
+9. **Outbound** goes through `OutboundGateway` (same as email/Signal). Conversation ids are reversible (`slack:D…`, `slack:D…:<thread_ts>`, `slack:C…:<thread_ts>`) per ADR-025.
+10. **Identities** use Slack user id (`U…`) with source `slack_participant` (auto-verified like `email_participant` / `signal_participant`).
 
 ## Consequences
 
-- Operators must create a Slack app (or import the manifest), install it, and vault `channel.slack.bot_token` + `channel.slack.app_token`, then install/enable Slack in the channel registry and restart.
-- Any workspace member can DM the bot and get a low-trust coordinator turn until contacts are elevated — documented and mitigated with an optional channel allowlist for @mentions.
+- Operators must create a Slack app (or import the manifest), install it, and vault `channel.slack.bot_token` + `channel.slack.app_token`, then install/enable Slack in the channel registry and restart. Re-install after manifest event/scope updates.
+- Any workspace member can DM the bot and get a low-trust coordinator turn until contacts are elevated — documented and mitigated with an optional channel allowlist for @mentions / thread replies.
+- Active-thread state and inbound dedupe are **process-local** (lost on restart/reconnect). After restart, a fresh `@mention` re-activates a channel thread. Dedupe absorbs Slack redelivery-on-missed-ack, not overlapping `message.im` + `app_mention` (those events are disjoint).
 - Events API remains a later alternative if a deployment prefers webhooks.
 - Meeting-debrief and other proactive flows can target `channel_id: "slack"` once the gateway path exists, without agent changes.
+- Reaction→approval wiring (correlate reacted-to `ts` with `outbound.delivered.messageId`) is intentionally a follow-up so the bus primitive ships with Slack.

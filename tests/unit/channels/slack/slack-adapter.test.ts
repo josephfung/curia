@@ -5,7 +5,7 @@ import { SlackAdapter } from '../../../../src/channels/slack/slack-adapter.js';
 import type { SlackClient } from '../../../../src/channels/slack/slack-client.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
-import type { SlackInboundEvent } from '../../../../src/channels/slack/types.js';
+import type { SlackInboundEvent, SlackInboundKind } from '../../../../src/channels/slack/types.js';
 import type { OutboundMessageEvent } from '../../../../src/bus/events.js';
 import { createLogger } from '../../../../src/logger.js';
 import pino from 'pino';
@@ -21,7 +21,7 @@ function makeMockClient() {
     getBotIdentity: ReturnType<typeof vi.fn>;
     lookupUser: ReturnType<typeof vi.fn>;
     postMessage: ReturnType<typeof vi.fn>;
-    simulateEvent: (event: SlackInboundEvent, kind: 'dm' | 'mention') => void;
+    simulateEvent: (event: SlackInboundEvent, kind: SlackInboundKind) => void;
   };
   emitter.connect = vi.fn().mockResolvedValue(undefined);
   emitter.disconnect = vi.fn().mockResolvedValue(undefined);
@@ -34,7 +34,7 @@ function makeMockClient() {
     disconnect: ReturnType<typeof vi.fn>;
     getBotIdentity: ReturnType<typeof vi.fn>;
     lookupUser: ReturnType<typeof vi.fn>;
-    simulateEvent: (event: SlackInboundEvent, kind: 'dm' | 'mention') => void;
+    simulateEvent: (event: SlackInboundEvent, kind: SlackInboundKind) => void;
   };
 }
 
@@ -112,7 +112,7 @@ describe('SlackAdapter', () => {
     );
   });
 
-  it('routes outbound slack: conversation via gateway', async () => {
+  it('routes outbound slack: conversation via gateway with slackUserId', async () => {
     const outbound: OutboundMessageEvent = {
       id: 'evt-1',
       timestamp: new Date(),
@@ -122,6 +122,7 @@ describe('SlackAdapter', () => {
         conversationId: 'slack:C999:1710000000.000200',
         channelId: 'slack',
         content: 'On it',
+        recipientId: 'U_ALICE',
       },
     };
 
@@ -134,12 +135,37 @@ describe('SlackAdapter', () => {
         slackChannelId: 'C999',
         threadTs: '1710000000.000200',
         message: 'On it',
+        slackUserId: 'U_ALICE',
       }),
       expect.objectContaining({
         conversationId: 'slack:C999:1710000000.000200',
         parentEventId: 'evt-1',
       }),
     );
+  });
+
+  it('publishes inbound.reaction for reaction_added', async () => {
+    const published: unknown[] = [];
+    bus.subscribe('inbound.reaction', 'dispatch', (e) => { published.push(e); });
+
+    client.simulateEvent(
+      {
+        type: 'reaction_added',
+        user: 'U_ALICE',
+        reaction: 'thumbsup',
+        item: { type: 'message', channel: 'C999', ts: '1710000000.000200' },
+      },
+      'reaction',
+    );
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(published).toHaveLength(1);
+    const event = published[0] as {
+      payload: { emoji: string; senderId: string; targetMessageId: string };
+    };
+    expect(event.payload.emoji).toBe('thumbsup');
+    expect(event.payload.senderId).toBe('U_ALICE');
+    expect(event.payload.targetMessageId).toBe('1710000000.000200');
   });
 
   it('ignores outbound for other channels', async () => {
