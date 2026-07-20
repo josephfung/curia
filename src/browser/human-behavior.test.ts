@@ -184,6 +184,18 @@ describe('humanClick', () => {
     expect(click).toHaveBeenCalledTimes(2);    // and retried the click
   });
 
+  it('bounds the boundingBox wait so a vanished element cannot hang the default 30s', async () => {
+    const page = mockPage();
+    const boundingBox = vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 });
+    const locator = {
+      boundingBox,
+      isVisible: vi.fn().mockResolvedValue(true),
+      click: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Locator;
+    await humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 });
+    expect(boundingBox).toHaveBeenCalledWith({ timeout: 1500 });
+  });
+
   it('does not retry when the click fails for a non-interception reason', async () => {
     const page = mockPage();
     const click = vi.fn().mockRejectedValue(new Error('locator.click: Target page closed'));

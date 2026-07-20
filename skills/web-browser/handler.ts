@@ -564,10 +564,24 @@ async function resolveLocator(page: Page, selector: string, log: SkillContext['l
       }
     }
     if (total === 1 && sole) return sole;
-    // 0 (stale/unknown ref) or >1 (ambiguous/duplicated) → a locator that cannot match (we
-    // never set data-curia-ref-unresolved), so the caller's action throws a clean not-found
-    // rather than resolving a wrong element.
-    return page.locator(`[data-curia-ref="${refToken}"][data-curia-ref-unresolved]`);
+    // Fail FAST, not slow. Previously we returned a guaranteed-miss locator here, but the
+    // caller's boundingBox()/click()/waitFor() then waited out the full Playwright timeout
+    // (~40s: 30s boundingBox + 10s click) on an element that can never appear — the dominant
+    // time-sink when a survey SPA re-renders and orphans refs. Throw immediately with an
+    // actionable message so the action returns in ~1s and the agent re-reads instead of
+    // hammering a dead ref. The handler's outer catch turns this into { success:false, error }.
+    if (total === 0) {
+      // 0 matches = stale: the element is gone, or the page/SPA re-rendered and minted new refs.
+      throw new Error(
+        `Element ref "${refToken}" is stale — the element is gone or the page re-rendered ` +
+          `since it was listed. Call get_content to get fresh refs, then retry.`,
+      );
+    }
+    // >1 = ambiguous: duplicated or cross-frame-copied (e.g. a hostile page re-injected the attr).
+    throw new Error(
+      `Element ref "${refToken}" is ambiguous — it matched ${total} elements. ` +
+        `Call get_content to get fresh, unique refs.`,
+    );
   }
 
   // Main frame first (the common case, and the cheapest).

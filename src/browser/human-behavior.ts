@@ -160,7 +160,11 @@ export async function humanType(page: Page, text: string, opts: BehaviorOptions 
 export async function humanClick(page: Page, locator: Locator, opts: BehaviorOptions = {}): Promise<void> {
   const { rng = Math.random, sleep = defaultSleep, strategy = bezierStrategy, log } = opts;
   try {
-    const box = await locator.boundingBox();
+    // Cap the wait: boundingBox() with no timeout defaults to Playwright's 30s, so an element
+    // that has vanished would hang the whole action. resolveLocator now throws on unknown refs
+    // before we reach here, but this is the backstop for an element that disappears between
+    // resolve and click. A present element returns its box immediately, well under 1.5s.
+    const box = await locator.boundingBox({ timeout: 1500 });
     if (box) {
       const vp = page.viewportSize() ?? { width: 1280, height: 720 };
       const from: Point = { x: rng() * vp.width, y: rng() * vp.height };

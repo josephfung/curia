@@ -961,47 +961,43 @@ describe('web-browser ref-based selectors', () => {
     expect(page.getByText).not.toHaveBeenCalled();
   });
 
-  it('fails closed on a stale/unknown ref, never degrading to fuzzy matching', async () => {
+  it('fails FAST with a clear message on a stale/unknown ref (no fuzzy fallthrough, no 40s hang)', async () => {
     const fill = vi.fn().mockResolvedValue(undefined);
     const page = makeMockPage('page body', fill, 'https://example.com/');
-    // The ref matches nothing this snapshot; the guaranteed-miss locator rejects like real
-    // Playwright would (0-element wait times out), naming the ref.
-    const miss = {
-      count: vi.fn().mockResolvedValue(0),
-      first: vi.fn().mockReturnThis(),
-      waitFor: vi.fn().mockRejectedValue(new Error('Timeout 10000ms exceeded waiting for locator([data-curia-ref="g9f0e9"][data-curia-ref-unresolved])')),
-    };
-    const none = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis(), waitFor: vi.fn().mockResolvedValue(undefined) };
-    page.locator = vi.fn((sel: string) => (sel.includes('data-curia-ref-unresolved') ? miss : none));
-    const ctx = ctxFor(page, { action: 'wait_for', selector: 'g9f0e9', session_id: 'sess-1' });
+    // The ref matches nothing this snapshot. resolveLocator must THROW immediately rather than
+    // return a guaranteed-miss locator the caller then waits ~40s on (30s boundingBox + 10s click).
+    const none = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    page.locator = vi.fn().mockReturnValue(none);
+    const ctx = ctxFor(page, { action: 'click', selector: 'g9f0e9', session_id: 'sess-1' });
 
     const result = await new WebBrowserHandler().execute(ctx);
 
     expect(page.locator).toHaveBeenCalledWith('[data-curia-ref="g9f0e9"]');
-    expect(page.getByRole).not.toHaveBeenCalled();
+    expect(page.getByRole).not.toHaveBeenCalled(); // never degraded to fuzzy matching
     expect(page.getByText).not.toHaveBeenCalled();
     expect(result.success).toBe(false);
-    expect((result as { error: string }).error).toMatch(/g9f0e9/);
+    const err = (result as { error: string }).error;
+    expect(err).toMatch(/g9f0e9/);
+    expect(err).toMatch(/stale/i);
+    expect(err).toMatch(/get_content/); // tells the agent exactly how to recover
   });
 
-  it('fails closed when a ref is duplicated (no silent .first())', async () => {
+  it('fails FAST with a clear message when a ref is duplicated (>1 match, no silent .first())', async () => {
     const fill = vi.fn().mockResolvedValue(undefined);
     const page = makeMockPage('page body', fill, 'https://example.com/');
     // Two elements carry the same ref (e.g. a hostile page re-injected our attribute).
-    const dup = { count: vi.fn().mockResolvedValue(2), first: vi.fn().mockReturnThis(), waitFor: vi.fn().mockResolvedValue(undefined) };
-    const miss = {
-      count: vi.fn().mockResolvedValue(0),
-      first: vi.fn().mockReturnThis(),
-      waitFor: vi.fn().mockRejectedValue(new Error('Timeout 10000ms exceeded waiting for locator([data-curia-ref="g1f0e2"][data-curia-ref-unresolved])')),
-    };
-    page.locator = vi.fn((sel: string) => (sel.includes('data-curia-ref-unresolved') ? miss : dup));
-    const ctx = ctxFor(page, { action: 'wait_for', selector: 'g1f0e2', session_id: 'sess-1' });
+    const dup = { count: vi.fn().mockResolvedValue(2), first: vi.fn().mockReturnThis() };
+    page.locator = vi.fn().mockReturnValue(dup);
+    const ctx = ctxFor(page, { action: 'click', selector: 'g1f0e2', session_id: 'sess-1' });
 
     const result = await new WebBrowserHandler().execute(ctx);
 
-    expect(result.success).toBe(false);          // ambiguous ref did not resolve to one element
+    expect(result.success).toBe(false); // ambiguous ref did not resolve to one element
     expect(page.getByRole).not.toHaveBeenCalled();
     expect(page.getByText).not.toHaveBeenCalled();
+    const err = (result as { error: string }).error;
+    expect(err).toMatch(/g1f0e2/);
+    expect(err).toMatch(/ambiguous/i);
   });
 
   it('still resolves a plain label selector via the existing cascade (back-compat)', async () => {
