@@ -83,8 +83,10 @@ function makeMem(seed: Record<string, string> = {}): EntityMemory & { __values: 
 function makeCtx(): SkillContext & {
   __completed: string[];
   __mem: ReturnType<typeof makeMem>;
+  __sendNotification: ReturnType<typeof vi.fn>;
 } {
   const completed: string[] = [];
+  const sendNotification = vi.fn().mockResolvedValue(true);
   const mem = makeMem({ [COMPLETION_CANDIDATES_KEY]: JSON.stringify(CANDIDATE_MAP) });
 
   const tasks: Record<string, {
@@ -145,11 +147,24 @@ function makeCtx(): SkillContext & {
     sensitivityClassifier: {
       classify: (text: string) => (/board|agm/i.test(text) ? 'restricted' : 'internal'),
     },
+    // Event-driven CEO notification (#1466): a mocked gateway + principal-resolving contactService,
+    // so a produced digest fires notifyLearningProposal. Exposed as __sendNotification for asserts.
+    outboundGateway: { sendNotification } as unknown as SkillContext['outboundGateway'],
+    contactService: {
+      findContactBySystemRole: vi.fn().mockResolvedValue({ id: 'principal-1' }),
+      getContactWithIdentities: vi.fn().mockResolvedValue({
+        identities: [
+          { channel: 'email', verified: true, status: 'active', channelIdentifier: 'ceo@example.com' },
+        ],
+      }),
+    } as unknown as SkillContext['contactService'],
     __completed: completed,
     __mem: mem,
+    __sendNotification: sendNotification,
   } as unknown as SkillContext & {
     __completed: string[];
     __mem: typeof mem;
+    __sendNotification: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -176,6 +191,26 @@ describe('TaskCompletionFromSentHandler', () => {
     // prevents re-surfacing now, not an in-band marker.
     const remaining = JSON.parse(ctx.__mem.__values.get(COMPLETION_CANDIDATES_KEY)!);
     expect(remaining).toEqual({});
+
+    // Event-driven surfacing (#1466): the produced undo/confirm items are pushed to the CEO
+    // inline, in one notification, the moment they're written.
+    expect(ctx.__sendNotification).toHaveBeenCalledTimes(1);
+    const payload = ctx.__sendNotification.mock.calls[0]![0];
+    expect(payload.notificationType).toBe('learning_proposal');
+    expect(payload.ceoEmail).toBe('ceo@example.com');
+    expect(payload.body).toContain('### Task completion from sent mail');
+    // Both the undo (auto-completed) and a confirm item's reply commands are inlined.
+    expect(payload.body).toContain('undo completion 11111111-1111-4111-8111-111111111111');
+    expect(payload.body).toContain('confirm completion 22222222-2222-4222-8222-222222222222');
+  });
+
+  it('does NOT notify when the run produces no digest items (empty candidate queue)', async () => {
+    const ctx = makeCtx();
+    // Drain the queue so nothing is produced this run.
+    ctx.__mem.__values.set(COMPLETION_CANDIDATES_KEY, JSON.stringify({}));
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(ctx.__sendNotification).not.toHaveBeenCalled();
   });
 
   it('a low-confidence candidate skips the subtask lookup and the sensitivity classifier (T3.1)', async () => {
@@ -267,6 +302,37 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(remaining['11111111-1111-4111-8111-111111111111']).toEqual(
       CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
     );
+
+    // The CEO must NOT be told to "undo" a task whose completeTask threw — it was never marked
+    // done. This run's only item was that failed auto-complete, so no notification fires at all.
+    expect(ctx.__sendNotification).not.toHaveBeenCalled();
+  });
+
+  it('a failed undo auto-complete is excluded from the notification but a sibling confirm item is still sent', async () => {
+    const ctx = makeCtx();
+    // Queue the auto-complete candidate (task 1) and a fuzzy/low-confidence one (task 3 → confirm).
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({
+        '11111111-1111-4111-8111-111111111111': CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+        '33333333-3333-4333-8333-333333333333': CANDIDATE_MAP['33333333-3333-4333-8333-333333333333'],
+      }),
+    );
+    // completeTask throws → the undo item for task 1 must be dropped from the notification.
+    (ctx.taskRepo as unknown as { completeTask: (...args: unknown[]) => Promise<unknown> }).completeTask =
+      vi.fn(async () => {
+        throw new Error('db hiccup');
+      });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    // A notification still fires (the confirm item is genuine and actionable)...
+    expect(ctx.__sendNotification).toHaveBeenCalledTimes(1);
+    const body = ctx.__sendNotification.mock.calls[0]![0].body as string;
+    // ...but it carries ONLY the confirm item, not the failed undo.
+    expect(body).toContain('confirm completion 33333333-3333-4333-8333-333333333333');
+    expect(body).not.toContain('undo completion 11111111-1111-4111-8111-111111111111');
   });
 
   it('DOUBLE-RUN: a digest soft-reject blocks completion entirely; a later successful run completes it with the undo note durable (Finding 6)', async () => {

@@ -160,7 +160,11 @@ export async function humanType(page: Page, text: string, opts: BehaviorOptions 
 export async function humanClick(page: Page, locator: Locator, opts: BehaviorOptions = {}): Promise<void> {
   const { rng = Math.random, sleep = defaultSleep, strategy = bezierStrategy, log } = opts;
   try {
-    const box = await locator.boundingBox();
+    // Cap the wait: boundingBox() with no timeout defaults to Playwright's 30s, so an element
+    // that has vanished would hang the whole action. resolveLocator now throws on unknown refs
+    // before we reach here, but this is the backstop for an element that disappears between
+    // resolve and click. A present element returns its box immediately, well under 1.5s.
+    const box = await locator.boundingBox({ timeout: 1500 });
     if (box) {
       const vp = page.viewportSize() ?? { width: 1280, height: 720 };
       const from: Point = { x: rng() * vp.width, y: rng() * vp.height };
@@ -188,12 +192,47 @@ export async function humanClick(page: Page, locator: Locator, opts: BehaviorOpt
     log?.debug({ err }, 'humanClick: visibility check failed');
     throw err;
   }
-  if (visible) {
-    await locator.click({ timeout: 10_000 });
-  } else {
+  const clickOpts = visible ? { timeout: 10_000 } : { force: true, timeout: 10_000 };
+  if (!visible) {
     log?.debug('humanClick: target not visible — using force click (typical for custom radios/checkboxes)');
-    await locator.click({ force: true, timeout: 10_000 });
   }
+  try {
+    await locator.click(clickOpts);
+  } catch (err) {
+    // A sticky header/footer, cookie bar, ad, or floating widget can sit over the target's
+    // click point; Playwright reports "<other element> ... intercepts pointer events" and
+    // retries until timeout. scrollIntoViewIfNeeded lands the element in the viewport but not
+    // necessarily clear of a sticky overlay. Re-center it — which clears BOTH top and bottom
+    // sticky bars — and retry the click once. Only interception is retried; any other failure
+    // (detached, target closed, genuinely not found) re-throws immediately so it fails fast.
+    // NOTE: force-clicking is deliberately NOT the recovery here — a forced click still fires
+    // at the covered coordinates, so it would hit the overlay, not the target. Repositioning
+    // is the only reliable fix for occlusion.
+    if (!isPointerInterception(err)) throw err;
+    log?.debug({ err }, 'humanClick: click intercepted by an overlay — recentering the target and retrying once');
+    try {
+      await locator.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' }));
+    } catch (scrollErr) {
+      // Recenter is our only recovery from occlusion. If it fails (element detached, page
+      // navigated away), the click can't succeed either — surface the failure rather than
+      // retrying blind against an unknown target state. Log first so the cause is observable.
+      log?.debug({ scrollErr }, 'humanClick: recenter scroll failed — surfacing, not retrying');
+      throw scrollErr;
+    }
+    await sleep(computeJitter(80, 200, rng));
+    await locator.click(clickOpts);
+  }
+}
+
+/**
+ * True when a click failed because another element (a sticky bar, overlay, ad, or modal)
+ * covers the target's click point. Playwright phrases this as "intercepts pointer events" in
+ * the timeout error's call log — matching that phrase is the only signal it exposes for this
+ * distinct failure mode, which is recoverable by repositioning (unlike a detached/closed target).
+ */
+function isPointerInterception(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /intercepts pointer events/i.test(msg);
 }
 
 /**

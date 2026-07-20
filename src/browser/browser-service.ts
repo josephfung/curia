@@ -47,7 +47,9 @@ import { parseProxyConfig, type ProxyConfig } from './proxy-config.js';
 
 interface BrowserServiceOptions {
   logger: Logger;
-  /** Session idle TTL in ms. Default: 600_000 (10 minutes). */
+  /** Session idle TTL in ms. Default: 1_800_000 (30 minutes) — long enough that a multi-page
+   *  form (e.g. a 60-question survey) doesn't get its session evicted between agent turns,
+   *  which would orphan every element ref the agent still holds. */
   sessionTtlMs?: number;
   /** How often to sweep expired sessions in ms. Default: 120_000 (2 minutes). */
   sweepIntervalMs?: number;
@@ -111,7 +113,7 @@ export class BrowserService {
 
   constructor(options: BrowserServiceOptions) {
     this.logger = options.logger.child({ service: 'BrowserService' });
-    this.sessionTtlMs = options.sessionTtlMs ?? 600_000;
+    this.sessionTtlMs = options.sessionTtlMs ?? 1_800_000;
     this.sweepIntervalMs = options.sweepIntervalMs ?? 120_000;
     this.profileDir = options.profileDir && options.profileDir.length > 0
       ? options.profileDir

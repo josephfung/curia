@@ -25,10 +25,13 @@ const MAX_CONTENT_LENGTH = 15_000;
 // one content budget. Passed into the in-browser extractor since it can't import this.
 const MAX_INTERACTABLE_REFS = 200;
 
-// Reserved slice of MAX_CONTENT_LENGTH for the interactable-ref list, so a large page
-// body can't truncate away the refs (the agent's only exact selectors). getCleanedContent
-// gives the body MAX_CONTENT_LENGTH minus this. Module constant, like the two above.
-const MAX_INTERACTABLE_CHARS = 6_000;
+// FLOOR (guaranteed minimum), not a ceiling, for the interactable-ref list within
+// MAX_CONTENT_LENGTH. A large page body can't starve the refs below this (they're the
+// agent's only exact selectors). But the refs are NOT capped here: when the body is small,
+// the list may grow into whatever budget the body leaves free (see getCleanedContent).
+// The old code used this same number as a hard cap, which silently dropped the tail of a
+// long list — e.g. a survey's "Next" button — even when 40%+ of the page budget sat unused.
+const MIN_INTERACTABLE_CHARS = 6_000;
 
 // The header extractFrameContent prefixes its interactable list with. DUPLICATED from
 // dom-extract.ts on purpose: that function is serialized into the page and cannot
@@ -52,6 +55,17 @@ const INTERACTION_SETTLE_TIMEOUT_MS = 1_500;
 // clear before we treat the page as blocked. Kept under the skill timeout budget.
 const CHALLENGE_POLL_TIMEOUT_MS = 12_000;
 const CHALLENGE_POLL_INTERVAL_MS = 500;
+
+// Circuit-breaker: after this many CONSECUTIVE failed interaction actions on one session,
+// refuse further interaction rather than let a stuck agent drain its budget into a futile
+// loop (a survey where every ref went stale produced dozens of ~40s failures in one run).
+const BREAKER_THRESHOLD = 4;
+
+// Actions that resolve a locator and can hang/fail on a stale ref or occluded target — the
+// ones the breaker gates. Recovery/read actions (get_content, navigate, scroll, screenshot,
+// press_key, close_session) are always allowed so the agent can re-read and recover; a
+// successful action of ANY kind resets the streak.
+const INTERACTION_ACTIONS: ReadonlySet<string> = new Set(['click', 'type', 'select', 'hover', 'wait_for']);
 
 // How long `wait_for` waits for an element to become visible before giving up.
 const WAIT_FOR_TIMEOUT_MS = 10_000;
@@ -141,6 +155,24 @@ export class WebBrowserHandler implements SkillHandler {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, session_id }, 'Failed to acquire browser session');
       return { success: false, error: `Failed to acquire browser session: ${message}` };
+    }
+
+    // Circuit-breaker: if this session has already failed BREAKER_THRESHOLD interaction actions
+    // in a row, stop attempting more interactions. Each stale-ref/occluded click still costs
+    // seconds, and a stuck agent would otherwise loop until its whole budget is gone (the 16P
+    // survey drained a run this way). Recovery actions (get_content/navigate/…) are still
+    // allowed, and any success resets the streak — so re-reading the page re-enables clicking.
+    if (INTERACTION_ACTIONS.has(action) && session.isTripped(BREAKER_THRESHOLD)) {
+      ctx.log.warn(
+        { action, sessionId, consecutiveFailures: session.consecutiveFailures },
+        'Browser circuit-breaker tripped — refusing further interaction on this session',
+      );
+      return {
+        success: false,
+        error:
+          `Stopping browser interaction: ${session.consecutiveFailures} actions failed in a row on this ` +
+          `session. Re-read the page with get_content to get fresh refs, or hand off to the principal.`,
+      };
     }
 
     ctx.log.info({ action, sessionId, url, selector }, 'Executing browser action');
@@ -405,8 +437,17 @@ export class WebBrowserHandler implements SkillHandler {
         result.screenshot_base64 = buf.toString('base64');
       }
 
+      // Action completed — clear the circuit-breaker streak (a successful get_content here is
+      // exactly how the agent recovers a tripped session).
+      session.recordSuccess();
       return { success: true, data: result };
     } catch (err) {
+      // Count this failure toward the circuit-breaker — but ONLY for the interaction actions the
+      // breaker actually gates. A failed navigate/get_content, or a secret_ref config error, is
+      // not an occluded/stale-element problem and shouldn't trip the click breaker; gating here
+      // keeps the counter meaning exactly what its message says ("N interactions in a row") and
+      // avoids the asymmetry with the sibling capability check that early-returns without counting.
+      if (INTERACTION_ACTIONS.has(action)) session.recordFailure();
       const message = err instanceof Error ? err.message : String(err);
       // Scrub any injected secret value from the error before it reaches the agent AND the
       // logs (#973). A Playwright failure references the selector, not the typed value, but
@@ -561,10 +602,24 @@ async function resolveLocator(page: Page, selector: string, log: SkillContext['l
       }
     }
     if (total === 1 && sole) return sole;
-    // 0 (stale/unknown ref) or >1 (ambiguous/duplicated) → a locator that cannot match (we
-    // never set data-curia-ref-unresolved), so the caller's action throws a clean not-found
-    // rather than resolving a wrong element.
-    return page.locator(`[data-curia-ref="${refToken}"][data-curia-ref-unresolved]`);
+    // Fail FAST, not slow. Previously we returned a guaranteed-miss locator here, but the
+    // caller's boundingBox()/click()/waitFor() then waited out the full Playwright timeout
+    // (~40s: 30s boundingBox + 10s click) on an element that can never appear — the dominant
+    // time-sink when a survey SPA re-renders and orphans refs. Throw immediately with an
+    // actionable message so the action returns in ~1s and the agent re-reads instead of
+    // hammering a dead ref. The handler's outer catch turns this into { success:false, error }.
+    if (total === 0) {
+      // 0 matches = stale: the element is gone, or the page/SPA re-rendered and minted new refs.
+      throw new Error(
+        `Element ref "${refToken}" is stale — the element is gone or the page re-rendered ` +
+          `since it was listed. Call get_content to get fresh refs, then retry.`,
+      );
+    }
+    // >1 = ambiguous: duplicated or cross-frame-copied (e.g. a hostile page re-injected the attr).
+    throw new Error(
+      `Element ref "${refToken}" is ambiguous — it matched ${total} elements. ` +
+        `Call get_content to get fresh, unique refs.`,
+    );
   }
 
   // Main frame first (the common case, and the cheapest).
@@ -752,17 +807,23 @@ async function getCleanedContent(page: Page, log: SkillContext['log']): Promise<
   const cleanedBody = bodyParts.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   const cleanedRefs = refParts.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
-  // Reserve up to MAX_INTERACTABLE_CHARS of the total budget for the ref list, then give
-  // the remainder to the body. This guarantees the refs survive even when the page body
-  // alone would exceed the whole budget — the failure mode the old single-slice truncation
-  // had (refs were appended last, so they were the first thing cut on a large page).
-  const refBudget = Math.min(cleanedRefs.length, MAX_INTERACTABLE_CHARS);
+  // Split the total budget between body and ref list. The ref list gets whatever the body
+  // leaves unused, but is guaranteed at least MIN_INTERACTABLE_CHARS so a huge body can't
+  // starve it. Crucially this is a FLOOR, not a ceiling: when the body is small (a survey
+  // page is ~1k of prose but dozens of interactables), the list may use the free budget
+  // instead of being hard-capped — which used to drop the tail (e.g. the "Next" button)
+  // while 40%+ of the page budget sat empty. Only when body + refs together exceed
+  // MAX_CONTENT_LENGTH does either side actually truncate.
+  const refBudget = Math.min(
+    cleanedRefs.length,
+    Math.max(MIN_INTERACTABLE_CHARS, MAX_CONTENT_LENGTH - cleanedBody.length),
+  );
   const bodyBudget = MAX_CONTENT_LENGTH - refBudget;
   const bodyOut = cleanedBody.length > bodyBudget
     ? cleanedBody.slice(0, bodyBudget) + '\n[content truncated]'
     : cleanedBody;
-  const refsOut = cleanedRefs.length > MAX_INTERACTABLE_CHARS
-    ? cleanedRefs.slice(0, MAX_INTERACTABLE_CHARS) + '\n[interactable list truncated]'
+  const refsOut = cleanedRefs.length > refBudget
+    ? cleanedRefs.slice(0, refBudget) + '\n[interactable list truncated]'
     : cleanedRefs;
 
   const combined = refsOut
