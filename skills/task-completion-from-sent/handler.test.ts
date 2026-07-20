@@ -302,6 +302,37 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(remaining['11111111-1111-4111-8111-111111111111']).toEqual(
       CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
     );
+
+    // The CEO must NOT be told to "undo" a task whose completeTask threw — it was never marked
+    // done. This run's only item was that failed auto-complete, so no notification fires at all.
+    expect(ctx.__sendNotification).not.toHaveBeenCalled();
+  });
+
+  it('a failed undo auto-complete is excluded from the notification but a sibling confirm item is still sent', async () => {
+    const ctx = makeCtx();
+    // Queue the auto-complete candidate (task 1) and a fuzzy/low-confidence one (task 3 → confirm).
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({
+        '11111111-1111-4111-8111-111111111111': CANDIDATE_MAP['11111111-1111-4111-8111-111111111111'],
+        '33333333-3333-4333-8333-333333333333': CANDIDATE_MAP['33333333-3333-4333-8333-333333333333'],
+      }),
+    );
+    // completeTask throws → the undo item for task 1 must be dropped from the notification.
+    (ctx.taskRepo as unknown as { completeTask: (...args: unknown[]) => Promise<unknown> }).completeTask =
+      vi.fn(async () => {
+        throw new Error('db hiccup');
+      });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+
+    // A notification still fires (the confirm item is genuine and actionable)...
+    expect(ctx.__sendNotification).toHaveBeenCalledTimes(1);
+    const body = ctx.__sendNotification.mock.calls[0]![0].body as string;
+    // ...but it carries ONLY the confirm item, not the failed undo.
+    expect(body).toContain('confirm completion 33333333-3333-4333-8333-333333333333');
+    expect(body).not.toContain('undo completion 11111111-1111-4111-8111-111111111111');
   });
 
   it('DOUBLE-RUN: a digest soft-reject blocks completion entirely; a later successful run completes it with the undo note durable (Finding 6)', async () => {

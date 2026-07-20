@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Learning-item surfacing** — voice-guide proposals and sent-mail task completions now notify the CEO when produced, not via a digest. (#1466)
+- **Learning-item surfacing** — voice-guide proposals and sent-mail task completions now notify the CEO directly, not via a digest. (#1466)
 - **`outbound.notification`** — new `learning_proposal` `notificationType` on the bus event (public API). (#1466)
 - **`web-browser`** — optional egress proxy (`browser.proxy`) routes browsing through a residential exit, plus a WebRTC-leak guard.
 - **`web-browser`** — stable per-element refs let the agent disambiguate duplicate labels (e.g. survey radios).
