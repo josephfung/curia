@@ -129,7 +129,7 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: false, error: 'browserService is not available — BrowserService failed to start or is not wired into ExecutionLayer' };
     }
 
-    const { action, url, selector, text, value, key, secret_ref, session_id, screenshot, block_ads, incognito, actions } = ctx.input as {
+    const { action, url, selector, text, value, key, secret_ref, session_id, screenshot, block_ads, incognito, keep_warm, actions } = ctx.input as {
       action?: string;
       url?: string;
       selector?: string;
@@ -150,6 +150,10 @@ export class WebBrowserHandler implements SkillHandler {
       // incognito (#987): run this session in a fresh, isolated context instead of the
       // principal's persistent profile. For Curia's own logins or throwaway flows.
       incognito?: boolean;
+      // keep_warm (ADR-030): pin this session so it survives the idle TTL between wakes — for
+      // a long-running task that will resume the same live page later. Record the session_id
+      // and pass it back on the next wake to reattach.
+      keep_warm?: boolean;
       // actions: an optional sequence of steps to run in order against the same page in one
       // call. When present, the top-level action/selector/… fields are ignored and each step
       // supplies its own. Lets a whole form page be filled in a single turn.
@@ -224,6 +228,7 @@ export class WebBrowserHandler implements SkillHandler {
       const result = await ctx.browserService.getOrCreateSession(session_id ?? undefined, {
         incognito: incognito === true,
         blockAds: block_ads === true,
+        keepWarm: keep_warm === true,
       });
       sessionId = result.sessionId;
       session = result.session;

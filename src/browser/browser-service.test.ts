@@ -155,6 +155,70 @@ describe('BrowserService (unit — mocked browser)', () => {
     }
   });
 
+  it('keep-warm exempts a session from the idle TTL so a parked task can resume it', async () => {
+    const first = await service.getOrCreateSession(undefined, { keepWarm: true });
+    const session = service.getSession(first.sessionId);
+    // Idle well past the 1000ms TTL — a normal session would be evicted and replaced.
+    session!.lastUsedAt = Date.now() - 60_000;
+    const second = await service.getOrCreateSession(first.sessionId);
+    expect(second.sessionId).toBe(first.sessionId); // pinned → same live session
+    expect(mockContext.newPage).toHaveBeenCalledOnce(); // no fresh page minted
+  });
+
+  it('keep-warm sessions survive the sweep', async () => {
+    const { sessionId } = await service.getOrCreateSession(undefined, { keepWarm: true });
+    service.getSession(sessionId)!.lastUsedAt = Date.now() - 60_000; // idle past TTL
+    await service.sweep();
+    expect(service.getSession(sessionId)).toBeDefined(); // not swept
+    expect(mockPage.close).not.toHaveBeenCalled();
+  });
+
+  it('passing keepWarm on a later call upgrades an existing session to pinned', async () => {
+    const first = await service.getOrCreateSession(undefined); // not pinned
+    expect(service.getSession(first.sessionId)!.keepWarm).toBe(false);
+    // Reuse while still fresh, now asking to keep it warm.
+    await service.getOrCreateSession(first.sessionId, { keepWarm: true });
+    expect(service.getSession(first.sessionId)!.keepWarm).toBe(true);
+    // It now survives going idle past the TTL.
+    service.getSession(first.sessionId)!.lastUsedAt = Date.now() - 60_000;
+    const again = await service.getOrCreateSession(first.sessionId);
+    expect(again.sessionId).toBe(first.sessionId);
+  });
+
+  it('evicts a keep-warm session once it exceeds the absolute-age cap', async () => {
+    const capped = new BrowserService({
+      logger,
+      sessionTtlMs: 1000,
+      sweepIntervalMs: 60000,
+      keepWarmMaxAgeMs: 10_000, // 10s absolute cap on a pinned session's lifetime
+      contextFactory: async () => mockContext as never,
+    });
+    await capped.start();
+    try {
+      const first = await capped.getOrCreateSession(undefined, { keepWarm: true });
+      const session = capped.getSession(first.sessionId)!;
+      // Not idle (so only the age cap can evict it), but created long ago.
+      session.lastUsedAt = Date.now();
+      (session as unknown as { createdAt: number }).createdAt = Date.now() - 60_000; // 60s > 10s cap
+      const second = await capped.getOrCreateSession(first.sessionId);
+      expect(second.sessionId).not.toBe(first.sessionId); // aged out despite keep-warm
+    } finally {
+      await capped.stop();
+    }
+  });
+
+  it('keeps concurrent keep-warm sessions independent (per-task isolation, no collision)', async () => {
+    const a = await service.getOrCreateSession(undefined, { keepWarm: true });
+    const b = await service.getOrCreateSession(undefined, { keepWarm: true });
+    expect(a.sessionId).not.toBe(b.sessionId); // two distinct sessions, not one shared tab
+    // Both idle past the TTL; both survive because each is pinned on its own.
+    service.getSession(a.sessionId)!.lastUsedAt = Date.now() - 60_000;
+    service.getSession(b.sessionId)!.lastUsedAt = Date.now() - 60_000;
+    await service.sweep();
+    expect(service.getSession(a.sessionId)).toBeDefined();
+    expect(service.getSession(b.sessionId)).toBeDefined();
+  });
+
   it('closeSession() closes the context and removes the session', async () => {
     const { sessionId } = await service.getOrCreateSession(undefined);
     await service.closeSession(sessionId);

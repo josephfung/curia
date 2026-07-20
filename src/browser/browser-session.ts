@@ -23,6 +23,21 @@ export class BrowserSession {
   readonly page: Page;
   /** Epoch ms of last access — updated by BrowserService.getOrCreateSession() on reuse. */
   lastUsedAt: number;
+  /** Epoch ms the session was created — the anchor for the absolute-age cap that bounds
+   *  even a keep-warm session's lifetime, so a forgotten pinned tab can't leak forever. */
+  readonly createdAt: number;
+
+  /**
+   * Keep-warm pin (opt-in, per task). A parked long-running browser task sets this so its
+   * session survives the idle TTL between wakes that may be far apart — the woken task
+   * reattaches to the same live, logged-in page instead of a cold tab. Pinning only exempts
+   * the session from the *idle* TTL; the absolute-age cap (see isExpired) still applies, and
+   * a process restart still loses the live page (the persistent PROFILE — cookies/history —
+   * survives on disk, so re-navigation resumes). Concurrent tasks each pin their own session
+   * (a separate page in the shared profile), so they never clobber one another. Default false
+   * (throwaway-per-flow, as before). See ADR-030.
+   */
+  keepWarm = false;
 
   /**
    * Literal secret VALUES injected into this session by reference (#973), e.g. a
@@ -72,7 +87,9 @@ export class BrowserSession {
     this.context = context;
     this.page = page;
     this.ownedContext = ownedContext;
-    this.lastUsedAt = Date.now();
+    const now = Date.now();
+    this.lastUsedAt = now;
+    this.createdAt = now;
   }
 
   /**
@@ -111,8 +128,18 @@ export class BrowserSession {
     return redactValues(text, variants);
   }
 
-  /** Returns true if the session has been idle longer than ttlMs. */
-  isExpired(ttlMs: number): boolean {
+  /**
+   * Returns true if the session should be evicted.
+   *
+   * - `maxAgeMs` (absolute-age cap) ALWAYS applies when provided: a session older than this
+   *   since creation is expired regardless of keep-warm, so a pinned tab can't leak forever.
+   * - A keep-warm session is otherwise exempt from the idle TTL (a parked task can resume it
+   *   after a long gap between wakes).
+   * - Otherwise the session expires after being idle longer than `ttlMs`.
+   */
+  isExpired(ttlMs: number, maxAgeMs?: number): boolean {
+    if (maxAgeMs !== undefined && Date.now() - this.createdAt > maxAgeMs) return true;
+    if (this.keepWarm) return false;
     return Date.now() - this.lastUsedAt > ttlMs;
   }
 
