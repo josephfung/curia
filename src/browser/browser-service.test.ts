@@ -134,6 +134,27 @@ describe('BrowserService (unit — mocked browser)', () => {
     expect(mockPage.close).toHaveBeenCalledOnce();
   });
 
+  it('keeps a session alive for long flows: the default idle TTL is 30 minutes', async () => {
+    // A long survey (dozens of clicks, some slow) idles between agent turns; the old 10-minute
+    // default evicted the session mid-flow, after which every ref went stale. Build with the
+    // DEFAULT TTL (no override) and confirm a 20-minute-idle session is still reused.
+    const longService = new BrowserService({
+      logger,
+      sweepIntervalMs: 60000,
+      contextFactory: async () => mockContext as never,
+    });
+    await longService.start();
+    try {
+      const first = await longService.getOrCreateSession(undefined);
+      const session = longService.getSession(first.sessionId);
+      session!.lastUsedAt = Date.now() - 20 * 60_000; // idle 20 min — under the 30-min default
+      const second = await longService.getOrCreateSession(first.sessionId);
+      expect(second.sessionId).toBe(first.sessionId); // same session, not evicted
+    } finally {
+      await longService.stop();
+    }
+  });
+
   it('closeSession() closes the context and removes the session', async () => {
     const { sessionId } = await service.getOrCreateSession(undefined);
     await service.closeSession(sessionId);

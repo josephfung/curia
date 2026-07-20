@@ -28,8 +28,10 @@ contact_creation_limits:
   max_per_hour: 100      # max new contacts created per hour, per email account
 
 browser:
-  # How long a browser session stays alive after its last action (ms).
-  sessionTtlMs: 600000   # 10 minutes
+  # How long a browser session stays alive after its last action (ms). Long enough that a
+  # multi-page form (e.g. a 60-question survey) isn't evicted mid-flow between agent turns —
+  # eviction orphans every element ref the agent still holds.
+  sessionTtlMs: 1800000   # 30 minutes
   # How often the session sweep runs to close expired sessions (ms).
   sweepIntervalMs: 120000  # 2 minutes
   # Persistent profile directory. Empty → ${HOME}/.curia/browser-profile.
