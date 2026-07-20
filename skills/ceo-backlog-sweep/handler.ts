@@ -18,18 +18,11 @@
 
 import { DateTime } from 'luxon';
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
-import type { TaskListRow } from '../../src/db/task-repo.js';
 
 // Non-terminal statuses: a task in any of these is still "open" and can rot.
 // Terminal statuses (done, cancelled) are excluded — a completed/cancelled task
 // with a past due date is not a backlog item.
 const OPEN_STATUSES = ['open', 'in_progress', 'blocked', 'waiting'];
-
-// Upper bound on how many candidate rows we pull for the count. A CEO with more
-// than this many overdue/due-today tasks has bigger problems than an exact count;
-// the nudge says "review for the full list" regardless, so an approximate ceiling
-// is fine. Kept well above any realistic backlog.
-const MAX_CANDIDATES = 100;
 
 /**
  * Resolve the principal's email address from the contacts store.
@@ -94,7 +87,7 @@ export class CeoBacklogSweepHandler implements SkillHandler {
       }
 
       // --- Step 1: Compute the "end of today" boundary in the CEO's timezone ---
-      // listTasks filters `due_at < dueBefore`, so passing the start of tomorrow
+      // listAllTasks filters `due_at < dueBefore`, so passing the start of tomorrow
       // (local midnight) captures everything due today and earlier. Day boundaries
       // are timezone-sensitive, so we anchor on ctx.timezone (falling back to UTC).
       const tz = ctx.timezone ?? 'UTC';
@@ -103,11 +96,16 @@ export class CeoBacklogSweepHandler implements SkillHandler {
       const startOfTomorrow = startOfToday.plus({ days: 1 });
 
       // --- Step 2: Query open CEO tasks that are overdue or due today ---
-      const rows: TaskListRow[] = await ctx.taskRepo.listTasks({
+      // listAllTasks (not listTasks) so the reported counts are exact rather than
+      // capped at a single page — an operational backstop must not under-report a
+      // 101-task backlog as "100" (#1433 fixed the same silent-cap bug in
+      // sent-observe). It pages internally with a 5000-row safety ceiling; a CEO
+      // backlog large enough to hit that has far bigger problems, and listAllTasks
+      // logs + flags `truncated` if it ever does.
+      const { tasks: rows } = await ctx.taskRepo.listAllTasks({
         statuses: OPEN_STATUSES,
         owner: 'ceo',
         dueBefore: startOfTomorrow.toJSDate(),
-        limit: MAX_CANDIDATES,
       });
 
       // --- Step 3: Split into overdue (before today) vs due-today ---

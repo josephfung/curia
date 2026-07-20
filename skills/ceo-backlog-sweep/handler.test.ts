@@ -67,11 +67,14 @@ function makeCtx(overrides: {
     listTasksThrows = false,
   } = overrides;
 
-  const listTasksMock = vi.fn();
+  // The handler uses listAllTasks (paginated, exact counts) — not the single-page
+  // listTasks — so the reported counts never silently cap. The mock returns the
+  // { tasks, truncated } shape listAllTasks resolves to.
+  const listAllTasksMock = vi.fn();
   if (listTasksThrows) {
-    listTasksMock.mockRejectedValue(new Error('db exploded'));
+    listAllTasksMock.mockRejectedValue(new Error('db exploded'));
   } else {
-    listTasksMock.mockResolvedValue(rows);
+    listAllTasksMock.mockResolvedValue({ tasks: rows, truncated: false });
   }
   const sendNotificationMock = vi.fn().mockResolvedValue(sendNotificationResult);
   const logInfoMock = vi.fn();
@@ -98,7 +101,7 @@ function makeCtx(overrides: {
     log: { info: logInfoMock, warn: logWarnMock, error: logErrorMock, debug: vi.fn() } as unknown as SkillContext['log'],
     taskRepo: withoutTaskRepo
       ? undefined
-      : ({ listTasks: listTasksMock } as unknown as TaskRepo),
+      : ({ listAllTasks: listAllTasksMock } as unknown as TaskRepo),
     contactService: {
       findContactBySystemRole: findContactBySystemRoleMock,
       getContactWithIdentities: getContactWithIdentitiesMock,
@@ -108,7 +111,7 @@ function makeCtx(overrides: {
       : ({ sendNotification: sendNotificationMock } as unknown as OutboundGateway),
   } as SkillContext;
 
-  return { ctx, listTasksMock, sendNotificationMock, logWarnMock, logErrorMock };
+  return { ctx, listAllTasksMock, sendNotificationMock, logWarnMock, logErrorMock };
 }
 
 describe('CeoBacklogSweepHandler', () => {
@@ -137,15 +140,33 @@ describe('CeoBacklogSweepHandler', () => {
   });
 
   it('scopes the query to owner=ceo, open statuses, and the end-of-today boundary', async () => {
-    const { ctx, listTasksMock } = makeCtx({ rows: [makeRow()] });
+    const { ctx, listAllTasksMock } = makeCtx({ rows: [makeRow()] });
     await new CeoBacklogSweepHandler().execute(ctx);
 
-    expect(listTasksMock).toHaveBeenCalledTimes(1);
-    const filters = listTasksMock.mock.calls[0]![0];
+    expect(listAllTasksMock).toHaveBeenCalledTimes(1);
+    const filters = listAllTasksMock.mock.calls[0]![0];
     expect(filters.owner).toBe('ceo');
     expect(filters.statuses).toEqual(['open', 'in_progress', 'blocked', 'waiting']);
     // start of tomorrow (local UTC midnight) — captures everything due today and earlier
     expect((filters.dueBefore as Date).toISOString()).toBe('2026-07-21T00:00:00.000Z');
+    // No single-page `limit` — listAllTasks pages through so counts stay exact.
+    expect(filters.limit).toBeUndefined();
+  });
+
+  it('reports exact counts beyond a single 100-row page (no silent cap)', async () => {
+    // 101 overdue tasks — the old single-page listTasks(limit:100) would have
+    // under-reported this as "100". listAllTasks returns them all in one { tasks }
+    // result here, so the handler must count every one.
+    const rows = Array.from({ length: 101 }, (_, i) =>
+      makeRow({ id: `overdue-${i}`, dueAt: '2026-07-19T09:00:00.000Z' }),
+    );
+    const { ctx, sendNotificationMock } = makeCtx({ rows });
+    const result = await new CeoBacklogSweepHandler().execute(ctx);
+
+    expect(result).toEqual({ success: true, data: { overdue: 101, dueToday: 0, notified: 101 } });
+    const payload = sendNotificationMock.mock.calls[0]![0];
+    expect(payload.subject).toBe('101 CEO tasks overdue or due today');
+    expect(payload.body).toContain('101 overdue');
   });
 
   it('is silent (no send) when no CEO tasks are overdue or due today', async () => {
