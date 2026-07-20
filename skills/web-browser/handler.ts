@@ -56,6 +56,17 @@ const INTERACTION_SETTLE_TIMEOUT_MS = 1_500;
 const CHALLENGE_POLL_TIMEOUT_MS = 12_000;
 const CHALLENGE_POLL_INTERVAL_MS = 500;
 
+// Circuit-breaker: after this many CONSECUTIVE failed interaction actions on one session,
+// refuse further interaction rather than let a stuck agent drain its budget into a futile
+// loop (a survey where every ref went stale produced dozens of ~40s failures in one run).
+const BREAKER_THRESHOLD = 4;
+
+// Actions that resolve a locator and can hang/fail on a stale ref or occluded target — the
+// ones the breaker gates. Recovery/read actions (get_content, navigate, scroll, screenshot,
+// press_key, close_session) are always allowed so the agent can re-read and recover; a
+// successful action of ANY kind resets the streak.
+const INTERACTION_ACTIONS: ReadonlySet<string> = new Set(['click', 'type', 'select', 'hover', 'wait_for']);
+
 // How long `wait_for` waits for an element to become visible before giving up.
 const WAIT_FOR_TIMEOUT_MS = 10_000;
 
@@ -144,6 +155,24 @@ export class WebBrowserHandler implements SkillHandler {
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, session_id }, 'Failed to acquire browser session');
       return { success: false, error: `Failed to acquire browser session: ${message}` };
+    }
+
+    // Circuit-breaker: if this session has already failed BREAKER_THRESHOLD interaction actions
+    // in a row, stop attempting more interactions. Each stale-ref/occluded click still costs
+    // seconds, and a stuck agent would otherwise loop until its whole budget is gone (the 16P
+    // survey drained a run this way). Recovery actions (get_content/navigate/…) are still
+    // allowed, and any success resets the streak — so re-reading the page re-enables clicking.
+    if (INTERACTION_ACTIONS.has(action) && session.isTripped(BREAKER_THRESHOLD)) {
+      ctx.log.warn(
+        { action, sessionId, consecutiveFailures: session.consecutiveFailures },
+        'Browser circuit-breaker tripped — refusing further interaction on this session',
+      );
+      return {
+        success: false,
+        error:
+          `Stopping browser interaction: ${session.consecutiveFailures} actions failed in a row on this ` +
+          `session. Re-read the page with get_content to get fresh refs, or hand off to the principal.`,
+      };
     }
 
     ctx.log.info({ action, sessionId, url, selector }, 'Executing browser action');
@@ -408,8 +437,14 @@ export class WebBrowserHandler implements SkillHandler {
         result.screenshot_base64 = buf.toString('base64');
       }
 
+      // Action completed — clear the circuit-breaker streak (a successful get_content here is
+      // exactly how the agent recovers a tripped session).
+      session.recordSuccess();
       return { success: true, data: result };
     } catch (err) {
+      // Count this failure toward the circuit-breaker so a run of stale-ref/occluded actions
+      // eventually short-circuits instead of looping to budget exhaustion.
+      session.recordFailure();
       const message = err instanceof Error ? err.message : String(err);
       // Scrub any injected secret value from the error before it reaches the agent AND the
       // logs (#973). A Playwright failure references the selector, not the typed value, but

@@ -42,6 +42,30 @@ export class BrowserSession {
    */
   private readonly ownedContext: BrowserContext | null;
 
+  /**
+   * Count of consecutive FAILED actions on this session, for the handler's circuit-breaker.
+   * A stale-ref or occluded click still costs seconds, so a stuck agent that keeps retrying
+   * would otherwise drain its whole budget into a futile loop (the 16personalities incident).
+   * Incremented on each failed action, reset to 0 on the first success — so re-reading the
+   * page (a successful get_content) re-enables interaction.
+   */
+  consecutiveFailures = 0;
+
+  /** Record a failed action (circuit-breaker input). */
+  recordFailure(): void {
+    this.consecutiveFailures++;
+  }
+
+  /** Record a successful action — clears the failure streak. */
+  recordSuccess(): void {
+    this.consecutiveFailures = 0;
+  }
+
+  /** True once consecutive failures reach `threshold` (circuit-breaker tripped). */
+  isTripped(threshold: number): boolean {
+    return this.consecutiveFailures >= threshold;
+  }
+
   constructor(context: BrowserContext, page: Page, ownedContext: BrowserContext | null = null) {
     this.context = context;
     this.page = page;

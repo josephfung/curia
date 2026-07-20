@@ -1000,6 +1000,51 @@ describe('web-browser ref-based selectors', () => {
     expect(err).toMatch(/ambiguous/i);
   });
 
+  it('trips a circuit-breaker after 4 consecutive interaction failures, then short-circuits', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('page body', fill, 'https://example.com/');
+    // Every click targets a stale ref → resolveLocator throws → a failure is recorded.
+    const none = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    page.locator = vi.fn().mockReturnValue(none);
+    // One ctx → getOrCreateSession returns the SAME session each call, so the counter persists.
+    const ctx = ctxFor(page, { action: 'click', selector: 'g1f0e1', session_id: 'sess-1' });
+
+    for (let i = 0; i < 4; i++) {
+      const r = await new WebBrowserHandler().execute(ctx);
+      expect(r.success).toBe(false); // 4 real attempts, all fail on the stale ref
+    }
+    const callsAfter4 = (page.locator as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // 5th attempt: breaker is tripped → short-circuit WITHOUT touching the page again.
+    const tripped = await new WebBrowserHandler().execute(ctx);
+    expect(tripped.success).toBe(false);
+    expect((tripped as { error: string }).error).toMatch(/failed in a row|Stopping browser interaction/i);
+    expect((page.locator as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfter4); // no new page work
+  });
+
+  it('resets the breaker after a successful get_content, re-enabling interaction', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('page body', fill, 'https://example.com/');
+    const none = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    page.locator = vi.fn().mockReturnValue(none);
+    const ctx = ctxFor(page, { action: 'click', selector: 'g1f0e1', session_id: 'sess-1' });
+
+    for (let i = 0; i < 4; i++) await new WebBrowserHandler().execute(ctx);
+    // Confirm tripped.
+    const trippedErr = (await new WebBrowserHandler().execute(ctx) as { error: string }).error;
+    expect(trippedErr).toMatch(/failed in a row|Stopping browser interaction/i);
+
+    // A successful get_content (a recovery action, never short-circuited) resets the streak.
+    const readCtx = { ...ctx, input: { action: 'get_content', session_id: 'sess-1' } } as unknown as SkillContext;
+    const read = await new WebBrowserHandler().execute(readCtx);
+    expect(read.success).toBe(true);
+
+    // Now a click is attempted again (not short-circuited): the page is touched for it.
+    const before = (page.locator as ReturnType<typeof vi.fn>).mock.calls.length;
+    await new WebBrowserHandler().execute(ctx);
+    expect((page.locator as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before);
+  });
+
   it('still resolves a plain label selector via the existing cascade (back-compat)', async () => {
     const fill = vi.fn().mockResolvedValue(undefined);
     const page = makeMockPage('page body', fill, 'https://example.com/');
