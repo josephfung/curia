@@ -442,9 +442,12 @@ export class WebBrowserHandler implements SkillHandler {
       session.recordSuccess();
       return { success: true, data: result };
     } catch (err) {
-      // Count this failure toward the circuit-breaker so a run of stale-ref/occluded actions
-      // eventually short-circuits instead of looping to budget exhaustion.
-      session.recordFailure();
+      // Count this failure toward the circuit-breaker — but ONLY for the interaction actions the
+      // breaker actually gates. A failed navigate/get_content, or a secret_ref config error, is
+      // not an occluded/stale-element problem and shouldn't trip the click breaker; gating here
+      // keeps the counter meaning exactly what its message says ("N interactions in a row") and
+      // avoids the asymmetry with the sibling capability check that early-returns without counting.
+      if (INTERACTION_ACTIONS.has(action)) session.recordFailure();
       const message = err instanceof Error ? err.message : String(err);
       // Scrub any injected secret value from the error before it reaches the agent AND the
       // logs (#973). A Playwright failure references the selector, not the typed value, but

@@ -43,11 +43,13 @@ export class BrowserSession {
   private readonly ownedContext: BrowserContext | null;
 
   /**
-   * Count of consecutive FAILED actions on this session, for the handler's circuit-breaker.
-   * A stale-ref or occluded click still costs seconds, so a stuck agent that keeps retrying
-   * would otherwise drain its whole budget into a futile loop (the 16personalities incident).
-   * Incremented on each failed action, reset to 0 on the first success — so re-reading the
-   * page (a successful get_content) re-enables interaction.
+   * Count of consecutive FAILED interaction actions (click/type/select/hover/wait_for) on this
+   * session, for the handler's circuit-breaker. A stale-ref or occluded click still costs
+   * seconds, so a stuck agent that keeps retrying would otherwise drain its whole budget into a
+   * futile loop (the 16personalities incident). The handler increments this only on a failed
+   * gated interaction, and resets it to 0 on ANY success — so re-reading the page (a successful
+   * get_content) re-enables interaction. This curbs, but does not hard-bound, an agent that
+   * oscillates trip→re-read→trip; fail-fast on stale refs does most of the budget savings.
    */
   consecutiveFailures = 0;
 
