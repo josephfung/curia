@@ -1373,6 +1373,56 @@ describe('web-browser batched actions (multi-action per call)', () => {
     expect(JSON.stringify(result)).not.toContain(SECRET_VALUE);
   });
 
+  it('honors a screenshot ACTION step inside a batch (captures the final page state)', async () => {
+    // The skill advertises `screenshot` as a batch action; a `{ action: 'screenshot' }` step must
+    // actually capture, not silently no-op. A batch returns one result, so it captures the end
+    // state — equivalent to call-level screenshot:true.
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('final page', fill, 'https://example.com/done');
+    const ctx = batchCtx(page, {
+      session_id: 'sess-1',
+      actions: [
+        { action: 'click', selector: 'g1f0e1' },
+        { action: 'click', selector: 'Next' },
+        { action: 'screenshot' },
+      ],
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { actions_completed: number; screenshot_base64?: string };
+      expect(data.actions_completed).toBe(3); // the screenshot step counts as completed
+      expect(data.screenshot_base64).toBeTruthy(); // and the capture actually ran
+    }
+  });
+
+  it('does NOT capture when a batch stops before reaching its screenshot step', async () => {
+    // The screenshot step is only honored if we actually reach it — a batch that fails earlier
+    // must not emit an image for a step it never ran.
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('mid-form', fill, 'https://example.com/form');
+    vi.mocked(humanClick).mockRejectedValueOnce(new Error('element gone'));
+    const ctx = batchCtx(page, {
+      session_id: 'sess-1',
+      actions: [
+        { action: 'click', selector: 'g1f0e1' }, // throws — batch stops here
+        { action: 'screenshot' },
+      ],
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true); // batch failures are reported in-band
+    if (result.success) {
+      const data = result.data as { actions_completed: number; failed_action?: number; screenshot_base64?: string };
+      expect(data.actions_completed).toBe(0);
+      expect(data.failed_action).toBe(0);
+      expect(data.screenshot_base64).toBeUndefined();
+    }
+  });
+
   it('degrades a screenshot-capture failure to a note instead of failing the whole call', async () => {
     const fill = vi.fn().mockResolvedValue(undefined);
     const page = makeMockPage('form submitted', fill, 'https://example.com/thanks');

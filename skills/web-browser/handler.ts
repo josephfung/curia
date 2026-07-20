@@ -263,6 +263,11 @@ export class WebBrowserHandler implements SkillHandler {
     let injectedSecretThisCall = false;
     const markSecretInjected = (): void => { injectedSecretThisCall = true; };
     let completed = 0;
+    // A `screenshot` step is a no-op inside performAction (like get_content) — the actual capture
+    // happens once, from the final page state, in the shared block below. Honor the advertised
+    // batch action by flagging that a screenshot was requested when we reach that step, so the
+    // final-state capture runs (and passes through the same #973 suppression + failure handling).
+    let screenshotStepReached = false;
     // The failure kind drives single-action back-compat: the original switch returned a
     // validation error and the breaker message RAW (no prefix), and only a thrown execution
     // error was wrapped as "Browser action \"X\" failed: …". Track which so we reproduce that
@@ -306,6 +311,11 @@ export class WebBrowserHandler implements SkillHandler {
         // is exactly how the agent recovers a tripped session).
         session.recordSuccess();
         completed++;
+        // A screenshot step within a batch requests a capture of the final page state (a batch
+        // returns one result, so there is one image — the end state, same as call-level
+        // `screenshot: true`). Only honor it if we actually reached the step, not on a batch that
+        // stopped earlier.
+        if (stepAction === 'screenshot') screenshotStepReached = true;
       } catch (err) {
         // Count this failure toward the circuit-breaker — but ONLY for the interaction actions
         // the breaker actually gates. A failed navigate/get_content, or a secret_ref config
@@ -383,14 +393,14 @@ export class WebBrowserHandler implements SkillHandler {
       }
     }
 
-    // Capture screenshot if explicitly requested or if this is a standalone screenshot action.
-    // HARD GUARD (#973): refuse to capture on a call that injected a secret by reference. The
+    // Capture screenshot if explicitly requested (call-level flag or standalone/batch screenshot
+    // action). HARD GUARD (#973): refuse to capture on a call that injected a secret by reference. The
     // value-aware backstop scrubs TEXT only — it cannot touch a PNG, and a secret filled into a
     // non-masked field would be visible in the image and round-trip into LLM context. (A
     // `type=password` field renders masked, but we can't assume the field type, so we fail
     // closed.) A standalone screenshot on a later call is still allowed — by then the
     // secret-bearing input is typically gone or masked.
-    const wantScreenshot = screenshot === true || screenshotOnly;
+    const wantScreenshot = screenshot === true || screenshotOnly || screenshotStepReached;
     if (injectedSecretThisCall && wantScreenshot) {
       ctx.log.debug({ sessionId }, 'Screenshot suppressed: a secret was injected this call (#973)');
       result.screenshot_skipped = 'A secret was filled in this call; screenshot suppressed to avoid capturing the value (#973).';
