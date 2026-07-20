@@ -1,7 +1,7 @@
 {
   "name": "voice-learn",
-  "description": "Weekly job: read accumulated (draft, sent) diffs from OKF, make one batched LLM pass to produce an updated free-form voice guide, and queue it as a digest proposal. Never writes the profile directly (human-in-the-loop). Never fabricates on zero data. Intended for the ceo-inbox weekly voice-learn cron.",
-  "version": "0.1.1",
+  "description": "Weekly job: read accumulated (draft, sent) diffs from OKF, make one batched LLM pass to produce an updated free-form voice guide, and queue it as a proposal. On a new proposal, sends the CEO a direct notification inlining it for approve/dismiss. Never writes the profile directly (human-in-the-loop). Never fabricates on zero data. Intended for the ceo-inbox weekly voice-learn cron.",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {},
@@ -12,5 +12,5 @@
   "permissions": [],
   "secrets": [],
   "timeout": 60000,
-  "capabilities": ["executiveProfileService", "workingDocs", "infraLlm", "entityMemory"]
+  "capabilities": ["executiveProfileService", "workingDocs", "infraLlm", "entityMemory", "outboundGateway"]
 }

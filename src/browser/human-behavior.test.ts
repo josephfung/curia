@@ -163,6 +163,73 @@ describe('humanClick', () => {
     await humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 });
     expect(click).toHaveBeenCalledWith({ force: true, timeout: 10_000 });
   });
+
+  it('recenters and retries once when a sticky overlay intercepts the click', async () => {
+    const page = mockPage();
+    // First click fails the way Playwright reports occlusion by a sticky navbar; retry succeeds.
+    const click = vi.fn()
+      .mockRejectedValueOnce(new Error(
+        'locator.click: Timeout 10000ms exceeded.\n' +
+        '  <div id="js-navbar" class="navbar navbar--sticky"> intercepts pointer events'))
+      .mockResolvedValueOnce(undefined);
+    const evaluate = vi.fn().mockResolvedValue(undefined);
+    const locator = {
+      boundingBox: vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 }),
+      isVisible: vi.fn().mockResolvedValue(true),
+      click,
+      evaluate,
+    } as unknown as Locator;
+    await humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 });
+    expect(evaluate).toHaveBeenCalledTimes(1); // recentered the target out from under the overlay
+    expect(click).toHaveBeenCalledTimes(2);    // and retried the click
+  });
+
+  it('surfaces a recenter failure instead of retrying the click blind', async () => {
+    const page = mockPage();
+    // The click is intercepted, so we enter the recenter path; the recenter itself then fails
+    // (element detached). We must propagate that, not retry the click against an unknown state.
+    const click = vi.fn().mockRejectedValue(new Error(
+      'locator.click: Timeout 10000ms exceeded.\n  <div id="js-navbar"> intercepts pointer events'));
+    const evaluate = vi.fn().mockRejectedValue(new Error('Element is not attached to the DOM'));
+    const locator = {
+      boundingBox: vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 }),
+      isVisible: vi.fn().mockResolvedValue(true),
+      click,
+      evaluate,
+    } as unknown as Locator;
+    await expect(humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 }))
+      .rejects.toThrow('not attached');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(click).toHaveBeenCalledTimes(1); // only the intercepted click — no blind retry
+  });
+
+  it('bounds the boundingBox wait so a vanished element cannot hang the default 30s', async () => {
+    const page = mockPage();
+    const boundingBox = vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 });
+    const locator = {
+      boundingBox,
+      isVisible: vi.fn().mockResolvedValue(true),
+      click: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Locator;
+    await humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 });
+    expect(boundingBox).toHaveBeenCalledWith({ timeout: 1500 });
+  });
+
+  it('does not retry when the click fails for a non-interception reason', async () => {
+    const page = mockPage();
+    const click = vi.fn().mockRejectedValue(new Error('locator.click: Target page closed'));
+    const evaluate = vi.fn().mockResolvedValue(undefined);
+    const locator = {
+      boundingBox: vi.fn().mockResolvedValue({ x: 10, y: 20, width: 100, height: 40 }),
+      isVisible: vi.fn().mockResolvedValue(true),
+      click,
+      evaluate,
+    } as unknown as Locator;
+    await expect(humanClick(page, locator, { sleep: noopSleep, rng: () => 0.5 }))
+      .rejects.toThrow('Target page closed');
+    expect(evaluate).not.toHaveBeenCalled(); // not an interception — no recenter
+    expect(click).toHaveBeenCalledTimes(1);  // and no retry
+  });
 });
 
 describe('simulateHumanPresence', () => {

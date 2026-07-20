@@ -34,3 +34,43 @@ export function renderCompletionSection(items: CompletionDigestItem[]): string {
   ];
   return lines.join('\n');
 }
+
+// ---------------------------------------------------------------------------
+// Event-driven notification bodies (#1466)
+//
+// After #1464 removed the scheduled daily digest, these standalone builders let a generator
+// surface a learning item the moment it's produced — the only path that now reaches the CEO for
+// approve/dismiss/undo/confirm. They wrap the render* helpers above (which already inline both the
+// reviewable content AND the reply commands) with a short preamble, so the CEO can act directly
+// from the notification. The CEO's reply still resolves via resolve-learning-digest, unchanged.
+// ---------------------------------------------------------------------------
+
+/** Notification for a freshly-produced writing-voice guide proposal (voice-learn). */
+export function buildVoiceProposalNotification(guide: string): { subject: string; body: string } {
+  return {
+    subject: 'Writing-voice guide update to review',
+    body: [
+      'I drafted an update to your writing-voice guide from your recent email edits.',
+      '',
+      // trimEnd drops the trailing blank line renderVoiceGuideSection appends for digest spacing.
+      renderVoiceGuideSection(guide).trimEnd(),
+    ].join('\n'),
+  };
+}
+
+/** Notification for freshly-produced sent-mail task-completion items (task-completion-from-sent).
+ *  `items` are this run's new undo/confirm entries — the caller must not pass an empty array
+ *  (renderCompletionSection would omit the section, leaving a bare preamble). */
+export function buildCompletionDigestNotification(
+  items: CompletionDigestItem[],
+): { subject: string; body: string } {
+  const plural = items.length === 1 ? '' : 's';
+  return {
+    subject: `${items.length} task update${plural} from your sent mail`,
+    body: [
+      'I matched some of your sent mail to open tasks. Please review:',
+      '',
+      renderCompletionSection(items).trimEnd(),
+    ].join('\n'),
+  };
+}

@@ -19,6 +19,8 @@ import {
   type CompletionDigestMap,
   type CompletionDigestItem,
 } from '../_shared/learning-state.js';
+import { buildCompletionDigestNotification } from '../_shared/learning-digest.js';
+import { notifyLearningProposal } from '../_shared/learning-notify.js';
 
 // Active (non-terminal) task statuses eligible for sent-mail completion. Mirrors the
 // active-status set used by the scheduler/backlog queries (src/db/queries/tasks.ts).
@@ -210,6 +212,11 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
 
     // Second pass: only now that every pending auto-complete's undo note is confirmed durable is
     // it safe to actually complete the tasks.
+    // Track which auto-completes actually landed this run so the notification below only tells the
+    // CEO to "undo" tasks that were really marked done — a completeTask that threw leaves the task
+    // active, and an "undo completion <id>" line for it would be a lie (the CEO reply path would
+    // then find a non-done task and either fail loud or falsely report "already reopened").
+    const completedTaskIds = new Set<string>();
     if (digestStored) {
       for (const pending of toAutoComplete) {
         try {
@@ -219,6 +226,7 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
             ctx.agentId,
           );
           delete remaining[pending.candidateTaskId];
+          completedTaskIds.add(pending.taskId);
           autoCompleted += 1;
         } catch (err) {
           ctx.log.error({ err, taskId: pending.taskId }, 'task-completion-from-sent: auto-complete failed');
@@ -232,6 +240,20 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
 
     if (digestStored && Object.keys(remaining).length !== Object.keys(candidateMap).length) {
       await writeCompletionCandidates(store, remaining);
+    }
+
+    // Surface this run's newly produced items to the CEO the moment they're durably written (#1466).
+    // After #1464 removed the scheduled digest, this event-driven notification is the only proactive
+    // path that reaches the CEO for undo/confirm/dismiss. Include every confirm item (they don't
+    // depend on completeTask) but only the undo items whose auto-complete actually succeeded this
+    // run — an undo whose completeTask threw is still in `digestAdds`/the durable digest (which
+    // self-heals next run), but must NOT be announced as done. Gated on digestStored (the durable
+    // digest the reply resolves against) and non-empty. Best-effort — notify never fails the run.
+    const notifyItems = digestAdds.filter(
+      (i) => i.kind === 'confirm' || completedTaskIds.has(i.taskId),
+    );
+    if (digestStored && notifyItems.length > 0) {
+      await notifyLearningProposal(ctx, buildCompletionDigestNotification(notifyItems));
     }
 
     ctx.log.info(
