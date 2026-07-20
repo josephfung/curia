@@ -4,11 +4,18 @@
 // browser. Each action performs one browser operation and returns the current
 // page state (cleaned DOM text + optional screenshot).
 //
+// A single call may also carry a `actions` array — a sequence of actions run in
+// order against the SAME page in one skill invocation (one LLM turn). This is how a
+// whole survey page (a dozen radio clicks + Next) is filled in one turn instead of
+// a dozen, so a long form fits inside one wake's turn budget instead of forcing the
+// work to be split across scheduled subtasks. See performAction + the batch loop below.
+//
 // The LLM drives navigation logic via its tool-use loop. This handler is the
 // hands — it executes what the LLM decides, not the reverse.
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { BrowserAction } from '../../src/browser/types.js';
+import type { BrowserSession } from '../../src/browser/browser-session.js';
 import type { Page, Frame, Locator } from 'playwright';
 // extractFrameContent runs inside the browser (passed to frame.evaluate). It lives in
 // its own module so the DOM lib it needs is scoped there, not leaked into this
@@ -44,7 +51,7 @@ const REF_SECTION_SENTINEL = '\n\n--- Interactable elements ---\n';
 // (e.g. OpenTable's date picker) hydrate well after `domcontentloaded`, so we give
 // them a moment to settle — but many sites never reach full idle, so this is
 // best-effort and a timeout here must NOT fail the navigation. Kept well under the
-// skill's 30s timeout (20s goto + 5s here leaves headroom).
+// skill's timeout (20s goto + 5s here leaves headroom).
 const NETWORK_IDLE_TIMEOUT_MS = 5_000;
 
 // Best-effort settle after an interaction (click/hover/press_key/scroll) that may or
@@ -70,6 +77,43 @@ const INTERACTION_ACTIONS: ReadonlySet<string> = new Set(['click', 'type', 'sele
 // How long `wait_for` waits for an element to become visible before giving up.
 const WAIT_FOR_TIMEOUT_MS = 10_000;
 
+// The actions dispatched per page operation (everything except close_session, which is
+// terminal and handled directly in execute()). Hoisted so both the batch/single validation
+// path and performAction's guard reference one list.
+const VALID_ACTIONS: BrowserAction[] = ['navigate', 'click', 'type', 'select', 'scroll', 'hover', 'press_key', 'wait_for', 'get_content', 'screenshot', 'close_session'];
+
+// Cap on the number of actions in one batched call. A real form page is well under this
+// (a 16personalities page is ~12 answers + Next); the cap bounds a single call's wall-clock
+// under the skill timeout and stops a runaway sequence. Exceeding it is a clear error, not a
+// silent truncation.
+const MAX_BATCH_ACTIONS = 50;
+
+/** One step in a batched call — the same per-action fields as a single invocation, minus
+ *  the call-level fields (session_id/incognito/block_ads/screenshot), which apply to the
+ *  whole batch and are read once from the top-level input. */
+interface BrowserActionStep {
+  action?: string;
+  url?: string;
+  selector?: string;
+  text?: string;
+  value?: string;
+  key?: string;
+  secret_ref?: string;
+}
+
+/** Everything performAction needs to run one step against the live page. */
+interface ActionDeps {
+  page: Page;
+  session: BrowserSession;
+  ctx: SkillContext;
+  sessionId: string;
+}
+
+/** Result of performing one step. `ok:false` is a VALIDATION error (bad/missing params) —
+ *  it does NOT count toward the circuit breaker and stops a batch cleanly. Execution errors
+ *  (stale ref, Playwright failure) THROW instead, so the caller counts them and redacts them. */
+type PerformResult = { ok: true; injectedSecret: boolean } | { ok: false; error: string };
+
 // Monotonic epoch seed for element refs (g<epoch>f<frame>e<n>). Passed into extractFrameContent
 // on every read; a fresh document adopts the then-current value as its epoch, a re-read document
 // keeps the epoch it already took. Because this counter NEVER resets — including across a page
@@ -85,7 +129,7 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: false, error: 'browserService is not available — BrowserService failed to start or is not wired into ExecutionLayer' };
     }
 
-    const { action, url, selector, text, value, key, secret_ref, session_id, screenshot, block_ads, incognito } = ctx.input as {
+    const { action, url, selector, text, value, key, secret_ref, session_id, screenshot, block_ads, incognito, actions } = ctx.input as {
       action?: string;
       url?: string;
       selector?: string;
@@ -106,19 +150,52 @@ export class WebBrowserHandler implements SkillHandler {
       // incognito (#987): run this session in a fresh, isolated context instead of the
       // principal's persistent profile. For Curia's own logins or throwaway flows.
       incognito?: boolean;
+      // actions: an optional sequence of steps to run in order against the same page in one
+      // call. When present, the top-level action/selector/… fields are ignored and each step
+      // supplies its own. Lets a whole form page be filled in a single turn.
+      actions?: unknown;
     };
 
-    if (!action || typeof action !== 'string') {
-      return { success: false, error: 'Missing required input: action (string)' };
+    // --- Build the step list: a batch (`actions`) or a single top-level action ---
+    const isBatch = actions !== undefined && actions !== null;
+    let steps: BrowserActionStep[];
+    if (isBatch) {
+      if (!Array.isArray(actions) || actions.length === 0) {
+        return { success: false, error: 'actions must be a non-empty array of {action, ...} steps' };
+      }
+      if (actions.length > MAX_BATCH_ACTIONS) {
+        return { success: false, error: `actions has ${actions.length} steps; the maximum per call is ${MAX_BATCH_ACTIONS}. Split the work across calls.` };
+      }
+      steps = [];
+      for (let i = 0; i < actions.length; i++) {
+        const s = actions[i];
+        if (typeof s !== 'object' || s === null || Array.isArray(s)) {
+          return { success: false, error: `actions[${i}] must be an object with an "action" field` };
+        }
+        steps.push(s as BrowserActionStep);
+      }
+    } else {
+      steps = [{ action, url, selector, text, value, key, secret_ref }];
     }
 
-    const validActions: BrowserAction[] = ['navigate', 'click', 'type', 'select', 'scroll', 'hover', 'press_key', 'wait_for', 'get_content', 'screenshot', 'close_session'];
-    if (!validActions.includes(action as BrowserAction)) {
-      return { success: false, error: `Unknown action: "${action}". Valid actions: ${validActions.join(', ')}` };
+    // Validate every step's action verb up front, before acquiring a session, so a typo
+    // fails with a clear message rather than mid-flight. close_session is only valid as a
+    // single, standalone action (it tears the session down) — never inside a batch.
+    for (let i = 0; i < steps.length; i++) {
+      const stepAction = steps[i]!.action;
+      if (!stepAction || typeof stepAction !== 'string') {
+        return { success: false, error: isBatch ? `actions[${i}] is missing "action" (string)` : 'Missing required input: action (string)' };
+      }
+      if (!VALID_ACTIONS.includes(stepAction as BrowserAction)) {
+        return { success: false, error: `Unknown action: "${stepAction}". Valid actions: ${VALID_ACTIONS.join(', ')}` };
+      }
+      if (isBatch && stepAction === 'close_session') {
+        return { success: false, error: `actions[${i}]: close_session cannot be used inside a batch — call it as a single action` };
+      }
     }
 
-    // --- close_session: no page interaction needed ---
-    if (action === 'close_session') {
+    // --- close_session: single, terminal action; no page interaction needed ---
+    if (!isBatch && steps[0]!.action === 'close_session') {
       if (!session_id || typeof session_id !== 'string') {
         return { success: false, error: 'close_session requires session_id' };
       }
@@ -137,12 +214,12 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: true, data: { content: '', session_id, url: '' } };
     }
 
-    // --- All other actions: acquire session ---
+    // --- All other actions: acquire session once for the whole call ---
     let sessionId: string;
     let page: Page;
     // Keep the session itself (not just its page) so we can register injected secret
     // values for value-aware redaction (#973) and scrub them from returned content.
-    let session: import('../../src/browser/browser-session.js').BrowserSession;
+    let session: BrowserSession;
     try {
       const result = await ctx.browserService.getOrCreateSession(session_id ?? undefined, {
         incognito: incognito === true,
@@ -157,308 +234,386 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: false, error: `Failed to acquire browser session: ${message}` };
     }
 
-    // Circuit-breaker: if this session has already failed BREAKER_THRESHOLD interaction actions
-    // in a row, stop attempting more interactions. Each stale-ref/occluded click still costs
-    // seconds, and a stuck agent would otherwise loop until its whole budget is gone (the 16P
-    // survey drained a run this way). Recovery actions (get_content/navigate/…) are still
-    // allowed, and any success resets the streak — so re-reading the page re-enables clicking.
-    if (INTERACTION_ACTIONS.has(action) && session.isTripped(BREAKER_THRESHOLD)) {
-      ctx.log.warn(
-        { action, sessionId, consecutiveFailures: session.consecutiveFailures },
-        'Browser circuit-breaker tripped — refusing further interaction on this session',
-      );
+    // Whether the caller passed a session_id that no longer mapped to a live session, so
+    // getOrCreateSession minted a fresh one (a different id came back). A woken subtask
+    // resuming a parked browser task uses this to know its live page is gone — so it should
+    // re-navigate to the recorded URL and resume, not assume it's mid-flow. (#task-resume)
+    const sessionReused = session_id !== undefined && session_id !== null && sessionId === session_id;
+
+    // Run each step in order against the same page. A batch stops at the first failure and
+    // reports how far it got, with fresh page content so the agent can recover. injected-secret
+    // suppression is per-CALL: if any step filled a secret, we refuse a screenshot this call.
+    let injectedSecretThisCall = false;
+    let completed = 0;
+    // A breaker trip is tracked separately so single-action mode can reproduce its exact,
+    // un-prefixed message (existing behavior + tests) rather than the "Browser action X
+    // failed:" wrapper used for genuine action failures.
+    let failure: { index: number; error: string; breakerTripped: boolean } | null = null;
+
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i]!;
+      const stepAction = step.action!;
+
+      // Circuit-breaker: if this session has already failed BREAKER_THRESHOLD interaction
+      // actions in a row, stop before attempting another. Each stale-ref/occluded click still
+      // costs seconds, and a stuck agent would otherwise loop until its whole budget is gone
+      // (the 16P survey drained a run this way). Recovery actions (get_content/navigate/…) are
+      // still allowed, and any success resets the streak — so re-reading re-enables clicking.
+      if (INTERACTION_ACTIONS.has(stepAction) && session.isTripped(BREAKER_THRESHOLD)) {
+        ctx.log.warn(
+          { action: stepAction, sessionId, consecutiveFailures: session.consecutiveFailures, batchIndex: isBatch ? i : undefined },
+          'Browser circuit-breaker tripped — refusing further interaction on this session',
+        );
+        failure = {
+          index: i,
+          error:
+            `Stopping browser interaction: ${session.consecutiveFailures} actions failed in a row on this ` +
+            `session. Re-read the page with get_content to get fresh refs, or hand off to the principal.`,
+          breakerTripped: true,
+        };
+        break;
+      }
+
+      ctx.log.info({ action: stepAction, sessionId, url: step.url, selector: step.selector, batchIndex: isBatch ? i : undefined }, 'Executing browser action');
+
+      try {
+        const outcome = await performAction(step, { page, session, ctx, sessionId });
+        if (!outcome.ok) {
+          // Validation error (bad/missing params) — does NOT count toward the breaker.
+          failure = { index: i, error: outcome.error, breakerTripped: false };
+          break;
+        }
+        if (outcome.injectedSecret) injectedSecretThisCall = true;
+        // Action completed — clear the circuit-breaker streak (a successful get_content here
+        // is exactly how the agent recovers a tripped session).
+        session.recordSuccess();
+        completed++;
+      } catch (err) {
+        // Count this failure toward the circuit-breaker — but ONLY for the interaction actions
+        // the breaker actually gates. A failed navigate/get_content, or a secret_ref config
+        // error, is not an occluded/stale-element problem and shouldn't trip the click breaker.
+        if (INTERACTION_ACTIONS.has(stepAction)) session.recordFailure();
+        const message = err instanceof Error ? err.message : String(err);
+        // Scrub any injected secret value from the error before it reaches the agent AND the
+        // logs (#973). A Playwright failure references the selector, not the typed value, but
+        // the backstop must cover error paths too — so we log the redacted message and a
+        // redacted stack rather than the raw err object (whose .message/.stack are the
+        // unredacted source). No `{ err }` here: pino would serialize the unscrubbed original.
+        const safeMessage = session.redactInjectedSecrets(message);
+        const safeStack = err instanceof Error && err.stack ? session.redactInjectedSecrets(err.stack) : undefined;
+        ctx.log.error({ action: stepAction, sessionId, errMessage: safeMessage, stack: safeStack, batchIndex: isBatch ? i : undefined }, 'Browser action failed');
+        failure = { index: i, error: safeMessage, breakerTripped: false };
+        break;
+      }
+    }
+
+    // Single-action back-compat: one action, one failure → { success:false, error } exactly as
+    // before. The breaker trip returns its raw message; a genuine action failure keeps the
+    // "Browser action \"X\" failed:" prefix.
+    if (!isBatch && failure) {
       return {
         success: false,
-        error:
-          `Stopping browser interaction: ${session.consecutiveFailures} actions failed in a row on this ` +
-          `session. Re-read the page with get_content to get fresh refs, or hand off to the principal.`,
+        error: failure.breakerTripped ? failure.error : `Browser action "${steps[0]!.action}" failed: ${failure.error}`,
       };
     }
 
-    ctx.log.info({ action, sessionId, url, selector }, 'Executing browser action');
-
-    // Set when this action injects a secret by reference (#973). A screenshot taken on the
-    // same action could capture the value in a non-masked field, and an image can't be
-    // value-redacted — so we refuse to capture one when this is true (see screenshot block).
-    let injectedSecretThisAction = false;
-
+    // --- Gather result (once, from the final page state) ---
+    // Only skip the DOM read for a standalone screenshot action; a batch always reads back so
+    // the agent sees where it landed (and can recover from a mid-batch failure).
+    const screenshotOnly = !isBatch && steps[0]!.action === 'screenshot';
+    let content: string;
+    let currentUrl: string;
     try {
-      // GUIDANCE (#1053): on bot-protected sites, prefer real UI interaction (click/type/
-      // select via these actions) over issuing fetch() inside page.evaluate(). A fetch() from
-      // page context is blocked at the TLS/fingerprint layer even with valid cookies, because
-      // it doesn't carry the browser's network fingerprint — whereas driving the real UI lets
-      // the site's own JS make requests through Chromium's genuine network stack.
-
-      // --- Dispatch action ---
-      switch (action as BrowserAction) {
-        case 'navigate': {
-          if (!url || typeof url !== 'string') {
-            return { success: false, error: 'navigate requires url (string)' };
-          }
-          // Validate URL before navigation to prevent SSRF.
-          // sensitivity: "elevated" gates who can invoke this skill, but once invoked
-          // the LLM controls the url parameter — we must block internal/private destinations
-          // here regardless of caller trust level.
-          let parsedUrl: URL;
-          try {
-            parsedUrl = new URL(url);
-          } catch {
-            return { success: false, error: `Invalid URL: "${url}"` };
-          }
-          if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-            return { success: false, error: `Only http: and https: are allowed, got: ${parsedUrl.protocol}` };
-          }
-          const hostname = parsedUrl.hostname.toLowerCase();
-          if (isPrivateHost(hostname)) {
-            return { success: false, error: `Blocked: navigation to private/internal addresses is not allowed (${hostname})` };
-          }
-          const response = await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
-
-          // Cloudflare / Akamai often serve a short-lived challenge page that clears once
-          // behavioral JS runs. Poll until the challenge title/body disappears — otherwise
-          // isLikelyEmpty fires on the stub and we false-positive "blocked". (#1053+)
-          await waitForChallengeClear(page, ctx.log, sessionId);
-
-          await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
-            ctx.log.debug({ err, sessionId }, 'networkidle not reached after navigate — proceeding with current DOM');
-          });
-
-          const readTitle = async (): Promise<string> => {
-            try {
-              return await page.title();
-            } catch (err) {
-              ctx.log.debug({ err, sessionId }, 'Could not read page title for block check');
-              return '';
-            }
-          };
-
-          // Soft-block recovery: a CF/DataDome soft block often clears on a second,
-          // human-paced load. Before declaring the site undrivable, dwell like a human and
-          // reload ONCE if the page looks blocked or served a near-empty stub. One retry,
-          // not a loop. (#1053)
-          let pageTitle = await readTitle();
-          // Capture the reload response separately so any subsequent hard-block error can
-          // report the post-reload HTTP status (the status from the initial `goto` may no
-          // longer be representative after the recovery attempt). (#1053)
-          let reloadResponse: Awaited<ReturnType<typeof page.reload>> | undefined;
-          if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
-            ctx.log.info({ sessionId, url: parsedUrl.toString(), pageTitle }, 'Soft block suspected — dwelling and reloading once');
-            await jitteredDelay(1500, 3000);
-            reloadResponse = await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch((err) => {
-              ctx.log.debug({ err, sessionId }, 'Reload during soft-block recovery failed — proceeding with current DOM');
-              return undefined;
-            });
-            await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
-              ctx.log.debug({ err, sessionId }, 'networkidle not reached after soft-block reload — proceeding with current DOM');
-            });
-            pageTitle = await readTitle();
-          }
-
-          // Fail fast on a hard edge block that survived the reload (IP/edge-level — retrying
-          // won't help). Surface a distinct, actionable error rather than an empty page.
-          // Re-check isLikelyEmpty here too: if the page was near-empty before the reload
-          // AND still near-empty after, it's a persistent soft block — not a transient stub.
-          // Use the reload response status when available — it reflects the post-recovery state.
-          const status = reloadResponse?.status() ?? response?.status();
-          if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
-            ctx.log.warn({ sessionId, url: parsedUrl.toString(), status, pageTitle }, 'Navigation hit a hard edge block');
-            return {
-              success: false,
-              error: `Site blocked automated access (HTTP ${status ?? '?'}${pageTitle ? `, "${pageTitle}"` : ''}). This site can't be driven from the server — hand off to the principal or draft the request instead.`,
-            };
-          }
-
-          // Clean (or recovered) navigation: dwell + simulate human presence so behavioral
-          // challenge JS can score human-like telemetry before the first interaction. (#1053)
-          await jitteredDelay(2000, 4000);
-          await simulateHumanPresence(page, { log: ctx.log });
-          break;
-        }
-
-        case 'click': {
-          if (!selector || typeof selector !== 'string') {
-            return { success: false, error: 'click requires selector (string — describe the element in natural language)' };
-          }
-          const clickTarget = await resolveLocator(page, selector, ctx.log);
-          // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
-          // scores natural pointer paths as more human-like than direct .click(). (#1053)
-          await humanClick(page, clickTarget, { log: ctx.log });
-          // Adaptive settle: a click may trigger navigation or an in-page update. Wait
-          // briefly for the DOM to settle, but don't fail the action if nothing navigates.
-          await settleAfterInteraction(page, ctx, sessionId);
-          break;
-        }
-
-        case 'scroll': {
-          // With a selector, scroll that element into view (reveals lazy-loaded widgets);
-          // without one, scroll the viewport down a screen (infinite-scroll / "load more").
-          if (selector && typeof selector === 'string') {
-            const scrollTarget = await resolveLocator(page, selector, ctx.log);
-            await scrollTarget.scrollIntoViewIfNeeded();
-          } else {
-            await page.mouse.wheel(0, 800);
-          }
-          await settleAfterInteraction(page, ctx, sessionId);
-          break;
-        }
-
-        case 'hover': {
-          if (!selector || typeof selector !== 'string') {
-            return { success: false, error: 'hover requires selector (string — describe the element in natural language)' };
-          }
-          // Many widgets (date-picker cells, menus) only reveal options on hover.
-          const hoverTarget = await resolveLocator(page, selector, ctx.log);
-          await hoverTarget.hover();
-          await settleAfterInteraction(page, ctx, sessionId);
-          break;
-        }
-
-        case 'press_key': {
-          if (!key || typeof key !== 'string') {
-            return { success: false, error: 'press_key requires key (string — e.g. "Enter", "Tab", "ArrowRight", "Escape")' };
-          }
-          // Keyboard nav is often the only reliable way through calendar grids and
-          // custom comboboxes. Presses against the currently focused element.
-          await page.keyboard.press(key);
-          await settleAfterInteraction(page, ctx, sessionId);
-          break;
-        }
-
-        case 'wait_for': {
-          if (!selector || typeof selector !== 'string') {
-            return { success: false, error: 'wait_for requires selector (string — the element to wait for)' };
-          }
-          // The LLM's explicit lever for "wait until the widget renders" — for SPAs where
-          // even networkidle isn't enough. Throws on timeout, caught below as a clear error.
-          const waitTarget = await resolveLocator(page, selector, ctx.log);
-          await waitTarget.waitFor({ state: 'visible', timeout: WAIT_FOR_TIMEOUT_MS });
-          break;
-        }
-
-        case 'type': {
-          if (!selector || typeof selector !== 'string') {
-            return { success: false, error: 'type requires selector (string)' };
-          }
-
-          // secret_ref (#973): fill a user.* vault secret by reference. Mutually exclusive
-          // with `text` — supplying both is ambiguous and rejected. The resolved value is
-          // registered with the session so it is scrubbed from any content read back, then
-          // typed via fill(). It is never logged and never returned to the agent.
-          const hasSecretRef = typeof secret_ref === 'string' && secret_ref.length > 0;
-          const hasText = text !== undefined && text !== null;
-
-          if (hasSecretRef && hasText) {
-            return { success: false, error: 'type accepts either text or secret_ref, not both' };
-          }
-
-          let fillValue: string;
-          if (hasSecretRef) {
-            if (!ctx.resolveSecretRef) {
-              // Capability not granted to this invocation — fail loud rather than
-              // silently falling back to typing the reference name as a literal.
-              return { success: false, error: 'secret_ref requires the secretResolver capability, which is not available to this skill' };
-            }
-            // resolveSecretRef enforces the user.* namespace + audit; it throws on a bad
-            // ref or a missing secret. Any thrown message names the ref, never the value.
-            fillValue = await ctx.resolveSecretRef(secret_ref!);
-            session.registerInjectedSecret(fillValue);
-            injectedSecretThisAction = true;
-          } else {
-            if (typeof text !== 'string') {
-              return { success: false, error: 'type requires text (string) or secret_ref (string)' };
-            }
-            fillValue = text;
-          }
-
-          const typeTarget = await resolveLocator(page, selector, ctx.log);
-          // Focus the field with a human cursor approach, clear any existing content
-          // (humanType appends; we want replace semantics), then type with human cadence.
-          // The same for both the visible-text and secret_ref paths — registering the secret
-          // above already gates the #973 redaction; scrubbing covers reflected content/URL,
-          // not keystrokes. ControlOrMeta = Cmd on macOS (dev), Ctrl on Linux (prod). (#1053)
-          await humanClick(page, typeTarget, { log: ctx.log });
-          await page.keyboard.press('ControlOrMeta+a');
-          await page.keyboard.press('Delete');
-          await humanType(page, fillValue, { log: ctx.log });
-          break;
-        }
-
-        case 'select': {
-          if (!selector || typeof selector !== 'string') {
-            return { success: false, error: 'select requires selector (string)' };
-          }
-          if (!value || typeof value !== 'string') {
-            return { success: false, error: 'select requires value (string)' };
-          }
-          // Use resolveLocator for consistency with click/type — the LLM can use
-          // natural language ("Country dropdown") and it will resolve via role/label/text.
-          const selectTarget = await resolveLocator(page, selector, ctx.log);
-          await selectTarget.selectOption(value);
-          break;
-        }
-
-        case 'get_content':
-          // No navigation — just re-read current state below
-          break;
-
-        case 'screenshot':
-          // Screenshot-only action — falls through to screenshot capture below
-          break;
-      }
-
-      // --- Gather result ---
-      const rawContent = action === 'screenshot'
-        ? ''   // screenshot action doesn't need DOM text
-        : await getCleanedContent(page, ctx.log);
-
+      const rawContent = screenshotOnly ? '' : await getCleanedContent(page, ctx.log);
       // Value-aware redaction backstop (#973): scrub any secret value injected into this
       // session from BOTH the content and the URL before they reach the LLM. A hostile page
       // could reflect a typed password back through the DOM, or a GET-form submit could echo
       // it into the query string (page.url()); this prevents both round-trip exfiltration
       // paths. redactInjectedSecrets covers the raw value plus its URL- and HTML-encoded
       // variants (see BrowserSession). No-op when nothing has been injected.
-      const content = session.redactInjectedSecrets(rawContent);
-      const currentUrl = session.redactInjectedSecrets(page.url());
+      content = session.redactInjectedSecrets(rawContent);
+      currentUrl = session.redactInjectedSecrets(page.url());
+    } catch (err) {
+      // getCleanedContent throws only when every frame errored during extraction (a genuine
+      // read failure, not an empty page). Mirror the single-action contract: surface it as a
+      // failed result rather than reporting success with empty content.
+      const message = err instanceof Error ? err.message : String(err);
+      const safeMessage = session.redactInjectedSecrets(message);
+      ctx.log.error({ sessionId, errMessage: safeMessage }, 'Failed to read page content after action(s)');
+      return { success: false, error: `Failed to read page content: ${safeMessage}` };
+    }
 
-      const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl };
+    const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl, session_reused: sessionReused };
 
-      // Capture screenshot if explicitly requested or if action === 'screenshot'.
-      // HARD GUARD (#973): refuse to capture on the same action that injected a secret by
-      // reference. The value-aware backstop scrubs TEXT only — it cannot touch a PNG, and a
-      // secret filled into a non-masked field would be visible in the image and round-trip
-      // into LLM context. (A `type=password` field renders masked, but we can't assume the
-      // field type, so we fail closed.) A standalone screenshot on a later call is still
-      // allowed — by then the secret-bearing input is typically gone or masked.
-      if (injectedSecretThisAction && (screenshot || action === 'screenshot')) {
-        ctx.log.debug({ action, sessionId }, 'Screenshot suppressed: a secret was injected this action (#973)');
-        result.screenshot_skipped = 'A secret was filled in this action; screenshot suppressed to avoid capturing the value (#973).';
-      } else if (screenshot || action === 'screenshot') {
-        const buf = await page.screenshot({ type: 'png', fullPage: false });
-        result.screenshot_base64 = buf.toString('base64');
+    // Batch diagnostics: tell the agent how far the sequence got and, on a stop, which step
+    // failed and why — reported IN-BAND (success:true) alongside fresh content so the agent
+    // can recover mid-form instead of losing the page state to an error string.
+    if (isBatch) {
+      result.actions_total = steps.length;
+      result.actions_completed = completed;
+      if (failure) {
+        result.failed_action = failure.index;
+        result.action_error = failure.error;
+      }
+    }
+
+    // Capture screenshot if explicitly requested or if this is a standalone screenshot action.
+    // HARD GUARD (#973): refuse to capture on a call that injected a secret by reference. The
+    // value-aware backstop scrubs TEXT only — it cannot touch a PNG, and a secret filled into a
+    // non-masked field would be visible in the image and round-trip into LLM context. (A
+    // `type=password` field renders masked, but we can't assume the field type, so we fail
+    // closed.) A standalone screenshot on a later call is still allowed — by then the
+    // secret-bearing input is typically gone or masked.
+    const wantScreenshot = screenshot === true || screenshotOnly;
+    if (injectedSecretThisCall && wantScreenshot) {
+      ctx.log.debug({ sessionId }, 'Screenshot suppressed: a secret was injected this call (#973)');
+      result.screenshot_skipped = 'A secret was filled in this call; screenshot suppressed to avoid capturing the value (#973).';
+    } else if (wantScreenshot) {
+      const buf = await page.screenshot({ type: 'png', fullPage: false });
+      result.screenshot_base64 = buf.toString('base64');
+    }
+
+    return { success: true, data: result };
+  }
+}
+
+/**
+ * Perform ONE browser action against the current page, mutating page state. Returns
+ * { ok:false } for a VALIDATION error (bad/missing params) — the caller decides whether to
+ * stop a batch or return success:false for a single action, and these do NOT count toward the
+ * circuit breaker. THROWS on an execution error (stale ref, Playwright failure); the caller
+ * catches it, counts it toward the breaker for interaction actions, and redacts it. Content
+ * gathering and screenshot capture happen once in the caller AFTER the (last) action, so
+ * get_content/screenshot are no-ops here. close_session is terminal and handled by the caller.
+ */
+async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise<PerformResult> {
+  const { page, session, ctx, sessionId } = deps;
+  const { action, url, selector, text, value, key, secret_ref } = step;
+  let injectedSecret = false;
+
+  // GUIDANCE (#1053): on bot-protected sites, prefer real UI interaction (click/type/
+  // select via these actions) over issuing fetch() inside page.evaluate(). A fetch() from
+  // page context is blocked at the TLS/fingerprint layer even with valid cookies, because
+  // it doesn't carry the browser's network fingerprint — whereas driving the real UI lets
+  // the site's own JS make requests through Chromium's genuine network stack.
+  switch (action as BrowserAction) {
+    case 'navigate': {
+      if (!url || typeof url !== 'string') {
+        return { ok: false, error: 'navigate requires url (string)' };
+      }
+      // Validate URL before navigation to prevent SSRF.
+      // sensitivity: "elevated" gates who can invoke this skill, but once invoked
+      // the LLM controls the url parameter — we must block internal/private destinations
+      // here regardless of caller trust level.
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(url);
+      } catch {
+        return { ok: false, error: `Invalid URL: "${url}"` };
+      }
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        return { ok: false, error: `Only http: and https: are allowed, got: ${parsedUrl.protocol}` };
+      }
+      const hostname = parsedUrl.hostname.toLowerCase();
+      if (isPrivateHost(hostname)) {
+        return { ok: false, error: `Blocked: navigation to private/internal addresses is not allowed (${hostname})` };
+      }
+      const response = await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
+
+      // Cloudflare / Akamai often serve a short-lived challenge page that clears once
+      // behavioral JS runs. Poll until the challenge title/body disappears — otherwise
+      // isLikelyEmpty fires on the stub and we false-positive "blocked". (#1053+)
+      await waitForChallengeClear(page, ctx.log, sessionId);
+
+      await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
+        ctx.log.debug({ err, sessionId }, 'networkidle not reached after navigate — proceeding with current DOM');
+      });
+
+      const readTitle = async (): Promise<string> => {
+        try {
+          return await page.title();
+        } catch (err) {
+          ctx.log.debug({ err, sessionId }, 'Could not read page title for block check');
+          return '';
+        }
+      };
+
+      // Soft-block recovery: a CF/DataDome soft block often clears on a second,
+      // human-paced load. Before declaring the site undrivable, dwell like a human and
+      // reload ONCE if the page looks blocked or served a near-empty stub. One retry,
+      // not a loop. (#1053)
+      let pageTitle = await readTitle();
+      // Capture the reload response separately so any subsequent hard-block error can
+      // report the post-reload HTTP status (the status from the initial `goto` may no
+      // longer be representative after the recovery attempt). (#1053)
+      let reloadResponse: Awaited<ReturnType<typeof page.reload>> | undefined;
+      if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
+        ctx.log.info({ sessionId, url: parsedUrl.toString(), pageTitle }, 'Soft block suspected — dwelling and reloading once');
+        await jitteredDelay(1500, 3000);
+        reloadResponse = await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch((err) => {
+          ctx.log.debug({ err, sessionId }, 'Reload during soft-block recovery failed — proceeding with current DOM');
+          return undefined;
+        });
+        await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT_MS }).catch((err) => {
+          ctx.log.debug({ err, sessionId }, 'networkidle not reached after soft-block reload — proceeding with current DOM');
+        });
+        pageTitle = await readTitle();
       }
 
-      // Action completed — clear the circuit-breaker streak (a successful get_content here is
-      // exactly how the agent recovers a tripped session).
-      session.recordSuccess();
-      return { success: true, data: result };
-    } catch (err) {
-      // Count this failure toward the circuit-breaker — but ONLY for the interaction actions the
-      // breaker actually gates. A failed navigate/get_content, or a secret_ref config error, is
-      // not an occluded/stale-element problem and shouldn't trip the click breaker; gating here
-      // keeps the counter meaning exactly what its message says ("N interactions in a row") and
-      // avoids the asymmetry with the sibling capability check that early-returns without counting.
-      if (INTERACTION_ACTIONS.has(action)) session.recordFailure();
-      const message = err instanceof Error ? err.message : String(err);
-      // Scrub any injected secret value from the error before it reaches the agent AND the
-      // logs (#973). A Playwright failure references the selector, not the typed value, but
-      // the backstop must cover error paths too — so we log the redacted message and a
-      // redacted stack rather than the raw err object (whose .message/.stack are the
-      // unredacted source). No `{ err }` here: pino would serialize the unscrubbed original.
-      const safeMessage = session.redactInjectedSecrets(message);
-      const safeStack = err instanceof Error && err.stack ? session.redactInjectedSecrets(err.stack) : undefined;
-      ctx.log.error({ action, sessionId, errMessage: safeMessage, stack: safeStack }, 'Browser action failed');
-      return { success: false, error: `Browser action "${action}" failed: ${safeMessage}` };
+      // Fail fast on a hard edge block that survived the reload (IP/edge-level — retrying
+      // won't help). Surface a distinct, actionable error rather than an empty page.
+      // Re-check isLikelyEmpty here too: if the page was near-empty before the reload
+      // AND still near-empty after, it's a persistent soft block — not a transient stub.
+      // Use the reload response status when available — it reflects the post-recovery state.
+      const status = reloadResponse?.status() ?? response?.status();
+      if (isHardBlock(pageTitle) || (await isLikelyEmpty(page, ctx.log))) {
+        ctx.log.warn({ sessionId, url: parsedUrl.toString(), status, pageTitle }, 'Navigation hit a hard edge block');
+        return {
+          ok: false,
+          error: `Site blocked automated access (HTTP ${status ?? '?'}${pageTitle ? `, "${pageTitle}"` : ''}). This site can't be driven from the server — hand off to the principal or draft the request instead.`,
+        };
+      }
+
+      // Clean (or recovered) navigation: dwell + simulate human presence so behavioral
+      // challenge JS can score human-like telemetry before the first interaction. (#1053)
+      await jitteredDelay(2000, 4000);
+      await simulateHumanPresence(page, { log: ctx.log });
+      return { ok: true, injectedSecret: false };
     }
+
+    case 'click': {
+      if (!selector || typeof selector !== 'string') {
+        return { ok: false, error: 'click requires selector (string — describe the element in natural language)' };
+      }
+      const clickTarget = await resolveLocator(page, selector, ctx.log);
+      // Use humanClick for realistic mouse-movement telemetry; behavioral challenge JS
+      // scores natural pointer paths as more human-like than direct .click(). (#1053)
+      await humanClick(page, clickTarget, { log: ctx.log });
+      // Adaptive settle: a click may trigger navigation or an in-page update. Wait
+      // briefly for the DOM to settle, but don't fail the action if nothing navigates.
+      await settleAfterInteraction(page, ctx, sessionId);
+      return { ok: true, injectedSecret: false };
+    }
+
+    case 'scroll': {
+      // With a selector, scroll that element into view (reveals lazy-loaded widgets);
+      // without one, scroll the viewport down a screen (infinite-scroll / "load more").
+      if (selector && typeof selector === 'string') {
+        const scrollTarget = await resolveLocator(page, selector, ctx.log);
+        await scrollTarget.scrollIntoViewIfNeeded();
+      } else {
+        await page.mouse.wheel(0, 800);
+      }
+      await settleAfterInteraction(page, ctx, sessionId);
+      return { ok: true, injectedSecret: false };
+    }
+
+    case 'hover': {
+      if (!selector || typeof selector !== 'string') {
+        return { ok: false, error: 'hover requires selector (string — describe the element in natural language)' };
+      }
+      // Many widgets (date-picker cells, menus) only reveal options on hover.
+      const hoverTarget = await resolveLocator(page, selector, ctx.log);
+      await hoverTarget.hover();
+      await settleAfterInteraction(page, ctx, sessionId);
+      return { ok: true, injectedSecret: false };
+    }
+
+    case 'press_key': {
+      if (!key || typeof key !== 'string') {
+        return { ok: false, error: 'press_key requires key (string — e.g. "Enter", "Tab", "ArrowRight", "Escape")' };
+      }
+      // Keyboard nav is often the only reliable way through calendar grids and
+      // custom comboboxes. Presses against the currently focused element.
+      await page.keyboard.press(key);
+      await settleAfterInteraction(page, ctx, sessionId);
+      return { ok: true, injectedSecret: false };
+    }
+
+    case 'wait_for': {
+      if (!selector || typeof selector !== 'string') {
+        return { ok: false, error: 'wait_for requires selector (string — the element to wait for)' };
+      }
+      // The LLM's explicit lever for "wait until the widget renders" — for SPAs where
+      // even networkidle isn't enough. Throws on timeout, caught by the caller as a clear error.
+      const waitTarget = await resolveLocator(page, selector, ctx.log);
+      await waitTarget.waitFor({ state: 'visible', timeout: WAIT_FOR_TIMEOUT_MS });
+      return { ok: true, injectedSecret: false };
+    }
+
+    case 'type': {
+      if (!selector || typeof selector !== 'string') {
+        return { ok: false, error: 'type requires selector (string)' };
+      }
+
+      // secret_ref (#973): fill a user.* vault secret by reference. Mutually exclusive
+      // with `text` — supplying both is ambiguous and rejected. The resolved value is
+      // registered with the session so it is scrubbed from any content read back, then
+      // typed via fill(). It is never logged and never returned to the agent.
+      const hasSecretRef = typeof secret_ref === 'string' && secret_ref.length > 0;
+      const hasText = text !== undefined && text !== null;
+
+      if (hasSecretRef && hasText) {
+        return { ok: false, error: 'type accepts either text or secret_ref, not both' };
+      }
+
+      let fillValue: string;
+      if (hasSecretRef) {
+        if (!ctx.resolveSecretRef) {
+          // Capability not granted to this invocation — fail loud rather than
+          // silently falling back to typing the reference name as a literal.
+          return { ok: false, error: 'secret_ref requires the secretResolver capability, which is not available to this skill' };
+        }
+        // resolveSecretRef enforces the user.* namespace + audit; it throws on a bad
+        // ref or a missing secret. Any thrown message names the ref, never the value.
+        fillValue = await ctx.resolveSecretRef(secret_ref!);
+        session.registerInjectedSecret(fillValue);
+        injectedSecret = true;
+      } else {
+        if (typeof text !== 'string') {
+          return { ok: false, error: 'type requires text (string) or secret_ref (string)' };
+        }
+        fillValue = text;
+      }
+
+      const typeTarget = await resolveLocator(page, selector, ctx.log);
+      // Focus the field with a human cursor approach, clear any existing content
+      // (humanType appends; we want replace semantics), then type with human cadence.
+      // The same for both the visible-text and secret_ref paths — registering the secret
+      // above already gates the #973 redaction; scrubbing covers reflected content/URL,
+      // not keystrokes. ControlOrMeta = Cmd on macOS (dev), Ctrl on Linux (prod). (#1053)
+      await humanClick(page, typeTarget, { log: ctx.log });
+      await page.keyboard.press('ControlOrMeta+a');
+      await page.keyboard.press('Delete');
+      await humanType(page, fillValue, { log: ctx.log });
+      return { ok: true, injectedSecret };
+    }
+
+    case 'select': {
+      if (!selector || typeof selector !== 'string') {
+        return { ok: false, error: 'select requires selector (string)' };
+      }
+      if (!value || typeof value !== 'string') {
+        return { ok: false, error: 'select requires value (string)' };
+      }
+      // Use resolveLocator for consistency with click/type — the LLM can use
+      // natural language ("Country dropdown") and it will resolve via role/label/text.
+      const selectTarget = await resolveLocator(page, selector, ctx.log);
+      await selectTarget.selectOption(value);
+      return { ok: true, injectedSecret: false };
+    }
+
+    case 'get_content':
+      // No navigation — the caller reads current state after this returns.
+      return { ok: true, injectedSecret: false };
+
+    case 'screenshot':
+      // Screenshot-only step — the caller captures after this returns.
+      return { ok: true, injectedSecret: false };
+
+    default:
+      // Unreachable: execute() validated the verb against VALID_ACTIONS before dispatching.
+      return { ok: false, error: `Unknown action: "${String(action)}"` };
   }
 }
 
