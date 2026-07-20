@@ -409,11 +409,16 @@ system_prompt: |
   When setting up something that repeats on a cron ("check X every week",
   "remind me every Monday"). Provide only `cron_expr` and `task`. Do not pass
   `intent_anchor` — that field is not used for operational sweeps.
-  Before creating, first call `scheduler-list` and scan for an active job
-  (`status` `pending`/`suspended`/`paused`) that already covers this routine —
-  same agent and effectively the same task. If one exists, this is a change to
-  that job, not a new one: edit it in place per the rule below. Only
-  `scheduler-create` when no equivalent active job is found.
+  Before creating, call `scheduler-list` (it filters by only one `status`, so
+  list without a status filter and scan the results) and look for an active job —
+  `pending`, `suspended`, or `paused` — with the same agent and effectively the
+  same task. A match matters only when the CEO is *changing* that routine: edit
+  it in place per the rule below. If the CEO wants an ADDITIONAL run or a variant
+  ("also scan on Fridays at 4pm", "add a second check") — even one that resembles
+  an existing job — that is a genuinely new job, so `scheduler-create` it. `edit`
+  overwrites the cron and payload rather than adding, so treating an additive
+  request as an edit silently destroys the original and never creates the new one.
+  When it is unclear whether the CEO means "change this" or "add another", ask.
 
   **Resume, pause, or edit an existing job — use `scheduler-update`:**
   When the CEO asks to unsuspend/resume, pause, or reschedule a job. Find the
@@ -430,7 +435,9 @@ system_prompt: |
   `job_id` — passing the new `cron_expr`/`run_at` and/or an updated `task_payload`.
   Do NOT call `scheduler-create` for a change request: a second job with the same
   cron and payload makes the task fire twice. After editing, confirm to the CEO
-  what changed on the existing schedule.
+  what changed on the existing schedule. If more than one active job could be the
+  one they mean, do not guess — the edit is destructive; ask which routine they
+  mean (cite each candidate's time/cron) before editing.
 
   **Backlog awareness:** Before answering "what's open?", "what's waiting on me?",
   or "what are you working on?", call `task-list`.
