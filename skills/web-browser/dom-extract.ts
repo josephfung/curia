@@ -16,16 +16,26 @@
  * here does not violate the "no module-scope value references" rule for a serialized fn.
  */
 interface ExtractOpts {
-  // Index of this frame within page.frames(); makes refs unique across frames without
-  // threading a global counter back to the handler (which would force an object return
-  // and break the string-returning frame mocks in handler.test.ts).
+  // This frame's index within page.frames() AT THIS READ. Combined with the epoch it forms a
+  // per-document ref namespace so refs from different frames don't collide. NB: page.frames()
+  // ordering is not stable across reads (removing a preceding sibling shifts everyone down), so
+  // a document PINS this value at adoption (see __curiaRefFrame__ below) and reuses the pinned
+  // one when minting — re-deriving it each read would let two same-epoch frames converge on the
+  // same ref after a reindex. Passed in (rather than threaded back) to keep the frame mocks in
+  // handler.test.ts returning a plain string.
   frameIndex: number;
   // Max interactables to tag + list before truncating. Passed in because this function
   // runs in-browser and cannot import the handler's module constant.
   maxRefs: number;
-  // Per-extraction generation, stamped into every ref so a ref outlives no snapshot: a ref
-  // from an earlier extraction carries an older generation and matches no current attribute.
-  generation: number;
+  // Monotonic epoch seed from the handler (a process-global counter that NEVER resets, even
+  // across navigations). A fresh document (new window) adopts it as THIS document's epoch and
+  // stamps it into every ref; a document that already carries an epoch keeps its own. This is
+  // what makes refs unique ACROSS documents — a ref minted on a page that has since navigated
+  // away carries an older epoch and matches nothing on the new page (fail closed) — while
+  // staying stable across same-document re-extractions. window resets on navigation, so the
+  // per-frame element counter alone would recycle e-numbers onto a new page's elements; the
+  // epoch prevents that recycled number from silently addressing the wrong element.
+  epochSeed: number;
 }
 
 /**
@@ -41,7 +51,7 @@ interface ExtractOpts {
  * inside the function so they serialize with it.
  */
 export function extractFrameContent(opts: ExtractOpts): string {
-  const { frameIndex, maxRefs, generation } = opts;
+  const { frameIndex, maxRefs, epochSeed } = opts;
 
   // --- bodyText: clone the body, strip noise, prefer the main content root. (unchanged) ---
   const root = document.body?.cloneNode(true) as HTMLBodyElement | null;
@@ -55,10 +65,38 @@ export function extractFrameContent(opts: ExtractOpts): string {
   const bodyText = (contentRoot.innerText ?? contentRoot.textContent ?? root.innerText ?? '').trim();
 
   // --- Interactable elements: tag each with a stable ref on the LIVE DOM ---
-  // Clear refs from a prior extraction first, so this snapshot's refs are the only ones
-  // present. A ref never outlives the snapshot that issued it: an element removed since
-  // the last snapshot leaves no stale ref for the resolver to match.
-  document.querySelectorAll('[data-curia-ref]').forEach(el => el.removeAttribute('data-curia-ref'));
+  // Refs are STABLE across re-extractions of the same document, yet distinct ACROSS documents.
+  // Two forces are in tension:
+  //   * Every browser action ends by re-reading the page, so renumbering on each extraction
+  //     (the first version of this feature) invalidated a ref within one action of handing it
+  //     to the agent — reads-then-multiple-acts hung until timeout. => refs must persist.
+  //   * window (and any counter on it) resets on navigation, so a per-document counter alone
+  //     recycles e-numbers onto the NEXT page's elements; a stale ref would then resolve to
+  //     exactly one live (wrong) element and be clicked. => numbering must not repeat per page.
+  // Resolution: PRESERVE an element's existing ref, mint new ones from a per-document `seq`,
+  // and stamp each ref with an `epoch` AND a `frame` scope this document adopts once. The epoch
+  // comes from the handler's monotonic `epochSeed` (never resets across navigations); a fresh
+  // window has no epoch yet so it adopts the current seed and pins the current frameIndex, while
+  // a re-extracted document keeps both — so same-document refs stay valid and cross-document
+  // refs never collide. Pinning the frame scope matters because page.frames() order shifts when
+  // a preceding sibling frame is removed: without pinning, a frame sliding into a vacated index
+  // would mint refs colliding with another same-epoch frame's retained refs. (epoch, frame) is
+  // therefore a stable per-document identity — distinct frames in one read have distinct indices,
+  // and later reads take strictly greater epochs. A removed element's ref matches nothing (fail
+  // closed); no live element inherits an old ref. NB: these on-window values are page-reachable
+  // and a hostile page could tamper with them, but that is not a wrong-element hazard — the
+  // handler's resolver ignores them and resolves ONLY when exactly one live element carries the
+  // ref, so any recycling fails closed.
+  const refState = window as unknown as {
+    __curiaRefEpoch__?: number; __curiaRefFrame__?: number; __curiaRefSeq__?: number;
+  };
+  if (typeof refState.__curiaRefEpoch__ !== 'number') {
+    refState.__curiaRefEpoch__ = epochSeed;    // fresh document → take this snapshot's epoch
+    refState.__curiaRefFrame__ = frameIndex;   // …and pin the frame scope at adoption
+    refState.__curiaRefSeq__ = 0;
+  }
+  const epoch = refState.__curiaRefEpoch__;
+  const frameScope = refState.__curiaRefFrame__ ?? frameIndex;
 
   const INTERACTABLE_SELECTOR = [
     'button', 'a[href]', 'input:not([type="hidden"])', 'select', 'textarea',
@@ -81,8 +119,15 @@ export function extractFrameContent(opts: ExtractOpts): string {
   const refLines: string[] = [];
   for (let i = 0; i < shown; i++) {
     const el = interactables[i]!;
-    const ref = `g${generation}f${frameIndex}e${i + 1}`;
-    el.setAttribute('data-curia-ref', ref);
+    // Reuse this element's ref if it already has one (stable across re-extractions); only
+    // mint a fresh id for an element seen for the first time. The (epoch, frameScope) pair
+    // scopes the id to this document; each frame's window has its own seq starting at 1.
+    let ref = el.getAttribute('data-curia-ref');
+    if (!ref) {
+      refState.__curiaRefSeq__ = (refState.__curiaRefSeq__ ?? 0) + 1;
+      ref = `g${epoch}f${frameScope}e${refState.__curiaRefSeq__}`;
+      el.setAttribute('data-curia-ref', ref);
+    }
 
     // ARIA role for display: explicit role attribute wins, else derive from the tag.
     let role = el.getAttribute('role') ?? '';
