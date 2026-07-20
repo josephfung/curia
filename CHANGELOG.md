@@ -20,6 +20,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`web-browser`** — circuit-breaker halts interaction after 4 consecutive failures to curb futile retry loops.
 - **`TaskRepo.reopenTask` tests** — cover non-`done` rejection, `progress.notes` audit note, and `task.updated` emission. (#1434)
 
+### Changed
+
+- **Daily digest** — the built-in 8am digest is now an on-demand, chat-editable morning-briefing example.
+
 ### Security
 
 - **Evidence-doc retention** — anchor `## Diff —` boundaries to the metadata envelope so an email-body heading can't dodge the purge. (#1444)
