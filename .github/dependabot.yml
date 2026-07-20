@@ -32,10 +32,12 @@ updates:
       # in disguise" onto stale, divergent SDK code (curia#1273). Block nylas
       # majors; a genuine future major (a real 9.x) gets reviewed and bumped by
       # hand. 8.x minor/patch updates still flow normally.
+      # UNBLOCK-WHEN: `npm view nylas dist-tags.latest` resolves to a real >=9.x (not the stray 17.13.1).
       - dependency-name: "nylas"
         update-types: ["version-update:semver-major"]
       # @types/node major tracks the Node.js release line. Runtime is Node 24
       # (engines + node:24-slim); block major bumps until Node itself is bumped.
+      # UNBLOCK-WHEN: package.json `engines.node` is bumped past 24 (moves in lockstep with the `node` docker ignore below).
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
       # TypeScript 7.x is the native (Go) compiler rewrite with breaking internal
@@ -45,6 +47,7 @@ updates:
       # ("Cannot read properties of undefined (reading 'Cjs')", curia#1454).
       # Stay on 6.x; bump to 7 by hand once typescript-eslint supports it. 6.x
       # minor/patch updates still flow normally.
+      # UNBLOCK-WHEN: `npm view typescript-eslint peerDependencies.typescript` allows >=7.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
 
@@ -80,6 +83,7 @@ updates:
       # release (26) is Current/unstable until it reaches LTS (~Oct 2026), and
       # Node.js says production should run only Active/Maintenance LTS. Digest +
       # minor/patch updates still flow; bump the major by hand when 26 goes LTS.
+      # UNBLOCK-WHEN: Node 26 reaches Active LTS (~2026-10) per https://nodejs.org/en/about/previous-releases.
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
 
@@ -96,5 +100,6 @@ updates:
       default-days: 7
     open-pull-requests-limit: 5
     ignore:
+      # UNBLOCK-WHEN: a deliberate pg16->pg17 database upgrade is scheduled (human decision, not automatable).
       - dependency-name: "pgvector/pgvector"
         update-types: ["version-update:semver-major"]
