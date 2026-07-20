@@ -25,6 +25,8 @@ function blankConfig(): Config {
     nylasGrantId: undefined,
     nylasSelfEmail: '',
     signalPhoneNumber: undefined,
+    slackBotToken: undefined,
+    slackAppToken: undefined,
   } as unknown as Config;
 }
 

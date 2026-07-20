@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import type { NylasClient, NylasMessage, NylasFolder, ListMessagesOptions, SendEmailOptions, AttachmentContent } from '../channels/email/nylas-client.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput } from './_shared/read-attachments.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
+import type { SlackClient } from '../channels/slack/slack-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import { classifyEmailSender } from '../contacts/contact-service.js';
 import type { ContactTier, ChannelIdentity } from '../contacts/types.js';
@@ -100,6 +101,15 @@ export interface SignalOutboundRequest {
   message: string;
 }
 
+export interface SlackOutboundRequest {
+  channel: 'slack';
+  /** Slack conversation id (D… for DM, C…/G… for channel). */
+  slackChannelId: string;
+  /** When set, reply in this thread (channel mentions). */
+  threadTs?: string;
+  message: string;
+}
+
 /**
  * Discriminated union of all supported outbound send requests.
  * Add a new variant here when adding a new channel.
@@ -108,7 +118,7 @@ export interface SignalOutboundRequest {
  * backwards-compatible, but changing existing field names or types is a breaking
  * change that must be called out in CHANGELOG.md.
  */
-export type OutboundSendRequest = EmailSendRequest | SignalOutboundRequest;
+export type OutboundSendRequest = EmailSendRequest | SignalOutboundRequest | SlackOutboundRequest;
 
 // Re-export the old name as an alias so existing callers don't break.
 // Previously OutboundSendRequest was a single interface (email-only). Now it's a
@@ -174,6 +184,11 @@ export interface OutboundGatewayConfig {
    * signal-cli RPC calls. Required when signalClient is provided.
    */
   signalPhoneNumber?: string;
+
+  /**
+   * Slack Socket Mode / Web API client. Optional — only when Slack channel is enabled.
+   */
+  slackClient?: SlackClient;
 
   contactService: ContactService;
   contentFilter: OutboundContentFilter;
@@ -305,6 +320,7 @@ export class OutboundGateway {
   private readonly primaryNylasClient: NylasClient | undefined;
   private readonly signalClient?: SignalRpcClient;
   private readonly signalPhoneNumber?: string;
+  private readonly slackClient?: SlackClient;
   private readonly contactService: ContactService;
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
@@ -321,6 +337,7 @@ export class OutboundGateway {
     this.primaryNylasClient = this.nylasClients.values().next().value;
     this.signalClient = config.signalClient;
     this.signalPhoneNumber = config.signalPhoneNumber;
+    this.slackClient = config.slackClient;
     this.contactService = config.contactService;
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
@@ -525,7 +542,9 @@ export class OutboundGateway {
               recipe.partialPayload ?? {},
               request.channel === 'email'
                 ? { to: request.to, subject: request.subject, body: request.body }
-                : { recipient: request.recipient, message: request.message },
+                : request.channel === 'slack'
+                  ? { slackChannelId: request.slackChannelId, message: request.message }
+                  : { recipient: request.recipient, message: request.message },
             );
             const sent = await this.sendNotification({
               notificationType: 'approval_requested',
@@ -590,9 +609,12 @@ export class OutboundGateway {
 
     // Derive a stable recipient identifier for the blocked-contact check and logging.
     // Email: the To address. Signal: phone number (1:1) or base64 group ID.
+    // Slack: conversation channel id (D…/C…).
     const recipientId = request.channel === 'email'
       ? request.to
-      : (request.recipient ?? request.groupId ?? '');
+      : request.channel === 'slack'
+        ? request.slackChannelId
+        : (request.recipient ?? request.groupId ?? '');
 
     // The message body field differs between channel types.
     const messageBody = request.channel === 'email' ? request.body : request.message;
@@ -1067,7 +1089,28 @@ export class OutboundGateway {
         });
       }
       return result;
-    } else {
+    }
+
+    if (request.channel === 'slack') {
+      const result = await this.dispatchSlack({ ...request, message: redactedBody });
+      // Slack channel/DM ids are not contact identifiers — skip promoteOrCreate.
+      // Inbound already auto-creates contacts from Slack user ids.
+      if (result.success) {
+        await this.publishDelivered({
+          channel: 'slack',
+          recipientId,
+          recipientContactId,
+          content: redactedBody,
+          conversationId: options?.conversationId,
+          taskEventId: options?.taskEventId,
+          messageId: result.messageId,
+          parentEventId: options?.parentEventId,
+        });
+      }
+      return result;
+    }
+
+    {
       const result = await this.dispatchSignal({ ...request, message: redactedBody });
       // Only promote for 1:1 Signal sends — group sends use a groupId, not an individual
       // phone number. Creating a contact for a group token would pollute the contacts table
@@ -1134,7 +1177,7 @@ export class OutboundGateway {
    * send conditional on the audit subsystem.
    */
   private async publishDelivered(payload: {
-    channel: 'signal' | 'email';
+    channel: 'signal' | 'email' | 'slack';
     recipientId: string;
     recipientContactId?: string;
     content: string;
@@ -1188,6 +1231,11 @@ export class OutboundGateway {
     if (request.channel === 'signal' && 'recipient' in request && request.recipient) {
       return checkPrincipalSignal(request.recipient, this.principalIdentities);
     }
+    // Slack conversation ids are not principal user ids — never treat a channel/DM
+    // target as the principal for autonomy carve-outs (fail closed).
+    if (request.channel === 'slack') {
+      return false;
+    }
     return false;
   }
 
@@ -1230,6 +1278,12 @@ export class OutboundGateway {
       tagged = emails
         .filter((e) => e.length > 0)
         .map((email) => ({ email, isPrincipal: this.isPrincipalEmail(email) }));
+    } else if (request.channel === 'slack') {
+      // Slack outbound targets a conversation, not a verified principal user id.
+      // Tag as non-principal so content-filter Stage 2 treats the audience conservatively.
+      tagged = request.slackChannelId.length > 0
+        ? [{ email: request.slackChannelId, isPrincipal: false }]
+        : [];
     } else {
       // Signal: tag via the principal's verified Signal identity. A groupId is never
       // the principal's private channel, so it is always a non-principal recipient.
@@ -2230,5 +2284,39 @@ export class OutboundGateway {
       );
       return { success: false, blockedReason: `Send failed: ${message}` };
     }
+  }
+
+  /**
+   * Dispatch a send request to Slack via chat.postMessage.
+   */
+  private async dispatchSlack(request: SlackOutboundRequest): Promise<OutboundSendResult> {
+    if (!this.slackClient) {
+      return { success: false, blockedReason: 'Slack client not configured' };
+    }
+
+    if (!request.slackChannelId.trim()) {
+      this.log.warn({ channel: 'slack' }, 'outbound-gateway: Slack send missing slackChannelId');
+      return { success: false, blockedReason: 'Slack send requires slackChannelId' };
+    }
+
+    const result = await this.slackClient.postMessage({
+      channel: request.slackChannelId,
+      text: request.message,
+      threadTs: request.threadTs,
+    });
+
+    if (!result.ok) {
+      this.log.error(
+        { channel: 'slack', error: result.error },
+        'outbound-gateway: Slack chat.postMessage failed',
+      );
+      return { success: false, blockedReason: `Send failed: ${result.error ?? 'unknown_error'}` };
+    }
+
+    this.log.info(
+      { channel: 'slack', hasThread: !!request.threadTs },
+      'outbound-gateway: Slack message sent successfully',
+    );
+    return { success: true, messageId: result.ts };
   }
 }

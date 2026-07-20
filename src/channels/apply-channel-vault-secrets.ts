@@ -1,6 +1,6 @@
 // apply-channel-vault-secrets.ts — overlays the channel-scoped vault credentials
-// (channel.email.* / channel.signal.*, written by the Channels UI) onto Config, so
-// the email/signal adapters actually boot from creds configured entirely through the
+// (channel.email.* / channel.signal.* / channel.slack.*, written by the Channels UI)
+// onto Config, so adapters actually boot from creds configured entirely through the
 // console (#964). Closes the seam where the registry gate read channel.* but the
 // adapters read config (populated only from the unprefixed bootstrap keys / env).
 //
@@ -10,7 +10,7 @@
 // the current config value (which already carries the bootstrap-vault result). Because the
 // precedence matches the gate, "enabled + resolvable" and actual adapter boot agree.
 //
-// NAMESPACE SAFETY (do not relax): this reads a FIXED allowlist of five channel.* keys.
+// NAMESPACE SAFETY (do not relax): this reads a FIXED allowlist of channel.* keys.
 // It must never call secrets.list() or scan by prefix — that keeps user.* (agent-captured)
 // secrets and dot-free skill/system secrets structurally out of reach.
 import type { Config } from '../config.js';
@@ -52,14 +52,23 @@ export async function applyChannelVaultSecrets(
   ): Promise<string | undefined> =>
     (await readVaultKey(secrets, vaultKey, logger)) ?? normalizeSecretValue(env[envVar]) ?? normalizeSecretValue(current);
 
-  const [nylasApiKey, nylasGrantId, nylasSelfEmail, signalPhoneNumber, signalSocketPath] =
-    await Promise.all([
-      resolve('channel.email.nylas_api_key', 'NYLAS_API_KEY', config.nylasApiKey),
-      resolve('channel.email.nylas_grant_id', 'NYLAS_GRANT_ID', config.nylasGrantId),
-      resolve('channel.email.nylas_self_email', 'NYLAS_SELF_EMAIL', config.nylasSelfEmail),
-      resolve('channel.signal.phone_number', 'SIGNAL_PHONE_NUMBER', config.signalPhoneNumber),
-      resolve('channel.signal.socket_path', 'SIGNAL_SOCKET_PATH', config.signalSocketPath),
-    ]);
+  const [
+    nylasApiKey,
+    nylasGrantId,
+    nylasSelfEmail,
+    signalPhoneNumber,
+    signalSocketPath,
+    slackBotToken,
+    slackAppToken,
+  ] = await Promise.all([
+    resolve('channel.email.nylas_api_key', 'NYLAS_API_KEY', config.nylasApiKey),
+    resolve('channel.email.nylas_grant_id', 'NYLAS_GRANT_ID', config.nylasGrantId),
+    resolve('channel.email.nylas_self_email', 'NYLAS_SELF_EMAIL', config.nylasSelfEmail),
+    resolve('channel.signal.phone_number', 'SIGNAL_PHONE_NUMBER', config.signalPhoneNumber),
+    resolve('channel.signal.socket_path', 'SIGNAL_SOCKET_PATH', config.signalSocketPath),
+    resolve('channel.slack.bot_token', 'SLACK_BOT_TOKEN', config.slackBotToken),
+    resolve('channel.slack.app_token', 'SLACK_APP_TOKEN', config.slackAppToken),
+  ]);
 
   config.nylasApiKey = nylasApiKey;
   config.nylasGrantId = nylasGrantId;
@@ -67,6 +76,8 @@ export async function applyChannelVaultSecrets(
   config.nylasSelfEmail = nylasSelfEmail ?? '';
   config.signalPhoneNumber = signalPhoneNumber;
   config.signalSocketPath = signalSocketPath;
+  config.slackBotToken = slackBotToken;
+  config.slackAppToken = slackAppToken;
 
   // Names only — never values. Lets an operator confirm which channel creds the vault/env
   // supplied vs. which are absent (feature-off), the same debuggability win as applyVaultSecrets.
@@ -76,6 +87,8 @@ export async function applyChannelVaultSecrets(
     'channel.email.nylas_self_email': nylasSelfEmail !== undefined,
     'channel.signal.phone_number': signalPhoneNumber !== undefined,
     'channel.signal.socket_path': signalSocketPath !== undefined,
+    'channel.slack.bot_token': slackBotToken !== undefined,
+    'channel.slack.app_token': slackAppToken !== undefined,
   };
   logger.info({ present }, 'Applied channel credentials onto config (vault ▸ env ▸ config)');
 }

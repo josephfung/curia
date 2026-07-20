@@ -16,9 +16,12 @@ channels:
   cli:
     enabled: true
   max_message_bytes: 102400   # 100KB — inbound messages exceeding this are rejected before routing
-  # Signal channel activation is controlled by env vars, not this file.
-  # Set SIGNAL_SOCKET_PATH + SIGNAL_PHONE_NUMBER at runtime to enable the Signal adapter.
-  # Trust level and unknown-sender policy live in config/channel-trust.yaml.
+  # Signal / Slack channel activation is controlled by vault credentials + the channel
+  # registry (Settings → Channels), not this file. Trust policies live in channel-trust.yaml.
+  slack:
+    # Optional allowlist of Slack channel ids (C…) for @mentions. Empty = all channels
+    # the bot is a member of. DMs are never filtered by this list.
+    allowed_channel_ids: []
 
 # Rate limits for automatic contact creation from email participants.
 # Prevents spam campaigns from flooding the contacts table.

@@ -47,6 +47,11 @@ export interface Config {
   //   that was registered via `signal-cli register` + `signal-cli verify`.
   signalSocketPath: string | undefined;
   signalPhoneNumber: string | undefined;
+  // Slack channel config (Socket Mode). Both must be set to enable the Slack adapter.
+  // slackBotToken: Bot User OAuth Token (xoxb-…).
+  // slackAppToken: App-Level Token (xapp-…) with connections:write for Socket Mode.
+  slackBotToken: string | undefined;
+  slackAppToken: string | undefined;
 }
 
 /** Per-resumable-task aggregate ceilings — progress-based circuit breaker (#1176). */
@@ -235,6 +240,10 @@ export interface YamlConfig {
     /** Max inbound message content size in bytes. Default: 102400 (100KB).
      *  Messages exceeding this are rejected by the dispatcher before routing. */
     max_message_bytes?: number;
+    slack?: {
+      /** Slack channel ids (C…) where @mentions are accepted. Empty/absent = all. */
+      allowed_channel_ids?: string[];
+    };
   };
   browser?: {
     sessionTtlMs?: number;
@@ -1197,5 +1206,7 @@ export function loadConfig(): Config {
     // Signal adapter with a bogus socket path or phone number.
     signalSocketPath: process.env.SIGNAL_SOCKET_PATH?.trim() || undefined,
     signalPhoneNumber: undefined,
+    slackBotToken: process.env.SLACK_BOT_TOKEN?.trim() || undefined,
+    slackAppToken: process.env.SLACK_APP_TOKEN?.trim() || undefined,
   };
 }

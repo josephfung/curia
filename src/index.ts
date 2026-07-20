@@ -69,6 +69,8 @@ import { EmailAccountsRepo } from './channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from './channels/email/resolve-email-accounts.js';
 import { SignalRpcClient } from './channels/signal/signal-rpc-client.js';
 import { SignalAdapter } from './channels/signal/signal-adapter.js';
+import { SlackClient } from './channels/slack/slack-client.js';
+import { SlackAdapter } from './channels/slack/slack-adapter.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
@@ -786,6 +788,21 @@ async function main(): Promise<void> {
     logger.warn('Signal socket path or phone number not configured — Signal channel disabled. Set them in the console (Settings → Channels → Signal), or via the SIGNAL_SOCKET_PATH / SIGNAL_PHONE_NUMBER env fallbacks.');
   }
 
+  // Slack channel — optional, requires channel.slack.bot_token + channel.slack.app_token.
+  // SlackClient is constructed here for OutboundGateway; SlackAdapter starts after dispatcher.
+  let slackClient: SlackClient | undefined;
+  let slackAdapter: SlackAdapter | undefined;
+  if (config.slackBotToken && config.slackAppToken) {
+    slackClient = new SlackClient({
+      botToken: config.slackBotToken,
+      appToken: config.slackAppToken,
+      logger,
+    });
+    logger.info('Slack client created (Socket Mode)');
+  } else {
+    logger.warn('Slack bot token or app token not configured — Slack channel disabled. Set them in the console (Settings → Channels → Slack), or via SLACK_BOT_TOKEN / SLACK_APP_TOKEN env fallbacks.');
+  }
+
   // Calendar client — operates as the PRINCIPAL (the CEO), not as Curia's mailbox.
   // RSVP is first-person: Nylas/Google records the response of the attendee whose
   // identity matches the authenticated grant. So the calendar client binds to the
@@ -1481,17 +1498,18 @@ async function main(): Promise<void> {
     nylasClientMap,
     signalRpcClient,
     config.signalPhoneNumber,
+    slackClient,
   );
   const hasAnyOutboundClient = hasRegistryGatedOutboundClient(registryGatedOutbound);
   // Defense-in-depth for setup-required mode: even though inbound email/Signal
   // adapters are skipped (so no inbound traffic should be triggering outbound
   // replies), the OutboundGateway is also used by notifiers (suspension, recovery,
   // approval) and skills that send directly. Skipping the gateway construction
-  // here closes those non-reply send paths too — there is no email/Signal
+  // here closes those non-reply send paths too — there is no email/Signal/Slack
   // egress at all until the operator completes setup and restarts.
   if (setupRequiredAtBoot && hasAnyOutboundClient) {
     logger.warn(
-      'SETUP-REQUIRED mode: outbound gateway NOT initialized — no email/Signal egress (notifiers, autonomy alerts) until restart',
+      'SETUP-REQUIRED mode: outbound gateway NOT initialized — no email/Signal/Slack egress (notifiers, autonomy alerts) until restart',
     );
   }
   const exportControlsConfig = resolveExportControls(yamlConfig);
@@ -1502,6 +1520,7 @@ async function main(): Promise<void> {
       nylasClients: registryGatedOutbound.nylasClients,
       signalClient: registryGatedOutbound.signalClient,
       signalPhoneNumber: registryGatedOutbound.signalPhoneNumber,
+      slackClient: registryGatedOutbound.slackClient,
       contactService,
       contentFilter: outboundFilter,
       bus,
@@ -1520,13 +1539,14 @@ async function main(): Promise<void> {
     logger.info({
       emailAccounts: registryGatedOutbound.nylasClients ? [...registryGatedOutbound.nylasClients.keys()] : [],
       hasSignal: !!registryGatedOutbound.signalClient,
+      hasSlack: !!registryGatedOutbound.slackClient,
       channelShouldStart: [...channelShouldStart],
     }, 'Outbound gateway initialized');
   } else if (nylasClientMap.size > 0 && !outboundFilter) {
     // Nylas clients are available but outboundFilter is missing (no coordinator config found).
     // Email skills will be unavailable because they check ctx.outboundGateway before sending.
     logger.warn('Outbound gateway NOT initialized — outboundFilter not ready (coordinator config missing?). Outbound send skills will be unavailable.');
-  } else if ((nylasClientMap.size > 0 || signalRpcClient) && !hasAnyOutboundClient) {
+  } else if ((nylasClientMap.size > 0 || signalRpcClient || slackClient) && !hasAnyOutboundClient) {
     logger.info(
       { channelShouldStart: [...channelShouldStart] },
       'Outbound gateway NOT initialized — toggleable channels with credentials are disabled or uninstalled in the registry',
@@ -1605,6 +1625,20 @@ async function main(): Promise<void> {
     // number) are absent from config, so no adapter was constructed. Warn instead of skipping
     // silently. (Only reachable outside setup-required mode, where outboundGateway is set.)
     logger.warn('channel signal is enabled + resolvable but its runtime client/credentials are missing (socket path or phone number); no Signal adapter constructed — check vault/env credentials and restart');
+  }
+
+  // Construct the Slack adapter (same ordering rule: after gateway, before start).
+  if (outboundGateway && slackClient && channelShouldStart.has('slack')) {
+    slackAdapter = new SlackAdapter({
+      bus,
+      logger,
+      client: slackClient,
+      outboundGateway,
+      contactService,
+      allowedChannelIds: yamlConfig.channels?.slack?.allowed_channel_ids,
+    });
+  } else if (outboundGateway && channelShouldStart.has('slack') && !slackClient) {
+    logger.warn('channel slack is enabled + resolvable but its runtime client/credentials are missing (bot token or app token); no Slack adapter constructed — check vault/env credentials and restart');
   }
 
   // Scheduler — Postgres-backed job scheduler for cron and one-shot tasks.
@@ -2398,6 +2432,13 @@ async function main(): Promise<void> {
         logger.error({ err }, 'Error stopping Signal adapter during shutdown');
       }
     }
+    if (slackAdapter) {
+      try {
+        await slackAdapter.stop();
+      } catch (err) {
+        logger.error({ err }, 'Error stopping Slack adapter during shutdown');
+      }
+    }
     try {
       await officeIdentityService.stop();
     } catch (err) {
@@ -2508,6 +2549,13 @@ async function main(): Promise<void> {
       logger.info('Signal channel adapter started');
     } else if (signalAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Signal adapter startup — restart after setup to enable');
+    }
+
+    if (slackAdapter && !setupRequiredAtBoot) {
+      await slackAdapter.start();
+      logger.info('Slack channel adapter started');
+    } else if (slackAdapter && setupRequiredAtBoot) {
+      logger.warn('SETUP-REQUIRED mode: skipping Slack adapter startup — restart after setup to enable');
     }
   } catch (err) {
     logger.fatal({ err }, 'Fatal error during channel adapter startup — invoking shutdown');

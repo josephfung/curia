@@ -25,6 +25,8 @@ function baseConfig(): Config {
     ceoSignalNumber: undefined,
     signalSocketPath: undefined,
     signalPhoneNumber: undefined,
+    slackBotToken: undefined,
+    slackAppToken: undefined,
   } as Config;
 }
 
@@ -34,7 +36,7 @@ function fakeSecrets(values: Record<string, string>) {
 }
 
 describe('applyChannelVaultSecrets', () => {
-  it('populates config from vault-only channel.email.* / channel.signal.* keys', async () => {
+  it('populates config from vault-only channel.email.* / channel.signal.* / channel.slack.* keys', async () => {
     const config = baseConfig();
     const secrets = fakeSecrets({
       'channel.email.nylas_api_key': 'nyk_vault',
@@ -42,6 +44,8 @@ describe('applyChannelVaultSecrets', () => {
       'channel.email.nylas_self_email': 'curia@vault.test',
       'channel.signal.phone_number': '+15550001111',
       'channel.signal.socket_path': '/run/signal/socket',
+      'channel.slack.bot_token': 'xoxb-vault',
+      'channel.slack.app_token': 'xapp-vault',
     });
 
     await applyChannelVaultSecrets(config, secrets, {}, logger);
@@ -51,6 +55,8 @@ describe('applyChannelVaultSecrets', () => {
     expect(config.nylasSelfEmail).toBe('curia@vault.test');
     expect(config.signalPhoneNumber).toBe('+15550001111');
     expect(config.signalSocketPath).toBe('/run/signal/socket');
+    expect(config.slackBotToken).toBe('xoxb-vault');
+    expect(config.slackAppToken).toBe('xapp-vault');
   });
 
   it('activates Signal from a console-only entry — channel.signal.phone_number alone, no flat bootstrap, no env', async () => {
@@ -132,7 +138,7 @@ describe('applyChannelVaultSecrets', () => {
     expect(config.nylasApiKey).toBe('nyk_env');
   });
 
-  it('reads ONLY the five named channel.* keys — never list(), never user.* / dot-free keys', async () => {
+  it('reads ONLY the named channel.* keys — never list(), never user.* / dot-free keys', async () => {
     const config = baseConfig();
     const secrets = fakeSecrets({});
 
@@ -145,6 +151,8 @@ describe('applyChannelVaultSecrets', () => {
       'channel.email.nylas_self_email',
       'channel.signal.phone_number',
       'channel.signal.socket_path',
+      'channel.slack.app_token',
+      'channel.slack.bot_token',
     ]);
     // No list() method should even be invoked (the fake doesn't have one).
     expect('list' in secrets).toBe(false);

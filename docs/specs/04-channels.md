@@ -108,6 +108,14 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - Handles: text messages, attachments, reactions
 - Secrets: `channel.signal.phone_number` — the canonical namespaced vault key (wired via `applyChannelVaultSecrets`, as above). The legacy flat `signal_phone_number` key was consolidated onto it and backfilled by migration; entering the phone number in the console alone now activates Signal (#1140).
 
+### Slack (via Socket Mode)
+- Toggleable channel: principal creates a **workspace-owned** Slack app (import Curia's app manifest), installs it, and vaults `channel.slack.bot_token` + `channel.slack.app_token`. See ADR-033.
+- **Inbound:** Socket Mode events — DMs (`message.im`) and `@mentions` (`app_mention`). Ignores reactions, edits, bot messages, and non-mention channel traffic. Own messages ignored by bot user id from `auth.test` (never by a hardcoded `@curia` string). Bot display name / @handle is set in Slack to match office identity.
+- **Outbound:** `OutboundGateway` → `chat.postMessage` (plain text / mrkdwn). Channel mentions reply in-thread.
+- **Conversation ID:** DM `slack:D<conversationId>`; channel thread `slack:C<channelId>:<thread_ts>` (reversible per ADR-025).
+- **Trust:** `medium`, `unknown_sender: allow`, `threaded: true` (`config/channel-trust.yaml`). Optional `channels.slack.allowed_channel_ids` allowlist for @mentions.
+- **Identity:** Slack user id (`U…`) as `channel_identifier`, source `slack_participant`.
+
 ### HTTP API
 - REST endpoints for programmatic access
 - SSE (Server-Sent Events) for real-time response streaming
@@ -145,6 +153,7 @@ Each channel is assigned a trust level that the dispatch layer tags on every inb
 | **CLI** | `high` | Requires SSH/physical access to the host |
 | **Signal** | `high` | Strong identity via phone number + Signal protocol |
 | **HTTP API** | `medium` | Token-authenticated, but tokens can be leaked |
+| **Slack** | `medium` | Workspace OAuth / bot token — weaker than Signal (ADR-033) |
 | **Email** | `low` | From headers are trivially spoofable; relies on SPF/DKIM/DMARC |
 
 Trust levels gate which actions the Coordinator can take based on the originating channel. See [06-audit-and-security.md](06-audit-and-security.md#trust-gated-actions) for policy configuration.

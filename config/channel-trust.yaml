@@ -29,3 +29,9 @@ channels:
     trust: low
     unknown_sender: allow
     threaded: true
+  # Slack workspace OAuth / bot token — medium trust (ADR-033). Native threads
+  # (threaded: true). Unknown workspace members may DM; they land as tier=unknown.
+  slack:
+    trust: medium
+    unknown_sender: allow
+    threaded: true

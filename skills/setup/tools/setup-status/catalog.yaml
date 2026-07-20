@@ -61,6 +61,20 @@ tasks:
     credential_how_to: "Set up signal-cli (included in docker-compose.yml), then enter the socket path and your phone number in Settings → Channels → Signal."
     docs_url: /channels/signal-setup
 
+  - id: slack
+    label: "Slack"
+    value_prop: "Let your team DM and @mention your agent in Slack — medium-trust workspace messaging."
+    tier: medium
+    handoff: console
+    handoff_path: /settings/channels
+    completion_check:
+      type: vault_secrets_all
+      keys:
+        - channel.slack.bot_token
+        - channel.slack.app_token
+    credential_how_to: "Import Curia's Slack app manifest, name the bot after your office identity, install it into your workspace, then enter the bot token and app-level token in Settings → Channels → Slack."
+    docs_url: /channels/slack-setup
+
   - id: web_research
     label: "Web research (Tavily)"
     value_prop: "Live web search for research tasks and news monitoring."
