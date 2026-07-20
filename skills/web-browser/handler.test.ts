@@ -961,47 +961,88 @@ describe('web-browser ref-based selectors', () => {
     expect(page.getByText).not.toHaveBeenCalled();
   });
 
-  it('fails closed on a stale/unknown ref, never degrading to fuzzy matching', async () => {
+  it('fails FAST with a clear message on a stale/unknown ref (no fuzzy fallthrough, no 40s hang)', async () => {
     const fill = vi.fn().mockResolvedValue(undefined);
     const page = makeMockPage('page body', fill, 'https://example.com/');
-    // The ref matches nothing this snapshot; the guaranteed-miss locator rejects like real
-    // Playwright would (0-element wait times out), naming the ref.
-    const miss = {
-      count: vi.fn().mockResolvedValue(0),
-      first: vi.fn().mockReturnThis(),
-      waitFor: vi.fn().mockRejectedValue(new Error('Timeout 10000ms exceeded waiting for locator([data-curia-ref="g9f0e9"][data-curia-ref-unresolved])')),
-    };
-    const none = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis(), waitFor: vi.fn().mockResolvedValue(undefined) };
-    page.locator = vi.fn((sel: string) => (sel.includes('data-curia-ref-unresolved') ? miss : none));
-    const ctx = ctxFor(page, { action: 'wait_for', selector: 'g9f0e9', session_id: 'sess-1' });
+    // The ref matches nothing this snapshot. resolveLocator must THROW immediately rather than
+    // return a guaranteed-miss locator the caller then waits ~40s on (30s boundingBox + 10s click).
+    const none = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    page.locator = vi.fn().mockReturnValue(none);
+    const ctx = ctxFor(page, { action: 'click', selector: 'g9f0e9', session_id: 'sess-1' });
 
     const result = await new WebBrowserHandler().execute(ctx);
 
     expect(page.locator).toHaveBeenCalledWith('[data-curia-ref="g9f0e9"]');
-    expect(page.getByRole).not.toHaveBeenCalled();
+    expect(page.getByRole).not.toHaveBeenCalled(); // never degraded to fuzzy matching
     expect(page.getByText).not.toHaveBeenCalled();
     expect(result.success).toBe(false);
-    expect((result as { error: string }).error).toMatch(/g9f0e9/);
+    const err = (result as { error: string }).error;
+    expect(err).toMatch(/g9f0e9/);
+    expect(err).toMatch(/stale/i);
+    expect(err).toMatch(/get_content/); // tells the agent exactly how to recover
   });
 
-  it('fails closed when a ref is duplicated (no silent .first())', async () => {
+  it('fails FAST with a clear message when a ref is duplicated (>1 match, no silent .first())', async () => {
     const fill = vi.fn().mockResolvedValue(undefined);
     const page = makeMockPage('page body', fill, 'https://example.com/');
     // Two elements carry the same ref (e.g. a hostile page re-injected our attribute).
-    const dup = { count: vi.fn().mockResolvedValue(2), first: vi.fn().mockReturnThis(), waitFor: vi.fn().mockResolvedValue(undefined) };
-    const miss = {
-      count: vi.fn().mockResolvedValue(0),
-      first: vi.fn().mockReturnThis(),
-      waitFor: vi.fn().mockRejectedValue(new Error('Timeout 10000ms exceeded waiting for locator([data-curia-ref="g1f0e2"][data-curia-ref-unresolved])')),
-    };
-    page.locator = vi.fn((sel: string) => (sel.includes('data-curia-ref-unresolved') ? miss : dup));
-    const ctx = ctxFor(page, { action: 'wait_for', selector: 'g1f0e2', session_id: 'sess-1' });
+    const dup = { count: vi.fn().mockResolvedValue(2), first: vi.fn().mockReturnThis() };
+    page.locator = vi.fn().mockReturnValue(dup);
+    const ctx = ctxFor(page, { action: 'click', selector: 'g1f0e2', session_id: 'sess-1' });
 
     const result = await new WebBrowserHandler().execute(ctx);
 
-    expect(result.success).toBe(false);          // ambiguous ref did not resolve to one element
+    expect(result.success).toBe(false); // ambiguous ref did not resolve to one element
     expect(page.getByRole).not.toHaveBeenCalled();
     expect(page.getByText).not.toHaveBeenCalled();
+    const err = (result as { error: string }).error;
+    expect(err).toMatch(/g1f0e2/);
+    expect(err).toMatch(/ambiguous/i);
+  });
+
+  it('trips a circuit-breaker after 4 consecutive interaction failures, then short-circuits', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('page body', fill, 'https://example.com/');
+    // Every click targets a stale ref → resolveLocator throws → a failure is recorded.
+    const none = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    page.locator = vi.fn().mockReturnValue(none);
+    // One ctx → getOrCreateSession returns the SAME session each call, so the counter persists.
+    const ctx = ctxFor(page, { action: 'click', selector: 'g1f0e1', session_id: 'sess-1' });
+
+    for (let i = 0; i < 4; i++) {
+      const r = await new WebBrowserHandler().execute(ctx);
+      expect(r.success).toBe(false); // 4 real attempts, all fail on the stale ref
+    }
+    const callsAfter4 = (page.locator as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // 5th attempt: breaker is tripped → short-circuit WITHOUT touching the page again.
+    const tripped = await new WebBrowserHandler().execute(ctx);
+    expect(tripped.success).toBe(false);
+    expect((tripped as { error: string }).error).toMatch(/failed in a row|Stopping browser interaction/i);
+    expect((page.locator as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfter4); // no new page work
+  });
+
+  it('resets the breaker after a successful get_content, re-enabling interaction', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('page body', fill, 'https://example.com/');
+    const none = { count: vi.fn().mockResolvedValue(0), first: vi.fn().mockReturnThis() };
+    page.locator = vi.fn().mockReturnValue(none);
+    const ctx = ctxFor(page, { action: 'click', selector: 'g1f0e1', session_id: 'sess-1' });
+
+    for (let i = 0; i < 4; i++) await new WebBrowserHandler().execute(ctx);
+    // Confirm tripped.
+    const trippedErr = (await new WebBrowserHandler().execute(ctx) as { error: string }).error;
+    expect(trippedErr).toMatch(/failed in a row|Stopping browser interaction/i);
+
+    // A successful get_content (a recovery action, never short-circuited) resets the streak.
+    const readCtx = { ...ctx, input: { action: 'get_content', session_id: 'sess-1' } } as unknown as SkillContext;
+    const read = await new WebBrowserHandler().execute(readCtx);
+    expect(read.success).toBe(true);
+
+    // Now a click is attempted again (not short-circuited): the page is touched for it.
+    const before = (page.locator as ReturnType<typeof vi.fn>).mock.calls.length;
+    await new WebBrowserHandler().execute(ctx);
+    expect((page.locator as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before);
   });
 
   it('still resolves a plain label selector via the existing cascade (back-compat)', async () => {
@@ -1067,6 +1108,76 @@ describe('web-browser ref-based selectors', () => {
       expect(content).toContain('[content truncated]');       // body was truncated...
       expect(content).toContain('[g1f0e1] button "Submit"');    // ...but refs survived (the point)
       expect(content).toContain('[g1f0e2] link "Next"');
+    }
+  });
+
+  it('does not truncate the ref list when the whole page fits the budget (small body, long list)', async () => {
+    // Regression for the 16personalities survey bug: a survey page has a tiny body but a
+    // long interactable list (dozens of radios), with the "Next" button LAST in DOM order.
+    // The list exceeded the old 6,000-char ref ceiling, so the tail-slice dropped Next —
+    // even though body + refs together sat well under the 15,000-char page budget (43% unused).
+    // With a floor (not a ceiling), the ref list may grow into the budget the body leaves free.
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const body = 'You regularly make new friends.';
+    // ~78 chars/line × 100 ≈ 7,800 chars: over the old ceiling, under the page budget.
+    const radios = Array.from({ length: 100 }, (_, i) =>
+      `[g1f0e${i + 1}] radio "I strongly agree" (group: "You regularly make new friends.")`).join('\n');
+    const nextBtn = '[g1f0e999] button "Next"'; // the navigation control, last in DOM order
+    const refList = `${radios}\n${nextBtn}`;
+    // Guard the premise: the list overflows the old ceiling, yet the whole page fits the budget.
+    expect(refList.length).toBeGreaterThan(6_000);
+    expect(body.length + refList.length).toBeLessThan(15_000);
+    const raw = `${body}\n\n--- Interactable elements ---\n${refList}`;
+    const page = makeMockPage(raw, fill, 'https://www.16personalities.com/');
+    const ctx = ctxFor(page, { action: 'get_content', session_id: 'sess-1' });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const content = (result.data as { content: string }).content;
+      // The Next button at the tail survives — the whole point of the fix.
+      expect(content).toContain('[g1f0e999] button "Next"');
+      // Nothing was cut: the total fit under the page budget, so neither side truncates.
+      expect(content).not.toContain('[interactable list truncated]');
+      expect(content).not.toContain('[content truncated]');
+    }
+  });
+
+  it('guarantees the ref-list floor when the body alone exceeds the budget', async () => {
+    // The other half of the fix's contract: 6,000 is a FLOOR. When the body alone is larger
+    // than the whole 15,000-char budget, the ref list must still get at least the floor — a
+    // giant page body can never starve the agent's selectors to nothing.
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const hugeBody = 'x'.repeat(20_000); // exceeds MAX_CONTENT_LENGTH on its own
+    // A ref list longer than the floor, with a distinctive control FIRST (must survive within
+    // the floor) followed by filler that overflows past it.
+    const early = '[g1f0e1] button "Submit"';
+    const filler = Array.from({ length: 100 }, (_, i) =>
+      `[g1f0e${i + 2}] radio "I strongly agree" (group: "You regularly make new friends.")`).join('\n');
+    const refList = `${early}\n${filler}`;
+    expect(refList.length).toBeGreaterThan(6_000);
+    const raw = `${hugeBody}\n\n--- Interactable elements ---\n${refList}`;
+    const page = makeMockPage(raw, fill, 'https://example.com/');
+    const ctx = ctxFor(page, { action: 'get_content', session_id: 'sess-1' });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const content = (result.data as { content: string }).content;
+      // Body truncated (it alone exceeds the budget)...
+      expect(content).toContain('[content truncated]');
+      // ...but the ref list still gets its guaranteed floor: the leading control survives,
+      // and the overflow past the floor is truncated and marked (not silently dropped).
+      expect(content).toContain('[g1f0e1] button "Submit"');
+      expect(content).toContain('[interactable list truncated]');
+      // Assert the floor QUANTITY, not just that *something* survived: the leading control
+      // would pass even with a tiny allocation. Measure only the ref-list content (between
+      // the section header and the truncation marker) and require the full 6,000-char floor.
+      const refSection = content.split('--- Interactable elements ---\n')[1] ?? '';
+      const refContent = refSection.split('\n[interactable list truncated]')[0]!;
+      expect(refContent.length).toBeGreaterThanOrEqual(6_000);
     }
   });
 });

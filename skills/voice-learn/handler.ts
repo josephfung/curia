@@ -10,6 +10,8 @@ import { ConfigStore } from '../../src/memory/config-store.js';
 import { buildVoiceGuidePrompt, parsePendingDiffs } from '../_shared/voice-learn-logic.js';
 import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
 import { writeVoiceProposal } from '../_shared/learning-state.js';
+import { buildVoiceProposalNotification } from '../_shared/learning-digest.js';
+import { notifyLearningProposal } from '../_shared/learning-notify.js';
 
 // Kept for Task 9 (resolve-learning-digest) and cooldown bookkeeping, even though
 // this handler no longer reads/writes provenance directly.
@@ -216,6 +218,13 @@ export class VoiceLearnHandler implements SkillHandler {
         }
       }
     }
+
+    // Surface the proposal to the CEO the moment it's durably written (#1466). After #1464 removed
+    // the scheduled digest, this event-driven notification is the only path that reaches the CEO
+    // for approve/dismiss. Best-effort: notifyLearningProposal never throws and never fails the run
+    // (the proposal is already persisted above). `guide` is guaranteed non-empty here — the
+    // empty-guide case returned earlier.
+    await notifyLearningProposal(ctx, buildVoiceProposalNotification(guide));
 
     ctx.log.info({ pairs: newPairs.length }, 'voice-learn: proposed an updated guide');
     return { success: true, data: { pairs_considered: newPairs.length, proposed: true } };

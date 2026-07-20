@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.14.0"
+version: "0.14.1"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -76,8 +76,9 @@ schedule:
   - cron: "0 8 * * 1"  # weekly voice-learn (Monday 8am)
     task: >
       Run voice-learn only: read accumulated (draft, sent) diffs and, if there is
-      enough new signal, queue a single updated writing-voice guide proposal for the
-      daily digest (human-approved; never writes the profile directly). Call
+      enough new signal, queue a single updated writing-voice guide proposal as a
+      pending learning item for the CEO to review (human-approved; never writes the
+      profile directly). Call
       scheduler-report when done. Do NOT triage the inbox, draft, archive, label, or
       send any messages on this wake.
     expectedDurationSeconds: 180
