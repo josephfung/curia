@@ -36,6 +36,16 @@
             "enabled": { "type": "boolean" }
           }
         },
+        "slack": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowed_channel_ids": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
         "max_message_bytes": { "type": "integer", "minimum": 1 }
       }
     },
