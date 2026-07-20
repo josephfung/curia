@@ -38,6 +38,15 @@ updates:
       # (engines + node:24-slim); block major bumps until Node itself is bumped.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # TypeScript 7.x is the native (Go) compiler rewrite with breaking internal
+      # API changes. typescript-eslint doesn't support it yet — even the latest
+      # (8.65.0) peer-caps at typescript '>=4.8.4 <6.1.0', so bumping TS to 7
+      # leaves no compatible linter version and crashes CI lint
+      # ("Cannot read properties of undefined (reading 'Cjs')", curia#1454).
+      # Stay on 6.x; bump to 7 by hand once typescript-eslint supports it. 6.x
+      # minor/patch updates still flow normally.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions versions (checkout, setup-node, etc.)
   - package-ecosystem: "github-actions"
