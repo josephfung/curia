@@ -25,10 +25,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Daily digest** — the built-in 8am digest is now an on-demand, chat-editable morning-briefing example.
 - **`ceo-inbox`** — voice-learn queues its guide proposal as a pending learning item, not the removed digest.
 
-### Fixed
-
-- **Coordinator scheduling** — changing a recurring ad-hoc job now edits it in place instead of creating a duplicate that fires twice. (#1465)
-
 ### Security
 
 - **Evidence-doc retention** — anchor `## Diff —` boundaries to the metadata envelope so an email-body heading can't dodge the purge. (#1444)
@@ -45,6 +41,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`web-browser`** — idle session TTL raised to 30 minutes so long forms aren't evicted mid-flow.
 - **Scheduler** — a run finishing after a concurrent pause/cancel no longer overwrites that state. (#1409)
 - **Coordinator** — external replies use first-person single-voice; internal specialist names forbidden. (#1354)
+- **Coordinator scheduling** — changing a recurring job now edits it in place instead of duplicating it. (#1465)
 - **Dispatcher** — content-filter blocks on relayed replies retry with reason, then salvage draft. (#1355)
 - **Scheduler** — liveness check no longer flaps `fail` every few minutes on a healthy scheduler. (#1359)
 - **`sensitivity_rules`** — now read from the merged config, so `local.yaml` overrides actually take effect. (#1369)
