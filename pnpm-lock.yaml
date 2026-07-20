@@ -189,8 +189,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared-types
       phaser:
-        specifier: ^4.2.0
-        version: 4.2.0
+        specifier: ^4.2.1
+        version: 4.2.1
     devDependencies:
       '@types/react':
         specifier: ^19.2.17
@@ -4469,8 +4469,8 @@ packages:
     resolution: {integrity: sha512-+t7qcQD2us8fO8YIq/3lA0gUrD+bVO70MG1MhcDcxJz/OlRGGIIHzFq/4x57Vn/LpzX5wFdfOTLQp9QMPd4ljQ==}
     engines: {node: '>=22'}
 
-  phaser@4.2.0:
-    resolution: {integrity: sha512-9nSQZs4CJ9+V96i2mRC3BBStBcsQWGJJBRpdFYSbpL40/i/QM+wLofaCYMsxNyDk8WJOlHGZUh3uVRKa7lj6yg==}
+  phaser@4.2.1:
+    resolution: {integrity: sha512-WUNwCPJpdjvZiuT6SgCfYVW8Qw/3j0jJ4ws7P2QkhFLFu74sbGuyHJcbFueGkY/AYO4Pi47bNQXn1OCJeLX//w==}
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
@@ -10050,7 +10050,7 @@ snapshots:
 
   pgvector@0.3.0: {}
 
-  phaser@4.2.0:
+  phaser@4.2.1:
     dependencies:
       eventemitter3: 5.0.4
 
