@@ -107,12 +107,19 @@ interface ActionDeps {
   session: BrowserSession;
   ctx: SkillContext;
   sessionId: string;
+  /** Called the instant a secret value is registered on the session — BEFORE the risky fill
+   *  that follows. Screenshot suppression latches on this, so it holds even if the fill then
+   *  throws mid-typing (which skips the step's normal return). This is what keeps the #973
+   *  screenshot hard-guard fail-CLOSED in batch mode. */
+  markSecretInjected: () => void;
 }
 
 /** Result of performing one step. `ok:false` is a VALIDATION error (bad/missing params) —
  *  it does NOT count toward the circuit breaker and stops a batch cleanly. Execution errors
- *  (stale ref, Playwright failure) THROW instead, so the caller counts them and redacts them. */
-type PerformResult = { ok: true; injectedSecret: boolean } | { ok: false; error: string };
+ *  (stale ref, Playwright failure) THROW instead, so the caller counts them and redacts them.
+ *  (Secret injection is signalled out-of-band via ActionDeps.markSecretInjected so it survives
+ *  a throw, not returned here.) */
+type PerformResult = { ok: true } | { ok: false; error: string };
 
 // Monotonic epoch seed for element refs (g<epoch>f<frame>e<n>). Passed into extractFrameContent
 // on every read; a fresh document adopts the then-current value as its epoch, a re-read document
@@ -248,12 +255,16 @@ export class WebBrowserHandler implements SkillHandler {
     // Run each step in order against the same page. A batch stops at the first failure and
     // reports how far it got, with fresh page content so the agent can recover. injected-secret
     // suppression is per-CALL: if any step filled a secret, we refuse a screenshot this call.
+    // markSecretInjected latches the moment a secret is registered (even if the fill then
+    // throws), so the screenshot guard can't fail open in the throw-before-return window.
     let injectedSecretThisCall = false;
+    const markSecretInjected = (): void => { injectedSecretThisCall = true; };
     let completed = 0;
-    // A breaker trip is tracked separately so single-action mode can reproduce its exact,
-    // un-prefixed message (existing behavior + tests) rather than the "Browser action X
-    // failed:" wrapper used for genuine action failures.
-    let failure: { index: number; error: string; breakerTripped: boolean } | null = null;
+    // The failure kind drives single-action back-compat: the original switch returned a
+    // validation error and the breaker message RAW (no prefix), and only a thrown execution
+    // error was wrapped as "Browser action \"X\" failed: …". Track which so we reproduce that
+    // exactly for single-action mode.
+    let failure: { index: number; error: string; kind: 'validation' | 'breaker' | 'execution' } | null = null;
 
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
@@ -274,7 +285,7 @@ export class WebBrowserHandler implements SkillHandler {
           error:
             `Stopping browser interaction: ${session.consecutiveFailures} actions failed in a row on this ` +
             `session. Re-read the page with get_content to get fresh refs, or hand off to the principal.`,
-          breakerTripped: true,
+          kind: 'breaker',
         };
         break;
       }
@@ -282,13 +293,12 @@ export class WebBrowserHandler implements SkillHandler {
       ctx.log.info({ action: stepAction, sessionId, url: step.url, selector: step.selector, batchIndex: isBatch ? i : undefined }, 'Executing browser action');
 
       try {
-        const outcome = await performAction(step, { page, session, ctx, sessionId });
+        const outcome = await performAction(step, { page, session, ctx, sessionId, markSecretInjected });
         if (!outcome.ok) {
           // Validation error (bad/missing params) — does NOT count toward the breaker.
-          failure = { index: i, error: outcome.error, breakerTripped: false };
+          failure = { index: i, error: outcome.error, kind: 'validation' };
           break;
         }
-        if (outcome.injectedSecret) injectedSecretThisCall = true;
         // Action completed — clear the circuit-breaker streak (a successful get_content here
         // is exactly how the agent recovers a tripped session).
         session.recordSuccess();
@@ -307,18 +317,19 @@ export class WebBrowserHandler implements SkillHandler {
         const safeMessage = session.redactInjectedSecrets(message);
         const safeStack = err instanceof Error && err.stack ? session.redactInjectedSecrets(err.stack) : undefined;
         ctx.log.error({ action: stepAction, sessionId, errMessage: safeMessage, stack: safeStack, batchIndex: isBatch ? i : undefined }, 'Browser action failed');
-        failure = { index: i, error: safeMessage, breakerTripped: false };
+        failure = { index: i, error: safeMessage, kind: 'execution' };
         break;
       }
     }
 
     // Single-action back-compat: one action, one failure → { success:false, error } exactly as
-    // before. The breaker trip returns its raw message; a genuine action failure keeps the
-    // "Browser action \"X\" failed:" prefix.
+    // before. A validation error and the breaker message are returned RAW (the original switch
+    // returned them directly); only a thrown execution error keeps the "Browser action \"X\"
+    // failed:" prefix the original catch added.
     if (!isBatch && failure) {
       return {
         success: false,
-        error: failure.breakerTripped ? failure.error : `Browser action "${steps[0]!.action}" failed: ${failure.error}`,
+        error: failure.kind === 'execution' ? `Browser action "${steps[0]!.action}" failed: ${failure.error}` : failure.error,
       };
     }
 
@@ -345,7 +356,11 @@ export class WebBrowserHandler implements SkillHandler {
       const message = err instanceof Error ? err.message : String(err);
       const safeMessage = session.redactInjectedSecrets(message);
       ctx.log.error({ sessionId, errMessage: safeMessage }, 'Failed to read page content after action(s)');
-      return { success: false, error: `Failed to read page content: ${safeMessage}` };
+      // Include how far a batch got so the agent knows side effects already ran (e.g. a form was
+      // submitted) and shouldn't blindly re-run the whole batch, even though we couldn't read the
+      // resulting page. Rare: requires the read to fail after the actions already executed.
+      const progress = isBatch ? ` (after ${completed}/${steps.length} action(s) completed)` : '';
+      return { success: false, error: `Failed to read page content${progress}: ${safeMessage}` };
     }
 
     const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl, session_reused: sessionReused };
@@ -374,8 +389,18 @@ export class WebBrowserHandler implements SkillHandler {
       ctx.log.debug({ sessionId }, 'Screenshot suppressed: a secret was injected this call (#973)');
       result.screenshot_skipped = 'A secret was filled in this call; screenshot suppressed to avoid capturing the value (#973).';
     } else if (wantScreenshot) {
-      const buf = await page.screenshot({ type: 'png', fullPage: false });
-      result.screenshot_base64 = buf.toString('base64');
+      // A screenshot failure (page crashed or navigated after the last action) must NOT discard
+      // an otherwise-successful call — the content and batch progress are the load-bearing result,
+      // and nuking them would leave the agent unable to tell a submitted form apart from an
+      // unstarted one (double-submit hazard). Degrade to a note instead of failing the whole call.
+      try {
+        const buf = await page.screenshot({ type: 'png', fullPage: false });
+        result.screenshot_base64 = buf.toString('base64');
+      } catch (err) {
+        const safeMessage = session.redactInjectedSecrets(err instanceof Error ? err.message : String(err));
+        ctx.log.debug({ sessionId, errMessage: safeMessage }, 'Screenshot capture failed — returning result without image');
+        result.screenshot_error = `Screenshot could not be captured (the action(s) still ran): ${safeMessage}`;
+      }
     }
 
     return { success: true, data: result };
@@ -394,7 +419,6 @@ export class WebBrowserHandler implements SkillHandler {
 async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise<PerformResult> {
   const { page, session, ctx, sessionId } = deps;
   const { action, url, selector, text, value, key, secret_ref } = step;
-  let injectedSecret = false;
 
   // GUIDANCE (#1053): on bot-protected sites, prefer real UI interaction (click/type/
   // select via these actions) over issuing fetch() inside page.evaluate(). A fetch() from
@@ -483,7 +507,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // challenge JS can score human-like telemetry before the first interaction. (#1053)
       await jitteredDelay(2000, 4000);
       await simulateHumanPresence(page, { log: ctx.log });
-      return { ok: true, injectedSecret: false };
+      return { ok: true };
     }
 
     case 'click': {
@@ -497,7 +521,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // Adaptive settle: a click may trigger navigation or an in-page update. Wait
       // briefly for the DOM to settle, but don't fail the action if nothing navigates.
       await settleAfterInteraction(page, ctx, sessionId);
-      return { ok: true, injectedSecret: false };
+      return { ok: true };
     }
 
     case 'scroll': {
@@ -510,7 +534,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
         await page.mouse.wheel(0, 800);
       }
       await settleAfterInteraction(page, ctx, sessionId);
-      return { ok: true, injectedSecret: false };
+      return { ok: true };
     }
 
     case 'hover': {
@@ -521,7 +545,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       const hoverTarget = await resolveLocator(page, selector, ctx.log);
       await hoverTarget.hover();
       await settleAfterInteraction(page, ctx, sessionId);
-      return { ok: true, injectedSecret: false };
+      return { ok: true };
     }
 
     case 'press_key': {
@@ -532,7 +556,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // custom comboboxes. Presses against the currently focused element.
       await page.keyboard.press(key);
       await settleAfterInteraction(page, ctx, sessionId);
-      return { ok: true, injectedSecret: false };
+      return { ok: true };
     }
 
     case 'wait_for': {
@@ -543,7 +567,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // even networkidle isn't enough. Throws on timeout, caught by the caller as a clear error.
       const waitTarget = await resolveLocator(page, selector, ctx.log);
       await waitTarget.waitFor({ state: 'visible', timeout: WAIT_FOR_TIMEOUT_MS });
-      return { ok: true, injectedSecret: false };
+      return { ok: true };
     }
 
     case 'type': {
@@ -573,7 +597,10 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
         // ref or a missing secret. Any thrown message names the ref, never the value.
         fillValue = await ctx.resolveSecretRef(secret_ref!);
         session.registerInjectedSecret(fillValue);
-        injectedSecret = true;
+        // Latch screenshot suppression NOW — before the fill below, which can throw mid-typing
+        // after a char has landed. Deferring this to the return would leave the guard fail-open
+        // in that window (a batch call falls through to the screenshot block on a step throw).
+        deps.markSecretInjected();
       } else {
         if (typeof text !== 'string') {
           return { ok: false, error: 'type requires text (string) or secret_ref (string)' };
@@ -591,7 +618,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       await page.keyboard.press('ControlOrMeta+a');
       await page.keyboard.press('Delete');
       await humanType(page, fillValue, { log: ctx.log });
-      return { ok: true, injectedSecret };
+      return { ok: true };
     }
 
     case 'select': {
@@ -605,16 +632,16 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       // natural language ("Country dropdown") and it will resolve via role/label/text.
       const selectTarget = await resolveLocator(page, selector, ctx.log);
       await selectTarget.selectOption(value);
-      return { ok: true, injectedSecret: false };
+      return { ok: true };
     }
 
     case 'get_content':
       // No navigation — the caller reads current state after this returns.
-      return { ok: true, injectedSecret: false };
+      return { ok: true };
 
     case 'screenshot':
       // Screenshot-only step — the caller captures after this returns.
-      return { ok: true, injectedSecret: false };
+      return { ok: true };
 
     default:
       // Unreachable: execute() validated the verb against VALID_ACTIONS before dispatching.

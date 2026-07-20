@@ -29,7 +29,8 @@
     "failed_action": "number? (batch only: 0-based index of the step that failed, if any)",
     "action_error": "string? (batch only: why the failed step failed)",
     "screenshot_base64": "string?",
-    "screenshot_skipped": "string?"
+    "screenshot_skipped": "string?",
+    "screenshot_error": "string? (set when a requested screenshot failed to capture; the action(s) still ran)"
   },
   "permissions": [
     "network:https"
