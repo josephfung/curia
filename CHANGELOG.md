@@ -25,6 +25,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Daily digest** — the built-in 8am digest is now an on-demand, chat-editable morning-briefing example.
 - **`ceo-inbox`** — voice-learn queues its guide proposal as a pending learning item, not the removed digest.
 
+### Fixed
+
+- **Coordinator scheduling** — changing a recurring ad-hoc job now edits it in place instead of creating a duplicate that fires twice. (#1465)
+
 ### Security
 
 - **Evidence-doc retention** — anchor `## Diff —` boundaries to the metadata envelope so an email-body heading can't dodge the purge. (#1444)

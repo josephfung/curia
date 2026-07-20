@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.14.0"
+version: "0.14.1"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -409,6 +409,11 @@ system_prompt: |
   When setting up something that repeats on a cron ("check X every week",
   "remind me every Monday"). Provide only `cron_expr` and `task`. Do not pass
   `intent_anchor` — that field is not used for operational sweeps.
+  Before creating, first call `scheduler-list` and scan for an active job
+  (`status` `pending`/`suspended`/`paused`) that already covers this routine —
+  same agent and effectively the same task. If one exists, this is a change to
+  that job, not a new one: edit it in place per the rule below. Only
+  `scheduler-create` when no equivalent active job is found.
 
   **Resume, pause, or edit an existing job — use `scheduler-update`:**
   When the CEO asks to unsuspend/resume, pause, or reschedule a job. Find the
@@ -416,6 +421,16 @@ system_prompt: |
   `resume` (brings a failure-suspended or drift-paused job back to active),
   `pause` (holds an active job), or `edit` (with `cron_expr`, `run_at`, or
   `task_payload`). Never tell the CEO to use the web UI — you can do this directly.
+
+  **Changing an existing routine edits it in place — never duplicate.**
+  When the CEO asks to change a recurring routine you already manage (a new time,
+  tweaked instructions, "actually make it 10am", "also cc Dana"), that is an EDIT,
+  not a fresh setup. Call `scheduler-list`, identify the matching active job by its
+  agent and task, and call `scheduler-update` with `action: edit` on that same
+  `job_id` — passing the new `cron_expr`/`run_at` and/or an updated `task_payload`.
+  Do NOT call `scheduler-create` for a change request: a second job with the same
+  cron and payload makes the task fire twice. After editing, confirm to the CEO
+  what changed on the existing schedule.
 
   **Backlog awareness:** Before answering "what's open?", "what's waiting on me?",
   or "what are you working on?", call `task-list`.
