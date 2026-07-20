@@ -1181,3 +1181,157 @@ describe('web-browser ref-based selectors', () => {
     }
   });
 });
+
+describe('web-browser batched actions (multi-action per call)', () => {
+  // Build a ctx around a caller-supplied mock page. Optionally override the session result
+  // getOrCreateSession returns (used by the session_reused cases below).
+  function batchCtx(
+    page: ReturnType<typeof makeMockPage>,
+    input: Record<string, unknown>,
+    sessionResult?: { sessionId: string; session: BrowserSession },
+  ) {
+    const result = sessionResult ?? {
+      sessionId: 'sess-1',
+      session: new BrowserSession({} as unknown as BrowserContext, page as unknown as Page),
+    };
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue(result),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    return { input, log: logger, browserService } as unknown as SkillContext;
+  }
+
+  it('runs a sequence of actions in order in one call (a whole page of answers + Next)', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('survey page', fill, 'https://www.16personalities.com/');
+    const ctx = batchCtx(page, {
+      session_id: 'sess-1',
+      actions: [
+        { action: 'click', selector: 'g1f0e1' },
+        { action: 'click', selector: 'g1f0e2' },
+        { action: 'click', selector: 'g1f0e3' },
+        { action: 'click', selector: 'Next' },
+      ],
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { actions_total: number; actions_completed: number; failed_action?: number; content: string };
+      expect(data.actions_total).toBe(4);
+      expect(data.actions_completed).toBe(4);
+      expect(data.failed_action).toBeUndefined();
+      expect(data.content).toContain('survey page');
+    }
+    // All four clicks executed against the page (one skill call = one turn).
+    expect(vi.mocked(humanClick)).toHaveBeenCalledTimes(4);
+  });
+
+  it('stops at the first failing step and reports partial progress with fresh content', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('survey page after one answer', fill, 'https://www.16personalities.com/');
+    const ctx = batchCtx(page, {
+      session_id: 'sess-1',
+      actions: [
+        { action: 'click', selector: 'g1f0e1' },
+        { action: 'click' }, // missing selector → validation error stops the batch here
+        { action: 'click', selector: 'g1f0e3' },
+      ],
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    // A batch returns success:true so the agent still gets page state to recover from.
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { actions_total: number; actions_completed: number; failed_action: number; action_error: string; content: string };
+      expect(data.actions_total).toBe(3);
+      expect(data.actions_completed).toBe(1);
+      expect(data.failed_action).toBe(1);
+      expect(data.action_error).toMatch(/selector/i);
+      expect(data.content).toContain('survey page after one answer');
+    }
+    // Only the first click ran; the batch stopped before the third.
+    expect(vi.mocked(humanClick)).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an empty or non-array actions input', async () => {
+    const empty = await new WebBrowserHandler().execute(
+      batchCtx(makeMockPage('x', vi.fn(), 'https://example.com/'), { actions: [] }),
+    );
+    expect(empty.success).toBe(false);
+    if (!empty.success) expect(empty.error).toMatch(/non-empty array/i);
+
+    const notArray = await new WebBrowserHandler().execute(
+      batchCtx(makeMockPage('x', vi.fn(), 'https://example.com/'), { actions: 'click' }),
+    );
+    expect(notArray.success).toBe(false);
+  });
+
+  it('rejects close_session inside a batch (it is terminal)', async () => {
+    const ctx = batchCtx(makeMockPage('x', vi.fn(), 'https://example.com/'), {
+      session_id: 'sess-1',
+      actions: [{ action: 'get_content' }, { action: 'close_session' }],
+    });
+    const result = await new WebBrowserHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/close_session/);
+  });
+
+  it('rejects an unknown action verb in a batch, before any action runs', async () => {
+    const ctx = batchCtx(makeMockPage('x', vi.fn(), 'https://example.com/'), {
+      session_id: 'sess-1',
+      actions: [{ action: 'click', selector: 'g1f0e1' }, { action: 'frobnicate' }],
+    });
+    const result = await new WebBrowserHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/Unknown action/);
+      expect(result.error).toMatch(/frobnicate/);
+    }
+    // Validation happens up front — the valid first step never executed.
+    expect(vi.mocked(humanClick)).not.toHaveBeenCalled();
+  });
+
+  it('caps the number of actions per call', async () => {
+    const tooMany = Array.from({ length: 51 }, () => ({ action: 'get_content' }));
+    const result = await new WebBrowserHandler().execute(
+      batchCtx(makeMockPage('x', vi.fn(), 'https://example.com/'), { session_id: 'sess-1', actions: tooMany }),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/maximum per call/i);
+  });
+});
+
+describe('web-browser session_reused signal', () => {
+  function ctxWithSession(input: Record<string, unknown>, returnedSessionId: string) {
+    const page = makeMockPage('page', vi.fn(), 'https://example.com/');
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: returnedSessionId, session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    return { input, log: logger, browserService } as unknown as SkillContext;
+  }
+
+  it('reports session_reused:true when a passed session_id reattaches to its live session', async () => {
+    const result = await new WebBrowserHandler().execute(
+      ctxWithSession({ action: 'get_content', session_id: 'sess-1' }, 'sess-1'),
+    );
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as { session_reused: boolean }).session_reused).toBe(true);
+  });
+
+  it('reports session_reused:false when the passed session_id expired and a fresh one was minted', async () => {
+    const result = await new WebBrowserHandler().execute(
+      ctxWithSession({ action: 'get_content', session_id: 'stale-sess' }, 'fresh-sess'),
+    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { session_reused: boolean; session_id: string };
+      expect(data.session_reused).toBe(false);
+      expect(data.session_id).toBe('fresh-sess');
+    }
+  });
+});
