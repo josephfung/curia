@@ -25,10 +25,13 @@ const MAX_CONTENT_LENGTH = 15_000;
 // one content budget. Passed into the in-browser extractor since it can't import this.
 const MAX_INTERACTABLE_REFS = 200;
 
-// Reserved slice of MAX_CONTENT_LENGTH for the interactable-ref list, so a large page
-// body can't truncate away the refs (the agent's only exact selectors). getCleanedContent
-// gives the body MAX_CONTENT_LENGTH minus this. Module constant, like the two above.
-const MAX_INTERACTABLE_CHARS = 6_000;
+// FLOOR (guaranteed minimum), not a ceiling, for the interactable-ref list within
+// MAX_CONTENT_LENGTH. A large page body can't starve the refs below this (they're the
+// agent's only exact selectors). But the refs are NOT capped here: when the body is small,
+// the list may grow into whatever budget the body leaves free (see getCleanedContent).
+// The old code used this same number as a hard cap, which silently dropped the tail of a
+// long list — e.g. a survey's "Next" button — even when 40%+ of the page budget sat unused.
+const MIN_INTERACTABLE_CHARS = 6_000;
 
 // The header extractFrameContent prefixes its interactable list with. DUPLICATED from
 // dom-extract.ts on purpose: that function is serialized into the page and cannot
@@ -752,17 +755,23 @@ async function getCleanedContent(page: Page, log: SkillContext['log']): Promise<
   const cleanedBody = bodyParts.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   const cleanedRefs = refParts.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
-  // Reserve up to MAX_INTERACTABLE_CHARS of the total budget for the ref list, then give
-  // the remainder to the body. This guarantees the refs survive even when the page body
-  // alone would exceed the whole budget — the failure mode the old single-slice truncation
-  // had (refs were appended last, so they were the first thing cut on a large page).
-  const refBudget = Math.min(cleanedRefs.length, MAX_INTERACTABLE_CHARS);
+  // Split the total budget between body and ref list. The ref list gets whatever the body
+  // leaves unused, but is guaranteed at least MIN_INTERACTABLE_CHARS so a huge body can't
+  // starve it. Crucially this is a FLOOR, not a ceiling: when the body is small (a survey
+  // page is ~1k of prose but dozens of interactables), the list may use the free budget
+  // instead of being hard-capped — which used to drop the tail (e.g. the "Next" button)
+  // while 40%+ of the page budget sat empty. Only when body + refs together exceed
+  // MAX_CONTENT_LENGTH does either side actually truncate.
+  const refBudget = Math.min(
+    cleanedRefs.length,
+    Math.max(MIN_INTERACTABLE_CHARS, MAX_CONTENT_LENGTH - cleanedBody.length),
+  );
   const bodyBudget = MAX_CONTENT_LENGTH - refBudget;
   const bodyOut = cleanedBody.length > bodyBudget
     ? cleanedBody.slice(0, bodyBudget) + '\n[content truncated]'
     : cleanedBody;
-  const refsOut = cleanedRefs.length > MAX_INTERACTABLE_CHARS
-    ? cleanedRefs.slice(0, MAX_INTERACTABLE_CHARS) + '\n[interactable list truncated]'
+  const refsOut = cleanedRefs.length > refBudget
+    ? cleanedRefs.slice(0, refBudget) + '\n[interactable list truncated]'
     : cleanedRefs;
 
   const combined = refsOut
