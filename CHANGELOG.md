@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`web-browser`** — optional egress proxy (`browser.proxy`) routes browsing through a residential exit, plus a WebRTC-leak guard.
 - **`web-browser`** — stable per-element refs let the agent disambiguate duplicate labels (e.g. survey radios).
+- **`web-browser`** — circuit-breaker stops interaction after 4 consecutive failures to avoid futile budget-draining loops.
 - **`TaskRepo.reopenTask` tests** — cover non-`done` rejection, `progress.notes` audit note, and `task.updated` emission. (#1434)
 
 ### Security
@@ -30,6 +31,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`web-browser`** — fix a regression that broke every browser page read after the element-refs change.
 - **`web-browser`** — element refs now resolve when passed with brackets and stay valid across later actions.
 - **`web-browser`** — the interactable list no longer drops trailing controls (e.g. "Next") when the page fits budget.
+- **`web-browser`** — clicks blocked by a sticky header/overlay now recenter and retry instead of timing out.
+- **`web-browser`** — stale or ambiguous element refs fail in ~1s with guidance, not a 40s hang.
+- **`web-browser`** — idle session TTL raised to 30 minutes so long forms aren't evicted mid-flow.
 - **Scheduler** — a run finishing after a concurrent pause/cancel no longer overwrites that state. (#1409)
 - **Coordinator** — external replies use first-person single-voice; internal specialist names forbidden. (#1354)
 - **Dispatcher** — content-filter blocks on relayed replies retry with reason, then salvage draft. (#1355)
