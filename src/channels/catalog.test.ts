@@ -3,8 +3,10 @@ import { describe, it, expect } from 'vitest';
 import { CHANNEL_CATALOG, getChannelDescriptor } from './catalog.js';
 
 describe('CHANNEL_CATALOG', () => {
-  it('contains exactly the four known channels', () => {
-    expect(CHANNEL_CATALOG.map(c => c.name).sort()).toEqual(['cli', 'email', 'http', 'signal']);
+  it('contains exactly the five known channels', () => {
+    expect(CHANNEL_CATALOG.map(c => c.name).sort()).toEqual([
+      'cli', 'email', 'http', 'signal', 'slack',
+    ]);
   });
 
   it('marks http and cli as non-toggleable with no credential fields', () => {
@@ -16,7 +18,7 @@ describe('CHANNEL_CATALOG', () => {
     }
   });
 
-  it('marks email and signal as toggleable with required credential fields', () => {
+  it('marks email, signal, and slack as toggleable with required credential fields', () => {
     const email = getChannelDescriptor('email')!;
     expect(email.isToggleable).toBe(true);
     expect(email.requiredSecretKeys).toEqual(['nylas_api_key', 'nylas_grant_id', 'nylas_self_email']);
@@ -24,6 +26,10 @@ describe('CHANNEL_CATALOG', () => {
     const signal = getChannelDescriptor('signal')!;
     expect(signal.isToggleable).toBe(true);
     expect(signal.requiredSecretKeys).toEqual(['socket_path', 'phone_number']);
+
+    const slack = getChannelDescriptor('slack')!;
+    expect(slack.isToggleable).toBe(true);
+    expect(slack.requiredSecretKeys).toEqual(['bot_token', 'app_token']);
   });
 
   it('every requiredSecretKey corresponds to a declared field', () => {
