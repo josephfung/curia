@@ -1428,4 +1428,16 @@ describe('web-browser session_reused signal', () => {
       expect(data.session_id).toBe('fresh-sess');
     }
   });
+
+  it('OMITS session_reused entirely when no session_id was passed (nothing to reattach to)', async () => {
+    // A boolean false would misread as "your session expired"; a brand-new session the agent
+    // didn't ask to reuse should simply carry no session_reused field.
+    const result = await new WebBrowserHandler().execute(
+      ctxWithSession({ action: 'get_content' }, 'brand-new-sess'),
+    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('session_reused' in (result.data as object)).toBe(false);
+    }
+  });
 });

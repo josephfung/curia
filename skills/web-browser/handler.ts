@@ -246,11 +246,14 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: false, error: `Failed to acquire browser session: ${message}` };
     }
 
-    // Whether the caller passed a session_id that no longer mapped to a live session, so
-    // getOrCreateSession minted a fresh one (a different id came back). A woken subtask
-    // resuming a parked browser task uses this to know its live page is gone — so it should
-    // re-navigate to the recorded URL and resume, not assume it's mid-flow. (#task-resume)
-    const sessionReused = session_id !== undefined && session_id !== null && sessionId === session_id;
+    // session_reused is only meaningful when the caller ASKED to reuse a session. When a live
+    // session_id was passed, true = we reattached to it, false = it had expired and a fresh one
+    // was minted (re-navigate + resume). When no (usable) session_id was passed there was nothing
+    // to reattach to, so we leave it undefined and omit the field below — emitting `false` there
+    // would misread as "your session expired". Mirror getOrCreateSession's own truthiness check
+    // (`if (sessionId)`): an empty string is treated as "no session provided".
+    const sessionProvided = typeof session_id === 'string' && session_id.length > 0;
+    const sessionReused = sessionProvided ? sessionId === session_id : undefined;
 
     // Run each step in order against the same page. A batch stops at the first failure and
     // reports how far it got, with fresh page content so the agent can recover. injected-secret
@@ -363,7 +366,10 @@ export class WebBrowserHandler implements SkillHandler {
       return { success: false, error: `Failed to read page content${progress}: ${safeMessage}` };
     }
 
-    const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl, session_reused: sessionReused };
+    const result: Record<string, unknown> = { content, session_id: sessionId, url: currentUrl };
+    // Only include session_reused when a session_id was passed (see above) — absent = "not
+    // applicable, this is a fresh session you didn't ask to reuse".
+    if (sessionReused !== undefined) result.session_reused = sessionReused;
 
     // Batch diagnostics: tell the agent how far the sequence got and, on a stop, which step
     // failed and why — reported IN-BAND (success:true) alongside fresh content so the agent
