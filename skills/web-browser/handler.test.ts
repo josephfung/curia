@@ -930,7 +930,7 @@ describe('web-browser ref-based selectors', () => {
     return { input, log: logger, browserService } as unknown as SkillContext;
   }
 
-  it('resolves an fNeM ref via data-curia-ref, bypassing the fuzzy cascade', async () => {
+  it('resolves an gNfNeM ref via data-curia-ref, bypassing the fuzzy cascade', async () => {
     const fill = vi.fn().mockResolvedValue(undefined);
     const page = makeMockPage('page body', fill, 'https://example.com/');
     const ctx = ctxFor(page, { action: 'click', selector: 'g1f0e3', session_id: 'sess-1' });
@@ -941,6 +941,22 @@ describe('web-browser ref-based selectors', () => {
     // The ref resolved by attribute...
     expect(page.locator).toHaveBeenCalledWith('[data-curia-ref="g1f0e3"]');
     // ...and did NOT fall through to accessible-name matching (which could hit a duplicate).
+    expect(page.getByRole).not.toHaveBeenCalled();
+    expect(page.getByText).not.toHaveBeenCalled();
+  });
+
+  it('resolves a ref passed in its bracketed display form ([gNfNeM]) — the shape the agent copies', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('page body', fill, 'https://example.com/');
+    // The page shows refs as "[g1f0e3] radio ...", and models routinely pass the token back with
+    // the brackets. The resolver must strip them and still hit the attribute fast-path, NOT
+    // fall through to fuzzy matching (which finds nothing and hangs until the action times out).
+    const ctx = ctxFor(page, { action: 'click', selector: '[g1f0e3]', session_id: 'sess-1' });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(page.locator).toHaveBeenCalledWith('[data-curia-ref="g1f0e3"]');
     expect(page.getByRole).not.toHaveBeenCalled();
     expect(page.getByText).not.toHaveBeenCalled();
   });

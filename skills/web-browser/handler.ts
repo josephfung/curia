@@ -56,13 +56,14 @@ const CHALLENGE_POLL_INTERVAL_MS = 500;
 // How long `wait_for` waits for an element to become visible before giving up.
 const WAIT_FOR_TIMEOUT_MS = 10_000;
 
-// Monotonic per-extraction generation stamped into every ref (g<gen>f<frame>e<n>). A ref
-// from an earlier snapshot carries an older generation, so once the page is re-serialized
-// its data-curia-ref attributes no longer match it — a stale ref then resolves to nothing
-// and fails closed, instead of silently pointing at whatever element inherited its old
-// e-number. Process-global and monotonic; resetting on restart is fine (refs from before a
-// restart aren't in any live agent context).
-let extractionGeneration = 0;
+// Monotonic epoch seed for element refs (g<epoch>f<frame>e<n>). Passed into extractFrameContent
+// on every read; a fresh document adopts the then-current value as its epoch, a re-read document
+// keeps the epoch it already took. Because this counter NEVER resets — including across a page
+// navigation, which DOES reset the page's own window-scoped counters — every document gets a
+// distinct epoch, so a ref minted before a navigation carries an older epoch and matches nothing
+// afterwards (fail closed) instead of colliding with the new page's recycled e-numbers. Process-
+// global and monotonic; resetting on restart is fine (pre-restart refs aren't in any live context).
+let refEpochSeed = 0;
 
 export class WebBrowserHandler implements SkillHandler {
   async execute(ctx: SkillContext): Promise<SkillResult> {
@@ -522,18 +523,26 @@ async function isLikelyEmpty(page: Page, log: SkillContext['log']): Promise<bool
  * unguarded: a detached main frame is a genuine failure the caller should surface.
  */
 async function resolveLocator(page: Page, selector: string, log: SkillContext['log']): Promise<Locator> {
-  // Ref fast-path: a ref token (g<gen>f<frame>e<n>, emitted by extractFrameContent) names
-  // exactly one element from one snapshot. Resolve by the unique attribute value and accept
-  // ONLY when exactly one element carries it across the main frame and all eligible child
-  // frames — this is how the agent disambiguates duplicate labels. Fail closed otherwise, so
-  // the action throws a clean "element not found" instead of clicking the wrong control:
-  //   - a ref from a prior snapshot carries an older generation → 0 matches;
+  // Ref fast-path: a ref token (g<epoch>f<frame>e<n>, emitted by extractFrameContent) names
+  // exactly one element. Resolve by the unique attribute value and accept ONLY when exactly one
+  // element carries it across the main frame and all eligible child frames — this is how the
+  // agent disambiguates duplicate labels. Fail closed otherwise, so the action throws a clean
+  // "element not found" instead of clicking the wrong control:
+  //   - a ref whose element is gone (removed, or the page navigated away — the new document
+  //     carries a newer epoch) → 0 matches;
   //   - a duplicated or cross-frame-copied ref → >1 matches.
   // We match by attribute rather than trusting the encoded frame index, because page.frames()
   // ordering can change between the snapshot and this action (SPAs swap iframes); the
   // attribute only exists where extractFrameContent set it.
-  if (/^g\d+f\d+e\d+$/.test(selector)) {
-    const attrSelector = `[data-curia-ref="${selector}"]`;
+  //
+  // Tolerate the bracketed display form: the ref is shown to the agent as "[g5f0e12] radio ..."
+  // and models frequently pass the token back verbatim WITH the surrounding brackets. Stripping
+  // a leading "[" / trailing "]" (and stray whitespace) here is the difference between the
+  // fast-path firing and the ref silently falling through to fuzzy matching that resolves to
+  // nothing and hangs the action until timeout — the bug this guards against.
+  const refToken = selector.trim().replace(/^\[/, '').replace(/\]$/, '').trim();
+  if (/^g\d+f\d+e\d+$/.test(refToken)) {
+    const attrSelector = `[data-curia-ref="${refToken}"]`;
     const refMainFrame = page.mainFrame();
     const scopes: Array<Page | Frame> = [
       page,
@@ -555,7 +564,7 @@ async function resolveLocator(page: Page, selector: string, log: SkillContext['l
     // 0 (stale/unknown ref) or >1 (ambiguous/duplicated) → a locator that cannot match (we
     // never set data-curia-ref-unresolved), so the caller's action throws a clean not-found
     // rather than resolving a wrong element.
-    return page.locator(`[data-curia-ref="${selector}"][data-curia-ref-unresolved]`);
+    return page.locator(`[data-curia-ref="${refToken}"][data-curia-ref-unresolved]`);
   }
 
   // Main frame first (the common case, and the cheapest).
@@ -674,8 +683,10 @@ async function pickBestLocator(loc: Locator, log: SkillContext['log']): Promise<
  */
 async function getCleanedContent(page: Page, log: SkillContext['log']): Promise<string> {
   const mainFrame = page.mainFrame();
-  // One generation per serialization; every frame in this snapshot shares it.
-  const generation = ++extractionGeneration;
+  // One monotonic epoch seed per read, shared by every frame in this snapshot. A frame's
+  // document adopts it only if the document is fresh (post-navigation); a re-read document
+  // keeps its earlier epoch, so refs stay stable within a document and distinct across them.
+  const epochSeed = ++refEpochSeed;
   // Body prose and the interactable-ref list are accumulated SEPARATELY so each gets its
   // own slice of the budget below: a content-heavy page body must never truncate away the
   // ref list, which holds the agent's only exact selectors.
@@ -700,14 +711,14 @@ async function getCleanedContent(page: Page, log: SkillContext['log']): Promise<
 
     let raw: string;
     try {
-      raw = await frame.evaluate(extractFrameContent, { frameIndex, maxRefs: MAX_INTERACTABLE_REFS, generation });
+      raw = await frame.evaluate(extractFrameContent, { frameIndex, maxRefs: MAX_INTERACTABLE_REFS, epochSeed });
     } catch (err) {
       // A frame can detach mid-read or refuse evaluation; skip it but remember it failed
       // so an all-failed read surfaces as an error rather than a clean empty success.
-      // NOTE: a frame that throws here keeps any data-curia-ref attributes from its prior
-      // extraction (clear-before-assign runs inside extractFrameContent, which didn't run).
-      // Acceptable: such a frame is detaching/navigating, so a ref resolved against it
-      // fails closed ("element not found") rather than hitting a wrong element.
+      // NOTE: refs are preserved across extractions by design, so a frame that throws here
+      // simply keeps its existing data-curia-ref attributes — no different from the normal
+      // case. If it's detaching/navigating, its next successful read adopts a new epoch, so a
+      // ref carried over from a prior document fails closed rather than hitting a wrong element.
       log.debug({ err, frameUrl: frame.url() }, 'Skipping frame during content extraction (read error)');
       failed++;
       continue;

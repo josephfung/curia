@@ -10,10 +10,26 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { extractFrameContent } from './dom-extract.js';
 
-const OPTS = { frameIndex: 0, maxRefs: 200, generation: 1 };
+const OPTS = { frameIndex: 0, maxRefs: 200, epochSeed: 1 };
+
+// Refs carry a per-document epoch and a per-document seq, both stored on `window` so they
+// survive across frame.evaluate() calls (that is what keeps a ref stable across re-extractions
+// of the same document). happy-dom shares one window across a file's tests, so clear both keys
+// before each test to simulate a fresh document that will adopt this test's epochSeed.
+function resetRefState(): void {
+  const w = window as unknown as {
+    __curiaRefEpoch__?: number; __curiaRefFrame__?: number; __curiaRefSeq__?: number;
+  };
+  w.__curiaRefEpoch__ = undefined;
+  w.__curiaRefFrame__ = undefined;
+  w.__curiaRefSeq__ = undefined;
+}
 
 describe('extractFrameContent — interactable refs', () => {
-  beforeEach(() => { document.body.innerHTML = ''; });
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    resetRefState();
+  });
 
   it('assigns a unique ref to every interactable and lists them', () => {
     document.body.innerHTML = `
@@ -50,7 +66,7 @@ describe('extractFrameContent — interactable refs', () => {
   it('caps the list at maxRefs and reports the remainder', () => {
     document.body.innerHTML =
       Array.from({ length: 5 }, (_, i) => `<button>B${i}</button>`).join('');
-    const out = extractFrameContent({ frameIndex: 0, maxRefs: 2, generation: 1 });
+    const out = extractFrameContent({ frameIndex: 0, maxRefs: 2, epochSeed: 1 });
     expect(out).toContain('[g1f0e1] button "B0"');
     expect(out).toContain('[g1f0e2] button "B1"');
     expect(out).not.toContain('[g1f0e3]');
@@ -59,13 +75,16 @@ describe('extractFrameContent — interactable refs', () => {
     expect(document.querySelectorAll('[data-curia-ref]').length).toBe(2);
   });
 
-  it('clears stale refs before reassigning on re-extraction', () => {
+  it('drops a removed element\'s ref (fail closed) while survivors keep theirs', () => {
     document.body.innerHTML = '<button>One</button><button>Two</button>';
+    extractFrameContent(OPTS);            // One=g1f0e1, Two=g1f0e2
+    document.querySelectorAll('button')[1]!.remove();  // Two gone before next snapshot
     extractFrameContent(OPTS);
-    document.querySelectorAll('button')[1]!.remove();  // element gone before next snapshot
-    extractFrameContent(OPTS);
-    expect(document.querySelectorAll('[data-curia-ref]').length).toBe(1);
+    // Two's element is gone, so its ref matches nothing — a stale action fails closed.
     expect(document.querySelector('[data-curia-ref="g1f0e2"]')).toBeNull();
+    // One survives and KEEPS its original ref, so a ref handed out earlier is still valid.
+    expect(document.querySelector('[data-curia-ref="g1f0e1"]')!.textContent).toBe('One');
+    expect(document.querySelectorAll('[data-curia-ref]').length).toBe(1);
   });
 
   it('emits no Interactable section when the page has none', () => {
@@ -77,23 +96,67 @@ describe('extractFrameContent — interactable refs', () => {
 
   it('scopes the ref prefix to the frame index (cross-frame uniqueness)', () => {
     document.body.innerHTML = '<button>Only</button>';
-    const out = extractFrameContent({ frameIndex: 1, maxRefs: 200, generation: 1 });
+    const out = extractFrameContent({ frameIndex: 1, maxRefs: 200, epochSeed: 1 });
     expect(out).toContain('[g1f1e1] button "Only"');
     expect(document.querySelector('[data-curia-ref="g1f1e1"]')).not.toBeNull();
   });
 
-  it('stamps a fresh generation each extraction so a prior-snapshot ref no longer matches', () => {
+  // Bug-2 guarantee: because every action re-reads the page, a ref must survive re-extraction.
+  // A re-extracted document keeps the epoch it already adopted (ignoring the handler's newer
+  // epochSeed), so existing refs are unchanged and a never-reused seq means a newly-inserted
+  // element can't steal an existing element's ref (which would silently address the wrong one).
+  it('keeps refs stable across re-extractions of the same document', () => {
     document.body.innerHTML = '<button>A</button><button>B</button>';
-    extractFrameContent({ frameIndex: 0, maxRefs: 200, generation: 1 });
+    extractFrameContent({ frameIndex: 0, maxRefs: 200, epochSeed: 1 });
     expect(document.querySelectorAll('button')[0]!.getAttribute('data-curia-ref')).toBe('g1f0e1');
-    // Prepend an element and re-serialize with the next generation (as getCleanedContent does).
+    const bRef = document.querySelectorAll('button')[1]!.getAttribute('data-curia-ref');  // g1f0e2
+    // Prepend a new element and re-extract WITH A NEWER epochSeed (as the handler passes each
+    // action). Same document → epoch stays 1, existing refs untouched, only Z gets a fresh id.
     document.body.insertAdjacentHTML('afterbegin', '<button>Z</button>');
-    extractFrameContent({ frameIndex: 0, maxRefs: 200, generation: 2 });
-    // The old ref now exists on NO element, so a stale action fails closed instead of hitting
-    // whatever inherited e1 (here Z).
+    extractFrameContent({ frameIndex: 0, maxRefs: 200, epochSeed: 2 });
+    // A and B keep their refs — the earlier g1f0e1 still addresses A, NOT the newly-prepended Z.
+    expect(document.querySelector('[data-curia-ref="g1f0e1"]')!.textContent).toBe('A');
+    expect(document.querySelector('[data-curia-ref="g1f0e2"]')!.textContent).toBe('B');
+    // Z, seen first this extraction, got the next never-reused id at the SAME epoch (g1f0e3).
+    const zRef = document.querySelector('button')!.getAttribute('data-curia-ref');
+    expect(zRef).toBe('g1f0e3');
+    expect(zRef).not.toBe(bRef);
+  });
+
+  // Finding-1 guarantee: across a navigation the page's window (and its per-document counters)
+  // resets, so the seq alone would recycle e-numbers onto the new page. The monotonic epochSeed
+  // makes the new document adopt a DIFFERENT epoch, so a ref from the old page carries an older
+  // epoch and matches nothing on the new page (fail closed) rather than clicking the wrong one.
+  it('stamps a fresh epoch on a new document so a prior-page ref no longer matches', () => {
+    document.body.innerHTML = '<button>OldPageButton</button>';
+    extractFrameContent({ frameIndex: 0, maxRefs: 200, epochSeed: 1 });
+    expect(document.querySelector('[data-curia-ref="g1f0e1"]')!.textContent).toBe('OldPageButton');
+    // Simulate a navigation: the window resets (new document), and the handler's monotonic seed
+    // has advanced. The new page's first element is e1 again, but under a NEW epoch.
+    resetRefState();
+    document.body.innerHTML = '<button>NewPageButton</button>';
+    extractFrameContent({ frameIndex: 0, maxRefs: 200, epochSeed: 2 });
+    // The new element carries epoch 2, not 1 — so the old g1f0e1 ref addresses NO live element.
+    expect(document.querySelector('[data-curia-ref="g2f0e1"]')!.textContent).toBe('NewPageButton');
     expect(document.querySelector('[data-curia-ref="g1f0e1"]')).toBeNull();
-    // New refs carry generation 2; e1 is the newly-prepended Z, not A.
-    expect(document.querySelector('[data-curia-ref="g2f0e1"]')!.textContent).toBe('Z');
+  });
+
+  // Point-3 guarantee: page.frames() ordering is not stable — removing a preceding sibling
+  // frame shifts survivors to lower indices. A document pins its frame scope at adoption, so a
+  // later read that passes a DIFFERENT frameIndex must not renumber its refs; otherwise a frame
+  // sliding into a vacated index could mint refs colliding with another same-epoch frame's.
+  it('pins the frame scope at adoption so a later frame-index shift never renumbers refs', () => {
+    document.body.innerHTML = '<button>X</button>';
+    extractFrameContent({ frameIndex: 2, maxRefs: 200, epochSeed: 1 });   // adopt at index 2
+    expect(document.querySelector('[data-curia-ref="g1f2e1"]')!.textContent).toBe('X');
+    // Re-read as if this frame shifted to index 1 (a preceding sibling was removed). The new
+    // element still mints under the ADOPTED scope (f2), NOT the current index — so it can never
+    // collide with whatever frame now occupies index 1.
+    document.body.insertAdjacentHTML('beforeend', '<button>Y</button>');
+    extractFrameContent({ frameIndex: 1, maxRefs: 200, epochSeed: 2 });
+    expect(document.querySelector('[data-curia-ref="g1f2e1"]')!.textContent).toBe('X');
+    expect(document.querySelector('[data-curia-ref="g1f2e2"]')!.textContent).toBe('Y');
+    expect(document.querySelector('[data-curia-ref="g1f1e2"]')).toBeNull();
   });
 
   // Regression: extractFrameContent is shipped to the browser via Playwright's
@@ -121,7 +184,7 @@ describe('extractFrameContent — interactable refs', () => {
     const rehydrated = new Function(`return (${transpiled.toString()})`)() as typeof extractFrameContent;
     document.body.innerHTML = '<button>Go</button>';
     let out = '';
-    expect(() => { out = rehydrated({ frameIndex: 0, maxRefs: 200, generation: 1 }); }).not.toThrow();
+    expect(() => { out = rehydrated({ frameIndex: 0, maxRefs: 200, epochSeed: 1 }); }).not.toThrow();
     expect(out).toContain('[g1f0e1] button "Go"');
   });
 });
