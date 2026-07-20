@@ -130,4 +130,11 @@ describe('notifyLearningProposal', () => {
     expect(sendNotificationMock).toHaveBeenCalledTimes(1);
     expect(logWarnMock).toHaveBeenCalled();
   });
+
+  it('never throws — an unexpected sendNotification throw resolves to false (non-fatal)', async () => {
+    const { ctx, sendNotificationMock, logWarnMock } = makeCtx();
+    sendNotificationMock.mockRejectedValue(new Error('bus exploded'));
+    await expect(notifyLearningProposal(ctx, NOTIFICATION)).resolves.toBe(false);
+    expect(logWarnMock).toHaveBeenCalled();
+  });
 });
