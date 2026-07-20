@@ -121,7 +121,7 @@ export function convertSlackEvent(
   event: SlackInboundEvent,
   botUserId: string | undefined,
   kind: Exclude<SlackInboundKind, 'reaction'>,
-  activeThreadKeys?: ReadonlySet<string>,
+  activeThreadKeys?: { has(key: string): boolean },
 ): ConvertedSlackMessage | null {
   if (kind === 'dm') {
     const msg = event as SlackMessageEvent;
@@ -248,7 +248,10 @@ export function convertSlackReaction(
   const channel = reaction.item.channel;
   const targetTs = reaction.item.ts;
   const isDm = channel.startsWith('D');
-  // Reactions on a message use that message's ts as the thread key when in a channel.
+  // Best-effort conversation key: for channel reactions we use the reacted
+  // message's ts (may be a thread reply, not the thread root). Approval
+  // correlation (#1479) must key on targetMessageId → outbound.delivered.messageId,
+  // not conversationId.
   const conversationId = buildSlackConversationId(channel, isDm ? undefined : targetTs, isDm);
 
   return {
