@@ -27,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Daily digest** — the built-in 8am digest is now an on-demand, chat-editable morning-briefing example.
 - **`ceo-inbox`** — voice-learn queues its guide proposal as a pending learning item, not the removed digest.
 - **Dependabot** — block TypeScript 7.x majors until typescript-eslint supports the native compiler. (#1454)
+- **Coordinator** — acts on over-budget goals autonomously, hides task machinery, and writes self-contained subtasks.
 
 ### Security
 
