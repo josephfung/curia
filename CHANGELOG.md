@@ -32,6 +32,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Dependabot** — block TypeScript 7.x majors until typescript-eslint supports the native compiler. (#1454)
 - **Coordinator** — acts on over-budget goals autonomously, hides task machinery, and writes self-contained subtasks.
 
+### Removed
+
+- **WIP design docs** — pruned 16 shipped design/plan docs; ADR-029 and source no longer cite `docs/wip/`.
+
 ### Security
 
 - **`adm-zip`** — pin transitive dev dep to `>=0.6.0`, clearing GHSA-xcpc-8h2w-3j85 (crafted ZIP 4GB allocation, HIGH).
