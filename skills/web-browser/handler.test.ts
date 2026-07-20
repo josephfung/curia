@@ -1322,6 +1322,80 @@ describe('web-browser batched actions (multi-action per call)', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/maximum per call/i);
   });
+
+  it('returns single-action validation errors RAW, without the "Browser action failed" prefix', async () => {
+    // Back-compat: the pre-batch handler returned validation messages directly from the switch.
+    // Only thrown execution errors carry the "Browser action \"X\" failed:" wrapper.
+    const result = await new WebBrowserHandler().execute(
+      batchCtx(makeMockPage('x', vi.fn(), 'https://example.com/'), { session_id: 'sess-1', action: 'click' }),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('click requires selector (string — describe the element in natural language)');
+      expect(result.error).not.toMatch(/Browser action/);
+    }
+  });
+
+  it('suppresses the screenshot even when a secret-injecting step THROWS mid-batch (#973 fail-closed)', async () => {
+    // The hard guard must key off "a secret was registered this call", not the step's success
+    // return: if humanType throws after the value is registered, a batch call still falls through
+    // to the screenshot block and must NOT capture the secret-bearing page.
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('login page', fill, 'https://example.com/');
+    // The fill throws AFTER the secret has been registered on the session.
+    vi.mocked(humanType).mockRejectedValueOnce(new Error('typing interrupted'));
+    const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const browserService = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-1', session }),
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = {
+      input: {
+        session_id: 'sess-1',
+        screenshot: true,
+        actions: [{ action: 'type', selector: 'g1f0e1', secret_ref: 'user.password' }, { action: 'click', selector: 'Sign in' }],
+      },
+      log: logger,
+      browserService,
+      resolveSecretRef,
+    } as unknown as SkillContext;
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { screenshot_base64?: string; screenshot_skipped?: string };
+      expect(data.screenshot_base64).toBeUndefined(); // NOT captured
+      expect(data.screenshot_skipped).toBeTruthy(); // suppressed with a note
+    }
+    // And nothing containing the secret was returned.
+    expect(JSON.stringify(result)).not.toContain(SECRET_VALUE);
+  });
+
+  it('degrades a screenshot-capture failure to a note instead of failing the whole call', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('form submitted', fill, 'https://example.com/thanks');
+    page.screenshot = vi.fn().mockRejectedValue(new Error('page navigated'));
+    const ctx = batchCtx(page, {
+      session_id: 'sess-1',
+      screenshot: true,
+      actions: [{ action: 'click', selector: 'g1f0e1' }, { action: 'click', selector: 'Submit' }],
+    });
+
+    const result = await new WebBrowserHandler().execute(ctx);
+
+    // The batch succeeded; only the auxiliary screenshot failed — the call must still succeed
+    // and return the page state so the agent knows the form was submitted.
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { content: string; actions_completed: number; screenshot_base64?: string; screenshot_error?: string };
+      expect(data.actions_completed).toBe(2);
+      expect(data.content).toContain('form submitted');
+      expect(data.screenshot_base64).toBeUndefined();
+      expect(data.screenshot_error).toMatch(/screenshot could not be captured/i);
+    }
+  });
 });
 
 describe('web-browser session_reused signal', () => {

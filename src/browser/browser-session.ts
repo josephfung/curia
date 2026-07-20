@@ -131,15 +131,17 @@ export class BrowserSession {
   /**
    * Returns true if the session should be evicted.
    *
-   * - `maxAgeMs` (absolute-age cap) ALWAYS applies when provided: a session older than this
-   *   since creation is expired regardless of keep-warm, so a pinned tab can't leak forever.
-   * - A keep-warm session is otherwise exempt from the idle TTL (a parked task can resume it
-   *   after a long gap between wakes).
-   * - Otherwise the session expires after being idle longer than `ttlMs`.
+   * - A KEEP-WARM (pinned) session is exempt from the idle TTL — a parked task can resume it
+   *   after a long gap between wakes — but is bounded by the absolute-age cap `maxAgeMs` (since
+   *   creation) so a forgotten pinned tab can't leak forever. The cap applies ONLY to pinned
+   *   sessions: a normal session that is still being actively used is already bounded by the
+   *   idle TTL and must not be force-evicted mid-use just for living a long time.
+   * - A normal session expires after being idle longer than `ttlMs` (unchanged).
    */
   isExpired(ttlMs: number, maxAgeMs?: number): boolean {
-    if (maxAgeMs !== undefined && Date.now() - this.createdAt > maxAgeMs) return true;
-    if (this.keepWarm) return false;
+    if (this.keepWarm) {
+      return maxAgeMs !== undefined && Date.now() - this.createdAt > maxAgeMs;
+    }
     return Date.now() - this.lastUsedAt > ttlMs;
   }
 
