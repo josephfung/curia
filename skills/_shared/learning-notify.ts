@@ -55,25 +55,32 @@ export async function notifyLearningProposal(
   ctx: SkillContext,
   notification: { subject: string; body: string },
 ): Promise<boolean> {
-  if (!ctx.outboundGateway) {
-    ctx.log.warn('learning-notify: outboundGateway unavailable — skipping learning-proposal notification');
+  // Self-contained never-throw guarantee. The generators await this bare inside their outer
+  // try/catch (which converts any throw to success:false and would churn the scheduler), so the
+  // "notification never fails the run" contract must not depend on sendNotification / the contacts
+  // layer never throwing. Wrap the whole body so a future change to any of them stays non-fatal.
+  try {
+    if (!ctx.outboundGateway) {
+      ctx.log.warn('learning-notify: outboundGateway unavailable — skipping learning-proposal notification');
+      return false;
+    }
+    const ceoEmail = await resolvePrincipalEmail(ctx);
+    if (!ceoEmail) {
+      ctx.log.warn('learning-notify: no principal email on file — skipping learning-proposal notification');
+      return false;
+    }
+    const sent = await ctx.outboundGateway.sendNotification({
+      notificationType: 'learning_proposal',
+      ceoEmail,
+      subject: notification.subject,
+      body: notification.body,
+    });
+    if (!sent) {
+      ctx.log.warn('learning-notify: sendNotification returned false — CEO notification not delivered this run');
+    }
+    return sent;
+  } catch (err) {
+    ctx.log.warn({ err }, 'learning-notify: unexpected error sending learning-proposal notification — treated as non-fatal');
     return false;
   }
-  const ceoEmail = await resolvePrincipalEmail(ctx);
-  if (!ceoEmail) {
-    ctx.log.warn('learning-notify: no principal email on file — skipping learning-proposal notification');
-    return false;
-  }
-  // sendNotification catches its own errors and returns a boolean (never throws), so this call
-  // cannot escape into the generator's outer try/catch and fail the run.
-  const sent = await ctx.outboundGateway.sendNotification({
-    notificationType: 'learning_proposal',
-    ceoEmail,
-    subject: notification.subject,
-    body: notification.body,
-  });
-  if (!sent) {
-    ctx.log.warn('learning-notify: sendNotification returned false — CEO notification not delivered this run');
-  }
-  return sent;
 }
