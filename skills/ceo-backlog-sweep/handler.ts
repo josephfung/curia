@@ -42,7 +42,11 @@ const MAX_CANDIDATES = 100;
  */
 async function resolvePrincipalEmail(ctx: SkillContext): Promise<string | null> {
   if (!ctx.contactService) {
-    ctx.log.warn('ceo-backlog-sweep: contactService capability unavailable — cannot resolve principal email');
+    // Distinct from the benign "no principal yet" case below: this is a capability-wiring
+    // fault (the skill ran without contactService injected) that does NOT heal on the next
+    // sweep — every cycle hits the same missing capability and the CEO is never nudged. Log
+    // at error so a misconfigured deployment is detectable in alerting, not just a warn stream.
+    ctx.log.error('ceo-backlog-sweep: contactService capability unavailable — cannot resolve principal email (persistent wiring fault)');
     return null;
   }
   try {
@@ -135,9 +139,12 @@ export class CeoBacklogSweepHandler implements SkillHandler {
       let notified = 0;
 
       if (ctx.outboundGateway === undefined) {
-        ctx.log.warn(
+        // Persistent wiring fault, not a transient hiccup: a missing gateway recurs every
+        // sweep, so "the next cycle re-surfaces it" does not apply and the backstop silently
+        // never fires. Log at error so it surfaces in alerting rather than a warn stream.
+        ctx.log.error(
           { overdue, dueToday },
-          'ceo-backlog-sweep: outboundGateway not available — skipping CEO nudge',
+          'ceo-backlog-sweep: outboundGateway not available — skipping CEO nudge (persistent wiring fault)',
         );
       } else {
         const ceoEmail = await resolvePrincipalEmail(ctx);

@@ -8,7 +8,7 @@
   "outputs": {
     "overdue": "number — count of open CEO tasks whose due date is before today",
     "dueToday": "number — count of open CEO tasks due today",
-    "notified": "number — count of tasks included in the nudge (0 when nothing sent)"
+    "notified": "number — count of tasks in the nudge once handed off to the outbound pipeline (0 when nothing enqueued); reflects successful enqueue, not confirmed delivery"
   },
   "permissions": [],
   "secrets": [],
