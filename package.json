@@ -42,7 +42,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@curia/shared-types": "workspace:*",
-    "@fastify/cookie": "^11.0.2",
+    "@fastify/cookie": "^11.1.1",
     "@fastify/cors": "^11.3.0",
     "@fastify/rate-limit": "^11.1.0",
     "@fastify/static": "^10.1.0",
