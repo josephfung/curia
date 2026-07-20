@@ -1131,6 +1131,12 @@ describe('web-browser ref-based selectors', () => {
       // and the overflow past the floor is truncated and marked (not silently dropped).
       expect(content).toContain('[g1f0e1] button "Submit"');
       expect(content).toContain('[interactable list truncated]');
+      // Assert the floor QUANTITY, not just that *something* survived: the leading control
+      // would pass even with a tiny allocation. Measure only the ref-list content (between
+      // the section header and the truncation marker) and require the full 6,000-char floor.
+      const refSection = content.split('--- Interactable elements ---\n')[1] ?? '';
+      const refContent = refSection.split('\n[interactable list truncated]')[0]!;
+      expect(refContent.length).toBeGreaterThanOrEqual(6_000);
     }
   });
 });
