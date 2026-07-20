@@ -22,6 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`web-browser`** — circuit-breaker halts interaction after 4 consecutive failures to curb futile retry loops.
 - **`web-browser`** — `actions` batches a page of steps into one call, so long forms fit one turn. (schema change)
 - **`web-browser`** — `session_reused` output tells a resuming agent whether its session reattached or expired.
+- **`web-browser`** — `keep_warm` pins a session so a long task resumes the same live page across wakes (ADR-030).
 - **`TaskRepo.reopenTask` tests** — cover non-`done` rejection, `progress.notes` audit note, and `task.updated` emission. (#1434)
 
 ### Changed

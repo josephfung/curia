@@ -53,6 +53,10 @@ interface BrowserServiceOptions {
   sessionTtlMs?: number;
   /** How often to sweep expired sessions in ms. Default: 120_000 (2 minutes). */
   sweepIntervalMs?: number;
+  /** Absolute-age cap for keep-warm (pinned) sessions in ms. A pinned session is exempt from
+   *  the idle TTL but still evicted once older than this since creation, so a task that never
+   *  releases its session can't leak a browser tab forever. Default: 7_200_000 (2 hours). */
+  keepWarmMaxAgeMs?: number;
   /** Persistent profile directory. Empty/absent → ${HOME}/.curia/browser-profile. */
   profileDir?: string;
   /** Browser channel, e.g. 'chrome' for real Chrome. Absent → bundled Chromium. */
@@ -77,6 +81,7 @@ export class BrowserService {
   private logger: Logger;
   private sessionTtlMs: number;
   private sweepIntervalMs: number;
+  private keepWarmMaxAgeMs: number;
   private profileDir: string;
   private channel: string | undefined;
   // Parsed once in the constructor; spread into every context's options and used to gate
@@ -115,6 +120,7 @@ export class BrowserService {
     this.logger = options.logger.child({ service: 'BrowserService' });
     this.sessionTtlMs = options.sessionTtlMs ?? 1_800_000;
     this.sweepIntervalMs = options.sweepIntervalMs ?? 120_000;
+    this.keepWarmMaxAgeMs = options.keepWarmMaxAgeMs ?? 7_200_000;
     this.profileDir = options.profileDir && options.profileDir.length > 0
       ? options.profileDir
       : join(homedir(), '.curia', 'browser-profile');
@@ -267,12 +273,16 @@ export class BrowserService {
    *
    * opts.incognito → isolated ephemeral context off the same browser (no persistent
    * profile). opts.blockAds → attach the (lazily-fetched) Ghostery ad blocker to the page.
+   * opts.keepWarm → pin the session (exempt from the idle TTL, subject to the absolute-age
+   * cap) so a parked long-running task can resume the same live page across far-apart wakes.
+   * Passing keepWarm:true when reusing an existing session upgrades it to pinned; it is never
+   * auto-downgraded (release via closeSession). See ADR-030.
    *
    * Returns the session and its (possibly new) sessionId.
    */
   async getOrCreateSession(
     sessionId: SessionId | undefined,
-    opts: { incognito?: boolean; blockAds?: boolean } = {},
+    opts: { incognito?: boolean; blockAds?: boolean; keepWarm?: boolean } = {},
   ): Promise<{ sessionId: SessionId; session: BrowserSession }> {
     const browser = this.context?.browser();
     if (!this.context || !browser || !browser.isConnected()) {
@@ -281,8 +291,10 @@ export class BrowserService {
 
     if (sessionId) {
       const existing = this.sessions.get(sessionId);
-      if (existing && !existing.isExpired(this.sessionTtlMs)) {
+      if (existing && !existing.isExpired(this.sessionTtlMs, this.keepWarmMaxAgeMs)) {
         existing.lastUsedAt = Date.now();
+        // Upgrade to pinned if the caller now wants to keep this session warm across wakes.
+        if (opts.keepWarm) existing.keepWarm = true;
         return { sessionId, session: existing };
       }
       if (existing) {
@@ -329,6 +341,8 @@ export class BrowserService {
 
     const newSessionId = randomUUID();
     const session = new BrowserSession(ownedContext ?? this.context, page, ownedContext);
+    // Pin from creation when the caller asked to keep this session warm across wakes.
+    if (opts.keepWarm) session.keepWarm = true;
 
     // Crash safety: if the page crashes, invalidate the session so the next
     // skill call starts fresh rather than retrying on a broken page.
@@ -340,7 +354,7 @@ export class BrowserService {
 
     this.sessions.set(newSessionId, session);
     this.logger.debug(
-      { sessionId: newSessionId, incognito: opts.incognito === true, blockAds: opts.blockAds === true },
+      { sessionId: newSessionId, incognito: opts.incognito === true, blockAds: opts.blockAds === true, keepWarm: opts.keepWarm === true },
       'New browser session created',
     );
 
@@ -368,7 +382,7 @@ export class BrowserService {
     // from closing the same sessions twice. Delete from the map before awaiting
     // close() so a concurrent getOrCreateSession() can't return a session that's
     // already been closed.
-    const expired = [...this.sessions.entries()].filter(([, s]) => s.isExpired(this.sessionTtlMs));
+    const expired = [...this.sessions.entries()].filter(([, s]) => s.isExpired(this.sessionTtlMs, this.keepWarmMaxAgeMs));
     for (const [sessionId, session] of expired) {
       if (!this.sessions.has(sessionId)) continue; // already closed by a concurrent call
       this.sessions.delete(sessionId);

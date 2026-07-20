@@ -281,8 +281,28 @@ describe('web-browser block_ads + incognito inputs (#987)', () => {
     await new WebBrowserHandler().execute(ctx);
 
     // The handler must forward both flags as the second arg to getOrCreateSession.
-    // session_id was not supplied, so first arg must be undefined.
-    expect(getOrCreateSession).toHaveBeenCalledWith(undefined, { incognito: true, blockAds: true });
+    // session_id was not supplied, so first arg must be undefined. keep_warm defaults to false.
+    expect(getOrCreateSession).toHaveBeenCalledWith(undefined, { incognito: true, blockAds: true, keepWarm: false });
+  });
+
+  it('forwards keep_warm:true to getOrCreateSession as keepWarm (pin the session)', async () => {
+    const fill = vi.fn().mockResolvedValue(undefined);
+    const page = makeMockPage('page', fill, 'https://example.com/');
+    const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
+    const getOrCreateSession = vi.fn().mockResolvedValue({ sessionId: 'sess-warm', session });
+    const browserService = {
+      getOrCreateSession,
+      closeSession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as BrowserService;
+    const ctx = {
+      input: { action: 'get_content', keep_warm: true, session_id: 'sess-warm' },
+      log: logger,
+      browserService,
+    } as unknown as SkillContext;
+
+    await new WebBrowserHandler().execute(ctx);
+
+    expect(getOrCreateSession).toHaveBeenCalledWith('sess-warm', { incognito: false, blockAds: false, keepWarm: true });
   });
 });
 
