@@ -22,6 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Tools vs skills vocabulary** — atoms are **tools** (`tool.json`, `ToolRegistry`); audit readers dual-match legacy `skill.*`. (#1485)
 - **`enable_task_management`** — retired; pin `tasks` + `documents` skills instead. (#1489)
 - **`pinned_skills`** — pins skill bundles (not atoms); per-tool `action_risk` unchanged. (#1489)
+- **ADR-032** — polymorphic pins (skill/tool/MCP) + MCP servers project skills; prerequisites for #1494. (#1494)
 
 ### Fixed
 
