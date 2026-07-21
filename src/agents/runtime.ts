@@ -38,6 +38,16 @@ import {
   applyPlanHarness,
   shouldOfferPlanSkill,
 } from './planned-task.js';
+import {
+  SKILL_ACTIVATE_TOOL_NAME,
+  formatActivatedSkillInstructionBlock,
+  parseSkillActivationProtocol,
+  selectActiveSkillsForWake,
+} from '../skills/skill-activation.js';
+import {
+  prepareActiveSkillsBlock,
+  replaceActiveSkillsBlock,
+} from '../db/active-skills-progress.js';
 import { readResumableBlock, type ResumableProgressBlock } from '../db/resumable-progress.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
@@ -92,6 +102,10 @@ export interface AgentConfig {
   executionLayer?: ExecutionLayer;
   /** Tool names to include as tools in every LLM call (after pin expansion). */
   pinnedTools?: string[];
+  /** Skill bundle names resolved from pinned_skills at bootstrap (Tier 0). */
+  pinnedSkillNames?: string[];
+  /** Skill (bundle) registry — used for Tier-1 wake re-load of active skills (#1495). */
+  skillRegistry?: import('../skills/skill-registry.js').SkillRegistry;
   /** Pre-built tool definitions for the LLM (from ToolRegistry.toToolDefinitions). */
   skillToolDefs?: ToolDefinition[];
   /** Optional autonomy service — when provided, the autonomy block is injected
@@ -469,6 +483,65 @@ export class AgentRuntime {
       const fresh = await this.config.taskRepo.getTask(boundTaskCtx.taskId);
       if (fresh) {
         boundTaskCtx = { ...boundTaskCtx, progress: fresh.progress };
+      }
+    }
+
+    // Tier 1 — re-load task-active skills from durable progress as a strong prior,
+    // re-check relevance vs the current step, and cap the set (design §6 / #1495).
+    // Pinned skills (Tier 0) stay eager in the bootstrap prompt and are skipped here.
+    const pinnedSkillNames = new Set(this.config.pinnedSkillNames ?? []);
+    if (
+      boundTaskCtx
+      && this.config.skillRegistry
+      && executionLayer
+    ) {
+      const relevanceText = [
+        typeof originalContent === 'string' ? originalContent : '',
+        typeof taskEvent.payload.intentAnchor === 'string' ? taskEvent.payload.intentAnchor : '',
+      ].join(' ');
+      const wakeSkills = selectActiveSkillsForWake({
+        progress: boundTaskCtx.progress,
+        pinnedSkillNames,
+        skillRegistry: this.config.skillRegistry,
+        relevanceText,
+      });
+      if (wakeSkills.length > 0) {
+        if (!workingToolDefs) workingToolDefs = [];
+        const instructionBlocks: string[] = [];
+        for (const skillName of wakeSkills) {
+          const resolved = executionLayer.resolveSkillActivationForAgent(skillName, agentId);
+          if ('error' in resolved) {
+            logger.warn({ agentId, skill: skillName, error: resolved.error }, 'Wake active-skill re-load skipped');
+            continue;
+          }
+          const currentNames = new Set(workingToolDefs.map((t) => t.name));
+          const newNames = resolved.tools.filter((n) => !currentNames.has(n));
+          if (newNames.length > 0) {
+            workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
+          }
+          const block = formatActivatedSkillInstructionBlock(resolved.skill, resolved.instructions);
+          if (block) instructionBlocks.push(block);
+        }
+        for (const block of instructionBlocks) {
+          effectiveSystemPrompt += `\n\n${block}`;
+        }
+        // Persist the re-selected set so dropped (irrelevant / over-cap) skills stay dropped.
+        if (this.config.taskRepo) {
+          try {
+            const next = replaceActiveSkillsBlock(wakeSkills);
+            const prepared = prepareActiveSkillsBlock(next);
+            if (prepared.ok) {
+              await this.config.taskRepo.setActiveSkillsBlock(boundTaskCtx.taskId, next, agentId);
+              boundTaskCtx = { ...boundTaskCtx, progress: { ...boundTaskCtx.progress, activeSkills: next } };
+            }
+          } catch (err) {
+            logger.warn({ err, agentId, taskId: boundTaskCtx.taskId }, 'Failed to persist re-selected activeSkills on wake');
+          }
+        }
+        logger.info(
+          { agentId, taskId: boundTaskCtx.taskId, activeSkills: wakeSkills },
+          'Re-loaded task-active skills on wake',
+        );
       }
     }
 
@@ -1152,8 +1225,8 @@ export class AgentRuntime {
           budget.consecutiveErrors = 0;
 
           // Dynamic tool-list expansion: when tool-registry returns successfully,
-          // append the discovered skills' full tool definitions to the working list
-          // so the LLM can call them in subsequent turns without pinning them upfront.
+          // append discovered kind:'tool' atoms to the working list. kind:'skill'
+          // results require skill-activate (instructions + member tools together).
           // Expansion is per-task (workingToolDefs is a local copy) — concurrent tasks
           // never see each other's discovered tools.
           if (toolCall.name === 'tool-registry' && workingToolDefs) {
@@ -1161,9 +1234,12 @@ export class AgentRuntime {
               const data = typeof result.data === 'string'
                 ? JSON.parse(result.data) as unknown
                 : result.data;
-              const discovered = (data as { tools?: Array<{ name: string }> })?.tools ?? [];
+              const discovered = (data as {
+                tools?: Array<{ name: string; kind?: 'tool' | 'skill' }>;
+              })?.tools ?? [];
               const currentNames = new Set(workingToolDefs.map(t => t.name));
               const newNames = discovered
+                .filter(s => !s.kind || s.kind === 'tool')
                 .map(s => s.name)
                 .filter(name => !currentNames.has(name));
               if (newNames.length > 0) {
@@ -1175,9 +1251,51 @@ export class AgentRuntime {
               }
             } catch (err) {
               // Non-fatal: if we can't parse the tool-registry result, the LLM simply
-              // cannot call discovered skills this turn. Log at warn and continue —
+              // cannot call discovered tools this turn. Log at warn and continue —
               // failing to expand the tool list must not abort the task.
               logger.warn({ err, agentId }, 'Failed to expand tool list from tool-registry result');
+            }
+          }
+
+          // Skill activation (#1495): expand member tools + inject SKILL.md instructions
+          // into the in-flight turn. Durable persistence is handled by skill-activate itself.
+          if (toolCall.name === SKILL_ACTIVATE_TOOL_NAME && workingToolDefs) {
+            try {
+              const data = typeof result.data === 'string'
+                ? JSON.parse(result.data) as unknown
+                : result.data;
+              const activation = parseSkillActivationProtocol(data);
+              if (activation) {
+                const currentNames = new Set(workingToolDefs.map(t => t.name));
+                const newNames = activation.tools.filter(name => !currentNames.has(name));
+                if (newNames.length > 0) {
+                  workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
+                }
+                const instructionBlock = formatActivatedSkillInstructionBlock(
+                  activation.skill,
+                  activation.instructions,
+                );
+                if (instructionBlock) {
+                  // Inject after the system prompt so subsequent LLM rounds see the
+                  // discipline block (mirrors Bullpen mid-turn system-message splice).
+                  const insertAt = messages.findIndex(m => m.role !== 'system') === -1
+                    ? messages.length
+                    : Math.max(1, messages.findIndex(m => m.role !== 'system'));
+                  messages.splice(insertAt, 0, { role: 'system', content: instructionBlock });
+                }
+                logger.info(
+                  {
+                    agentId,
+                    skill: activation.skill,
+                    addedTools: newNames,
+                    instructionsLoaded: activation.instructions.length > 0,
+                    skippedTools: activation.skippedTools,
+                  },
+                  'Activated skill for task turn',
+                );
+              }
+            } catch (err) {
+              logger.warn({ err, agentId }, 'Failed to apply skill-activate result to working tool list');
             }
           }
 

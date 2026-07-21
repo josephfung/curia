@@ -16,6 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **Skill (bundle) model** — `SKILL.md` + nested `tools/`; `pinned_skills` expands bundles; `skill_registry` table. (#1489)
+- **Skill activation runtime** — `toolSearch` returns `kind:"skill"`; `skill-activate` loads tools + instructions; Tier 1 persists in `progress.activeSkills`. (#1495)
 
 ### Changed
 

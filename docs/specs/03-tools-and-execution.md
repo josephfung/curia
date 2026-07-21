@@ -109,25 +109,58 @@ At startup, the framework connects to each MCP server, discovers tools via `tool
 
 ---
 
-## Skill Discovery
+## Skill Discovery & Activation
 
-Two-tier access:
+Vocabulary (ADR-031): a **tool** is the callable atom; a **skill** is a bundle of tools +
+optional `SKILL.md` instructions. Agents pin **skills** (`pinned_skills`); discovery and
+activation also operate at the skill level.
 
-### Pinned Skills
-Explicitly listed in agent config (`pinned_skills`). Always available to the agent, always included in the LLM's tool list.
+Two orthogonal axes (design §6 / #1495):
 
-### Discoverable Skills
-All registered skills (local + MCP) are searchable via the built-in `tool-registry` skill. Agents with `allow_discovery: true` in their YAML automatically receive `tool-registry` in their tool list. When the LLM determines it needs a capability not in its pinned skills, it invokes:
+| Axis | Options |
+|------|---------|
+| **Availability** | pinned (curated, always in toolkit) vs discoverable (`allow_discovery`) |
+| **Instruction-loading** | eager (bootstrap) vs lazy (on activation). Pinned ≠ eager for future imports; today pinned skills load instructions at bootstrap. |
+
+### Tiered lookup
+
+1. **Tier 0 — pinned skills** — expanded at bootstrap via `resolvePinnedSkills` (member tools + instruction blocks). Unchanged by activation.
+2. **Tier 1 — task-active skills** — recorded in `tasks.progress.activeSkills`. On each wake, re-loaded as a strong prior, re-checked for relevance against the current step, and capped (default 5).
+3. **Tier 2 — discovery** — only when Tiers 0/1 miss and the agent has `allow_discovery: true`.
+
+### Pinned skills (Tier 0)
+Explicitly listed in agent config (`pinned_skills`). Always available to the agent, always included in the LLM's tool list; instruction bodies are appended to the system prompt at bootstrap.
+
+### Discoverable tools & skills (Tier 2)
+All registered tools and non-synthetic skills are searchable via the built-in `tool-registry` tool. Agents with `allow_discovery: true` automatically receive `tool-registry` and `skill-activate` in their tool list. When the LLM needs a capability not in its pinned set:
 
 ```text
 tool-registry({ query: "send email" })
 ```
 
-This returns a list of matching skill names and descriptions. **Discovered skills are immediately callable** — after `tool-registry` succeeds, `AgentRuntime` calls `ExecutionLayer.getToolDefinitions()` with the returned names and appends the full tool schemas to the per-task working tool list before the next LLM call. The LLM can then call any discovered skill natively, with its real input schema, in the same or subsequent turns.
+Returns matches with `kind: "tool"` (orphan / synthetic-owned atom) or `kind: "skill"` (bundle).
+Member tools of a real skill are **promoted to the owning skill** — discovering `task-create`
+returns the `tasks` skill, not the atom alone — so the discipline block cannot be skipped.
 
-Tool-list expansion is **per-task**: each task gets a local copy of the startup tool list, so concurrent tasks never see each other's discoveries. Multiple `tool-registry` calls within one task accumulate — the runtime deduplicates by name. Discovered skills flow through the same `ExecutionLayer.invoke()` path as pinned skills, including the elevation gate (`sensitivity: elevated` skills require a live principal turn — see Safety Gate below).
+**Tools** (`kind: "tool"`) are immediately callable: after `tool-registry` succeeds,
+`AgentRuntime` appends their schemas to the per-task working tool list.
 
-`tool-registry` itself is excluded from its own search results to avoid circular self-discovery.
+**Skills** (`kind: "skill"`) require activation:
+
+```text
+skill-activate({ skill: "tasks" })
+```
+
+Activation loads member tools into the working toolkit and injects the skill's `SKILL.md`
+body into the turn. It **never widens authority** — member tools still pass `allowed_callers`
+and `action_risk` at invoke time; disallowed members are listed in `skippedTools` and omitted.
+
+When a task is bound, activation also appends the skill to `progress.activeSkills` (MRU,
+capped) so park/resume wakes restore Tier 1.
+
+Tool-list expansion is **per-task**: each task gets a local copy of the startup tool list.
+`tool-registry` and `skill-activate` are excluded from search results to avoid circular
+self-discovery.
 
 ### Safety Gate for First-Time Use
 
@@ -135,6 +168,7 @@ Tool-list expansion is **per-task**: each task gets a local copy of the startup 
 - Skills tagged `sensitivity: "elevated"` (CEO-authority primitives — approve/deny/dismiss actions, set-autonomy, grant-recommendation decisions): require a **live principal turn**, enforced at the execution-layer gate (`isLivePrincipalTurn`). Not a per-agent first-use approval — every invocation must be a fresh principal turn (#1126)
 - The deferred per-agent-skill `skill_approvals` "ask once on first use by that agent" flow is a separate, still-unbuilt concern (persist-once-ask-once); it would layer on top of, not replace, the elevation gate
 - Elevation rejections and autonomy-gate blocks are audit-logged
+- **Activation ≠ authorization** — activating a skill only surfaces + instructs; it cannot grant a tool the agent was not already allowed to call
 
 ---
 

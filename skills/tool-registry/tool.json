@@ -1,11 +1,11 @@
 {
   "name": "tool-registry",
-  "description": "Search the tool registry to discover available capabilities by keyword. Use this when you need a tool that is not in your current tool list. Returns matching tool names and descriptions. Pass an empty string to list all available tools.",
-  "version": "1.1.0",
+  "description": "Search the registry to discover available tools and skills (bundles) by keyword. Returns matches with kind:\"tool\" (callable atom) or kind:\"skill\" (bundle — call skill-activate to load its tools + instructions). Pass an empty string to list all available entries. Member tools of a skill are returned as the skill, not as individual tools.",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
-    "query": "string (keyword to search — pass an empty string to list all available tools)"
+    "query": "string (keyword to search — pass an empty string to list all available tools and skills)"
   },
   "outputs": {
     "tools": "array"

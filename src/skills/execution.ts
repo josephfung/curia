@@ -27,6 +27,8 @@ import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/esc
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import type { ContactTier } from '../contacts/types.js';
 import type { ToolRegistry } from './registry.js';
+import type { SkillRegistry } from './skill-registry.js';
+import { unifiedToolSearch, resolveSkillActivation } from './skill-activation.js';
 import { sanitizeOutput, sanitizeObjectOutput } from './sanitize.js';
 import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
 import type { Logger } from '../logger.js';
@@ -142,6 +144,7 @@ function buildActionDescription(
 
 export class ExecutionLayer {
   private registry: ToolRegistry;
+  private skillRegistry?: SkillRegistry;
   private logger: Logger;
   private bus?: EventBus;
   private agentRegistry?: AgentRegistry;
@@ -246,8 +249,11 @@ export class ExecutionLayer {
     exportControlService?: ExportControlService;
     /** Shared sensitivity classifier (#1419) — available to skills declaring 'sensitivityClassifier'. */
     sensitivityClassifier?: SensitivityClassifier;
+    /** Skill (bundle) registry — enables unified discovery + skill-activate (#1495). */
+    skillRegistry?: SkillRegistry;
   }) {
     this.registry = registry;
+    this.skillRegistry = options?.skillRegistry;
     this.logger = logger;
     this.bus = options?.bus;
     this.agentRegistry = options?.agentRegistry;
@@ -605,6 +611,26 @@ export class ExecutionLayer {
    */
   getToolDefinitions(toolNames: string[]): ToolDefinition[] {
     return this.registry.toToolDefinitions(toolNames);
+  }
+
+  /**
+   * Resolve a skill activation for an agent (#1495). Returns member tools the
+   * agent may call (allowed_callers) plus SKILL.md instructions — never widens
+   * authority. Requires skillRegistry on this layer.
+   */
+  resolveSkillActivationForAgent(
+    skillName: string,
+    agentId: string,
+  ): import('./skill-activation.js').SkillActivationResult | import('./skill-activation.js').SkillActivationFailure {
+    if (!this.skillRegistry) {
+      return { error: 'skillRegistry not configured on ExecutionLayer' };
+    }
+    return resolveSkillActivation({
+      skillName,
+      skillRegistry: this.skillRegistry,
+      toolRegistry: this.registry,
+      agentId,
+    });
   }
 
   /**
@@ -1285,6 +1311,7 @@ export class ExecutionLayer {
     // refuse to run the skill. This catches configuration errors at invocation time.
     const missingCaps = caps.filter(cap => {
       if (cap === 'toolSearch') return false; // toolSearch is synthesized, not a field on `this`
+      if (cap === 'skillRegistry') return this.skillRegistry === undefined;
       return capabilityServices[cap] === undefined;
     });
     if (missingCaps.length > 0) {
@@ -1315,28 +1342,41 @@ export class ExecutionLayer {
           ? buildEntityMemoryObserver(this.entityMemory!, this.bus, memAudit, skillLogger)
           : this.entityMemory;
       } else if (cap === 'toolSearch') {
-        // Special case: toolSearch is a closure over the tool registry, not a service field.
-        // Filters out tool-registry itself (circular self-discovery) and tools whose
-        // allowed_callers list does not include the calling agent (defense-in-depth —
-        // prevents LLM from discovering tools it cannot invoke).
+        // Special case: toolSearch is a closure over ToolRegistry + SkillRegistry.
+        // Filters out tool-registry / skill-activate (circular self-discovery) and
+        // tools whose allowed_callers list does not include the calling agent.
         //
-        // Phase 2: skill (bundle) results are deferred until Phase 3 lands activation
-        // (tiered lookup + task-state persistence). Returning kind:'skill' now would
-        // surface bundles the agent cannot activate, inviting hallucinated calls and
-        // duplicating member atoms already listed as tools.
-        ctx.toolSearch = (query: string) =>
-          this.registry.search(query)
-            .filter(s => s.manifest.name !== 'tool-registry')
-            .filter(s => {
-              const allowed = s.manifest.allowed_callers;
-              if (!allowed || allowed.length === 0) return true;
-              return allowed.includes(options?.agentId ?? 'system');
-            })
-            .map(s => ({
-              name: s.manifest.name,
-              description: s.manifest.description,
-              kind: 'tool' as const,
-            }));
+        // Phase 3a (#1495): returns kind:'skill' for non-synthetic bundles and
+        // promotes member-atom matches to their owning skill (lazy instruction-loading).
+        const skillRegistry = this.skillRegistry;
+        ctx.toolSearch = (query: string) => {
+          if (!skillRegistry) {
+            // Fallback: tools-only (pre-Phase-3a behaviour) when skillRegistry unset.
+            return this.registry.search(query)
+              .filter(s => s.manifest.name !== 'tool-registry' && s.manifest.name !== 'skill-activate')
+              .filter(s => {
+                const allowed = s.manifest.allowed_callers;
+                if (!allowed || allowed.length === 0) return true;
+                return allowed.includes(options?.agentId ?? 'system');
+              })
+              .map(s => ({
+                name: s.manifest.name,
+                description: s.manifest.description,
+                kind: 'tool' as const,
+              }));
+          }
+          return unifiedToolSearch({
+            query,
+            toolRegistry: this.registry,
+            skillRegistry,
+            agentId: options?.agentId ?? 'system',
+          });
+        };
+      } else if (cap === 'skillRegistry') {
+        // skill-activate needs both the bundle catalog and the atom catalog to
+        // resolve member tools under allowed_callers without widening authority.
+        ctx.skillRegistry = this.skillRegistry;
+        ctx.toolRegistry = this.registry;
       } else if (cap === 'infraLlm') {
         // Special case: infraLlm creates a scoped instance per invocation that
         // carries telemetry context (agentId, taskEventId, conversationId, toolName).

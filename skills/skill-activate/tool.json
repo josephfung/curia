@@ -1,0 +1,24 @@
+{
+  "name": "skill-activate",
+  "description": "Activate a discovered skill (bundle) for this task: load its member tools into your toolkit and inject its SKILL.md instructions. Call after tool-registry returns a result with kind:\"skill\". Activation does not grant new authority — member tools still respect allowed_callers and action_risk.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "skill": "string (skill bundle name from tool-registry, e.g. tasks or calendar)",
+    "task_id": "string? (optional — defaults to the bound task when on a scheduler wake)"
+  },
+  "outputs": {
+    "skill": "string",
+    "tools": "array",
+    "skippedTools": "array",
+    "instructionsLoaded": "boolean"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 5000,
+  "capabilities": [
+    "skillRegistry",
+    "taskRepo"
+  ]
+}
