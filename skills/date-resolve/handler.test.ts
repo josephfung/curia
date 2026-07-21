@@ -5,16 +5,16 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { DateResolveHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { DateTime, Settings } from 'luxon';
 import pino from 'pino';
 
-function makeCtx(input: Record<string, unknown>, timezone = 'America/Toronto'): SkillContext {
+function makeCtx(input: Record<string, unknown>, timezone = 'America/Toronto'): ToolContext {
   return {
     input,
     timezone,
     log: pino({ level: 'silent' }),
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 const handler = new DateResolveHandler();

@@ -1,7 +1,7 @@
 // timestamp.ts — centralized "timestamp" skill input type handling.
 //
 // Skills declare inputs as "timestamp" or "timestamp?" in their manifests.
-// The SkillRegistry maps this to a string schema with the canonical description
+// The ToolRegistry maps this to a string schema with the canonical description
 // from describeTimestampInput(). The ExecutionLayer calls normalizeTimestamp()
 // before invoking any handler, so handlers always receive UTC Z-suffix strings
 // and never need to know Curia's timezone themselves.

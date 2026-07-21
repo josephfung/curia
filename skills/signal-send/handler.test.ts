@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SignalSendHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import type { ContactService } from '../../src/contacts/contact-service.js';
 import pino from 'pino';
@@ -13,7 +13,7 @@ function makeCtx(overrides: {
   input?: Record<string, unknown>;
   gateway?: Partial<OutboundGateway>;
   contactService?: Partial<ContactService>;
-}): SkillContext {
+}): ToolContext {
   const gateway = {
     send: vi.fn().mockResolvedValue({ success: true }),
     getSignalGroupMembers: vi.fn().mockResolvedValue([]),
@@ -31,7 +31,7 @@ function makeCtx(overrides: {
     log: makeLogger(),
     outboundGateway: gateway,
     contactService,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('SignalSendHandler', () => {

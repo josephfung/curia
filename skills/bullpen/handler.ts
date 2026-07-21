@@ -11,12 +11,12 @@
 //   get_thread — read the full message history for a thread
 //   close      — close a thread (creator or coordinator only)
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createAgentDiscuss } from '../../src/bus/events.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 
-export class BullpenHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class BullpenHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { input } = ctx;
     const action = input['action'];
 

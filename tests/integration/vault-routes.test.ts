@@ -37,7 +37,7 @@ describeIf('vault routes', () => {
     // endpoint's scope guard has a known-allowed key ('tavily_api_key') and a
     // known-disallowed one (anything else).
     const registryService = new RegistryService(
-      new RegistryRepo(pool, 'skill_registry'),
+      new RegistryRepo(pool, 'tool_registry'),
       new RegistryRepo(pool, 'agent_registry'),
       [{ name: 'web-search', metadata: { name: 'web-search', description: 'd', version: '1.0.0', requiresSecrets: [DECLARED_KEY] } }],
       [],

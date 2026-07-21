@@ -22,8 +22,8 @@ import { TaskRepo } from '../../src/db/task-repo.js';
 import { makePrincipalOriginator } from '../../src/contacts/principal.js';
 import { makeWakeContext } from '../../src/autonomy/effective-standing.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
-import { SkillRegistry } from '../../src/skills/registry.js';
-import type { SkillManifest, SkillHandler } from '../../src/skills/types.js';
+import { ToolRegistry } from '../../src/skills/registry.js';
+import type { ToolManifest, ToolHandler } from '../../src/skills/types.js';
 import type { AutonomyService, AutonomyConfig } from '../../src/autonomy/autonomy-service.js';
 import type { EventBus } from '../../src/bus/bus.js';
 
@@ -47,8 +47,8 @@ function makeAutonomyService(score: number): AutonomyService {
 function makeManifest(
   name: string,
   sensitivity: 'normal' | 'elevated',
-  action_risk: SkillManifest['action_risk'],
-): SkillManifest {
+  action_risk: ToolManifest['action_risk'],
+): ToolManifest {
   return {
     name, description: name, version: '1.0.0',
     sensitivity, action_risk, inputs: {}, outputs: {},
@@ -165,18 +165,18 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
     expect(rows).toHaveLength(1); // guard before indexing (CodeAnt, #1156): no row → clear assertion failure
     const taskMetadata = metadataFromWakeRow(rows[0]!);
 
-    const handler: SkillHandler = { execute: async () => ({ success: true, data: 'merged' }) };
+    const handler: ToolHandler = { execute: async () => ({ success: true, data: 'merged' }) };
 
     // contact-merge is now `normal` + action_risk:'medium' (#1126). The wake's system lineage is
     // downgraded to agent by the ladder (derived child below posture D), so the autonomy score
     // alone governs it: below the medium threshold (70) → surface-and-confirm; at/above → auto.
-    const registryLow = new SkillRegistry();
+    const registryLow = new ToolRegistry();
     registryLow.register(makeManifest('contact-merge', 'normal', 'medium'), handler);
     const blocked = await new ExecutionLayer(registryLow, logger, { autonomyService: makeAutonomyService(65) })
       .invoke('contact-merge', {}, undefined, { taskMetadata });
     expect(blocked.success).toBe(false); // 65 < 70 → ADR-018 surface-and-confirm
 
-    const registryHigh = new SkillRegistry();
+    const registryHigh = new ToolRegistry();
     registryHigh.register(makeManifest('contact-merge', 'normal', 'medium'), handler);
     const allowed = await new ExecutionLayer(registryHigh, logger, { autonomyService: makeAutonomyService(75) })
       .invoke('contact-merge', {}, undefined, { taskMetadata });
@@ -210,11 +210,11 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
     expect(rows[0]!.originator).toEqual(CONSOLE_PRINCIPAL_LINEAGE);
     const taskMetadata = metadataFromWakeRow(rows[0]!);
 
-    const handler: SkillHandler = { execute: async () => ({ success: true, data: 'acted as principal' }) };
+    const handler: ToolHandler = { execute: async () => ({ success: true, data: 'acted as principal' }) };
 
     // A `normal` skill with action_risk:'critical' (min score 90). At score 75 a non-principal task
     // is blocked by Gate B; the console task's retained principal standing bypasses gates A/B/C.
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeManifest('commit-funds', 'normal', 'critical'), handler);
     const allowed = await new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(75) })
       .invoke('commit-funds', {}, undefined, { taskMetadata });
@@ -225,7 +225,7 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
       originator: { contactId: 'a', systemRole: 'agent', channel: 'console', initiatedAt: CONSOLE_PRINCIPAL_LINEAGE.initiatedAt, tier: null },
       wakeContext: makeWakeContext(false),
     };
-    const registryControl = new SkillRegistry();
+    const registryControl = new ToolRegistry();
     registryControl.register(makeManifest('commit-funds', 'normal', 'critical'), handler);
     const blocked = await new ExecutionLayer(registryControl, logger, { autonomyService: makeAutonomyService(75) })
       .invoke('commit-funds', {}, undefined, { taskMetadata: agentMetadata });
@@ -250,13 +250,13 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
     );
     expect(rows).toHaveLength(1); // guard before indexing (CodeAnt, #1156): no row → clear assertion failure
     const taskMetadata = metadataFromWakeRow(rows[0]!);
-    const handler: SkillHandler = { execute: async () => ({ success: true, data: 'should not run' }) };
+    const handler: ToolHandler = { execute: async () => ({ success: true, data: 'should not run' }) };
 
     // Even at score 90 (posture D, system lineage retained as standing for the autonomy ladder),
     // an `elevated` skill is blocked: the gate now requires a LIVE principal turn, which a wake
     // never is. This is the self-approval-hole closure, end-to-end.
     for (const score of [65, 90]) {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       registry.register(makeManifest('exercise-authority', 'elevated', 'none'), handler);
       const result = await new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(score) })
         .invoke('exercise-authority', {}, undefined, { taskMetadata });
@@ -292,12 +292,12 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
     expect(taskMetadata).toBeDefined();
     expect(taskMetadata).not.toHaveProperty('wakeContext');
 
-    const handler: SkillHandler = { execute: async () => ({ success: true, data: 'acted as principal' }) };
+    const handler: ToolHandler = { execute: async () => ({ success: true, data: 'acted as principal' }) };
 
     // A `normal` + action_risk:'critical' skill (min score 90). At score 75 a non-principal task is
     // blocked by Gate B; the wake's retained principal standing bypasses it — proof the bypass is
     // intact on a self-deferral (the very asymmetry #1153 closes: heartbeat floors, wake_at keeps).
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeManifest('commit-funds', 'normal', 'critical'), handler);
     const allowed = await new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(75) })
       .invoke('commit-funds', {}, undefined, { taskMetadata });
@@ -305,7 +305,7 @@ describeIf('woken-task authorization (#1060 dedup scenario)', () => {
 
     // But a wake_at fire is NOT a live principal turn, so an `elevated` authority primitive stays
     // blocked at any score — a pre-chosen deferral resumes work, it must not exercise authority.
-    const elevatedRegistry = new SkillRegistry();
+    const elevatedRegistry = new ToolRegistry();
     elevatedRegistry.register(makeManifest('exercise-authority', 'elevated', 'none'), handler);
     const blocked = await new ExecutionLayer(elevatedRegistry, logger, { autonomyService: makeAutonomyService(90) })
       .invoke('exercise-authority', {}, undefined, { taskMetadata });

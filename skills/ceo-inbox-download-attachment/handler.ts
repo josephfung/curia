@@ -9,12 +9,12 @@
 //   3. Download raw bytes via CeoNylasClient.downloadAttachment().
 //   4. Return base64-encoded content + metadata.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { CeoNylasClient } from '../_shared/ceo-nylas-client.js';
 import { MAX_TEMP_FILE_BYTES } from '../../src/skills/temp-file-store.js';
 
-export class CeoInboxDownloadAttachmentHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CeoInboxDownloadAttachmentHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
     const client = new CeoNylasClient(apiKey, grantId, ctx.log);

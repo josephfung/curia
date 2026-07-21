@@ -2,7 +2,7 @@
 
 Agents are the LLM-powered workers in Curia. Each agent is defined by a YAML config file in `agents/`. Most agents require only a YAML file; complex agents can optionally add a TypeScript handler for custom lifecycle logic.
 
-See [Adding a Skill](adding-a-skill.md) if you want to add a capability rather than a new agent. Skills are available to all agents.
+See [Adding a Skill](adding-a-tool.md) if you want to add a capability rather than a new agent. Skills are available to all agents.
 
 ---
 
@@ -11,7 +11,7 @@ See [Adding a Skill](adding-a-skill.md) if you want to add a capability rather t
 1. Create `agents/<name>.yaml` with the required fields (see below)
 2. If using a custom handler: create `agents/<name>.handler.ts`
 3. Restart Curia — agent YAML files are loaded and schema-validated at startup
-4. Pin the skills the agent needs (see the [skills directory](../specs/03-skills-and-execution.md#built-in-skills) and browse `skills/` for available options)
+4. Pin the skills the agent needs (see the [skills directory](../specs/03-tools-and-execution.md#built-in-skills) and browse `skills/` for available options)
 
 > **New agents start disabled in the registry.** Like skills, agents are tracked in a registry (`agent_registry`) with an install/enable lifecycle. A newly added agent is registered at startup but **not enabled** by default — enable it (via the registry HTTP API or admin UI) before it participates in routing. Enable state is **restart-based**: only enabled agents are loaded and registered on the next restart. See [Configuration → registry](configuration.md#skill-agent-and-channel-registry).
 
@@ -148,7 +148,7 @@ Browse the `skills/` directory for available skills. As a heuristic:
 - Don't pin skills that are rarely needed — use `allow_discovery: true` instead so they're available on demand without cluttering the tool list
 - The Coordinator should pin a broad set since it handles all inbound routing
 
-**`allowed_callers` and custom skills:** If a custom skill in your deploy repo has `allowed_callers` set and your new agent needs to use it, add your agent's name to that skill's `allowed_callers` list. This only applies to custom skills in the same deploy repo — core skills should never restrict by deployment-specific agent name. See [Adding a Skill — `allowed_callers`](adding-a-skill.md#allowed_callers-optional) for the full pattern.
+**`allowed_callers` and custom skills:** If a custom skill in your deploy repo has `allowed_callers` set and your new agent needs to use it, add your agent's name to that skill's `allowed_callers` list. This only applies to custom skills in the same deploy repo — core skills should never restrict by deployment-specific agent name. See [Adding a Skill — `allowed_callers`](adding-a-tool.md#allowed_callers-optional) for the full pattern.
 
 Current built-in skills include (see `skills/` for the full list):
 
@@ -328,10 +328,10 @@ For skill-level testing, write `handler.test.ts` in the skill directory instead.
 
 ## Related Docs
 
-- [Adding a Skill](adding-a-skill.md) — write a new skill for your agent to use
+- [Adding a Skill](adding-a-tool.md) — write a new skill for your agent to use
 
 ### Key Specs
 - [Architecture Overview](../specs/00-overview.md) — five-layer bus model
 - [Agent System Spec](../specs/02-agent-system.md) — agent lifecycle, state model, status API
-- [Skills & Execution](../specs/03-skills-and-execution.md) — how skills work, discovery, approval gate
+- [Skills & Execution](../specs/03-tools-and-execution.md) — how skills work, discovery, approval gate
 - [Audit & Security](../specs/06-audit-and-security.md) — what gets logged and how

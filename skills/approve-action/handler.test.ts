@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ApproveActionHandler } from './handler.js';
-import type { SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { ExecutionLayer } from '../../src/skills/execution.js';
@@ -13,7 +13,7 @@ const PENDING_ROW = {
   id: 10,
   taskId: 't1',
   conversationId: 'conv-1',
-  skillName: 'calendar-create-event',
+  toolName: 'calendar-create-event',
   actionRisk: 'high',
   outcome: 'pending_approval' as const,
   shortRef: 'cal-1',
@@ -32,7 +32,7 @@ const PENDING_ROW = {
   parentActionId: null,
 };
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: { short_ref: 'cal-1' },
     secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
@@ -48,7 +48,7 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     taskEventId: 'task-1',
     caller: { contactId: 'ceo-1', role: 'ceo', channel: 'cli' },
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 function makeMockRepo(overrides?: Partial<ActionLogRepo>): ActionLogRepo {
@@ -66,7 +66,7 @@ function makeMockBus(): EventBus {
   } as unknown as EventBus;
 }
 
-function makeMockExecutionLayer(result?: SkillResult): ExecutionLayer {
+function makeMockExecutionLayer(result?: ToolResult): ExecutionLayer {
   return {
     invoke: vi.fn().mockResolvedValue(result ?? { success: true, data: { event_id: 'evt-123' } }),
   } as unknown as ExecutionLayer;
@@ -103,7 +103,7 @@ describe('ApproveActionHandler', () => {
     // Verify re-execution
     expect(execLayer.invoke).toHaveBeenCalledOnce();
     const invokeArgs = (execLayer.invoke as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(invokeArgs[0]).toBe('calendar-create-event'); // skillName
+    expect(invokeArgs[0]).toBe('calendar-create-event'); // toolName
     expect(invokeArgs[1]).toEqual({ title: 'Lunch with Dana' }); // payload
     expect(invokeArgs[3]).toMatchObject({ humanApproved: true }); // options
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CeoInboxShadowDraftHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { shadowDraftPath } from '../_shared/shadow-draft.js';
 
 describe('CeoInboxShadowDraftHandler', () => {
@@ -8,7 +8,7 @@ describe('CeoInboxShadowDraftHandler', () => {
     const create = vi.fn().mockResolvedValue({});
     const ctx = { input: { source_message_id: 'm9', subject: 'Board pack for Friday', body: 'Draft reply.' },
       agentId: 'ceo-inbox', workingDocs: { read: vi.fn().mockResolvedValue(null), create },
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } } as unknown as SkillContext;
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } } as unknown as ToolContext;
     const result = await new CeoInboxShadowDraftHandler().execute(ctx);
     expect((result as { data: { captured: boolean } }).data.captured).toBe(true);
     expect(create).toHaveBeenCalled();
@@ -27,7 +27,7 @@ describe('CeoInboxShadowDraftHandler', () => {
       agentId: 'ceo-inbox',
       workingDocs: { read: vi.fn().mockResolvedValue(null), create },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await new CeoInboxShadowDraftHandler().execute(ctx);
     expect(result.success).toBe(true);
     expect((result as { data: { captured: boolean; path: string } }).data.captured).toBe(true);

@@ -29,7 +29,7 @@ export interface DiagnosticsQuery {
   taskId?: string;
   agentId?: string;
   status?: string;
-  skillName?: string;
+  toolName?: string;
   outcome?: string;
   role?: string;
   /** Half-open [from, to) window applied to created_at. */
@@ -76,7 +76,7 @@ export interface ActionLogEntryRow {
   id: string;
   taskId: string;
   conversationId: string | null;
-  skillName: string;
+  toolName: string;
   actionRisk: string;
   outcome: string;
   taskSummary: string | null;
@@ -288,8 +288,8 @@ export class DiagnosticsRepo {
       params.push(query.conversationId);
       conditions.push(`conversation_id = $${params.length}`);
     }
-    if (query.skillName) {
-      params.push(query.skillName);
+    if (query.toolName) {
+      params.push(query.toolName);
       conditions.push(`skill_name = $${params.length}`);
     }
     if (query.outcome) {
@@ -315,7 +315,7 @@ export class DiagnosticsRepo {
       id: String(r.id),
       taskId: r.task_id as string,
       conversationId: (r.conversation_id as string | null) ?? null,
-      skillName: r.skill_name as string,
+      toolName: r.skill_name as string,
       actionRisk: r.action_risk as string,
       outcome: r.outcome as string,
       taskSummary: (r.task_summary as string | null) ?? null,

@@ -84,7 +84,7 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 - `src/bus/events.ts` — event type registry (discriminated union), source of truth
 - `src/bus/permissions.ts` — layer-to-event authorization map (security boundary)
 - `agents/*.yaml` — agent configuration files
-- `skills/*/skill.json` — skill manifests
+- `skills/*/tool.json` — skill manifests
 - `config/default.yaml` — base configuration
 
 ## Adding Things
@@ -96,8 +96,8 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 4. Add config section to `config/default.yaml`
 5. Write tests
 
-### New Skill
-1. Create `skills/<name>/skill.json` (manifest) + `handler.ts`
+### New Tool
+1. Create `skills/<name>/tool.json` (manifest) + `handler.ts`
 2. Declare permissions and secrets in the manifest
 3. Write `handler.test.ts`
 4. **Pin it to at least one agent.** Add the skill name to `pinned_skills` in the relevant agent YAML (`agents/coordinator.yaml` for most skills). A skill that isn't pinned to any agent is invisible to that agent unless dynamic discovery happens to surface it — which is unreliable. Exception: pure infrastructure skills invoked by the system (e.g. `extract-facts`, `extract-relationships`, `scheduler-report`) intentionally have no agent owner.
@@ -105,7 +105,7 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 
 ### Versioning skills and agents
 
-Bump the `version` field in `skill.json` (for skills) or the `version` field in `agents/<name>.yaml` (for agents) whenever you make a meaningful change:
+Bump the `version` field in `tool.json` (for skills) or the `version` field in `agents/<name>.yaml` (for agents) whenever you make a meaningful change:
 
 - New skill or agent → start at `"0.1.0"`.
 - New capability, new input/output field, new pinned skill → bump **minor** (`0.X.0`).
@@ -115,7 +115,7 @@ The version is surfaced in structured logs and useful for correlating prod behav
 
 ### Autonomy Awareness
 
-When adding a new skill, declare its action risk in `skill.json`. This field is **required** — manifests that omit it are rejected at startup, and the execution layer enforces it against the live autonomy score:
+When adding a new skill, declare its action risk in `tool.json`. This field is **required** — manifests that omit it are rejected at startup, and the execution layer enforces it against the live autonomy score:
 
 ```json
 "action_risk": "medium"
@@ -268,11 +268,11 @@ When cutting a release, use this table to determine the bump size:
 | New spec shipped for the first time (brand-new capability) | **minor** (`0.X.0`) | Autonomy engine shipped, entity context enrichment |
 | Completing a partially-shipped spec or feature | **patch** (`0.x.Y`) | Context summarization completing §01-memory-system.md |
 | Bug fix, small improvement, doc-only | **patch** (`0.x.Y`) | Fixing a skill error path, updating a guide |
-| Breaking change to public API surface | **minor** + note in changelog | Renaming a `SkillContext` field, changing `skill.json` schema |
+| Breaking change to public API surface | **minor** + note in changelog | Renaming a `ToolContext` field, changing `tool.json` schema |
 
 **Public API surfaces** (changes here must be called out explicitly in the changelog even pre-1.0):
-- `skill.json` manifest schema (fields, types, required/optional)
-- `SkillHandler` / `SkillContext` / `SkillResult` TypeScript interfaces
+- `tool.json` manifest schema (fields, types, required/optional)
+- `ToolHandler` / `ToolContext` / `ToolResult` TypeScript interfaces
 - Agent YAML schema (`agents/*.yaml` fields)
 - Bus event type definitions (`src/bus/events.ts`)
 - Channel adapter interface
@@ -295,7 +295,7 @@ Bring the docs in line with what actually shipped this batch. Do this first, so 
 
 - **`docs/specs/`** — update the architecture specs so they describe the system as it now behaves. New capability shipped → its spec reflects it; behavior changed → the affected spec is corrected.
 - **`docs/wip/`** — prune it. Remove artifacts whose work has shipped and been folded into `docs/specs/` (or is otherwise complete). Leave anything still in progress untouched.
-- **`docs/dev/`** — update the how-to guides (`adding-a-skill`, `adding-an-agent`, `configuration`, `setup`, etc.) wherever this release changed the steps they describe.
+- **`docs/dev/`** — update the how-to guides (`adding-a-tool`, `adding-an-agent`, `configuration`, `setup`, etc.) wherever this release changed the steps they describe.
 - **curia-docs repo** — the public site (docs.meetcuria.com) lives in the separate `curia-docs` repo. Where this release changed user-facing behavior, update it there via its own PR. This is not part of the Curia release PR.
 
 ***B. Pre-release security gate***

@@ -1,16 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { EventBus } from '../../src/bus/bus.js';
-import { SkillRegistry } from '../../src/skills/registry.js';
+import { ToolRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import type { BusEvent, OutboundDeliveredEvent } from '../../src/bus/events.js';
-import type { SkillManifest } from '../../src/skills/types.js';
+import type { ToolManifest } from '../../src/skills/types.js';
 import type { ContactService } from '../../src/contacts/contact-service.js';
 import type { OutboundContentFilter } from '../../src/dispatch/outbound-filter.js';
 import type { OutboundContextService } from '../../src/dispatch/outbound-context.js';
 import { SignalSendHandler } from '../../skills/signal-send/handler.js';
-import signalSendManifest from '../../skills/signal-send/skill.json' with { type: 'json' };
+import signalSendManifest from '../../skills/signal-send/tool.json' with { type: 'json' };
 import type { SignalRpcClient } from '../../src/channels/signal/signal-rpc-client.js';
 
 const logger = pino({ level: 'silent' });
@@ -20,9 +20,9 @@ describe('outbound.delivered emission (#729)', () => {
     const bus = new EventBus(logger);
     const captured: BusEvent[] = [];
 
-    // Capture both skill.result and outbound.delivered events to validate the full pipeline.
+    // Capture both tool.result and outbound.delivered events to validate the full pipeline.
     bus.subscribe('outbound.delivered', 'system', async (evt) => { captured.push(evt); });
-    bus.subscribe('skill.result', 'system', async (evt) => { captured.push(evt); });
+    bus.subscribe('tool.result', 'system', async (evt) => { captured.push(evt); });
 
     // Mock signal-cli RPC client — send resolves to undefined (success), listGroups
     // returns empty array (used only for group sends, irrelevant for 1:1).
@@ -77,8 +77,8 @@ describe('outbound.delivered emission (#729)', () => {
     });
 
     // Register the signal-send skill with the real manifest and handler.
-    const registry = new SkillRegistry();
-    registry.register(signalSendManifest as SkillManifest, new SignalSendHandler());
+    const registry = new ToolRegistry();
+    registry.register(signalSendManifest as ToolManifest, new SignalSendHandler());
 
     // Build the real ExecutionLayer wired with the gateway, bus, contactService,
     // and outboundContextService. The signal-send manifest declares both
@@ -111,7 +111,7 @@ describe('outbound.delivered emission (#729)', () => {
     expect(result.success).toBe(true);
 
     // The execution layer calls invoke() directly here — no AgentRuntime in the loop,
-    // so skill.result events are not published (that happens in the agent layer).
+    // so tool.result events are not published (that happens in the agent layer).
     // The outbound.delivered event is published by OutboundGateway after the wire-level
     // send succeeds, which is the audit signal this test validates.
     const deliveredEvents = captured.filter(

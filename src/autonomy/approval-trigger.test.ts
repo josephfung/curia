@@ -123,7 +123,7 @@ function makeService(
 const BASE_OPTS = {
   taskId: 'task-1',
   conversationId: 'conv-1',
-  skillName: 'calendar-create-event',
+  toolName: 'calendar-create-event',
   actionRisk: 'high',
   input: { title: 'Lunch with Dana' },
   currentScore: 65,
@@ -168,7 +168,7 @@ describe('ApprovalTriggerService.request()', () => {
 
     await service.request({
       ...BASE_OPTS,
-      skillName: 'signal-send',
+      toolName: 'signal-send',
       input: {
         recipient: '+15550142',
         message: 'Confirming Thursday at 3pm.',
@@ -188,7 +188,7 @@ describe('ApprovalTriggerService.request()', () => {
 
     await service.request({
       ...BASE_OPTS,
-      skillName: 'signal-send',
+      toolName: 'signal-send',
       input: {
         recipient: '+15550142',
         message: 'Secret message body',
@@ -339,7 +339,7 @@ describe('ApprovalTriggerService.request()', () => {
       const insertCall = (repo.insert as ReturnType<typeof vi.fn>).mock.calls[0]![0];
       expect(insertCall.taskId).toBe('task-1');
       expect(insertCall.conversationId).toBe('conv-1');
-      expect(insertCall.skillName).toBe('calendar-create-event');
+      expect(insertCall.toolName).toBe('calendar-create-event');
       expect(insertCall.actionRisk).toBe('high');
       expect(insertCall.outcome).toBe('pending_approval');
       expect(insertCall.payload).toEqual({ title: 'Lunch with Dana' });

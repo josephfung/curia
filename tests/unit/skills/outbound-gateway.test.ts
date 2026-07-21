@@ -2250,7 +2250,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
   // Standard re-execution recipe the email adapter would pass to gateway.send().
   // Tests that exercise the pending_approval write path must include this to opt in.
   const TEST_RECIPE = {
-    skillName: 'send-draft',
+    toolName: 'send-draft',
     partialPayload: { account: 'curia' },
     description: 'Draft reply to recipient@example.com — "Hello". Use send-draft to approve.',
   } as const;
@@ -2309,7 +2309,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
     expect(actionLogRepo.insert).not.toHaveBeenCalled();
   });
 
-  it('writes action_log row using recipe skillName, payload, and description', async () => {
+  it('writes action_log row using recipe toolName, payload, and description', async () => {
     const mocks = createMocks();
     const actionLogRepo = makeActionLogRepo();
 
@@ -2325,7 +2325,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
     });
 
     const recipe = {
-      skillName: 'send-draft',
+      toolName: 'send-draft',
       partialPayload: { account: 'joseph' },
       description: 'Draft reply to partner@example.com — "Project update". Use send-draft to approve.',
     };
@@ -2337,7 +2337,7 @@ describe('gated draft-fallback (two-step pattern)', () => {
 
     expect(actionLogRepo.insert).toHaveBeenCalledOnce();
     const insertArg = (actionLogRepo.insert as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(insertArg.skillName).toBe('send-draft');
+    expect(insertArg.toolName).toBe('send-draft');
     expect(insertArg.payload).toEqual({ account: 'joseph' });
     expect(insertArg.description).toBe(recipe.description);
     expect(insertArg.taskId).toBe('task-789');

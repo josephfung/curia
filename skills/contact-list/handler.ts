@@ -6,7 +6,7 @@
 // Default behavior: excludes kind='automated' and kind='agent' from results.
 // Pass kind='automated' or kind='agent' explicitly to include them.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { ContactKind } from '../../src/contacts/types.js';
 
 const VALID_KINDS: readonly ContactKind[] = ['person', 'organization', 'automated', 'principal', 'agent'];
@@ -14,8 +14,8 @@ const VALID_KINDS: readonly ContactKind[] = ['person', 'organization', 'automate
 // Default People-view filter: excludes automated and agent contacts.
 const DEFAULT_KIND_FILTER: ContactKind[] = ['person', 'principal', 'organization'];
 
-export class ContactListHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactListHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     // Runtime-validated below via VALID_KINDS and explicit guards.
     const { role, kind: kindInput, limit, offset } = ctx.input as unknown as {
       role?: string;

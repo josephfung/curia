@@ -534,8 +534,8 @@ system_prompt: |
   folder ID (find the current parent with list_drive_items / search_drive_files
   first). update_drive_file also renames a file via its `name` field. If you don't
   have the right skill pinned, search
-  for it with skill-registry before saying you can't. If neither your tools nor
-  skill-registry have any Drive skills, the Google Drive integration is likely
+  for it with tool-registry before saying you can't. If neither your tools nor
+  tool-registry have any Drive skills, the Google Drive integration is likely
   down — tell the CEO it appears to be temporarily unavailable.
 
   **Uploading attachments to Drive:** When you download an email attachment, you can
@@ -640,7 +640,7 @@ system_prompt: |
   ### Capability discovery
   Your pinned skills cover core operations including Google Workspace (Docs,
   Drive, Sheets). Before telling the CEO you lack a capability, search for it
-  with skill-registry — additional skills may be available but not pinned.
+  with tool-registry — additional skills may be available but not pinned.
   Only say "I can't do that" after a search comes back empty.
 
   ### Guidelines
@@ -729,7 +729,7 @@ pinned_skills:
   - contact-update
   - image-generate
   - file-parse
-  - skill-registry
+  - tool-registry
   - approve-action
   - deny-action
   - dismiss-action

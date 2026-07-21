@@ -1,7 +1,7 @@
 /**
  * Integration tests for the dispatcher reply-lock feature (#847).
  *
- * These tests exercise the full in-process flow: skill.result fires → reply-lock
+ * These tests exercise the full in-process flow: tool.result fires → reply-lock
  * flag is set on the routing entry → handleAgentResponse sees the flag and
  * suppresses the duplicate outbound.message.
  *
@@ -19,7 +19,7 @@ import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
 import {
   createAgentResponse,
-  createSkillResult,
+  createToolResult,
   type BusEvent,
   type OutboundMessageEvent,
   type OutboundSuppressedDuplicateEvent,
@@ -55,7 +55,7 @@ function makeStubs() {
   return { dispatcher, publishedEvents, subscribeHandlers };
 }
 
-/** Seeds the routing map (without humanReplySent so handleSkillResult must set it). */
+/** Seeds the routing map (without humanReplySent so handleToolResult must set it). */
 function seedRouting(
   dispatcher: Dispatcher,
   taskEventId: string,
@@ -74,32 +74,32 @@ function seedRouting(
   });
 }
 
-async function fireSkillResult(
+async function fireToolResult(
   subscribeHandlers: Map<string, (event: BusEvent) => void | Promise<void>>,
   {
     agentId,
     conversationId,
-    skillName,
+    toolName,
     to,
     invokeEventId = 'invoke-1',
   }: {
     agentId: string;
     conversationId: string;
-    skillName: string;
+    toolName: string;
     to: string;
     invokeEventId?: string;
   },
 ) {
-  const event = createSkillResult({
+  const event = createToolResult({
     agentId,
     conversationId,
-    skillName,
+    toolName,
     result: { success: true, data: { message_id: 'msg-1', to, subject: 'Re: Test' } },
     durationMs: 100,
     parentEventId: invokeEventId,
   });
-  const handler = subscribeHandlers.get('skill.result');
-  if (!handler) throw new Error('No skill.result handler registered');
+  const handler = subscribeHandlers.get('tool.result');
+  if (!handler) throw new Error('No tool.result handler registered');
   await handler(event);
 }
 
@@ -128,11 +128,11 @@ describe('Dispatcher reply-lock — integration', () => {
         senderId: 'client@example.com',
       });
 
-      // Coordinator called email-reply — skill.result fires before agent.response
-      await fireSkillResult(subscribeHandlers, {
+      // Coordinator called email-reply — tool.result fires before agent.response
+      await fireToolResult(subscribeHandlers, {
         agentId: 'coordinator',
         conversationId: 'email:thread-abc',
-        skillName: 'email-reply',
+        toolName: 'email-reply',
         to: 'client@example.com',
       });
 
@@ -157,16 +157,16 @@ describe('Dispatcher reply-lock — integration', () => {
       });
 
       // email-reply failed — should not trigger reply-lock
-      const failEvent = createSkillResult({
+      const failEvent = createToolResult({
         agentId: 'coordinator',
         conversationId: 'email:conv-fail',
-        skillName: 'email-reply',
+        toolName: 'email-reply',
         result: { success: false, error: 'Gateway rejected' },
         durationMs: 50,
         parentEventId: 'invoke-fail',
       });
-      const skillHandler = subscribeHandlers.get('skill.result');
-      if (!skillHandler) throw new Error('No skill.result handler registered');
+      const skillHandler = subscribeHandlers.get('tool.result');
+      if (!skillHandler) throw new Error('No tool.result handler registered');
       await skillHandler(failEvent);
 
       await fireAgentResponse(subscribeHandlers, {
@@ -188,10 +188,10 @@ describe('Dispatcher reply-lock — integration', () => {
       });
 
       // email-reply in a DIFFERENT conversation — should not affect this routing entry
-      await fireSkillResult(subscribeHandlers, {
+      await fireToolResult(subscribeHandlers, {
         agentId: 'coordinator',
         conversationId: 'email:thread-different',
-        skillName: 'email-reply',
+        toolName: 'email-reply',
         to: 'client@example.com',
       });
 
@@ -214,10 +214,10 @@ describe('Dispatcher reply-lock — integration', () => {
       });
 
       // email-reply to a different person in the same conversation
-      await fireSkillResult(subscribeHandlers, {
+      await fireToolResult(subscribeHandlers, {
         agentId: 'coordinator',
         conversationId: 'email:thread-abc',
-        skillName: 'email-reply',
+        toolName: 'email-reply',
         to: 'someone-else@example.com',
       });
 
@@ -240,10 +240,10 @@ describe('Dispatcher reply-lock — integration', () => {
         senderId: 'client@example.com',
       });
 
-      await fireSkillResult(subscribeHandlers, {
+      await fireToolResult(subscribeHandlers, {
         agentId: 'coordinator',
         conversationId: 'email:thread-send',
-        skillName: 'email-send',
+        toolName: 'email-send',
         to: 'client@example.com',
       });
 
@@ -267,10 +267,10 @@ describe('Dispatcher reply-lock — integration', () => {
         senderId: 'client@example.com',
       });
 
-      await fireSkillResult(subscribeHandlers, {
+      await fireToolResult(subscribeHandlers, {
         agentId: 'coordinator',
         conversationId: 'email:thread-multi',
-        skillName: 'email-send',
+        toolName: 'email-send',
         // Simulate email-send returning comma-joined recipients
         to: 'client@example.com, ops@example.com',
       });
@@ -296,12 +296,12 @@ describe('Dispatcher reply-lock — integration', () => {
         senderId: 'reconciliation@client.com',
       });
 
-      // T2125 specialist calls email-reply — skill.result fires with specialist agentId
+      // T2125 specialist calls email-reply — tool.result fires with specialist agentId
       // but same conversationId as the coordinator's routing entry
-      await fireSkillResult(subscribeHandlers, {
+      await fireToolResult(subscribeHandlers, {
         agentId: 'T2125-expense-tracker',
         conversationId: 'email:reconciliation-thread',
-        skillName: 'email-reply',
+        toolName: 'email-reply',
         to: 'reconciliation@client.com',
       });
 
@@ -338,10 +338,10 @@ describe('Dispatcher reply-lock — integration', () => {
       });
 
       // Specialist fires email-reply for conv-A only
-      await fireSkillResult(subscribeHandlers, {
+      await fireToolResult(subscribeHandlers, {
         agentId: 'specialist',
         conversationId: 'email:conv-A',
-        skillName: 'email-reply',
+        toolName: 'email-reply',
         to: 'alice@example.com',
       });
 
@@ -374,7 +374,7 @@ describe('Dispatcher reply-lock — integration', () => {
         senderId: 'user@example.com',
       });
 
-      // No skill.result fires — coordinator responds via agent.response only
+      // No tool.result fires — coordinator responds via agent.response only
       await fireAgentResponse(subscribeHandlers, {
         taskEventId: 'task-normal',
         conversationId: 'email:thread-normal',
@@ -393,10 +393,10 @@ describe('Dispatcher reply-lock — integration', () => {
         senderId: 'user@example.com',
       });
 
-      await fireSkillResult(subscribeHandlers, {
+      await fireToolResult(subscribeHandlers, {
         agentId: 'coordinator',
         conversationId: 'email:thread-cal',
-        skillName: 'list-calendar',
+        toolName: 'list-calendar',
         to: 'user@example.com',
       });
 

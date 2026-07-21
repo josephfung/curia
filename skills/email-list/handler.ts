@@ -4,14 +4,14 @@
 // Returns lightweight summaries (no body — use email-get for full content).
 // Account resolution is handled by the gateway's named-client map.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { ListMessagesOptions } from '../../src/channels/email/nylas-client.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
 
-export class EmailListHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailListHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.outboundGateway) {
       return { success: false, error: 'email-list requires outboundGateway (capabilities: ["outboundGateway"])' };
     }

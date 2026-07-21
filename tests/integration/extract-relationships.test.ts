@@ -17,7 +17,7 @@ import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { EntityContextAssembler } from '../../src/entity-context/assembler.js';
 import { ExtractRelationshipsHandler } from '../../skills/extract-relationships/handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
 
 const { Pool } = pg;
@@ -41,14 +41,14 @@ function makeMockInfraLlm(responses: string[]): InfraLlm {
   };
 }
 
-function makeCtx(entityMemory: EntityMemory, text: string, infraLlm: InfraLlm): SkillContext {
+function makeCtx(entityMemory: EntityMemory, text: string, infraLlm: InfraLlm): ToolContext {
   return {
     input: { text, source: 'integration-test' },
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     entityMemory,
     infraLlm,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describeIf('extract-relationships integration', () => {

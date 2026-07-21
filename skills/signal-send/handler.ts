@@ -10,7 +10,7 @@
 // for the final send, so this handler focuses on Signal-specific validation
 // and the group trust pre-check.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
@@ -21,8 +21,8 @@ const MAX_MESSAGE_LENGTH = 10_000;
 // We require the leading + to be strict — signal-cli expects fully qualified numbers.
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
-export class SignalSendHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class SignalSendHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { recipient, group_id, message, context_bridge: contextBridgeRaw } = ctx.input as {
       recipient?: string;
       group_id?: string;

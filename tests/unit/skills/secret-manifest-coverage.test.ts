@@ -3,7 +3,7 @@
 // Every ctx.secret('name') call in a skill handler must have 'name' declared in
 // that skill's manifest secrets array. This test catches:
 //
-//   1. A developer adds ctx.secret('new_key') but forgets to update skill.json.
+//   1. A developer adds ctx.secret('new_key') but forgets to update tool.json.
 //   2. A malicious handler calls ctx.secret('OTHER_SKILL_API_KEY') — cross-skill
 //      secret access. The runtime allowlist blocks this at execution time, but this
 //      test surfaces it at CI time before it can reach production.
@@ -28,7 +28,7 @@ describe('secret manifest coverage', () => {
       if (!entry.isDirectory()) continue;
 
       const skillDir = path.join(SKILLS_DIR, entry.name);
-      const manifestPath = path.join(skillDir, 'skill.json');
+      const manifestPath = path.join(skillDir, 'tool.json');
 
       // Prefer handler.ts (development source) over handler.js (compiled output)
       const handlerPath = fs.existsSync(path.join(skillDir, 'handler.ts'))
@@ -53,7 +53,7 @@ describe('secret manifest coverage', () => {
         const secretName = match[1].toLowerCase();
         if (!declaredSecrets.has(secretName)) {
           violations.push(
-            `${entry.name}/handler: ctx.secret('${match[1]}') is not declared in skill.json secrets array`,
+            `${entry.name}/handler: ctx.secret('${match[1]}') is not declared in tool.json secrets array`,
           );
         }
       }

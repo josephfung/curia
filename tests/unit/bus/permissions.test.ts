@@ -36,29 +36,29 @@ describe('Bus Permissions', () => {
     expect(canSubscribe('channel', 'agent.task')).toBe(false);
   });
 
-  it('agent layer can publish skill.invoke', () => {
-    expect(canPublish('agent', 'skill.invoke')).toBe(true);
+  it('agent layer can publish tool.invoke', () => {
+    expect(canPublish('agent', 'tool.invoke')).toBe(true);
   });
 
-  it('agent layer can publish skill.result (on behalf of execution layer)', () => {
-    expect(canPublish('agent', 'skill.result')).toBe(true);
+  it('agent layer can publish tool.result (on behalf of execution layer)', () => {
+    expect(canPublish('agent', 'tool.result')).toBe(true);
   });
 
-  it('execution layer can publish skill.result', () => {
-    expect(canPublish('execution', 'skill.result')).toBe(true);
+  it('execution layer can publish tool.result', () => {
+    expect(canPublish('execution', 'tool.result')).toBe(true);
   });
 
-  it('agent layer can subscribe to skill.result', () => {
-    expect(canSubscribe('agent', 'skill.result')).toBe(true);
+  it('agent layer can subscribe to tool.result', () => {
+    expect(canSubscribe('agent', 'tool.result')).toBe(true);
   });
 
-  it('execution layer can subscribe to skill.invoke', () => {
-    expect(canSubscribe('execution', 'skill.invoke')).toBe(true);
+  it('execution layer can subscribe to tool.invoke', () => {
+    expect(canSubscribe('execution', 'tool.invoke')).toBe(true);
   });
 
   it('channel layer cannot publish skill events', () => {
-    expect(canPublish('channel', 'skill.invoke')).toBe(false);
-    expect(canPublish('channel', 'skill.result')).toBe(false);
+    expect(canPublish('channel', 'tool.invoke')).toBe(false);
+    expect(canPublish('channel', 'tool.result')).toBe(false);
   });
 
   it('agent layer can publish agent.error', () => {
@@ -80,20 +80,20 @@ describe('Bus Permissions', () => {
 
   // Explicit cross-layer violation cases called out in issue #187.
   // These confirm the hard boundaries between layers are enforced correctly.
-  // (channel/skill.invoke and channel/agent.task are already covered above.)
+  // (channel/tool.invoke and channel/agent.task are already covered above.)
 
-  it('dispatch layer cannot publish skill.result', () => {
-    // skill.result is owned by execution (and agent on its behalf); dispatch has no publish right
-    expect(canPublish('dispatch', 'skill.result')).toBe(false);
+  it('dispatch layer cannot publish tool.result', () => {
+    // tool.result is owned by execution (and agent on its behalf); dispatch has no publish right
+    expect(canPublish('dispatch', 'tool.result')).toBe(false);
   });
 
-  it('dispatch layer cannot publish skill.invoke', () => {
-    // skill.invoke is an agent-layer responsibility; dispatch cannot trigger skills directly
-    expect(canPublish('dispatch', 'skill.invoke')).toBe(false);
+  it('dispatch layer cannot publish tool.invoke', () => {
+    // tool.invoke is an agent-layer responsibility; dispatch cannot trigger skills directly
+    expect(canPublish('dispatch', 'tool.invoke')).toBe(false);
   });
 
   it('execution layer cannot publish agent.task', () => {
-    // execution only emits skill.result; it has no routing authority
+    // execution only emits tool.result; it has no routing authority
     expect(canPublish('execution', 'agent.task')).toBe(false);
   });
 

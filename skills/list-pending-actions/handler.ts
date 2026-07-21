@@ -12,11 +12,11 @@
 // allowance — commit 3bd3d224 — that the live-principal redefinition removes). This move is what
 // keeps the digest working without giving any system-lineage context standing at the elevated gate.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
-export class ListPendingActionsHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ListPendingActionsHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.actionLogRepo) {
       return { success: false, error: 'list-pending-actions requires actionLogRepo capability' };
     }
@@ -28,7 +28,7 @@ export class ListPendingActionsHandler implements SkillHandler {
       const pending = rows.map((row) => ({
         short_ref: row.shortRef,
         description: row.description,
-        skill_name: row.skillName,
+        skill_name: row.toolName,
         created_at: toLocalIso(Math.floor(row.createdAt.getTime() / 1000), tz),
         expires_at: row.expiresAt ? toLocalIso(Math.floor(row.expiresAt.getTime() / 1000), tz) : null,
       }));

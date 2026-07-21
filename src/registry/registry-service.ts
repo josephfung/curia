@@ -1,7 +1,7 @@
 // registry-service.ts — merges on-disk manifest discovery with registry rows to
 // compute derived state, and exposes the install/enable/disable/uninstall lifecycle
 // the /api/registry routes call. State changes touch the DB only; the live in-memory
-// SkillRegistry/AgentRegistry are NOT mutated — enforcement is restart-based (spec §6).
+// ToolRegistry/AgentRegistry are NOT mutated — enforcement is restart-based (spec §6).
 
 import type {
   IRegistryRepo, RegistryKind, RegistryEntry, Discovery, SecretsLister,
@@ -25,16 +25,16 @@ export class RegistryService {
   ) {}
 
   setDiscovery(kind: RegistryKind, discovery: Discovery[]): void {
-    if (kind === 'skill') this.skillDiscovery = discovery;
+    if (kind === 'tool') this.skillDiscovery = discovery;
     else this.agentDiscovery = discovery;
   }
 
   private repo(kind: RegistryKind): IRegistryRepo {
-    return kind === 'skill' ? this.skillRepo : this.agentRepo;
+    return kind === 'tool' ? this.skillRepo : this.agentRepo;
   }
 
   private discovery(kind: RegistryKind): Discovery[] {
-    return kind === 'skill' ? this.skillDiscovery : this.agentDiscovery;
+    return kind === 'tool' ? this.skillDiscovery : this.agentDiscovery;
   }
 
   /** Every known item (on disk and/or in DB) with its derived state. */

@@ -10,7 +10,7 @@
 //
 // See ADR-017 for the full reasoning behind this pattern.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { NylasMessage } from '../../src/channels/email/nylas-client.js';
 import { createHumanDecision } from '../../src/bus/events.js';
 import { isPrincipalOriginated } from '../../src/contacts/principal.js';
@@ -21,8 +21,8 @@ type DraftDiscoveryResult =
   | { success: true; draft: NylasMessage; resolvedAccount: string }
   | { success: false; error: string; reason: 'not_found' | 'fetch_error' };
 
-export class SendDraftHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class SendDraftHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     // ------------------------------------------------------------------
     // Step 1: Task-origin check — hard gate, must be first
     // ------------------------------------------------------------------
@@ -256,7 +256,7 @@ export class SendDraftHandler implements SkillHandler {
    * account a draft lives in — the skill discovers it automatically.
    */
   private async findDraftById(
-    ctx: SkillContext,
+    ctx: ToolContext,
     draftId: string,
     account: string | undefined,
   ): Promise<DraftDiscoveryResult> {
@@ -315,8 +315,8 @@ export class SendDraftHandler implements SkillHandler {
 
   /** Search a single account's DRAFTS folder for a draft by ID. */
   private async searchAccountForDraft(
-    ctx: SkillContext,
-    gateway: NonNullable<SkillContext['outboundGateway']>,
+    ctx: ToolContext,
+    gateway: NonNullable<ToolContext['outboundGateway']>,
     draftId: string,
     account: string,
   ): Promise<DraftDiscoveryResult> {

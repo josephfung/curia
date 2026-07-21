@@ -8,7 +8,7 @@
 //
 // This is a "normal" sensitivity skill — no human approval required.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 // Default max body length: 50KB. Enough for most web pages when truncated.
 const DEFAULT_MAX_LENGTH = 50000;
@@ -44,8 +44,8 @@ function isPrivateHostname(hostname: string): boolean {
   return false;
 }
 
-export class WebFetchHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class WebFetchHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { url, max_length } = ctx.input as { url?: string; max_length?: number };
 
     if (!url || typeof url !== 'string') {

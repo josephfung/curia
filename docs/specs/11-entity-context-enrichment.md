@@ -253,7 +253,7 @@ Skills that operate on entities follow a consistent convention:
 ### Example: Calendar List Events (after adoption)
 
 ```typescript
-async execute(ctx: SkillContext): Promise<SkillResult> {
+async execute(ctx: ToolContext): Promise<ToolResult> {
   // 1. Resolve who we're looking up events for
   const contacts = ctx.input.contacts as string[] | undefined;
   const entityIds = contacts ?? [ctx.caller?.contactId ?? 'caller'];
@@ -350,7 +350,7 @@ LLM: "Now I can list her events"
 
 ### Option B: Execution layer pre-enrichment
 
-The execution layer automatically calls `entity-context` before invoking the handler, based on a manifest declaration. The handler receives the enriched context as part of `SkillContext`.
+The execution layer automatically calls `entity-context` before invoking the handler, based on a manifest declaration. The handler receives the enriched context as part of `ToolContext`.
 
 ```json
 {
@@ -466,7 +466,7 @@ Skills that currently use the capability:
 - `email-send` — auto-registers on every successful send; honors explicit `context_bridge` JSON input.
 - `email-reply` — same pattern; the registered entry covers the *reply we just sent*, not the original message.
 - `signal-send` — same pattern.
-- `context-bridge-release` — **coordinator-only** skill (enforced via `allowed_callers`, see [spec 03](03-skills-and-execution.md)). Lets the coordinator explicitly close a thread when the LLM detects the conversation has concluded, freeing the slot before TTL expiry.
+- `context-bridge-release` — **coordinator-only** skill (enforced via `allowed_callers`, see [spec 03](03-tools-and-execution.md)). Lets the coordinator explicitly close a thread when the LLM detects the conversation has concluded, freeing the slot before TTL expiry.
 
 A shared helper module `src/dispatch/context-bridge-parse.ts` (not a skill — it's used internally by send-skill handlers) normalizes the optional `context_bridge` JSON string input into the structured `OutboundContextEntry` shape consumed by `register()`.
 
@@ -510,7 +510,7 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 
 ### Cross-References
 
-- [Spec 03 — Skills and Execution](03-skills-and-execution.md): the `outboundContext` capability surface and the coordinator-only `allowed_callers` restriction on `context-bridge-release`.
+- [Spec 03 — Skills and Execution](03-tools-and-execution.md): the `outboundContext` capability surface and the coordinator-only `allowed_callers` restriction on `context-bridge-release`.
 - [Spec 04 — Channels](04-channels.md): how `email-send` / `email-reply` / `signal-send` register entries on successful send.
 - [Spec 15 — Outbound Safety](15-outbound-safety.md): how outbound-safety gates interact with auto-registration — registration happens on success only, after the safety pipeline has cleared the message.
 - [Spec 17 — Meeting Debrief](17-meeting-debrief.md): the debrief agent uses the outbound context bridge with a 48-hour TTL to claim replies to its proactive prompts.
@@ -547,7 +547,7 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 |---|---|
 | **01 — Memory System** | Entity context reads from the KG (nodes, edges, facts). The assembly pipeline is a read-only query pattern — it does not write to the KG. Fact categories in the payload map to the KG's `fact` node type. |
 | **02 — Agent System** | Agent self-identity (Curia's contact record) is seeded at bootstrap. The agent's contactId is injected into the coordinator's system prompt. |
-| **03 — Skills & Execution** | `entity_enrichment` manifest declaration is a new feature of the execution layer. `ctx.entityContext` is a new field on `SkillContext`. The `entity-context` skill is a new local skill. |
+| **03 — Skills & Execution** | `entity_enrichment` manifest declaration is a new feature of the execution layer. `ctx.entityContext` is a new field on `ToolContext`. The `entity-context` skill is a new local skill. |
 | **09 — Contacts & Identity** | Contacts are the identity resolution layer for person entities. Entity-context reads from contacts but does not modify them. The agent's seeded contact record is a new bootstrap step. |
 
 ---
@@ -584,7 +584,7 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 - [ ] Entity-context assembly module (`src/entity-context/`)
 - [ ] Proactive account discovery in the assembly pipeline
 - [ ] `entity-context` skill (manifest + handler)
-- [ ] `ctx.entityContext` field on `SkillContext`
+- [ ] `ctx.entityContext` field on `ToolContext`
 - [ ] `entity_enrichment` manifest declaration support in execution layer
 - [ ] TTL cache for entity context payloads
 - [ ] Cache invalidation on contact/KG mutations

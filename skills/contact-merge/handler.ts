@@ -17,12 +17,12 @@
 // auto-commit a `certain`-confidence merge. If that proves too eager, raise action_risk rather
 // than reintroducing a handler gate. See docs/specs/14-autonomy-engine.md.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export class ContactMergeHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactMergeHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { primary_contact_id, secondary_contact_id, dry_run } = ctx.input as {
       primary_contact_id?: string;
       secondary_contact_id?: string;

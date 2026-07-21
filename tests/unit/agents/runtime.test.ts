@@ -3704,12 +3704,12 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const taskCreateCount = { n: 0 };
 
     const mockExecution = {
-      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>) => {
-        if (skillName === 'task-create') {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>) => {
+        if (toolName === 'task-create') {
           taskCreateCount.n += 1;
           return { success: true, data: { task_id: 'escalation-task-1' } };
         }
-        if (skillName === 'delegate') {
+        if (toolName === 'delegate') {
           delegateInvokeCount.n += 1;
           return {
             success: true,
@@ -3788,12 +3788,12 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const taskCreateCount = { n: 0 };
 
     const mockExecution = {
-      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
-        if (skillName === 'task-create') {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') {
           taskCreateCount.n += 1;
           return { success: true, data: { task_id: 'escalation-task-retry' } };
         }
-        if (skillName === 'delegate') {
+        if (toolName === 'delegate') {
           const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
           const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
           const dKey = delegationKey(delegateAgent, delegateTask);
@@ -3897,12 +3897,12 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const taskCreateCount = { n: 0 };
 
     const mockExecution = {
-      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
-        if (skillName === 'task-create') {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') {
           taskCreateCount.n += 1;
           return { success: true, data: { task_id: 'escalation-task-timeout' } };
         }
-        if (skillName === 'delegate') {
+        if (toolName === 'delegate') {
           const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
           const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
           const dKey = delegationKey(delegateAgent, delegateTask);
@@ -4010,12 +4010,12 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const taskCreateCount = { n: 0 };
 
     const mockExecution = {
-      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
-        if (skillName === 'task-create') {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') {
           taskCreateCount.n += 1;
           return { success: true, data: { task_id: 'escalation-humanize-1' } };
         }
-        if (skillName === 'delegate') {
+        if (toolName === 'delegate') {
           const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
           const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
           const dKey = delegationKey(delegateAgent, delegateTask);
@@ -4098,9 +4098,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const bus = new EventBus(logger);
 
     const mockExecution = {
-      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
-        if (skillName === 'task-create') return { success: true, data: { task_id: 'escalation-humanize-blocked' } };
-        if (skillName === 'delegate') {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') return { success: true, data: { task_id: 'escalation-humanize-blocked' } };
+        if (toolName === 'delegate') {
           const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
           const dKey = delegationKey(delegateAgent, typeof input['task'] === 'string' ? input['task'] : '');
           const guard = options?.delegationGuard;
@@ -4173,9 +4173,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const bus = new EventBus(logger);
 
     const mockExecution = {
-      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
-        if (skillName === 'task-create') return { success: true, data: { task_id: 'escalation-humanize-tool-error' } };
-        if (skillName === 'delegate') {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') return { success: true, data: { task_id: 'escalation-humanize-tool-error' } };
+        if (toolName === 'delegate') {
           const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
           const dKey = delegationKey(delegateAgent, typeof input['task'] === 'string' ? input['task'] : '');
           const guard = options?.delegationGuard;
@@ -4249,9 +4249,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const bus = new EventBus(logger);
 
     const mockExecution = {
-      invoke: vi.fn(async (skillName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
-        if (skillName === 'task-create') return { success: true, data: { task_id: 'escalation-humanize-empty-agent' } };
-        if (skillName === 'delegate') {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') return { success: true, data: { task_id: 'escalation-humanize-empty-agent' } };
+        if (toolName === 'delegate') {
           const dKey = delegationKey('', typeof input['task'] === 'string' ? input['task'] : '');
           const guard = options?.delegationGuard;
           if (guard) guard.recordInvocation(dKey);
@@ -4328,12 +4328,12 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const taskCreateCount = { n: 0 };
 
     const mockExecution = {
-      invoke: vi.fn(async (skillName: string) => {
-        if (skillName === 'task-create') {
+      invoke: vi.fn(async (toolName: string) => {
+        if (toolName === 'task-create') {
           taskCreateCount.n += 1;
           return { success: true, data: { task_id: 'escalation-task-1' } };
         }
-        if (skillName === 'delegate') {
+        if (toolName === 'delegate') {
           return {
             success: true,
             data: {

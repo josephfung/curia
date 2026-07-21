@@ -1,12 +1,12 @@
 // skills/activity-log/handler.ts
 //
-// Read-only query of audit_log skill.result rows for CEO-facing activity recap.
+// Read-only query of audit_log tool.result rows for CEO-facing activity recap.
 // Summarizes consequential autonomous actions without returning raw payloads.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { AuditLogRow } from '../../src/audit/audit-log-repo.js';
 import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
-import { getRecapEligibleSkillNames } from '../../src/skills/recap-skills.js';
+import { getRecapEligibleToolNames } from '../../src/skills/recap-skills.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -19,8 +19,8 @@ interface ActivityLogInput {
   limit?: number;
 }
 
-export class ActivityLogHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ActivityLogHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.auditLogRepo) {
       return { success: false, error: 'activity-log requires auditLogRepo capability' };
     }
@@ -42,15 +42,15 @@ export class ActivityLogHandler implements SkillHandler {
       return { success: false, error: 'until must be after since' };
     }
 
-    const skillNames = input.skill_name
+    const toolNames = input.skill_name
       ? [input.skill_name.trim()].filter(Boolean)
       : undefined;
 
     try {
-      const rows = await ctx.auditLogRepo.findSkillResults({
+      const rows = await ctx.auditLogRepo.findToolResults({
         since,
         until,
-        skillNames,
+        toolNames,
         agentId: typeof input.agent_id === 'string' ? input.agent_id : undefined,
         limit: typeof input.limit === 'number' ? input.limit : undefined,
       });
@@ -60,11 +60,11 @@ export class ActivityLogHandler implements SkillHandler {
         : [];
 
       const tz = ctx.timezone;
-      const recapSkills = getRecapEligibleSkillNames();
+      const recapSkills = getRecapEligibleToolNames();
       const actions = rows
-        .map((row) => summarizeSkillResult(row, autonomyRows, tz))
+        .map((row) => summarizeToolResult(row, autonomyRows, tz))
         .filter((action): action is NonNullable<typeof action> => action !== null)
-        .filter((action) => skillNames ? true : recapSkills.has(action.skill));
+        .filter((action) => toolNames ? true : recapSkills.has(action.skill));
 
       return {
         success: true,
@@ -81,7 +81,7 @@ export class ActivityLogHandler implements SkillHandler {
   }
 }
 
-function summarizeSkillResult(
+function summarizeToolResult(
   row: AuditLogRow,
   autonomyRows: ActionLogRow[],
   tz?: string,
@@ -94,33 +94,33 @@ function summarizeSkillResult(
   detail: string | null;
   autonomy: 'autonomous' | 'approved' | 'unknown';
 } | null {
-  const skillName = typeof row.payload.skillName === 'string' ? row.payload.skillName : null;
-  if (!skillName) return null;
+  const toolName = typeof row.payload.toolName === 'string' ? row.payload.toolName : null;
+  if (!toolName) return null;
 
   const result = row.payload.result as { success?: boolean; data?: unknown; error?: string } | undefined;
   const success = result?.success === true;
-  const autonomy = matchAutonomyOutcome(skillName, row.timestamp, row.conversationId, autonomyRows);
+  const autonomy = matchAutonomyOutcome(toolName, row.timestamp, row.conversationId, autonomyRows);
 
   return {
     timestamp: toLocalIso(Math.floor(row.timestamp.getTime() / 1000), tz) ?? row.timestamp.toISOString(),
-    skill: skillName,
+    skill: toolName,
     agent_id: row.sourceId,
-    target: extractTarget(skillName, result),
+    target: extractTarget(toolName, result),
     outcome: success ? 'completed' : 'failed',
-    detail: success ? extractSuccessDetail(skillName, result?.data) : (result?.error ?? null),
+    detail: success ? extractSuccessDetail(toolName, result?.data) : (result?.error ?? null),
     autonomy,
   };
 }
 
 function matchAutonomyOutcome(
-  skillName: string,
+  toolName: string,
   timestamp: Date,
   conversationId: string | null,
   autonomyRows: ActionLogRow[],
 ): 'autonomous' | 'approved' | 'unknown' {
   const windowMs = 5 * 60 * 1000;
   const candidates = autonomyRows.filter((row) => {
-    if (row.skillName !== skillName) return false;
+    if (row.toolName !== toolName) return false;
     if (conversationId && row.conversationId && row.conversationId !== conversationId) return false;
     return Math.abs(row.createdAt.getTime() - timestamp.getTime()) <= windowMs;
   });
@@ -133,11 +133,11 @@ function matchAutonomyOutcome(
   return 'unknown';
 }
 
-function extractTarget(skillName: string, result?: { success?: boolean; data?: unknown; error?: string }): string {
+function extractTarget(toolName: string, result?: { success?: boolean; data?: unknown; error?: string }): string {
   const data = asRecord(result?.data);
-  if (!data) return skillName;
+  if (!data) return toolName;
 
-  if (skillName === 'calendar-respond-to-invite') {
+  if (toolName === 'calendar-respond-to-invite') {
     const event = asRecord(data.event);
     const title = typeof event?.title === 'string' ? event.title : null;
     const response = typeof data.response === 'string' ? data.response : null;
@@ -146,13 +146,13 @@ function extractTarget(skillName: string, result?: { success?: boolean; data?: u
     if (response) return response;
   }
 
-  if (skillName.startsWith('email-') || skillName === 'signal-send' || skillName === 'send-draft') {
+  if (toolName.startsWith('email-') || toolName === 'signal-send' || toolName === 'send-draft') {
     const to = data.to ?? data.recipient;
     if (typeof to === 'string') return to;
     if (Array.isArray(to) && typeof to[0] === 'string') return to[0];
   }
 
-  if (skillName.startsWith('calendar-')) {
+  if (toolName.startsWith('calendar-')) {
     const event = asRecord(data.event);
     if (typeof event?.title === 'string') return event.title;
   }
@@ -161,14 +161,14 @@ function extractTarget(skillName: string, result?: { success?: boolean; data?: u
   if (typeof data.title === 'string') return data.title;
   if (typeof data.subject === 'string') return data.subject;
 
-  return skillName;
+  return toolName;
 }
 
-function extractSuccessDetail(skillName: string, data: unknown): string | null {
+function extractSuccessDetail(toolName: string, data: unknown): string | null {
   const record = asRecord(data);
   if (!record) return null;
 
-  if (skillName === 'calendar-respond-to-invite') {
+  if (toolName === 'calendar-respond-to-invite') {
     const response = typeof record.response === 'string' ? record.response : null;
     const released = Array.isArray(record.releasedHolds) ? record.releasedHolds.length : null;
     if (response && released !== null) return `RSVP ${response}; released ${released} hold(s)`;

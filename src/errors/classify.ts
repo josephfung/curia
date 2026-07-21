@@ -131,13 +131,13 @@ export function classifyError(err: unknown, source: string): AgentError {
  * Classify a skill failure into an AgentError.
  * Skills return { success: false, error: string } — always SKILL_ERROR.
  */
-export function classifySkillError(skillName: string, error: string): AgentError {
+export function classifySkillError(toolName: string, error: string): AgentError {
   return {
     type: 'SKILL_ERROR',
-    source: `skill:${skillName}`,
+    source: `skill:${toolName}`,
     message: sanitizeMessage(error),
     retryable: isRetryable('SKILL_ERROR'),
-    context: { skillName },
+    context: { toolName },
     timestamp: new Date(),
   };
 }

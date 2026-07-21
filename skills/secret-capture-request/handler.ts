@@ -5,14 +5,14 @@
 // a system/channel/protected key. The skill returns ONLY the link — it has no code path that
 // reads a value, which is the structural form of the "LLM never sees secrets" guarantee.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { CaptureValueFormat } from '../../src/secrets/secret-capture-service.js';
 import { buildCaptureOrigin } from '../../src/secrets/build-capture-origin.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 /** Build the operator-facing magic-link URL. Prod uses ctx.appOrigin; dev falls back to the
  *  local SPA origin (Fastify serves the built console on httpPort). */
-function buildCaptureUrl(ctx: SkillContext, rawToken: string): string {
+function buildCaptureUrl(ctx: ToolContext, rawToken: string): string {
   // Trim any trailing slash so a configured appOrigin like "https://host/" doesn't yield a
   // "//secret-capture/..." path that breaks SPA route matching.
   const origin = (ctx.appOrigin ?? `http://localhost:${ctx.httpPort ?? 3000}`).replace(/\/+$/, '');
@@ -26,8 +26,8 @@ function parseValueFormat(input: unknown): CaptureValueFormat {
   throw new Error(`value_format must be 'string' or 'json', got '${String(input)}'.`);
 }
 
-export class SecretCaptureRequestHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class SecretCaptureRequestHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.secretCapture) {
       return { success: false, error: 'secret-capture-request requires the secretCapture capability in context.' };
     }

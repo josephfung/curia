@@ -321,7 +321,7 @@ and met the `setup-wizard` agent. From here:
 
 If you want to dig deeper, the [architecture overview](../specs/00-overview.md)
 explains how the layers fit together, and the [agent](adding-an-agent.md)
-and [skill](adding-a-skill.md) guides cover the most common extension points.
+and [skill](adding-a-tool.md) guides cover the most common extension points.
 The end-to-end onboarding flow is documented in
 [spec 18 - Onboarding](../specs/18-onboarding.md).
 

@@ -40,7 +40,7 @@ interface SummarizeOptions {
 
 /**
  * Produce a bounded, PII-scrubbed summary of an arbitrary JSONB payload. Keeps
- * the structurally useful keys an investigator needs (skillName, taskId, blockId,
+ * the structurally useful keys an investigator needs (toolName, taskId, blockId,
  * result.success, error, recipientId, …) visible while capping depth, breadth,
  * and string length so a large or sensitive payload cannot be dumped wholesale.
  *

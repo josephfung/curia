@@ -1,7 +1,7 @@
 // skills/setup-status/handler.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import { SetupStatusHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 
 // ── EntityMemory mock helpers ────────────────────────────────────────────────
@@ -70,12 +70,12 @@ function makeCtx(overrides: Partial<{
   behavioralPreferences: string[];
   activeJobs: Array<{ intentAnchor?: string | null; status?: string }>;
   secretError: Error;
-}> = {}): SkillContext {
+}> = {}): ToolContext {
   const secrets = overrides.secrets ?? {};
   return {
     input: {},
     entityMemory: makeEntityMemory(overrides.existingDeferrals) as unknown as EntityMemory,
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as SkillContext['log'],
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ToolContext['log'],
     secret: vi.fn((name: string) => {
       // Vault infrastructure error takes priority — throws for every key, simulating
       // a vault outage rather than a missing specific key.
@@ -92,7 +92,7 @@ function makeCtx(overrides: Partial<{
         decisionStyle: { externalActions: 'balanced', internalActions: 'balanced' },
         constraints: [],
       }),
-    } as unknown as SkillContext['officeIdentityService'],
+    } as unknown as ToolContext['officeIdentityService'],
     schedulerService: {
       // Honor the status filter so future regressions to this filter logic are caught:
       // if a filter is provided, only return jobs matching that status.
@@ -103,8 +103,8 @@ function makeCtx(overrides: Partial<{
         }
         return jobs as unknown[];
       }),
-    } as unknown as SkillContext['schedulerService'],
-  } as unknown as SkillContext;
+    } as unknown as ToolContext['schedulerService'],
+  } as unknown as ToolContext;
 }
 
 const handler = new SetupStatusHandler();
@@ -245,7 +245,7 @@ describe('setup-status', () => {
     });
 
     it('returns error when entityMemory is absent', async () => {
-      const ctx = { input: {}, log: { error: vi.fn() } } as unknown as SkillContext;
+      const ctx = { input: {}, log: { error: vi.fn() } } as unknown as ToolContext;
       const result = await handler.execute(ctx);
       expect(result.success).toBe(false);
     });

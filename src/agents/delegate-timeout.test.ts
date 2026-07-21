@@ -9,8 +9,8 @@ import {
 } from './delegate-timeout.js';
 
 describe('computeDelegateTimeoutMs', () => {
-  it('matches skills/delegate/skill.json outer timeout', () => {
-    const manifestPath = join(import.meta.dirname, '../../skills/delegate/skill.json');
+  it('matches skills/delegate/tool.json outer timeout', () => {
+    const manifestPath = join(import.meta.dirname, '../../skills/delegate/tool.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { timeout: number };
     expect(DELEGATE_SKILL_OUTER_TIMEOUT_MS).toBe(manifest.timeout);
   });

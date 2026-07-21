@@ -4,12 +4,12 @@
 // Supports both cron expressions (recurring) and ISO 8601 timestamps (one-shot).
 // When intent_anchor is provided, a persistent agent_task is linked to the job.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 import { validateTaskErrorBudget } from '../../src/tasks/task-error-budget.js';
 
-export class SchedulerCreateHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class SchedulerCreateHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.schedulerService) {
       return {
         success: false,

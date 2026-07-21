@@ -32,7 +32,7 @@ export class ActionLogRepo {
       params: [
         row.taskId,
         row.conversationId ?? null,
-        row.skillName,
+        row.toolName,
         row.actionRisk,
         row.outcome,
         row.taskSummary ?? null,
@@ -62,7 +62,7 @@ export class ActionLogRepo {
       params,
     );
     const id = Number(result.rows[0]!.id);
-    this.logger.debug({ id, skillName: row.skillName, outcome: row.outcome }, 'action-log-repo: inserted row');
+    this.logger.debug({ id, toolName: row.toolName, outcome: row.outcome }, 'action-log-repo: inserted row');
     return id;
   }
 
@@ -85,7 +85,7 @@ export class ActionLogRepo {
     // int8 -> number at the boundary (see insert()); a dedup no-op returns no row, preserved as null.
     const raw = result.rows[0]?.id;
     const id = raw === undefined ? null : Number(raw);
-    this.logger.debug({ id, skillName: row.skillName, deduped: id === null }, 'action-log-repo: shadow insert');
+    this.logger.debug({ id, toolName: row.toolName, deduped: id === null }, 'action-log-repo: shadow insert');
     return id;
   }
 
@@ -176,7 +176,7 @@ export class ActionLogRepo {
    */
   async findPendingByTaskAndSkill(
     taskId: string,
-    skillName: string,
+    toolName: string,
     payload: Record<string, unknown>,
   ): Promise<ActionLogRow | null> {
     const result = await this.pool.query(
@@ -186,7 +186,7 @@ export class ActionLogRepo {
          AND outcome = 'pending_approval'
          AND payload::jsonb = $3::jsonb
        LIMIT 1`,
-      [taskId, skillName, JSON.stringify(payload)],
+      [taskId, toolName, JSON.stringify(payload)],
     );
     if (result.rows.length === 0) return null;
     return mapRow(result.rows[0]);
@@ -472,7 +472,7 @@ function mapRow(row: Record<string, unknown>): ActionLogRow {
     id: row.id as number,
     taskId: row.task_id as string,
     conversationId: row.conversation_id as string | null,
-    skillName: row.skill_name as string,
+    toolName: row.skill_name as string,
     actionRisk: row.action_risk as string,
     outcome: row.outcome as ActionLogRow['outcome'],
     taskSummary: row.task_summary as string | null,

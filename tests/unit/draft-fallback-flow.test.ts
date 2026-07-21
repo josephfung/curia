@@ -205,9 +205,9 @@ describe('Draft Fallback Flow Integration', () => {
       const insertedRow = actionLogRepo._insertedRows[0]!;
       expect(insertedRow).toMatchObject({
         taskId: 'task-evt-001',
-        // The email adapter passes reExecRecipe with skillName: 'send-draft' so
+        // The email adapter passes reExecRecipe with toolName: 'send-draft' so
         // approve-action can invoke the correct skill generically on CEO approval.
-        skillName: 'send-draft',
+        toolName: 'send-draft',
         actionRisk: 'medium',
         outcome: 'pending_approval',
       });

@@ -166,7 +166,7 @@ never returned to the LLM in the first place: it is tracked per browser session 
 raw plus its URL- and HTML-encoded variants — from the returned page content, the page URL,
 and any error messages, so a hostile page cannot reflect the injected credential back into the
 model's context. Screenshots are suppressed on any action that fills a secret, since an image
-cannot be value-redacted. See [spec 03 — Output Sanitization](03-skills-and-execution.md#output-sanitization).
+cannot be value-redacted. See [spec 03 — Output Sanitization](03-tools-and-execution.md#output-sanitization).
 
 ### Bulk Export Gates (#201)
 

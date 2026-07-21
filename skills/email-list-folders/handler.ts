@@ -3,10 +3,10 @@
 // Lists all folders/labels in an email account via OutboundGateway.
 // Read-only operation — no side effects.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class EmailListFoldersHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailListFoldersHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.outboundGateway) {
       return {
         success: false,

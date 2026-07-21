@@ -13,7 +13,7 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { MemoryStoreHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 function makeEntityMemory() {
   const embeddingService = EmbeddingService.createForTesting();
@@ -22,13 +22,13 @@ function makeEntityMemory() {
   return { mem: new EntityMemory(store, validator, embeddingService, createSilentLogger()), store };
 }
 
-function makeCtx(entityMemory: EntityMemory | undefined, input: Record<string, unknown>): SkillContext {
+function makeCtx(entityMemory: EntityMemory | undefined, input: Record<string, unknown>): ToolContext {
   return {
     input,
     secret: () => 'test-key',
     log: pino({ level: 'silent' }),
     entityMemory,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 // Factory for mock entity memory objects used in the updated/rate_limited/entity_not_found tests.
@@ -272,7 +272,7 @@ describe('MemoryStoreHandler', () => {
         secret: () => 'test-key',
         log: pino({ level: 'silent' }),
         entityMemory: makeMockEntityMemory({ stored: true, action: 'updated', nodeId: 'fact-existing-42', sensitivity: 'internal' }),
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 
@@ -295,7 +295,7 @@ describe('MemoryStoreHandler', () => {
         log: pino({ level: 'silent' }),
         entityMemory: mockMem,
         memoryWriteSource,
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 
@@ -313,7 +313,7 @@ describe('MemoryStoreHandler', () => {
         log: pino({ level: 'silent' }),
         entityMemory: mockMem,
         // No memoryWriteSource — simulates test / CLI invocations
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 
@@ -330,7 +330,7 @@ describe('MemoryStoreHandler', () => {
         secret: () => 'test-key',
         log: pino({ level: 'silent' }),
         entityMemory: makeMockEntityMemory({ stored: false, action: 'rate_limited', conflict: 'Memory write rate limit exceeded (50 per agent per task)' }),
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 
@@ -349,7 +349,7 @@ describe('MemoryStoreHandler', () => {
         secret: () => 'test-key',
         log: pino({ level: 'silent' }),
         entityMemory: makeMockEntityMemory({ stored: false, action: 'entity_not_found', conflict: 'Entity node not found: entity-1' }),
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 
@@ -373,7 +373,7 @@ describe('MemoryStoreHandler', () => {
           conflict: 'Existing fact "location: Kitchener" (confidence: 0.9) has higher confidence than incoming "location: Toronto" (confidence: 0.7) — write rejected',
           existingNodeId: 'existing-node-123',
         }),
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 
@@ -398,7 +398,7 @@ describe('MemoryStoreHandler', () => {
           nodeId: 'existing-node-123',
           sensitivity: 'internal',
         }),
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 
@@ -418,7 +418,7 @@ describe('MemoryStoreHandler', () => {
       entityMemory: ReturnType<typeof makeMockEntityMemory>,
       contact: { id: string } | null,
       input: Record<string, unknown>,
-    ): SkillContext {
+    ): ToolContext {
       const contactService = {
         findContactByKgNodeId: vi.fn().mockResolvedValue(contact),
         updateContactFields: vi.fn().mockResolvedValue({ id: contact?.id ?? 'c1' }),
@@ -429,7 +429,7 @@ describe('MemoryStoreHandler', () => {
         log: pino({ level: 'silent' }),
         entityMemory,
         contactService,
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
     }
 
     it('redirects a canonical attribute write to ContactService when entity is a person with a contact', async () => {
@@ -530,7 +530,7 @@ describe('MemoryStoreHandler', () => {
         log: pino({ level: 'silent' }),
         entityMemory: mockMem,
         contactService,
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 
@@ -634,7 +634,7 @@ describe('MemoryStoreHandler', () => {
         log: pino({ level: 'silent' }),
         entityMemory: mockMem,
         contactService,
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 
@@ -655,7 +655,7 @@ describe('MemoryStoreHandler', () => {
           ...makeMockEntityMemory({}),
           storeFact: vi.fn().mockRejectedValue(new Error('DB connection lost')),
         },
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
 

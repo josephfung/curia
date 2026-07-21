@@ -1,17 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CeoInboxListHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { Logger } from '../../src/logger.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/** Build a minimal SkillContext. The Nylas client is mocked at the fetch level
+/** Build a minimal ToolContext. The Nylas client is mocked at the fetch level
  *  so we can inspect the outgoing query params. There is no watermark anymore,
  *  so no entityMemory wiring is needed. */
 function makeCtx(
   input: Record<string, unknown>,
   opts: { selfEmail?: string } = {},
-): SkillContext {
+): ToolContext {
   return {
     input,
     secret(name: string) {
@@ -29,7 +29,7 @@ function makeCtx(
       error: vi.fn(),
       debug: vi.fn(),
     } as unknown as Logger,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 function mockFetchReturning(messages: unknown[] = []) {

@@ -4,13 +4,13 @@
 // Kept as a separate skill from task-update so the coordinator prompt can reason about
 // completion cleanly and the audit log distinguishes completion from generic updates.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export class TaskCompleteHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class TaskCompleteHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as {
       task_id?: string;
       completion_note?: string;

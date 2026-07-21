@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import type { SkillResult, SkillManifest } from '../../../src/skills/types.js';
+import type { ToolResult, ToolManifest } from '../../../src/skills/types.js';
 
-describe('SkillResult discriminated union', () => {
+describe('ToolResult discriminated union', () => {
   it('success result carries data', () => {
-    const result: SkillResult = { success: true, data: { count: 42 } };
+    const result: ToolResult = { success: true, data: { count: 42 } };
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data).toEqual({ count: 42 });
@@ -11,7 +11,7 @@ describe('SkillResult discriminated union', () => {
   });
 
   it('failure result carries error string', () => {
-    const result: SkillResult = { success: false, error: 'connection refused' };
+    const result: ToolResult = { success: false, error: 'connection refused' };
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error).toBe('connection refused');
@@ -19,9 +19,9 @@ describe('SkillResult discriminated union', () => {
   });
 });
 
-describe('SkillManifest', () => {
+describe('ToolManifest', () => {
   it('represents a complete manifest', () => {
-    const manifest: SkillManifest = {
+    const manifest: ToolManifest = {
       name: 'test-skill',
       description: 'A test skill',
       version: '1.0.0',

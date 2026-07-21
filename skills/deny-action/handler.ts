@@ -7,12 +7,12 @@
 // SECURITY: sensitivity: "elevated" — authorization is enforced solely by the execution-layer
 // live-principal gate (#1126). No handler-level re-check.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createHumanDecision } from '../../src/bus/events.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 
-export class DenyActionHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DenyActionHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.actionLogRepo) {
       return { success: false, error: 'deny-action requires actionLogRepo capability' };
     }
@@ -64,7 +64,7 @@ export class DenyActionHandler implements SkillHandler {
               deciderId: senderId,
               deciderChannel: channelId,
               subjectEventId: row.taskId,
-              subjectSummary: `CEO denied: ${row.description ?? row.skillName}`,
+              subjectSummary: `CEO denied: ${row.description ?? row.toolName}`,
               contextShown: ['short_ref', 'description', 'skill_name'],
               presentedAt: row.createdAt,
               decidedAt: new Date(),
@@ -78,7 +78,7 @@ export class DenyActionHandler implements SkillHandler {
       }
 
       ctx.log.info({ rowId: row.id, shortRef: row.shortRef }, 'deny-action: request denied');
-      return { success: true, data: `Denied: ${row.description ?? row.skillName} (${row.shortRef})` };
+      return { success: true, data: `Denied: ${row.description ?? row.toolName} (${row.shortRef})` };
     } catch (err) {
       ctx.log.error({ err }, 'deny-action: unexpected failure');
       return { success: false, error: 'deny-action failed unexpectedly' };

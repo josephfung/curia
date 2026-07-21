@@ -2,6 +2,9 @@
 
 Date: 2026-06-09
 Status: Accepted
+<!-- Naming note: ADR-031 renames the atom "skill" → "tool" (`tool_registry` →
+     `tool_registry`, manifests `tool.json`). The install/enable lifecycle model
+     in this ADR is unchanged; only the atom vocabulary is superseded. -->
 
 ## Context
 
@@ -31,7 +34,7 @@ The goal is a lifecycle model with four observable states:
 
 ## Decision
 
-Two new tables — `skill_registry` and `agent_registry` — gate skill and agent loading.
+Two new tables — `tool_registry` and `agent_registry` — gate skill and agent loading.
 Only items with an `enabled = true` row are registered at startup. State is derived from
 the on-disk × row cross-reference.
 
@@ -46,7 +49,7 @@ default. Only items in the trusted in-repo file can self-enrol on startup.
 process restart. No hot-reload in this PR; hot-reload is a larger change with ordering
 and dependency concerns and is explicitly deferred.
 
-**`install`/`uninstall` manifest blocks are parsed but inert in PR1.** `skill.json` and
+**`install`/`uninstall` manifest blocks are parsed but inert in PR1.** `tool.json` and
 agent YAML gain optional `install`/`uninstall` blocks (schema reserved for PR2: secrets
 registration, and PR3: config schema). Parsers accept them now so existing manifests
 compile unchanged; the execution layer ignores them until the follow-up PRs wire the

@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CalendarCreateHoldHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import type { Logger } from '../../src/logger.js';
 import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
@@ -68,13 +68,13 @@ function makeCreatedEvent(overrides?: Partial<NylasCalendarEvent>): NylasCalenda
   };
 }
 
-/** Build a SkillContext with configurable entityMemory and createEvent mock. */
+/** Build a ToolContext with configurable entityMemory and createEvent mock. */
 function makeCtx(opts: {
   toggleValue: string | null;
   createEvent?: ReturnType<typeof vi.fn>;
   subject?: string;
   sourceRef?: string;
-}): SkillContext {
+}): ToolContext {
   const createEvent = opts.createEvent ?? vi.fn().mockResolvedValue(makeCreatedEvent());
   return {
     input: {
@@ -94,9 +94,9 @@ function makeCtx(opts: {
     entityMemory: makeEntityMemory(opts.toggleValue),
     nylasCalendarClient: {
       createEvent,
-    } as unknown as SkillContext['nylasCalendarClient'],
+    } as unknown as ToolContext['nylasCalendarClient'],
     timezone: 'America/Toronto',
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,12 +289,12 @@ describe('CalendarCreateHoldHandler -- malformed timezone', () => {
 
   it('resolves with success:true even when ctx.timezone is invalid (never throws)', async () => {
     // A malformed timezone like 'Not/AZone' causes toLocalIso / formatDisplayTimezone
-    // to throw internally. The handler must catch that and return a SkillResult rather
+    // to throw internally. The handler must catch that and return a ToolResult rather
     // than letting the rejection bubble up (skills must never throw).
     const createEvent = vi.fn().mockResolvedValue(makeCreatedEvent());
     const ctx = makeCtx({ toggleValue: null, createEvent });
     // Override the timezone to an invalid value.
-    // Cast through unknown first — SkillContext has no index signature.
+    // Cast through unknown first — ToolContext has no index signature.
     (ctx as unknown as Record<string, unknown>).timezone = 'Not/AZone';
 
     const result = await expect(handler.execute(ctx)).resolves.toBeDefined();

@@ -39,7 +39,7 @@ export interface AgentThinkDirective extends SceneDirectiveBase {
   kind: 'agent.think';
   agentId: string;
   phase: 'start' | 'stop';
-  skillName?: string;
+  toolName?: string;
 }
 
 export interface TubeInDirective extends SceneDirectiveBase {

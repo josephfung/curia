@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { SkillRegistry } from '../../../src/skills/registry.js';
+import { ToolRegistry } from '../../../src/skills/registry.js';
 import { createSilentLogger } from '../../../src/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ function emptyConfigDir(): string {
 
 describe('loadMcpServers — absent / empty config', () => {
   it('returns empty array when skills.yaml is absent', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const sessions = await loadMcpServers(emptyConfigDir(), registry, logger, secrets);
     expect(sessions).toHaveLength(0);
     expect(registry.list()).toHaveLength(0);
@@ -82,14 +82,14 @@ describe('loadMcpServers — absent / empty config', () => {
 
   it('returns empty array when skills.yaml is empty', async () => {
     const dir = writeSkillsYaml('');
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const sessions = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
   });
 
   it('returns empty array when servers list is empty', async () => {
     const dir = writeSkillsYaml('servers: []');
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const sessions = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
   });
@@ -120,7 +120,7 @@ servers:
     args: ["-y", "@modelcontextprotocol/server-filesystem"]
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const sessions = await loadMcpServers(dir, registry, logger, secrets);
 
     // Only the working server's session is returned.
@@ -142,7 +142,7 @@ servers:
     command: npx
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const sessions = await loadMcpServers(dir, registry, logger, secrets);
 
     expect(sessions).toHaveLength(0);
@@ -157,7 +157,7 @@ servers:
     transport: stdio
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const sessions = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
     expect(mockConnectStdio).not.toHaveBeenCalled();
@@ -170,7 +170,7 @@ servers:
     transport: sse
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const sessions = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
     expect(mockConnectSse).not.toHaveBeenCalled();
@@ -219,7 +219,7 @@ servers:
     sensitivity: normal
     timeout_ms: 15000
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const sessions = await loadMcpServers(dir, registry, logger, secrets);
 
     expect(sessions).toHaveLength(1);
@@ -258,7 +258,7 @@ servers:
     action_risk: high
     sensitivity: elevated
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     await loadMcpServers(dir, registry, logger, secrets);
 
     expect(registry.get('tool-x')!.manifest.action_risk).toBe('high');
@@ -280,7 +280,7 @@ servers:
     command: npx
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     await loadMcpServers(dir, registry, logger, secrets);
 
     expect(registry.get('tool-z')!.manifest.sensitivity).toBe('normal');
@@ -299,7 +299,7 @@ servers:
     command: npx
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     await loadMcpServers(dir, registry, logger, secrets);
 
     expect(registry.get('tool-t')!.manifest.timeout).toBe(30000);
@@ -318,7 +318,7 @@ servers:
     url: https://mcp-github.example.com/sse
     action_risk: medium
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     await loadMcpServers(dir, registry, logger, secrets);
 
     expect(mockConnectSse).toHaveBeenCalledOnce();
@@ -343,7 +343,7 @@ servers:
     command: npx
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     // Should not throw — duplicate registration is a warning, not a crash.
     await expect(loadMcpServers(dir, registry, logger, secrets)).resolves.not.toThrow();
     // The first registration wins.
@@ -356,7 +356,7 @@ describe('loadMcpServers — tools/call round-trip', () => {
     vi.clearAllMocks();
   });
 
-  it('routes tools/call through the registered SkillHandler', async () => {
+  it('routes tools/call through the registered ToolHandler', async () => {
     const mcpResult = {
       content: [{ type: 'text', text: 'file contents here' }],
       isError: false,
@@ -374,13 +374,13 @@ servers:
     command: npx
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     await loadMcpServers(dir, registry, logger, secrets);
 
     const skill = registry.get('read_file')!;
     const result = await skill.handler.execute({
-      skillName: 'read_file',
-      skillVersion: '1.0.0',
+      toolName: 'read_file',
+      toolVersion: '1.0.0',
       input: { path: '/tmp/test.txt' },
       secret: () => '',
       log: logger,
@@ -410,12 +410,12 @@ servers:
     command: npx
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     await loadMcpServers(dir, registry, logger, secrets);
 
     const result = await registry.get('bad_tool')!.handler.execute({
-      skillName: 'bad_tool',
-      skillVersion: '1.0.0',
+      toolName: 'bad_tool',
+      toolVersion: '1.0.0',
       input: {},
       secret: () => '',
       log: logger,
@@ -438,18 +438,18 @@ servers:
     command: npx
     action_risk: none
 `);
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     await loadMcpServers(dir, registry, logger, secrets);
 
     const result = await registry.get('erroring_tool')!.handler.execute({
-      skillName: 'erroring_tool',
-      skillVersion: '1.0.0',
+      toolName: 'erroring_tool',
+      toolVersion: '1.0.0',
       input: {},
       secret: () => '',
       log: logger,
     });
 
-    // Must never throw — returns SkillResult failure instead.
+    // Must never throw — returns ToolResult failure instead.
     expect(result.success).toBe(false);
     expect((result as { success: false; error: string }).error).toMatch(/connection lost/);
   });

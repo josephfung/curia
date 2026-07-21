@@ -44,7 +44,7 @@ import { CalendarCreateEventHandler } from '../../skills/calendar-create-event/h
 
 // Nylas types for mock events
 import type { NylasCalendarClient, NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { Logger } from '../../src/logger.js';
 import { CURIA_HOLD_KEY, buildHoldMetadata } from '../../src/channels/calendar/holds.js';
 
@@ -173,13 +173,13 @@ describeIf('calendar-holds — config-store toggle (real Postgres)', () => {
     expect(readBack).toBe('false');
 
     const createEvent = vi.fn();
-    const ctx: SkillContext = {
+    const ctx: ToolContext = {
       input: { calendarId: CAL_ID, start: SLOT_START, end: SLOT_END, subject: 'toggle off test' },
       secret: () => { throw new Error('no secret in integration test'); },
       log: silentLog(),
       entityMemory,
       nylasCalendarClient: { createEvent } as unknown as NylasCalendarClient,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const handler = new CalendarCreateHoldHandler();
     const result = await handler.execute(ctx);
@@ -209,13 +209,13 @@ describeIf('calendar-holds — config-store toggle (real Postgres)', () => {
     const createdHold = makeHoldEvent(holdEventId);
     const createEvent = vi.fn().mockResolvedValue(createdHold);
 
-    const ctx: SkillContext = {
+    const ctx: ToolContext = {
       input: { calendarId: CAL_ID, start: SLOT_START, end: SLOT_END, subject: 'toggle on test' },
       secret: () => { throw new Error('no secret in integration test'); },
       log: silentLog(),
       entityMemory,
       nylasCalendarClient: { createEvent } as unknown as NylasCalendarClient,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const handler = new CalendarCreateHoldHandler();
     const result = await handler.execute(ctx);
@@ -273,13 +273,13 @@ describeIf('calendar-holds — hold place → self-release (real Postgres)', () 
     const createdHold = makeHoldEvent(holdEventId);
     const holdCreateEvent = vi.fn().mockResolvedValue(createdHold);
 
-    const holdCtx: SkillContext = {
+    const holdCtx: ToolContext = {
       input: { calendarId: CAL_ID, start: SLOT_START, end: SLOT_END, subject: 'release test hold' },
       secret: () => { throw new Error('no secret'); },
       log: silentLog(),
       entityMemory,
       nylasCalendarClient: { createEvent: holdCreateEvent } as unknown as NylasCalendarClient,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const holdResult = await new CalendarCreateHoldHandler().execute(holdCtx);
     expect(holdResult.success).toBe(true);
@@ -301,7 +301,7 @@ describeIf('calendar-holds — hold place → self-release (real Postgres)', () 
     const listEvents = vi.fn().mockResolvedValue([createdHold]);
     const deleteEvent = vi.fn().mockResolvedValue(undefined);
 
-    const bookCtx: SkillContext = {
+    const bookCtx: ToolContext = {
       input: {
         calendarId: CAL_ID,
         title: 'Real Meeting',
@@ -316,7 +316,7 @@ describeIf('calendar-holds — hold place → self-release (real Postgres)', () 
         deleteEvent,
       } as unknown as NylasCalendarClient,
       // No contactService → read-only check is skipped (handled in try block)
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const bookResult = await new CalendarCreateEventHandler().execute(bookCtx);
 

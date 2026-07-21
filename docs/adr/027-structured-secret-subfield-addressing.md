@@ -164,7 +164,7 @@ and never the value.
 - **`secret.accessed` payload gains an optional field** — a change to the bus-event
   public API surface, called out per the changelog policy. It is additive and
   backward-compatible.
-- **`skill.json` for web-browser gains a `select` + `secret_ref` behavior** — a
+- **`tool.json` for web-browser gains a `select` + `secret_ref` behavior** — a
   public-API (manifest schema) change, versioned with a minor bump.
 - **Month-name projections are pinned to `en-US`.** A non-English payment form with
   localized month labels would not match; revisiting locale handling is deferred until

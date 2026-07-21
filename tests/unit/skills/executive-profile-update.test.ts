@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ExecutiveProfileUpdateHandler } from '../../../skills/executive-profile-update/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import type { ExecutiveProfile } from '../../../src/executive/types.js';
 import pino from 'pino';
 
@@ -27,10 +27,10 @@ function makeCtx(
     update: (config: ExecutiveProfile, changedBy: string, note?: string) => Promise<void>;
   },
   caller?: { contactId?: string; role?: string },
-): SkillContext {
+): ToolContext {
   return {
-    skillName: 'executive-profile-update',
-    skillVersion: '1.1.0',
+    toolName: 'executive-profile-update',
+    toolVersion: '1.1.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
@@ -177,7 +177,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
     }
   });
 
-  it('uses fixed "skill" label for changedBy, puts actor in note', async () => {
+  it('uses fixed "tool" label for changedBy, puts actor in note', async () => {
     const service = {
       get: () => baseProfile,
       update: vi.fn(async () => {}),
@@ -190,7 +190,7 @@ describe('ExecutiveProfileUpdateHandler', () => {
     ));
 
     // changedBy is a fixed source label, not the caller identity
-    expect((service.update.mock.calls as unknown[][])[0]![1]).toBe('skill');
+    expect((service.update.mock.calls as unknown[][])[0]![1]).toBe('tool');
     // Actor identity goes in the note
     const note = (service.update.mock.calls as unknown[][])[0]![2] as string;
     expect(note).toContain('ceo-contact-uuid');

@@ -65,15 +65,15 @@ const VERB_RULES: Array<{ test: (name: string) => boolean; verb: string }> = [
  * coordinator's advisory failure message.
  */
 export function buildDescription(
-  skillName: string,
+  toolName: string,
   input: Record<string, unknown>,
 ): string {
   // Determine verb
   let verb = '';
   for (const rule of VERB_RULES) {
-    if (rule.test(skillName)) { verb = rule.verb; break; }
+    if (rule.test(toolName)) { verb = rule.verb; break; }
   }
-  if (!verb) return `Run ${skillName}`;
+  if (!verb) return `Run ${toolName}`;
 
   // Pick context fields in priority order
   const contextParts: string[] = [];
@@ -86,7 +86,7 @@ export function buildDescription(
   }
 
   // Known skill but no recognizable context fields — return just the verb.
-  // (Fallback to "Run {skillName}" is only for truly unknown skills above.)
+  // (Fallback to "Run {toolName}" is only for truly unknown skills above.)
   if (contextParts.length === 0) return verb;
 
   const context = contextParts.join(', ');
@@ -124,7 +124,7 @@ export class ApprovalTriggerService {
   async request(opts: {
     taskId: string;
     conversationId?: string;
-    skillName: string;
+    toolName: string;
     actionRisk: string;
     input: Record<string, unknown>;
     currentScore: number;
@@ -133,21 +133,21 @@ export class ApprovalTriggerService {
      *  score-based message is used. Provide this for non-score gate blocks (e.g. tier gate). */
     reason?: string;
   }): Promise<ApprovalRequestResult> {
-    const { taskId, conversationId, skillName, actionRisk, input, currentScore, requiredScore } = opts;
+    const { taskId, conversationId, toolName, actionRisk, input, currentScore, requiredScore } = opts;
 
     // Step 1: Dedup check
-    const existing = await this.actionLogRepo.findPendingByTaskAndSkill(taskId, skillName, input);
+    const existing = await this.actionLogRepo.findPendingByTaskAndSkill(taskId, toolName, input);
     if (existing) {
       const existingShortRef = existing.shortRef ?? 'unknown';
       if (!existing.shortRef) {
         // A pending_approval row without a short_ref should not happen — flag it.
         this.logger.warn(
-          { taskId, skillName },
+          { taskId, toolName },
           'approval-trigger: existing pending_approval row has null short_ref — data inconsistency',
         );
       }
       this.logger.info(
-        { taskId, skillName, existingShortRef },
+        { taskId, toolName, existingShortRef },
         'approval-trigger: duplicate request — pending_approval row already exists',
       );
       return { created: false, reason: 'duplicate', existingShortRef };
@@ -163,7 +163,7 @@ export class ApprovalTriggerService {
     let shortRef!: string;
     // Sanitize description before storing and sending — the input fields come from
     // LLM-generated skill arguments and may contain dangerous tags.
-    const description = sanitizeOutput(buildDescription(skillName, input));
+    const description = sanitizeOutput(buildDescription(toolName, input));
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
 
     for (let attempt = 1; attempt <= MAX_INSERT_RETRIES; attempt++) {
@@ -173,7 +173,7 @@ export class ApprovalTriggerService {
         rowId = await this.actionLogRepo.insert({
           taskId,
           conversationId,
-          skillName,
+          toolName,
           actionRisk,
           outcome: 'pending_approval',
           payload: input,
@@ -209,7 +209,7 @@ export class ApprovalTriggerService {
     }
 
     this.logger.info(
-      { rowId, taskId, skillName, shortRef, currentScore, requiredScore },
+      { rowId, taskId, toolName, shortRef, currentScore, requiredScore },
       'approval-trigger: pending_approval row created',
     );
 
@@ -230,7 +230,7 @@ export class ApprovalTriggerService {
         preamble: opts.reason ?? defaultBody,
         shortRef,
         expiresAt,
-        skillName,
+        toolName,
         payload: input,
         recipientTier,
         logger: this.logger,

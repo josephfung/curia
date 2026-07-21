@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { EventBus } from '../../src/bus/bus.js';
 import { AgentRuntime } from '../../src/agents/runtime.js';
-import { SkillRegistry } from '../../src/skills/registry.js';
+import { ToolRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import type { LLMProvider, Message, ContentBlock } from '../../src/agents/llm/provider.js';
 const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
-import type { SkillManifest, SkillHandler, SkillContext } from '../../src/skills/types.js';
+import type { ToolManifest, ToolHandler, ToolContext } from '../../src/skills/types.js';
 import { createAgentTask } from '../../src/bus/events.js';
 import pino from 'pino';
 
@@ -18,8 +18,8 @@ const logger = pino({ level: 'silent' });
 describe('Skill invocation integration', () => {
   it('completes the full tool-use loop: task → LLM → skill → result → response', async () => {
     // 1. Set up the skill registry with a simple test skill
-    const registry = new SkillRegistry();
-    const manifest: SkillManifest = {
+    const registry = new ToolRegistry();
+    const manifest: ToolManifest = {
       name: 'echo',
       description: 'Echoes input back as output',
       version: '1.0.0',
@@ -31,8 +31,8 @@ describe('Skill invocation integration', () => {
       secrets: [],
       timeout: 5000,
     };
-    const echoHandler: SkillHandler = {
-      execute: async (ctx: SkillContext) => ({
+    const echoHandler: ToolHandler = {
+      execute: async (ctx: ToolContext) => ({
         success: true,
         data: `Echo: ${ctx.input.message}`,
       }),
@@ -111,8 +111,8 @@ describe('Skill invocation integration', () => {
   });
 
   it('handles skill failure in the loop gracefully', async () => {
-    const registry = new SkillRegistry();
-    const manifest: SkillManifest = {
+    const registry = new ToolRegistry();
+    const manifest: ToolManifest = {
       name: 'fail-skill',
       description: 'Always fails',
       version: '1.0.0',

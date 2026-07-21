@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EmailReplyHandler } from '../../../skills/email-reply/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -13,17 +13,17 @@ function makeCtx(
   }>,
   taskMetadata?: Record<string, unknown>,
   opts?: { selfEmail?: string },
-): SkillContext {
+): ToolContext {
   return {
-    skillName: 'email-reply',
-    skillVersion: '1.3.2',
+    toolName: 'email-reply',
+    toolVersion: '1.3.2',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
     outboundGateway: gateway as never,
     taskMetadata,
     ...(opts?.selfEmail ? { selfEmail: opts.selfEmail } : {}),
-  } as SkillContext;
+  } as ToolContext;
 }
 
 describe('EmailReplyHandler', () => {
@@ -135,7 +135,7 @@ describe('EmailReplyHandler — CC modes', () => {
       send: (...args: unknown[]) => unknown;
     }>,
     selfEmail?: string,
-  ): SkillContext {
+  ): ToolContext {
     return makeCtx(input, gateway, {}, { selfEmail });
   }
 

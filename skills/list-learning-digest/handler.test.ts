@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ListLearningDigestHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import {
   VOICE_PROPOSAL_KEY,
   COMPLETION_DIGEST_KEY,
@@ -53,7 +53,7 @@ describe('ListLearningDigestHandler', () => {
   it('returns empty message when no items', async () => {
     const ctx = {
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await new ListLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
     const data = (result as { data: { sections_markdown: string; message?: string } }).data;
@@ -78,7 +78,7 @@ describe('ListLearningDigestHandler', () => {
     const ctx = {
       entityMemory: mem,
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await new ListLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
     const data = (result as { data: { sections_markdown: string; voice_guide: string | null } }).data;
@@ -92,7 +92,7 @@ describe('ListLearningDigestHandler', () => {
   it('does not render the voice section when entityMemory is unavailable', async () => {
     const ctx = {
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await new ListLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
     const data = (result as { data: { sections_markdown: string; voice_guide: string | null } }).data;
@@ -112,7 +112,7 @@ describe('ListLearningDigestHandler', () => {
     const ctx = {
       entityMemory: mem,
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await new ListLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
     const data = (result as { data: { sections_markdown: string; voice_guide: string | null } }).data;

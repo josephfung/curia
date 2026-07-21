@@ -18,12 +18,12 @@ import { describe, it, expect } from 'vitest';
 import { EventBus } from '../../src/bus/bus.js';
 import { AgentRuntime } from '../../src/agents/runtime.js';
 import { AgentRegistry } from '../../src/agents/agent-registry.js';
-import { SkillRegistry } from '../../src/skills/registry.js';
+import { ToolRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { DelegateHandler } from '../../skills/delegate/handler.js';
 import { RequestClarificationHandler } from '../../skills/request-clarification/handler.js';
 import type { LLMProvider, Message, ContentBlock } from '../../src/agents/llm/provider.js';
-import type { SkillManifest, SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolManifest, ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createAgentTask } from '../../src/bus/events.js';
 import pino from 'pino';
 
@@ -36,7 +36,7 @@ const MOCK_PROVENANCE = {
 } as const;
 
 // Shared delegate skill manifest — used by both test cases to avoid duplication.
-const DELEGATE_MANIFEST: SkillManifest = {
+const DELEGATE_MANIFEST: ToolManifest = {
   name: 'delegate',
   description: 'Delegate a task to a specialist agent',
   version: '1.0.0',
@@ -50,7 +50,7 @@ const DELEGATE_MANIFEST: SkillManifest = {
   timeout: 120000,
 };
 
-const REQUEST_CLARIFICATION_MANIFEST: SkillManifest = {
+const REQUEST_CLARIFICATION_MANIFEST: ToolManifest = {
   name: 'request-clarification',
   description: 'Request clarification from the CEO',
   version: '1.0.0',
@@ -102,8 +102,8 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
     let signalSendCallCount = 0;
     let capturedSignalMessage = '';
     let capturedContextBridge: Record<string, unknown> = {};
-    const mockSignalSend: SkillHandler = {
-      async execute(ctx: SkillContext): Promise<SkillResult> {
+    const mockSignalSend: ToolHandler = {
+      async execute(ctx: ToolContext): Promise<ToolResult> {
         signalSendCallCount++;
         const input = ctx.input as Record<string, unknown>;
         capturedSignalMessage = (input.message as string) ?? '';
@@ -116,18 +116,18 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
 
     // Mock context-bridge-release: captures the entry_id the coordinator releases.
     let releasedEntryId: string | undefined;
-    const mockContextBridgeRelease: SkillHandler = {
-      async execute(ctx: SkillContext): Promise<SkillResult> {
+    const mockContextBridgeRelease: ToolHandler = {
+      async execute(ctx: ToolContext): Promise<ToolResult> {
         releasedEntryId = (ctx.input as Record<string, unknown>).entry_id as string;
         return { success: true, data: {} };
       },
     };
 
-    const skillRegistry = new SkillRegistry();
+    const skillRegistry = new ToolRegistry();
     skillRegistry.register(DELEGATE_MANIFEST, new DelegateHandler());
     skillRegistry.register(REQUEST_CLARIFICATION_MANIFEST, new RequestClarificationHandler());
 
-    const signalSendManifest: SkillManifest = {
+    const signalSendManifest: ToolManifest = {
       name: 'signal-send',
       description: 'Send a Signal message',
       version: '1.0.0',
@@ -142,7 +142,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
     };
     skillRegistry.register(signalSendManifest, mockSignalSend);
 
-    const contextBridgeReleaseManifest: SkillManifest = {
+    const contextBridgeReleaseManifest: ToolManifest = {
       name: 'context-bridge-release',
       description: 'Release an outbound context bridge entry',
       version: '1.0.0',
@@ -469,7 +469,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
     agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main coordinator' });
     agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research and analysis' });
 
-    const skillRegistry = new SkillRegistry();
+    const skillRegistry = new ToolRegistry();
     skillRegistry.register(DELEGATE_MANIFEST, new DelegateHandler());
 
     const bus = new EventBus(logger);

@@ -6,7 +6,7 @@
 // PII-scrubbed chain. All traversal is bounded (depth, fan-out, total nodes) and
 // cycle-safe.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { AuditLogRow, AuditLogRepo } from '../../src/audit/audit-log-repo.js';
 import { toEventRecord } from '../../src/diagnostics/event-record.js';
 import { formatDisplayTimezone } from '../../src/time/timestamp.js';
@@ -30,8 +30,8 @@ function clamp(value: number | undefined, def: number, max: number): number {
   return Math.min(Math.floor(value), max);
 }
 
-export class AuditTraceHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class AuditTraceHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const repo = ctx.auditLogRepo;
     if (!repo) {
       return { success: false, error: 'audit-trace requires auditLogRepo capability' };

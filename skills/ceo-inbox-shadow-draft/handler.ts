@@ -1,8 +1,8 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { shadowDraftPath, SHADOW_DOC_TYPE } from '../_shared/shadow-draft.js';
 
-export class CeoInboxShadowDraftHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CeoInboxShadowDraftHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.workingDocs) {
       return { success: false, error: 'ceo-inbox-shadow-draft requires workingDocs' };
     }

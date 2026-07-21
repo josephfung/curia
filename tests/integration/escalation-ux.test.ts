@@ -16,7 +16,7 @@ import {
 } from '../../src/agents/resumable-circuit-breaker.js';
 import { buildDelegationEscalation, renderEscalation } from '../../src/agents/task-escalation.js';
 import { TaskCreateHandler } from '../../skills/task-create/handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -161,7 +161,7 @@ describeIf('Escalation UX — planned-parent + delegation (#1267)', () => {
       agentId: 'coordinator',
       timezone: 'UTC',
       taskRepo: repo,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new TaskCreateHandler().execute(ctx);
     expect(result.success).toBe(true);

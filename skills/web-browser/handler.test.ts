@@ -27,7 +27,7 @@ import pino from 'pino';
 import { WebBrowserHandler } from './handler.js';
 import { BrowserSession } from '../../src/browser/browser-session.js';
 import type { BrowserService } from '../../src/browser/browser-service.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { BrowserContext, Page } from 'playwright';
 
 const logger = pino({ level: 'silent' });
@@ -100,13 +100,13 @@ function makeMockPage(
   };
 }
 
-/** Build a SkillContext + a real BrowserSession wrapping the mock page. */
-function makeSkillContext(opts: {
+/** Build a ToolContext + a real BrowserSession wrapping the mock page. */
+function makeToolContext(opts: {
   input: Record<string, unknown>;
   pageContent?: string;
   pageUrl?: string;
   resolveSecretRef?: (ref: string) => Promise<string>;
-}): { ctx: SkillContext; session: BrowserSession; fill: ReturnType<typeof vi.fn> } {
+}): { ctx: ToolContext; session: BrowserSession; fill: ReturnType<typeof vi.fn> } {
   const fill = vi.fn().mockResolvedValue(undefined);
   const page = makeMockPage(opts.pageContent ?? 'nothing sensitive here', fill, opts.pageUrl);
   const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
@@ -121,7 +121,7 @@ function makeSkillContext(opts: {
     log: logger,
     browserService,
     resolveSecretRef: opts.resolveSecretRef,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 
   return { ctx, session, fill };
 }
@@ -129,7 +129,7 @@ function makeSkillContext(opts: {
 describe('web-browser type action with secret_ref (#973)', () => {
   it('fills the resolved secret value and never returns it', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx } = makeSkillContext({
+    const { ctx } = makeToolContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
       resolveSecretRef,
     });
@@ -147,7 +147,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
   it('redacts an injected value reflected back through get_content', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
     // First fill the secret, then a page whose content echoes it back.
-    const { ctx, session } = makeSkillContext({
+    const { ctx, session } = makeToolContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
       pageContent: `Welcome. Your entered password was ${SECRET_VALUE} (oops).`,
       resolveSecretRef,
@@ -167,7 +167,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
   it('redacts an injected value reflected back through the returned url (GET form)', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx } = makeSkillContext({
+    const { ctx } = makeToolContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
       // A form that submits via GET puts the field value into the query string.
       pageUrl: `https://aeroplan.com/login?pw=${SECRET_VALUE}`,
@@ -186,7 +186,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
   it('suppresses a screenshot on the same action that injects a secret', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx } = makeSkillContext({
+    const { ctx } = makeToolContext({
       // screenshot:true on a secret_ref fill — the field may render the value (non-password
       // input), and an image can't be value-redacted, so capture must be refused.
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password', screenshot: true },
@@ -204,7 +204,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
 
   it('rejects when both text and secret_ref are supplied (mutually exclusive)', async () => {
     const resolveSecretRef = vi.fn().mockResolvedValue(SECRET_VALUE);
-    const { ctx } = makeSkillContext({
+    const { ctx } = makeToolContext({
       input: { action: 'type', selector: '#pass', text: 'literal', secret_ref: 'user.aeroplan_password' },
       resolveSecretRef,
     });
@@ -217,14 +217,14 @@ describe('web-browser type action with secret_ref (#973)', () => {
   });
 
   it('rejects when neither text nor secret_ref is supplied', async () => {
-    const { ctx } = makeSkillContext({ input: { action: 'type', selector: '#pass' } });
+    const { ctx } = makeToolContext({ input: { action: 'type', selector: '#pass' } });
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(false);
   });
 
   it('errors clearly when secret_ref is used but the resolver capability is absent', async () => {
     // resolveSecretRef undefined — the skill was invoked without the secretResolver capability.
-    const { ctx } = makeSkillContext({
+    const { ctx } = makeToolContext({
       input: { action: 'type', selector: '#pass', secret_ref: 'user.aeroplan_password' },
     });
 
@@ -238,7 +238,7 @@ describe('web-browser type action with secret_ref (#973)', () => {
   });
 
   it('still supports a literal text fill (non-secret path uses humanType for realistic cadence)', async () => {
-    const { ctx } = makeSkillContext({
+    const { ctx } = makeToolContext({
       input: { action: 'type', selector: '#search', text: 'hello world' },
     });
 
@@ -276,7 +276,7 @@ describe('web-browser block_ads + incognito inputs (#987)', () => {
       input: { action: 'navigate', url: 'https://example.com', block_ads: true, incognito: true },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     await new WebBrowserHandler().execute(ctx);
 
@@ -298,7 +298,7 @@ describe('web-browser block_ads + incognito inputs (#987)', () => {
       input: { action: 'get_content', keep_warm: true, session_id: 'sess-warm' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     await new WebBrowserHandler().execute(ctx);
 
@@ -314,7 +314,7 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
   }
 
   it('scroll with a selector scrolls the target element into view', async () => {
-    const { ctx, session } = makeSkillContext({
+    const { ctx, session } = makeToolContext({
       input: { action: 'scroll', selector: 'load more results' },
     });
     const result = await new WebBrowserHandler().execute(ctx);
@@ -324,7 +324,7 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
   });
 
   it('scroll without a selector scrolls the viewport', async () => {
-    const { ctx, session } = makeSkillContext({ input: { action: 'scroll' } });
+    const { ctx, session } = makeToolContext({ input: { action: 'scroll' } });
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(true);
     const page = session.page as unknown as { mouse: { wheel: ReturnType<typeof vi.fn> } };
@@ -332,7 +332,7 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
   });
 
   it('hover hovers the resolved element', async () => {
-    const { ctx, session } = makeSkillContext({
+    const { ctx, session } = makeToolContext({
       input: { action: 'hover', selector: 'July 18' },
     });
     const result = await new WebBrowserHandler().execute(ctx);
@@ -342,13 +342,13 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
   });
 
   it('hover without a selector errors', async () => {
-    const { ctx } = makeSkillContext({ input: { action: 'hover' } });
+    const { ctx } = makeToolContext({ input: { action: 'hover' } });
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(false);
   });
 
   it('press_key presses the given key', async () => {
-    const { ctx, session } = makeSkillContext({
+    const { ctx, session } = makeToolContext({
       input: { action: 'press_key', key: 'Enter' },
     });
     const result = await new WebBrowserHandler().execute(ctx);
@@ -358,13 +358,13 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
   });
 
   it('press_key without a key errors', async () => {
-    const { ctx } = makeSkillContext({ input: { action: 'press_key' } });
+    const { ctx } = makeToolContext({ input: { action: 'press_key' } });
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(false);
   });
 
   it('wait_for waits for the element to become visible', async () => {
-    const { ctx, session } = makeSkillContext({
+    const { ctx, session } = makeToolContext({
       input: { action: 'wait_for', selector: 'date picker' },
     });
     const result = await new WebBrowserHandler().execute(ctx);
@@ -374,7 +374,7 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
   });
 
   it('wait_for surfaces a clear error when the element never appears', async () => {
-    const { ctx, session } = makeSkillContext({
+    const { ctx, session } = makeToolContext({
       input: { action: 'wait_for', selector: 'never renders' },
     });
     // Make the shared locator's waitFor reject (timeout).
@@ -386,7 +386,7 @@ describe('web-browser new interaction actions (scroll/hover/press_key/wait_for)'
   });
 
   it('wait_for without a selector errors', async () => {
-    const { ctx } = makeSkillContext({ input: { action: 'wait_for' } });
+    const { ctx } = makeToolContext({ input: { action: 'wait_for' } });
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(false);
   });
@@ -445,7 +445,7 @@ describe('web-browser iframe awareness', () => {
       input: { action: 'click', selector: 'July 18' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -500,7 +500,7 @@ describe('web-browser iframe awareness', () => {
       input: { action: 'click', selector: 'Reserve' },
       log: logger,
       browserService: browserServiceD,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctxD);
 
@@ -538,7 +538,7 @@ describe('web-browser iframe awareness', () => {
       input: { action: 'get_content' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -582,7 +582,7 @@ describe('web-browser frame SSRF gating + read-failure detection', () => {
       input: { action: 'get_content' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -645,7 +645,7 @@ describe('web-browser frame SSRF gating + read-failure detection', () => {
       input: { action: 'click', selector: 'admin link' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -688,7 +688,7 @@ describe('web-browser frame SSRF gating + read-failure detection', () => {
       input: { action: 'get_content' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -723,7 +723,7 @@ describe('web-browser frame SSRF gating + read-failure detection', () => {
       input: { action: 'get_content' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -747,7 +747,7 @@ describe('web-browser hard-block detection', () => {
       input: { action: 'navigate', url: 'https://www.opentable.com/booking/xyz' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -776,7 +776,7 @@ describe('web-browser hard-block detection', () => {
       input: { action: 'navigate', url: 'https://app.example.com/dashboard' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(true);
@@ -794,7 +794,7 @@ describe('web-browser hard-block detection', () => {
       input: { action: 'navigate', url: 'https://example.com' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
     expect(result.success).toBe(true);
@@ -812,7 +812,7 @@ describe('web-browser navigate hardening — dwell + soft-block reload (#1053)',
       input: { action: 'navigate', url: 'https://example.com' },
       log: logger,
       browserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
   }
 
   it('dwells and simulates presence after a clean navigation', async () => {
@@ -897,7 +897,7 @@ describe('web-browser click uses human behavior (#1053)', () => {
         getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-click', session }),
         closeSession: vi.fn(),
       } as unknown as BrowserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -929,7 +929,7 @@ describe('web-browser navigate — challenge poll (#1053+)', () => {
         }),
         closeSession: vi.fn(),
       } as unknown as BrowserService,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -940,14 +940,14 @@ describe('web-browser navigate — challenge poll (#1053+)', () => {
 
 describe('web-browser ref-based selectors', () => {
   // Build a ctx around a caller-supplied mock page so the test can assert on how the
-  // page's locator methods were called (makeSkillContext hides its page).
+  // page's locator methods were called (makeToolContext hides its page).
   function ctxFor(page: ReturnType<typeof makeMockPage>, input: Record<string, unknown>) {
     const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);
     const browserService = {
       getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: 'sess-1', session }),
       closeSession: vi.fn().mockResolvedValue(undefined),
     } as unknown as BrowserService;
-    return { input, log: logger, browserService } as unknown as SkillContext;
+    return { input, log: logger, browserService } as unknown as ToolContext;
   }
 
   it('resolves an gNfNeM ref via data-curia-ref, bypassing the fuzzy cascade', async () => {
@@ -1055,7 +1055,7 @@ describe('web-browser ref-based selectors', () => {
     expect(trippedErr).toMatch(/failed in a row|Stopping browser interaction/i);
 
     // A successful get_content (a recovery action, never short-circuited) resets the streak.
-    const readCtx = { ...ctx, input: { action: 'get_content', session_id: 'sess-1' } } as unknown as SkillContext;
+    const readCtx = { ...ctx, input: { action: 'get_content', session_id: 'sess-1' } } as unknown as ToolContext;
     const read = await new WebBrowserHandler().execute(readCtx);
     expect(read.success).toBe(true);
 
@@ -1218,7 +1218,7 @@ describe('web-browser batched actions (multi-action per call)', () => {
       getOrCreateSession: vi.fn().mockResolvedValue(result),
       closeSession: vi.fn().mockResolvedValue(undefined),
     } as unknown as BrowserService;
-    return { input, log: logger, browserService } as unknown as SkillContext;
+    return { input, log: logger, browserService } as unknown as ToolContext;
   }
 
   it('runs a sequence of actions in order in one call (a whole page of answers + Next)', async () => {
@@ -1359,7 +1359,7 @@ describe('web-browser batched actions (multi-action per call)', () => {
       log: logger,
       browserService,
       resolveSecretRef,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new WebBrowserHandler().execute(ctx);
 
@@ -1456,7 +1456,7 @@ describe('web-browser session_reused signal', () => {
       getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: returnedSessionId, session }),
       closeSession: vi.fn().mockResolvedValue(undefined),
     } as unknown as BrowserService;
-    return { input, log: logger, browserService } as unknown as SkillContext;
+    return { input, log: logger, browserService } as unknown as ToolContext;
   }
 
   it('reports session_reused:true when a passed session_id reattaches to its live session', async () => {

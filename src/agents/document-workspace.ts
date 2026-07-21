@@ -10,7 +10,7 @@ import type { ResumableDocumentPointer } from '../db/resumable-progress.js';
 import { isDocumentPointer } from '../db/resumable-progress.js';
 
 /** The four skills every document-workspace-enabled agent can call. */
-export const DOCUMENT_WORKSPACE_SKILLS = [
+export const DOCUMENT_WORKSPACE_TOOLS = [
   'doc-read',
   'doc-list',
   'doc-write',
@@ -89,7 +89,7 @@ export function applyDocumentWorkspace(
     return { systemPrompt, pinnedSkills: [...pinnedSkills] };
   }
   const merged = [...pinnedSkills];
-  for (const skill of DOCUMENT_WORKSPACE_SKILLS) {
+  for (const skill of DOCUMENT_WORKSPACE_TOOLS) {
     if (!merged.includes(skill)) merged.push(skill);
   }
   return {

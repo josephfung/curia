@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import pino from 'pino';
 import { RequestClarificationHandler, CLARIFICATION_PROTOCOL } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
-function makeCtx(input: Record<string, unknown>): SkillContext {
+function makeCtx(input: Record<string, unknown>): ToolContext {
   return {
     input,
     secret: () => 'test-key',
     log: pino({ level: 'silent' }),
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('request-clarification handler', () => {

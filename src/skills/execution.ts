@@ -2,7 +2,7 @@
 //
 // This is the security boundary between agents and the outside world.
 // It resolves skills from the registry, validates permissions, provides
-// a sandboxed SkillContext, enforces timeouts, and sanitizes outputs.
+// a sandboxed ToolContext, enforces timeouts, and sanitizes outputs.
 //
 // Normal skills get: validated input, scoped secret access, a scoped logger,
 // and universal services (contactService, entityContextAssembler, agentPersona).
@@ -17,16 +17,16 @@
 // before invoking the handler. The handler receives ctx.entityContext[] and
 // never needs to call entity-context itself.
 
-import type { SkillResult, SkillContext, CallerContext, AgentPersona, ToolDefinition, SkillManifest } from './types.js';
+import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput } from '../contacts/principal-recipient.js';
 import type { ChannelIdentity } from '../contacts/types.js';
-import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_SKILLS } from '../autonomy/escalation-policy.js';
+import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import type { ContactTier } from '../contacts/types.js';
-import type { SkillRegistry } from './registry.js';
+import type { ToolRegistry } from './registry.js';
 import { sanitizeOutput, sanitizeObjectOutput } from './sanitize.js';
 import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
 import type { Logger } from '../logger.js';
@@ -54,8 +54,8 @@ import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import { DEFAULT_RESUMABLE_CEILINGS, type ResumableCeilingsConfig } from '../config.js';
 import type { ExportControlService } from '../security/export-controls.js';
 import {
-  MCP_EXPORT_SKILLS,
-  GATEWAY_ATTACHMENT_SKILLS,
+  MCP_EXPORT_TOOLS,
+  GATEWAY_ATTACHMENT_TOOLS,
   ExportControlService as ExportControlServiceClass,
   extractDestinationFromInput,
   formatDestination,
@@ -78,10 +78,10 @@ const USER_SECRET_PREFIX = 'user.';
 
 // Hard allowlist of skills permitted to declare and use the `secretResolver` capability.
 // Mirrors the executionLayer→approve-action restriction below: declaring the capability in
-// skill.json is necessary but NOT sufficient — the skill name must also appear here. Kept as
+// tool.json is necessary but NOT sufficient — the skill name must also appear here. Kept as
 // a set so sibling skills that legitimately need by-reference injection (e.g. a future
 // http-request skill) can be added deliberately rather than by manifest edit alone.
-export const SECRET_RESOLVER_ALLOWED_SKILLS: ReadonlySet<string> = new Set(['web-browser']);
+export const SECRET_RESOLVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['web-browser']);
 
 /** Options passed to ExecutionLayer.invoke() by the agent runtime. */
 export interface InvokeOptions {
@@ -123,8 +123,8 @@ const JUDGE_INPUT_DESCRIPTION_MAX_LENGTH = 1000;
  * A vague or truncated description fails safe: the judge leans toward escalate.
  */
 function buildActionDescription(
-  skillName: string,
-  manifest: SkillManifest,
+  toolName: string,
+  manifest: ToolManifest,
   input: Record<string, unknown>,
 ): string {
   let inputJson: string;
@@ -137,11 +137,11 @@ function buildActionDescription(
   if (inputJson.length > JUDGE_INPUT_DESCRIPTION_MAX_LENGTH) {
     inputJson = inputJson.slice(0, JUDGE_INPUT_DESCRIPTION_MAX_LENGTH) + '…(truncated)';
   }
-  return `Skill "${skillName}" (${manifest.description}). Invocation input: ${inputJson}`;
+  return `Skill "${toolName}" (${manifest.description}). Invocation input: ${inputJson}`;
 }
 
 export class ExecutionLayer {
-  private registry: SkillRegistry;
+  private registry: ToolRegistry;
   private logger: Logger;
   private bus?: EventBus;
   private agentRegistry?: AgentRegistry;
@@ -202,7 +202,7 @@ export class ExecutionLayer {
    *  yamlConfig.sensitivity_rules and reused across skills and EntityMemory. */
   private sensitivityClassifier?: SensitivityClassifier;
 
-  constructor(registry: SkillRegistry, logger: Logger, options?: {
+  constructor(registry: ToolRegistry, logger: Logger, options?: {
     bus?: EventBus;
     agentRegistry?: AgentRegistry;
     contactService?: ContactService;
@@ -302,7 +302,7 @@ export class ExecutionLayer {
    * Sanitize a skill error message and wrap it in <skill_error> tags.
    *
    * Wrapping in a structured tag serves two purposes:
-   * 1. The skill.result bus event carries clearly-typed error data for the audit log.
+   * 1. The tool.result bus event carries clearly-typed error data for the audit log.
    * 2. If the error string ever reaches the LLM directly, it reads as structured data
    *    rather than a free-form instruction that could be mistaken for a system directive.
    *
@@ -337,7 +337,7 @@ export class ExecutionLayer {
    * Otherwise, returns the existing error message unchanged (fail-open).
    */
   private async buildGateError(
-    skillName: string,
+    toolName: string,
     input: Record<string, unknown>,
     currentScore: number,
     requiredScore: number,
@@ -346,7 +346,7 @@ export class ExecutionLayer {
     skillLogger: Logger,
   ): Promise<string> {
     const baseMsg =
-      `Skill '${skillName}' blocked — autonomy score is ${currentScore}, ` +
+      `Tool '${toolName}' blocked — autonomy score is ${currentScore}, ` +
       `but this skill (action_risk: ${String(actionRisk)}) requires ${requiredScore}. `;
 
     // Approval trigger — only if wired and task context is available.
@@ -355,7 +355,7 @@ export class ExecutionLayer {
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
           conversationId: options.conversationId,
-          skillName,
+          toolName,
           actionRisk: String(actionRisk),
           input,
           currentScore,
@@ -363,7 +363,7 @@ export class ExecutionLayer {
         });
         if (!result.created) {
           return (
-            `Skill '${skillName}' blocked — an approval request for this action ` +
+            `Tool '${toolName}' blocked — an approval request for this action ` +
             `is already pending (ref: ${result.existingShortRef}).`
           );
         }
@@ -379,7 +379,7 @@ export class ExecutionLayer {
         // Approval trigger failure should not change the gate behavior.
         // The skill is still blocked; we just can't create the approval row.
         skillLogger.warn(
-          { err, skillName },
+          { err, toolName },
           'approval trigger failed — returning standard gate error',
         );
       }
@@ -394,7 +394,7 @@ export class ExecutionLayer {
    * Creates an approval request when the trigger is wired; falls back to a static message.
    */
   private async buildTierGateError(
-    skillName: string,
+    toolName: string,
     input: Record<string, unknown>,
     initiatingTier: string,
     actionRisk: string | number,
@@ -403,7 +403,7 @@ export class ExecutionLayer {
     skillLogger: Logger,
   ): Promise<string> {
     const baseMsg =
-      `Skill '${skillName}' blocked — the initiating contact's tier ('${initiatingTier}') ` +
+      `Tool '${toolName}' blocked — the initiating contact's tier ('${initiatingTier}') ` +
       `does not permit ${String(actionRisk)}-risk actions without approval. `;
 
     if (this.approvalTrigger && options?.taskEventId) {
@@ -411,18 +411,18 @@ export class ExecutionLayer {
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
           conversationId: options.conversationId,
-          skillName,
+          toolName,
           actionRisk: String(actionRisk),
           input,
           currentScore,
           requiredScore: currentScore,
           reason:
-            `Curia wanted to run '${skillName}', but the initiating contact's tier ` +
+            `Curia wanted to run '${toolName}', but the initiating contact's tier ` +
             `('${initiatingTier}') requires approval for ${String(actionRisk)}-risk actions.`,
         });
         if (!result.created) {
           return (
-            `Skill '${skillName}' blocked — an approval request for this action ` +
+            `Tool '${toolName}' blocked — an approval request for this action ` +
             `is already pending (ref: ${result.existingShortRef}).`
           );
         }
@@ -436,7 +436,7 @@ export class ExecutionLayer {
         );
       } catch (err) {
         skillLogger.warn(
-          { err, skillName },
+          { err, toolName },
           'tier gate approval trigger failed — returning standard gate error',
         );
       }
@@ -450,7 +450,7 @@ export class ExecutionLayer {
    * Restricted bulk blocks do not create approval rows.
    */
   private async buildExportGateError(
-    skillName: string,
+    toolName: string,
     input: Record<string, unknown>,
     message: string,
     items: import('../security/export-controls.js').ExportItem[],
@@ -466,7 +466,7 @@ export class ExecutionLayer {
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
           conversationId: options.conversationId,
-          skillName,
+          toolName,
           actionRisk: String(actionRisk),
           input: { ...input, export_items: items.map((i) => ({
             node_id: i.nodeId,
@@ -492,7 +492,7 @@ export class ExecutionLayer {
           `notification could not be delivered — the CEO will see it in the next digest.`
         );
       } catch (err) {
-        skillLogger.warn({ err, skillName }, 'export gate approval trigger failed');
+        skillLogger.warn({ err, toolName }, 'export gate approval trigger failed');
       }
     }
 
@@ -519,8 +519,8 @@ export class ExecutionLayer {
   private async resolveTierGateDecision(
     initiatingTier: ContactTier,
     actionClass: ActionConsequenceClass,
-    skillName: string,
-    manifest: SkillManifest,
+    toolName: string,
+    manifest: ToolManifest,
     input: Record<string, unknown>,
     options: InvokeOptions | undefined,
     skillLogger: Logger,
@@ -533,7 +533,7 @@ export class ExecutionLayer {
     if (decisionIfReplyToSender === decisionIfThirdParty) {
       if (isPrincipalSoleRecipient && decisionIfReplyToSender === 'allow') {
         skillLogger.info(
-          { skillName, initiatingTier, actionClass, isPrincipalSoleRecipient },
+          { toolName, initiatingTier, actionClass, isPrincipalSoleRecipient },
           'autonomy gate: Gate C allowed — recipient set is exclusively the verified principal (#1301)',
         );
       }
@@ -549,13 +549,13 @@ export class ExecutionLayer {
     // (isThirdPartyFacing === undefined) → fail closed.
     if (this.escalationJudge?.isEnabled()) {
       const verdict = await this.escalationJudge.classifyAction({
-        description: buildActionDescription(skillName, manifest, input),
+        description: buildActionDescription(toolName, manifest, input),
         initiatingTier,
         conversationId: options?.conversationId ?? 'system',
       });
       if (verdict.isThirdPartyFacing === undefined) {
         skillLogger.info(
-          { skillName, initiatingTier, actionClass, reason: verdict.reason },
+          { toolName, initiatingTier, actionClass, reason: verdict.reason },
           'autonomy gate: Gate C escalation judge returned no third-party determination — failing closed (escalate)',
         );
         return 'escalate';
@@ -570,7 +570,7 @@ export class ExecutionLayer {
       );
       skillLogger.info(
         {
-          skillName,
+          toolName,
           initiatingTier,
           manifestClass: actionClass,
           judgedClass: verdict.actionClass,
@@ -587,7 +587,7 @@ export class ExecutionLayer {
 
     // No judge available — fail closed rather than guess permissively.
     skillLogger.warn(
-      { skillName, initiatingTier, actionClass },
+      { toolName, initiatingTier, actionClass },
       'autonomy gate: Gate C decision is third-party-sensitive but no escalation judge is configured — failing closed (escalate)',
     );
     return 'escalate';
@@ -597,14 +597,14 @@ export class ExecutionLayer {
    * Return LLM tool definitions for the named skills.
    *
    * Used by AgentRuntime to expand the per-task working tool list after a
-   * skill-registry discovery call — the runtime calls this with the names
-   * returned by skill-registry, gets back full tool schemas, and appends
+   * tool-registry discovery call — the runtime calls this with the names
+   * returned by tool-registry, gets back full tool schemas, and appends
    * them so the LLM can call the newly-discovered skills in subsequent turns.
    *
    * Unknown names are silently skipped (same as toToolDefinitions).
    */
-  getToolDefinitions(skillNames: string[]): ToolDefinition[] {
-    return this.registry.toToolDefinitions(skillNames);
+  getToolDefinitions(toolNames: string[]): ToolDefinition[] {
+    return this.registry.toToolDefinitions(toolNames);
   }
 
   /**
@@ -612,31 +612,31 @@ export class ExecutionLayer {
    *
    * Steps:
    * 1. Resolve the skill from the registry
-   * 2. Build a sandboxed SkillContext with scoped secret access
+   * 2. Build a sandboxed ToolContext with scoped secret access
    * 3. If manifest declares entity_enrichment, pre-assemble EntityContext
    * 4. Execute the handler with a timeout
    * 5. Sanitize the output (strip injection vectors, redact secrets, truncate)
    * 6. Return the result
    *
-   * Never throws — always returns a SkillResult.
+   * Never throws — always returns a ToolResult.
    */
   async invoke(
-    skillName: string,
+    toolName: string,
     input: Record<string, unknown>,
     caller?: CallerContext,
     options?: InvokeOptions,
-  ): Promise<SkillResult> {
-    const skill = this.registry.get(skillName);
+  ): Promise<ToolResult> {
+    const skill = this.registry.get(toolName);
 
     if (!skill) {
-      return { success: false, error: this.wrapSkillError(`Skill '${skillName}' not found in registry`) };
+      return { success: false, error: this.wrapSkillError(`Tool '${toolName}' not found in registry`) };
     }
 
     const { manifest, handler } = skill;
 
     // Declare skillLogger here (before the normalization loop) so it is in scope
     // for both the normalization error path and the rest of the method.
-    const skillLogger = this.logger.child({ skill: skillName });
+    const skillLogger = this.logger.child({ skill: toolName });
 
     // Normalize timestamp inputs to UTC Z-suffix before invoking the handler.
     // The LLM often emits offset-less ISO strings (e.g. "2026-04-06T08:00:00")
@@ -674,7 +674,7 @@ export class ExecutionLayer {
       try {
         autonomyConfig = await this.autonomyService.getConfig();
       } catch (err) {
-        skillLogger.warn({ err, skillName }, 'autonomy gate: failed to read autonomy_config — skipping gate (fail-open)');
+        skillLogger.warn({ err, toolName }, 'autonomy gate: failed to read autonomy_config — skipping gate (fail-open)');
       }
     }
 
@@ -709,7 +709,7 @@ export class ExecutionLayer {
     // The signal is `options.liveTurn` (a DISTINCT field off the metadata bag, so it can never be
     // persisted); isLivePrincipalTurn also requires principal originator on the effective metadata
     // for defence in depth. A live turn carries no wakeContext, so its effective standing equals
-    // its raw lineage. See docs/specs/03-skills-and-execution.md (elevated = live principal turn) and ADR-017.
+    // its raw lineage. See docs/specs/03-tools-and-execution.md (elevated = live principal turn) and ADR-017.
     if (manifest.sensitivity === 'elevated') {
       // Defence in depth (#1126): a heartbeat-woken / scheduled task is NEVER a live principal turn.
       // The live signal is a distinct off-bag field the wake path never sets, so a woken task should
@@ -720,7 +720,7 @@ export class ExecutionLayer {
       if (isWokenTurn || !isLivePrincipalTurn(options?.liveTurn, effectiveTaskMetadata)) {
         this.logger.warn(
           {
-            skillName,
+            toolName,
             caller: caller ? { role: caller.role, channel: caller.channel } : null,
             // Log the raw LINEAGE (audit), not the downgraded effective standing.
             originator: (options?.taskMetadata as Record<string, unknown> | undefined)?.originator ?? null,
@@ -729,7 +729,7 @@ export class ExecutionLayer {
         );
         return {
           success: false,
-          error: this.wrapSkillError(`Skill '${skillName}' requires a live principal turn — it can only be invoked directly by the principal (the CEO), not by a system job, an agent, or a woken/scheduled task`),
+          error: this.wrapSkillError(`Tool '${toolName}' requires a live principal turn — it can only be invoked directly by the principal (the CEO), not by a system job, an agent, or a woken/scheduled task`),
         };
       }
     }
@@ -749,13 +749,13 @@ export class ExecutionLayer {
       const callerId = options?.agentId ?? 'system';
       if (!allowedCallers.includes(callerId)) {
         skillLogger.warn(
-          { skillName, callerId, allowedCallers },
+          { toolName, callerId, allowedCallers },
           'Skill blocked: caller not in allowed_callers',
         );
         return {
           success: false,
           error: this.wrapSkillError(
-            `Skill '${skillName}' is restricted to agents: ${allowedCallers.join(', ')}`,
+            `Tool '${toolName}' is restricted to agents: ${allowedCallers.join(', ')}`,
           ),
         };
       }
@@ -771,7 +771,7 @@ export class ExecutionLayer {
       // originator (the CEO who triggered the task chain) for forensic attribution.
       skillLogger.info(
         {
-          skillName,
+          toolName,
           agentId: options.agentId,
           taskEventId: options.taskEventId,
           originator: options.taskMetadata?.['originator'],
@@ -805,7 +805,7 @@ export class ExecutionLayer {
         // CEO instruction overrides it by intent. Log at info so bypasses are visible in prod.
         if (isPrincipalOriginated(effectiveTaskMetadata)) {
           skillLogger.info(
-            { skillName, currentScore, agentId: options?.agentId, taskEventId: options?.taskEventId },
+            { toolName, currentScore, agentId: options?.agentId, taskEventId: options?.taskEventId },
             'autonomy gate: skipped — task originated by principal',
           );
         } else {
@@ -813,26 +813,26 @@ export class ExecutionLayer {
           // action_risk: 'none' is exempt (reads, retrieval, summarisation).
           if (currentScore < 60 && manifest.action_risk !== 'none') {
             skillLogger.info(
-              { skillName, currentScore, actionRisk: manifest.action_risk },
+              { toolName, currentScore, actionRisk: manifest.action_risk },
               'autonomy gate: skill blocked — agent is in restricted mode (score < 60)',
             );
             if (this.bus) {
               this.bus.publish('execution', createAutonomySkillBlocked({
-                skillName,
+                toolName,
                 actionRisk: manifest.action_risk,
                 currentScore,
                 requiredScore: 60,
                 agentId: options?.agentId,
                 taskEventId: options?.taskEventId,
               })).catch((err) => {
-                skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
+                skillLogger.warn({ err, toolName }, 'autonomy gate: failed to publish autonomy.tool_blocked event');
               });
             }
             // Note: `input` here is post-timestamp-normalization (mutated in-place above).
             // The stored payload in autonomy_action_log will contain normalized timestamps,
             // which is correct — re-normalization on approve-action re-invocation is a no-op.
             const gateAError = await this.buildGateError(
-              skillName, input, currentScore, 60, manifest.action_risk, options, skillLogger,
+              toolName, input, currentScore, 60, manifest.action_risk, options, skillLogger,
             );
             return {
               success: false,
@@ -846,24 +846,24 @@ export class ExecutionLayer {
           const requiredScore = AutonomyService.minScoreForActionRisk(manifest.action_risk);
           if (currentScore < requiredScore) {
             skillLogger.info(
-              { skillName, currentScore, requiredScore, actionRisk: manifest.action_risk },
+              { toolName, currentScore, requiredScore, actionRisk: manifest.action_risk },
               'autonomy gate: skill blocked — score below action_risk threshold',
             );
             if (this.bus) {
               this.bus.publish('execution', createAutonomySkillBlocked({
-                skillName,
+                toolName,
                 actionRisk: manifest.action_risk,
                 currentScore,
                 requiredScore,
                 agentId: options?.agentId,
                 taskEventId: options?.taskEventId,
               })).catch((err) => {
-                skillLogger.warn({ err, skillName }, 'autonomy gate: failed to publish autonomy.skill_blocked event');
+                skillLogger.warn({ err, toolName }, 'autonomy gate: failed to publish autonomy.tool_blocked event');
               });
             }
             // Note: same post-normalization `input` as Gate A — see comment above.
             const gateBError = await this.buildGateError(
-              skillName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger,
+              toolName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger,
             );
             return {
               success: false,
@@ -886,15 +886,15 @@ export class ExecutionLayer {
           if (initiatingTier !== null && manifest.action_risk !== 'none') {
             // KG writes from unknown/blocked external senders are not prompt-only (#1290).
             if (
-              KG_WRITE_SKILLS.has(skillName) &&
+              KG_WRITE_TOOLS.has(toolName) &&
               (initiatingTier === 'unknown' || initiatingTier === 'blocked')
             ) {
               skillLogger.info(
-                { skillName, initiatingTier, actionRisk: manifest.action_risk },
+                { toolName, initiatingTier, actionRisk: manifest.action_risk },
                 'autonomy gate: skill blocked — KG write from untrusted external originator (Gate C, #1290)',
               );
               const gateCError = await this.buildTierGateError(
-                skillName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
+                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
               );
               return {
                 success: false,
@@ -903,21 +903,21 @@ export class ExecutionLayer {
             }
             const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
             const isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
-              skillName,
+              toolName,
               input,
               this.principalIdentities,
             );
             const tierDecision = await this.resolveTierGateDecision(
-              initiatingTier, actionClass, skillName, manifest, input, options, skillLogger,
+              initiatingTier, actionClass, toolName, manifest, input, options, skillLogger,
               isPrincipalSoleRecipient,
             );
             if (tierDecision === 'escalate') {
               skillLogger.info(
-                { skillName, initiatingTier, actionClass, actionRisk: manifest.action_risk },
+                { toolName, initiatingTier, actionClass, actionRisk: manifest.action_risk },
                 'autonomy gate: skill blocked — initiating contact tier below required minimum (Gate C)',
               );
               const gateCError = await this.buildTierGateError(
-                skillName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
+                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
               );
               return {
                 success: false,
@@ -942,7 +942,7 @@ export class ExecutionLayer {
               | undefined;
             skillLogger.warn(
               {
-                skillName,
+                toolName,
                 actionRisk: manifest.action_risk,
                 originator: options?.taskMetadata?.['originator'],
                 originatorContactId: failedOriginator?.contactId,
@@ -954,7 +954,7 @@ export class ExecutionLayer {
             // No tier to feed buildTierGateError — pass an explicit sentinel label so the
             // escalation message and approval request read sensibly (tier 'unresolved').
             const gateCError = await this.buildTierGateError(
-              skillName, input, 'unresolved', manifest.action_risk, currentScore, options, skillLogger,
+              toolName, input, 'unresolved', manifest.action_risk, currentScore, options, skillLogger,
             );
             return {
               success: false,
@@ -975,50 +975,50 @@ export class ExecutionLayer {
         const isWoken = (options?.taskMetadata as Record<string, unknown> | undefined)?.['wakeContext'] !== undefined;
         if (isWoken && manifest.action_risk !== 'none') {
           skillLogger.warn(
-            { skillName, actionRisk: manifest.action_risk, agentId: options?.agentId, taskEventId: options?.taskEventId },
+            { toolName, actionRisk: manifest.action_risk, agentId: options?.agentId, taskEventId: options?.taskEventId },
             'autonomy gate: score unavailable on a woken task — failing closed (no human in the loop)',
           );
           return {
             success: false,
             error: this.wrapSkillError(
-              `Skill '${skillName}' blocked — the autonomy score is temporarily unavailable and this is an autonomous (woken) task. ` +
+              `Tool '${toolName}' blocked — the autonomy score is temporarily unavailable and this is an autonomous (woken) task. ` +
               `It will be retried once the score can be read.`,
             ),
           };
         }
-        skillLogger.warn({ skillName }, 'autonomy gate: score unavailable — skipping gate (fail-open; service unwired or pre-migration?)');
+        skillLogger.warn({ toolName }, 'autonomy gate: score unavailable — skipping gate (fail-open; service unwired or pre-migration?)');
       }
     }
 
     // Export control gate — MCP bulk exports and email attachments (#201).
     // humanApproved bypasses threshold and destination gates but NOT restricted bulk blocks.
-    const isExportSkill = MCP_EXPORT_SKILLS.has(skillName)
-      || (GATEWAY_ATTACHMENT_SKILLS.has(skillName) && Array.isArray(input['attachments']) && input['attachments'].length > 0);
+    const isExportSkill = MCP_EXPORT_TOOLS.has(toolName)
+      || (GATEWAY_ATTACHMENT_TOOLS.has(toolName) && Array.isArray(input['attachments']) && input['attachments'].length > 0);
     let resolvedMcpExportAudit: { items: import('../security/export-controls.js').ExportItem[]; destination: import('../security/export-controls.js').ExportDestination } | undefined;
     if (this.exportControlService && isExportSkill) {
       const exportEval = await this.exportControlService.evaluateSkillExport({
-        skillName,
+        toolName,
         input,
         humanApproved: options?.humanApproved,
       });
       if (exportEval) {
         const { outcome, items } = exportEval;
-        const destination = extractDestinationFromInput(skillName, input)
+        const destination = extractDestinationFromInput(toolName, input)
           ?? { kind: 'email' as const, address: '(implicit reply)' };
         if (outcome.action === 'block') {
           skillLogger.info(
-            { skillName, code: outcome.code, itemCount: items.length },
+            { toolName, code: outcome.code, itemCount: items.length },
             'export gate: bulk restricted export blocked',
           );
           return { success: false, error: this.wrapSkillError(outcome.message) };
         }
         if (outcome.action === 'approval_required') {
           skillLogger.info(
-            { skillName, code: outcome.code, itemCount: items.length },
+            { toolName, code: outcome.code, itemCount: items.length },
             'export gate: export requires CEO approval',
           );
           const gateError = await this.buildExportGateError(
-            skillName,
+            toolName,
             input,
             outcome.message,
             items,
@@ -1028,7 +1028,7 @@ export class ExecutionLayer {
           );
           return { success: false, error: this.wrapSkillError(gateError) };
         }
-        if (MCP_EXPORT_SKILLS.has(skillName)) {
+        if (MCP_EXPORT_TOOLS.has(toolName)) {
           resolvedMcpExportAudit = { items, destination };
         }
       }
@@ -1088,15 +1088,15 @@ export class ExecutionLayer {
       if (entry) secretCache.set(entry[0], entry[1]);
     }
 
-    const ctx: SkillContext = {
+    const ctx: ToolContext = {
       // Invoking skill's manifest identity — lets handlers read their own name/version
-      // from ctx instead of hardcoding a const that must be kept in sync with skill.json.
-      skillName: manifest.name,
-      skillVersion: manifest.version,
+      // from ctx instead of hardcoding a const that must be kept in sync with tool.json.
+      toolName: manifest.name,
+      toolVersion: manifest.version,
       input,
       secret: (name: string): string => {
         if (!declaredSecrets.has(name)) {
-          throw new Error(`Secret '${name}' is not declared in the manifest for skill '${skillName}'`);
+          throw new Error(`Secret '${name}' is not declared in the manifest for skill '${toolName}'`);
         }
         const entry = secretCache.get(name);
         if (!entry) {
@@ -1111,7 +1111,7 @@ export class ExecutionLayer {
         // Falls back to debug-only logging if the bus is not wired (e.g. test environments).
         if (this.bus) {
           this.bus.publish('execution', createSecretAccessed({
-            skillName,
+            toolName,
             secretName: name,
             agentId: options?.agentId,
             taskEventId: options?.taskEventId,
@@ -1121,7 +1121,7 @@ export class ExecutionLayer {
             // surface at error level so it reaches SIEM/alerting dashboards. The debug
             // log below still fires, but it is not a durable audit record.
             skillLogger.error(
-              { err, secretName: name, skillName, agentId: options?.agentId, taskEventId: options?.taskEventId },
+              { err, secretName: name, toolName, agentId: options?.agentId, taskEventId: options?.taskEventId },
               'AUDIT FAILURE: secret.accessed event could not be published — secret was returned but access may not be recorded',
             );
           });
@@ -1246,18 +1246,18 @@ export class ExecutionLayer {
     // Hard-restrict executionLayer to approve-action only.
     // executionLayer grants invoke() with humanApproved: true, which bypasses autonomy
     // gates A and B. This capability MUST NOT be available to any other skill — a
-    // compromised or misconfigured skill with executionLayer could execute arbitrary
+    // compromised or misconfigured tool with executionLayer could execute arbitrary
     // actions as if the CEO approved them. The manifest comment is advisory; this
     // guard is the enforcement boundary.
     if (caps.includes('executionLayer') && manifest.name !== 'approve-action') {
       skillLogger.error(
-        { skillName, manifestName: manifest.name },
+        { toolName, manifestName: manifest.name },
         'SECURITY: executionLayer capability is restricted to approve-action — refusing to run skill',
       );
       return {
         success: false,
         error: this.wrapSkillError(
-          `Skill '${skillName}' declares capability 'executionLayer' but only 'approve-action' is permitted to use it`,
+          `Tool '${toolName}' declares capability 'executionLayer' but only 'approve-action' is permitted to use it`,
         ),
       };
     }
@@ -1266,17 +1266,17 @@ export class ExecutionLayer {
     // resolveSecretRef dereferences stored user.* secrets into the handler at runtime — a
     // surface that must not be available to arbitrary skills even if they declare it. The
     // manifest capability is necessary but not sufficient; the skill name must also be on
-    // SECRET_RESOLVER_ALLOWED_SKILLS. This guard is the enforcement boundary (mirrors the
+    // SECRET_RESOLVER_ALLOWED_TOOLS. This guard is the enforcement boundary (mirrors the
     // executionLayer→approve-action restriction above).
-    if (caps.includes('secretResolver') && !SECRET_RESOLVER_ALLOWED_SKILLS.has(manifest.name)) {
+    if (caps.includes('secretResolver') && !SECRET_RESOLVER_ALLOWED_TOOLS.has(manifest.name)) {
       skillLogger.error(
-        { skillName, manifestName: manifest.name },
+        { toolName, manifestName: manifest.name },
         'SECURITY: secretResolver capability is restricted to an allowlist — refusing to run skill',
       );
       return {
         success: false,
         error: this.wrapSkillError(
-          `Skill '${skillName}' declares capability 'secretResolver' but is not on the resolver allowlist`,
+          `Tool '${toolName}' declares capability 'secretResolver' but is not on the resolver allowlist`,
         ),
       };
     }
@@ -1284,18 +1284,18 @@ export class ExecutionLayer {
     // Fail-closed: if a declared capability is not available on this ExecutionLayer,
     // refuse to run the skill. This catches configuration errors at invocation time.
     const missingCaps = caps.filter(cap => {
-      if (cap === 'skillSearch') return false; // skillSearch is synthesized, not a field on `this`
+      if (cap === 'toolSearch') return false; // toolSearch is synthesized, not a field on `this`
       return capabilityServices[cap] === undefined;
     });
     if (missingCaps.length > 0) {
       skillLogger.error(
-        { skillName, missingCapabilities: missingCaps },
+        { toolName, missingCapabilities: missingCaps },
         'Skill declares capabilities not available on ExecutionLayer',
       );
       return {
         success: false,
         error: this.wrapSkillError(
-          `Skill '${skillName}' requires capabilities [${missingCaps.join(', ')}] ` +
+          `Tool '${toolName}' requires capabilities [${missingCaps.join(', ')}] ` +
           `but they are not configured on the ExecutionLayer`,
         ),
       };
@@ -1314,14 +1314,14 @@ export class ExecutionLayer {
         ctx.entityMemory = memAudit && this.bus
           ? buildEntityMemoryObserver(this.entityMemory!, this.bus, memAudit, skillLogger)
           : this.entityMemory;
-      } else if (cap === 'skillSearch') {
-        // Special case: skillSearch is a closure over the registry, not a service field.
-        // Filters out skill-registry itself (circular self-discovery) and skills whose
+      } else if (cap === 'toolSearch') {
+        // Special case: toolSearch is a closure over the registry, not a service field.
+        // Filters out tool-registry itself (circular self-discovery) and skills whose
         // allowed_callers list does not include the calling agent (defense-in-depth —
         // prevents LLM from discovering skills it cannot invoke).
-        ctx.skillSearch = (query: string) =>
+        ctx.toolSearch = (query: string) =>
           this.registry.search(query)
-            .filter(s => s.manifest.name !== 'skill-registry')
+            .filter(s => s.manifest.name !== 'tool-registry')
             .filter(s => {
               const allowed = s.manifest.allowed_callers;
               if (!allowed || allowed.length === 0) return true;
@@ -1330,13 +1330,13 @@ export class ExecutionLayer {
             .map(s => ({ name: s.manifest.name, description: s.manifest.description }));
       } else if (cap === 'infraLlm') {
         // Special case: infraLlm creates a scoped instance per invocation that
-        // carries telemetry context (agentId, taskEventId, conversationId, skillName).
+        // carries telemetry context (agentId, taskEventId, conversationId, toolName).
         if (this.infraLlmService) {
           ctx.infraLlm = this.infraLlmService.scoped({
             agentId: options?.agentId,
             taskEventId: options?.taskEventId,
             conversationId: options?.conversationId,
-            skillName,
+            toolName,
           });
         }
       } else if (cap === 'outboundContext') {
@@ -1348,7 +1348,7 @@ export class ExecutionLayer {
           );
         } else if (this.outboundContextService && !options?.conversationId) {
           skillLogger.debug(
-            { skillName },
+            { toolName },
             'outboundContext capability declared but conversationId not available — bridge registration disabled for this invocation',
           );
         }
@@ -1368,7 +1368,7 @@ export class ExecutionLayer {
         //      before the vault is ever consulted, so they can never be form-fill material.
         //   2. Audit: every resolution emits secret.accessed (name + source, byReference:true)
         //      — never the value. The value is returned to the handler only; the handler
-        //      contract (see SkillContext.resolveSecretRef) forbids placing it in results/logs.
+        //      contract (see ToolContext.resolveSecretRef) forbids placing it in results/logs.
         ctx.resolveSecretRef = async (ref: string): Promise<string> => {
           if (typeof ref !== 'string' || !ref.startsWith(USER_SECRET_PREFIX)) {
             throw new Error(
@@ -1387,7 +1387,7 @@ export class ExecutionLayer {
           // Audit — fire-and-forget, name + source only, flagged as by-reference.
           if (this.bus) {
             this.bus.publish('execution', createSecretAccessed({
-              skillName,
+              toolName,
               secretName: ref,
               agentId: options?.agentId,
               taskEventId: options?.taskEventId,
@@ -1395,7 +1395,7 @@ export class ExecutionLayer {
               byReference: true,
             })).catch((err) => {
               skillLogger.error(
-                { err, secretName: ref, skillName, agentId: options?.agentId, taskEventId: options?.taskEventId },
+                { err, secretName: ref, toolName, agentId: options?.agentId, taskEventId: options?.taskEventId },
                 'AUDIT FAILURE: secret.accessed (by-reference) event could not be published — secret was returned but access may not be recorded',
               );
             });
@@ -1424,7 +1424,7 @@ export class ExecutionLayer {
       // A skill declared entity_enrichment but the assembler was not wired in —
       // this is a configuration mistake, not a designed degradation path.
       skillLogger.warn(
-        { skillName },
+        { toolName },
         'entity_enrichment declared in manifest but EntityContextAssembler not configured — skipping pre-enrichment; ctx.entityContext will be undefined',
       );
     }
@@ -1444,7 +1444,7 @@ export class ExecutionLayer {
           idsToEnrich = [this.agentContactId];
         } else {
           // No IDs to enrich — log and continue without pre-enrichment
-          skillLogger.debug({ skillName, enrichmentDefault: enrichment.default }, 'entity_enrichment: no IDs to resolve, skipping pre-enrichment');
+          skillLogger.debug({ toolName, enrichmentDefault: enrichment.default }, 'entity_enrichment: no IDs to resolve, skipping pre-enrichment');
         }
       }
 
@@ -1465,14 +1465,14 @@ export class ExecutionLayer {
           ]).finally(() => { clearTimeout(enrichmentTimer); });
 
           if (enrichmentResult.unresolved.length > 0) {
-            skillLogger.warn({ skillName, unresolved: enrichmentResult.unresolved }, 'entity_enrichment: some IDs could not be resolved');
+            skillLogger.warn({ toolName, unresolved: enrichmentResult.unresolved }, 'entity_enrichment: some IDs could not be resolved');
           }
           ctx.entityContext = enrichmentResult.entities;
-          skillLogger.debug({ skillName, enrichedCount: enrichmentResult.entities.length }, 'entity_enrichment: pre-enrichment complete');
+          skillLogger.debug({ toolName, enrichedCount: enrichmentResult.entities.length }, 'entity_enrichment: pre-enrichment complete');
         } catch (err) {
           // Non-fatal: log and continue without ctx.entityContext.
           // The handler should check ctx.entityContext and handle its absence gracefully.
-          skillLogger.error({ err, skillName }, 'entity_enrichment: pre-enrichment failed, continuing without entity context');
+          skillLogger.error({ err, toolName }, 'entity_enrichment: pre-enrichment failed, continuing without entity context');
         }
       }
     }
@@ -1483,9 +1483,9 @@ export class ExecutionLayer {
     // Without cleanup, successful skill invocations leak timers that keep the
     // process alive during graceful shutdown.
     let timer: NodeJS.Timeout;
-    const timeoutPromise = new Promise<SkillResult>((_, reject) => {
+    const timeoutPromise = new Promise<ToolResult>((_, reject) => {
       timer = setTimeout(
-        () => reject(new Error(`Skill '${skillName}' timed out after ${manifest.timeout}ms`)),
+        () => reject(new Error(`Tool '${toolName}' timed out after ${manifest.timeout}ms`)),
         manifest.timeout,
       );
     });
@@ -1500,7 +1500,7 @@ export class ExecutionLayer {
       if (result.success && resolvedMcpExportAudit && this.bus) {
         const { items, destination } = resolvedMcpExportAudit;
         this.bus.publish('execution', createExportDelivered({
-          skillName,
+          toolName,
           agentId: options?.agentId,
           taskEventId: options?.taskEventId,
           conversationId: options?.conversationId,
@@ -1513,7 +1513,7 @@ export class ExecutionLayer {
           maxSensitivity: maxItemSensitivity(items),
           parentEventId: options?.parentEventId,
         })).catch((err) => {
-          skillLogger.warn({ err, skillName }, 'export gate: failed to publish export.delivered event');
+          skillLogger.warn({ err, toolName }, 'export gate: failed to publish export.delivered event');
         });
       }
 
@@ -1528,7 +1528,7 @@ export class ExecutionLayer {
         // Check the original length — post-sanitize length includes the suffix so >=
         // would fire a false positive when output is exactly skillOutputMaxLength chars.
         if (result.data.length > this.skillOutputMaxLength) {
-          skillLogger.warn({ skillName, outputLength: result.data.length }, 'Skill output truncated to configured limit');
+          skillLogger.warn({ toolName, outputLength: result.data.length }, 'Skill output truncated to configured limit');
         }
         return { success: true, data: sanitized };
       } else if (result.success && result.data !== null && result.data !== undefined) {
@@ -1552,17 +1552,16 @@ export class ExecutionLayer {
         const serialized = JSON.stringify(sanitizedData);
         if (serialized.length > this.skillOutputMaxLength) {
           skillLogger.warn(
-            { skillName, outputLength: serialized.length, limit: this.skillOutputMaxLength },
-            'Object skill output exceeded size limit — truncating to protect the LLM context window',
+            { toolName, outputLength: serialized.length, limit: this.skillOutputMaxLength },
+            'Object tool output exceeded size limit — truncating to protect the LLM context window',
           );
           // Last-resort fallback: collapse to a bounded string form. Structure is lost,
           // but a truncated, clearly-marked payload is safe to feed back to the model —
-          // an unbounded one is not. Skills that can legitimately return large results
+          // an unbounded one is not. Tools that can legitimately return large results
           // should page or trim at the source (see scheduler-list) so this never fires.
           const truncated =
             serialized.slice(0, this.skillOutputMaxLength) + '[truncated — output exceeded limit]';
           return { success: true, data: truncated };
-        }
         return { success: true, data: sanitizedData };
       }
 

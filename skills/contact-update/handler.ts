@@ -14,7 +14,7 @@
 // fails we return an error — this skill has an explicit write intent and should
 // not silently fall through to the KG.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { CANONICAL_ATTRIBUTE_MAP, normalizePhone } from '../../src/contacts/canonical-attribute-guard.js';
 import { ContactValidationError } from '../../src/contacts/contact-service.js';
 import type { ContactCanonicalFields } from '../../src/contacts/types.js';
@@ -23,8 +23,8 @@ import type { ContactCanonicalFields } from '../../src/contacts/types.js';
 // allowlist stays in sync with the KG guard without duplicating it.
 const VALID_FIELD_KEYS = new Set<keyof ContactCanonicalFields>(CANONICAL_ATTRIBUTE_MAP.values());
 
-export class ContactUpdateHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactUpdateHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { contact_id, fields } = ctx.input as {
       contact_id?: string;
       fields?: Record<string, unknown>;

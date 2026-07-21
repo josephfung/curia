@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskCompletionFromSentHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import { CONFIG_NAMESPACE } from '../ceo-inbox-sent-observe/handler.js';
 import {
@@ -80,7 +80,7 @@ function makeMem(seed: Record<string, string> = {}): EntityMemory & { __values: 
   } as unknown as EntityMemory & { __values: Map<string, string> };
 }
 
-function makeCtx(): SkillContext & {
+function makeCtx(): ToolContext & {
   __completed: string[];
   __mem: ReturnType<typeof makeMem>;
   __sendNotification: ReturnType<typeof vi.fn>;
@@ -149,7 +149,7 @@ function makeCtx(): SkillContext & {
     },
     // Event-driven CEO notification (#1466): a mocked gateway + principal-resolving contactService,
     // so a produced digest fires notifyLearningProposal. Exposed as __sendNotification for asserts.
-    outboundGateway: { sendNotification } as unknown as SkillContext['outboundGateway'],
+    outboundGateway: { sendNotification } as unknown as ToolContext['outboundGateway'],
     contactService: {
       findContactBySystemRole: vi.fn().mockResolvedValue({ id: 'principal-1' }),
       getContactWithIdentities: vi.fn().mockResolvedValue({
@@ -157,11 +157,11 @@ function makeCtx(): SkillContext & {
           { channel: 'email', verified: true, status: 'active', channelIdentifier: 'ceo@example.com' },
         ],
       }),
-    } as unknown as SkillContext['contactService'],
+    } as unknown as ToolContext['contactService'],
     __completed: completed,
     __mem: mem,
     __sendNotification: sendNotification,
-  } as unknown as SkillContext & {
+  } as unknown as ToolContext & {
     __completed: string[];
     __mem: typeof mem;
     __sendNotification: ReturnType<typeof vi.fn>;

@@ -5,7 +5,7 @@
 // free-form guide, and queue it as a "Guide Proposal" for the CEO to approve via
 // the digest. This handler never writes the profile directly — human-in-the-loop.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 import { buildVoiceGuidePrompt, parsePendingDiffs } from '../_shared/voice-learn-logic.js';
 import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
@@ -31,8 +31,8 @@ export const DIFFS_CHECKPOINT_KEY = 'voice_learn.diffs_checkpoint';
  *  oldest-first across runs so nothing is stranded past the checkpoint. */
 const MAX_PAIRS = 40;
 
-export class VoiceLearnHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class VoiceLearnHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     // Skill contract: never throw — normalize any profile/document/LLM failure.
     try {
       return await this.runLearn(ctx);
@@ -45,7 +45,7 @@ export class VoiceLearnHandler implements SkillHandler {
     }
   }
 
-  private async runLearn(ctx: SkillContext): Promise<SkillResult> {
+  private async runLearn(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.executiveProfileService || !ctx.workingDocs || !ctx.infraLlm) {
       return {
         success: false,

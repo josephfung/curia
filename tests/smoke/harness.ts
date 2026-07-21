@@ -21,9 +21,9 @@ import { EmbeddingService } from '../../src/memory/embedding.js';
 import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { EntityMemory } from '../../src/memory/entity-memory.js';
-import { SkillRegistry } from '../../src/skills/registry.js';
+import { ToolRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
-import { discoverSkillManifests, loadSkillsFromDirectory } from '../../src/skills/loader.js';
+import { discoverToolManifests, loadToolsFromDirectory } from '../../src/skills/loader.js';
 import { ModelRegistry } from '../../src/agents/llm/model-registry.js';
 import { ContactService } from '../../src/contacts/contact-service.js';
 import { ContactResolver } from '../../src/contacts/contact-resolver.js';
@@ -110,11 +110,11 @@ export async function createHarness(): Promise<CuriaHarness> {
   // Skill registry — loads all skills from the skills/ directory.
   // Smoke tests enable all skills (no registry DB available) so every handler is
   // registered. The two-step API mirrors the production bootstrap path.
-  const skillRegistry = new SkillRegistry();
+  const skillRegistry = new ToolRegistry();
   const skillsDir = path.resolve(import.meta.dirname, '../../skills');
-  const skillDiscoveries = discoverSkillManifests(skillsDir);
+  const skillDiscoveries = discoverToolManifests(skillsDir);
   const allSkillNames = new Set(skillDiscoveries.map(d => d.name));
-  await loadSkillsFromDirectory(skillDiscoveries, skillRegistry, logger, allSkillNames);
+  await loadToolsFromDirectory(skillDiscoveries, skillRegistry, logger, allSkillNames);
 
   // Agent registry — tracks all running agents for delegation and listing.
   const agentRegistry = new AgentRegistry();

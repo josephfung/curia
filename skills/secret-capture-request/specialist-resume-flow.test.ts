@@ -9,7 +9,7 @@ import pino from 'pino';
 import { SecretCaptureRequestHandler } from './handler.js';
 import { SecretCaptureResumeSubscriber, type ResumeRoutingRegistrar } from '../../src/secrets/secret-capture-resume-subscriber.js';
 import { createSecretCaptured } from '../../src/bus/events.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { SecretCaptureMinter, CaptureOrigin } from '../../src/secrets/secret-capture-service.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { BusEvent, Layer, EventType, AgentTaskEvent } from '../../src/bus/events.js';
@@ -30,7 +30,7 @@ describe('specialist secret-capture resume flow (#995)', () => {
       appOrigin: 'https://curia.example.com',
       conversationId: 'delegate-xyz', channelId: 'internal', agentId: 'accounts-specialist',
       taskMetadata: { originator, delegationOrigin: { conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator', originalTask: 'log into Aeroplan and check balance' } },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const res = await new SecretCaptureRequestHandler().execute(skillCtx);
     expect(res.success).toBe(true);
     expect(captured!.agentId).toBe('coordinator');

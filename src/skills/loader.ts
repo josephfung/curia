@@ -1,26 +1,26 @@
 // loader.ts — loads skills from the skills/ directory at startup.
 //
 // Each skill lives in its own subdirectory with:
-//   - skill.json (manifest)
+//   - tool.json (manifest)
 //   - handler.ts (or handler.js) (implementation)
 //
 // The loader reads each subdirectory, validates the manifest,
-// dynamically imports the handler, and registers both in the SkillRegistry.
+// dynamically imports the handler, and registers both in the ToolRegistry.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { SkillManifest, SkillHandler } from './types.js';
-import type { SkillRegistry } from './registry.js';
+import type { ToolManifest, ToolHandler } from './types.js';
+import type { ToolRegistry } from './registry.js';
 import type { Logger } from '../logger.js';
 import type { ManifestMetadata } from '../registry/types.js';
 
 /**
  * Fixed allowlist of valid capability names that skills may declare in their manifest.
- * Each name corresponds to a privileged service on SkillContext.
+ * Each name corresponds to a privileged service on ToolContext.
  *
  * This set only changes when a new service type is added to the platform —
  * not when a new skill is added. Adding a new skill that needs an existing
- * capability is a skill.json-only change.
+ * capability is a tool.json-only change.
  *
  * Services NOT in this list (contactService, entityContextAssembler, agentPersona)
  * are universal — available to every skill without declaration.
@@ -28,44 +28,44 @@ import type { ManifestMetadata } from '../registry/types.js';
 export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'bus', 'agentRegistry', 'outboundGateway',
   'schedulerService', 'entityMemory', 'nylasCalendarClient',
-  'autonomyService', 'executiveProfileService', 'officeIdentityService', 'browserService', 'bullpenService', 'skillSearch',
+  'autonomyService', 'executiveProfileService', 'officeIdentityService', 'browserService', 'bullpenService', 'toolSearch',
   'actionLogRepo', 'auditLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
   'infraLlm', 'outboundContext', 'taskRepo', 'workingDocs', 'secretCapture', 'secretResolver',
   'diagnosticsRepo', 'sensitivityClassifier',
 ]);
 
 /** One discovered on-disk skill: lenient parse for the registry UI + reconciliation.
- *  `metadata` is null when skill.json failed to parse (error captured). `dir` is the
- *  skill directory, needed by loadSkillsFromDirectory to import the handler. */
-export interface SkillDiscovery {
+ *  `metadata` is null when tool.json failed to parse (error captured). `dir` is the
+ *  skill directory, needed by loadToolsFromDirectory to import the handler. */
+export interface ToolDiscovery {
   name: string;
   metadata: ManifestMetadata | null;
   error?: string;
   dir: string;
   /** Full parsed+defaulted manifest, present only when metadata !== null. */
-  manifest?: SkillManifest;
+  manifest?: ToolManifest;
 }
 
 /**
- * Scan skillsDir and parse every skill.json leniently (no handler import).
+ * Scan skillsDir and parse every tool.json leniently (no handler import).
  * A parse error is captured per-skill rather than thrown, so a broken DISABLED
  * skill never crashes startup. Used by the registry UI, reconciliation, and as
- * the input to loadSkillsFromDirectory.
+ * the input to loadToolsFromDirectory.
  */
-export function discoverSkillManifests(skillsDir: string, logger?: Logger): SkillDiscovery[] {
+export function discoverToolManifests(skillsDir: string, logger?: Logger): ToolDiscovery[] {
   if (!fs.existsSync(skillsDir)) {
     throw new Error(`Skills directory not found: ${skillsDir}`);
   }
-  const out: SkillDiscovery[] = [];
+  const out: ToolDiscovery[] = [];
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = path.join(skillsDir, entry.name);
-    const manifestPath = path.join(dir, 'skill.json');
+    const manifestPath = path.join(dir, 'tool.json');
     if (!fs.existsSync(manifestPath)) continue; // not a skill dir (e.g. _shared)
 
     try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as SkillManifest;
-      // Apply the same defaults that loadSkillsFromDirectory used to apply inline,
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as ToolManifest;
+      // Apply the same defaults that loadToolsFromDirectory used to apply inline,
       // so the pre-parsed manifest is consistent with what the loader will register.
       manifest.timeout ??= 30000;
       manifest.sensitivity ??= 'normal';
@@ -122,9 +122,9 @@ export function discoverSkillManifests(skillsDir: string, logger?: Logger): Skil
  * is a hard failure — a thing going live must be valid (fail closed, unchanged from
  * the old behavior). Returns the number of skills registered.
  */
-export async function loadSkillsFromDirectory(
-  discoveries: SkillDiscovery[],
-  registry: SkillRegistry,
+export async function loadToolsFromDirectory(
+  discoveries: ToolDiscovery[],
+  registry: ToolRegistry,
   logger: Logger,
   enabledNames: Set<string>,
 ): Promise<number> {
@@ -144,13 +144,13 @@ export async function loadSkillsFromDirectory(
       const manifest = disc.manifest;
 
       // Validate declared capabilities against the fixed allowlist.
-      // Unknown names fail hard at startup — a typo in skill.json is a configuration
+      // Unknown names fail hard at startup — a typo in tool.json is a configuration
       // error that must surface at boot, not silently produce a skill with wrong privileges.
       if (manifest.capabilities !== undefined) {
         for (const cap of manifest.capabilities) {
           if (!VALID_CAPABILITIES.has(cap)) {
             throw new Error(
-              `Skill '${manifest.name}' declares unknown capability '${cap}'. ` +
+              `Tool '${manifest.name}' declares unknown capability '${cap}'. ` +
               `Valid capabilities: ${[...VALID_CAPABILITIES].join(', ')}`,
             );
           }
@@ -171,17 +171,17 @@ export async function loadSkillsFromDirectory(
 
       // Handler can be exported as default, or as a named class.
       // Convention: export a class whose name ends in "Handler" (e.g., WebFetchHandler).
-      let handler: SkillHandler;
+      let handler: ToolHandler;
       if (handlerModule.default && typeof (handlerModule.default as Record<string, unknown>).execute === 'function') {
-        handler = handlerModule.default as SkillHandler;
+        handler = handlerModule.default as ToolHandler;
       } else {
         // Find the first exported class with an execute method
         const HandlerClass = Object.values(handlerModule).find(
           (exp: unknown) => typeof exp === 'function' && (exp as { prototype?: { execute?: unknown } }).prototype?.execute,
-        ) as (new () => SkillHandler) | undefined;
+        ) as (new () => ToolHandler) | undefined;
 
         if (!HandlerClass) {
-          throw new Error(`No valid SkillHandler export found in ${handlerPath}`);
+          throw new Error(`No valid ToolHandler export found in ${handlerPath}`);
         }
         handler = new HandlerClass();
       }
@@ -214,7 +214,7 @@ export async function loadSkillsFromDirectory(
  * 'system' is always a valid caller (checkpoint processor, scheduler).
  */
 export function validateAllowedCallers(
-  registry: SkillRegistry,
+  registry: ToolRegistry,
   knownAgentNames: Set<string>,
 ): void {
   for (const skill of registry.list()) {
@@ -222,7 +222,7 @@ export function validateAllowedCallers(
       if (caller === 'system') continue;
       if (!knownAgentNames.has(caller)) {
         throw new Error(
-          `Skill '${skill.manifest.name}' declares unknown allowed_caller '${caller}'. ` +
+          `Tool '${skill.manifest.name}' declares unknown allowed_caller '${caller}'. ` +
           `Known agents: ${[...knownAgentNames].join(', ')}`,
         );
       }

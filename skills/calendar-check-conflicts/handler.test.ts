@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { CalendarCheckConflictsHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { buildHoldMetadata } from '../../src/channels/calendar/holds.js';
 
@@ -10,7 +10,7 @@ import { buildHoldMetadata } from '../../src/channels/calendar/holds.js';
 // Fixture helpers
 // ---------------------------------------------------------------------------
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: {
       calendarIds: ['test@example.com'],
@@ -22,9 +22,9 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     timezone: 'America/New_York',
     nylasCalendarClient: {
       getFreeBusy: vi.fn().mockResolvedValue([]),
-    } as unknown as SkillContext['nylasCalendarClient'],
+    } as unknown as ToolContext['nylasCalendarClient'],
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           ],
         },
       ]),
-    } as unknown as SkillContext['nylasCalendarClient'];
+    } as unknown as ToolContext['nylasCalendarClient'];
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -88,7 +88,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           ],
         },
       ]),
-    } as unknown as SkillContext['nylasCalendarClient'];
+    } as unknown as ToolContext['nylasCalendarClient'];
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -137,7 +137,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           ],
         },
       ]),
-    } as unknown as SkillContext['nylasCalendarClient'];
+    } as unknown as ToolContext['nylasCalendarClient'];
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -201,7 +201,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           }),
         },
       ]),
-    } as unknown as SkillContext['nylasCalendarClient'];
+    } as unknown as ToolContext['nylasCalendarClient'];
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -267,7 +267,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           }),
         },
       ]),
-    } as unknown as SkillContext['nylasCalendarClient'];
+    } as unknown as ToolContext['nylasCalendarClient'];
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -334,7 +334,7 @@ describe('CalendarCheckConflictsHandler — free events do not conflict', () => 
           }),
         },
       ]),
-    } as unknown as SkillContext['nylasCalendarClient'];
+    } as unknown as ToolContext['nylasCalendarClient'];
 
     const result = await handler.execute(makeCtx({
       input: {

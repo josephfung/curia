@@ -6,10 +6,10 @@
 // confirm exactly what was cleared. Access is controlled by pinning (no
 // allowed_callers), matching the context-bridge-release convention.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class ContextBridgeClearHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContextBridgeClearHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as { subjects?: unknown; subject?: unknown };
 
     // Accept either `subjects: string[]` or a single `subject: string`. Prefer

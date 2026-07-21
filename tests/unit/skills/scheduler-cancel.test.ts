@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SchedulerCancelHandler } from '../../../skills/scheduler-cancel/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 
 import pino from 'pino';
 
@@ -8,11 +8,11 @@ const logger = pino({ level: 'silent' });
 
 function makeCtx(
   input: Record<string, unknown>,
-  overrides?: Partial<SkillContext>,
-): SkillContext {
+  overrides?: Partial<ToolContext>,
+): ToolContext {
   return {
-    skillName: 'scheduler-cancel',
-    skillVersion: '1.1.0',
+    toolName: 'scheduler-cancel',
+    toolVersion: '1.1.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

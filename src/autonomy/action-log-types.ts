@@ -36,7 +36,7 @@ export interface ActionLogRow {
   id: number;
   taskId: string;
   conversationId: string | null;
-  skillName: string;
+  toolName: string;
   actionRisk: string;
   outcome: ActionLogOutcome;
   taskSummary: string | null;
@@ -63,7 +63,7 @@ export interface ActionLogRow {
 export interface ActionLogInsert {
   taskId: string;
   conversationId?: string;
-  skillName: string;
+  toolName: string;
   actionRisk: string;
   outcome: ActionLogOutcome;
   taskSummary?: string;

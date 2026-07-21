@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ContactSetRoleHandler } from '../../../skills/contact-set-role/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
 
-function makeCtx(input: Record<string, unknown>, overrides?: Partial<SkillContext>): SkillContext {
-  return { skillName: 'contact-set-role', skillVersion: '1.1.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
+function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext>): ToolContext {
+  return { toolName: 'contact-set-role', toolVersion: '1.1.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
 }
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000';

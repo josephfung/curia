@@ -13,7 +13,7 @@
 // The meta-index lets list_namespaces run as a single KG read rather than a
 // label-scan across all entities.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 const INDEX_LABEL = 'config-store-index';
 
@@ -21,8 +21,8 @@ function anchorLabel(namespace: string): string {
   return `config:${namespace}`;
 }
 
-export class ConfigStoreHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ConfigStoreHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { action } = ctx.input as { action?: string };
 
     if (!action || !['store', 'retrieve', 'list_namespaces'].includes(action)) {
@@ -42,7 +42,7 @@ export class ConfigStoreHandler implements SkillHandler {
     return this.listNamespaces(ctx);
   }
 
-  private async store(ctx: SkillContext): Promise<SkillResult> {
+  private async store(ctx: ToolContext): Promise<ToolResult> {
     const { namespace, key, value } = ctx.input as {
       namespace?: string;
       key?: string;
@@ -139,7 +139,7 @@ export class ConfigStoreHandler implements SkillHandler {
     return { success: true, data: { stored: storeResult.stored, action: storeResult.action, namespace, key } };
   }
 
-  private async retrieve(ctx: SkillContext): Promise<SkillResult> {
+  private async retrieve(ctx: ToolContext): Promise<ToolResult> {
     const { namespace, key } = ctx.input as { namespace?: string; key?: string };
 
     if (!namespace || typeof namespace !== 'string') {
@@ -210,7 +210,7 @@ export class ConfigStoreHandler implements SkillHandler {
     }
   }
 
-  private async listNamespaces(ctx: SkillContext): Promise<SkillResult> {
+  private async listNamespaces(ctx: ToolContext): Promise<ToolResult> {
     // Declared before try so the catch block can include them even if the error
     // occurs after they are assigned.
     let indexNodeIds: string[] | undefined;
@@ -240,7 +240,7 @@ export class ConfigStoreHandler implements SkillHandler {
     }
   }
 
-  private async findOrCreateAnchor(ctx: SkillContext, namespace: string) {
+  private async findOrCreateAnchor(ctx: ToolContext, namespace: string) {
     const label = anchorLabel(namespace);
     const existing = await ctx.entityMemory!.findEntities(label);
     if (existing.length > 0) return existing[0]!;
@@ -254,7 +254,7 @@ export class ConfigStoreHandler implements SkillHandler {
     return entity;
   }
 
-  private async registerNamespace(ctx: SkillContext, namespace: string, writeSource: string): Promise<void> {
+  private async registerNamespace(ctx: ToolContext, namespace: string, writeSource: string): Promise<void> {
     const indexNodes = await ctx.entityMemory!.findEntities(INDEX_LABEL);
 
     let indexNodeId: string;

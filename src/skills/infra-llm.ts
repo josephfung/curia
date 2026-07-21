@@ -6,7 +6,7 @@
 // 3. Do NOT expose raw chat() — skills cannot use this for arbitrary LLM access
 //
 // This is the replacement for the raw llmProvider + modelRouter capabilities
-// that were temporarily exposed on SkillContext (#637). The narrow API surface
+// that were temporarily exposed on ToolContext (#637). The narrow API surface
 // IS the security policy: any skill can declare 'infraLlm', but all it gets
 // is classify/extract with full telemetry, not unbounded LLM access.
 
@@ -44,13 +44,13 @@ export interface InfraLlm {
 
 /**
  * Per-invocation telemetry context — set by ExecutionLayer when injecting
- * infraLlm into SkillContext, so bus events carry the correct IDs.
+ * infraLlm into ToolContext, so bus events carry the correct IDs.
  */
 export interface InfraLlmScope {
   agentId?: string;
   taskEventId?: string;
   conversationId?: string;
-  skillName: string;
+  toolName: string;
 }
 
 /**
@@ -97,7 +97,7 @@ export class InfraLlmService {
     } catch (err) {
       // LLMProvider contract says chat() never throws, but network-level exceptions
       // can slip through. Catch here to honour our own errors-as-values contract.
-      this.logger.error({ err, skillName: scope.skillName }, 'infraLlm.classify: provider threw unexpectedly');
+      this.logger.error({ err, toolName: scope.toolName }, 'infraLlm.classify: provider threw unexpectedly');
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
 
@@ -106,7 +106,7 @@ export class InfraLlmService {
     if (response.type !== 'text') {
       const errorMsg = response.type === 'error' ? response.error.message : 'Unexpected non-text response';
       this.logger.error(
-        { type: response.type, skillName: scope.skillName, model: resolved.model },
+        { type: response.type, toolName: scope.toolName, model: resolved.model },
         'infraLlm.classify failed',
       );
       return { ok: false, error: errorMsg };
@@ -150,7 +150,7 @@ export class InfraLlmService {
         options: { max_tokens: options?.maxTokens ?? 4000 },
       });
     } catch (err) {
-      this.logger.error({ err, skillName: scope.skillName }, 'infraLlm.extract: provider threw unexpectedly');
+      this.logger.error({ err, toolName: scope.toolName }, 'infraLlm.extract: provider threw unexpectedly');
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
 
@@ -159,7 +159,7 @@ export class InfraLlmService {
     if (response.type !== 'text') {
       const errorMsg = response.type === 'error' ? response.error.message : 'Unexpected non-text response';
       this.logger.error(
-        { type: response.type, skillName: scope.skillName, model: resolved.model },
+        { type: response.type, toolName: scope.toolName, model: resolved.model },
         'infraLlm.extract failed',
       );
       return { ok: false, error: errorMsg };
@@ -191,7 +191,7 @@ export class InfraLlmService {
       const responseHash = createHash('sha256').update(responseText).digest('hex');
 
       const event = createLlmCall({
-        agentId: scope.agentId ?? `skill:${scope.skillName}`,
+        agentId: scope.agentId ?? `skill:${scope.toolName}`,
         conversationId: scope.conversationId ?? 'system',
         requestedModel: provenance.requestedModel,
         actualModel: provenance.actualModel,
@@ -212,7 +212,7 @@ export class InfraLlmService {
     } catch (err) {
       // Telemetry failure must not break the skill — log and continue.
       this.logger.warn(
-        { err, skillName: scope.skillName },
+        { err, toolName: scope.toolName },
         'infraLlm: failed to publish llm.call telemetry event',
       );
     }

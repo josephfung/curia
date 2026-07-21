@@ -5,11 +5,11 @@
 // 'replace' overwrites the full list unconditionally.
 // Mirrors the executive-profile-update skill pattern.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { OfficeIdentity } from '../../src/identity/types.js';
 
-export class BehavioralPreferencesUpdateHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class BehavioralPreferencesUpdateHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.officeIdentityService) {
       // Missing capability = deployment misconfiguration. Log at error so it surfaces in traces.
       ctx.log.error(
@@ -68,7 +68,7 @@ export class BehavioralPreferencesUpdateHandler implements SkillHandler {
       const updated: OfficeIdentity = { ...current, behavioralPreferences: merged };
       await ctx.officeIdentityService.update(
         updated,
-        'skill',
+        'tool',
         `behavioral-preferences-update: ${changes} (by ${actor})`,
       );
 

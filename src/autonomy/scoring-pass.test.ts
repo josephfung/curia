@@ -12,7 +12,7 @@ function makeRow(overrides: Partial<ActionLogRow>): ActionLogRow {
     id: 1,
     taskId: 'task-1',
     conversationId: null,
-    skillName: 'send-email',
+    toolName: 'send-email',
     actionRisk: 'medium',
     outcome: 'success',
     taskSummary: 'Send a reply to Dana',

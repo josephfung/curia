@@ -1,7 +1,7 @@
 // mcp-loader.ts — reads config/skills.yaml, connects to each MCP server,
-// discovers tools via tools/list, and registers them in the SkillRegistry.
+// discovers tools via tools/list, and registers them in the ToolRegistry.
 //
-// Called once at startup, right after loadSkillsFromDirectory. Returns the live
+// Called once at startup, right after loadToolsFromDirectory. Returns the live
 // McpSession array so the bootstrap orchestrator can close them on shutdown.
 //
 // Connection failures are warn-only — a missing MCP server should not take
@@ -10,8 +10,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
-import type { SkillManifest, SkillHandler, SkillContext, SkillResult } from './types.js';
-import type { SkillRegistry } from './registry.js';
+import type { ToolManifest, ToolHandler, ToolContext, ToolResult } from './types.js';
+import type { ToolRegistry } from './registry.js';
 import { connectStdio, connectSse } from './mcp-client.js';
 import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
@@ -61,7 +61,7 @@ export function loadSkillsConfig(configDir: string): SkillsConfig {
 // ---------------------------------------------------------------------------
 
 /**
- * Map an MCP tools/call result to a Curia SkillResult.
+ * Map an MCP tools/call result to a Curia ToolResult.
  *
  * The MCP SDK returns:
  *   { content: Array<{ type: 'text' | 'image' | ..., text?: string }>, isError?: boolean }
@@ -76,7 +76,7 @@ function mapMcpResult(
   logger: Logger,
   serverId: string,
   toolName: string,
-): SkillResult {
+): ToolResult {
   // Legacy compatibility result shape from older MCP servers (toolResult wrapper).
   // The legacy protocol has no isError flag, so we cannot determine success/failure.
   // Log a warning so operators know which servers still need upgrading.
@@ -267,10 +267,10 @@ export async function resolveSecretsBlock(
 
 /**
  * Load MCP servers from config/skills.yaml, connect to each one, discover
- * tools via tools/list, and register them in the SkillRegistry.
+ * tools via tools/list, and register them in the ToolRegistry.
  *
  * @param configDir          - Absolute path to the config/ directory (same as used by loadYamlConfig).
- * @param registry           - The SkillRegistry to register discovered tools into.
+ * @param registry           - The ToolRegistry to register discovered tools into.
  * @param logger             - Pino logger for structured log output.
  * @param secrets            - Vault accessor. A server's `env:` empty-string sentinels and
  *                             `fixed_inputs` "env:VAR" references are resolved from the vault
@@ -283,7 +283,7 @@ export async function resolveSecretsBlock(
  */
 export async function loadMcpServers(
   configDir: string,
-  registry: SkillRegistry,
+  registry: ToolRegistry,
   logger: Logger,
   secrets: SecretsService,
   enabledServerNames?: Set<string>,
@@ -471,10 +471,10 @@ export async function loadMcpServers(
 
     let registered = 0;
     for (const tool of tools) {
-      // Build a minimal SkillManifest from the tool's metadata.
+      // Build a minimal ToolManifest from the tool's metadata.
       // inputs is left empty ({}) because toToolDefinitions() uses mcpInputSchema
       // instead of the shorthand inputs notation for MCP-sourced tools.
-      const manifest: SkillManifest = {
+      const manifest: ToolManifest = {
         name: tool.name,
         description: tool.description ?? `Tool '${tool.name}' from MCP server '${serverEntry.name}'`,
         version: '1.0.0',
@@ -492,8 +492,8 @@ export async function loadMcpServers(
       const capturedSession = session;
       const toolName = tool.name;
 
-      const handler: SkillHandler = {
-        async execute(ctx: SkillContext): Promise<SkillResult> {
+      const handler: ToolHandler = {
+        async execute(ctx: ToolContext): Promise<ToolResult> {
           try {
             // Merge fixed_inputs into the tool call arguments. Fixed values take
             // precedence — even if an agent somehow passed a value for a stripped

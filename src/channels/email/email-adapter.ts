@@ -91,7 +91,7 @@ export interface EmailAdapterConfig {
   /**
    * IANA timezone (e.g. "America/Toronto") used when rendering the Date line in
    * appended reply quotes. Sourced from the global `TIMEZONE` env var to match
-   * the timezone the skills receive via SkillContext.
+   * the timezone the skills receive via ToolContext.
    */
   timezone: string;
   /**
@@ -761,7 +761,7 @@ export class EmailAdapter implements Channel {
 
     // Send through gateway, handle gated fallback.
     // Pass reExecRecipe so the gateway knows how to re-execute this send on CEO approval:
-    //   skillName: 'send-draft' — the registered skill approve-action will invoke
+    //   toolName: 'send-draft' — the registered skill approve-action will invoke
     //   partialPayload: { account } — the draft's account; draft_id is filled in by
     //                                 linkGatedAction() after the draft is created below
     //   description: human-readable label for the pending_approval row + notification
@@ -772,7 +772,7 @@ export class EmailAdapter implements Channel {
       conversationId: context.conversationId,
       parentEventId: context.parentEventId,
       reExecRecipe: {
-        skillName: 'send-draft',
+        toolName: 'send-draft',
         partialPayload: { account: accountId },
         description: `Draft reply to ${recipientLabel}${subjectLabel ? ` — "${subjectLabel}"` : ''}. Use send-draft to approve.`,
       },

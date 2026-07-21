@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxSearchHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { Logger } from '../../src/logger.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -8,10 +8,10 @@ import type { Logger } from '../../src/logger.js';
 function makeCtx(
   input: Record<string, unknown>,
   opts: { selfEmail?: string } = {},
-): SkillContext {
+): ToolContext {
   return {
-    skillName: 'ceo-inbox-search',
-    skillVersion: '0.2.0',
+    toolName: 'ceo-inbox-search',
+    toolVersion: '0.2.0',
     input,
     secret(name: string) {
       if (name === 'nylas_api_key') return 'test-key';

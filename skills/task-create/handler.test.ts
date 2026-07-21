@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { TaskCreateHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { TaskRepo } from '../../src/db/task-repo.js';
 import type { TaskRow } from '../../src/db/queries/tasks.js';
 import type { AgentRegistry } from '../../src/agents/agent-registry.js';
@@ -16,7 +16,7 @@ function makeRegistry(knownAgents: string[] = []): AgentRegistry {
   } as unknown as AgentRegistry;
 }
 
-function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input: {},
     secret: () => 'unused',
@@ -24,7 +24,7 @@ function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
     agentId: 'coordinator',
     timezone: 'America/Toronto',
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 function makeTaskRow(overrides: Partial<TaskRow> = {}): TaskRow {

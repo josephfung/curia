@@ -384,7 +384,7 @@ export class OutboundGateway {
        */
       reExecRecipe?: {
         /** Registered skill name to invoke on approval (e.g. 'send-draft'). */
-        skillName: string;
+        toolName: string;
         /**
          * Partial payload to store in the action_log row. May be incomplete at gate
          * time (e.g. draft_id not yet known). Callers fill in missing fields via
@@ -399,7 +399,7 @@ export class OutboundGateway {
       };
       /** Export gate context for attachment bulk-export audit and approval (#201). */
       exportContext?: {
-        skillName: string;
+        toolName: string;
         agentId?: string;
         exportItems?: unknown;
       };
@@ -491,7 +491,7 @@ export class OutboundGateway {
             rowId = await this.actionLogRepo.insert({
               taskId: options.taskEventId,
               conversationId: options.conversationId ?? undefined,
-              skillName: recipe.skillName,
+              toolName: recipe.toolName,
               actionRisk: 'medium',
               outcome: 'pending_approval',
               shortRef: candidateRef,
@@ -535,7 +535,7 @@ export class OutboundGateway {
                 preamble: recipe.description,
                 shortRef: candidateRef,
                 expiresAt,
-                skillName: recipe.skillName,
+                toolName: recipe.toolName,
                 payload: notificationPayload,
                 recipientTier,
                 logger: this.log,
@@ -745,7 +745,7 @@ export class OutboundGateway {
               await this.actionLogRepo.insert({
                 taskId: options.taskEventId,
                 conversationId: options.conversationId ?? undefined,
-                skillName: recipe.skillName,
+                toolName: recipe.toolName,
                 actionRisk: 'medium',
                 outcome: 'pending_approval',
                 shortRef: candidateRef,
@@ -776,7 +776,7 @@ export class OutboundGateway {
                   preamble: outcome.message,
                   shortRef: actionRef ?? 'pending',
                   expiresAt,
-                  skillName: recipe.skillName,
+                  toolName: recipe.toolName,
                   payload: {
                     ...(recipe.partialPayload ?? {}),
                     export_items: items.map((i) => ({
@@ -1059,7 +1059,7 @@ export class OutboundGateway {
               exportAudit: {
                 destination: formatDestination(extractDestinationFromEmailRequest(request.to)),
                 items: exportAuditItems,
-                skillName: options?.exportContext?.skillName,
+                toolName: options?.exportContext?.toolName,
                 agentId: options?.exportContext?.agentId,
               },
             }
@@ -1145,7 +1145,7 @@ export class OutboundGateway {
     exportAudit?: {
       destination: string;
       items: ExportItem[];
-      skillName?: string;
+      toolName?: string;
       agentId?: string;
     };
   }): Promise<void> {
@@ -1162,7 +1162,7 @@ export class OutboundGateway {
                 label: i.label,
                 sensitivity: i.sensitivity,
               })),
-              skillName: exportAudit.skillName,
+              toolName: exportAudit.toolName,
               agentId: exportAudit.agentId,
             },
           }

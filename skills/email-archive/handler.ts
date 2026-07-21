@@ -6,10 +6,10 @@
 // Does NOT run through the outbound content filter — this is a folder-move
 // operation, not an outbound communication.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class EmailArchiveHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailArchiveHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { message_id: rawMessageId, account } = ctx.input as {
       message_id?: string;
       account?: string;

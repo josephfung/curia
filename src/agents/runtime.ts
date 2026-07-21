@@ -1,6 +1,6 @@
 import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createSkillInvoke, createSkillResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
 import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
@@ -92,7 +92,7 @@ export interface AgentConfig {
   executionLayer?: ExecutionLayer;
   /** Skill names to include as tools in every LLM call. */
   pinnedSkills?: string[];
-  /** Pre-built tool definitions for the LLM (from SkillRegistry.toToolDefinitions). */
+  /** Pre-built tool definitions for the LLM (from ToolRegistry.toToolDefinitions). */
   skillToolDefs?: ToolDefinition[];
   /** Optional autonomy service — when provided, the autonomy block is injected
    *  into the effective system prompt on every task. Only the coordinator receives this. */
@@ -982,7 +982,7 @@ export class AgentRuntime {
       messages.push({ role: 'assistant', content: assistantBlocks });
 
       // Execute each tool call through the execution layer.
-      // Publish skill.invoke and skill.result bus events for audit coverage.
+      // Publish tool.invoke and tool.result bus events for audit coverage.
       const toolResultBlocks: ContentBlock[] = [];
       for (const toolCall of response.toolCalls) {
         logger.info({ agentId, skill: toolCall.name, callId: toolCall.id }, 'Invoking skill');
@@ -1063,12 +1063,12 @@ export class AgentRuntime {
           }
         }
 
-        // Publish skill.invoke for audit trail — after injection so the recorded input
+        // Publish tool.invoke for audit trail — after injection so the recorded input
         // reflects the actual values passed to the skill (including injected timeout_ms).
-        const invokeEvent = createSkillInvoke({
+        const invokeEvent = createToolInvoke({
           agentId,
           conversationId,
-          skillName: toolCall.name,
+          toolName: toolCall.name,
           input: skillInput,
           taskEventId: taskEvent.id,
           parentEventId: taskEvent.id,
@@ -1133,14 +1133,14 @@ export class AgentRuntime {
         }
         const durationMs = Date.now() - startTime;
 
-        // Publish skill.result for audit trail
+        // Publish tool.result for audit trail
         // Published by agent layer on behalf of the execution layer —
         // the execution layer doesn't have bus access in Phase 3.
         // TODO: When execution layer gets bus access, move this publish there.
-        const resultEvent = createSkillResult({
+        const resultEvent = createToolResult({
           agentId,
           conversationId,
-          skillName: toolCall.name,
+          toolName: toolCall.name,
           result,
           durationMs,
           parentEventId: invokeEvent.id,
@@ -1151,17 +1151,17 @@ export class AgentRuntime {
           // Success: reset consecutive error counter
           budget.consecutiveErrors = 0;
 
-          // Dynamic tool-list expansion: when skill-registry returns successfully,
+          // Dynamic tool-list expansion: when tool-registry returns successfully,
           // append the discovered skills' full tool definitions to the working list
           // so the LLM can call them in subsequent turns without pinning them upfront.
           // Expansion is per-task (workingToolDefs is a local copy) — concurrent tasks
           // never see each other's discovered tools.
-          if (toolCall.name === 'skill-registry' && workingToolDefs) {
+          if (toolCall.name === 'tool-registry' && workingToolDefs) {
             try {
               const data = typeof result.data === 'string'
                 ? JSON.parse(result.data) as unknown
                 : result.data;
-              const discovered = (data as { skills?: Array<{ name: string }> })?.skills ?? [];
+              const discovered = (data as { tools?: Array<{ name: string }> })?.tools ?? [];
               const currentNames = new Set(workingToolDefs.map(t => t.name));
               const newNames = discovered
                 .map(s => s.name)
@@ -1170,20 +1170,20 @@ export class AgentRuntime {
                 workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
                 logger.info(
                   { agentId, addedTools: newNames },
-                  'Expanded working tool list with discovered skills',
+                  'Expanded working tool list with discovered tools',
                 );
               }
             } catch (err) {
-              // Non-fatal: if we can't parse the skill-registry result, the LLM simply
+              // Non-fatal: if we can't parse the tool-registry result, the LLM simply
               // cannot call discovered skills this turn. Log at warn and continue —
               // failing to expand the tool list must not abort the task.
-              logger.warn({ err, agentId }, 'Failed to expand tool list from skill-registry result');
+              logger.warn({ err, agentId }, 'Failed to expand tool list from tool-registry result');
             }
           }
 
           // Clarification protocol detection: when request-clarification returns
           // successfully, capture the question and findings for the short-circuit exit.
-          // Follows the same pattern as the skill-registry check above — inspect by
+          // Follows the same pattern as the tool-registry check above — inspect by
           // skill name, parse the structured result, take runtime-level action.
           if (toolCall.name === 'request-clarification') {
             try {

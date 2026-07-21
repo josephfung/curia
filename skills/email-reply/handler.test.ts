@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EmailReplyHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import pino from 'pino';
 
@@ -8,7 +8,7 @@ function makeLogger() {
   return pino({ level: 'silent' });
 }
 
-function makeCtx(input: Record<string, unknown>, opts?: { timezone?: string }): SkillContext {
+function makeCtx(input: Record<string, unknown>, opts?: { timezone?: string }): ToolContext {
   const gateway = {
     send: vi.fn().mockResolvedValue({ success: true }),
     getEmailMessage: vi.fn().mockResolvedValue({
@@ -27,7 +27,7 @@ function makeCtx(input: Record<string, unknown>, opts?: { timezone?: string }): 
     log: makeLogger(),
     outboundGateway: gateway,
     timezone: opts?.timezone,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('EmailReplyHandler', () => {

@@ -11,10 +11,10 @@
 // owns the calendar. This prevents silent mis-assignment (see incident
 // kg-web-a7717246-1d7a-411c-9129-b6feb54bfc22).
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class CalendarRegisterHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CalendarRegisterHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.contactService) {
       return { success: false, error: 'calendar-register: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
     }

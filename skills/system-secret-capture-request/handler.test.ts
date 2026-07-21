@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import pino from 'pino';
 import { SystemSecretCaptureRequestHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { SecretCaptureMinter, MintResult } from '../../src/secrets/secret-capture-service.js';
 import { decodeResumeToken } from '../../src/agents/resume-token.js';
 
@@ -27,14 +27,14 @@ function fakeMinter(opts: { reject?: boolean; result?: Partial<MintResult> } = {
   };
 }
 
-function makeCtx(input: Record<string, unknown>, minter: SecretCaptureMinter | undefined = fakeMinter()): SkillContext {
+function makeCtx(input: Record<string, unknown>, minter: SecretCaptureMinter | undefined = fakeMinter()): ToolContext {
   return {
     input,
     secret: () => 'unused',
     log: pino({ level: 'silent' }),
     secretCapture: minter,
     appOrigin: 'https://curia.example.com',
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('SystemSecretCaptureRequestHandler', () => {
@@ -86,7 +86,7 @@ describe('SystemSecretCaptureRequestHandler', () => {
       secretCapture: fakeMinter({ result: { rawToken: 'tok' } }),
       appOrigin: undefined,
       httpPort: 4521,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await new SystemSecretCaptureRequestHandler().execute(ctx);
     const data = (result as { success: true; data: Record<string, unknown> }).data;
     expect(data.capture_url).toBe('http://localhost:4521/secret-capture/tok');
@@ -98,7 +98,7 @@ describe('SystemSecretCaptureRequestHandler', () => {
       secret: () => 'unused',
       log: pino({ level: 'silent' }),
       secretCapture: undefined,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await new SystemSecretCaptureRequestHandler().execute(ctx);
     expect(result.success).toBe(false);
   });
@@ -116,8 +116,8 @@ function fakeMinterWithUserCalls(over: Partial<MintResult> = {}): SecretCaptureM
   };
 }
 
-function makeCtxWithOverrides(input: Record<string, unknown>, overrides: Partial<SkillContext> = {}): SkillContext {
-  return { input, log: pino({ level: 'silent' }), secretCapture: fakeMinterWithUserCalls(), appOrigin: 'https://curia.example.com', ...overrides } as unknown as SkillContext;
+function makeCtxWithOverrides(input: Record<string, unknown>, overrides: Partial<ToolContext> = {}): ToolContext {
+  return { input, log: pino({ level: 'silent' }), secretCapture: fakeMinterWithUserCalls(), appOrigin: 'https://curia.example.com', ...overrides } as unknown as ToolContext;
 }
 
 describe('SystemSecretCaptureRequestHandler (#995)', () => {

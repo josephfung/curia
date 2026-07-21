@@ -4,7 +4,7 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { ConversationCheckpointEvent } from '../bus/events.js';
 import { createCheckpointExtractionSkipped } from '../bus/events.js';
-import type { SkillResult } from '../skills/types.js';
+import type { ToolResult } from '../skills/types.js';
 import type { ChannelPolicyConfig } from '../contacts/types.js';
 import {
   loadFirstExternalOriginatorTier,
@@ -14,7 +14,7 @@ import {
 
 // Skills invoked at every checkpoint, in addition to any future skills.
 // Add new checkpoint skills here — no changes to Dispatch or the runtime required.
-const CHECKPOINT_SKILLS: Array<{ name: string }> = [
+const CHECKPOINT_TOOLS: Array<{ name: string }> = [
   { name: 'extract-relationships' },
   { name: 'extract-facts' },
 ];
@@ -44,7 +44,7 @@ export class ConversationCheckpointProcessor {
     const skipKgExtraction = shouldSkipCheckpointKgExtraction(channelTrust, firstExternalTier);
 
     if (skipKgExtraction) {
-      const skillNames = CHECKPOINT_SKILLS.map(s => s.name);
+      const toolNames = CHECKPOINT_TOOLS.map(s => s.name);
       this.logger.info(
         {
           conversationId,
@@ -52,7 +52,7 @@ export class ConversationCheckpointProcessor {
           channelId,
           channelTrust,
           firstExternalTier: firstExternalTier === 'none' ? null : firstExternalTier,
-          skills: skillNames,
+          skills: toolNames,
         },
         'Checkpoint KG extraction skipped — untrusted external originator on low-trust channel (#1290)',
       );
@@ -65,7 +65,7 @@ export class ConversationCheckpointProcessor {
             channelId,
             channelTrust,
             firstExternalTier: firstExternalTier === 'none' ? null : firstExternalTier,
-            skills: skillNames,
+            skills: toolNames,
             reason: 'untrusted_sender',
           }),
         );
@@ -98,24 +98,24 @@ export class ConversationCheckpointProcessor {
     // Check both rejected promises (thrown errors) and resolved { success: false }
     // results — ExecutionLayer never throws, so the latter is the normal failure path.
     const results = await Promise.allSettled(
-      CHECKPOINT_SKILLS.map(skill =>
+      CHECKPOINT_TOOLS.map(skill =>
         this.executionLayer.invoke(skill.name, { text: transcript, source }, callerContext),
       ),
     );
 
     results.forEach((result, index) => {
-      const skillName = CHECKPOINT_SKILLS[index]!.name;
+      const toolName = CHECKPOINT_TOOLS[index]!.name;
       if (result.status === 'rejected') {
         this.logger.error(
-          { err: result.reason as Error, skill: skillName, conversationId },
+          { err: result.reason as Error, skill: toolName, conversationId },
           'checkpoint skill threw unexpectedly — watermark will still advance',
         );
         return;
       }
-      const skillResult = result.value as SkillResult;
+      const skillResult = result.value as ToolResult;
       if (!skillResult.success) {
         this.logger.error(
-          { skill: skillName, conversationId, error: skillResult.error },
+          { skill: toolName, conversationId, error: skillResult.error },
           'checkpoint skill returned failure — watermark will still advance',
         );
       }

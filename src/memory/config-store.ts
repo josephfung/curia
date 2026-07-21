@@ -1,7 +1,7 @@
 // src/memory/config-store.ts
 //
 // Lightweight KG-backed key-value store for system infrastructure code.
-// Mirrors the logic in skills/config-store/handler.ts but without SkillContext
+// Mirrors the logic in skills/config-store/handler.ts but without ToolContext
 // overhead, so non-agent callers (e.g. EmailAdapter, ceo-inbox-list) can read
 // and write config values directly.
 //

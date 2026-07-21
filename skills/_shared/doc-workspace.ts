@@ -1,6 +1,6 @@
 // Shared helpers for doc-* skills (#1209).
 
-import type { SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { WorkingDocRow, WorkingDocWriteResult } from '../../src/db/working-docs-repo.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import {
@@ -17,7 +17,7 @@ import {
 } from '../../src/agents/document-workspace.js';
 import { normalizeDocPath } from '../../src/memory/okf.js';
 
-export function requireWorkingDocs(ctx: SkillContext): SkillResult | null {
+export function requireWorkingDocs(ctx: ToolContext): ToolResult | null {
   if (!ctx.workingDocs) {
     ctx.log.error('doc-*: workingDocs not available');
     return { success: false, error: 'Document workspace not available — database not configured' };
@@ -59,7 +59,7 @@ export function mapWriteConflict(result: WorkingDocWriteResult, timezone: string
 }
 
 export async function appendDirectoryLog(
-  ctx: SkillContext,
+  ctx: ToolContext,
   documentPath: string,
   operation: string,
   summary: string,
@@ -110,7 +110,7 @@ export async function appendDirectoryLog(
 }
 
 export async function listDirectoryProjection(
-  ctx: SkillContext,
+  ctx: ToolContext,
   prefix: string,
 ): Promise<{ directory: string; index_path: string; manifest: string; documents: WorkingDocRow[] }> {
   const repo = ctx.workingDocs!;
@@ -126,10 +126,10 @@ export async function listDirectoryProjection(
 }
 
 export async function readDocument(
-  ctx: SkillContext,
+  ctx: ToolContext,
   path: string,
   section?: string,
-): Promise<SkillResult> {
+): Promise<ToolResult> {
   const guard = requireWorkingDocs(ctx);
   if (guard) return guard;
 
@@ -165,10 +165,10 @@ export async function readDocument(
 }
 
 export async function searchDocuments(
-  ctx: SkillContext,
+  ctx: ToolContext,
   query: string,
   pathPrefix?: string,
-): Promise<SkillResult> {
+): Promise<ToolResult> {
   const guard = requireWorkingDocs(ctx);
   if (guard) return guard;
 

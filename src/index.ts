@@ -48,11 +48,11 @@ import { KnowledgeGraphStore } from './memory/knowledge-graph.js';
 import { MemoryValidator } from './memory/validation.js';
 import { EntityMemory } from './memory/entity-memory.js';
 import { ConfigStore } from './memory/config-store.js';
-import { SkillRegistry } from './skills/registry.js';
+import { ToolRegistry } from './skills/registry.js';
 import { ExecutionLayer } from './skills/execution.js';
 import { resolveBypassLadder } from './autonomy/effective-standing.js';
-import { loadSkillsFromDirectory, discoverSkillManifests, validateAllowedCallers } from './skills/loader.js';
-import type { SkillDiscovery } from './skills/loader.js';
+import { loadToolsFromDirectory, discoverToolManifests, validateAllowedCallers } from './skills/loader.js';
+import type { ToolDiscovery } from './skills/loader.js';
 import { loadMcpServers, loadSkillsConfig } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
@@ -243,7 +243,7 @@ async function main(): Promise<void> {
     await runStartupValidation({
       configDir,
       // agentsDir / skillsDir intentionally omitted — manifest schema validation now
-      // happens inside discoverAgentManifests / discoverSkillManifests so that broken
+      // happens inside discoverAgentManifests / discoverToolManifests so that broken
       // uninstalled manifests don't block startup.
       // `schemasDir` is computed here (the entrypoint) — not inside the validator —
       // because tsup bundles every source file into a single `dist/index.js`,
@@ -865,23 +865,23 @@ async function main(): Promise<void> {
   // Skill registry — loads all skills from the skills/ directory.
   // Skills are the framework's extension mechanism; agents invoke them
   // via the LLM's tool-use API through the execution layer.
-  const skillRegistry = new SkillRegistry(config.timezone);
+  const skillRegistry = new ToolRegistry(config.timezone);
   const skillsDir = path.resolve(import.meta.dirname, '../skills');
   const agentsDir = path.resolve(import.meta.dirname, '../agents');
 
   // --- Registry: discover everything on disk (lenient), reconcile the core set,
   // then load+register ONLY enabled skills/agents. (Spec: skill/agent registry, #541.)
-  let skillDiscovery: SkillDiscovery[];
+  let skillDiscovery: ToolDiscovery[];
   let agentDiscovery: AgentDiscovery[];
   try {
-    skillDiscovery = discoverSkillManifests(skillsDir, logger);
+    skillDiscovery = discoverToolManifests(skillsDir, logger);
     agentDiscovery = discoverAgentManifests(agentsDir);
   } catch (err) {
     logger.fatal({ err }, 'Failed to discover skills/agents on disk');
     process.exit(1);
   }
 
-  const skillRegistryRepo = new RegistryRepo(pool, 'skill_registry');
+  const skillRegistryRepo = new RegistryRepo(pool, 'tool_registry');
   const agentRegistryRepo = new RegistryRepo(pool, 'agent_registry');
 
   // Load the trusted fresh-install core set. The file MUST exist and be valid —
@@ -900,8 +900,8 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const candidate = loaded as RegistryDefaults;
-    if (!Array.isArray(candidate.skills) || !Array.isArray(candidate.agents)) {
-      logger.fatal({ path: defaultsPath, loaded }, 'config/registry-defaults.yaml has wrong shape (expected {skills: [], agents: []})');
+    if (!Array.isArray(candidate.tools) || !Array.isArray(candidate.agents)) {
+      logger.fatal({ path: defaultsPath, loaded }, 'config/registry-defaults.yaml has wrong shape (expected {tools: [], agents: []})');
       process.exit(1);
     }
     registryDefaults = candidate;
@@ -930,7 +930,7 @@ async function main(): Promise<void> {
   try {
     skillRows = await skillRegistryRepo.listRows();
   } catch (err) {
-    logger.fatal({ err }, 'Failed to read skill_registry rows after reconciliation');
+    logger.fatal({ err }, 'Failed to read tool_registry rows after reconciliation');
     process.exit(1);
   }
   const skillDiscNames = new Set(skillDiscovery.map(d => d.name));
@@ -941,10 +941,10 @@ async function main(): Promise<void> {
   }
   const enabledSkillNames = new Set(skillRows.filter(r => r.enabled).map(r => r.name));
   try {
-    const skillCount = await loadSkillsFromDirectory(skillDiscovery, skillRegistry, logger, enabledSkillNames);
+    const skillCount = await loadToolsFromDirectory(skillDiscovery, skillRegistry, logger, enabledSkillNames);
     logger.info({ skillCount }, 'Skills loaded');
   } catch (err) {
-    // Fail hard on skill loading errors — a broken skill.json or handler should
+    // Fail hard on skill loading errors — a broken tool.json or handler should
     // not silently degrade the system to no-tools mode. Consistent with how we
     // handle missing DATABASE_URL and ANTHROPIC_API_KEY.
     logger.fatal({ err }, 'Failed to load skills');
@@ -1053,7 +1053,7 @@ async function main(): Promise<void> {
   const coordinatorConfig = agentConfigs.find(c => c.name === 'coordinator');
 
   // Extract agent persona from the identity service — the single source of truth
-  // for the agent's identity. Used by skills (via SkillContext.agentPersona) so
+  // for the agent's identity. Used by skills (via ToolContext.agentPersona) so
   // templates and outbound-facing code never hardcode the agent's name or title.
   const officeIdentity = officeIdentityService.get();
   const agentPersona: AgentPersona = {
@@ -1863,10 +1863,10 @@ async function main(): Promise<void> {
   for (const agentConfig of agentConfigs) {
     // Build tool definitions from pinned skills
     const agentPinnedSkills = agentConfig.pinned_skills ?? [];
-    for (const skillName of agentPinnedSkills) {
-      if (!skillRegistry.get(skillName)) {
+    for (const toolName of agentPinnedSkills) {
+      if (!skillRegistry.get(toolName)) {
         logger.warn(
-          { agent: agentConfig.name, skill: skillName },
+          { agent: agentConfig.name, skill: toolName },
           'Pinned skill not found in registry; skipping tool definition',
         );
       }
@@ -1933,18 +1933,18 @@ async function main(): Promise<void> {
     // was: const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
     const agentToolDefs = skillRegistry.toToolDefinitions(effectivePinnedSkills);
 
-    // allow_discovery: true → inject the skill-registry discovery tool into the agent's
+    // allow_discovery: true → inject the tool-registry discovery tool into the agent's
     // tool list. Skipped if already pinned to avoid duplicate tool definitions.
-    // The skill-registry handler is loaded by the standard file loader like any other
+    // The tool-registry handler is loaded by the standard file loader like any other
     // skill; this only controls whether it appears in the LLM's tool list for this agent.
-    if (agentConfig.allow_discovery && !effectivePinnedSkills.includes('skill-registry')) {
-      const discoveryToolDefs = skillRegistry.toToolDefinitions(['skill-registry']);
+    if (agentConfig.allow_discovery && !effectivePinnedSkills.includes('tool-registry')) {
+      const discoveryToolDefs = skillRegistry.toToolDefinitions(['tool-registry']);
       if (discoveryToolDefs.length === 0) {
-        // skill-registry is not in the registry — it either failed to load (bad manifest,
+        // tool-registry is not in the registry — it either failed to load (bad manifest,
         // missing handler) or was never registered. Error-level: a declared capability is
         // unavailable for this agent's entire lifetime. Root cause will be in the earlier
         // skill-loader error log; this connects the agent-level consequence to it.
-        logger.error({ agent: agentConfig.name }, 'allow_discovery is true but skill-registry is not registered — discovery unavailable; check startup logs for skill load errors');
+        logger.error({ agent: agentConfig.name }, 'allow_discovery is true but tool-registry is not registered — discovery unavailable; check startup logs for skill load errors');
       } else {
         agentToolDefs.push(...discoveryToolDefs);
       }
@@ -2277,7 +2277,7 @@ async function main(): Promise<void> {
     webAppBootstrapSecret: config.webAppBootstrapSecret,
     appOrigin: config.appOrigin,
     agentNames: agentConfigs.map(c => c.name),
-    skillNames: skillRegistry.list().map(s => s.manifest.name),
+    toolNames: skillRegistry.list().map(s => s.manifest.name),
     schedulerService,
     identityService: officeIdentityService,
     executiveProfileService,

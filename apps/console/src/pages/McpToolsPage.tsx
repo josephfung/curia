@@ -216,7 +216,7 @@ function serverSortValue(e: McpEntry, key: McpSortKey): string {
   return key === 'name' ? e.name : e.state;
 }
 
-export default function McpSkillsPage() {
+export default function McpToolsPage() {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [entries, setEntries] = useState<McpEntry[]>([]);

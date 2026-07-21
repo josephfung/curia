@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { DelegateHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { BusEvent, AgentTaskEvent } from '../../src/bus/events.js';
 import { createAgentResponse } from '../../src/bus/events.js';
@@ -39,9 +39,9 @@ const agentRegistry = {
   has: (n: string) => n === 'research-analyst',
   get: (n: string) => ({ name: n, role: 'specialist' }),
   listSpecialists: () => [{ name: 'research-analyst' }],
-} as unknown as SkillContext['agentRegistry'];
+} as unknown as ToolContext['agentRegistry'];
 
-function makeCtx(bus: EventBus, over: Partial<SkillContext> = {}): SkillContext {
+function makeCtx(bus: EventBus, over: Partial<ToolContext> = {}): ToolContext {
   return {
     input: { agent: 'research-analyst', task: 'find the acquisition comps' },
     log: pino({ level: 'silent' }),
@@ -52,7 +52,7 @@ function makeCtx(bus: EventBus, over: Partial<SkillContext> = {}): SkillContext 
     channelId: 'email',
     taskMetadata: { originator: { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' } },
     ...over,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('DelegateHandler relay-context forwarding (#995)', () => {

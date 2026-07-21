@@ -6,7 +6,7 @@
 
 import path from 'node:path';
 import type { ActionRisk } from './types.js';
-import { discoverSkillManifests } from './loader.js';
+import { discoverToolManifests } from './loader.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 
 const SKILLS_DIR = path.resolve(import.meta.dirname, '../../skills');
@@ -16,11 +16,11 @@ let cachedRecapSkills: Set<string> | null = null;
 /** Minimum autonomy score for a skill to appear in the default activity recap. */
 const RECAP_MIN_SCORE = AutonomyService.minScoreForActionRisk('low');
 
-export function getRecapEligibleSkillNames(): Set<string> {
+export function getRecapEligibleToolNames(): Set<string> {
   if (cachedRecapSkills) return cachedRecapSkills;
 
   const names = new Set<string>();
-  for (const disc of discoverSkillManifests(SKILLS_DIR)) {
+  for (const disc of discoverToolManifests(SKILLS_DIR)) {
     if (disc.error || !disc.manifest) continue;
     if (isRecapEligible(disc.manifest.action_risk)) {
       names.add(disc.manifest.name);
@@ -35,6 +35,6 @@ function isRecapEligible(risk: ActionRisk): boolean {
 }
 
 /** Test-only: reset module cache between test files. */
-export function resetRecapSkillCache(): void {
+export function resetRecapToolCache(): void {
   cachedRecapSkills = null;
 }

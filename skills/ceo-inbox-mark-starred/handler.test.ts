@@ -2,10 +2,10 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { CeoInboxMarkStarredHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 
-function makeCtx(overrides?: Partial<SkillContext> & { input?: Record<string, unknown> }): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext> & { input?: Record<string, unknown> }): ToolContext {
   return {
     input: { message_id: 'msg-123' },
     secret: (_name: string) => 'test-secret',
@@ -13,7 +13,7 @@ function makeCtx(overrides?: Partial<SkillContext> & { input?: Record<string, un
     taskMetadata: {},
     taskEventId: undefined,
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('CeoInboxMarkStarredHandler', () => {

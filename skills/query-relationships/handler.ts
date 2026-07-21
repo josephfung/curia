@@ -6,14 +6,14 @@
 //   - One match     → returns edges, optionally filtered by type
 //   - Many matches  → returns ambiguous:true with candidates for disambiguation
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { EDGE_TYPES } from '../../src/memory/types.js';
 import type { EdgeType } from '../../src/memory/types.js';
 
 const EDGE_TYPES_SET: ReadonlySet<string> = new Set(EDGE_TYPES);
 
-export class QueryRelationshipsHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class QueryRelationshipsHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { entity, edge_type } = ctx.input as { entity?: string; edge_type?: string };
 
     if (!entity || typeof entity !== 'string') {

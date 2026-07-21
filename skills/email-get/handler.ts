@@ -4,10 +4,10 @@
 // Routes via OutboundGateway.getEmailMessage() — account resolution
 // is handled by the gateway's named-client map.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class EmailGetHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailGetHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.outboundGateway) {
       return { success: false, error: 'email-get requires outboundGateway (capabilities: ["outboundGateway"])' };
     }

@@ -4,7 +4,7 @@
 // It owns establishing a connection to an MCP server (stdio or SSE), wrapping
 // the SDK session, and exposing a clean close() for graceful shutdown.
 //
-// It has zero knowledge of SkillRegistry or skill manifests — that's the loader's job.
+// It has zero knowledge of ToolRegistry or skill manifests — that's the loader's job.
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';

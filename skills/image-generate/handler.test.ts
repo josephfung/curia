@@ -6,17 +6,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageGenerateHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import pino from 'pino';
 
-// A minimal SkillContext factory. image-generate needs:
+// A minimal ToolContext factory. image-generate needs:
 //   ctx.input    — the skill inputs
 //   ctx.secret() — returns the API key, or throws when secretThrows is true
 //   ctx.log      — pino logger (silenced)
 function makeCtx(
   input: Record<string, unknown>,
   { secretThrows = false } = {},
-): SkillContext {
+): ToolContext {
   return {
     input,
     secret: (_name: string) => {
@@ -26,7 +26,7 @@ function makeCtx(
       return 'test-api-key';
     },
     log: pino({ level: 'silent' }),
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 // Minimal OpenAI Images API response shape.

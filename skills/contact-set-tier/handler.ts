@@ -1,4 +1,4 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { ContactTier, TaskOriginator } from '../../src/contacts/types.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -16,8 +16,8 @@ const SETTABLE_TIERS: ContactTier[] = ['blocked', 'unknown', 'known', 'trusted']
 // specialist as a live turn, while an autonomous/woken contacts task carries no live signal and
 // is correctly blocked. (action_risk:'high' is inert while elevated — elevated skills are
 // autonomy-gate-exempt — but documents the consequence class.)
-export class ContactSetTierHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactSetTierHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { contact_id, tier, reason } = ctx.input as {
       contact_id?: string;
       tier?: string;

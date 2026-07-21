@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ExecutiveProfileGetHandler } from '../../../skills/executive-profile-get/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import type { ExecutiveProfile } from '../../../src/executive/types.js';
 import pino from 'pino';
 
@@ -20,10 +20,10 @@ const testProfile: ExecutiveProfile = {
   },
 };
 
-function makeCtx(service?: { get: () => ExecutiveProfile }): SkillContext {
+function makeCtx(service?: { get: () => ExecutiveProfile }): ToolContext {
   return {
-    skillName: 'executive-profile-get',
-    skillVersion: '1.0.0',
+    toolName: 'executive-profile-get',
+    toolVersion: '1.0.0',
     input: {},
     secret: () => { throw new Error('no secrets'); },
     log: logger,

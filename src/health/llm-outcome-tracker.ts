@@ -1,7 +1,7 @@
 // llm-outcome-tracker.ts — in-memory recorder of per-key LLM/embedding call outcomes.
 //
 // Maintained by HealthService via bus event subscriptions (llm.call, llm.error,
-// embedding.call, embedding.error, skill.result). Read by runCanaries() to determine
+// embedding.call, embedding.error, tool.result). Read by runCanaries() to determine
 // whether each capability tier has been healthy without making billed probe calls.
 
 import type { TrackerKey, TierOutcome } from './types.js';

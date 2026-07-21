@@ -6,7 +6,7 @@
 // an empty scope returns available:false so the agent reports "unavailable /
 // expired" rather than confabulating.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { DiagnosticsQuery, DiagnosticsRepo } from '../../src/diagnostics/diagnostics-repo.js';
 import { redactText, summarizePayload } from '../../src/diagnostics/redact.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
@@ -35,8 +35,8 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-export class OpsLookupHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class OpsLookupHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const repo = ctx.diagnosticsRepo;
     if (!repo) {
       return { success: false, error: 'ops-lookup requires diagnosticsRepo capability' };
@@ -62,7 +62,7 @@ export class OpsLookupHandler implements SkillHandler {
       taskId: str(input.task_id),
       agentId: str(input.agent_id),
       status: str(input.status),
-      skillName: str(input.skill_name),
+      toolName: str(input.skill_name),
       outcome: str(input.outcome),
       role: str(input.role),
       from: from || undefined,
@@ -151,7 +151,7 @@ export class OpsLookupHandler implements SkillHandler {
           id: a.id,
           task_id: a.taskId,
           conversation_id: a.conversationId,
-          skill_name: a.skillName,
+          skill_name: a.toolName,
           action_risk: a.actionRisk,
           outcome: a.outcome,
           task_summary: redactText(a.taskSummary),

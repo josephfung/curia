@@ -9,11 +9,11 @@
 //   3. Download via outboundGateway.downloadEmailAttachment().
 //   4. Return base64-encoded content plus metadata.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { MAX_TEMP_FILE_BYTES } from '../../src/skills/temp-file-store.js';
 
-export class EmailDownloadAttachmentHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailDownloadAttachmentHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.outboundGateway) {
       return {
         success: false,

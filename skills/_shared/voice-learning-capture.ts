@@ -3,7 +3,7 @@
 // Capture failure must never block draft creation. Callers invoke this after a
 // successful Nylas draft create/update and ignore the boolean result.
 
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { NylasParticipant } from './ceo-nylas-client.js';
 
 export const VOICE_LEARNING_DOC_TYPE = 'voice-draft-snapshot';
@@ -28,7 +28,7 @@ export function draftSnapshotPath(draftId: string): string {
  * workingDocs is unavailable or the write failed (already logged).
  */
 export async function captureDraftSnapshot(
-  ctx: SkillContext,
+  ctx: ToolContext,
   input: DraftSnapshotInput,
 ): Promise<boolean> {
   const repo = ctx.workingDocs;

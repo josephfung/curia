@@ -6,7 +6,7 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { MemoryQueryHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 function makeEntityMemory(): EntityMemory {
   const embeddingService = EmbeddingService.createForTesting();
@@ -15,13 +15,13 @@ function makeEntityMemory(): EntityMemory {
   return new EntityMemory(store, validator, embeddingService, createSilentLogger());
 }
 
-function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): SkillContext {
+function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): ToolContext {
   return {
     input,
     secret: () => 'test-key',
     log: pino({ level: 'silent' }),
     entityMemory,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('MemoryQueryHandler', () => {
@@ -53,7 +53,7 @@ describe('MemoryQueryHandler', () => {
       secret: () => 'test-key',
       log: pino({ level: 'silent' }),
       entityMemory: undefined,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await handler.execute(ctx);
 

@@ -12,7 +12,7 @@ import type { IRegistryRepo } from './types.js';
 import type { Logger } from '../logger.js';
 
 export interface RegistryDefaults {
-  skills: string[];
+  tools: string[];
   agents: string[];
 }
 
@@ -27,12 +27,12 @@ export interface ReconcileDeps {
 
 export async function reconcileRegistries(deps: ReconcileDeps): Promise<void> {
   const { skillRepo, agentRepo, skillDiscoveryNames, agentDiscoveryNames, defaults, logger } = deps;
-  await reconcileOne('skill', skillRepo, skillDiscoveryNames, defaults.skills, logger);
+  await reconcileOne('tool', skillRepo, skillDiscoveryNames, defaults.tools, logger);
   await reconcileOne('agent', agentRepo, agentDiscoveryNames, defaults.agents, logger);
 }
 
 async function reconcileOne(
-  kind: 'skill' | 'agent',
+  kind: 'tool' | 'agent',
   repo: IRegistryRepo,
   discoveryNames: Set<string>,
   coreNames: string[],

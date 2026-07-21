@@ -3,10 +3,10 @@
 // Returns the executive's current writing voice profile as structured data
 // plus a human-readable summary. Read-only, no special sensitivity.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class ExecutiveProfileGetHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ExecutiveProfileGetHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.executiveProfileService) {
       return { success: false, error: 'executive-profile-get requires executiveProfileService in context. Is the executive profile configured?' };
     }

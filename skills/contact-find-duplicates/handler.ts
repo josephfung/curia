@@ -10,7 +10,7 @@
 // summary. This makes repeated weekly runs safe to run without accumulating
 // duplicate tasks.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { DuplicatePair, TaskOriginator } from '../../src/contacts/types.js';
 import type { KgNode } from '../../src/memory/types.js';
 import { hasExclusion } from '../../src/contacts/dedup-exclusions.js';
@@ -36,8 +36,8 @@ const OPEN_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
 // issue, adding offset to ListTasksFilters and paginating here is the right fix.
 const EXISTING_TASK_FETCH_LIMIT = 1000;
 
-export class ContactFindDuplicatesHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactFindDuplicatesHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { min_score: rawMinScore, max_tasks: rawMaxTasks } = ctx.input as {
       min_score?: unknown;
       max_tasks?: unknown;

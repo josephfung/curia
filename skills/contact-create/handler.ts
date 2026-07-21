@@ -6,14 +6,14 @@
 //
 // This skill uses contactService, which is a universal service.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 // Channel names that this skill accepts as optional inputs.
 // Each maps to a channel type used by linkIdentity().
 const CHANNEL_INPUTS = ['email', 'phone', 'signal', 'telegram'] as const;
 
-export class ContactCreateHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactCreateHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { name, role, notes, email, phone, signal, telegram } = ctx.input as {
       name?: string;
       role?: string;

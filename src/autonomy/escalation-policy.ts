@@ -55,7 +55,7 @@ export type ActionConsequenceClass =
 export type EscalationDecision = 'allow' | 'escalate';
 
 /** Skills that persist durable KG facts/edges — require tier >= known for external originators (#1290). */
-export const KG_WRITE_SKILLS = new Set([
+export const KG_WRITE_TOOLS = new Set([
   'memory-store',
   'extract-facts',
   'extract-relationships',

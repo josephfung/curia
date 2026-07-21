@@ -4,7 +4,7 @@
 // scopes the change to the authenticated attendee, so we never write a full
 // participants array or risk changing another attendee's status.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { NylasCalendarEvent, NylasRsvpStatus } from '../../src/channels/calendar/nylas-calendar-client.js';
 import {
   findHoldsForConversationRelease,
@@ -22,8 +22,8 @@ const RESPONSE_TO_NYLAS: Record<InviteResponse, NylasRsvpStatus> = {
 
 const HOLD_SEARCH_PADDING_MS = 14 * 24 * 60 * 60 * 1000;
 
-export class CalendarRespondToInviteHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CalendarRespondToInviteHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.nylasCalendarClient) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }
@@ -131,7 +131,7 @@ export class CalendarRespondToInviteHandler implements SkillHandler {
   }
 
   private async releaseMatchingHolds(
-    ctx: SkillContext,
+    ctx: ToolContext,
     calendarId: string,
     criteria: HoldMatchCriteria | undefined,
     event: NylasCalendarEvent | null,

@@ -110,7 +110,7 @@ Use [`docs/adr/template.md`](docs/adr/template.md) and add a row to the index in
 Step-by-step guides for common extension tasks — more detail than the quick references below:
 
 - [**Adding an Agent**](docs/dev/adding-an-agent.md) — full YAML schema reference, skill pinning, autonomy injection, lifecycle hooks
-- [**Adding a Skill**](docs/dev/adding-a-skill.md) — manifest fields, `action_risk` and the autonomy gate, handler interface, secrets, testing checklist
+- [**Adding a Skill**](docs/dev/adding-a-tool.md) — manifest fields, `action_risk` and the autonomy gate, handler interface, secrets, testing checklist
 - [**Smoke Tests**](docs/dev/smoke-tests.md) - how our LLM-based testing works, and how to add more tests
 
 ## Adding a New Channel Adapter
@@ -122,9 +122,9 @@ Step-by-step guides for common extension tasks — more detail than the quick re
 
 ## Adding a New Skill
 
-See the full [Adding a Skill guide](docs/dev/adding-a-skill.md) for schema details, `action_risk` values, and a pre-PR checklist. Quick reference:
+See the full [Adding a Skill guide](docs/dev/adding-a-tool.md) for schema details, `action_risk` values, and a pre-PR checklist. Quick reference:
 
-1. Create `skills/<name>/` with `skill.json` manifest and `handler.ts`
+1. Create `skills/<name>/` with `tool.json` manifest and `handler.ts`
 2. Write tests in `skills/<name>/handler.test.ts`
 3. Declare `action_risk`, `sensitivity`, permissions, and secrets in the manifest
 

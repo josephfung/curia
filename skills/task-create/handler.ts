@@ -19,7 +19,7 @@
 // (`schedulable_by` in agent YAML) was considered and deliberately deferred; revisit
 // if a compromised-agent threat model warrants restricting who can schedule into whom.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 import type { TaskEscalation } from '../../src/agents/task-escalation.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
@@ -45,8 +45,8 @@ function isValidEscalationShape(value: unknown): value is TaskEscalation {
     && Array.isArray(v.suggestedActions);
 }
 
-export class TaskCreateHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class TaskCreateHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as {
       title?: string;
       description?: string;

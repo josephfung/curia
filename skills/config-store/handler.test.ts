@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ConfigStoreHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import pino from 'pino';
 
 function makeEntityMemory(overrides: Record<string, unknown> = {}) {
@@ -22,14 +22,14 @@ function makeEntityMemory(overrides: Record<string, unknown> = {}) {
 function makeCtx(
   entityMemory: ReturnType<typeof makeEntityMemory> | null | undefined,
   input: Record<string, unknown>,
-  overrides: Partial<SkillContext> = {},
-): SkillContext {
+  overrides: Partial<ToolContext> = {},
+): ToolContext {
   return {
     input,
     entityMemory: entityMemory === null ? undefined : (entityMemory ?? makeEntityMemory()),
     log: pino({ level: 'silent' }),
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('ConfigStoreHandler', () => {

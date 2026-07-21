@@ -11,7 +11,7 @@
 // so a missing gateway, missing principal email, or a failed send must never fail the generator's
 // run (which would falsely signal failure and churn the scheduler). All such cases log and return.
 
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 /**
  * Resolve the principal's verified + ACTIVE email address, or null (a silent skip).
@@ -21,7 +21,7 @@ import type { SkillContext } from '../../src/skills/types.js';
  * active email (a defunct/bounced address may be reassigned, so we don't route CEO notifications
  * to it). Never throws — a contacts-layer error on this notification path is treated as "no email".
  */
-export async function resolvePrincipalEmail(ctx: SkillContext): Promise<string | null> {
+export async function resolvePrincipalEmail(ctx: ToolContext): Promise<string | null> {
   if (!ctx.contactService) {
     // Capability-wiring problem (contactService is universal, so this is unexpected) rather than a
     // benign first-run data state — log the cause; the caller logs the consequence (skip).
@@ -52,7 +52,7 @@ export async function resolvePrincipalEmail(ctx: SkillContext): Promise<string |
  * when sendNotification confirmed the notification event was published.
  */
 export async function notifyLearningProposal(
-  ctx: SkillContext,
+  ctx: ToolContext,
   notification: { subject: string; body: string },
 ): Promise<boolean> {
   // Self-contained never-throw guarantee. The generators await this bare inside their outer

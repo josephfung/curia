@@ -46,7 +46,7 @@ scoped rules:
 
 1. `tests-relax-production-rules` — async/null/error/naming rules don't apply to test files.
 2. `nullish-equality-idiom` — `!= null` / `== null` is the intentional combined guard.
-3. `agent-error-is-bus-boundary-only` — `AgentError` is bus-layer only; skills return `SkillResult`, routes/services/frontend use their own patterns.
+3. `agent-error-is-bus-boundary-only` — `AgentError` is bus-layer only; skills return `ToolResult`, routes/services/frontend use their own patterns.
 4. `error-propagation-and-pg-codes` — services may propagate to the caller's error boundary; direct `pgCode` checks are fine.
 5. `scripts-maintenance-conventions` — `scripts/` use log + exit-code, not `AgentError`.
 6. `apps-console-frontend-conventions` — Vite/React frontend ≠ Node backend (extensionless imports, `console.error`, etc.).

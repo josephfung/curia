@@ -3,10 +3,10 @@
 // Marks an email as read via the OutboundGateway. Used after triage or
 // processing to prevent re-processing on subsequent polling runs.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class EmailMarkReadHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailMarkReadHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { message_id: rawMessageId, account } = ctx.input as {
       message_id?: string;
       account?: string;

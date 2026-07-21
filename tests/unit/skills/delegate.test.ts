@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DelegateHandler } from '../../../skills/delegate/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { EventBus } from '../../../src/bus/bus.js';
 
@@ -10,11 +10,11 @@ const logger = pino({ level: 'silent' });
 
 function makeCtx(
   input: Record<string, unknown>,
-  overrides?: Partial<SkillContext>,
-): SkillContext {
+  overrides?: Partial<ToolContext>,
+): ToolContext {
   return {
-    skillName: 'delegate',
-    skillVersion: '1.3.0',
+    toolName: 'delegate',
+    toolVersion: '1.3.0',
     input,
     secret: () => { throw new Error('no secrets needed'); },
     log: logger,

@@ -1,6 +1,6 @@
 // task-completion-from-sent — risk-tiered completion from Sent matches (#1424).
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import {
   classifyTaskRisk,
   decideCompletionAction,
@@ -29,8 +29,8 @@ import { notifyLearningProposal } from '../_shared/learning-notify.js';
 // a terminated task as done.
 const ACTIVE_TASK_STATUSES = new Set(['open', 'in_progress', 'waiting', 'blocked']);
 
-export class TaskCompletionFromSentHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class TaskCompletionFromSentHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     // Skill contract: never throw — normalize repo/document failures to a result.
     try {
       return await this.runCompletion(ctx);
@@ -43,7 +43,7 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
     }
   }
 
-  private async runCompletion(ctx: SkillContext): Promise<SkillResult> {
+  private async runCompletion(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.taskRepo || !ctx.sensitivityClassifier || !ctx.entityMemory) {
       return {
         success: false,
@@ -51,7 +51,7 @@ export class TaskCompletionFromSentHandler implements SkillHandler {
       };
     }
     // Narrow closure over the classifier's classify() so classifyTaskRisk stays a pure,
-    // testable helper that doesn't need to know about SkillContext (#1419). No structured
+    // testable helper that doesn't need to know about ToolContext (#1419). No structured
     // properties here — the title+tags text is already flattened by classifyTaskRisk, so
     // pass an empty properties bag (classify()'s second, required arg).
     const classify = (text: string) => ctx.sensitivityClassifier!.classify(text, {});

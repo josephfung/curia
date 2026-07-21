@@ -1,9 +1,9 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { CeoNylasClient } from '../_shared/ceo-nylas-client.js';
 import type { NylasFolder } from '../_shared/ceo-nylas-client.js';
 
-export class CeoInboxUpdateFoldersHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CeoInboxUpdateFoldersHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
     const client = new CeoNylasClient(apiKey, grantId, ctx.log);

@@ -99,14 +99,14 @@ export interface ExportEvaluation {
 }
 
 // Skills that export countable records via MCP (second enforcement point).
-export const MCP_EXPORT_SKILLS = new Set([
+export const MCP_EXPORT_TOOLS = new Set([
   'create_drive_file',
   'create_sheet',
   'append_table_rows',
 ]);
 
 // Skills that route attachments through OutboundGateway.
-export const GATEWAY_ATTACHMENT_SKILLS = new Set([
+export const GATEWAY_ATTACHMENT_TOOLS = new Set([
   'email-send',
   'email-reply',
   'email-draft-save',
@@ -347,17 +347,17 @@ function extractMcpRowItems(input: Record<string, unknown>, rowLabel: string): R
  * otherwise derives a count from attachments / table rows with default `internal` sensitivity.
  */
 export function extractExportItemsFromInput(
-  skillName: string,
+  toolName: string,
   input: Record<string, unknown>,
 ): RawExportItemInput[] {
-  if (GATEWAY_ATTACHMENT_SKILLS.has(skillName)) {
+  if (GATEWAY_ATTACHMENT_TOOLS.has(toolName)) {
     return extractAttachmentExportItems(input);
   }
 
   const explicit = parseRawExportItems(input['export_items']);
   if (explicit.length > 0) return explicit;
 
-  if (skillName === 'create_drive_file') {
+  if (toolName === 'create_drive_file') {
     const fileName = typeof input['file_name'] === 'string'
       ? input['file_name']
       : typeof input['filename'] === 'string'
@@ -366,14 +366,14 @@ export function extractExportItemsFromInput(
     return [{ label: fileName }];
   }
 
-  if (skillName === 'create_sheet') {
+  if (toolName === 'create_sheet') {
     const rowItems = extractMcpRowItems(input, 'row');
     if (rowItems.length > 0) return rowItems;
     const title = typeof input['title'] === 'string' ? input['title'] : 'new sheet';
     return [{ label: title }];
   }
 
-  if (skillName === 'append_table_rows') {
+  if (toolName === 'append_table_rows') {
     return extractMcpRowItems(input, 'row');
   }
 
@@ -382,22 +382,22 @@ export function extractExportItemsFromInput(
 
 /** Derive the export destination from skill input. */
 export function extractDestinationFromInput(
-  skillName: string,
+  toolName: string,
   input: Record<string, unknown>,
 ): ExportDestination | null {
-  if (GATEWAY_ATTACHMENT_SKILLS.has(skillName)) {
+  if (GATEWAY_ATTACHMENT_TOOLS.has(toolName)) {
     const to = input['to'];
     if (typeof to === 'string' && to.trim()) {
       return { kind: 'email', address: to.trim() };
     }
-    if (skillName === 'email-reply') {
+    if (toolName === 'email-reply') {
       // Reply destination is implicit in reply_to_message_id — channel tier gate handles trust.
       return null;
     }
     return null;
   }
 
-  if (skillName === 'signal-send') {
+  if (toolName === 'signal-send') {
     const recipient = input['recipient'];
     if (typeof recipient === 'string' && recipient.trim()) {
       return { kind: 'signal', address: recipient.trim() };
@@ -405,7 +405,7 @@ export function extractDestinationFromInput(
     return null;
   }
 
-  if (skillName === 'create_drive_file') {
+  if (toolName === 'create_drive_file') {
     const folderId = input['folder_id'] ?? input['folderId'];
     if (typeof folderId === 'string' && folderId.trim()) {
       return { kind: 'drive_folder', folderId: folderId.trim() };
@@ -413,12 +413,12 @@ export function extractDestinationFromInput(
     return { kind: 'drive_folder', folderId: 'root' };
   }
 
-  if (skillName === 'create_sheet' || skillName === 'append_table_rows') {
+  if (toolName === 'create_sheet' || toolName === 'append_table_rows') {
     const spreadsheetId = input['spreadsheet_id'] ?? input['spreadsheetId'];
     if (typeof spreadsheetId === 'string' && spreadsheetId.trim()) {
       return { kind: 'spreadsheet', spreadsheetId: spreadsheetId.trim() };
     }
-    if (skillName === 'create_sheet') {
+    if (toolName === 'create_sheet') {
       return { kind: 'spreadsheet', spreadsheetId: '(new)' };
     }
     return null;
@@ -478,19 +478,19 @@ export class ExportControlService {
   }
 
   async evaluateSkillExport(opts: {
-    skillName: string;
+    toolName: string;
     input: Record<string, unknown>;
     humanApproved?: boolean;
   }): Promise<ExportEvaluation | null> {
-    if (!MCP_EXPORT_SKILLS.has(opts.skillName) && !GATEWAY_ATTACHMENT_SKILLS.has(opts.skillName)) {
+    if (!MCP_EXPORT_TOOLS.has(opts.toolName) && !GATEWAY_ATTACHMENT_TOOLS.has(opts.toolName)) {
       return null;
     }
 
-    const rawItems = extractExportItemsFromInput(opts.skillName, opts.input);
+    const rawItems = extractExportItemsFromInput(opts.toolName, opts.input);
     if (rawItems.length === 0) return null;
 
     const items = await this.resolveItems(rawItems);
-    const destination = extractDestinationFromInput(opts.skillName, opts.input)
+    const destination = extractDestinationFromInput(opts.toolName, opts.input)
       ?? { kind: 'email' as const, address: '(implicit reply)' };
 
     const outcome = evaluateExportGate({

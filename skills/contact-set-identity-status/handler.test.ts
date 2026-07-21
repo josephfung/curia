@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ContactSetIdentityStatusHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { ContactService } from '../../src/contacts/contact-service.js';
 import type { ChannelIdentity } from '../../src/contacts/types.js';
 import { IdentityNotFoundError } from '../../src/contacts/types.js';
@@ -32,7 +32,7 @@ function makeIdentity(overrides: Partial<ChannelIdentity> = {}): ChannelIdentity
 function makeCtx(overrides: {
   input?: Record<string, unknown>;
   contactService?: Partial<ContactService>;
-}): SkillContext {
+}): ToolContext {
   const contactService = {
     setIdentityStatus: vi.fn().mockResolvedValue(makeIdentity({ status: 'defunct' })),
     ...overrides.contactService,
@@ -43,7 +43,7 @@ function makeCtx(overrides: {
     secret: () => '',
     log: makeLogger(),
     contactService,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('ContactSetIdentityStatusHandler', () => {

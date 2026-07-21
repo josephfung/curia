@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SendDraftHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
@@ -33,7 +33,7 @@ function makeCtx(overrides: {
   bus?: Partial<EventBus>;
   taskEventId?: string;
   actionLogRepo?: Partial<ActionLogRepo> | null;
-}): SkillContext {
+}): ToolContext {
   const gateway = {
     listEmailMessages: vi.fn().mockResolvedValue([DRAFT_STUB]),
     sendEmailDraft: vi.fn().mockResolvedValue({ success: true, messageId: 'msg-sent-1' }),
@@ -74,7 +74,7 @@ function makeCtx(overrides: {
         },
     taskEventId: overrides.taskEventId ?? 'task-event-1',
     actionLogRepo,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 
   return ctx;
 }

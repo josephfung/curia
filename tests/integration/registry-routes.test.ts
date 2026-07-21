@@ -23,10 +23,10 @@ describeIf('registry routes', () => {
     pool = new Pool({ connectionString: DATABASE_URL });
 
     // Verify the tables exist before proceeding (they're created by migrations).
-    await pool.query('SELECT 1 FROM skill_registry LIMIT 0');
+    await pool.query('SELECT 1 FROM tool_registry LIMIT 0');
     await pool.query('SELECT 1 FROM agent_registry LIMIT 0');
 
-    const skillRepo = new RegistryRepo(pool, 'skill_registry');
+    const skillRepo = new RegistryRepo(pool, 'tool_registry');
     const agentRepo = new RegistryRepo(pool, 'agent_registry');
 
     // Seed discovery with one known skill so we can exercise install/enable paths.
@@ -55,29 +55,29 @@ describeIf('registry routes', () => {
     await pool?.end();
   });
 
-  // Reset the skill_registry table before each test to ensure isolation.
+  // Reset the tool_registry table before each test to ensure isolation.
   beforeEach(async () => {
-    await pool.query('DELETE FROM skill_registry');
+    await pool.query('DELETE FROM tool_registry');
   });
 
   const hdr = { 'x-web-bootstrap-secret': SECRET };
 
   it('401s without the secret', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/registry/skills' });
+    const res = await app.inject({ method: 'GET', url: '/api/registry/tools' });
     expect(res.statusCode).toBe(401);
   });
 
   it('lists a discovered-but-uninstalled skill', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/registry/skills', headers: hdr });
+    const res = await app.inject({ method: 'GET', url: '/api/registry/tools', headers: hdr });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { skills: Array<{ name: string; state: string }> };
-    expect(body.skills.find(s => s.name === 'alpha')?.state).toBe('uninstalled');
+    const body = res.json() as { tools: Array<{ name: string; state: string }> };
+    expect(body.tools.find(s => s.name === 'alpha')?.state).toBe('uninstalled');
   });
 
   it('install-enable flips it to enabled', async () => {
     const res = await app.inject({
       method: 'POST',
-      url: '/api/registry/skills/alpha/install-enable',
+      url: '/api/registry/tools/alpha/install-enable',
       headers: hdr,
     });
     expect(res.statusCode).toBe(200);
@@ -87,7 +87,7 @@ describeIf('registry routes', () => {
   it('400s installing an unknown (not-on-disk) skill', async () => {
     const res = await app.inject({
       method: 'POST',
-      url: '/api/registry/skills/nope/install',
+      url: '/api/registry/tools/nope/install',
       headers: hdr,
     });
     expect(res.statusCode).toBe(400);

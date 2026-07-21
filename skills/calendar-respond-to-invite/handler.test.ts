@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CalendarRespondToInviteHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { buildHoldMetadata } from '../../src/channels/calendar/holds.js';
@@ -49,7 +49,7 @@ function makeHold(id: string, startTime: number, endTime: number, ref?: { source
   });
 }
 
-function makeCtx(overrides?: Partial<SkillContext>, clientOverrides?: Record<string, unknown>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>, clientOverrides?: Record<string, unknown>): ToolContext {
   const sendRsvp = vi.fn().mockResolvedValue({ requestId: 'req_1', sendIcsError: null });
   const getEvent = vi.fn().mockResolvedValue(makeEvent());
   const listEvents = vi.fn().mockResolvedValue([]);
@@ -70,9 +70,9 @@ function makeCtx(overrides?: Partial<SkillContext>, clientOverrides?: Record<str
       deleteEvent,
       updateEvent: vi.fn(),
       ...clientOverrides,
-    } as unknown as SkillContext['nylasCalendarClient'],
+    } as unknown as ToolContext['nylasCalendarClient'],
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 describe('CalendarRespondToInviteHandler', () => {

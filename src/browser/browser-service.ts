@@ -23,7 +23,7 @@
 //    Drop the Xvfb management entirely when using a managed service.
 //
 // For options 2 and 3, only this file needs to change — the handler,
-// session model, and SkillContext interface are unaffected.
+// session model, and ToolContext interface are unaffected.
 
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';

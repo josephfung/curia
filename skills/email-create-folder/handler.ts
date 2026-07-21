@@ -3,10 +3,10 @@
 // Creates a new folder/label in an email account via OutboundGateway.
 // For Gmail, this creates a user-defined label.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class EmailCreateFolderHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailCreateFolderHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { name: rawName, account } = ctx.input as {
       name?: string;
       account?: string;

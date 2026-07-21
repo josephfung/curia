@@ -1,4 +1,4 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 import { CONFIG_NAMESPACE as VOICE_NS, DISMISSED_KEY } from '../voice-learn/handler.js';
 import {
@@ -16,8 +16,8 @@ const ACTIONS = new Set([
   'dismiss_completion',
 ]);
 
-export class ResolveLearningDigestHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ResolveLearningDigestHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     // Skill contract: never throw — a rejected profile/config/task/document call becomes
     // a failure result rather than escaping the handler.
     try {
@@ -31,7 +31,7 @@ export class ResolveLearningDigestHandler implements SkillHandler {
     }
   }
 
-  private async runResolve(ctx: SkillContext): Promise<SkillResult> {
+  private async runResolve(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.taskRepo || !ctx.entityMemory || !ctx.executiveProfileService) {
       return {
         success: false,
@@ -62,7 +62,7 @@ export class ResolveLearningDigestHandler implements SkillHandler {
         const current = ctx.executiveProfileService.get().writingVoice;
         await ctx.executiveProfileService.update(
           { writingVoice: { ...current, guide: proposal.guide } },
-          'skill',
+          'tool',
           'voice guide approved',
         );
 

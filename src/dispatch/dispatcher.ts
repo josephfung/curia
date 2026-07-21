@@ -1,5 +1,5 @@
 import type { EventBus } from '../bus/bus.js';
-import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, SkillResultEvent, OutboundBlockedEvent } from '../bus/events.js';
+import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent } from '../bus/events.js';
 import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
@@ -210,10 +210,10 @@ export class Dispatcher {
       await this.handleAgentError(event as AgentErrorEvent);
     });
 
-    // skill.result → reply-lock: detect successful email-reply / email-send calls so
+    // tool.result → reply-lock: detect successful email-reply / email-send calls so
     // handleAgentResponse can suppress the duplicate outbound.message. See #847.
-    this.bus.subscribe('skill.result', 'dispatch', async (event) => {
-      await this.handleSkillResult(event as SkillResultEvent);
+    this.bus.subscribe('tool.result', 'dispatch', async (event) => {
+      await this.handleToolResult(event as ToolResultEvent);
     });
 
     // outbound.blocked → bounded rewrite retry or salvage draft for dispatcher-relayed replies (#1355)
@@ -807,21 +807,21 @@ export class Dispatcher {
    * Reply-lock: detect when a human-facing reply skill fires successfully during a task
    * and mark the routing entry so handleAgentResponse can suppress the duplicate outbound.
    *
-   * The skill.result event carries conversationId but not the agent.task ID directly,
+   * The tool.result event carries conversationId but not the agent.task ID directly,
    * so we scan the routing map for an entry with a matching conversationId and senderId.
    * This works for both the direct-coordinator case (coordinator calls email-reply) and
    * the delegated-specialist case (T2125 calls email-reply; coordinator's routing entry
    * shares the same conversationId). See #847.
    *
-   * NOTE: This relies on single-process in-order event delivery — skill.result must be
+   * NOTE: This relies on single-process in-order event delivery — tool.result must be
    * delivered to all subscribers (including this handler) before agent.response is
    * delivered. The bus processes subscribers sequentially within a single Node.js
    * event loop; multi-process deployments would require a persistent lock instead.
    */
-  private async handleSkillResult(event: SkillResultEvent): Promise<void> {
-    const { skillName, conversationId, result } = event.payload;
+  private async handleToolResult(event: ToolResultEvent): Promise<void> {
+    const { toolName, conversationId, result } = event.payload;
 
-    if (skillName !== 'email-reply' && skillName !== 'email-send') return;
+    if (toolName !== 'email-reply' && toolName !== 'email-send') return;
     if (!result.success) return;
 
     // Extract outbound recipients from result.data.
@@ -833,7 +833,7 @@ export class Dispatcher {
       // The skill contract (to: string) was not met — log a warning so duplicate sends are
       // observable. The lock fails open: outbound.message will still be published.
       this.logger.warn(
-        { skillName, conversationId },
+        { toolName, conversationId },
         'Dispatcher reply-lock: skill result missing expected { to: string } field — reply-lock NOT set, duplicate send may occur',
       );
       return;
@@ -854,7 +854,7 @@ export class Dispatcher {
         routing.humanReplySent = true;
         matched = true;
         this.logger.debug(
-          { taskId, conversationId, skillName },
+          { taskId, conversationId, toolName },
           'Dispatcher reply-lock: human-facing reply detected — outbound.message will be suppressed',
         );
       }
@@ -863,7 +863,7 @@ export class Dispatcher {
     if (!matched) {
       // Expected for bullpen tasks or when the routing entry was already cleaned up.
       this.logger.debug(
-        { skillName, conversationId, routingMapSize: this.taskRouting.size },
+        { toolName, conversationId, routingMapSize: this.taskRouting.size },
         'Dispatcher reply-lock: no routing entry matched skill result — no lock set',
       );
     }

@@ -1,0 +1,19 @@
+{
+  "name": "tool-registry",
+  "description": "Search the tool registry to discover available capabilities by keyword. Use this when you need a tool that is not in your current tool list. Returns matching tool names and descriptions. Pass an empty string to list all available tools.",
+  "version": "1.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "query": "string (keyword to search — pass an empty string to list all available tools)"
+  },
+  "outputs": {
+    "tools": "array"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 5000,
+  "capabilities": [
+    "toolSearch"
+  ]
+}

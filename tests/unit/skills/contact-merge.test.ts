@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ContactMergeHandler } from '../../../skills/contact-merge/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -9,11 +9,11 @@ const VALID_UUID_B = '550e8400-e29b-41d4-a716-446655440001';
 
 function makeCtx(
   input: Record<string, unknown>,
-  overrides?: Partial<SkillContext>,
-): SkillContext {
+  overrides?: Partial<ToolContext>,
+): ToolContext {
   return {
-    skillName: 'contact-merge',
-    skillVersion: '1.1.0',
+    toolName: 'contact-merge',
+    toolVersion: '1.1.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

@@ -10,7 +10,7 @@
 | 00 | This file | Architecture, layers, bus, message flow, design principles |
 | 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings |
 | 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers |
-| 03 | [Skills & Execution](03-skills-and-execution.md) | Local skills, MCP, discovery, secrets, permissions, allowed_callers |
+| 03 | [Skills & Execution](03-tools-and-execution.md) | Local skills, MCP, discovery, secrets, permissions, allowed_callers |
 | 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email channels, message normalization |
 | 05 | [Error Recovery](05-error-recovery.md) | Error budgets, state continuity, pattern detection, failure model |
 | 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security |
@@ -60,7 +60,7 @@ All communication flows through a central in-process message bus backed by Postg
 
 ### Bus Security Enforcement
 
-The bus validates publisher authorization at registration time. A module registered as `layer: "channel"` can only publish event types in the channel allowlist (`inbound.message`, `inbound.event`). Attempting to publish `skill.invoke` throws an error. This is the hard security boundary — it's architectural, not policy.
+The bus validates publisher authorization at registration time. A module registered as `layer: "channel"` can only publish event types in the channel allowlist (`inbound.message`, `inbound.event`). Attempting to publish `tool.invoke` throws an error. This is the hard security boundary — it's architectural, not policy.
 
 The exception is the **System layer**, which has full publish and subscribe access to all event types. This is reserved for trusted infrastructure components (audit logger, memory engine, scheduler) that need cross-cutting access to operate.
 
@@ -69,9 +69,9 @@ The exception is the **System layer**, which has full publish and subscribe acce
 Full round-trip for an inbound message:
 1. Channel adapter publishes `inbound.message`
 2. Dispatch layer (subscribed to `inbound.message`) evaluates policy, publishes `agent.task`
-3. Agent (subscribed to `agent.task`) calls LLM, may publish `skill.invoke`
-4. Execution layer (subscribed to `skill.invoke`) runs skill, publishes `skill.result`
-5. Agent (subscribed to `skill.result`) incorporates result, publishes `agent.response`
+3. Agent (subscribed to `agent.task`) calls LLM, may publish `tool.invoke`
+4. Execution layer (subscribed to `tool.invoke`) runs skill, publishes `tool.result`
+5. Agent (subscribed to `tool.result`) incorporates result, publishes `agent.response`
 6. Dispatch layer (subscribed to `agent.response`) translates to `outbound.message`
 7. Channel adapter (subscribed to `outbound.message`) sends via platform API
 

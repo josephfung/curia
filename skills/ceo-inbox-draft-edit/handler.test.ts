@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDraftEditHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
-function buildCtx(input: Record<string, unknown>): SkillContext {
+function buildCtx(input: Record<string, unknown>): ToolContext {
   return {
-    skillName: 'ceo-inbox-draft-edit',
-    skillVersion: '0.2.1',
+    toolName: 'ceo-inbox-draft-edit',
+    toolVersion: '0.2.1',
     input,
     timezone: 'America/Toronto',
     secret(key: string): string {
@@ -21,7 +21,7 @@ function buildCtx(input: Record<string, unknown>): SkillContext {
       error: vi.fn(),
       debug: vi.fn(),
     },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 // Raw Nylas draft as returned by PUT /drafts/{id}.

@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WebBrowserHandler } from '../../../skills/web-browser/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import type { BrowserService } from '../../../src/browser/browser-service.js';
 import pino from 'pino';
 
@@ -95,10 +95,10 @@ function makeMockBrowserService(): BrowserService {
   } as unknown as BrowserService;
 }
 
-function makeCtx(input: Record<string, unknown>, browserService?: BrowserService): SkillContext {
+function makeCtx(input: Record<string, unknown>, browserService?: BrowserService): ToolContext {
   return {
-    skillName: 'web-browser',
-    skillVersion: '1.5.0',
+    toolName: 'web-browser',
+    toolVersion: '1.5.0',
     input,
     secret: () => { throw new Error('no secrets needed'); },
     log: logger,

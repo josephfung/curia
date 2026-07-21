@@ -8,17 +8,17 @@ const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
 
-describeIf('RegistryRepo (skill_registry)', () => {
+describeIf('RegistryRepo (tool_registry)', () => {
   let pool: pg.Pool;
   let repo: RegistryRepo;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
-    await pool.query('SELECT 1 FROM skill_registry LIMIT 0'); // fails loudly if migration 051 not applied
-    repo = new RegistryRepo(pool, 'skill_registry');
+    await pool.query('SELECT 1 FROM tool_registry LIMIT 0'); // fails loudly if migration 051 not applied
+    repo = new RegistryRepo(pool, 'tool_registry');
   });
   afterAll(async () => { await pool.end(); });
-  beforeEach(async () => { await pool.query('DELETE FROM skill_registry'); });
+  beforeEach(async () => { await pool.query('DELETE FROM tool_registry'); });
 
   it('install inserts a disabled row with installed_by', async () => {
     const row = await repo.install('alpha', 'tester');

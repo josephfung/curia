@@ -1,7 +1,7 @@
 // src/startup/validator.ts
 //
 // Centralized startup validation — runs before any services are initialized.
-// Validates config/default.yaml, all agents/*.yaml, and all skills/*/skill.json
+// Validates config/default.yaml, all agents/*.yaml, and all skills/*/tool.json
 // against JSON Schema using Ajv. Any failure throws with a descriptive message
 // and causes process.exit(1) in the bootstrap orchestrator (src/index.ts).
 //
@@ -65,7 +65,7 @@ function formatErrors(errors: ErrorObject[]): string {
  *   1. config/default.yaml (or configFileName override)
  *   2. config/skills.yaml (absent file is OK — no MCP servers configured)
  *   3. all *.yaml and *.yml files in agentsDir
- *   4. all skill.json files in skillsDir (one per skill subdirectory)
+ *   4. all tool.json files in skillsDir (one per skill subdirectory)
  */
 export async function runStartupValidation(opts: {
   configDir: string;
@@ -86,7 +86,7 @@ export async function runStartupValidation(opts: {
   const validateConfig = ajv.compile(loadSchema(schemasDir, 'default-config.schema.json'));
   const validateSkillsConfig = ajv.compile(loadSchema(schemasDir, 'skills-config.json'));
   const validateAgent = ajv.compile(loadSchema(schemasDir, 'agent-config.schema.json'));
-  const validateSkill = ajv.compile(loadSchema(schemasDir, 'skill-manifest.schema.json'));
+  const validateSkill = ajv.compile(loadSchema(schemasDir, 'tool-manifest.schema.json'));
 
   // 1. Validate config/default.yaml (absent file is OK — all fields are optional)
   const configPath = path.join(configDir, configFileName);
@@ -138,19 +138,19 @@ export async function runStartupValidation(opts: {
     }
   }
 
-  // 4. Validate all skills/*/skill.json (skipped when skillsDir is omitted)
+  // 4. Validate all skills/*/tool.json (skipped when skillsDir is omitted)
   //
   // Supports two layouts:
   //   a) skillsDir is a parent containing multiple skill subdirectories (production):
-  //        skills/web-search/skill.json, skills/email-send/skill.json, ...
-  //   b) skillsDir is a single skill directory directly containing skill.json (tests):
-  //        skills/valid-skill/skill.json — tests pass path.join(F, 'skills/valid-skill')
+  //        skills/web-search/tool.json, skills/email-send/tool.json, ...
+  //   b) skillsDir is a single skill directory directly containing tool.json (tests):
+  //        skills/valid-skill/tool.json — tests pass path.join(F, 'skills/valid-skill')
   //
-  // In case (b), the directory is checked first for a direct skill.json, then
+  // In case (b), the directory is checked first for a direct tool.json, then
   // subdirectories are scanned as in case (a).
   if (skillsDir && fs.existsSync(skillsDir)) {
-    // Case (b): direct skill.json in skillsDir itself
-    const directManifest = path.join(skillsDir, 'skill.json');
+    // Case (b): direct tool.json in skillsDir itself
+    const directManifest = path.join(skillsDir, 'tool.json');
     if (fs.existsSync(directManifest)) {
       const raw = JSON.parse(fs.readFileSync(directManifest, 'utf-8')) as unknown;
       if (!validateSkill(raw)) {
@@ -165,7 +165,7 @@ export async function runStartupValidation(opts: {
         .filter(e => e.isDirectory());
 
       for (const entry of skillEntries) {
-        const manifestPath = path.join(skillsDir, entry.name, 'skill.json');
+        const manifestPath = path.join(skillsDir, entry.name, 'tool.json');
         if (!fs.existsSync(manifestPath)) continue;
 
         const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;

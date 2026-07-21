@@ -11,10 +11,10 @@
 // Both operations are idempotent-safe: if the node is already archived or no longer
 // in a warned state, the handler returns success: false rather than throwing.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class MemoryConfirmHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class MemoryConfirmHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.entityMemory) {
       return { success: false, error: 'Entity memory service not available. Declare "entityMemory" in capabilities.' };
     }

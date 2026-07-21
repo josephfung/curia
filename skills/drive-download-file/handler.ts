@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream';
 import { google } from 'googleapis';
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { MAX_TEMP_FILE_BYTES } from '../../src/skills/temp-file-store.js';
 import { getDriveClient } from '../../src/google/drive-auth.js';
 
@@ -78,8 +78,8 @@ async function streamToBuffer(stream: Readable, maxBytes: number): Promise<Buffe
   });
 }
 
-export class DriveDownloadFileHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DriveDownloadFileHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.writeTempFile) {
       return { success: false, error: 'drive-download-file requires tempFileStore capability' };
     }

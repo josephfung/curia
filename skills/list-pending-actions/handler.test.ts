@@ -2,11 +2,11 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ListPendingActionsHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import { createSilentLogger } from '../../src/logger.js';
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: {},
     secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
@@ -24,7 +24,7 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     taskEventId: 'task-1',
     timezone: 'UTC',
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 function makeMockRepo(overrides?: Partial<ActionLogRepo>): ActionLogRepo {
@@ -66,11 +66,11 @@ describe('ListPendingActionsHandler', () => {
       findAllPending: vi.fn().mockResolvedValue([
         {
           id: 1, shortRef: 'cal-1', description: 'Create calendar event: Lunch',
-          skillName: 'calendar-create-event', createdAt: now, expiresAt: expires,
+          toolName: 'calendar-create-event', createdAt: now, expiresAt: expires,
         },
         {
           id: 2, shortRef: 'email-1', description: 'Send email reply: Re: Budget',
-          skillName: 'email-reply', createdAt: now, expiresAt: expires,
+          toolName: 'email-reply', createdAt: now, expiresAt: expires,
         },
       ]),
     });
@@ -91,7 +91,7 @@ describe('ListPendingActionsHandler', () => {
     expect(data.displayTimezone).toBe('UTC');
   });
 
-  it('returns SkillResult error when findAllPending throws', async () => {
+  it('returns ToolResult error when findAllPending throws', async () => {
     const repo = makeMockRepo({
       findAllPending: vi.fn().mockRejectedValue(new Error('DB connection lost')),
     });

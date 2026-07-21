@@ -16,7 +16,7 @@ Config is merged in order: `default.yaml` ← `local.yaml` or `production.yaml` 
 ### Secret References
 
 Secrets are never stored in config files. Application secrets resolve from the **encrypted
-vault** (vault-first; see [spec 03 — Secrets Access](03-skills-and-execution.md#secrets-access)
+vault** (vault-first; see [spec 03 — Secrets Access](03-tools-and-execution.md#secrets-access)
 and ADR-020/021). Only four bootstrap values live in `.env`, because they are needed to reach
 and unlock the vault itself: `DATABASE_URL`, `SECRET_ENCRYPTION_KEY`, `DB_USER`, `DB_PASSWORD`.
 (Alongside these, `.env` also holds non-secret operational config such as `HTTP_PORT`,

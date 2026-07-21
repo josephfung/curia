@@ -2,17 +2,17 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import pino from 'pino';
 import { ContactRenameHandler } from './handler.js';
 import { ContactService } from '../../src/contacts/contact-service.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 const silentLog = pino({ level: 'silent' });
 
-function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input: {},
     secret: () => 'unused',
     log: silentLog,
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('ContactRenameHandler', () => {

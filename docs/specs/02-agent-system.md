@@ -39,7 +39,7 @@ system_prompt: |
   For tasks, delegate to the appropriate specialist and synthesize
   their work into your response.
 pinned_skills:
-  - skill-registry
+  - tool-registry
   - scheduler
   - memory-query
 allow_discovery: true
@@ -100,7 +100,7 @@ handler: ./research-analyst.handler.ts
 # ... same config fields plus custom logic
 ```
 
-Handler exports hooks: `onTask`, `onSkillResult`, `beforeRespond`.
+Handler exports hooks: `onTask`, `onToolResult`, `beforeRespond`.
 
 ### Config Validation
 
@@ -124,8 +124,8 @@ Both `${agent_contact_id}` and `${principal_contact_id}` are guarded by a UUID-f
 
 1. Dispatch layer receives `inbound.message`, routes to agent
 2. Agent loads system prompt + relevant memory (entity facts, knowledge graph context, Bullpen status)
-3. Agent calls LLM, which may request skill invocations → publishes `skill.invoke`
-4. Skill results return via `skill.result`
+3. Agent calls LLM, which may request skill invocations → publishes `tool.invoke`
+4. Skill results return via `tool.result`
 5. Agent formulates response → publishes `agent.response`
 6. Dispatch routes response to originating channel
 
@@ -138,7 +138,7 @@ The agent runtime exposes hooks at key lifecycle points. Hooks are used by the f
 - `beforeLLMCall(context)` — modify context before sending to LLM (memory injection, context pruning)
 - `afterLLMCall(response)` — inspect/modify LLM response before acting on it
 - `beforeSkillInvoke(skill, args)` — validate/modify skill invocation
-- `afterSkillResult(skill, result)` — process skill results before feeding back to LLM
+- `afterToolResult(skill, result)` — process skill results before feeding back to LLM
 - `onTaskComplete(task, result)` — cleanup, memory persistence, metric emission
 - `onTaskError(task, error)` — error recovery logic (see [05-error-recovery.md](05-error-recovery.md))
 
@@ -289,7 +289,7 @@ All agents receive a `## Current Date & Time` block in their system prompt on ev
 
 ## Known Deficiencies
 
-- **Lifecycle hooks** — no hook system in `AgentRuntime`; `beforeLLMCall`, `afterLLMCall`, `beforeSkillInvoke`, `afterSkillResult`, `onTaskComplete`, and `onTaskError` are not implemented.
+- **Lifecycle hooks** — no hook system in `AgentRuntime`; `beforeLLMCall`, `afterLLMCall`, `beforeSkillInvoke`, `afterToolResult`, `onTaskComplete`, and `onTaskError` are not implemented.
 - **Agent presence snapshot** — the `GET /api/agents/status` endpoint exists but all agents return hardcoded `state: 'idle'`; a real-time state machine has not been built.
 - **Agent presence SSE stream** — the `GET /api/agents/status/stream` endpoint is not implemented.
 - **Ollama provider** — the local-model provider is not implemented; no `ollama.ts` provider file exists.

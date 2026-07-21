@@ -162,7 +162,7 @@ interface OutboundDeliveredPayload {
   exportAudit?: {
     destination: string;
     items: Array<{ nodeId?: string; label: string; sensitivity: string }>;
-    skillName?: string;
+    toolName?: string;
     agentId?: string;
   };
 }
@@ -170,7 +170,7 @@ interface OutboundDeliveredPayload {
 // ExportDeliveredPayload — emitted by ExecutionLayer after a successful MCP
 // bulk-record export (Drive/Sheets). Mirrors outbound.delivered for non-channel sinks.
 interface ExportDeliveredPayload {
-  skillName: string;
+  toolName: string;
   agentId?: string;
   taskEventId?: string;
   conversationId?: string;
@@ -253,18 +253,18 @@ export interface OutboundNotificationPayload {
   originalRecipientId?: string;
 }
 
-interface SkillInvokePayload {
+interface ToolInvokePayload {
   agentId: string;
   conversationId: string;
-  skillName: string;
+  toolName: string;
   input: Record<string, unknown>;
   taskEventId: string;  // traces back to the agent.task that triggered this
 }
 
-interface SkillResultPayload {
+interface ToolResultPayload {
   agentId: string;
   conversationId: string;
-  skillName: string;
+  toolName: string;
   result: { success: true; data: unknown } | { success: false; error: string };
   durationMs: number;
 }
@@ -528,7 +528,7 @@ interface ContextBudgetPayload {
 // Records which skill accessed which secret, from which agent/task — never the secret value.
 // This is the primary audit trail for secrets isolation (spec 06, Secrets Isolation).
 interface SecretAccessedPayload {
-  skillName: string;
+  toolName: string;
   secretName: string;     // the declared key name — never the resolved value
   agentId?: string;       // agent that invoked the skill
   taskEventId?: string;   // causal chain: the agent.task that triggered this invocation
@@ -549,7 +549,7 @@ interface SecretAccessedPayload {
 interface SecretCapturedPayload {
   secretName: string;     // the resolved vault key (e.g. 'user.aeroplan_password') — never the value
   label: string | null;   // human-friendly label shown on the form
-  // Routing context captured at mint time from SkillContext. All optional: a token minted
+  // Routing context captured at mint time from ToolContext. All optional: a token minted
   // outside an agent context (or before #972) has no routable origin and is simply not resumed.
   conversationId?: string;
   agentId?: string;
@@ -568,7 +568,7 @@ interface SecretCapturedPayload {
 // action_risk threshold. Advisory-only — the agent receives a { success: false }
 // result and can escalate to the CEO.
 interface AutonomySkillBlockedPayload {
-  skillName: string;
+  toolName: string;
   actionRisk: ActionRisk;
   currentScore: number;
   requiredScore: number;
@@ -746,18 +746,18 @@ export interface OutboundNotificationEvent extends BaseEvent {
   payload: OutboundNotificationPayload;
 }
 
-export interface SkillInvokeEvent extends BaseEvent {
-  type: 'skill.invoke';
+export interface ToolInvokeEvent extends BaseEvent {
+  type: 'tool.invoke';
   sourceLayer: 'agent';
-  payload: SkillInvokePayload;
+  payload: ToolInvokePayload;
 }
 
-export interface SkillResultEvent extends BaseEvent {
-  type: 'skill.result';
+export interface ToolResultEvent extends BaseEvent {
+  type: 'tool.result';
   // sourceLayer is 'execution' because the result logically comes from the execution layer,
   // even though the agent layer publishes it on behalf (execution layer has no bus access in Phase 3).
   sourceLayer: 'execution';
-  payload: SkillResultPayload;
+  payload: ToolResultPayload;
 }
 
 export interface AgentErrorEvent extends BaseEvent {
@@ -1022,10 +1022,10 @@ export interface SecretCapturedEvent extends BaseEvent {
   payload: SecretCapturedPayload;
 }
 
-// AutonomySkillBlockedEvent — execution layer blocked a skill invocation
+// AutonomyToolBlockedEvent — execution layer blocked a skill invocation
 // due to insufficient autonomy score.
-export interface AutonomySkillBlockedEvent extends BaseEvent {
-  type: 'autonomy.skill_blocked';
+export interface AutonomyToolBlockedEvent extends BaseEvent {
+  type: 'autonomy.tool_blocked';
   sourceLayer: 'execution';
   payload: AutonomySkillBlockedPayload;
 }
@@ -1158,8 +1158,8 @@ export type BusEvent =
   | AgentTaskEvent
   | AgentResponseEvent
   | OutboundMessageEvent
-  | SkillInvokeEvent
-  | SkillResultEvent
+  | ToolInvokeEvent
+  | ToolResultEvent
   | AgentErrorEvent          // Error recovery: structured error events for audit and user notification
   | AgentDiscussEvent        // Bullpen: inter-agent discussion message
   | MemoryStoreEvent      // Phase 6: knowledge graph write audit
@@ -1192,7 +1192,7 @@ export type BusEvent =
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
-  | AutonomySkillBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
+  | AutonomyToolBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
   | EmbeddingErrorEvent        // #434: failed embedding call — used by HealthService for health tracking
@@ -1362,30 +1362,30 @@ export function createOutboundNotification(
   };
 }
 
-export function createSkillInvoke(
+export function createToolInvoke(
   // parentEventId is required — every skill invocation must trace back to the agent.task that triggered it.
-  payload: SkillInvokePayload & { parentEventId: string },
-): SkillInvokeEvent {
+  payload: ToolInvokePayload & { parentEventId: string },
+): ToolInvokeEvent {
   const { parentEventId, ...rest } = payload;
   return {
     id: randomUUID(),
     timestamp: new Date(),
-    type: 'skill.invoke',
+    type: 'tool.invoke',
     sourceLayer: 'agent',
     payload: rest,
     parentEventId,
   };
 }
 
-export function createSkillResult(
-  // parentEventId is required — results must reference the skill.invoke event they respond to.
-  payload: SkillResultPayload & { parentEventId: string },
-): SkillResultEvent {
+export function createToolResult(
+  // parentEventId is required — results must reference the tool.invoke event they respond to.
+  payload: ToolResultPayload & { parentEventId: string },
+): ToolResultEvent {
   const { parentEventId, ...rest } = payload;
   return {
     id: randomUUID(),
     timestamp: new Date(),
-    type: 'skill.result',
+    type: 'tool.result',
     sourceLayer: 'execution',
     payload: rest,
     parentEventId,
@@ -1752,11 +1752,11 @@ export function createSecretCaptured(
 export function createAutonomySkillBlocked(
   payload: AutonomySkillBlockedPayload,
   parentEventId?: string,
-): AutonomySkillBlockedEvent {
+): AutonomyToolBlockedEvent {
   return {
     id: randomUUID(),
     timestamp: new Date(),
-    type: 'autonomy.skill_blocked',
+    type: 'autonomy.tool_blocked',
     sourceLayer: 'execution',
     payload,
     parentEventId,

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxReadHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
-function buildCtx(input: Record<string, unknown>): SkillContext {
+function buildCtx(input: Record<string, unknown>): ToolContext {
   return {
     input,
     secret(key: string): string {
@@ -18,7 +18,7 @@ function buildCtx(input: Record<string, unknown>): SkillContext {
       error: vi.fn(),
       debug: vi.fn(),
     },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 function jsonResponse(data: unknown) {

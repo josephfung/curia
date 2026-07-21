@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { EventBus } from '../../src/bus/bus.js';
 import { AgentRuntime } from '../../src/agents/runtime.js';
 import { AgentRegistry } from '../../src/agents/agent-registry.js';
-import { SkillRegistry } from '../../src/skills/registry.js';
+import { ToolRegistry } from '../../src/skills/registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { DelegateHandler } from '../../skills/delegate/handler.js';
 import type { LLMProvider, Message, ContentBlock } from '../../src/agents/llm/provider.js';
 const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
-import type { SkillManifest } from '../../src/skills/types.js';
+import type { ToolManifest } from '../../src/skills/types.js';
 import { createAgentTask } from '../../src/bus/events.js';
 import pino from 'pino';
 
@@ -20,8 +20,8 @@ describe('Multi-agent delegation integration', () => {
     agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main coordinator' });
     agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research and analysis' });
 
-    const skillRegistry = new SkillRegistry();
-    const delegateManifest: SkillManifest = {
+    const skillRegistry = new ToolRegistry();
+    const delegateManifest: ToolManifest = {
       name: 'delegate',
       description: 'Delegate a task to a specialist agent',
       version: '1.0.0',

@@ -3,7 +3,7 @@ import {
   applyDocumentWorkspace,
   buildIndexProjection,
   DOCUMENT_WORKSPACE_BLOCK,
-  DOCUMENT_WORKSPACE_SKILLS,
+  DOCUMENT_WORKSPACE_TOOLS,
   documentPointerFromTaskContent,
   extractSectionContent,
   formatAccumulatorResumeBlock,
@@ -62,7 +62,7 @@ describe('applyDocumentWorkspace', () => {
   it('appends the block and pins doc skills when task management is enabled', () => {
     const r = applyDocumentWorkspace(cfg({ enable_task_management: true }), 'BASE PROMPT', ['x']);
     expect(r.systemPrompt).toBe(`BASE PROMPT\n\n${DOCUMENT_WORKSPACE_BLOCK}`);
-    expect(r.pinnedSkills).toEqual(['x', ...DOCUMENT_WORKSPACE_SKILLS]);
+    expect(r.pinnedSkills).toEqual(['x', ...DOCUMENT_WORKSPACE_TOOLS]);
   });
 
   it('does not duplicate already-pinned doc skills', () => {

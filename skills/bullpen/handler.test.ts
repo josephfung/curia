@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BullpenHandler } from './handler.js';
 import { BullpenService } from '../../src/memory/bullpen.js';
 import { createLogger } from '../../src/logger.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
-function makeCtx(input: Record<string, unknown>, overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext>): ToolContext {
   const bullpenService = BullpenService.createInMemory();
   return {
     input,
@@ -17,10 +17,10 @@ function makeCtx(input: Record<string, unknown>, overrides?: Partial<SkillContex
     bus: {
       publish: vi.fn().mockResolvedValue(undefined),
       subscribe: vi.fn(),
-    } as unknown as SkillContext['bus'],
-    agentRegistry: { list: vi.fn().mockReturnValue([]) } as unknown as SkillContext['agentRegistry'],
+    } as unknown as ToolContext['bus'],
+    agentRegistry: { list: vi.fn().mockReturnValue([]) } as unknown as ToolContext['agentRegistry'],
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('BullpenHandler', () => {
@@ -260,7 +260,7 @@ describe('BullpenHandler', () => {
         bus: {
           publish: slowPublish,
           subscribe: vi.fn(),
-        } as unknown as SkillContext['bus'],
+        } as unknown as ToolContext['bus'],
       },
     );
 
@@ -299,7 +299,7 @@ describe('BullpenHandler', () => {
       {
         bullpenService: openCtx.bullpenService,
         agentId: 'agent-b',
-        bus: { publish: slowPublish, subscribe: vi.fn() } as unknown as SkillContext['bus'],
+        bus: { publish: slowPublish, subscribe: vi.fn() } as unknown as ToolContext['bus'],
       },
     );
 
@@ -359,7 +359,7 @@ describe('BullpenHandler', () => {
     const bus = {
       publish: vi.fn().mockResolvedValue(undefined),
       subscribe: vi.fn(),
-    } as unknown as SkillContext['bus'];
+    } as unknown as ToolContext['bus'];
 
     const makeRaceCtx = () => makeCtx(
       {
@@ -399,7 +399,7 @@ describe('BullpenHandler', () => {
         content: 'still ok',
       },
       {
-        bus: { publish: failingPublish, subscribe: vi.fn() } as unknown as SkillContext['bus'],
+        bus: { publish: failingPublish, subscribe: vi.fn() } as unknown as ToolContext['bus'],
       },
     );
 

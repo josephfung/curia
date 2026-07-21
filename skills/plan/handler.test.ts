@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { PlanHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { TaskRepo } from '../../src/db/task-repo.js';
 import type { TaskRow } from '../../src/db/queries/tasks.js';
 
@@ -11,7 +11,7 @@ const CHILD_GATHER = '00000000-0000-0000-0000-000000000002';
 const CHILD_AUDIT = '00000000-0000-0000-0000-000000000003';
 const CHILD_SYNTH = '00000000-0000-0000-0000-000000000004';
 
-function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   const taskRepo = overrides.taskRepo
     ? { ...planRepoExtras(), ...overrides.taskRepo }
     : undefined;
@@ -22,7 +22,7 @@ function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
     agentId: 'coordinator',
     ...overrides,
     taskRepo,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 function makeTaskRow(overrides: Partial<TaskRow> = {}): TaskRow {
@@ -91,7 +91,7 @@ describe('PlanHandler', () => {
     const handler = new PlanHandler();
     const result = await handler.execute(makeCtx({
       taskRepo,
-      agentRegistry: { has: () => true } as unknown as SkillContext['agentRegistry'],
+      agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
       input: {
         task_id: PARENT_ID,
         steps: [
@@ -151,7 +151,7 @@ describe('PlanHandler', () => {
     const handler = new PlanHandler();
     const result = await handler.execute(makeCtx({
       taskRepo,
-      agentRegistry: { has: () => true } as unknown as SkillContext['agentRegistry'],
+      agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
       input: {
         task_id: PARENT_ID,
         steps: [
@@ -216,7 +216,7 @@ describe('PlanHandler', () => {
     const handler = new PlanHandler();
     const result = await handler.execute(makeCtx({
       taskRepo,
-      agentRegistry: { has: () => true } as unknown as SkillContext['agentRegistry'],
+      agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
       input: {
         task_id: PARENT_ID,
         steps: [
@@ -281,7 +281,7 @@ describe('PlanHandler', () => {
     const handler = new PlanHandler();
     const result = await handler.execute(makeCtx({
       taskRepo,
-      agentRegistry: { has: () => true } as unknown as SkillContext['agentRegistry'],
+      agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
       input: {
         task_id: PARENT_ID,
         steps: [
@@ -348,7 +348,7 @@ describe('PlanHandler', () => {
     const handler = new PlanHandler();
     await handler.execute(makeCtx({
       taskRepo,
-      agentRegistry: { has: () => true } as unknown as SkillContext['agentRegistry'],
+      agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
       input: {
         task_id: PARENT_ID,
         steps: [
@@ -412,7 +412,7 @@ describe('PlanHandler', () => {
     const handler = new PlanHandler();
     const result = await handler.execute(makeCtx({
       taskRepo,
-      agentRegistry: { has: () => true } as unknown as SkillContext['agentRegistry'],
+      agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
       input: {
         task_id: PARENT_ID,
         steps: [
@@ -477,7 +477,7 @@ describe('PlanHandler', () => {
     const handler = new PlanHandler();
     await handler.execute(makeCtx({
       taskRepo,
-      agentRegistry: { has: () => true } as unknown as SkillContext['agentRegistry'],
+      agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
       input: {
         task_id: PARENT_ID,
         steps: [
@@ -517,7 +517,7 @@ describe('PlanHandler', () => {
     const handler = new PlanHandler();
     const result = await handler.execute(makeCtx({
       taskRepo,
-      agentRegistry: { has: () => true } as unknown as SkillContext['agentRegistry'],
+      agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
       input: {
         task_id: PARENT_ID,
         steps: [{ id: 'gather', title: 'Gather', target_agent_id: 'coordinator' }],

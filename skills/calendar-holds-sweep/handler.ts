@@ -24,7 +24,7 @@
 //     for deterministic staleness checks. In production, this input is always absent
 //     and Date.now() is used. Do NOT set this in the scheduler payload.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { isHoldEvent, isHoldStale } from '../../src/channels/calendar/holds.js';
 
 // Default maximum hold age in days.
@@ -38,8 +38,8 @@ const DEFAULT_MAX_AGE_DAYS = 7;
 // listEvents and can be detected and deleted by isHoldStale condition 1.
 const SWEEP_WINDOW_DAYS = 14;
 
-export class CalendarHoldsSweepHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CalendarHoldsSweepHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     // Validate required inputs.
     const { contactId, maxAgeDays: maxAgeDaysInput, nowMs: nowMsInput } = ctx.input as {
       contactId?: string;
@@ -57,7 +57,7 @@ export class CalendarHoldsSweepHandler implements SkillHandler {
     }
 
     // nowMs: UNDOCUMENTED test-only seam — not part of the skill's public contract and
-    // NOT listed in skill.json. Tests inject it via ctx.input.nowMs for deterministic
+    // NOT listed in tool.json. Tests inject it via ctx.input.nowMs for deterministic
     // staleness checks. In production this input is always absent; Date.now() is used.
     // nowUnix is seconds; isHoldStale takes seconds for the current time.
     const nowMs = typeof nowMsInput === 'number' ? nowMsInput : Date.now();

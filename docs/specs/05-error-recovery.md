@@ -100,7 +100,7 @@ A `known_failures` table records tool + error-type combinations that consistentl
 
 - Skills return structured results: `{ success: true, data }` or `{ success: false, error }`
 - The agent LLM sees the error and decides how to proceed (retry, alternative skill, or report)
-- Skill timeouts (from `skill.json`) trigger an automatic failure result — no hanging
+- Skill timeouts (from `tool.json`) trigger an automatic failure result — no hanging
 - MCP server disconnections: mark the server's tools as unavailable, notify agent, try reconnecting in background
 
 ### Channel Adapter Failures

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { notifyLearningProposal, resolvePrincipalEmail } from './learning-notify.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 
 interface CtxOpts {
@@ -57,11 +57,11 @@ function makeCtx(opts: CtxOpts = {}) {
       : ({
           findContactBySystemRole: findContactBySystemRoleMock,
           getContactWithIdentities: getContactWithIdentitiesMock,
-        } as unknown as SkillContext['contactService']),
+        } as unknown as ToolContext['contactService']),
     outboundGateway: withoutGateway
       ? undefined
       : ({ sendNotification: sendNotificationMock } as unknown as OutboundGateway),
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 
   return { ctx, sendNotificationMock, findContactBySystemRoleMock, logWarnMock };
 }

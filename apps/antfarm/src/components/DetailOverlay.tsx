@@ -20,7 +20,7 @@ function directiveSummary(directive: SceneDirective): string {
     case 'agent.speak':
       return `${directive.agentId} speaks${directive.content ? `: ${directive.content}` : ''}`;
     case 'agent.think':
-      return `${directive.agentId} ${directive.phase === 'start' ? 'thinking' : 'done thinking'}${directive.skillName ? ` (${directive.skillName})` : ''}`;
+      return `${directive.agentId} ${directive.phase === 'start' ? 'thinking' : 'done thinking'}${directive.toolName ? ` (${directive.toolName})` : ''}`;
     case 'tube.in':
       return `Inbound tube${directive.conversationId ? ` (${directive.conversationId})` : ''}`;
     case 'tube.out':

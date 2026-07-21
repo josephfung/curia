@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ResolveLearningDigestHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { CONFIG_NAMESPACE, DISMISSED_KEY } from '../voice-learn/handler.js';
 import {
   VOICE_PROPOSAL_KEY,
@@ -64,7 +64,7 @@ describe('ResolveLearningDigestHandler', () => {
       },
       taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
@@ -72,7 +72,7 @@ describe('ResolveLearningDigestHandler', () => {
       expect.objectContaining({
         writingVoice: expect.objectContaining({ guide: expect.stringContaining('Dry humour') }),
       }),
-      'skill',
+      'tool',
       expect.any(String),
     );
     // The resolved proposal is cleared from config (the approved guide now lives in the
@@ -106,7 +106,7 @@ describe('ResolveLearningDigestHandler', () => {
       },
       taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     // Soft-reject only the proposal-clear write; the profile update above goes through
     // executiveProfileService, independent of storeFact.
@@ -151,7 +151,7 @@ describe('ResolveLearningDigestHandler', () => {
       },
       taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     // The proposal clear soft-rejects on the first write, then lands on the second (replay).
     let clearCallCount = 0;
@@ -199,7 +199,7 @@ describe('ResolveLearningDigestHandler', () => {
       },
       taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
@@ -228,7 +228,7 @@ describe('ResolveLearningDigestHandler', () => {
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
@@ -257,7 +257,7 @@ describe('ResolveLearningDigestHandler', () => {
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     (mem.storeFact as ReturnType<typeof vi.fn>).mockImplementation(
       async (p: { label: string; properties?: Record<string, unknown> }) => {
@@ -300,7 +300,7 @@ describe('ResolveLearningDigestHandler', () => {
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     // The digest clear soft-rejects on the first write, then lands on the second (replay).
     let clearCallCount = 0;
@@ -350,7 +350,7 @@ describe('ResolveLearningDigestHandler', () => {
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(false);
@@ -380,7 +380,7 @@ describe('ResolveLearningDigestHandler', () => {
       taskRepo: { reopenTask, completeTask: vi.fn(), getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(false);
@@ -405,7 +405,7 @@ describe('ResolveLearningDigestHandler', () => {
       taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
@@ -430,7 +430,7 @@ describe('ResolveLearningDigestHandler', () => {
       taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(false);
@@ -466,7 +466,7 @@ describe('ResolveLearningDigestHandler', () => {
       taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     // The digest clear soft-rejects on the first write, then lands on the second (replay).
     let clearCallCount = 0;
@@ -514,7 +514,7 @@ describe('ResolveLearningDigestHandler', () => {
       taskRepo: { reopenTask, completeTask, getTask },
       agentId: 'coordinator',
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);

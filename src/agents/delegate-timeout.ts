@@ -5,10 +5,10 @@
 // does not time out a healthy in-flight delegation.
 //
 // The wait timeout must resolve inside the delegate skill's outer execution timeout
-// (skills/delegate/skill.json "timeout") so the handler can emit a structured failure
+// (skills/delegate/tool.json "timeout") so the handler can emit a structured failure
 // before the execution layer kills the invocation.
 
-/** Must stay in sync with skills/delegate/skill.json "timeout" — enforced by test. */
+/** Must stay in sync with skills/delegate/tool.json "timeout" — enforced by test. */
 export const DELEGATE_SKILL_OUTER_TIMEOUT_MS = 900_000;
 
 /** Margin below the outer skill timeout so the inner wait resolves first under load. */

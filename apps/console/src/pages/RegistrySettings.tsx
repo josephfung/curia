@@ -24,7 +24,7 @@ interface ManifestMetadata {
 
 interface RegistryEntry {
   name: string;
-  kind: 'skill' | 'agent';
+  kind: 'tool' | 'agent';
   state: DerivedState;
   metadata: ManifestMetadata | null;
   manifestError?: string;
@@ -131,7 +131,7 @@ function SecretRow({ name, configured, onSaved }: {
 
 function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
   entry: RegistryEntry;
-  kindPath: 'skills' | 'agents';
+  kindPath: 'tools' | 'agents';
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -139,7 +139,7 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
   const [err, setErr] = useState<string | null>(null);
 
   // PR2 (#939): required-secrets gate. Only skills declare install.requires_secrets.
-  const required = entry.kind === 'skill' ? (entry.metadata?.requiresSecrets ?? []) : [];
+  const required = entry.kind === 'tool' ? (entry.metadata?.requiresSecrets ?? []) : [];
   const [configured, setConfigured] = useState<Set<string>>(new Set());
   const [secretsErr, setSecretsErr] = useState<string | null>(null);
 
@@ -239,7 +239,7 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
                 <label>Version</label>
                 <div>{entry.metadata.version}</div>
               </div>
-              {entry.kind === 'skill' && (
+              {entry.kind === 'tool' && (
                 <>
                   <div className="form-field">
                     <label>Action risk</label>
@@ -449,8 +449,8 @@ function getSortValue(entry: RegistryEntry, key: SortKey): string {
 // settings shell; they are now top-level pages reachable directly from the
 // sidebar's Settings group.
 
-function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
-  const kindPath = kind === 'skill' ? 'skills' : 'agents';
+function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
+  const kindPath = kind === 'tool' ? 'tools' : 'agents';
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -527,7 +527,7 @@ function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
   const safePage = Math.min(page, totalPages);
   const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
-  const title = kind === 'skill' ? 'Skills' : 'Agents';
+  const title = kind === 'tool' ? 'Tools' : 'Agents';
   // Name, State, kind-specific columns, Version. Agents have one kind-specific
   // column (Model tier); skills have two (Action risk, Sensitivity).
   const colCount = kind === 'agent' ? 4 : 5;
@@ -701,8 +701,8 @@ function RegistryPage({ kind }: { kind: 'skill' | 'agent' }) {
 
 // ── Exported page components (one per route) ─────────────────────────────────
 
-export function SkillsPage() {
-  return <RegistryPage kind="skill" />;
+export function ToolsPage() {
+  return <RegistryPage kind="tool" />;
 }
 
 export function AgentsPage() {
