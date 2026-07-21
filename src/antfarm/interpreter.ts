@@ -47,10 +47,10 @@ export function interpretEvent(row: AuditEventRow): SceneDirective | SceneDirect
         state: 'active',
       };
 
-    case 'skill.invoke': {
-      const skillName = payloadString(payload, 'skillName') ?? '';
+    case 'tool.invoke': {
+      const toolName = payloadString(payload, 'toolName') ?? '';
       const agentId = payloadString(payload, 'agentId') ?? row.sourceId;
-      if (skillName === 'delegate') {
+      if (toolName === 'delegate') {
         const input = payload.input;
         const targetAgentId =
           typeof input === 'object' && input !== null && !Array.isArray(input)
@@ -83,17 +83,17 @@ export function interpretEvent(row: AuditEventRow): SceneDirective | SceneDirect
         kind: 'agent.think',
         agentId,
         phase: 'start',
-        skillName,
+        toolName,
       };
     }
 
-    case 'skill.result':
+    case 'tool.result':
       return {
         ...base,
         kind: 'agent.think',
         agentId: payloadString(payload, 'agentId') ?? row.sourceId,
         phase: 'stop',
-        skillName: payloadString(payload, 'skillName'),
+        toolName: payloadString(payload, 'toolName'),
       };
 
     case 'agent.discuss':
@@ -159,7 +159,7 @@ export function interpretEvent(row: AuditEventRow): SceneDirective | SceneDirect
           ...base,
           kind: 'badge',
           badgeKind: 'autonomy.blocked',
-          label: payloadString(payload, 'skillName')
+          label: payloadString(payload, 'toolName')
             ?? payloadString(payload, 'reason')
             ?? row.eventType,
         };

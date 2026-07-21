@@ -2,8 +2,8 @@
 //
 // Skills are Curia's extension mechanism — how agents interact with the
 // outside world. These types define the contract between skills and the
-// execution layer. Skills implement SkillHandler; the execution layer
-// provides SkillContext and expects SkillResult.
+// execution layer. Skills implement ToolHandler; the execution layer
+// provides ToolContext and expects ToolResult.
 
 import type { Logger } from '../logger.js';
 
@@ -25,10 +25,10 @@ import type { Logger } from '../logger.js';
 export type ActionRisk = 'none' | 'low' | 'medium' | 'high' | 'critical' | number;
 
 /**
- * Skill manifest shape — loaded from skill.json files in each skill directory.
+ * Skill manifest shape — loaded from tool.json files in each skill directory.
  * Declares what the skill does, what it needs, and its security classification.
  */
-export interface SkillManifest {
+export interface ToolManifest {
   name: string;
   description: string;
   version: string;
@@ -36,7 +36,7 @@ export interface SkillManifest {
   sensitivity: 'normal' | 'elevated';
   /** Action risk: the minimum autonomy score required to invoke this skill without
    *  explicit CEO approval. Required on all new manifests — Phase 2 will enforce this
-   *  at load time (SkillRegistry.register will reject manifests that omit it).
+   *  at load time (ToolRegistry.register will reject manifests that omit it).
    *  See ActionRisk for the named label → score mapping. */
   action_risk: ActionRisk;
   /** JSON Schema-ish description of expected inputs */
@@ -49,14 +49,14 @@ export interface SkillManifest {
   secrets: string[];
   /** Per-invocation timeout in ms. Default 30000. */
   timeout: number;
-  /** Declares which privileged SkillContext services this skill needs.
+  /** Declares which privileged ToolContext services this skill needs.
    *  Only known capability names are accepted — the loader validates against
    *  a fixed allowlist at startup and rejects unknown names.
    *  The manifest is frozen after loading — capabilities cannot be mutated at runtime.
    *
    *  Valid capabilities: bus, agentRegistry, outboundGateway,
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
-   *  executiveProfileService, officeIdentityService, browserService, bullpenService, skillSearch,
+   *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
    *  taskRepo, workingDocs, secretCapture, secretResolver.
    *
@@ -134,14 +134,14 @@ export interface AgentPersona {
 /**
  * The sandboxed context passed to every skill invocation.
  * Skills cannot access the bus, database, or filesystem directly —
- * they receive inputs through ctx.input and return outputs via SkillResult.
+ * they receive inputs through ctx.input and return outputs via ToolResult.
  */
-export interface SkillContext {
-  /** The invoking skill's manifest name and version (from skill.json). Populated by the
+export interface ToolContext {
+  /** The invoking skill's manifest name and version (from tool.json). Populated by the
    *  execution layer at context build time so handlers never need to hardcode their own
-   *  version — it stays in sync with skill.json automatically. */
-  skillName: string;
-  skillVersion: string;
+   *  version — it stays in sync with tool.json automatically. */
+  toolName: string;
+  toolVersion: string;
   /** Validated input matching the manifest's inputs declaration */
   input: Record<string, unknown>;
   /** Scoped secret access — only secrets declared in the manifest are accessible */
@@ -225,9 +225,9 @@ export interface SkillContext {
    *  Provides a warm Playwright Chromium instance with session management.
    *  Skills use this to interact with JS-rendered pages and web forms. */
   browserService?: import('../browser/browser-service.js').BrowserService;
-  /** Skill search — available to skills declaring 'skillSearch' in capabilities.
-   *  Searches all registered skills by keyword, excluding skill-registry itself. */
-  skillSearch?: (query: string) => Array<{ name: string; description: string }>;
+  /** Skill search — available to skills declaring 'toolSearch' in capabilities.
+   *  Searches all registered skills by keyword, excluding tool-registry itself. */
+  toolSearch?: (query: string) => Array<{ name: string; description: string }>;
   /** Arbitrary task-level metadata forwarded from the agent.task event payload.
    *  Skills that do not need it can ignore this field entirely. */
   taskMetadata?: Record<string, unknown>;
@@ -296,7 +296,7 @@ export interface SkillContext {
    *  DYNAMIC `user.<slug>` names chosen per activity. Guardrails: only `user.*` references
    *  resolve (system/channel keys are rejected); each call emits secret.accessed (name only,
    *  byReference: true). The returned value is for runtime use only — handlers MUST NOT place
-   *  it in SkillResult.data, error strings, or logs. */
+   *  it in ToolResult.data, error strings, or logs. */
   resolveSecretRef?: (ref: string) => Promise<string>;
   /** Operator-facing origin of the console (e.g. "https://curia.example.com"), used by the
    *  capture skills to build the magic-link URL. Undefined in local dev — fall back to
@@ -319,25 +319,25 @@ export interface SkillContext {
  * This makes error handling explicit and prevents unhandled exceptions
  * from propagating through the execution layer.
  */
-export type SkillResult =
+export type ToolResult =
   | { success: true; data: unknown }
   | { success: false; error: string };
 
 /**
  * Interface that all skill handlers implement.
- * The execute method receives a sandboxed SkillContext and returns a SkillResult.
+ * The execute method receives a sandboxed ToolContext and returns a ToolResult.
  */
-export interface SkillHandler {
-  execute(ctx: SkillContext): Promise<SkillResult>;
+export interface ToolHandler {
+  execute(ctx: ToolContext): Promise<ToolResult>;
 }
 
 /**
  * Internal registry entry — combines manifest metadata with the loaded handler.
  * The registry stores these; the execution layer looks them up by name.
  */
-export interface RegisteredSkill {
-  manifest: SkillManifest;
-  handler: SkillHandler;
+export interface RegisteredTool {
+  manifest: ToolManifest;
+  handler: ToolHandler;
   /**
    * Raw MCP input schema from the MCP server's tools/list response.
    * Present only for MCP-sourced tools. When set, toToolDefinitions() uses this
@@ -349,7 +349,7 @@ export interface RegisteredSkill {
 
 /**
  * Tool definition format expected by LLM providers (Anthropic, OpenAI).
- * Generated from SkillManifest data so agents never need to know the
+ * Generated from ToolManifest data so agents never need to know the
  * internal manifest format.
  *
  * Defined here (not in provider.ts) because it's the canonical shared type

@@ -10,14 +10,14 @@
 // - Direction-agnostic: uses findEdges() which checks both directions, so the
 //   caller does not need to know how the edge was originally stored.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { EDGE_TYPES } from '../../src/memory/types.js';
 import type { EdgeType } from '../../src/memory/types.js';
 
 const EDGE_TYPES_SET: ReadonlySet<string> = new Set(EDGE_TYPES);
 
-export class DeleteRelationshipHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DeleteRelationshipHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { subject, predicate, object } = ctx.input as {
       subject?: string;
       predicate?: string;

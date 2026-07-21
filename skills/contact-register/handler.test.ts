@@ -2,17 +2,17 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import pino from 'pino';
 import { ContactRegisterHandler } from './handler.js';
 import { ContactService } from '../../src/contacts/contact-service.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 const silentLog = pino({ level: 'silent' });
 
-function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input: {},
     secret: () => 'unused',
     log: silentLog,
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 const TIMESTAMP_A = '2026-05-08T10:00:00.000Z';
@@ -319,7 +319,7 @@ describe('ContactRegisterHandler — confidence pipeline (pipeline present)', ()
 
     const ctx = makeCtx({
       contactService,
-      confidencePipeline: mockPipeline as unknown as SkillContext['confidencePipeline'],
+      confidencePipeline: mockPipeline as unknown as ToolContext['confidencePipeline'],
       input: { channel: 'email', identifier: 'dave@example.com', displayName: 'Dave', messageTimestamp: TIMESTAMP_A },
     });
 
@@ -338,7 +338,7 @@ describe('ContactRegisterHandler — confidence pipeline (pipeline present)', ()
 
     const ctx = makeCtx({
       contactService,
-      confidencePipeline: mockPipeline as unknown as SkillContext['confidencePipeline'],
+      confidencePipeline: mockPipeline as unknown as ToolContext['confidencePipeline'],
       input: { channel: 'email', identifier: 'dave@example.com', displayName: 'Dave', messageTimestamp: TIMESTAMP_A },
     });
 
@@ -382,7 +382,7 @@ describe('ContactRegisterHandler — bus event emission', () => {
 
     const ctx = makeCtx({
       contactService,
-      bus: mockBus as SkillContext['bus'],
+      bus: mockBus as ToolContext['bus'],
       input: { channel: 'email', identifier: 'carol@example.com', displayName: 'Carol', messageTimestamp: TIMESTAMP_A },
     });
 

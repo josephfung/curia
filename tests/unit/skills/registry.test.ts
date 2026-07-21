@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { SkillRegistry } from '../../../src/skills/registry.js';
-import type { SkillManifest, SkillHandler } from '../../../src/skills/types.js';
+import { ToolRegistry } from '../../../src/skills/registry.js';
+import type { ToolManifest, ToolHandler } from '../../../src/skills/types.js';
 
-const stubHandler: SkillHandler = {
+const stubHandler: ToolHandler = {
   execute: async () => ({ success: true, data: 'stub' }),
 };
 
-function makeManifest(overrides: Partial<SkillManifest> = {}): SkillManifest {
+function makeManifest(overrides: Partial<ToolManifest> = {}): ToolManifest {
   return {
     name: 'test-skill',
     description: 'A test skill',
@@ -22,11 +22,11 @@ function makeManifest(overrides: Partial<SkillManifest> = {}): SkillManifest {
   };
 }
 
-describe('SkillRegistry', () => {
-  let registry: SkillRegistry;
+describe('ToolRegistry', () => {
+  let registry: ToolRegistry;
 
   beforeEach(() => {
-    registry = new SkillRegistry();
+    registry = new ToolRegistry();
   });
 
   it('registers and retrieves a skill by name', () => {

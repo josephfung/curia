@@ -4,12 +4,12 @@
 // Annotates each conflict with the calendar owner's name from the registry.
 // Returns an empty array (clear=true) if the time is free.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import { eventsOverlap, findMatchingHolds, type HoldMatchCriteria } from '../../src/channels/calendar/holds.js';
 
-export class CalendarCheckConflictsHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CalendarCheckConflictsHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.nylasCalendarClient) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }

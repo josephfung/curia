@@ -28,7 +28,7 @@ describeIf('activity-log integration', () => {
     const since = new Date('2026-06-25T12:00:00.000Z');
     const until = new Date('2026-06-25T13:00:00.000Z');
     const payload = {
-      skillName: 'calendar-respond-to-invite',
+      toolName: 'calendar-respond-to-invite',
       conversationId: 'conv-test',
       agentId: 'calendar',
       result: {
@@ -44,7 +44,7 @@ describeIf('activity-log integration', () => {
 
     await pool.query(
       `INSERT INTO audit_log (timestamp, event_type, source_layer, source_id, payload)
-       VALUES ($1, 'skill.result', $2, 'calendar', $3::jsonb)`,
+       VALUES ($1, 'tool.result', $2, 'calendar', $3::jsonb)`,
       [new Date('2026-06-25T12:30:00.000Z'), sourceLayer, JSON.stringify(payload)],
     );
 

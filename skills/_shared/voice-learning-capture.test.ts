@@ -4,13 +4,13 @@ import {
   draftSnapshotPath,
   VOICE_LEARNING_DOC_TYPE,
 } from './voice-learning-capture.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 function buildCtx(workingDocs?: {
   read: ReturnType<typeof vi.fn>;
   create: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
-}): SkillContext {
+}): ToolContext {
   return {
     agentId: 'ceo-inbox',
     conversationId: 'conv-1',
@@ -21,7 +21,7 @@ function buildCtx(workingDocs?: {
       error: vi.fn(),
       debug: vi.fn(),
     },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 const SNAPSHOT = {

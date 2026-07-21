@@ -9,12 +9,12 @@
 // live-principal gate (#1126). No handler-level re-check: the gate already guarantees this skill
 // only runs in a live principal turn. executionLayer capability is restricted to this skill.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createHumanDecision } from '../../src/bus/events.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 
-export class ApproveActionHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ApproveActionHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.actionLogRepo) {
       return { success: false, error: 'approve-action requires actionLogRepo capability' };
     }
@@ -60,7 +60,7 @@ export class ApproveActionHandler implements SkillHandler {
       // standing-continuity needs (the queued skill is always `normal` — elevated skills are
       // autonomy-exempt and so are never blocked into the queue in the first place).
       const reResult = await ctx.executionLayer.invoke(
-        row.skillName,
+        row.toolName,
         row.payload,
         ctx.caller,
         {
@@ -77,7 +77,7 @@ export class ApproveActionHandler implements SkillHandler {
         await ctx.actionLogRepo.insert({
           taskId: row.taskId,
           conversationId: row.conversationId ?? undefined,
-          skillName: row.skillName,
+          toolName: row.toolName,
           actionRisk: row.actionRisk,
           outcome: childOutcome,
           // taskSummary is `string | undefined`; insert() maps undefined → NULL, so
@@ -116,7 +116,7 @@ export class ApproveActionHandler implements SkillHandler {
               deciderId: senderId,
               deciderChannel: channelId,
               subjectEventId: row.taskId,
-              subjectSummary: `CEO approved: ${row.description ?? row.skillName}`,
+              subjectSummary: `CEO approved: ${row.description ?? row.toolName}`,
               contextShown: ['short_ref', 'description', 'skill_name', 'payload'],
               presentedAt: row.createdAt,
               decidedAt: new Date(),

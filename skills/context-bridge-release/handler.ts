@@ -6,11 +6,11 @@
 // task_id in metadata), persists the CEO answer on the bound task first, then
 // releases — atomically (#1299).
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { isTaskWakeReplyBinding, recordTaskWakeReply } from '../../src/dispatch/task-wake-reply.js';
 
-export class ContextBridgeReleaseHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContextBridgeReleaseHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { entry_id: rawEntryId, reply: rawReply } = ctx.input as {
       entry_id?: string;
       reply?: string;

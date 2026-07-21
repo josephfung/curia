@@ -6,12 +6,12 @@
 // Use this for the NEEDS DRAFT triage category: coordinator writes the draft,
 // the CEO reviews and sends it from their email client.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
 import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
 
-export class EmailDraftSaveHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailDraftSaveHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.outboundGateway) {
       return { success: false, error: 'email-draft-save requires outboundGateway (capabilities: ["outboundGateway"])' };
     }

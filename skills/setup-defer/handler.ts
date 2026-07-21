@@ -3,7 +3,7 @@
 // Writes/clears deferral flags in config-store. A deferred task's id is stored
 // as a JSON array under setup_wizard/deferrals. Rewriting the whole array on
 // each call sidesteps config-store's no-delete limitation.
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 
 // Config-store namespace and key for wizard deferrals — matches what
@@ -24,8 +24,8 @@ const VALID_TASK_IDS = new Set([
   'kg_memory',
 ]);
 
-export class SetupDeferHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class SetupDeferHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.entityMemory) {
       return { success: false, error: 'setup-defer requires entityMemory capability.' };
     }

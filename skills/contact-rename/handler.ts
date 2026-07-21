@@ -5,10 +5,10 @@
 //
 // This skill uses contactService, which is a universal service.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class ContactRenameHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactRenameHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { contact_id, display_name } = ctx.input as {
       contact_id?: string;
       display_name?: string;

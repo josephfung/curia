@@ -5,7 +5,7 @@
 // provided are merged onto the current profile. Unchanged fields keep
 // their existing values.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { WritingVoice } from '../../src/executive/types.js';
 import { normalizeKeysToSnakeCase } from '../../src/skills/normalize.js';
 
@@ -22,8 +22,8 @@ interface PartialWritingVoiceInput {
   sign_off?: string;
 }
 
-export class ExecutiveProfileUpdateHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ExecutiveProfileUpdateHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.executiveProfileService) {
       return { success: false, error: 'executive-profile-update requires executiveProfileService in context. Is the executive profile configured?' };
     }
@@ -73,7 +73,7 @@ export class ExecutiveProfileUpdateHandler implements SkillHandler {
       const actor = ctx.caller?.contactId ?? ctx.caller?.role ?? 'unknown';
       await ctx.executiveProfileService.update(
         { writingVoice: merged },
-        'skill',
+        'tool',
         `${changes} (by ${actor})`,
       );
 

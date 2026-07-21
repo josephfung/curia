@@ -1,6 +1,8 @@
-# Adding a Skill
+# Adding a Tool
 
-Skills are how agents interact with the outside world. Every capability — sending email, fetching a web page, writing to a calendar, running a search — is a skill. The execution layer sandboxes skill invocations: skills receive typed inputs and return typed outputs; they cannot publish bus events or access the database directly.
+Tools are how agents interact with the outside world. Every capability — sending email, fetching a web page, writing to a calendar, running a search — is a **tool** (the invocation + authorization atom). The execution layer sandboxes tool invocations: tools receive typed inputs and return typed outputs; they cannot publish bus events or access the database directly.
+
+> **Vocabulary (ADR-031):** atoms are *tools*; a future *skill* is a bundle/collection of tools + optional instructions (Phase 2 of #1436). Agent YAML still uses `pinned_skills` for the pin list — that field will pin bundles in Phase 2; today it still lists tool names.
 
 See [Adding an Agent](adding-an-agent.md) if you want to create a new agent rather than extend an existing one.
 
@@ -9,13 +11,13 @@ See [Adding an Agent](adding-an-agent.md) if you want to create a new agent rath
 ## Quick Start
 
 1. Create a directory under `skills/<name>/`
-2. Write `skills/<name>/skill.json` — the manifest (schema, metadata, risk declaration)
+2. Write `skills/<name>/tool.json` — the manifest (schema, metadata, risk declaration)
 3. Write `skills/<name>/handler.ts` — the implementation
 4. Write `skills/<name>/handler.test.ts` — tests
-5. Pin the skill in any agent that should use it (`pinned_skills` in the agent YAML), or make it discoverable via `allow_discovery: true`
+5. Pin the tool in any agent that should use it (`pinned_skills` in the agent YAML), or make it discoverable via `allow_discovery: true`
 6. Restart Curia — skills are loaded from the `skills/` directory at startup
 
-> **The skill starts disabled in the registry.** A newly added skill is registered at startup but is **not enabled** by default. Enable it (via the registry HTTP API or admin UI) before any agent can call it. Enable state is **restart-based** — toggling enabled/disabled takes effect on the next restart, when only enabled skills are loaded and registered. See [Manifest → `install.requires_secrets`](#installrequires_secrets-optional) for the secret-gating that the registry enforces at install/enable time, and [Skills & Execution Spec — Registry lifecycle](../specs/03-skills-and-execution.md) for the full design.
+> **The tool starts disabled in the registry.** A newly added tool is registered at startup but is **not enabled** by default. Enable it (via the registry HTTP API or admin UI) before any agent can call it. Enable state is **restart-based** — toggling enabled/disabled takes effect on the next restart, when only enabled tools are loaded and registered. See [Manifest → `install.requires_secrets`](#installrequires_secrets-optional) for the secret-gating that the registry enforces at install/enable time, and [Tools & Execution Spec — Registry lifecycle](../specs/03-tools-and-execution.md) for the full design.
 
 ---
 
@@ -24,18 +26,18 @@ See [Adding an Agent](adding-an-agent.md) if you want to create a new agent rath
 ```
 skills/
   web-search/
-    skill.json        # manifest — schema, metadata, risk level
+    tool.json        # manifest — schema, metadata, risk level
     handler.ts        # implementation
     handler.test.ts   # unit + integration tests
 ```
 
-Skills are self-contained. Keep external imports minimal and declare any required secrets in the manifest.
+Tools are self-contained. Keep external imports minimal and declare any required secrets in the manifest.
 
 ---
 
-## The Manifest (`skill.json`)
+## The Manifest (`tool.json`)
 
-The manifest is the source of truth for what a skill does, what it needs, and how risky it is. The execution layer reads this before invoking the handler.
+The manifest is the source of truth for what a tool does, what it needs, and how risky it is. The execution layer reads this before invoking the handler.
 
 ```json
 {
@@ -91,7 +93,7 @@ Controls the elevated-skill gate in the execution layer:
 
 `"elevated"` is the **CEO-authority primitive** gate (redefined in #1126). The signal is a distinct `liveTurn` field on the `agent.task` payload — *not* a metadata-bag key, so it can never be swept onto a persisted/wakeable row. The dispatcher stamps it only on principal inbounds, and the `delegate` skill forwards it across a **synchronous** delegation, so "the CEO is live" spans the whole synchronous call tree (a specialist acting inside the CEO's turn qualifies) but a wake or scheduler fire never does. Enforcement lives solely at the execution-layer gate (`isLivePrincipalTurn`); elevated handlers carry no duplicate origination re-check.
 
-Reserve `"elevated"` for skills that exercise CEO authority itself: the approval queue and autonomy controls (`approve`/`deny`/`dismiss-action`, `set-autonomy`), the grant-recommendation decisions, the authorization-altering contact skills (`contact-set-tier`/`contact-set-role`/`contact-grant-permission`/`contact-revoke-permission`), and `system-secret-capture-request`. **Do not** use `"elevated"` for consequential *mutations* that aren't authority primitives — sending email, calendar writes, and the like are `"normal"` + an appropriate `action_risk`, governed by the autonomy engine and the ADR-018 surface-and-confirm flow. See [03-skills-and-execution.md](../specs/03-skills-and-execution.md) and ADR-017.
+Reserve `"elevated"` for skills that exercise CEO authority itself: the approval queue and autonomy controls (`approve`/`deny`/`dismiss-action`, `set-autonomy`), the grant-recommendation decisions, the authorization-altering contact skills (`contact-set-tier`/`contact-set-role`/`contact-grant-permission`/`contact-revoke-permission`), and `system-secret-capture-request`. **Do not** use `"elevated"` for consequential *mutations* that aren't authority primitives — sending email, calendar writes, and the like are `"normal"` + an appropriate `action_risk`, governed by the autonomy engine and the ADR-018 surface-and-confirm flow. See [03-tools-and-execution.md](../specs/03-tools-and-execution.md) and ADR-017.
 
 #### `action_risk` (required)
 
@@ -109,7 +111,7 @@ A raw integer (0–100) may be used for precision when the named levels are too 
 
 **Status:** `action_risk` is validated at load time and enforced at runtime. Skills whose action_risk exceeds the current autonomy score are blocked with an advisory failure.
 
-**How gating works:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an `autonomy.skill_blocked` audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
+**How gating works:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an `autonomy.tool_blocked` audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
 
 #### Woken and derived tasks: the bypass ladder
 
@@ -131,7 +133,7 @@ Restricts which agents may invoke this skill. When set, only the named agents (a
 - Agent names are validated against the loaded agent registry at startup — unknown names cause a hard startup failure.
 - CEO-approved re-executions (`humanApproved: true`) bypass the caller gate.
 - Omit `allowed_callers` entirely (or set to `[]`) to allow any agent to invoke the skill — this is the default behavior.
-- The `skillSearch` closure also respects `allowed_callers`: skills whose caller list excludes the searching agent are filtered from discovery results (defense-in-depth).
+- The `toolSearch` closure also respects `allowed_callers`: skills whose caller list excludes the searching agent are filtered from discovery results (defense-in-depth).
 
 **When to use `allowed_callers`:**
 
@@ -144,7 +146,7 @@ For deployment-level access control of core skills, rely on the existing mechani
 
 #### `capabilities` (optional)
 
-Declares which privileged `SkillContext` services this skill needs. The loader validates declared names against a fixed allowlist at startup and rejects unknown names. The manifest is frozen after loading — capabilities cannot be changed at runtime.
+Declares which privileged `ToolContext` services this skill needs. The loader validates declared names against a fixed allowlist at startup and rejects unknown names. The manifest is frozen after loading — capabilities cannot be changed at runtime.
 
 ```json
 "capabilities": ["outboundGateway"]
@@ -164,7 +166,7 @@ Valid capability names and what they grant:
 | `executiveProfileService` | `ExecutiveProfileService` | Managing the CEO's writing voice profile |
 | `browserService` | `BrowserService` | Controlling a real web browser (Playwright) |
 | `bullpenService` | `BullpenService` | Managing agent conversation threads |
-| `skillSearch` | `skillSearch` closure | Searching the skill registry by keyword |
+| `toolSearch` | `toolSearch` closure | Searching the skill registry by keyword |
 | `actionLogRepo` | `ActionLogRepo` | Read/write access to `autonomy_action_log` for approval lifecycle (approve, deny, dismiss, list pending) |
 | `executionLayer` | `ExecutionLayer` | Re-invoking skills with `humanApproved` bypass. Only `approve-action` should declare this — it is `sensitivity: "elevated"` (CEO-only). |
 | `confidencePipeline` | `ConfidencePipeline` | Contact confidence scoring. Skills that modify trust-related data (trust level, identity pairings) should declare this and fire scoring signals through it. |
@@ -235,7 +237,7 @@ tier) alongside the item it describes:
 The `OutboundGateway` uses these to apply the item-count threshold, non-contact destination
 allowlist (confidential+ only), and `restricted` sensitivity ceiling. An agent-supplied
 `sensitivity` on an item can only **ratchet up** the resolved value, never downgrade it. See
-`skills/email-send/skill.json` for a live example and [spec 06 — Sensitivity resolution](../specs/06-audit-and-security.md#sensitivity-resolution).
+`skills/email-send/tool.json` for a live example and [spec 06 — Sensitivity resolution](../specs/06-audit-and-security.md#sensitivity-resolution).
 
 #### `permissions` (optional, default: `[]`)
 
@@ -288,14 +290,14 @@ Opts this skill's output out of **only** the broad generic-long-hex secret scrub
 
 ## The Handler (`handler.ts`)
 
-All handlers export a class implementing the `SkillHandler` interface. The execution layer instantiates the class at load time and calls `execute()` per invocation.
+All handlers export a class implementing the `ToolHandler` interface. The execution layer instantiates the class at load time and calls `execute()` per invocation.
 
 ```typescript
 // skills/web-search/handler.ts
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class WebSearchHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class WebSearchHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { query, count = 10 } = ctx.input as { query: string; count?: number };
 
     // ctx.secret() is synchronous — no await needed
@@ -325,10 +327,10 @@ export class WebSearchHandler implements SkillHandler {
 }
 ```
 
-### `SkillContext` (key fields)
+### `ToolContext` (key fields)
 
 ```typescript
-interface SkillContext {
+interface ToolContext {
   /** Validated input matching the manifest's inputs declaration */
   input: Record<string, unknown>;
 
@@ -419,10 +421,10 @@ interface SkillContext {
 
 See `src/skills/types.ts` for the full interface with all optional fields.
 
-### `SkillResult`
+### `ToolResult`
 
 ```typescript
-type SkillResult =
+type ToolResult =
   | { success: true; data: unknown }
   | { success: false; error: string };
 ```
@@ -450,13 +452,13 @@ const apiKey = ctx.secret('stripe_api_key');  // synchronous — no await
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { WebSearchHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 // Use a real silent pino logger so the type is correct and log calls don't
 // produce output during tests. Spy on it directly if you need to assert logging.
 const logger = pino({ level: 'silent' });
 
-function makeCtx(input: Record<string, unknown>): SkillContext {
+function makeCtx(input: Record<string, unknown>): ToolContext {
   return {
     input,
     // Synchronous — return a fixed test value for declared secrets
@@ -550,7 +552,7 @@ mcp_servers:
 
 At startup, Curia connects to each MCP server, discovers its tools via `tools/list`, and registers them in the skill registry alongside local skills. Agents don't know or care whether a tool is local or MCP.
 
-See [Skills & Execution Spec](../specs/03-skills-and-execution.md#mcp-skills-external-servers) for recommended MCP servers.
+See [Tools & Execution Spec](../specs/03-tools-and-execution.md#mcp-skills-external-servers) for recommended MCP servers.
 
 ---
 
@@ -587,12 +589,12 @@ For **freeform working state that grows** — running notes, a draft, or a resea
 
 ## Checklist Before Opening a PR
 
-- [ ] `action_risk` is declared in `skill.json`
+- [ ] `action_risk` is declared in `tool.json`
 - [ ] `sensitivity` is `"elevated"` *only* if the skill is a CEO-authority primitive (requires a live principal turn); consequential mutations use `"normal"` + `action_risk` instead
 - [ ] `capabilities` declares only the privileged services actually used — omit if using only universal services
 - [ ] `allowed_callers` is set appropriately: for core skills, only for structural invariants (coordinator-only governance, system-only infrastructure); for custom/deploy skills, default to restricting to the intended agent(s)
 - [ ] All optional inputs are suffixed with `?` in the manifest
-- [ ] Handler exports a **class** implementing `SkillHandler`, not a bare function
+- [ ] Handler exports a **class** implementing `ToolHandler`, not a bare function
 - [ ] Handler never throws — all errors returned as `{ success: false, error }`
 - [ ] Error message in the failure return is prefixed with the skill name (e.g. `"web-search failed: ..."`)
 - [ ] `timeout` is set appropriately for the expected latency
@@ -609,7 +611,7 @@ For **freeform working state that grows** — running notes, a draft, or a resea
 ## Related Docs
 
 - [Architecture Overview](../specs/00-overview.md) — five-layer bus model
-- [Skills & Execution Spec](../specs/03-skills-and-execution.md) — full execution layer design
+- [Tools & Execution Spec](../specs/03-tools-and-execution.md) — full execution layer design
 - [Adding an Agent](adding-an-agent.md) — wire your new skill into an agent
 - [Audit & Security](../specs/06-audit-and-security.md) — what gets logged
 - [Autonomy Engine](../specs/14-autonomy-engine.md) — how `action_risk` gates execution (hard gates, Phase 3 auto-adjustment)

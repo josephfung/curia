@@ -2,30 +2,30 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { AuditQueryHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { AuditLogRepo, AuditLogRow } from '../../src/audit/audit-log-repo.js';
 import { createSilentLogger } from '../../src/logger.js';
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: {},
     secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
     log: createSilentLogger(),
     timezone: 'America/New_York',
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 function auditRow(overrides?: Partial<AuditLogRow>): AuditLogRow {
   return {
     id: 'evt-1',
     timestamp: new Date('2026-07-07T12:00:00.000Z'),
-    eventType: 'skill.result',
+    eventType: 'tool.result',
     sourceLayer: 'execution',
     sourceId: 'coordinator',
     conversationId: 'conv-1',
     parentEventId: 'evt-0',
-    payload: { skillName: 'email-send' },
+    payload: { toolName: 'email-send' },
     ...overrides,
   };
 }
@@ -53,8 +53,8 @@ describe('AuditQueryHandler', () => {
     const data = (result as { success: true; data: { events: Array<Record<string, unknown>>; count: number; available: boolean } }).data;
     expect(data.count).toBe(1);
     expect(data.available).toBe(true);
-    expect(data.events[0]).toMatchObject({ id: 'evt-1', eventType: 'skill.result', parentEventId: 'evt-0' });
-    expect(data.events[0]!.payloadSummary).toEqual({ skillName: 'email-send' });
+    expect(data.events[0]).toMatchObject({ id: 'evt-1', eventType: 'tool.result', parentEventId: 'evt-0' });
+    expect(data.events[0]!.payloadSummary).toEqual({ toolName: 'email-send' });
   });
 
   it('reports available:false when findById misses', async () => {

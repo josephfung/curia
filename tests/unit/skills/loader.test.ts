@@ -2,21 +2,21 @@ import { describe, it, expect, afterAll } from 'vitest';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import { discoverSkillManifests, loadSkillsFromDirectory } from '../../../src/skills/loader.js';
-import { SkillRegistry } from '../../../src/skills/registry.js';
+import { discoverToolManifests, loadToolsFromDirectory } from '../../../src/skills/loader.js';
+import { ToolRegistry } from '../../../src/skills/registry.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
 
-describe('loadSkillsFromDirectory', () => {
+describe('loadToolsFromDirectory', () => {
   it('loads the web-fetch skill from the skills directory', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const skillsDir = path.resolve(import.meta.dirname, '../../../skills');
 
     // Discover all skills, then enable only web-fetch so we don't pay the
     // full dynamic-import cost for 90+ handlers in a 5 s test timeout.
-    const discoveries = discoverSkillManifests(skillsDir);
-    await loadSkillsFromDirectory(discoveries, registry, logger, new Set(['web-fetch']));
+    const discoveries = discoverToolManifests(skillsDir);
+    await loadToolsFromDirectory(discoveries, registry, logger, new Set(['web-fetch']));
 
     const webFetch = registry.get('web-fetch');
     expect(webFetch).toBeDefined();
@@ -25,14 +25,14 @@ describe('loadSkillsFromDirectory', () => {
   });
 
   it('returns the count of loaded skills', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const skillsDir = path.resolve(import.meta.dirname, '../../../skills');
 
     // Enable only web-fetch — we just need to confirm the return value
     // reflects the actual number of registered skills (1 here). Loading all
     // 90+ handlers would risk the 5 s vitest timeout on a cold import cache.
-    const discoveries = discoverSkillManifests(skillsDir);
-    const count = await loadSkillsFromDirectory(discoveries, registry, logger, new Set(['web-fetch']));
+    const discoveries = discoverToolManifests(skillsDir);
+    const count = await loadToolsFromDirectory(discoveries, registry, logger, new Set(['web-fetch']));
     expect(count).toBe(1);
   });
 
@@ -47,7 +47,7 @@ describe('loadSkillsFromDirectory', () => {
     function writeSkill(name: string, install: unknown): void {
       const dir = path.join(tmpDir, name);
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'skill.json'), JSON.stringify({
+      fs.writeFileSync(path.join(dir, 'tool.json'), JSON.stringify({
         name, description: 'd', version: '1.0.0', action_risk: 'none', install,
       }));
     }
@@ -56,34 +56,34 @@ describe('loadSkillsFromDirectory', () => {
 
     it('keeps a well-formed string array', () => {
       writeSkill('good', { requires_secrets: ['a', 'b'] });
-      const disc = discoverSkillManifests(tmpDir).find(d => d.name === 'good');
+      const disc = discoverToolManifests(tmpDir).find(d => d.name === 'good');
       expect(disc?.metadata?.requiresSecrets).toEqual(['a', 'b']);
     });
 
     it('coerces a non-array value to undefined (no requirement)', () => {
       writeSkill('bad-string', { requires_secrets: 'tavily_api_key' });
-      const disc = discoverSkillManifests(tmpDir).find(d => d.name === 'bad-string');
+      const disc = discoverToolManifests(tmpDir).find(d => d.name === 'bad-string');
       // Must NOT be the raw string — that would iterate char-by-char downstream.
       expect(disc?.metadata?.requiresSecrets).toBeUndefined();
     });
 
     it('drops non-string entries from a mixed array', () => {
       writeSkill('mixed', { requires_secrets: ['ok', 42, null, 'fine'] });
-      const disc = discoverSkillManifests(tmpDir).find(d => d.name === 'mixed');
+      const disc = discoverToolManifests(tmpDir).find(d => d.name === 'mixed');
       expect(disc?.metadata?.requiresSecrets).toEqual(['ok', 'fine']);
     });
 
     it('leaves requiresSecrets undefined when there is no install block', () => {
       writeSkill('none', undefined);
-      const disc = discoverSkillManifests(tmpDir).find(d => d.name === 'none');
+      const disc = discoverToolManifests(tmpDir).find(d => d.name === 'none');
       expect(disc?.metadata?.requiresSecrets).toBeUndefined();
     });
   });
 
   it('throws for a nonexistent directory', async () => {
-    // discoverSkillManifests now owns the directory scan, so it is the
+    // discoverToolManifests now owns the directory scan, so it is the
     // function that throws when the directory doesn't exist.
-    expect(() => discoverSkillManifests('/tmp/nonexistent-dir-xyz')).toThrow();
+    expect(() => discoverToolManifests('/tmp/nonexistent-dir-xyz')).toThrow();
   });
 
   // Regression guard: every installed skill manifest must be convertible to a
@@ -101,12 +101,12 @@ describe('loadSkillsFromDirectory', () => {
   // cache can exceed the default 5 s. This test must cover every installed
   // skill — it is the regression guard for malformed manifests.
   it('produces valid tool definitions for every installed skill', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const skillsDir = path.resolve(import.meta.dirname, '../../../skills');
 
-    const discoveries = discoverSkillManifests(skillsDir);
+    const discoveries = discoverToolManifests(skillsDir);
     const enabledNames = new Set(discoveries.map(d => d.name));
-    await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+    await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
 
     const allSkillNames = registry.list().map(s => s.manifest.name);
     expect(allSkillNames.length).toBeGreaterThan(0);

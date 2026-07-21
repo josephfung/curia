@@ -11,7 +11,7 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { ExtractRelationshipsHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
 
 // -- Test helpers --
@@ -41,14 +41,14 @@ function makeMockInfraLlm(responses: string[]): InfraLlm {
   };
 }
 
-function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>, infraLlm: InfraLlm): SkillContext {
+function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>, infraLlm: InfraLlm): ToolContext {
   return {
     input,
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     entityMemory,
     infraLlm,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 // -- Tests --

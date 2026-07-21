@@ -4,10 +4,10 @@
 // OutboundGateway. Creates labels that don't yet exist. Preserves all
 // existing labels on the message (merge, not replace).
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class EmailLabelHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailLabelHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
 

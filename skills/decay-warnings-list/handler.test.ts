@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolContext, ToolResult } from '../../src/skills/types.js';
 import { DecayWarningsListHandler } from './handler.js';
 
-function makeCtx(warnings: unknown[]): SkillContext {
+function makeCtx(warnings: unknown[]): ToolContext {
   return {
     input: {},
     entityMemory: {
@@ -10,7 +10,7 @@ function makeCtx(warnings: unknown[]): SkillContext {
     },
     timezone: 'America/Toronto',
     log: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 // Compute warnedAt relative to now so daysRemaining stays within the 7-day window
@@ -27,7 +27,7 @@ describe('DecayWarningsListHandler', () => {
       },
     ]);
     const handler = new DecayWarningsListHandler();
-    const result: SkillResult = await handler.execute(ctx);
+    const result: ToolResult = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
     const data = (result as { success: true; data: { warnings: unknown[]; count: number } }).data;
@@ -57,7 +57,7 @@ describe('DecayWarningsListHandler', () => {
       input: {},
       entityMemory: undefined,
       log: { error: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const handler = new DecayWarningsListHandler();
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);

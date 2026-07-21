@@ -32,9 +32,9 @@ The server-side **interpreter** (`src/antfarm/interpreter.ts`) is the heart of t
 |---|---|---|
 | `schedule.fired` | `claw.deliver` | overhead claw drops a job onto an agent's desk |
 | `agent.task` | `agent.state` (`active`) | agent lights up / starts working |
-| `skill.invoke` (`delegate`) | `agent.walk` + `agent.speak` | agent walks to the delegate's desk and speaks the task |
-| `skill.invoke` (other) | `agent.think` (`start`) | thought bubble appears (skill running) |
-| `skill.result` | `agent.think` (`stop`) | thought bubble clears |
+| `tool.invoke` (`delegate`) | `agent.walk` + `agent.speak` | agent walks to the delegate's desk and speaks the task |
+| `tool.invoke` (other) | `agent.think` (`start`) | thought bubble appears (skill running) |
+| `tool.result` | `agent.think` (`stop`) | thought bubble clears |
 | `agent.discuss` | `agent.speak` | speech bubble (Bullpen conversation) |
 | `inbound.message` | `tube.in` | message arrives through a vacuum tube |
 | `outbound.message` / `outbound.delivered` | `tube.out` | message leaves through a vacuum tube |

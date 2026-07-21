@@ -51,6 +51,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [028](028-shared-unbound-agent-memory.md) | Shared, unbound agent memory — remove the inert `memory.scopes` field; govern access by capability gating + sensitivity tiers + provenance, not per-agent scopes | Accepted |
 | [029](029-passive-email-observation-and-counterfactual-competence.md) | Passive email observation with counterfactual (shadow) competence as a Phase 3 input — reuse existing stores, no new memory types | Accepted |
 | [030](030-per-task-warm-browser-session.md) | Opt-in, per-task warm browser session (`keep_warm`) — reject a global canonical session (collision); profile-level warmth stays always-on | Accepted |
+| [031](031-tools-vs-skills-vocabulary.md) | Tools vs skills vocabulary — atom rename to **tool**; free **skill** for collections (Phase 1 of #1436) | Accepted |
 
 ## Adding new ADRs
 

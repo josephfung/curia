@@ -3,7 +3,7 @@
 // Lists tasks with optional filters. Returns up to `limit` (default 25) tasks sorted
 // by priority DESC, due_at ASC NULLS LAST. Joins to include the next pending wake-up.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import type { TaskListRow } from '../../src/db/task-repo.js';
 
@@ -14,8 +14,8 @@ const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
 const MAX_LIMIT = 100;
 
-export class TaskListHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class TaskListHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as {
       status?: string;
       owner?: string;

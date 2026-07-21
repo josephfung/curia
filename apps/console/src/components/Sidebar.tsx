@@ -31,7 +31,7 @@ const ROUTES: Record<string, string> = {
   contacts: '/contacts',
   tasks:    '/tasks',
   jobs:     '/jobs',
-  skills:   '/skills',
+  tools: '/tools',
   agents:   '/agents',
   channels:   '/channels',
   'mcp-skills': '/mcp-skills',
@@ -76,7 +76,7 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
   // Expand the Settings group when on any of its pages (Skills/Agents are now
   // standalone pages but still live under the sidebar's Settings group).
   const [settingsOpen, setSettingsOpen] = useState(
-    activeView === 'settings' || activeView === 'skills' || activeView === 'agents' || activeView === 'channels' || activeView === 'mcp-skills',
+    activeView === 'settings' || activeView === 'tools' || activeView === 'agents' || activeView === 'channels' || activeView === 'mcp-skills',
   );
   const [principalName, setPrincipalName] = useState<string | null>(null);
   const { setOpen } = useMobileMenu();
@@ -177,11 +177,11 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
           {settingsOpen && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
               <button
-                className={`nav-sub-item${activeView === 'skills' ? ' active' : ''}`}
-                onClick={() => go('skills')}
+                className={`nav-sub-item${activeView === 'tools' ? ' active' : ''}`}
+                onClick={() => go('tools')}
               >
                 <IconWand />
-                Skills
+                Tools
               </button>
               <button
                 className={`nav-sub-item${activeView === 'agents' ? ' active' : ''}`}

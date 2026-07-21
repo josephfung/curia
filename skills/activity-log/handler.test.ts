@@ -2,12 +2,12 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ActivityLogHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { AuditLogRepo, AuditLogRow } from '../../src/audit/audit-log-repo.js';
 import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import { createSilentLogger } from '../../src/logger.js';
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: {
       since: '2026-06-25T00:00:00.000Z',
@@ -17,20 +17,20 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     log: createSilentLogger(),
     timezone: 'America/New_York',
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 function makeAuditRow(overrides?: Partial<AuditLogRow>): AuditLogRow {
   return {
     id: 'audit-1',
     timestamp: new Date('2026-06-25T18:00:00.000Z'),
-    eventType: 'skill.result',
+    eventType: 'tool.result',
     sourceLayer: 'execution',
     sourceId: 'calendar',
     conversationId: 'conv-1',
     parentEventId: null,
     payload: {
-      skillName: 'calendar-respond-to-invite',
+      toolName: 'calendar-respond-to-invite',
       result: {
         success: true,
         data: {
@@ -53,13 +53,13 @@ describe('ActivityLogHandler', () => {
 
   it('returns RSVP actions with summarized target and detail', async () => {
     const auditLogRepo = {
-      findSkillResults: vi.fn().mockResolvedValue([makeAuditRow()]),
+      findToolResults: vi.fn().mockResolvedValue([makeAuditRow()]),
     } as unknown as AuditLogRepo;
     const actionLogRepo = {
       findTerminalBetween: vi.fn().mockResolvedValue([
         {
           id: 1,
-          skillName: 'calendar-respond-to-invite',
+          toolName: 'calendar-respond-to-invite',
           outcome: 'success',
           conversationId: 'conv-1',
           createdAt: new Date('2026-06-25T18:00:00.000Z'),
@@ -84,7 +84,7 @@ describe('ActivityLogHandler', () => {
 
   it('filters to calendar-respond-to-invite when skill_name is provided', async () => {
     const auditLogRepo = {
-      findSkillResults: vi.fn().mockResolvedValue([makeAuditRow()]),
+      findToolResults: vi.fn().mockResolvedValue([makeAuditRow()]),
     } as unknown as AuditLogRepo;
 
     const handler = new ActivityLogHandler();
@@ -100,17 +100,17 @@ describe('ActivityLogHandler', () => {
     const data = (result as { success: true; data: { actions: Array<Record<string, unknown>> } }).data;
     expect(data.actions).toHaveLength(1);
     expect(data.actions[0]!.skill).toBe('calendar-respond-to-invite');
-    expect(auditLogRepo.findSkillResults).toHaveBeenCalledWith(expect.objectContaining({
-      skillNames: ['calendar-respond-to-invite'],
+    expect(auditLogRepo.findToolResults).toHaveBeenCalledWith(expect.objectContaining({
+      toolNames: ['calendar-respond-to-invite'],
     }));
   });
 
   it('excludes non-recap skills by default', async () => {
     const auditLogRepo = {
-      findSkillResults: vi.fn().mockResolvedValue([
+      findToolResults: vi.fn().mockResolvedValue([
         makeAuditRow({
           payload: {
-            skillName: 'memory-query',
+            toolName: 'memory-query',
             result: { success: true, data: {} },
           },
         }),
@@ -127,20 +127,20 @@ describe('ActivityLogHandler', () => {
 
   it('labels approved actions when autonomy log matches conversation_id', async () => {
     const auditLogRepo = {
-      findSkillResults: vi.fn().mockResolvedValue([makeAuditRow()]),
+      findToolResults: vi.fn().mockResolvedValue([makeAuditRow()]),
     } as unknown as AuditLogRepo;
     const actionLogRepo = {
       findTerminalBetween: vi.fn().mockResolvedValue([
         {
           id: 1,
-          skillName: 'calendar-respond-to-invite',
+          toolName: 'calendar-respond-to-invite',
           outcome: 'approved',
           conversationId: 'conv-1',
           createdAt: new Date('2026-06-25T18:00:01.000Z'),
         },
         {
           id: 2,
-          skillName: 'calendar-respond-to-invite',
+          toolName: 'calendar-respond-to-invite',
           outcome: 'success',
           conversationId: 'conv-other',
           createdAt: new Date('2026-06-25T18:00:01.000Z'),
@@ -158,13 +158,13 @@ describe('ActivityLogHandler', () => {
 
   it('returns unknown autonomy when conversation_id does not match', async () => {
     const auditLogRepo = {
-      findSkillResults: vi.fn().mockResolvedValue([makeAuditRow({ conversationId: 'conv-1' })]),
+      findToolResults: vi.fn().mockResolvedValue([makeAuditRow({ conversationId: 'conv-1' })]),
     } as unknown as AuditLogRepo;
     const actionLogRepo = {
       findTerminalBetween: vi.fn().mockResolvedValue([
         {
           id: 1,
-          skillName: 'calendar-respond-to-invite',
+          toolName: 'calendar-respond-to-invite',
           outcome: 'success',
           conversationId: 'conv-other',
           createdAt: new Date('2026-06-25T18:00:00.000Z'),

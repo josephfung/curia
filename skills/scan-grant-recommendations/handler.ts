@@ -10,7 +10,7 @@
 // Cadence ceiling: the run stops creating new recommendations once
 // cadence_ceiling new ones have been produced, preventing a burst.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 const CANDIDATE_PERMISSION = 'schedule_meetings';
 
@@ -40,8 +40,8 @@ function buildJudgePrompt(
   return `${context}\n\nShould this contact be granted scheduling access (schedule_meetings) on the executive's behalf?`;
 }
 
-export class ScanGrantRecommendationsHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ScanGrantRecommendationsHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.infraLlm) {
       return { success: false, error: 'scan-grant-recommendations: infraLlm capability missing' };
     }

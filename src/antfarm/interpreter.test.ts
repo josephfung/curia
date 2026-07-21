@@ -44,12 +44,12 @@ describe('interpretEvent', () => {
     });
   });
 
-  it('maps delegate skill.invoke to agent.walk and agent.speak', () => {
+  it('maps delegate tool.invoke to agent.walk and agent.speak', () => {
     const result = interpretEvent(row({
-      eventType: 'skill.invoke',
+      eventType: 'tool.invoke',
       payload: {
         agentId: 'coordinator',
-        skillName: 'delegate',
+        toolName: 'delegate',
         input: { agent: 'research', task: 'Find the Q2 report' },
       },
     }));
@@ -70,29 +70,29 @@ describe('interpretEvent', () => {
     ]);
   });
 
-  it('maps non-delegate skill.invoke to agent.think start', () => {
+  it('maps non-delegate tool.invoke to agent.think start', () => {
     const result = interpretEvent(row({
-      eventType: 'skill.invoke',
-      payload: { agentId: 'calendar', skillName: 'calendar-list-events', input: {} },
+      eventType: 'tool.invoke',
+      payload: { agentId: 'calendar', toolName: 'calendar-list-events', input: {} },
     }));
     expect(result).toMatchObject({
       kind: 'agent.think',
       agentId: 'calendar',
       phase: 'start',
-      skillName: 'calendar-list-events',
+      toolName: 'calendar-list-events',
     });
   });
 
-  it('maps skill.result to agent.think stop', () => {
+  it('maps tool.result to agent.think stop', () => {
     const result = interpretEvent(row({
-      eventType: 'skill.result',
+      eventType: 'tool.result',
       sourceLayer: 'execution',
-      payload: { agentId: 'calendar', skillName: 'calendar-list-events' },
+      payload: { agentId: 'calendar', toolName: 'calendar-list-events' },
     }));
     expect(result).toMatchObject({
       kind: 'agent.think',
       phase: 'stop',
-      skillName: 'calendar-list-events',
+      toolName: 'calendar-list-events',
     });
   });
 
@@ -173,10 +173,10 @@ describe('interpretEvent', () => {
   });
 
   it('maps autonomy.*_blocked events to badge', () => {
-    for (const eventType of ['autonomy.skill_blocked', 'autonomy.send_blocked'] as const) {
+    for (const eventType of ['autonomy.tool_blocked', 'autonomy.send_blocked'] as const) {
       const result = interpretEvent(row({
         eventType,
-        payload: { skillName: 'send-email', reason: 'score too low' },
+        payload: { toolName: 'send-email', reason: 'score too low' },
       }));
       expect(result).toMatchObject({
         kind: 'badge',
@@ -220,10 +220,10 @@ describe('buildScript', () => {
     const script = buildScript([
       row({
         id: 'd',
-        eventType: 'skill.invoke',
+        eventType: 'tool.invoke',
         payload: {
           agentId: 'coordinator',
-          skillName: 'delegate',
+          toolName: 'delegate',
           input: { agent: 'research', task: 'Go' },
         },
       }),

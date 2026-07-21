@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ApprovalExpirySweepHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { ContactService } from '../../src/contacts/contact-service.js';
 import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
@@ -18,7 +18,7 @@ function makeRow(overrides: Partial<ActionLogRow> = {}): ActionLogRow {
   return {
     id: 1,
     shortRef: 'cal-1',
-    skillName: 'create-calendar-event',
+    toolName: 'create-calendar-event',
     description: 'Create event: Lunch',
     actionRisk: 'medium',
     outcome: 'pending_approval',
@@ -88,14 +88,14 @@ function makeCtx(overrides: {
       : { identities: [] },
   );
 
-  const ctx: SkillContext = {
-    skillName: 'approval-expiry-sweep',
-    skillVersion: '1.0.1',
+  const ctx: ToolContext = {
+    toolName: 'approval-expiry-sweep',
+    toolVersion: '1.0.1',
     input: {},
     secret: vi.fn().mockImplementation((name: string) => {
       throw new Error(`secret ${name} not configured`);
     }),
-    log: { info: logInfoMock, warn: logWarnMock, error: logErrorMock, debug: vi.fn() } as unknown as SkillContext['log'],
+    log: { info: logInfoMock, warn: logWarnMock, error: logErrorMock, debug: vi.fn() } as unknown as ToolContext['log'],
     actionLogRepo: {
       findExpired: findExpiredMock,
       expireRows: expireRowsMock,
@@ -109,7 +109,7 @@ function makeCtx(overrides: {
     outboundGateway: withoutOutboundGateway
       ? undefined
       : ({ sendNotification: sendNotificationMock } as unknown as OutboundGateway),
-  } as SkillContext;
+  } as ToolContext;
 
   return { ctx, findExpiredMock, expireRowsMock, sendNotificationMock, findContactBySystemRoleMock, logInfoMock, logWarnMock, logErrorMock };
 }

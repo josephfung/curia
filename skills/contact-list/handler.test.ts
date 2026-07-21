@@ -3,7 +3,7 @@
 // kind filter. Status filter removed along with ContactStatus (#955).
 import { describe, it, expect, vi } from 'vitest';
 import { ContactListHandler } from './handler.js';
-import type { SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { Contact } from '../../src/contacts/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 
@@ -46,7 +46,7 @@ const dave = makeContact({ id: 'd4', displayName: 'Dave', tier: 'blocked', creat
 
 const allContacts = [alice, bob, carol, dave];
 
-function makeCtx(input: Record<string, unknown> = {}, contacts: Contact[] = allContacts): SkillContext {
+function makeCtx(input: Record<string, unknown> = {}, contacts: Contact[] = allContacts): ToolContext {
   return {
     input,
     log: createSilentLogger(),
@@ -69,11 +69,11 @@ function makeCtx(input: Record<string, unknown> = {}, contacts: Contact[] = allC
       }),
       findContactByRole: vi.fn().mockResolvedValue([]),
     },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 /** Extract contacts array from a successful result. */
-function getContacts(result: SkillResult): Array<{ contact_id: string; display_name: string; tier: string }> {
+function getContacts(result: ToolResult): Array<{ contact_id: string; display_name: string; tier: string }> {
   if (!result.success) throw new Error(`Expected success, got: ${result.error}`);
   return (result.data as { contacts: Array<{ contact_id: string; display_name: string; tier: string }> }).contacts;
 }
@@ -270,7 +270,7 @@ describe('ContactListHandler', () => {
       input: {},
       log: createSilentLogger(),
       contactService: undefined,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (result.success) throw new Error('expected failure');
@@ -283,7 +283,7 @@ describe('ContactListHandler', () => {
 // Uses a lighter-weight makeCtx that accepts raw objects so the kind field can
 // be set freely without satisfying the full Contact interface.
 
-function makeKindCtx(input: Record<string, unknown>, contacts: unknown[]): SkillContext {
+function makeKindCtx(input: Record<string, unknown>, contacts: unknown[]): ToolContext {
   return {
     input,
     log: createSilentLogger(),
@@ -297,7 +297,7 @@ function makeKindCtx(input: Record<string, unknown>, contacts: unknown[]): Skill
         });
       },
     },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 const personContact = { id: '1', displayName: 'Alice', role: null, tier: 'known', kgNodeId: null, kind: 'person' };
@@ -363,7 +363,7 @@ describe('ContactListHandler — kind filter', () => {
         findContactByRole: async () => [roleContact, roleHuman],
         listContacts: vi.fn(),
       },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     const ids = (result as { success: true; data: { contacts: Array<{ contact_id: string }> } }).data.contacts.map((c) => c.contact_id);

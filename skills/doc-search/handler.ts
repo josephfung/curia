@@ -1,10 +1,10 @@
 // handler.ts — doc-search skill (#1209).
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { searchDocuments, requireWorkingDocs } from '../_shared/doc-workspace.js';
 
-export class DocSearchHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DocSearchHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { query, path_prefix } = ctx.input as { query?: string; path_prefix?: string };
 
     if (!query || typeof query !== 'string' || !query.trim()) {

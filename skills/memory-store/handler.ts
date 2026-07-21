@@ -14,7 +14,7 @@
 //   rate_limited          — write limit (50 per task) exceeded
 //   redirected_to_contact — attribute is canonical; write went to ContactService instead of KG
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, SENSITIVITY_LEVELS, NODE_TYPES } from '../../src/memory/types.js';
 import type { DecayClass, Sensitivity, NodeType, KgNode } from '../../src/memory/types.js';
 import { buildCanonicalPatch } from '../../src/contacts/canonical-attribute-guard.js';
@@ -29,8 +29,8 @@ const ENTITY_NODE_TYPES_SET: ReadonlySet<string> = new Set(ENTITY_NODE_TYPES);
 // Matches any UUID-shaped string (all versions/variants), not just v4.
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export class MemoryStoreHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class MemoryStoreHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const {
       entity,
       field,
@@ -342,7 +342,7 @@ export class MemoryStoreHandler implements SkillHandler {
           // union (stored and action are independent fields), so TypeScript cannot narrow
           // result.action through the stored boolean check — these cases are required to
           // keep the exhaustive switch type-correct. Per the skill contract (handlers
-          // resolve to a SkillResult, never throw), surface the impossible state as a
+          // resolve to a ToolResult, never throw), surface the impossible state as a
           // logged failure rather than a thrown Error.
           ctx.log.error(
             { entity, field, action: result.action },

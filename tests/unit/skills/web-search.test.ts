@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WebSearchHandler } from '../../../skills/web-search/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -8,10 +8,10 @@ const logger = pino({ level: 'silent' });
 function makeCtx(
   input: Record<string, unknown>,
   secretValue = 'tvly-test-key',
-): SkillContext {
+): ToolContext {
   return {
-    skillName: 'web-search',
-    skillVersion: '1.1.0',
+    toolName: 'web-search',
+    toolVersion: '1.1.0',
     input,
     secret: (name: string) => {
       if (name === 'tavily_api_key') return secretValue;
@@ -41,9 +41,9 @@ describe('WebSearchHandler', () => {
   });
 
   it('returns failure when API key is missing', async () => {
-    const ctx: SkillContext = {
-      skillName: 'web-search',
-      skillVersion: '1.1.0',
+    const ctx: ToolContext = {
+      toolName: 'web-search',
+      toolVersion: '1.1.0',
       input: { query: 'test' },
       // A genuinely-missing secret throws a plain Error with no `cause`.
       secret: () => { throw new Error('Secret not set'); },
@@ -60,9 +60,9 @@ describe('WebSearchHandler', () => {
   });
 
   it('surfaces vault read failures as operational errors, not missing-secret guidance', async () => {
-    const ctx: SkillContext = {
-      skillName: 'web-search',
-      skillVersion: '1.1.0',
+    const ctx: ToolContext = {
+      toolName: 'web-search',
+      toolVersion: '1.1.0',
       input: { query: 'test' },
       // The execution layer wraps a vault read failure in an Error with a `cause`
       // (see src/skills/execution.ts). That is an outage, not a misconfiguration —

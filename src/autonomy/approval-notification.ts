@@ -131,33 +131,33 @@ const GENERIC_DETAIL_FIELDS: DetailFieldSpec[] = [
 
 /** Representative payloads for allowlisted skills — used by tests to catch silent misses. */
 export const SKILL_DETAIL_FIXTURES: Array<{
-  skillName: string;
+  toolName: string;
   payload: Record<string, unknown>;
   /** Skill-specific labels that must appear when the fixture payload is rendered. */
   expectedLabels: string[];
 }> = [
   {
-    skillName: 'signal-send',
+    toolName: 'signal-send',
     payload: { recipient: '+15550142', message: 'Confirming Thursday at 3pm.' },
     expectedLabels: ['To:', 'Message:'],
   },
   {
-    skillName: 'email-reply',
+    toolName: 'email-reply',
     payload: { reply_to_message_id: 'msg-abc', body: 'Thanks — Thursday works.' },
     expectedLabels: ['Reply to:', 'Message:'],
   },
   {
-    skillName: 'email-draft-save',
+    toolName: 'email-draft-save',
     payload: { to: 'dana@example.com', subject: 'Re: Budget', body: 'Draft body text.' },
     expectedLabels: ['To:', 'Subject:', 'Body:'],
   },
   {
-    skillName: 'send-draft',
+    toolName: 'send-draft',
     payload: { to: 'dana@example.com', subject: 'Re: Budget', body: 'Approved send body.' },
     expectedLabels: ['To:', 'Subject:', 'Body:'],
   },
   {
-    skillName: 'calendar-create-event',
+    toolName: 'calendar-create-event',
     payload: {
       title: 'Board sync',
       start: '2026-07-02T15:00:00Z',
@@ -166,12 +166,12 @@ export const SKILL_DETAIL_FIXTURES: Array<{
     expectedLabels: ['Title:', 'Start:', 'End:'],
   },
   {
-    skillName: 'store-fact',
+    toolName: 'store-fact',
     payload: { label: 'Dana prefers mornings', value: 'true' },
     expectedLabels: ['Label:', 'Value:'],
   },
   {
-    skillName: 'scheduler-create',
+    toolName: 'scheduler-create',
     payload: {
       task: 'nightly-sweep',
       cron_expr: '0 2 * * *',
@@ -180,7 +180,7 @@ export const SKILL_DETAIL_FIXTURES: Array<{
     expectedLabels: ['Task:', 'Schedule:', 'Agent:'],
   },
   {
-    skillName: 'scheduler-cancel',
+    toolName: 'scheduler-cancel',
     payload: { job_id: 'job-abc-123' },
     expectedLabels: ['Job:'],
   },
@@ -247,9 +247,9 @@ function formatFieldValue(value: unknown, fieldKey?: string): string | null {
   return null;
 }
 
-function fieldSpecsForSkill(skillName: string): DetailFieldSpec[] {
+function fieldSpecsForSkill(toolName: string): DetailFieldSpec[] {
   for (const rule of SKILL_DETAIL_FIELDS) {
-    if (rule.test(skillName)) return rule.fields;
+    if (rule.test(toolName)) return rule.fields;
   }
   return GENERIC_DETAIL_FIELDS;
 }
@@ -277,10 +277,10 @@ export function enrichGatewayApprovalPayload(
  * Values pass through sanitizeOutput; per-field and total length caps apply.
  */
 export function buildApprovalDetails(
-  skillName: string,
+  toolName: string,
   payload: Record<string, unknown>,
 ): string {
-  const specs = fieldSpecsForSkill(skillName);
+  const specs = fieldSpecsForSkill(toolName);
   const seenLabels = new Set<string>();
   const lines: string[] = [];
   let totalLength = 0;
@@ -311,7 +311,7 @@ export interface BuildApprovalNotificationBodyOpts {
   preamble: string;
   shortRef: string;
   expiresAt: Date;
-  skillName: string;
+  toolName: string;
   payload: Record<string, unknown>;
   /** When absent or below principal tier, detail block is omitted. */
   recipientTier: ContactTier | null;
@@ -348,19 +348,19 @@ export function buildApprovalNotificationBody(opts: BuildApprovalNotificationBod
   );
 
   if (includeDetail) {
-    const details = buildApprovalDetails(opts.skillName, opts.payload);
+    const details = buildApprovalDetails(opts.toolName, opts.payload);
     if (details) {
       lines.push(details, '');
     } else {
       logDetailOmission(opts.logger, 'no renderable fields in payload', {
-        skillName: opts.skillName,
+        toolName: opts.toolName,
         ceoEmail: opts.ceoEmail,
         payloadKeys: Object.keys(opts.payload),
       });
     }
   } else if (opts.ceoEmail) {
     logDetailOmission(opts.logger, 'recipient tier below principal or unresolved', {
-      skillName: opts.skillName,
+      toolName: opts.toolName,
       ceoEmail: opts.ceoEmail,
       recipientTier: opts.recipientTier,
     });

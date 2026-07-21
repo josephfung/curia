@@ -10,15 +10,15 @@
 // resume + edit; the skill closes the gap where agents could create/list/cancel a
 // job but could not resume, pause, or edit one (issue #1409).
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 // The lifecycle operations this skill exposes. resume and pause are state
 // transitions; edit changes schedule/payload fields.
 type SchedulerAction = 'resume' | 'pause' | 'edit';
 const VALID_ACTIONS: readonly SchedulerAction[] = ['resume', 'pause', 'edit'];
 
-export class SchedulerUpdateHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class SchedulerUpdateHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.schedulerService) {
       return {
         success: false,

@@ -114,7 +114,7 @@ export async function messageRoutes(
   /**
    * GET /api/messages/stream — SSE endpoint.
    *
-   * Streams outbound.message, skill.invoke, and skill.result events.
+   * Streams outbound.message, tool.invoke, and tool.result events.
    * Optionally filter by ?conversation_id=xxx
    */
   app.get('/api/messages/stream', async (request: FastifyRequest, reply: FastifyReply) => {

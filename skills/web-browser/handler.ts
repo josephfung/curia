@@ -13,7 +13,7 @@
 // The LLM drives navigation logic via its tool-use loop. This handler is the
 // hands — it executes what the LLM decides, not the reverse.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { BrowserAction } from '../../src/browser/types.js';
 import type { BrowserSession } from '../../src/browser/browser-session.js';
 import type { Page, Frame, Locator } from 'playwright';
@@ -105,7 +105,7 @@ interface BrowserActionStep {
 interface ActionDeps {
   page: Page;
   session: BrowserSession;
-  ctx: SkillContext;
+  ctx: ToolContext;
   sessionId: string;
   /** Called the instant a secret value is registered on the session — BEFORE the risky fill
    *  that follows. Screenshot suppression latches on this, so it holds even if the fill then
@@ -130,8 +130,8 @@ type PerformResult = { ok: true } | { ok: false; error: string };
 // global and monotonic; resetting on restart is fine (pre-restart refs aren't in any live context).
 let refEpochSeed = 0;
 
-export class WebBrowserHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class WebBrowserHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.browserService) {
       return { success: false, error: 'browserService is not available — BrowserService failed to start or is not wired into ExecutionLayer' };
     }
@@ -670,7 +670,7 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
  * expected (no navigation occurred) and must not fail the action — logged at debug,
  * never propagated. Replaces the old flat 500ms wait with an adaptive one.
  */
-async function settleAfterInteraction(page: Page, ctx: SkillContext, sessionId: string): Promise<void> {
+async function settleAfterInteraction(page: Page, ctx: ToolContext, sessionId: string): Promise<void> {
   await page.waitForLoadState('domcontentloaded', { timeout: INTERACTION_SETTLE_TIMEOUT_MS }).catch((err) => {
     ctx.log.debug({ err, sessionId }, 'No navigation settled after interaction — proceeding');
   });
@@ -701,7 +701,7 @@ function isChallengeInProgress(title: string, bodySnippet: string): boolean {
  * Poll until a Cloudflare/Akamai challenge page clears or timeout. Best-effort — a timeout
  * just means we proceed with whatever DOM is present (the soft-block reload may still help).
  */
-async function waitForChallengeClear(page: Page, log: SkillContext['log'], sessionId: string): Promise<void> {
+async function waitForChallengeClear(page: Page, log: ToolContext['log'], sessionId: string): Promise<void> {
   const deadline = Date.now() + CHALLENGE_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     let title = '';
@@ -726,7 +726,7 @@ async function waitForChallengeClear(page: Page, log: SkillContext['log'], sessi
 // positives on minimal-but-legitimate pages (e.g. a login form that has only icon buttons
 // and placeholder text). Best-effort: an evaluate failure is treated as "not empty" so we
 // never trigger a reload on a transient read error. (#1053)
-async function isLikelyEmpty(page: Page, log: SkillContext['log']): Promise<boolean> {
+async function isLikelyEmpty(page: Page, log: ToolContext['log']): Promise<boolean> {
   try {
     const metrics = await page.evaluate(() => ({
       textLength: (document.body?.innerText ?? '').trim().length,
@@ -766,7 +766,7 @@ async function isLikelyEmpty(page: Page, log: SkillContext['log']): Promise<bool
  * defensive pattern as getCleanedContent. The main-frame paths are intentionally left
  * unguarded: a detached main frame is a genuine failure the caller should surface.
  */
-async function resolveLocator(page: Page, selector: string, log: SkillContext['log']): Promise<Locator> {
+async function resolveLocator(page: Page, selector: string, log: ToolContext['log']): Promise<Locator> {
   // Ref fast-path: a ref token (g<epoch>f<frame>e<n>, emitted by extractFrameContent) names
   // exactly one element. Resolve by the unique attribute value and accept ONLY when exactly one
   // element carries it across the main frame and all eligible child frames — this is how the
@@ -868,7 +868,7 @@ async function resolveLocator(page: Page, selector: string, log: SkillContext['l
  * Try to resolve `selector` within a single scope (a Page or a Frame). Returns the
  * matching locator, or null if nothing matched (so the caller can try the next frame).
  */
-async function resolveInScope(scope: Page | Frame, selector: string, log: SkillContext['log']): Promise<Locator | null> {
+async function resolveInScope(scope: Page | Frame, selector: string, log: ToolContext['log']): Promise<Locator | null> {
   // Roles ordered roughly by likelihood. `gridcell`/`cell` cover calendar date cells,
   // which custom date pickers expose inside a role="grid".
   const rolesToTry: Parameters<Page['getByRole']>[0][] = [
@@ -919,7 +919,7 @@ function escapeAttrValue(value: string): string {
  * When a selector matches many elements (duplicate nav links, multi-question quizzes),
  * prefer the first visible one in DOM order; fall back to .first() for hidden custom inputs.
  */
-async function pickBestLocator(loc: Locator, log: SkillContext['log']): Promise<Locator> {
+async function pickBestLocator(loc: Locator, log: ToolContext['log']): Promise<Locator> {
   const count = await loc.count();
   if (count <= 1) return count === 1 ? loc : loc.first();
   for (let i = 0; i < count; i++) {
@@ -939,7 +939,7 @@ async function pickBestLocator(loc: Locator, log: SkillContext['log']): Promise<
  * separate frame documents that the main frame's DOM doesn't contain — so we extract
  * each frame and concatenate, labelling sub-frames so the LLM knows where content lives.
  */
-async function getCleanedContent(page: Page, log: SkillContext['log']): Promise<string> {
+async function getCleanedContent(page: Page, log: ToolContext['log']): Promise<string> {
   const mainFrame = page.mainFrame();
   // One monotonic epoch seed per read, shared by every frame in this snapshot. A frame's
   // document adopts it only if the document is fresh (post-navigation); a re-read document

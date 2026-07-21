@@ -3,7 +3,7 @@
 // Dedicated primitive for the progress.resumable block — not folded into task-update,
 // which appends human-readable notes to progress.notes instead.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import {
   boundTaskFromMetadata,
   isResumableTask,
@@ -14,12 +14,12 @@ import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function boundTaskFromSkillContext(ctx: SkillContext): BoundTaskContext | null {
+function boundTaskFromToolContext(ctx: ToolContext): BoundTaskContext | null {
   return boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined);
 }
 
-export class CheckpointHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CheckpointHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as {
       task_id?: string;
       cursor?: string | Record<string, unknown> | null;
@@ -30,7 +30,7 @@ export class CheckpointHandler implements SkillHandler {
       next?: string;
     };
 
-    const bound = boundTaskFromSkillContext(ctx);
+    const bound = boundTaskFromToolContext(ctx);
     const taskId = input.task_id ?? bound?.taskId;
     if (!taskId || typeof taskId !== 'string') {
       return {

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ContactFindDuplicatesHandler } from '../../../skills/contact-find-duplicates/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import type { DuplicatePair } from '../../../src/contacts/types.js';
 import type { TaskRow } from '../../../src/db/queries/tasks.js';
 import { dedupPairTag } from '../../../src/contacts/dedup-pair-key.js';
@@ -50,10 +50,10 @@ function makeContext(
     };
     entityMemory?: { getFacts: (nodeId: string) => Promise<unknown[]> };
   } = {},
-): SkillContext {
+): ToolContext {
   return {
-    skillName: 'contact-find-duplicates',
-    skillVersion: '2.1.0',
+    toolName: 'contact-find-duplicates',
+    toolVersion: '2.1.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

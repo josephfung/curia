@@ -8,10 +8,10 @@
 // entity_enrichment manifest declaration instead — that runs the same
 // assembler without an extra LLM round-trip.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class EntityContextHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EntityContextHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const assembler = ctx.entityContextAssembler;
     if (!assembler) {
       return { success: false, error: 'Entity context assembler not available — database not configured' };

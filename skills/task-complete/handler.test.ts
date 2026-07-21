@@ -1,14 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { TaskCompleteHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { TaskRepo } from '../../src/db/task-repo.js';
 import type { TaskRow } from '../../src/db/queries/tasks.js';
 
 const silentLog = pino({ level: 'silent' });
 const VALID_UUID = '00000000-0000-0000-0000-000000000002';
 
-function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input: {},
     secret: () => 'unused',
@@ -16,7 +16,7 @@ function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
     agentId: 'coordinator',
     timezone: 'America/Toronto',
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 function makeTaskRow(overrides: Partial<TaskRow> = {}): TaskRow {

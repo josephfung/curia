@@ -81,7 +81,7 @@ export class AutonomyService {
    *
    * Used by Phase 2 gate wiring in the execution layer to enforce autonomy-aware
    * skill access. Callers should validate numeric values are in [0, 100] at
-   * skill load time (see SkillRegistry.register) before calling this.
+   * skill load time (see ToolRegistry.register) before calling this.
    */
   static minScoreForActionRisk(risk: ActionRisk): number {
     if (typeof risk === 'number') return risk;
@@ -91,7 +91,7 @@ export class AutonomyService {
       case 'medium':   return 70;
       case 'high':     return 80;
       case 'critical': return 90;
-      // Defense in depth: SkillRegistry.register() should reject unknown labels at load
+      // Defense in depth: ToolRegistry.register() should reject unknown labels at load
       // time, but guard here in case this helper is called outside the registry path.
       default: throw new Error(`Unknown action_risk label: "${String(risk)}"`);
     }

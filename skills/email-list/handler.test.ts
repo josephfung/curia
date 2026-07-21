@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { EmailListHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 import type { NylasMessage } from '../../src/channels/email/nylas-client.js';
 
@@ -32,10 +32,10 @@ function makeMessage(overrides?: Partial<NylasMessage>): NylasMessage {
 function makeMockGateway(messages: NylasMessage[] = [makeMessage()]) {
   return {
     listEmailMessages: vi.fn().mockResolvedValue(messages),
-  } as unknown as SkillContext['outboundGateway'];
+  } as unknown as ToolContext['outboundGateway'];
 }
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: {},
     secret: () => { throw new Error('no secret in test'); },
@@ -44,7 +44,7 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     taskMetadata: {},
     taskEventId: undefined,
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +163,7 @@ describe('EmailListHandler — error handling', () => {
   it('returns error when gateway throws', async () => {
     const gateway = {
       listEmailMessages: vi.fn().mockRejectedValue(new Error('API failure')),
-    } as unknown as SkillContext['outboundGateway'];
+    } as unknown as ToolContext['outboundGateway'];
     const handler = new EmailListHandler();
     const result = await handler.execute(makeCtx({ outboundGateway: gateway }));
     expect(result.success).toBe(false);

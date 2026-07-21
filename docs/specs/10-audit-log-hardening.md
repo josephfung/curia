@@ -51,8 +51,8 @@ The audit logger extracts structured fields from each event payload before INSER
 | `agent.response` | `respond` | `success` | `conversation` / conversationId | `agent` / agentId |
 | `outbound.message` | `send` | `success` | `conversation` / conversationId | `system` / `dispatch` |
 | `outbound.delivered` | `deliver` | `success` | `conversation` / conversationId | `channel` / channelId |
-| `skill.invoke` | `execute` | `pending` | `skill` / skillName | `agent` / agentId |
-| `skill.result` | `execute` | from `result.success` | `skill` / skillName | `agent` / agentId |
+| `tool.invoke` | `execute` | `pending` | `skill` / toolName | `agent` / agentId |
+| `tool.result` | `execute` | from `result.success` | `skill` / toolName | `agent` / agentId |
 | `memory.store` | `create` | `success` | `kg_node` / nodeId | `agent` / agentId |
 | `memory.query` | `read` | `success` | `knowledge_graph` / queryType | `agent` / agentId |
 | `contact.resolved` | `resolve` | `success` | `contact` / contactId | `system` / `dispatch` |
@@ -197,11 +197,11 @@ This creates a traceable link from any response back to its data sources. Memory
 
 ### Skill Data Access Logging
 
-Skills that read external data (email-reader, calendar-reader, web-fetcher) should include a `sourcesAccessed` field in their `skill.result` payload:
+Skills that read external data (email-reader, calendar-reader, web-fetcher) should include a `sourcesAccessed` field in their `tool.result` payload:
 
 ```typescript
 // Convention for skill result data when external sources are consulted
-interface SkillResultWithSources {
+interface ToolResultWithSources {
   success: true;
   data: unknown;
   sourcesAccessed?: Array<{
@@ -211,7 +211,7 @@ interface SkillResultWithSources {
 }
 ```
 
-This is a convention, not a type enforcement — skills are responsible for populating it. The audit log captures whatever the skill returns. Skills that don't access external sources omit the field. To prevent silent omission, skills whose manifests declare external data sources (via a `dataSources` field in `skill.json`) should be validated at test time: a lint/test checks that their results include `sourcesAccessed` when `success: true`.
+This is a convention, not a type enforcement — skills are responsible for populating it. The audit log captures whatever the skill returns. Skills that don't access external sources omit the field. To prevent silent omission, skills whose manifests declare external data sources (via a `dataSources` field in `tool.json`) should be validated at test time: a lint/test checks that their results include `sourcesAccessed` when `success: true`.
 
 ---
 

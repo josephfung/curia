@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EmailGetHandler } from '../../../skills/email-get/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -22,10 +22,10 @@ const mockMessage = {
 
 function makeCtx(input: Record<string, unknown>, gateway?: Partial<{
   getEmailMessage: (...args: unknown[]) => unknown;
-}>): SkillContext {
+}>): ToolContext {
   return {
-    skillName: 'email-get',
-    skillVersion: '1.0.0',
+    toolName: 'email-get',
+    toolVersion: '1.0.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,

@@ -1,7 +1,7 @@
 import type { AgentYamlConfig } from './loader.js';
 
 /** The task skills every task-management-enabled agent can call. */
-export const TASK_MANAGEMENT_SKILLS = [
+export const TASK_MANAGEMENT_TOOLS = [
   'task-create',
   'task-list',
   'task-update',
@@ -82,7 +82,7 @@ export function applyTaskManagement(
   }
   // Keep the author's explicit pins; append any task skills not already present.
   const merged = [...pinnedSkills];
-  for (const skill of TASK_MANAGEMENT_SKILLS) {
+  for (const skill of TASK_MANAGEMENT_TOOLS) {
     if (!merged.includes(skill)) merged.push(skill);
   }
   return {

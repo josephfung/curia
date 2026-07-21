@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { CalendarHoldsSweepHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ const realMeeting = makeEvent({ id: 'evt-real', slotOffset: -5,  slotDuration: 1
 // makeCtx helper
 // ---------------------------------------------------------------------------
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: {
       contactId: 'deadbeef-0000-0000-0000-000000000001',
@@ -89,13 +89,13 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
       getCalendarsForContact: vi.fn().mockResolvedValue([
         { nylasCalendarId: 'cal-work' },
       ]),
-    } as unknown as SkillContext['contactService'],
+    } as unknown as ToolContext['contactService'],
     nylasCalendarClient: {
       listEvents: vi.fn().mockResolvedValue([pastHold, freshHold, oldHold, realMeeting]),
       deleteEvent: vi.fn().mockResolvedValue(undefined),
-    } as unknown as SkillContext['nylasCalendarClient'],
+    } as unknown as ToolContext['nylasCalendarClient'],
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([]),
         deleteEvent: vi.fn(),
-      } as unknown as SkillContext['nylasCalendarClient'],
+      } as unknown as ToolContext['nylasCalendarClient'],
     });
 
     const result = await handler.execute(ctx);
@@ -182,7 +182,7 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([sixDayOldHold]),
         deleteEvent: vi.fn(),
-      } as unknown as SkillContext['nylasCalendarClient'],
+      } as unknown as ToolContext['nylasCalendarClient'],
     });
 
     const result = await handler.execute(ctx);
@@ -203,7 +203,7 @@ describe('CalendarHoldsSweepHandler — core sweep logic', () => {
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([sevenDayOldHold]),
         deleteEvent: vi.fn(),
-      } as unknown as SkillContext['nylasCalendarClient'],
+      } as unknown as ToolContext['nylasCalendarClient'],
     });
 
     const result = await handler.execute(ctx);
@@ -231,7 +231,7 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([pastHold, freshHold, oldHold, realMeeting]),
         deleteEvent,
-      } as unknown as SkillContext['nylasCalendarClient'],
+      } as unknown as ToolContext['nylasCalendarClient'],
     });
 
     const result = await handler.execute(ctx);
@@ -267,7 +267,7 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
     const ctx = makeCtx({
       contactService: {
         getCalendarsForContact: vi.fn().mockResolvedValue([]),
-      } as unknown as SkillContext['contactService'],
+      } as unknown as ToolContext['contactService'],
     });
 
     const result = await handler.execute(ctx);
@@ -295,7 +295,7 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
     const ctx = makeCtx({
       contactService: {
         getCalendarsForContact: vi.fn().mockRejectedValue(new Error('DB connection lost')),
-      } as unknown as SkillContext['contactService'],
+      } as unknown as ToolContext['contactService'],
     });
 
     // Must resolve (not reject) — skills never throw
@@ -313,7 +313,7 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
           { nylasCalendarId: 'cal-work' },
           { nylasCalendarId: 'cal-personal' },
         ]),
-      } as unknown as SkillContext['contactService'],
+      } as unknown as ToolContext['contactService'],
       nylasCalendarClient: {
         // cal-work fails; cal-personal succeeds with one stale hold
         listEvents: vi.fn().mockImplementation((_calId: string) => {
@@ -323,7 +323,7 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
           return Promise.resolve([pastHold]);
         }),
         deleteEvent: vi.fn().mockResolvedValue(undefined),
-      } as unknown as SkillContext['nylasCalendarClient'],
+      } as unknown as ToolContext['nylasCalendarClient'],
     });
 
     const result = await handler.execute(ctx);

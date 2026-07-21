@@ -2,11 +2,11 @@
 // and manifest freeze in the skill loader.
 //
 // Covers:
-//   1. discoverSkillManifests: parses manifests without importing handlers
-//   2. discoverSkillManifests: captures parse errors leniently
-//   3. loadSkillsFromDirectory: only registers enabled skills (gated)
-//   4. loadSkillsFromDirectory: hard-fails on enabled skill with bad manifest
-//   5. loadSkillsFromDirectory: skips disabled skill with bad manifest
+//   1. discoverToolManifests: parses manifests without importing handlers
+//   2. discoverToolManifests: captures parse errors leniently
+//   3. loadToolsFromDirectory: only registers enabled skills (gated)
+//   4. loadToolsFromDirectory: hard-fails on enabled skill with bad manifest
+//   5. loadToolsFromDirectory: skips disabled skill with bad manifest
 //   6. Unknown capability names cause a hard load failure at startup
 //   7. Valid capabilities load successfully and the manifest is frozen
 //   8. Frozen manifests reject mutation attempts at runtime
@@ -17,8 +17,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import pino from 'pino';
-import { discoverSkillManifests, loadSkillsFromDirectory, validateAllowedCallers } from './loader.js';
-import { SkillRegistry } from './registry.js';
+import { discoverToolManifests, loadToolsFromDirectory, validateAllowedCallers } from './loader.js';
+import { ToolRegistry } from './registry.js';
 import { createLogger } from '../logger.js';
 
 // Silent logger — these tests do not assert on log output
@@ -26,7 +26,7 @@ const logger = pino({ level: 'silent' });
 const silentLogger = createLogger('silent');
 
 /**
- * Write a minimal skill directory (skill.json + trivial handler) into tmpDir.
+ * Write a minimal skill directory (tool.json + trivial handler) into tmpDir.
  *
  * The handler is written as a .js (ESM) file — not .ts — because the loader
  * imports handlers via `import('file://...')` which bypasses vitest's transform
@@ -35,10 +35,10 @@ const silentLogger = createLogger('silent');
  * The loader checks for handler.ts first; since we only write handler.js,
  * it falls back to the .js path (the correct fallback behavior).
  */
-function setupSkillDir(tmpDir: string, skillName: string, manifest: Record<string, unknown>): void {
-  const skillDir = path.join(tmpDir, skillName);
+function setupSkillDir(tmpDir: string, toolName: string, manifest: Record<string, unknown>): void {
+  const skillDir = path.join(tmpDir, toolName);
   fs.mkdirSync(skillDir, { recursive: true });
-  fs.writeFileSync(path.join(skillDir, 'skill.json'), JSON.stringify(manifest));
+  fs.writeFileSync(path.join(skillDir, 'tool.json'), JSON.stringify(manifest));
   // Named export matching the HandlerClass path in loader.ts
   fs.writeFileSync(
     path.join(skillDir, 'handler.js'),
@@ -53,7 +53,7 @@ function setupSkillDir(tmpDir: string, skillName: string, manifest: Record<strin
 function writeSkill(dir: string, name: string, manifest: object, handler: string) {
   const sdir = path.join(dir, name);
   fs.mkdirSync(sdir, { recursive: true });
-  fs.writeFileSync(path.join(sdir, 'skill.json'), JSON.stringify(manifest));
+  fs.writeFileSync(path.join(sdir, 'tool.json'), JSON.stringify(manifest));
   fs.writeFileSync(path.join(sdir, 'handler.js'), handler);
 }
 
@@ -61,14 +61,14 @@ function writeSkill(dir: string, name: string, manifest: object, handler: string
 // Discovery tests (no handler import)
 // ---------------------------------------------------------------------------
 
-describe('discoverSkillManifests', () => {
+describe('discoverToolManifests', () => {
   let dir: string;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-')); });
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
   it('returns metadata without importing handlers', () => {
     writeSkill(dir, 'good', { name: 'good', description: 'd', version: '1.0.0', action_risk: 'low' }, 'throw new Error("should not import");');
-    const found = discoverSkillManifests(dir);
+    const found = discoverToolManifests(dir);
     expect(found).toHaveLength(1);
     expect(found[0]!.name).toBe('good');
     expect(found[0]!.metadata?.actionRisk).toBe('low');
@@ -78,8 +78,8 @@ describe('discoverSkillManifests', () => {
   it('captures a parse error instead of throwing', () => {
     const sdir = path.join(dir, 'broken');
     fs.mkdirSync(sdir);
-    fs.writeFileSync(path.join(sdir, 'skill.json'), '{ not json');
-    const found = discoverSkillManifests(dir);
+    fs.writeFileSync(path.join(sdir, 'tool.json'), '{ not json');
+    const found = discoverToolManifests(dir);
     expect(found[0]!.metadata).toBeNull();
     expect(found[0]!.error).toBeTruthy();
   });
@@ -93,7 +93,7 @@ describe('discoverSkillManifests', () => {
       { name: 'manifest-name', description: 'd', version: '1.0.0', action_risk: 'none' },
       'export default { async execute() { return { success: true, data: {} }; } };',
     );
-    const found = discoverSkillManifests(dir, mockLogger);
+    const found = discoverToolManifests(dir, mockLogger);
     expect(found).toHaveLength(1);
     expect(found[0]!.name).toBe('manifest-name');
     expect(warnFn).toHaveBeenCalledOnce();
@@ -107,7 +107,7 @@ describe('discoverSkillManifests', () => {
     const warnFn = vi.fn();
     const mockLogger = { warn: warnFn } as never;
     writeSkill(dir, 'good', { name: 'good', description: 'd', version: '1.0.0', action_risk: 'none' }, 'throw new Error("should not import");');
-    discoverSkillManifests(dir, mockLogger);
+    discoverToolManifests(dir, mockLogger);
     expect(warnFn).not.toHaveBeenCalled();
   });
 });
@@ -116,12 +116,12 @@ describe('discoverSkillManifests', () => {
 // Gated loading tests (enabledNames gate)
 // ---------------------------------------------------------------------------
 
-describe('loadSkillsFromDirectory (gated)', () => {
+describe('loadToolsFromDirectory (gated)', () => {
   let dir: string;
-  let registry: SkillRegistry;
+  let registry: ToolRegistry;
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-'));
-    registry = new SkillRegistry('UTC');
+    registry = new ToolRegistry('UTC');
   });
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
@@ -130,8 +130,8 @@ describe('loadSkillsFromDirectory (gated)', () => {
   it('registers only enabled skills', async () => {
     writeSkill(dir, 'on',  { name: 'on',  description: 'd', version: '1.0.0', action_risk: 'none' }, HANDLER);
     writeSkill(dir, 'off', { name: 'off', description: 'd', version: '1.0.0', action_risk: 'none' }, HANDLER);
-    const discoveries = discoverSkillManifests(dir);
-    const loaded = await loadSkillsFromDirectory(discoveries, registry, silentLogger, new Set(['on']));
+    const discoveries = discoverToolManifests(dir);
+    const loaded = await loadToolsFromDirectory(discoveries, registry, silentLogger, new Set(['on']));
     expect(loaded).toBe(1);
     expect(registry.get('on')).toBeDefined();
     expect(registry.get('off')).toBeUndefined();
@@ -140,13 +140,13 @@ describe('loadSkillsFromDirectory (gated)', () => {
   it('hard-fails on an ENABLED skill with a bad manifest', async () => {
     const discoveries = [{ name: 'bad', metadata: null, error: 'bad json', dir: path.join(dir, 'bad') }];
     await expect(
-      loadSkillsFromDirectory(discoveries as never, registry, silentLogger, new Set(['bad'])),
+      loadToolsFromDirectory(discoveries as never, registry, silentLogger, new Set(['bad'])),
     ).rejects.toThrow();
   });
 
   it('skips a DISABLED skill with a bad manifest (no throw)', async () => {
     const discoveries = [{ name: 'bad', metadata: null, error: 'bad json', dir: path.join(dir, 'bad') }];
-    const loaded = await loadSkillsFromDirectory(discoveries as never, registry, silentLogger, new Set());
+    const loaded = await loadToolsFromDirectory(discoveries as never, registry, silentLogger, new Set());
     expect(loaded).toBe(0);
   });
 });
@@ -169,12 +169,12 @@ describe('loader: capability validation', () => {
         outputs: {},
         capabilities: ['outboundGateway', 'notARealCapability'],
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
       // The loader wraps the inner error; the bad capability name must appear
       // in the final message so operators know what to fix.
-      await expect(loadSkillsFromDirectory(discoveries, registry, logger, enabledNames))
+      await expect(loadToolsFromDirectory(discoveries, registry, logger, enabledNames))
         .rejects.toThrow('notARealCapability');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -194,10 +194,10 @@ describe('loader: capability validation', () => {
         outputs: {},
         capabilities: ['outboundGateway'],
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      const count = await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      const count = await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
       expect(count).toBe(1);
 
       const skill = registry.get('good-skill');
@@ -222,10 +222,10 @@ describe('loader: capability validation', () => {
         outputs: {},
         // no 'capabilities' key — skill uses only universal services
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      const count = await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      const count = await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
       expect(count).toBe(1);
 
       const skill = registry.get('nocap-skill');
@@ -250,10 +250,10 @@ describe('loader: capability validation', () => {
         outputs: {},
         capabilities: ['sensitivityClassifier'],
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      const count = await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      const count = await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
       expect(count).toBe(1);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -273,10 +273,10 @@ describe('loader: capability validation', () => {
         outputs: {},
         capabilities: ['outboundGateway'],
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const skill = registry.get('frozen-skill');
       // ESM modules run in strict mode — pushing to a frozen array throws TypeError.
@@ -308,10 +308,10 @@ describe('loader: allowed_callers', () => {
         outputs: {},
         allowed_callers: ['coordinator'],
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const skill = registry.get('restricted-skill');
       expect(Object.isFrozen(skill?.manifest.allowed_callers)).toBe(true);
@@ -339,10 +339,10 @@ describe('validateAllowedCallers', () => {
         outputs: {},
         allowed_callers: ['coordinator'],
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const knownAgents = new Set(['coordinator', 'calendar', 'ceo-inbox']);
       expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();
@@ -364,10 +364,10 @@ describe('validateAllowedCallers', () => {
         outputs: {},
         allowed_callers: ['system'],
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
 
       // 'system' is not in the known agents set — but it's always valid
       const knownAgents = new Set(['coordinator']);
@@ -390,10 +390,10 @@ describe('validateAllowedCallers', () => {
         outputs: {},
         allowed_callers: ['coordinatorrr'],
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const knownAgents = new Set(['coordinator', 'calendar']);
       expect(() => validateAllowedCallers(registry, knownAgents)).toThrow('coordinatorrr');
@@ -414,10 +414,10 @@ describe('validateAllowedCallers', () => {
         inputs: {},
         outputs: {},
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const knownAgents = new Set(['coordinator']);
       expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();
@@ -441,10 +441,10 @@ describe('validateAllowedCallers', () => {
         outputs: {},
         allowed_callers: [],
       });
-      const registry = new SkillRegistry();
-      const discoveries = discoverSkillManifests(tmpDir);
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
       const enabledNames = new Set(discoveries.map(d => d.name));
-      await loadSkillsFromDirectory(discoveries, registry, logger, enabledNames);
+      await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
 
       const knownAgents = new Set(['coordinator']);
       expect(() => validateAllowedCallers(registry, knownAgents)).not.toThrow();

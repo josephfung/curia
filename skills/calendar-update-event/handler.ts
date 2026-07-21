@@ -3,11 +3,11 @@
 // Updates an existing calendar event with partial field changes.
 // Checks the read-only flag before attempting the update.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
-export class CalendarUpdateEventHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CalendarUpdateEventHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.nylasCalendarClient) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }

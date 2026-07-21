@@ -1,4 +1,4 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { CeoNylasClient, type NylasDraftSummary } from '../_shared/ceo-nylas-client.js';
 
 const MAX_LIMIT = 50;
@@ -30,8 +30,8 @@ function draftMatchesQuery(draft: NylasDraftSummary, query: string): boolean {
   );
 }
 
-export class CeoInboxSearchHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CeoInboxSearchHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
     const client = new CeoNylasClient(apiKey, grantId, ctx.log);

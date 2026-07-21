@@ -227,7 +227,7 @@ resume deferred tasks in any subsequent session.
 - `setup-defer` — write; persists or clears deferrals for catalog tasks
 - `behavioral-preferences-update` (appends to `OfficeIdentity.behavioralPreferences`)
 - `scheduler-create`, `scheduler-list`, `scheduler-cancel`
-- `skill-registry`
+- `tool-registry`
 - `memory-store`
 - `executive-profile-update`
 
@@ -295,6 +295,6 @@ outcome-backward concierge: instant wins → outcome question
 ## Related specs
 
 - [02 — Agent System](02-agent-system.md) — coordinator delegation, specialist routing
-- [03 — Skills & Execution](03-skills-and-execution.md) — `action_risk`, capability injection
+- [03 — Skills & Execution](03-tools-and-execution.md) — `action_risk`, capability injection
 - [13 — Office Identity](13-office-identity.md) — `OfficeIdentity` schema, `OfficeIdentityService`, HTTP API
 - [14 — Autonomy Engine](14-autonomy-engine.md) — `action_risk` enforcement

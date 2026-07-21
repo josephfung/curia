@@ -9,11 +9,11 @@
 //     system-generated adjustments (changedBy === 'system'). Null if fewer than 2 system entries.
 //   - scoredActionCount: count of autonomy_action_log rows with scored_by set (0 if table absent)
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { AutonomyHistoryEntry } from '../../src/autonomy/autonomy-service.js';
 
-export class GetAutonomyHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class GetAutonomyHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.autonomyService) {
       return { success: false, error: 'get-autonomy requires autonomyService in context. Declare "autonomyService" in capabilities.' };
     }

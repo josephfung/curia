@@ -1,10 +1,10 @@
 // handler.ts — doc-read skill (#1209).
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { readDocument, requireWorkingDocs } from '../_shared/doc-workspace.js';
 
-export class DocReadHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DocReadHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { path, section } = ctx.input as { path?: string; section?: string };
 
     if (!path || typeof path !== 'string' || !path.trim()) {

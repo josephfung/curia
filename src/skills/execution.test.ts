@@ -4,16 +4,16 @@
 // These tests verify that:
 //   1. getToolDefinitions delegates to the registry and returns correct schemas
 //   2. Unknown skill names are silently skipped
-//   3. Skills returned by skill-registry can have their tool defs retrieved and
+//   3. Skills returned by tool-registry can have their tool defs retrieved and
 //      then be invoked — the full discover → call path works end-to-end with mocks
 //   4. Capability-gated service injection: only declared services reach ctx
 
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { SkillRegistry } from './registry.js';
+import { ToolRegistry } from './registry.js';
 import { ExecutionLayer } from './execution.js';
 import { TempFileStore } from './temp-file-store.js';
-import type { SkillHandler, SkillManifest, SkillResult, SkillContext } from './types.js';
+import type { ToolHandler, ToolManifest, ToolResult, ToolContext } from './types.js';
 import type { EventBus } from '../bus/bus.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
@@ -27,7 +27,7 @@ import { SensitivityClassifier } from '../memory/sensitivity.js';
 const logger = pino({ level: 'silent' });
 
 /** Minimal manifest for a normal read-only skill. */
-function makeManifest(name: string, description = `${name} description`): SkillManifest {
+function makeManifest(name: string, description = `${name} description`): ToolManifest {
   return {
     name,
     description,
@@ -43,7 +43,7 @@ function makeManifest(name: string, description = `${name} description`): SkillM
 }
 
 /** Handler that always returns success with the given data. */
-function makeHandler(data: unknown): SkillHandler {
+function makeHandler(data: unknown): ToolHandler {
   return {
     execute: vi.fn().mockResolvedValue({ success: true, data }),
   };
@@ -63,7 +63,7 @@ function makeAutonomyService(score: number): AutonomyService {
 }
 
 /** Build a manifest with a specific action_risk. */
-function makeRiskyManifest(name: string, actionRisk: 'none' | 'low' | 'medium' | 'high' | 'critical'): SkillManifest {
+function makeRiskyManifest(name: string, actionRisk: 'none' | 'low' | 'medium' | 'high' | 'critical'): ToolManifest {
   return {
     name,
     description: `${name} description`,
@@ -84,7 +84,7 @@ function makeRiskyManifest(name: string, actionRisk: 'none' | 'low' | 'medium' |
 
 describe('ExecutionLayer.getToolDefinitions', () => {
   it('returns tool definitions for registered skills', () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeManifest('search-docs', 'Search Google Docs'), makeHandler('ok'));
     registry.register(makeManifest('search-drive', 'Search Google Drive'), makeHandler('ok'));
     const layer = new ExecutionLayer(registry, logger);
@@ -99,7 +99,7 @@ describe('ExecutionLayer.getToolDefinitions', () => {
   });
 
   it('silently skips unknown skill names', () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeManifest('real-skill'), makeHandler('ok'));
     const layer = new ExecutionLayer(registry, logger);
 
@@ -110,7 +110,7 @@ describe('ExecutionLayer.getToolDefinitions', () => {
   });
 
   it('returns an empty array when no names match', () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const layer = new ExecutionLayer(registry, logger);
 
     const defs = layer.getToolDefinitions(['ghost-skill']);
@@ -119,7 +119,7 @@ describe('ExecutionLayer.getToolDefinitions', () => {
   });
 
   it('passes MCP input schema through directly', () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const mcpSchema = {
       type: 'object' as const,
       properties: { fileId: { type: 'string', description: 'The Drive file ID' } },
@@ -140,14 +140,14 @@ describe('ExecutionLayer.getToolDefinitions', () => {
 // ---------------------------------------------------------------------------
 
 describe('discover → invoke round-trip', () => {
-  it('skills surfaced by skill-registry can be retrieved via getToolDefinitions then invoked', async () => {
-    const registry = new SkillRegistry();
+  it('skills surfaced by tool-registry can be retrieved via getToolDefinitions then invoked', async () => {
+    const registry = new ToolRegistry();
     const handler = makeHandler({ content: 'document content' });
     registry.register(makeManifest('get_doc_content', 'Get the content of a Google Doc'), handler);
 
     const layer = new ExecutionLayer(registry, logger);
 
-    // Step 1: simulate what skill-registry returns for this skill
+    // Step 1: simulate what tool-registry returns for this skill
     const discoveredSkills = [{ name: 'get_doc_content', description: 'Get the content of a Google Doc' }];
 
     // Step 2: runtime calls getToolDefinitions with the discovered names
@@ -164,7 +164,7 @@ describe('discover → invoke round-trip', () => {
   });
 
   it('skills not in pinned list but discoverable are accessible after getToolDefinitions', () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     // Register several skills — only one is "pinned" (in the initial tool list)
     registry.register(makeManifest('pinned-skill'), makeHandler('pinned'));
     registry.register(makeManifest('search_drive_files', 'Search Drive'), makeHandler('found'));
@@ -175,7 +175,7 @@ describe('discover → invoke round-trip', () => {
 
     const layer = new ExecutionLayer(registry, logger);
 
-    // skill-registry discovers the non-pinned skills
+    // tool-registry discovers the non-pinned skills
     const discovered = [
       { name: 'search_drive_files' },
       { name: 'get_doc_content' },
@@ -242,7 +242,7 @@ describe('object output size cap', () => {
 
 describe('capability-gated service injection', () => {
   /** Manifest that declares specific capabilities. */
-  function makeCapManifest(name: string, capabilities: string[]): SkillManifest {
+  function makeCapManifest(name: string, capabilities: string[]): ToolManifest {
     return {
       name,
       description: `${name} description`,
@@ -259,11 +259,11 @@ describe('capability-gated service injection', () => {
   }
 
   it('injects only declared capabilities into context', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     // Handler captures the context it received so we can inspect it
     let capturedCtx: Record<string, unknown> = {};
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         capturedCtx = ctx as unknown as Record<string, unknown>;
         return { success: true, data: 'ok' };
       }),
@@ -290,10 +290,10 @@ describe('capability-gated service injection', () => {
   });
 
   it('injects no privileged services when capabilities is empty', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     let capturedCtx: Record<string, unknown> = {};
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         capturedCtx = ctx as unknown as Record<string, unknown>;
         return { success: true, data: 'ok' };
       }),
@@ -316,10 +316,10 @@ describe('capability-gated service injection', () => {
   });
 
   it('injects sensitivityClassifier for skills declaring the capability (#1419)', async () => {
-    const registry = new SkillRegistry();
-    let capturedCtx: SkillContext | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const registry = new ToolRegistry();
+    let capturedCtx: ToolContext | undefined;
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         capturedCtx = ctx;
         return { success: true, data: 'ok' };
       }),
@@ -336,10 +336,10 @@ describe('capability-gated service injection', () => {
   });
 
   it('does NOT inject sensitivityClassifier for skills without the capability (#1419)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     let capturedCtx: Record<string, unknown> = {};
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         capturedCtx = ctx as unknown as Record<string, unknown>;
         return { success: true, data: 'ok' };
       }),
@@ -355,9 +355,9 @@ describe('capability-gated service injection', () => {
   });
 
   it('returns skill error when declared capability is not available on ExecutionLayer', async () => {
-    const registry = new SkillRegistry();
-    const handler: SkillHandler = {
-      execute: vi.fn(async (): Promise<SkillResult> => ({ success: true, data: 'ok' })),
+    const registry = new ToolRegistry();
+    const handler: ToolHandler = {
+      execute: vi.fn(async (): Promise<ToolResult> => ({ success: true, data: 'ok' })),
     };
     registry.register(makeCapManifest('needs-scheduler', ['schedulerService']), handler);
 
@@ -383,10 +383,10 @@ describe('capability-gated service injection', () => {
     });
     await tempFileStore.init();
 
-    const registry = new SkillRegistry();
-    let capturedCtx: SkillContext | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const registry = new ToolRegistry();
+    let capturedCtx: ToolContext | undefined;
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         capturedCtx = ctx;
         return { success: true, data: 'ok' };
       }),
@@ -412,10 +412,10 @@ describe('capability-gated service injection', () => {
     });
     await gatingStore.init();
 
-    const registry = new SkillRegistry();
-    let capturedCtx: SkillContext | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const registry = new ToolRegistry();
+    let capturedCtx: ToolContext | undefined;
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         capturedCtx = ctx;
         return { success: true, data: 'ok' };
       }),
@@ -436,22 +436,22 @@ describe('capability-gated service injection', () => {
 });
 
 // ---------------------------------------------------------------------------
-// skillName / skillVersion injection (#1419) — the execution layer must
+// toolName / toolVersion injection (#1419) — the execution layer must
 // populate these from the loaded manifest so handlers never hardcode their
-// own version const that can drift out of sync with skill.json.
+// own version const that can drift out of sync with tool.json.
 // ---------------------------------------------------------------------------
 
-describe('skillName/skillVersion injection', () => {
-  it('injects skillVersion and skillName from the manifest into ctx', async () => {
-    const registry = new SkillRegistry();
-    const manifest: SkillManifest = {
+describe('toolName/toolVersion injection', () => {
+  it('injects toolVersion and toolName from the manifest into ctx', async () => {
+    const registry = new ToolRegistry();
+    const manifest: ToolManifest = {
       ...makeManifest('version-probe'),
       version: '9.9.9',
     };
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => ({
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => ({
         success: true,
-        data: { v: ctx.skillVersion, n: ctx.skillName },
+        data: { v: ctx.toolVersion, n: ctx.toolName },
       })),
     };
     registry.register(manifest, handler);
@@ -470,11 +470,11 @@ describe('skillName/skillVersion injection', () => {
 
 describe('taskMetadata pass-through', () => {
   it('passes taskMetadata to the skill context', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const layer = new ExecutionLayer(registry, logger);
 
-    let capturedCtx: SkillContext | undefined;
-    const capturingHandler: SkillHandler = {
+    let capturedCtx: ToolContext | undefined;
+    const capturingHandler: ToolHandler = {
       async execute(ctx) { capturedCtx = ctx; return { success: true, data: 'ok' }; },
     };
 
@@ -503,11 +503,11 @@ describe('taskMetadata pass-through', () => {
   });
 
   it('leaves taskMetadata undefined when options omit it', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const layer = new ExecutionLayer(registry, logger);
 
-    let capturedCtx: SkillContext | undefined;
-    const capturingHandler: SkillHandler = {
+    let capturedCtx: ToolContext | undefined;
+    const capturingHandler: ToolHandler = {
       async execute(ctx) { capturedCtx = ctx; return { success: true, data: 'ok' }; },
     };
 
@@ -539,7 +539,7 @@ describe('taskMetadata pass-through', () => {
 
 describe('autonomy gates', () => {
   it('blocks skill when score is below action_risk threshold', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('should not run');
     registry.register(makeRiskyManifest('send-email', 'medium'), handler); // requires 70
 
@@ -560,7 +560,7 @@ describe('autonomy gates', () => {
   });
 
   it('allows skill when score meets action_risk threshold', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
     registry.register(makeRiskyManifest('send-email', 'medium'), handler); // requires 70
 
@@ -574,7 +574,7 @@ describe('autonomy gates', () => {
   });
 
   it('always allows action_risk: none regardless of score', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
     registry.register(makeRiskyManifest('search-docs', 'none'), handler);
 
@@ -588,7 +588,7 @@ describe('autonomy gates', () => {
   });
 
   it('blocks all non-none skills when score < 60 (full restriction)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('should not run');
     registry.register(makeRiskyManifest('store-fact', 'low'), handler); // requires 60
 
@@ -609,8 +609,8 @@ describe('autonomy gates', () => {
     expect(handler.execute).not.toHaveBeenCalled();
   });
 
-  it('emits autonomy.skill_blocked event when skill is blocked', async () => {
-    const registry = new SkillRegistry();
+  it('emits autonomy.tool_blocked event when skill is blocked', async () => {
+    const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
@@ -624,9 +624,9 @@ describe('autonomy gates', () => {
     expect(mockBus.publish).toHaveBeenCalledWith(
       'execution',
       expect.objectContaining({
-        type: 'autonomy.skill_blocked',
+        type: 'autonomy.tool_blocked',
         payload: expect.objectContaining({
-          skillName: 'send-email',
+          toolName: 'send-email',
           currentScore: 65,
           requiredScore: 70,
         }),
@@ -635,7 +635,7 @@ describe('autonomy gates', () => {
   });
 
   it('skips gate when autonomyService is not wired (fail-open)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
     registry.register(makeRiskyManifest('send-email', 'medium'), handler);
 
@@ -648,9 +648,9 @@ describe('autonomy gates', () => {
   });
 
   it('exempts elevated skills from autonomy gate (prevents set-autonomy deadlock)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('score updated');
-    const elevatedManifest: SkillManifest = {
+    const elevatedManifest: ToolManifest = {
       ...makeRiskyManifest('set-autonomy', 'high'), // requires 80
       sensitivity: 'elevated',
     };
@@ -683,7 +683,7 @@ describe('autonomy gates', () => {
   });
 
   it('fails open when getConfig throws (DB error)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
     registry.register(makeRiskyManifest('send-email', 'medium'), handler);
 
@@ -701,7 +701,7 @@ describe('autonomy gates', () => {
   });
 
   it('skips gate when getConfig returns null (pre-migration)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
     registry.register(makeRiskyManifest('send-email', 'medium'), handler);
 
@@ -718,7 +718,7 @@ describe('autonomy gates', () => {
   });
 
   it('skips gates A and B when task is principal-originated (Gate B territory)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
     // calendar-create-event uses action_risk: 'high' → requires score 80. Score 74 would normally block.
     registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
@@ -743,7 +743,7 @@ describe('autonomy gates', () => {
   });
 
   it('skips gates A and B when task is principal-originated (Gate A territory)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
     // score 50 triggers Gate A (< 60 blocks all non-none) and Gate B (50 < 70 threshold for medium) —
     // principal should bypass both
@@ -769,7 +769,7 @@ describe('autonomy gates', () => {
   });
 
   it('does NOT bypass gates for agent-originated tasks', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('should not run');
     registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // requires 80
 
@@ -814,12 +814,12 @@ describe('autonomy gates', () => {
       initiatedAt: '2026-06-23T00:00:00.000Z', tier: null,
     };
 
-    function elevatedManifest(name: string): SkillManifest {
+    function elevatedManifest(name: string): ToolManifest {
       return { ...makeRiskyManifest(name, 'none'), sensitivity: 'elevated' };
     }
 
     it('same-task wake of a principal task KEEPS the principal-bypass at score >= 70', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('ok');
       // high-risk needs 80; only the principal-bypass lets it run at 70.
       registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
@@ -834,7 +834,7 @@ describe('autonomy gates', () => {
     });
 
     it('same-task wake of a principal task LOSES the bypass at score < 70 (propose-only)', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // needs 80
       const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(69) });
@@ -852,7 +852,7 @@ describe('autonomy gates', () => {
     // hole closure). The ladder still governs the *autonomy* principal-bypass for normal skills
     // (tested above with calendar-create-event), but it can no longer satisfy the elevated gate.
     it('elevated gate rejects a principal same-task wake even when the score clears posture B (>= 70)', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(elevatedManifest('approve-grant-recommendation'), handler);
       const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(95) });
@@ -872,7 +872,7 @@ describe('autonomy gates', () => {
     // carries wakeContext. This pins the self-approval-hole closure to the gate itself rather than to
     // the dispatcher/scheduler behaving perfectly. (#1126)
     it('elevated gate rejects a principal same-task wake even if liveTurn leaks in', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(elevatedManifest('approve-grant-recommendation'), handler);
       const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(95) });
@@ -888,7 +888,7 @@ describe('autonomy gates', () => {
     });
 
     it('elevated gate rejects a principal same-task wake below posture B too (blocked at any score)', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(elevatedManifest('approve-grant-recommendation'), handler);
       const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(69) });
@@ -902,7 +902,7 @@ describe('autonomy gates', () => {
     });
 
     it('elevated gate rejects a derived child of a system task even at posture D (>= 90) — system never satisfies it', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(elevatedManifest('approve-grant-recommendation'), handler);
       // 90 clears posture D (lineage retained as system) — but the elevated gate is no longer
@@ -917,7 +917,7 @@ describe('autonomy gates', () => {
     });
 
     it('a LIVE principal turn (no wakeContext) keeps the bypass regardless of score', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // needs 80
       const layer = new ExecutionLayer(registry, logger, { autonomyService: makeAutonomyService(10) });
@@ -933,9 +933,9 @@ describe('autonomy gates', () => {
     it('exposes EFFECTIVE standing to the handler via ctx.taskMetadata (closes the send-draft self-check hole)', async () => {
       // A normal/none skill whose only gate is a handler self-check on ctx.taskMetadata must see
       // the downgraded standing for a woken principal-lineage task, not the raw lineage.
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       let seenRole: unknown;
-      const handler: SkillHandler = {
+      const handler: ToolHandler = {
         execute: async (ctx) => {
           seenRole = (ctx.taskMetadata?.originator as { systemRole?: string } | undefined)?.systemRole;
           return { success: true, data: 'ok' };
@@ -951,13 +951,13 @@ describe('autonomy gates', () => {
 
       // The contactId (audit field) is preserved through the downgrade.
       let seenContactId: unknown;
-      const handler2: SkillHandler = {
+      const handler2: ToolHandler = {
         execute: async (ctx) => {
           seenContactId = (ctx.taskMetadata?.originator as { contactId?: string } | undefined)?.contactId;
           return { success: true, data: 'ok' };
         },
       };
-      const registry2 = new SkillRegistry();
+      const registry2 = new ToolRegistry();
       registry2.register(makeRiskyManifest('reads-meta-2', 'none'), handler2);
       await new ExecutionLayer(registry2, logger, { autonomyService: makeAutonomyService(50) })
         .invoke('reads-meta-2', {}, undefined, {
@@ -967,7 +967,7 @@ describe('autonomy gates', () => {
     });
 
     it('fails CLOSED on a woken task when the autonomy score is unavailable', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('send-email', 'medium'), handler);
       // getConfig returns null (pre-migration / DB blip) — fail-open for live turns, fail-closed for wakes.
@@ -986,7 +986,7 @@ describe('autonomy gates', () => {
     it('fails CLOSED on a woken task even when no autonomy service is wired', async () => {
       // Defense-in-depth: with no service the gates are skipped entirely, so the metadata downgrade
       // would be decorative for an autonomous execution — the woken brake must still apply.
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('send-email', 'medium'), handler);
       const layer = new ExecutionLayer(registry, logger); // no autonomyService
@@ -1001,7 +1001,7 @@ describe('autonomy gates', () => {
     });
 
     it('still fails OPEN on a LIVE turn when the score is unavailable (no regression)', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('send-email', 'medium'), handler);
       const nullService = { getConfig: async () => null } as unknown as import('../autonomy/autonomy-service.js').AutonomyService;
@@ -1015,7 +1015,7 @@ describe('autonomy gates', () => {
     });
 
     it('honours custom ladder thresholds passed to the constructor', async () => {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // needs 80
       // sameTask threshold lowered to 50 → a wake at 55 keeps the principal bypass.
@@ -1072,7 +1072,7 @@ describe('autonomy gates', () => {
       escalationJudge?: EscalationJudge,
       principalIdentities: readonly ChannelIdentity[] = TEST_PRINCIPAL_IDENTITIES,
     ) {
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(100),
         bus,
@@ -1519,7 +1519,7 @@ describe('autonomy gates', () => {
         ...logger,
         child: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
       } as unknown as typeof logger;
-      const registry = new SkillRegistry();
+      const registry = new ToolRegistry();
       const layer = new ExecutionLayer(registry, spyLogger, { autonomyService: makeAutonomyService(100) });
       registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler('should not run'));
 
@@ -1536,7 +1536,7 @@ describe('autonomy gates', () => {
       });
 
       expect(warn).toHaveBeenCalledWith(
-        expect.objectContaining({ skillName: 'email-send', actionRisk: 'medium' }),
+        expect.objectContaining({ toolName: 'email-send', actionRisk: 'medium' }),
         expect.stringContaining('failing closed'),
       );
     });
@@ -1590,7 +1590,7 @@ describe('autonomy gates', () => {
       expect(handler.execute).toHaveBeenCalledOnce();
     });
 
-    it('does not emit autonomy.skill_blocked when Gate C fires (tier block, not score block)', async () => {
+    it('does not emit autonomy.tool_blocked when Gate C fires (tier block, not score block)', async () => {
       const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
       const { registry, layer } = makeLayerWithScore100(mockBus);
       registry.register(makeRiskyManifest('email-reply', 'medium'), makeHandler('no'));
@@ -1600,7 +1600,7 @@ describe('autonomy gates', () => {
       expect(result.success).toBe(false);
       expect(mockBus.publish).not.toHaveBeenCalledWith(
         'execution',
-        expect.objectContaining({ type: 'autonomy.skill_blocked' }),
+        expect.objectContaining({ type: 'autonomy.tool_blocked' }),
       );
     });
 
@@ -1626,7 +1626,7 @@ describe('autonomy gates', () => {
 
 describe('humanApproved on InvokeOptions', () => {
   it('skips autonomy gates when humanApproved is true', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('approved result');
     registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
 
@@ -1643,10 +1643,10 @@ describe('humanApproved on InvokeOptions', () => {
   });
 
   it('still enforces elevated-skill gate when humanApproved is true', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('should not run');
     // Make a manifest with sensitivity: 'elevated' — the elevated gate is NOT bypassed
-    const manifest: SkillManifest = {
+    const manifest: ToolManifest = {
       ...makeRiskyManifest('approve-action', 'high'),
       sensitivity: 'elevated',
     };
@@ -1669,9 +1669,9 @@ describe('humanApproved on InvokeOptions', () => {
     // Pre-#1126 a system-declared job (e.g. the 8am digest) was let through the elevated gate
     // (commit 3bd3d224). The live-principal redefinition removes that allowance; the one read that
     // needed it (list-pending-actions) is now `normal` + allowed_callers instead.
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('should not run');
-    const manifest: SkillManifest = {
+    const manifest: ToolManifest = {
       ...makeRiskyManifest('elevated-thing', 'none'),
       sensitivity: 'elevated',
     };
@@ -1696,9 +1696,9 @@ describe('humanApproved on InvokeOptions', () => {
   });
 
   it('allows elevated skills on a LIVE principal turn (#1126)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
-    const manifest: SkillManifest = {
+    const manifest: ToolManifest = {
       ...makeRiskyManifest('elevated-thing', 'none'),
       sensitivity: 'elevated',
     };
@@ -1727,9 +1727,9 @@ describe('humanApproved on InvokeOptions', () => {
   it('blocks elevated skills when liveTurn is set but lineage is not principal (forgery defence)', async () => {
     // isLivePrincipalTurn requires BOTH the liveTurn flag AND principal originator, so a stray
     // liveTurn without principal standing fails closed.
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('should not run');
-    const manifest: SkillManifest = {
+    const manifest: ToolManifest = {
       ...makeRiskyManifest('elevated-thing', 'none'),
       sensitivity: 'elevated',
     };
@@ -1755,9 +1755,9 @@ describe('humanApproved on InvokeOptions', () => {
   });
 
   it('blocks elevated skills when task is agent-originated', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('should not run');
-    const manifest: SkillManifest = {
+    const manifest: ToolManifest = {
       ...makeRiskyManifest('list-pending-actions', 'none'),
       sensitivity: 'elevated',
     };
@@ -1793,7 +1793,7 @@ function makeApprovalTrigger(result: ApprovalRequestResult): ApprovalTriggerServ
 
 describe('approval trigger on gate block', () => {
   it('Gate B calls trigger and enriches error with shortRef when notification sent', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
     const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1', notificationSent: true });
@@ -1818,7 +1818,7 @@ describe('approval trigger on gate block', () => {
   });
 
   it('calendar-respond-to-invite is medium-risk and routes to pending approval below score 70', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('should not run');
     registry.register(makeRiskyManifest('calendar-respond-to-invite', 'medium'), handler);
 
@@ -1843,7 +1843,7 @@ describe('approval trigger on gate block', () => {
     }
     expect(handler.execute).not.toHaveBeenCalled();
     expect(trigger.request).toHaveBeenCalledWith(expect.objectContaining({
-      skillName: 'calendar-respond-to-invite',
+      toolName: 'calendar-respond-to-invite',
       actionRisk: 'medium',
       input,
       currentScore: 69,
@@ -1852,7 +1852,7 @@ describe('approval trigger on gate block', () => {
   });
 
   it('Gate A calls trigger and enriches error with shortRef', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('store-fact', 'low'), makeHandler('no'));
 
     const trigger = makeApprovalTrigger({ created: true, shortRef: 'mem-1', notificationSent: true });
@@ -1877,7 +1877,7 @@ describe('approval trigger on gate block', () => {
   });
 
   it('returns duplicate message when trigger finds existing pending row', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
     const trigger = makeApprovalTrigger({ created: false, reason: 'duplicate', existingShortRef: 'email-1' });
@@ -1901,7 +1901,7 @@ describe('approval trigger on gate block', () => {
   });
 
   it('includes notification failure note when notificationSent is false', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
     const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1', notificationSent: false });
@@ -1924,7 +1924,7 @@ describe('approval trigger on gate block', () => {
   });
 
   it('falls back to existing error when trigger is not wired', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
     const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
@@ -1948,7 +1948,7 @@ describe('approval trigger on gate block', () => {
   });
 
   it('falls back to existing error when taskEventId is missing (Gate B path)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('send-email', 'medium'), makeHandler('no'));
 
     const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-1', notificationSent: true });
@@ -1972,7 +1972,7 @@ describe('approval trigger on gate block', () => {
 
   it('falls back to existing error when taskEventId is missing (Gate A path)', async () => {
     // Gate A triggers when score < 60 and action_risk !== 'none'
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeRiskyManifest('store-fact', 'low'), makeHandler('no'));
 
     const trigger = makeApprovalTrigger({ created: true, shortRef: 'mem-1', notificationSent: true });
@@ -2001,7 +2001,7 @@ describe('approval trigger on gate block', () => {
 
 describe('allowed_callers gate', () => {
   it('blocks invocation when agentId is not in allowed_callers', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const manifest = { ...makeManifest('restricted-skill'), allowed_callers: ['coordinator'] };
     registry.register(manifest, makeHandler('ok'));
     const layer = new ExecutionLayer(registry, logger);
@@ -2018,7 +2018,7 @@ describe('allowed_callers gate', () => {
   });
 
   it('allows invocation when agentId is in allowed_callers', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const manifest = { ...makeManifest('restricted-skill'), allowed_callers: ['coordinator'] };
     registry.register(manifest, makeHandler('ok'));
     const layer = new ExecutionLayer(registry, logger);
@@ -2031,7 +2031,7 @@ describe('allowed_callers gate', () => {
   });
 
   it('allows any agent when allowed_callers is undefined', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeManifest('open-skill'), makeHandler('ok'));
     const layer = new ExecutionLayer(registry, logger);
 
@@ -2043,7 +2043,7 @@ describe('allowed_callers gate', () => {
   });
 
   it('allows any agent when allowed_callers is empty array', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const manifest = { ...makeManifest('open-skill'), allowed_callers: [] as string[] };
     registry.register(manifest, makeHandler('ok'));
     const layer = new ExecutionLayer(registry, logger);
@@ -2056,7 +2056,7 @@ describe('allowed_callers gate', () => {
   });
 
   it('falls back to "system" when agentId is undefined (checkpoint processor path)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const manifest = { ...makeManifest('system-skill'), allowed_callers: ['system'] };
     registry.register(manifest, makeHandler('ok'));
     const layer = new ExecutionLayer(registry, logger);
@@ -2068,7 +2068,7 @@ describe('allowed_callers gate', () => {
   });
 
   it('skips allowed_callers check when humanApproved is set (CEO-authorized re-execution)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const manifest = { ...makeManifest('restricted-skill'), allowed_callers: ['coordinator'] };
     registry.register(manifest, makeHandler('ok'));
     const layer = new ExecutionLayer(registry, logger);
@@ -2083,7 +2083,7 @@ describe('allowed_callers gate', () => {
   });
 
   it('blocks system invocation when "system" is not in allowed_callers', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const manifest = { ...makeManifest('agent-only'), allowed_callers: ['coordinator'] };
     registry.register(manifest, makeHandler('ok'));
     const layer = new ExecutionLayer(registry, logger);
@@ -2095,7 +2095,7 @@ describe('allowed_callers gate', () => {
   });
 
   it('allows CEO-approved re-execution with no agentId (approve-action path)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     // Mirrors a governance skill restricted to coordinator only
     const manifest = { ...makeManifest('governance-skill'), allowed_callers: ['coordinator'] };
     registry.register(manifest, makeHandler('ok'));
@@ -2115,12 +2115,12 @@ describe('allowed_callers gate', () => {
 });
 
 // ---------------------------------------------------------------------------
-// skillSearch filtering by allowed_callers
+// toolSearch filtering by allowed_callers
 // ---------------------------------------------------------------------------
 
-describe('skillSearch filters by allowed_callers', () => {
+describe('toolSearch filters by allowed_callers', () => {
   it('hides skills whose allowed_callers excludes the querying agent', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
 
     // Open skill — no allowed_callers
     registry.register(makeManifest('public-skill'), makeHandler('ok'));
@@ -2131,15 +2131,15 @@ describe('skillSearch filters by allowed_callers', () => {
     const restricted = { ...makeManifest('restricted-skill'), allowed_callers: ['coordinator'] };
     registry.register(restricted, makeHandler('ok'));
 
-    // Searcher skill — has skillSearch capability, called by research-analyst
+    // Searcher skill — has toolSearch capability, called by research-analyst
     const searcher = {
       ...makeManifest('searcher'),
-      capabilities: ['skillSearch'],
+      capabilities: ['toolSearch'],
     };
     const searchResults: Array<{ name: string }> = [];
-    const searcherHandler: SkillHandler = {
-      execute: async (ctx: SkillContext) => {
-        const results = ctx.skillSearch!('skill');
+    const searcherHandler: ToolHandler = {
+      execute: async (ctx: ToolContext) => {
+        const results = ctx.toolSearch!('skill');
         searchResults.push(...results);
         return { success: true, data: results };
       },
@@ -2162,14 +2162,14 @@ describe('skillSearch filters by allowed_callers', () => {
 // ---------------------------------------------------------------------------
 describe('ctx.secret resolution', () => {
   // Manifest that declares a secret and a handler that reads it.
-  function makeSecretManifest(name: string, secretKey: string): SkillManifest {
+  function makeSecretManifest(name: string, secretKey: string): ToolManifest {
     return { ...makeManifest(name), secrets: [secretKey] };
   }
-  function makeSecretReadingHandler(secretKey: string): { handler: SkillHandler; read: () => string | undefined } {
+  function makeSecretReadingHandler(secretKey: string): { handler: ToolHandler; read: () => string | undefined } {
     let read: string | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
-        read = (ctx as SkillContext).secret(secretKey);
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
+        read = (ctx as ToolContext).secret(secretKey);
         return { success: true, data: 'ok' };
       }),
     };
@@ -2181,7 +2181,7 @@ describe('ctx.secret resolution', () => {
   }
 
   it('reads from the vault when present and tags source=vault', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const { handler, read } = makeSecretReadingHandler('tavily_api_key');
     registry.register(makeSecretManifest('vault-skill', 'tavily_api_key'), handler);
     const secretsService = { get: vi.fn().mockResolvedValue('from-vault') } as unknown as SecretsService;
@@ -2198,7 +2198,7 @@ describe('ctx.secret resolution', () => {
   });
 
   it('falls back to env when the vault has no entry and tags source=env', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const { handler, read } = makeSecretReadingHandler('tavily_api_key');
     registry.register(makeSecretManifest('env-skill', 'tavily_api_key'), handler);
     const secretsService = { get: vi.fn().mockResolvedValue(null) } as unknown as SecretsService;
@@ -2223,7 +2223,7 @@ describe('ctx.secret resolution', () => {
   });
 
   it('works with no secretsService wired (env-only, current behavior)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const { handler, read } = makeSecretReadingHandler('tavily_api_key');
     registry.register(makeSecretManifest('legacy-skill', 'tavily_api_key'), handler);
     const savedTavily = process.env.TAVILY_API_KEY;
@@ -2243,11 +2243,11 @@ describe('ctx.secret resolution', () => {
   });
 
   it('throws (in-handler) when an undeclared secret is requested', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     let caught: string | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
-        try { (ctx as SkillContext).secret('not_declared'); }
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
+        try { (ctx as ToolContext).secret('not_declared'); }
         catch (e) { caught = (e as Error).message; }
         return { success: true, data: 'ok' };
       }),
@@ -2259,11 +2259,11 @@ describe('ctx.secret resolution', () => {
   });
 
   it('throws (in-handler) when a declared secret is set nowhere', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     let caught: string | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
-        try { (ctx as SkillContext).secret('tavily_api_key'); }
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
+        try { (ctx as ToolContext).secret('tavily_api_key'); }
         catch (e) { caught = (e as Error).message; }
         return { success: true, data: 'ok' };
       }),
@@ -2277,11 +2277,11 @@ describe('ctx.secret resolution', () => {
   });
 
   it('defers a vault read error to access time (invocation does not abort)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     let caughtMessage: string | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
-        try { (ctx as SkillContext).secret('tavily_api_key'); }
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
+        try { (ctx as ToolContext).secret('tavily_api_key'); }
         catch (e) { caughtMessage = (e as Error).message; }
         return { success: true, data: 'ok' };
       }),
@@ -2308,7 +2308,7 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   /** Manifest declaring the secretResolver capability under an arbitrary name.
    *  sensitivity/action_risk are kept minimal so these tests isolate the resolver
    *  capability gate from the (separately tested) sensitivity and autonomy gates. */
-  function makeResolverManifest(name: string): SkillManifest {
+  function makeResolverManifest(name: string): ToolManifest {
     return {
       name,
       description: `${name} description`,
@@ -2327,10 +2327,10 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   const RESOLVED_VALUE = 'sup3r-s3cret-pw';
 
   it('injects ctx.resolveSecretRef and resolves a user.* secret for an allowlisted skill', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     let resolved: string | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         resolved = await ctx.resolveSecretRef!('user.aeroplan_password');
         return { success: true, data: 'ok' };
       }),
@@ -2349,10 +2349,10 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   });
 
   it('rejects a non-user.* reference (system/channel keys are never form-fill material)', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     let error: string | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         try { await ctx.resolveSecretRef!('anthropic_api_key'); }
         catch (e) { error = (e as Error).message; }
         return { success: true, data: 'ok' };
@@ -2371,10 +2371,10 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   });
 
   it('rejects channel.* references too', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     let error: string | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         try { await ctx.resolveSecretRef!('channel.email.nylas_api_key'); }
         catch (e) { error = (e as Error).message; }
         return { success: true, data: 'ok' };
@@ -2391,10 +2391,10 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   });
 
   it('throws when the referenced user.* secret does not exist', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     let error: string | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         try { await ctx.resolveSecretRef!('user.missing'); }
         catch (e) { error = (e as Error).message; }
         return { success: true, data: 'ok' };
@@ -2411,9 +2411,9 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   });
 
   it('emits secret.accessed with byReference:true, name + source only, never the value', async () => {
-    const registry = new SkillRegistry();
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const registry = new ToolRegistry();
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         await ctx.resolveSecretRef!('user.aeroplan_password');
         return { success: true, data: 'ok' };
       }),
@@ -2434,7 +2434,7 @@ describe('secretResolver capability (resolveSecretRef)', () => {
       expect.objectContaining({
         type: 'secret.accessed',
         payload: expect.objectContaining({
-          skillName: 'web-browser',
+          toolName: 'web-browser',
           secretName: 'user.aeroplan_password',
           byReference: true,
           source: 'vault',
@@ -2449,7 +2449,7 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   });
 
   it('refuses to run a skill that declares secretResolver but is not on the allowlist', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
     registry.register(makeResolverManifest('rogue-skill'), handler);
 
@@ -2467,10 +2467,10 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   });
 
   it('does NOT inject resolveSecretRef for skills without the capability', async () => {
-    const registry = new SkillRegistry();
-    let capturedCtx: SkillContext | undefined;
-    const handler: SkillHandler = {
-      execute: vi.fn(async (ctx): Promise<SkillResult> => {
+    const registry = new ToolRegistry();
+    let capturedCtx: ToolContext | undefined;
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
         capturedCtx = ctx;
         return { success: true, data: 'ok' };
       }),
@@ -2486,7 +2486,7 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   });
 
   it('fails closed when secretResolver is declared but no secretsService is configured', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     const handler = makeHandler('ok');
     registry.register(makeResolverManifest('web-browser'), handler);
 

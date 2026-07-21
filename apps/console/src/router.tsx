@@ -17,8 +17,8 @@ const AutonomyPage = lazy(() =>
 const WorkspacePage = lazy(() =>
   import('./pages/SettingsPage').then(m => ({ default: m.WorkspacePage })),
 );
-const SkillsPage = lazy(() =>
-  import('./pages/RegistrySettings').then(m => ({ default: m.SkillsPage })),
+const ToolsPage = lazy(() =>
+  import('./pages/RegistrySettings').then(m => ({ default: m.ToolsPage })),
 );
 const AgentsPage = lazy(() =>
   import('./pages/RegistrySettings').then(m => ({ default: m.AgentsPage })),
@@ -26,7 +26,7 @@ const AgentsPage = lazy(() =>
 const ChannelsPage = lazy(() =>
   import('./pages/ChannelSettings').then(m => ({ default: m.ChannelsPage })),
 );
-const McpSkillsPage = lazy(() => import('./pages/McpSkillsPage'));
+const McpToolsPage = lazy(() => import('./pages/McpToolsPage'));
 const WizardPage = lazy(() => import('./pages/WizardPage'));
 const SecretCapturePage = lazy(() => import('./pages/SecretCapturePage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
@@ -114,13 +114,19 @@ const workspaceRoute = createRoute({
   component: WorkspacePage,
 });
 
-// Skills and Agents are now standalone top-level pages (peer to Contacts/Tasks),
-// no longer rendered inside the settings shell. The two routes below preserve the
-// old /settings/skills and /settings/agents URLs by redirecting to the new paths.
+// Tools and Agents are standalone top-level pages (peer to Contacts/Tasks),
+// no longer rendered inside the settings shell. Preserve old /settings/skills,
+// /skills, and /settings/agents URLs by redirecting to the new paths.
 const skillsSettingsRedirect = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/skills',
-  beforeLoad: () => { throw redirect({ to: '/skills' }); },
+  beforeLoad: () => { throw redirect({ to: '/tools' }); },
+});
+
+const legacySkillsRedirect = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/skills',
+  beforeLoad: () => { throw redirect({ to: '/tools' }); },
 });
 
 const agentsSettingsRedirect = createRoute({
@@ -172,8 +178,8 @@ const tasksRoute = createRoute({
 
 const skillsRoute = createRoute({
   getParentRoute: () => authedRoute,
-  path: '/skills',
-  component: SkillsPage,
+  path: '/tools',
+  component: ToolsPage,
 });
 
 const agentsRoute = createRoute({
@@ -191,7 +197,7 @@ const channelsRoute = createRoute({
 const mcpSkillsRoute = createRoute({
   getParentRoute: () => authedRoute,
   path: '/mcp-skills',
-  component: McpSkillsPage,
+  component: McpToolsPage,
 });
 
 const kgRoute = createRoute({
@@ -214,6 +220,7 @@ const routeTree = rootRoute.addChildren([
     jobDetailRoute,
     tasksRoute,
     skillsRoute,
+    legacySkillsRedirect,
     agentsRoute,
     channelsRoute,
     mcpSkillsRoute,

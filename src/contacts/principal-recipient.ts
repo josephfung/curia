@@ -122,14 +122,14 @@ function parseSignalSendRecipient(input: Record<string, unknown>): string | null
  * skill/input shape is not fully understood (fail closed).
  */
 export function resolvePrincipalIsSoleRecipientFromSkillInput(
-  skillName: string,
+  toolName: string,
   input: Record<string, unknown>,
   principalIdentities: readonly ChannelIdentity[],
 ): boolean {
   if (principalIdentities.length === 0) return false;
-  if (!GATE_C_PRINCIPAL_CARVEOUT_SKILLS.has(skillName)) return false;
+  if (!GATE_C_PRINCIPAL_CARVEOUT_SKILLS.has(toolName)) return false;
 
-  if (skillName === 'email-send') {
+  if (toolName === 'email-send') {
     const emails = parseEmailSendRecipients(input);
     if (emails === null) return false;
     const tagged = emails.map((email) => ({
@@ -139,7 +139,7 @@ export function resolvePrincipalIsSoleRecipientFromSkillInput(
     return computePrincipalIsSoleRecipient(tagged);
   }
 
-  if (skillName === 'signal-send') {
+  if (toolName === 'signal-send') {
     const recipient = parseSignalSendRecipient(input);
     if (recipient === null) return false;
     return isPrincipalSignal(recipient, principalIdentities);

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EmailDraftSaveHandler } from '../../../skills/email-draft-save/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -8,17 +8,17 @@ const logger = pino({ level: 'silent' });
 function makeCtx(input: Record<string, unknown>, gateway?: Partial<{
   createEmailDraft: (...args: unknown[]) => unknown;
   getEmailMessage: (...args: unknown[]) => unknown;
-}>, taskMetadata?: Record<string, unknown>, opts?: { timezone?: string }): SkillContext {
+}>, taskMetadata?: Record<string, unknown>, opts?: { timezone?: string }): ToolContext {
   return {
-    skillName: 'email-draft-save',
-    skillVersion: '1.1.1',
+    toolName: 'email-draft-save',
+    toolVersion: '1.1.1',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
     outboundGateway: gateway as never,
     taskMetadata,
     timezone: opts?.timezone,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 describe('EmailDraftSaveHandler', () => {

@@ -8,15 +8,15 @@
 // daysRemaining is computed from warned_at + 7 days - now(). The coordinator uses
 // this to communicate urgency: "this will be archived in 3 days — is it still accurate?"
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 // Hold-back window default — must match DreamEngine's warnHoldBackDays config default.
 // Pass holdBackDays input to override if the DreamEngine config changes.
 const WARN_HOLD_BACK_DAYS_DEFAULT = 7;
 
-export class DecayWarningsListHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DecayWarningsListHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.entityMemory) {
       return { success: false, error: 'Entity memory service not available. Declare "entityMemory" in capabilities.' };
     }

@@ -8,7 +8,7 @@
 // Pure computation using luxon. No external services, no side effects.
 
 import { DateTime } from 'luxon';
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 /** Canonical day names for matching against user input. */
@@ -120,8 +120,8 @@ function canonicalDay(input: string): DayName | null {
   return null;
 }
 
-export class DateResolveHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DateResolveHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = (ctx.input ?? {}) as Record<string, unknown>;
     const dateInput = typeof input.date === 'string' ? input.date.trim() : '';
     const relativeInput = typeof input.relative === 'string' ? input.relative.trim() : '';

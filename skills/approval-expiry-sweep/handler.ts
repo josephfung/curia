@@ -13,7 +13,7 @@
 //   - outboundGateway absent → expiry still happens, notification skipped
 //   - sendNotification() returns false → logged at warn, not propagated (expiry is done)
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
 
 /**
@@ -31,7 +31,7 @@ import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
  * transient contacts-layer error must not fail the sweep (which would falsely signal failure
  * and cause scheduler retry churn). Lookup errors are caught here and treated as "no email".
  */
-async function resolvePrincipalEmail(ctx: SkillContext): Promise<string | null> {
+async function resolvePrincipalEmail(ctx: ToolContext): Promise<string | null> {
   if (!ctx.contactService) {
     // Distinct from the benign "no principal yet" case: this is a capability-wiring
     // problem (the skill ran without contactService injected), which an operator should
@@ -59,8 +59,8 @@ async function resolvePrincipalEmail(ctx: SkillContext): Promise<string | null> 
 // they represent low-stakes actions the CEO didn't need to weigh in on urgently.
 const NOTIFIABLE_TIERS = new Set(['high', 'critical']);
 
-export class ApprovalExpirySweepHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ApprovalExpirySweepHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     try {
       if (!ctx.actionLogRepo) {
         return { success: false, error: 'approval-expiry-sweep requires actionLogRepo capability' };
@@ -92,7 +92,7 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
       // Log each actually-expired row for auditability — not the candidate set.
       for (const r of actuallyExpiredRows) {
         ctx.log.info(
-          { id: r.id, shortRef: r.shortRef, skillName: r.skillName, actionRisk: r.actionRisk },
+          { id: r.id, shortRef: r.shortRef, toolName: r.toolName, actionRisk: r.actionRisk },
           'approval-expiry-sweep: row expired',
         );
       }
@@ -131,7 +131,7 @@ export class ApprovalExpirySweepHandler implements SkillHandler {
             // Bullet list: one line per expired request so the CEO can quickly scan.
             // shortRef and description are nullable — fall back to readable placeholders.
             const body = notifiable
-              .map((r) => `• ${r.shortRef ?? '(no ref)'}: ${r.description ?? '(no description)'} [${r.skillName}]`)
+              .map((r) => `• ${r.shortRef ?? '(no ref)'}: ${r.description ?? '(no description)'} [${r.toolName}]`)
               .join('\n');
 
             const sent = await ctx.outboundGateway.sendNotification({

@@ -1,4 +1,4 @@
-// registry-repo.ts — Postgres-backed CRUD over skill_registry / agent_registry.
+// registry-repo.ts — Postgres-backed CRUD over tool_registry / agent_registry.
 // One instance per table (the table name is validated against an allowlist so it can
 // never be attacker-influenced). All queries parameterized. Mirrors the SecretsService
 // / AutonomyService injection pattern: constructor takes (pool, table).
@@ -10,7 +10,7 @@ import type { IRegistryRepo, RegistryRow } from './types.js';
 // SQL strings use literal table names (never runtime concatenation) so the
 // parameterized-queries rule is satisfied: data values use $1/$2, table names
 // are compile-time string literals selected via this map.
-const ALLOWED_TABLES = ['skill_registry', 'agent_registry'] as const;
+const ALLOWED_TABLES = ['tool_registry', 'agent_registry'] as const;
 type RegistryTable = typeof ALLOWED_TABLES[number];
 
 interface DbRegistryRow {
@@ -47,26 +47,26 @@ const SQL: Record<RegistryTable, {
   disable: string;
   uninstall: string;
 }> = {
-  skill_registry: {
-    list: `SELECT ${COLS} FROM skill_registry`,
-    get: `SELECT ${COLS} FROM skill_registry WHERE name = $1`,
-    install: `INSERT INTO skill_registry (name, enabled, installed_by)
+  tool_registry: {
+    list: `SELECT ${COLS} FROM tool_registry`,
+    get: `SELECT ${COLS} FROM tool_registry WHERE name = $1`,
+    install: `INSERT INTO tool_registry (name, enabled, installed_by)
               VALUES ($1, false, $2)
               ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
               RETURNING ${COLS}`,
-    installAndEnable: `INSERT INTO skill_registry (name, enabled, installed_by, enabled_at, enabled_by)
+    installAndEnable: `INSERT INTO tool_registry (name, enabled, installed_by, enabled_at, enabled_by)
                        VALUES ($1, true, $2, now(), $2)
                        ON CONFLICT (name) DO NOTHING
                        RETURNING ${COLS}`,
-    enable: `UPDATE skill_registry
+    enable: `UPDATE tool_registry
                SET enabled = true, enabled_at = now(), enabled_by = $2, updated_at = now()
              WHERE name = $1
              RETURNING ${COLS}`,
-    disable: `UPDATE skill_registry
+    disable: `UPDATE tool_registry
                 SET enabled = false, enabled_at = NULL, enabled_by = NULL, updated_at = now()
               WHERE name = $1
               RETURNING ${COLS}`,
-    uninstall: `DELETE FROM skill_registry WHERE name = $1`,
+    uninstall: `DELETE FROM tool_registry WHERE name = $1`,
   },
   agent_registry: {
     list: `SELECT ${COLS} FROM agent_registry`,

@@ -16,7 +16,7 @@ import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { ModelRoutingConfig } from '../agents/llm/model-router.js';
 import type { McpSession } from '../skills/mcp-client.js';
 import type { HealthConfig } from '../config.js';
-import type { LlmCallEvent, LlmErrorEvent, SkillResultEvent } from '../bus/events.js';
+import type { LlmCallEvent, LlmErrorEvent, ToolResultEvent } from '../bus/events.js';
 import type { CheckResult, HealthResponse, HealthStatus, TrackerKey, CanaryResult } from './types.js';
 import { LlmOutcomeTracker } from './llm-outcome-tracker.js';
 import {
@@ -113,18 +113,18 @@ export class HealthService {
       }
     });
 
-    // Track image-generate skill outcomes via skill.result events.
-    bus.subscribe('skill.result', 'system', (event) => {
+    // Track image-generate skill outcomes via tool.result events.
+    bus.subscribe('tool.result', 'system', (event) => {
       try {
-        const e = event as SkillResultEvent;
-        if (e.payload.skillName !== 'image-generate') return;
+        const e = event as ToolResultEvent;
+        if (e.payload.toolName !== 'image-generate') return;
         if (e.payload.result.success) {
           this.tracker.recordSuccess('image_gen');
         } else {
           this.tracker.recordError('image_gen');
         }
       } catch (err) {
-        logger.warn({ err }, 'HealthService: unexpected error in skill.result handler');
+        logger.warn({ err }, 'HealthService: unexpected error in tool.result handler');
       }
     });
 

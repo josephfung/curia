@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ContextBridgeClearHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import pino from 'pino';
 
 const handler = new ContextBridgeClearHandler();
@@ -8,7 +8,7 @@ const handler = new ContextBridgeClearHandler();
 function makeCtx(
   input: Record<string, unknown>,
   clearResult: unknown = { totalReleased: 0, perSubject: [], unmatched: [] },
-): SkillContext {
+): ToolContext {
   return {
     input,
     secret: vi.fn((name: string) => { throw new Error(`Missing secret: ${name}`); }),
@@ -18,7 +18,7 @@ function makeCtx(
       release: vi.fn(),
       clearBySubjects: vi.fn().mockResolvedValue(clearResult),
     },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('ContextBridgeClearHandler', () => {

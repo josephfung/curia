@@ -11,13 +11,13 @@
 // Nylas doesn't support server-side text search on event fields, so
 // the skill fetches all events in range and filters locally.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import { isSystemOriginated, isPrincipalOriginated } from '../../src/contacts/principal.js';
 
-export class CalendarListEventsHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CalendarListEventsHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const calendarClient = ctx.nylasCalendarClient;
     if (!calendarClient) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };

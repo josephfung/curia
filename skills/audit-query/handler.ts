@@ -4,7 +4,7 @@
 // AuditLogRepo's findById / findByBlockId / findByEventTypes / findTimeline and
 // returns bounded, PII-scrubbed event records. No raw payloads leave the skill.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { AuditLogRow } from '../../src/audit/audit-log-repo.js';
 import { toEventRecord } from '../../src/diagnostics/event-record.js';
 import { formatDisplayTimezone } from '../../src/time/timestamp.js';
@@ -30,8 +30,8 @@ function parseIso(value: string | undefined, field: string): { date?: Date; erro
   return { date: new Date(value) };
 }
 
-export class AuditQueryHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class AuditQueryHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.auditLogRepo) {
       return { success: false, error: 'audit-query requires auditLogRepo capability' };
     }

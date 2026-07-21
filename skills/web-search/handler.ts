@@ -12,7 +12,7 @@
 // never passed through the LLM context. Content is truncated per result to
 // avoid blowing out the LLM context window.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 // Max characters per result's content field — keeps LLM context manageable.
 const MAX_CONTENT_LENGTH = 5000;
@@ -44,8 +44,8 @@ function truncate(text: string): string {
   return text.slice(0, MAX_CONTENT_LENGTH) + '[truncated]';
 }
 
-export class WebSearchHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class WebSearchHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { query, maxResults, searchDepth } = ctx.input as {
       query?: string;
       maxResults?: number;

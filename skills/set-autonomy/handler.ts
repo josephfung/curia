@@ -4,10 +4,10 @@
 // Validated and rejected by the execution layer if the caller is not CEO.
 // Upserts autonomy_config and appends to autonomy_history.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class SetAutonomyHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class SetAutonomyHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.autonomyService) {
       return { success: false, error: 'set-autonomy requires autonomyService in context. Declare "autonomyService" in capabilities.' };
     }

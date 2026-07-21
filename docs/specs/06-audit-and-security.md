@@ -66,8 +66,8 @@ The bus validates publisher authorization at registration time. Each module regi
 |---|---|---|
 | `channel` | `inbound.message`, `inbound.event`, `outbound.delivered` | `outbound.message`, `outbound.event` |
 | `dispatch` | `agent.task`, `outbound.message` | `inbound.message`, `agent.response`, `agent.error` |
-| `agent` | `skill.invoke`, `agent.response`, `agent.discuss`, `memory.*` | `agent.task`, `skill.result`, `agent.discuss` |
-| `execution` | `skill.result` | `skill.invoke` |
+| `agent` | `tool.invoke`, `agent.response`, `agent.discuss`, `memory.*` | `agent.task`, `tool.result`, `agent.discuss` |
+| `execution` | `tool.result` | `tool.invoke` |
 | `system` | ALL (audit, scheduler, memory engine) | ALL |
 
 `outbound.delivered` is emitted by the channel layer's outbound gateway after every successful wire-level send (email, Signal). It is distinct from `outbound.message` (which is emitted by `dispatch` when an `agent.response` is translated to a send request): `outbound.message` represents *intent to send*, while `outbound.delivered` represents *confirmed wire-level delivery*. Together they close the visibility gap for skill-invoked sends that bypass the `agent.response` path. See [spec 10 — Audit Log Hardening](10-audit-log-hardening.md) and [spec 15 — Outbound Safety](15-outbound-safety.md).
@@ -76,7 +76,7 @@ Attempting to publish an unauthorized event type throws an error at call time. T
 
 ### Tool Output Sanitization
 
-All skill/tool results are sanitized before being included in LLM context (see [03-skills-and-execution.md](03-skills-and-execution.md)):
+All skill/tool results are sanitized before being included in LLM context (see [03-tools-and-execution.md](03-tools-and-execution.md)):
 - Strip XML/HTML tags that could be interpreted as system instructions
 - Truncate to configurable limit
 - Redact secret-like patterns
@@ -95,7 +95,7 @@ For persistent tasks:
 
 ### Secrets Isolation
 
-- Secrets are stored in an **encrypted application-layer vault** (AES-256-GCM, `secrets` table), decrypted on read by `SecretsService`. Resolution is vault-first; the only secrets in `.env` are the four bootstrap values needed to reach and unlock the vault (`DATABASE_URL`, `SECRET_ENCRYPTION_KEY`, `DB_USER`, `DB_PASSWORD`). See [ADR-020](../adr/020-secrets-vault.md) / [ADR-021](../adr/021-vault-only-secret-resolution.md) and [spec 03 — Secrets Access](03-skills-and-execution.md#secrets-access).
+- Secrets are stored in an **encrypted application-layer vault** (AES-256-GCM, `secrets` table), decrypted on read by `SecretsService`. Resolution is vault-first; the only secrets in `.env` are the four bootstrap values needed to reach and unlock the vault (`DATABASE_URL`, `SECRET_ENCRYPTION_KEY`, `DB_USER`, `DB_PASSWORD`). See [ADR-020](../adr/020-secrets-vault.md) / [ADR-021](../adr/021-vault-only-secret-resolution.md) and [spec 03 — Secrets Access](03-tools-and-execution.md#secrets-access).
 - Agents/LLMs never see secret values
 - Only skills access secrets, through the scoped `ctx.secret()` interface
 - Every secret access is audit-logged via `secret.accessed` (which skill, from which agent/task, and the resolution `source`: `vault` \| `env`)

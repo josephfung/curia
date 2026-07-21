@@ -16,10 +16,10 @@ export interface AuditLogRow {
   payload: Record<string, unknown>;
 }
 
-export interface SkillResultAuditQuery {
+export interface ToolResultAuditQuery {
   since: Date;
   until: Date;
-  skillNames?: string[];
+  toolNames?: string[];
   agentId?: string;
   limit?: number;
 }
@@ -115,16 +115,16 @@ export class AuditLogRepo {
   ) {}
 
   /**
-   * Return `skill.result` audit rows in a half-open [since, until) window.
+   * Return `tool.result` audit rows in a half-open [since, until) window.
    * Optional filters narrow by skill name(s) and executing agent id.
    */
-  async findSkillResults(query: SkillResultAuditQuery): Promise<AuditLogRow[]> {
+  async findToolResults(query: ToolResultAuditQuery): Promise<AuditLogRow[]> {
     const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
     const params: unknown[] = [query.since, query.until];
     let skillFilter = '';
-    if (query.skillNames && query.skillNames.length > 0) {
-      params.push(query.skillNames);
-      skillFilter = `AND payload->>'skillName' = ANY($${params.length}::text[])`;
+    if (query.toolNames && query.toolNames.length > 0) {
+      params.push(query.toolNames);
+      skillFilter = `AND payload->>'toolName' = ANY($${params.length}::text[])`;
     }
     let agentFilter = '';
     if (query.agentId) {
@@ -139,7 +139,7 @@ export class AuditLogRepo {
        FROM audit_log
        WHERE timestamp >= $1
          AND timestamp < $2
-         AND event_type = 'skill.result'
+         AND event_type = 'tool.result'
          ${skillFilter}
          ${agentFilter}
        ORDER BY timestamp ASC
@@ -150,7 +150,7 @@ export class AuditLogRepo {
     const rows = result.rows.map(mapRow);
     this.logger.debug(
       { count: rows.length, since: query.since, until: query.until },
-      'audit-log-repo: findSkillResults',
+      'audit-log-repo: findToolResults',
     );
     return rows;
   }

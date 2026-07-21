@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
-import { createInboundMessage, createAgentError, createAgentTask, createAgentResponse, createOutboundBlocked, createAutonomySendBlocked, createSkillResult, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
+import { createInboundMessage, createAgentError, createAgentTask, createAgentResponse, createOutboundBlocked, createAutonomySendBlocked, createToolResult, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
 import { CONTENT_BLOCK_MAX_RETRIES } from '../../../src/dispatch/content-block-relay.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
@@ -1955,20 +1955,20 @@ describe('Dispatcher auto-elevation — Path 1 correspondence (#951)', () => {
     return { subscribeHandlers, elevateFn, resolveFn };
   }
 
-  async function fireSkillResult(
+  async function fireToolResult(
     subscribeHandlers: Map<string, (event: BusEvent) => void | Promise<void>>,
-    opts: { skillName: string; to: string },
+    opts: { toolName: string; to: string },
   ) {
-    const event = createSkillResult({
+    const event = createToolResult({
       agentId: 'coordinator',
       conversationId: 'conv-1',
-      skillName: opts.skillName,
+      toolName: opts.toolName,
       result: { success: true, data: { message_id: 'msg-1', to: opts.to } },
       durationMs: 50,
       parentEventId: 'invoke-1',
     });
-    const handler = subscribeHandlers.get('skill.result');
-    if (!handler) throw new Error('No skill.result handler registered');
+    const handler = subscribeHandlers.get('tool.result');
+    if (!handler) throw new Error('No tool.result handler registered');
     await handler(event);
     // Flush microtasks so fire-and-forget promise chains settle.
     await new Promise<void>(r => setImmediate(r));
@@ -1976,31 +1976,31 @@ describe('Dispatcher auto-elevation — Path 1 correspondence (#951)', () => {
 
   it('calls elevateTierToKnown("correspondence") after email-reply to a resolved contact', async () => {
     const { subscribeHandlers, elevateFn } = buildHarness();
-    await fireSkillResult(subscribeHandlers, { skillName: 'email-reply', to: 'recipient@example.com' });
+    await fireToolResult(subscribeHandlers, { toolName: 'email-reply', to: 'recipient@example.com' });
     expect(elevateFn).toHaveBeenCalledWith('contact-abc', 'correspondence');
   });
 
   it('calls elevateTierToKnown("correspondence") after email-send to a resolved contact', async () => {
     const { subscribeHandlers, elevateFn } = buildHarness();
-    await fireSkillResult(subscribeHandlers, { skillName: 'email-send', to: 'someone@example.com' });
+    await fireToolResult(subscribeHandlers, { toolName: 'email-send', to: 'someone@example.com' });
     expect(elevateFn).toHaveBeenCalledWith('contact-abc', 'correspondence');
   });
 
   it('calls elevate for each recipient in a comma-separated to field', async () => {
     const { subscribeHandlers, elevateFn } = buildHarness();
-    await fireSkillResult(subscribeHandlers, { skillName: 'email-send', to: 'a@example.com, b@example.com' });
+    await fireToolResult(subscribeHandlers, { toolName: 'email-send', to: 'a@example.com, b@example.com' });
     expect(elevateFn).toHaveBeenCalledTimes(2);
   });
 
   it('does not call elevate when resolver returns no contact', async () => {
     const { subscribeHandlers, elevateFn } = buildHarness({ resolvedContactId: null });
-    await fireSkillResult(subscribeHandlers, { skillName: 'email-reply', to: 'new@example.com' });
+    await fireToolResult(subscribeHandlers, { toolName: 'email-reply', to: 'new@example.com' });
     expect(elevateFn).not.toHaveBeenCalled();
   });
 
   it('silently skips when no contactService configured', async () => {
     const { subscribeHandlers, elevateFn } = buildHarness({ withContactService: false });
-    await fireSkillResult(subscribeHandlers, { skillName: 'email-reply', to: 'someone@example.com' });
+    await fireToolResult(subscribeHandlers, { toolName: 'email-reply', to: 'someone@example.com' });
     expect(elevateFn).not.toHaveBeenCalled();
   });
 });

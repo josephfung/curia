@@ -1,21 +1,21 @@
-// registry.ts — the skill registry indexes all available skills (local + MCP).
+// registry.ts — the tool registry indexes all available tools (local + MCP).
 //
-// At startup, the bootstrap orchestrator loads skill manifests from the
-// skills/ directory and registers them here. Agents access skills through
-// this registry — either by name (pinned skills) or by search (discovery).
+// At startup, the bootstrap orchestrator loads tool manifests from the
+// skills/ directory and registers them here. Agents access tools through
+// this registry — either by name (pinned_skills) or by search (discovery).
 //
-// The registry also converts skill manifests to LLM tool definitions so
+// The registry also converts tool manifests to LLM tool definitions so
 // the agent runtime can pass them to the LLM's tool-use API.
 
-import type { SkillManifest, SkillHandler, RegisteredSkill, ToolDefinition } from './types.js';
+import type { ToolManifest, ToolHandler, RegisteredTool, ToolDefinition } from './types.js';
 import { describeTimestampInput } from '../time/timestamp.js';
 
 // Valid named action_risk labels — used for runtime validation since manifests
 // are loaded from JSON via a bare cast and TypeScript cannot enforce this at runtime.
 const ACTION_RISK_LABELS = new Set(['none', 'low', 'medium', 'high', 'critical']);
 
-export class SkillRegistry {
-  private skills = new Map<string, RegisteredSkill>();
+export class ToolRegistry {
+  private tools = new Map<string, RegisteredTool>();
   /** IANA timezone name used to populate timestamp input descriptions in tool schemas. */
   private timezone: string;
 
@@ -24,77 +24,77 @@ export class SkillRegistry {
   }
 
   /**
-   * Register a skill with its manifest and handler.
-   * Throws if a skill with the same name is already registered —
+   * Register a tool with its manifest and handler.
+   * Throws if a tool with the same name is already registered —
    * duplicate names indicate a configuration error that should surface
    * at startup, not silently overwrite.
    *
    * Also validates action_risk at runtime — manifests are loaded from JSON via
-   * a bare `as SkillManifest` cast, so TypeScript cannot enforce enum correctness.
-   * Invalid values fail closed at skill load time rather than silently producing
+   * a bare `as ToolManifest` cast, so TypeScript cannot enforce enum correctness.
+   * Invalid values fail closed at tool load time rather than silently producing
    * undefined thresholds later when autonomy gates are evaluated.
    */
   /**
-   * Register a skill with its manifest and handler.
+   * Register a tool with its manifest and handler.
    *
    * @param mcpInputSchema - Optional raw MCP JSON Schema for the tool's inputs.
    *   When provided, toToolDefinitions() passes it directly to the LLM instead of
    *   parsing the shorthand manifest.inputs notation. Only set for MCP-sourced tools.
    */
-  register(manifest: SkillManifest, handler: SkillHandler, mcpInputSchema?: ToolDefinition['input_schema']): void {
-    if (this.skills.has(manifest.name)) {
-      throw new Error(`Skill '${manifest.name}' is already registered`);
+  register(manifest: ToolManifest, handler: ToolHandler, mcpInputSchema?: ToolDefinition['input_schema']): void {
+    if (this.tools.has(manifest.name)) {
+      throw new Error(`Tool '${manifest.name}' is already registered`);
     }
     if (manifest.action_risk === undefined || manifest.action_risk === null) {
       throw new Error(
-        `Skill '${manifest.name}' is missing required field 'action_risk'. ` +
-        `All skills must declare action_risk. See docs/dev/adding-a-skill.md.`,
+        `Tool '${manifest.name}' is missing required field 'action_risk'. ` +
+        `All tools must declare action_risk. See docs/dev/adding-a-tool.md.`,
       );
     }
     const risk = manifest.action_risk;
     if (typeof risk === 'number') {
       if (!Number.isInteger(risk) || risk < 0 || risk > 100) {
         throw new Error(
-          `Skill '${manifest.name}' has invalid action_risk: ${risk}. ` +
+          `Tool '${manifest.name}' has invalid action_risk: ${risk}. ` +
           `Numeric action_risk must be an integer between 0 and 100.`,
         );
       }
     } else if (!ACTION_RISK_LABELS.has(risk as string)) {
       throw new Error(
-        `Skill '${manifest.name}' has invalid action_risk label: "${String(risk)}". ` +
+        `Tool '${manifest.name}' has invalid action_risk label: "${String(risk)}". ` +
         `Expected one of: ${[...ACTION_RISK_LABELS].join(', ')}.`,
       );
     }
     // Fail closed: skip_secret_redaction relaxes the output secret scrub, so it is gated to
     // skills that declare the 'secretCapture' capability (the secret-capture family, whose
     // output structurally cannot carry a real secret value). This stops an unrelated or
-    // misconfigured skill from silently weakening redaction by setting the flag. (#971)
+    // misconfigured tool from silently weakening redaction by setting the flag. (#971)
     if (manifest.skip_secret_redaction === true && !(manifest.capabilities ?? []).includes('secretCapture')) {
       throw new Error(
-        `Skill '${manifest.name}' sets skip_secret_redaction but does not declare the ` +
+        `Tool '${manifest.name}' sets skip_secret_redaction but does not declare the ` +
         `'secretCapture' capability. This flag relaxes output secret redaction and is ` +
-        `restricted to secret-capture skills — remove the flag or add the capability.`,
+        `restricted to secret-capture tools — remove the flag or add the capability.`,
       );
     }
-    this.skills.set(manifest.name, { manifest, handler, mcpInputSchema });
+    this.tools.set(manifest.name, { manifest, handler, mcpInputSchema });
   }
 
   /** Look up a skill by exact name. Returns undefined if not found. */
-  get(name: string): RegisteredSkill | undefined {
-    return this.skills.get(name);
+  get(name: string): RegisteredTool | undefined {
+    return this.tools.get(name);
   }
 
   /** List all registered skills. */
-  list(): RegisteredSkill[] {
-    return Array.from(this.skills.values());
+  list(): RegisteredTool[] {
+    return Array.from(this.tools.values());
   }
 
   /**
    * Search skills by keyword against name and description.
-   * Used by the skill-registry built-in skill for discovery.
+   * Used by the tool-registry built-in skill for discovery.
    * Simple substring match — good enough for a small registry.
    */
-  search(query: string): RegisteredSkill[] {
+  search(query: string): RegisteredTool[] {
     const lower = query.toLowerCase();
     return this.list().filter(s =>
       s.manifest.name.toLowerCase().includes(lower) ||
@@ -110,11 +110,11 @@ export class SkillRegistry {
    * Unknown skill names are silently skipped — the agent YAML might
    * reference skills not yet installed, which is a warning, not a crash.
    */
-  toToolDefinitions(skillNames: string[]): ToolDefinition[] {
+  toToolDefinitions(toolNames: string[]): ToolDefinition[] {
     const tools: ToolDefinition[] = [];
 
-    for (const name of skillNames) {
-      const skill = this.skills.get(name);
+    for (const name of toolNames) {
+      const skill = this.tools.get(name);
       if (!skill) continue;
 
       // MCP-sourced tools carry the raw JSON Schema from the server's tools/list response.
@@ -171,7 +171,7 @@ export class SkillRegistry {
           const VALID_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'null']);
           if (!itemType || !VALID_ITEM_TYPES.has(itemType)) {
             throw new Error(
-              `Skill '${name}' input '${key}': invalid array item type '${itemType}' in '${typeStr}'. ` +
+              `Tool '${name}' input '${key}': invalid array item type '${itemType}' in '${typeStr}'. ` +
               `Expected one of: ${[...VALID_ITEM_TYPES].join(', ')}.`,
             );
           }
@@ -184,7 +184,7 @@ export class SkillRegistry {
           const VALID_PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'null']);
           if (!VALID_PRIMITIVE_TYPES.has(baseType)) {
             throw new Error(
-              `Skill '${name}' input '${key}': invalid type '${baseType}' in '${typeStr}'. ` +
+              `Tool '${name}' input '${key}': invalid type '${baseType}' in '${typeStr}'. ` +
               `Expected one of: ${[...VALID_PRIMITIVE_TYPES].join(', ')}, or an array type (e.g. string[]).`,
             );
           }

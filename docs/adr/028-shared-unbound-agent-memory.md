@@ -7,7 +7,7 @@ Status: Accepted
 
 Agent YAML configs carried an optional `memory.scopes` field, and several documents (the agent dev guide, the agent-system spec, the architecture overview) described it as an enforced isolation boundary — "an agent only sees entities within its declared scopes." Issue #521 was filed to make that guarantee real: thread the declared scopes to the runtime and filter knowledge-graph reads/writes by scope.
 
-Investigation (issue #521) found the field was inert end-to-end: parsed into a typed config field, copied into the registry manifest, and rendered as a console column, but never threaded to `AgentRuntime`, `ExecutionLayer`, `SkillContext`, `EntityMemory`, or `KnowledgeGraphStore`. Every agent shared one un-scoped knowledge graph; `semanticSearch()` filtered only on `type` and `sensitivity`; `kg_nodes` had no `scope` column. Only 3 of 8 first-party agents declared a scope at all.
+Investigation (issue #521) found the field was inert end-to-end: parsed into a typed config field, copied into the registry manifest, and rendered as a console column, but never threaded to `AgentRuntime`, `ExecutionLayer`, `ToolContext`, `EntityMemory`, or `KnowledgeGraphStore`. Every agent shared one un-scoped knowledge graph; `semanticSearch()` filtered only on `type` and `sensitivity`; `kg_nodes` had no `scope` column. Only 3 of 8 first-party agents declared a scope at all.
 
 Before building enforcement, we reconsidered whether per-agent memory isolation is the right model. Options considered:
 

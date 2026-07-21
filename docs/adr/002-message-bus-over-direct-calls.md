@@ -18,7 +18,7 @@ All inter-layer communication flows through a central in-process message bus bac
 
 Key aspects of the decision:
 - **Typed event registry** — all event types are defined as a TypeScript discriminated union. No `any` payloads, no stringly-typed event names without compile-time checking.
-- **Hard security boundaries** — the bus validates publisher authorization at registration time. A layer registered as `"channel"` cannot publish `skill.invoke`. This is architectural enforcement, not policy.
+- **Hard security boundaries** — the bus validates publisher authorization at registration time. A layer registered as `"channel"` cannot publish `tool.invoke`. This is architectural enforcement, not policy.
 - **Write-ahead audit logging** — the audit logger writes events to Postgres *before* delivering to other subscribers. This gives at-least-once delivery guarantees even across restarts.
 - **System layer** — trusted infrastructure (audit logger, memory engine, scheduler) registers with full pub/sub access. All other layers have a restrictive allowlist.
 

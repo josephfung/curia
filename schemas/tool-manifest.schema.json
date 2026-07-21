@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "skill-manifest",
+  "$id": "tool-manifest",
   "type": "object",
   "required": ["name", "description", "version", "action_risk"],
   "additionalProperties": false,

@@ -35,16 +35,16 @@ describe('reconcileRegistries', () => {
   let agentRepo: FakeRepo;
   beforeEach(() => { skillRepo = new FakeRepo(); agentRepo = new FakeRepo(); });
 
-  const run = (defaults: { skills: string[]; agents: string[] }, onDisk: { skills: string[]; agents: string[] }) =>
+  const run = (defaults: { tools: string[]; agents: string[] }, onDisk: { tools: string[]; agents: string[] }) =>
     reconcileRegistries({
       skillRepo, agentRepo,
-      skillDiscoveryNames: new Set(onDisk.skills),
+      skillDiscoveryNames: new Set(onDisk.tools),
       agentDiscoveryNames: new Set(onDisk.agents),
       defaults, logger,
     });
 
   it('enrolls a core item with no row as enabled', async () => {
-    await run({ skills: ['core-skill'], agents: [] }, { skills: ['core-skill', 'other'], agents: [] });
+    await run({ tools: ['core-skill'], agents: [] }, { tools: ['core-skill', 'other'], agents: [] });
     const row = await skillRepo.getRow('core-skill');
     expect(row?.enabled).toBe(true);
     expect(row?.enabledBy).toBe('reconciliation');
@@ -53,8 +53,8 @@ describe('reconcileRegistries', () => {
   });
 
   it('is idempotent — second run changes nothing', async () => {
-    const defaults = { skills: ['core-skill'], agents: [] };
-    const onDisk = { skills: ['core-skill'], agents: [] };
+    const defaults = { tools: ['core-skill'], agents: [] };
+    const onDisk = { tools: ['core-skill'], agents: [] };
     await run(defaults, onDisk);
     const first = await skillRepo.getRow('core-skill');
     await run(defaults, onDisk);
@@ -64,7 +64,7 @@ describe('reconcileRegistries', () => {
 
   it('respects an admin-disabled core item (row present, disabled)', async () => {
     await skillRepo.install('core-skill', 'web-app'); // row exists, enabled=false
-    await run({ skills: ['core-skill'], agents: [] }, { skills: ['core-skill'], agents: [] });
+    await run({ tools: ['core-skill'], agents: [] }, { tools: ['core-skill'], agents: [] });
     expect((await skillRepo.getRow('core-skill'))?.enabled).toBe(false);
   });
 
@@ -72,12 +72,12 @@ describe('reconcileRegistries', () => {
     await skillRepo.install('core-skill', 'web-app');
     await skillRepo.enable('core-skill', 'web-app');
     const before = await skillRepo.getRow('core-skill');
-    await run({ skills: ['core-skill'], agents: [] }, { skills: ['core-skill'], agents: [] });
+    await run({ tools: ['core-skill'], agents: [] }, { tools: ['core-skill'], agents: [] });
     expect(await skillRepo.getRow('core-skill')).toEqual(before);
   });
 
   it('warns (no throw) when a core default is not on disk', async () => {
-    await expect(run({ skills: ['missing'], agents: [] }, { skills: [], agents: [] })).resolves.toBeUndefined();
+    await expect(run({ tools: ['missing'], agents: [] }, { tools: [], agents: [] })).resolves.toBeUndefined();
     expect(await skillRepo.getRow('missing')).toBeNull();
   });
 });

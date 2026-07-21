@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { DismissActionHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { ActionLogRepo } from '../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import { createSilentLogger } from '../../src/logger.js';
@@ -12,7 +12,7 @@ const PENDING_ROW = {
   id: 10,
   taskId: 't1',
   conversationId: 'conv-1',
-  skillName: 'calendar-create-event',
+  toolName: 'calendar-create-event',
   actionRisk: 'high',
   outcome: 'pending_approval' as const,
   shortRef: 'cal-1',
@@ -31,7 +31,7 @@ const PENDING_ROW = {
   parentActionId: null,
 };
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: { short_ref: 'cal-1' },
     secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
@@ -46,7 +46,7 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     },
     taskEventId: 'task-1',
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 function makeMockRepo(overrides?: Partial<ActionLogRepo>): ActionLogRepo {

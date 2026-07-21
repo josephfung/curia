@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as yaml from 'js-yaml';
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 
 // ── Catalog types ──────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ const SECRET_ABSENT_MSG = 'is declared but not set in the environment';
 /** Returns true when the named secret is present in the vault, false otherwise.
  *  ctx.secret() throws when the key is absent — we use try/catch to check presence
  *  without consuming the value. */
-function secretPresent(ctx: SkillContext, name: string): boolean {
+function secretPresent(ctx: ToolContext, name: string): boolean {
   try {
     ctx.secret(name);
     return true;
@@ -91,7 +91,7 @@ function secretPresent(ctx: SkillContext, name: string): boolean {
 
 /** Loads the set of deferred task IDs from the ConfigStore. Returns an empty set
  *  when no deferrals have been stored (or if the stored value is malformed). */
-async function loadDeferredSet(ctx: SkillContext): Promise<Set<string>> {
+async function loadDeferredSet(ctx: ToolContext): Promise<Set<string>> {
   if (!ctx.entityMemory) return new Set();
   const configStore = new ConfigStore(ctx.entityMemory, ctx.log);
   let stored: string | null;
@@ -119,8 +119,8 @@ async function loadDeferredSet(ctx: SkillContext): Promise<Set<string>> {
 
 // ── Handler ────────────────────────────────────────────────────────────────
 
-export class SetupStatusHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class SetupStatusHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.entityMemory) {
       return { success: false, error: 'setup-status requires entityMemory capability.' };
     }

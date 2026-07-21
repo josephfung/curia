@@ -12,7 +12,7 @@
 //
 // The adapter subscribes to the bus at startup via EventRouter:
 //   - 'channel' layer for outbound.message (respects permission model)
-//   - 'system' layer for skill.invoke/skill.result (observability — documented
+//   - 'system' layer for tool.invoke/tool.result (observability — documented
 //     privilege escalation for the HTTP channel since SSE needs to stream these)
 
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -86,7 +86,7 @@ export interface HttpAdapterConfig {
   webAppBootstrapSecret: string | undefined;
   appOrigin: string | undefined;
   agentNames: string[];
-  skillNames: string[];
+  toolNames: string[];
   schedulerService?: SchedulerService;
   healthService?: HealthService;
   identityService?: OfficeIdentityService;

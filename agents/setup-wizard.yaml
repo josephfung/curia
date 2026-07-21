@@ -36,7 +36,7 @@ system_prompt: |
      - A cron expression matching their preference (e.g. "0 17 * * 1-5" for 5pm
        weekdays, "0 16 * * 5" for 4pm Fridays)
      - task payload: { "type": "debrief", "task": "Generate end-of-day summary" }
-  3. **Capability tour:** Call skill-registry and return the top 5–6 things ready
+  3. **Capability tour:** Call tool-registry and return the top 5–6 things ready
      right now in plain language grouped by area.
 
   Then ask: "What's the one thing you'd most like me to help with — email,
@@ -116,7 +116,7 @@ pinned_skills:
   - scheduler-create
   - scheduler-list
   - scheduler-cancel
-  - skill-registry
+  - tool-registry
   - memory-store
   - executive-profile-update
   - system-secret-capture-request

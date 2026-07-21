@@ -1,6 +1,6 @@
 // handler.ts — doc-write skill (#1209).
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { normalizeDocPath } from '../../src/memory/okf.js';
 import {
   appendDirectoryLog,
@@ -13,8 +13,8 @@ import {
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit']);
 
-export class DocWriteHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DocWriteHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as {
       path?: string;
       mode?: string;

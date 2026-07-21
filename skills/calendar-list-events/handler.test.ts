@@ -2,14 +2,14 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { CalendarListEventsHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
 // ---------------------------------------------------------------------------
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: {
       timeMin: '2026-05-26T00:00:00Z',
@@ -19,9 +19,9 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     log: createSilentLogger(),
     nylasCalendarClient: {
       listEvents: vi.fn().mockResolvedValue([]),
-    } as unknown as SkillContext['nylasCalendarClient'],
+    } as unknown as ToolContext['nylasCalendarClient'],
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ describe('CalendarListEventsHandler — system caller guard', () => {
       getCalendarsForContact: vi.fn().mockRejectedValue(
         new Error('invalid input syntax for type uuid: "system"'),
       ),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
 
     const result = await handler.execute(makeCtx({
       caller: { contactId: 'system', role: null, channel: 'internal' },
@@ -53,7 +53,7 @@ describe('CalendarListEventsHandler — system caller guard', () => {
     const handler = new CalendarListEventsHandler();
     const contactService = {
       getCalendarsForContact: vi.fn(),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
 
     const result = await handler.execute(makeCtx({
       caller: { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
@@ -71,14 +71,14 @@ describe('CalendarListEventsHandler — system caller guard', () => {
       getCalendarsForContact: vi.fn().mockResolvedValue([
         { nylasCalendarId: 'cal-work' },
       ]),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
 
     const result = await handler.execute(makeCtx({
       caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'signal' },
       contactService,
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([]),
-      } as unknown as SkillContext['nylasCalendarClient'],
+      } as unknown as ToolContext['nylasCalendarClient'],
     }));
 
     // Guard must not have fired — contactService was called with the UUID
@@ -97,7 +97,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
       getCalendarsForContact: vi.fn().mockResolvedValue([
         { nylasCalendarId: 'joseph@josephfung.ca' },
       ]),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -111,7 +111,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
       contactService,
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([]),
-      } as unknown as SkillContext['nylasCalendarClient'],
+      } as unknown as ToolContext['nylasCalendarClient'],
     }));
 
     expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
@@ -122,7 +122,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
     const handler = new CalendarListEventsHandler();
     const contactService = {
       getCalendarsForContact: vi.fn(),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -148,7 +148,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
       getCalendarsForContact: vi.fn().mockResolvedValue([
         { nylasCalendarId: 'cal-principal' },
       ]),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -161,7 +161,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
       contactService,
       nylasCalendarClient: {
         listEvents: vi.fn().mockResolvedValue([]),
-      } as unknown as SkillContext['nylasCalendarClient'],
+      } as unknown as ToolContext['nylasCalendarClient'],
     }));
 
     expect(contactService!.getCalendarsForContact).toHaveBeenCalledWith(principalId);
@@ -175,7 +175,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
     const callerContactId = 'cafebabe-0000-0000-0000-000000000002';
     const contactService = {
       getCalendarsForContact: vi.fn(),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
 
     const result = await handler.execute(makeCtx({
       input: {
@@ -197,7 +197,7 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
     const handler = new CalendarListEventsHandler();
     const contactService = {
       getCalendarsForContact: vi.fn().mockRejectedValue(new Error('connection terminated unexpectedly')),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
 
     const result = await handler.execute(makeCtx({
       input: {

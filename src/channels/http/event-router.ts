@@ -119,8 +119,8 @@ export interface SseClient {
 export const ANT_FARM_EVENT_TYPES = [
   'schedule.fired',
   'agent.task',
-  'skill.invoke',
-  'skill.result',
+  'tool.invoke',
+  'tool.result',
   'agent.discuss',
   'inbound.message',
   'outbound.message',
@@ -129,7 +129,7 @@ export const ANT_FARM_EVENT_TYPES = [
   'task.completed',
   'agent.error',
   'human.decision',
-  'autonomy.skill_blocked',
+  'autonomy.tool_blocked',
   'autonomy.send_blocked',
 ] as const;
 
@@ -166,7 +166,7 @@ export class EventRouter {
   /**
    * Register shared subscribers on the bus. Called once at startup.
    * Uses 'channel' layer for outbound.message (proper permission model)
-   * and 'system' layer for observability events (skill.invoke, skill.result).
+   * and 'system' layer for observability events (tool.invoke, tool.result).
    */
   setupSubscriptions(bus: EventBus): void {
     // outbound.message — dispatches to pending POST resolvers and SSE clients
@@ -224,26 +224,26 @@ export class EventRouter {
       this.broadcastToSseClients(sseData, convId);
     });
 
-    // skill.invoke — observability stream for SSE clients
-    bus.subscribe('skill.invoke', 'system', (event: BusEvent) => {
-      if (event.type !== 'skill.invoke') return;
+    // tool.invoke — observability stream for SSE clients
+    bus.subscribe('tool.invoke', 'system', (event: BusEvent) => {
+      if (event.type !== 'tool.invoke') return;
       const sseData = JSON.stringify({
-        type: 'skill.invoke',
+        type: 'tool.invoke',
         agent: event.payload.agentId,
-        skill: event.payload.skillName,
+        tool: event.payload.toolName,
         conversation_id: event.payload.conversationId,
         timestamp: event.timestamp,
       });
       this.broadcastToSseClients(sseData, event.payload.conversationId);
     });
 
-    // skill.result — observability stream for SSE clients
-    bus.subscribe('skill.result', 'system', (event: BusEvent) => {
-      if (event.type !== 'skill.result') return;
+    // tool.result — observability stream for SSE clients
+    bus.subscribe('tool.result', 'system', (event: BusEvent) => {
+      if (event.type !== 'tool.result') return;
       const sseData = JSON.stringify({
-        type: 'skill.result',
+        type: 'tool.result',
         agent: event.payload.agentId,
-        skill: event.payload.skillName,
+        tool: event.payload.toolName,
         success: event.payload.result.success,
         duration_ms: event.payload.durationMs,
         conversation_id: event.payload.conversationId,
@@ -287,7 +287,7 @@ export class EventRouter {
     });
 
     // agent.discuss — broadcast Bullpen activity to all SSE clients for dashboard observability.
-    // Uses 'system' layer (same privilege as skill.invoke/skill.result) so the HTTP channel
+    // Uses 'system' layer (same privilege as tool.invoke/tool.result) so the HTTP channel
     // can observe agent-layer events without publishing them.
     bus.subscribe('agent.discuss', 'system', (event: BusEvent) => {
       if (event.type !== 'agent.discuss') return;

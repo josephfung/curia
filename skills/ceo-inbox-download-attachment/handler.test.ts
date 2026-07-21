@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDownloadAttachmentHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { Logger } from '../../src/logger.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -8,14 +8,14 @@ import type { Logger } from '../../src/logger.js';
 function buildCtx(overrides: Partial<{
   attachment_id: string;
   message_id: string;
-}> = {}): SkillContext {
+}> = {}): ToolContext {
   const input: Record<string, unknown> = {};
   if ('attachment_id' in overrides) input.attachment_id = overrides.attachment_id;
   if ('message_id' in overrides) input.message_id = overrides.message_id;
 
   return {
-    skillName: 'ceo-inbox-download-attachment',
-    skillVersion: '0.1.0',
+    toolName: 'ceo-inbox-download-attachment',
+    toolVersion: '0.1.0',
     input,
     secret(key: string): string {
       switch (key) {

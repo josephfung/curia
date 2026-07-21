@@ -6,7 +6,7 @@
 //
 // sensitivity: "elevated" — enforced by the gateway's security pipeline.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
 import { buildReplyQuote } from '../../src/skills/_shared/reply-quote.js';
@@ -31,8 +31,8 @@ function parseRecipients(raw: string): string[] {
     });
 }
 
-export class EmailSendHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class EmailSendHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { to, cc, subject, body, reply_to_message_id: replyToMessageIdRaw, attachments: attachmentsRaw, context_bridge: contextBridgeRaw } = ctx.input as {
       to?: string;
       cc?: string;
@@ -160,12 +160,12 @@ export class EmailSendHandler implements SkillHandler {
         ...(attachmentsParsed.length > 0
           ? {
             reExecRecipe: {
-              skillName: 'email-send',
+              toolName: 'email-send',
               partialPayload: ctx.input,
               description: `Send email with ${attachmentsParsed.length} attachment(s) to ${toAddresses[0]}`,
             },
             exportContext: {
-              skillName: 'email-send',
+              toolName: 'email-send',
               agentId: ctx.agentId,
               exportItems: (ctx.input as Record<string, unknown>)['export_items'],
             },

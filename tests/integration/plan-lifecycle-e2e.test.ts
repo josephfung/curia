@@ -18,7 +18,7 @@ import { PlanFrontierSubscriber } from '../../src/agents/plan-frontier-subscribe
 import { createScheduleFired } from '../../src/bus/events.js';
 import { DEFAULT_RESUMABLE_CEILINGS } from '../../src/config.js';
 import { PlanHandler } from '../../skills/plan/handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -58,7 +58,7 @@ describeIf('Plan primitive end-to-end (#1177)', () => {
     schedulerService = new SchedulerService(pool, bus, logger as never, 'UTC');
   });
 
-  function planCtx(input: Record<string, unknown>): SkillContext {
+  function planCtx(input: Record<string, unknown>): ToolContext {
     return {
       input,
       secret: () => 'unused',
@@ -66,8 +66,8 @@ describeIf('Plan primitive end-to-end (#1177)', () => {
       agentId: 'coordinator',
       taskRepo: repo,
       // The handler only calls agentRegistry.has() to validate target agents.
-      agentRegistry: { has: () => true } as unknown as SkillContext['agentRegistry'],
-    } as unknown as SkillContext;
+      agentRegistry: { has: () => true } as unknown as ToolContext['agentRegistry'],
+    } as unknown as ToolContext;
   }
 
   it('materializes a plan, advances the frontier, and auto-completes with the deliverable', async () => {

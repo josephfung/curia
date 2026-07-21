@@ -18,7 +18,7 @@ approaches were considered:
    negotiation, capability exchange, and request/response correlation handled internally.
 
 A third question was whether to model MCP tools as a separate registry, or to register
-them transparently alongside local skills in the existing `SkillRegistry`.
+them transparently alongside local skills in the existing `ToolRegistry`.
 
 ## Decision
 
@@ -39,9 +39,9 @@ All SDK usage is isolated to `src/skills/mcp-client.ts`. No other module imports
 `@modelcontextprotocol/sdk`, which limits the blast radius of a future SDK upgrade or
 replacement.
 
-### Register MCP tools transparently in `SkillRegistry` (registry-transparent design)
+### Register MCP tools transparently in `ToolRegistry` (registry-transparent design)
 
-MCP tools are registered in the existing `SkillRegistry` using the same
+MCP tools are registered in the existing `ToolRegistry` using the same
 `register(manifest, handler)` interface as local skills. Agents call
 `registry.toToolDefinitions()` and receive a flat list — they cannot distinguish local
 from MCP tools. The `ExecutionLayer` is invoked for every tool call regardless of origin,
@@ -51,7 +51,7 @@ uniformly.
 This honours the design constraint stated in the original spec: *"Two types, one
 interface. Agents don't know or care which kind they're using."*
 
-An optional `mcpInputSchema` field on `RegisteredSkill` stores the raw JSON Schema
+An optional `mcpInputSchema` field on `RegisteredTool` stores the raw JSON Schema
 returned by `tools/list`. When present, `toToolDefinitions()` passes it through directly
 instead of converting from the shorthand `inputs` format used by local skill manifests.
 This avoids a lossy round-trip and preserves the full JSON Schema fidelity that MCP

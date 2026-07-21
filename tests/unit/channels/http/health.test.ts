@@ -1,6 +1,6 @@
 // health.test.ts — legacy test, updated to use the new HealthService shim.
 //
-// The old route took pool/logger/agentNames/skillNames directly and did its own
+// The old route took pool/logger/agentNames/toolNames directly and did its own
 // db probe. Task 7 replaced that with a thin shim over HealthService.getStatus().
 // These tests now use a mock HealthService consistent with the new interface.
 

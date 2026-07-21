@@ -4,7 +4,7 @@ import {
   CONFIG_NAMESPACE,
   DIFFS_CHECKPOINT_KEY,
 } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { ExecutiveProfile } from '../../src/executive/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
@@ -94,7 +94,7 @@ function makeCtx(opts: {
   voice?: Partial<ExecutiveProfile['writingVoice']>;
   diffs?: string;
   entityMemory?: EntityMemory;
-}): SkillContext & {
+}): ToolContext & {
   __updates: unknown[];
   __docs: Map<string, { body: string; version: number; type: string; path: string; frontmatter: Record<string, unknown> }>;
   __sendNotification: ReturnType<typeof vi.fn>;
@@ -127,8 +127,8 @@ function makeCtx(opts: {
   return {
     input: {},
     agentId: 'ceo-inbox',
-    skillName: 'voice-learn',
-    skillVersion: '0.2.0',
+    toolName: 'voice-learn',
+    toolVersion: '0.2.0',
     entityMemory: opts.entityMemory,
     executiveProfileService: {
       get: () => profile,
@@ -173,7 +173,7 @@ function makeCtx(opts: {
       }),
     },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    outboundGateway: { sendNotification } as unknown as SkillContext['outboundGateway'],
+    outboundGateway: { sendNotification } as unknown as ToolContext['outboundGateway'],
     contactService: {
       findContactBySystemRole: vi.fn().mockResolvedValue({ id: 'principal-1' }),
       getContactWithIdentities: vi.fn().mockResolvedValue({
@@ -181,11 +181,11 @@ function makeCtx(opts: {
           { channel: 'email', verified: true, status: 'active', channelIdentifier: 'ceo@example.com' },
         ],
       }),
-    } as unknown as SkillContext['contactService'],
+    } as unknown as ToolContext['contactService'],
     __updates: updates,
     __docs: docs,
     __sendNotification: sendNotification,
-  } as unknown as SkillContext & {
+  } as unknown as ToolContext & {
     __updates: unknown[];
     __docs: typeof docs;
     __sendNotification: ReturnType<typeof vi.fn>;

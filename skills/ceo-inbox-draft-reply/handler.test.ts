@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDraftReplyHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { Logger } from '../../src/logger.js';
 import { readFile, realpath } from 'node:fs/promises';
 
@@ -12,12 +12,12 @@ vi.mock('node:fs/promises', () => ({
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockRealpath = realpath as ReturnType<typeof vi.fn>;
 
-// Helper to build a minimal mock SkillContext
+// Helper to build a minimal mock ToolContext
 function buildCtx(overrides: Partial<{
   reply_to_message_id: string;
   body: string;
   attachments: unknown;
-}>= {}): SkillContext {
+}>= {}): ToolContext {
   const input: Record<string, unknown> = {
     reply_to_message_id: overrides.reply_to_message_id ?? 'msg-001',
     body: overrides.body ?? 'Thanks for reaching out.',
@@ -25,8 +25,8 @@ function buildCtx(overrides: Partial<{
   if ('attachments' in overrides) input.attachments = overrides.attachments;
 
   return {
-    skillName: 'ceo-inbox-draft-reply',
-    skillVersion: '0.3.0',
+    toolName: 'ceo-inbox-draft-reply',
+    toolVersion: '0.3.0',
     input,
     timezone: 'America/Toronto',
     secret(key: string): string {
@@ -43,7 +43,7 @@ function buildCtx(overrides: Partial<{
       error: vi.fn(),
       debug: vi.fn(),
     },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 // Helper to build a Nylas API message response
@@ -335,9 +335,9 @@ describe('CeoInboxDraftReplyHandler', () => {
     });
 
     // Build a ctx where ceo_self_email returns an empty string
-    const ctx: SkillContext = {
-      skillName: 'ceo-inbox-draft-reply',
-      skillVersion: '0.3.0',
+    const ctx: ToolContext = {
+      toolName: 'ceo-inbox-draft-reply',
+      toolVersion: '0.3.0',
       input: {
         reply_to_message_id: 'msg-001',
         body: 'Thanks for reaching out.',
@@ -566,7 +566,7 @@ describe('CeoInboxDraftReplyHandler', () => {
       read: vi.fn().mockResolvedValue(null),
       create: vi.fn().mockRejectedValue(new Error('okf unavailable')),
       update: vi.fn(),
-    } as unknown as NonNullable<SkillContext['workingDocs']>;
+    } as unknown as NonNullable<ToolContext['workingDocs']>;
 
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);

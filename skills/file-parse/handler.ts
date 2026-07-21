@@ -14,7 +14,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { Node, HTMLElement as HtmlElement } from 'node-html-parser';
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { InfraLlm } from '../../src/skills/infra-llm.js';
 
 // CJS-only deps: load via createRequire so the CJS build is used reliably under
@@ -44,8 +44,8 @@ const MIME_MAP: Record<string, 'csv' | 'pdf' | 'image' | 'html' | 'ics'> = {
 // 'raw' opts out of LLM extraction; any other non-empty string gets a generic prompt.
 // See prompts.ts — agents can define new document types without modifying this file.
 
-export class FileParseHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class FileParseHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.infraLlm) {
       ctx.log.error('file-parse: infraLlm capability missing — execution layer misconfigured');
       return { success: false, error: 'file-parse requires infraLlm capability' };
@@ -132,7 +132,7 @@ export class FileParseHandler implements SkillHandler {
 
   // --- CSV: deterministic, no LLM ---
 
-  private handleCsv(buffer: Buffer): SkillResult {
+  private handleCsv(buffer: Buffer): ToolResult {
     const text = buffer.toString('utf-8');
     const rows = parseCsv(text);
     return {
@@ -148,7 +148,7 @@ export class FileParseHandler implements SkillHandler {
 
   // --- ICS: deterministic calendar invite parsing ---
 
-  private handleIcs(buffer: Buffer, extractAs: ExtractAs): SkillResult {
+  private handleIcs(buffer: Buffer, extractAs: ExtractAs): ToolResult {
     const text = buffer.toString('utf-8');
     const structured = extractAs === 'raw' ? null : parseIcsInvite(text);
     return {
@@ -165,12 +165,12 @@ export class FileParseHandler implements SkillHandler {
   // --- Image: InfraLlm vision ---
 
   private async handleImage(
-    ctx: SkillContext,
+    ctx: ToolContext,
     infraLlm: InfraLlm,
     contentBase64: string,
     mimeType: string,
     extractAs: ExtractAs,
-  ): Promise<SkillResult> {
+  ): Promise<ToolResult> {
     const prompt = getExtractionPrompt(extractAs);
 
     // For 'raw', ask for a plain text transcription of the image
@@ -202,11 +202,11 @@ export class FileParseHandler implements SkillHandler {
   // --- PDF: text extraction + optional LLM structuring ---
 
   private async handlePdf(
-    ctx: SkillContext,
+    ctx: ToolContext,
     infraLlm: InfraLlm,
     buffer: Buffer,
     extractAs: ExtractAs,
-  ): Promise<SkillResult> {
+  ): Promise<ToolResult> {
     let rawText: string;
     try {
       const parser = new PDFParse({ data: buffer });
@@ -258,11 +258,11 @@ export class FileParseHandler implements SkillHandler {
   // --- HTML: tag stripping + optional LLM structuring ---
 
   private async handleHtml(
-    ctx: SkillContext,
+    ctx: ToolContext,
     infraLlm: InfraLlm,
     buffer: Buffer,
     extractAs: ExtractAs,
-  ): Promise<SkillResult> {
+  ): Promise<ToolResult> {
     const html = buffer.toString('utf-8');
     const rawText = stripHtmlTags(html);
 
@@ -276,12 +276,12 @@ export class FileParseHandler implements SkillHandler {
   // --- Shared: LLM-based structured extraction from text ---
 
   private async extractStructured(
-    ctx: SkillContext,
+    ctx: ToolContext,
     infraLlm: InfraLlm,
     type: 'pdf' | 'html',
     rawText: string,
     extractAs: ExtractAs,
-  ): Promise<SkillResult> {
+  ): Promise<ToolResult> {
     const prompt = getExtractionPrompt(extractAs);
     if (!prompt) {
       // Should not happen — 'raw' is handled before this call
@@ -309,13 +309,13 @@ export class FileParseHandler implements SkillHandler {
   // --- Result builder: parse LLM output into structured data ---
 
   private buildResult(
-    ctx: SkillContext,
+    ctx: ToolContext,
     type: 'csv' | 'pdf' | 'image' | 'html',
     llmText: string,
     extractAs: ExtractAs,
     isStructured: boolean,
     rawTextOverride?: string,
-  ): SkillResult {
+  ): ToolResult {
     if (!isStructured) {
       // raw text extraction (e.g. image transcription)
       return { success: true, data: { type, raw_text: llmText, structured: null, confidence: 0.8 } };

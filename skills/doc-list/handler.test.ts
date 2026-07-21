@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { DocListHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { WorkingDocsRepo, WorkingDocRow } from '../../src/db/working-docs-repo.js';
 
 const silentLog = pino({ level: 'silent' });
 
-function makeCtx(docs: WorkingDocRow[], input: Record<string, unknown> = { path: '/projects/x/' }): SkillContext {
+function makeCtx(docs: WorkingDocRow[], input: Record<string, unknown> = { path: '/projects/x/' }): ToolContext {
   const repo = {
     listByPrefix: vi.fn().mockResolvedValue(docs),
   } as unknown as WorkingDocsRepo;
@@ -15,7 +15,7 @@ function makeCtx(docs: WorkingDocRow[], input: Record<string, unknown> = { path:
     log: silentLog,
     timezone: 'America/Toronto',
     workingDocs: repo,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('DocListHandler', () => {

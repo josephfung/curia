@@ -1,10 +1,10 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { writeExclusion } from '../../src/contacts/dedup-exclusions.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export class ContactDedupExcludeHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactDedupExcludeHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as Record<string, unknown>;
     const contactAId = input['contact_a_id'];
     const contactBId = input['contact_b_id'];

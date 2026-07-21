@@ -1,4 +1,4 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { CeoNylasClient } from '../_shared/ceo-nylas-client.js';
 
 const MAX_LIMIT = 50;
@@ -10,8 +10,8 @@ const DEFAULT_LIMIT = 20;
 // Both the Gmail UI name ("DRAFTS") and the API label ("DRAFT") map here.
 const DRAFTS_FOLDER_NAMES = new Set(['DRAFT', 'DRAFTS']);
 
-export class CeoInboxListHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CeoInboxListHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
     const client = new CeoNylasClient(apiKey, grantId, ctx.log);

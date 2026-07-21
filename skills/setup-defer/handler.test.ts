@@ -1,7 +1,7 @@
 // skills/setup-defer/handler.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import { SetupDeferHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import type { Logger } from '../../src/logger.js';
 
@@ -54,8 +54,8 @@ function makeEntityMemory(existingDeferrals?: string): MinimalEntityMemory {
   };
 }
 
-/** Build a SkillContext with the given input and optional pre-seeded store data. */
-function makeCtx(input: Record<string, unknown>, existingDeferrals?: string): SkillContext {
+/** Build a ToolContext with the given input and optional pre-seeded store data. */
+function makeCtx(input: Record<string, unknown>, existingDeferrals?: string): ToolContext {
   return {
     input,
     entityMemory: makeEntityMemory(existingDeferrals) as unknown as EntityMemory,
@@ -66,7 +66,7 @@ function makeCtx(input: Record<string, unknown>, existingDeferrals?: string): Sk
       debug: vi.fn(),
     } as unknown as Logger,
     secret: vi.fn(),
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 const handler = new SetupDeferHandler();
@@ -136,7 +136,7 @@ describe('setup-defer', () => {
       input: { task_id: 'email', action: 'defer' },
       entityMemory: mem as unknown as EntityMemory,
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     expect((result as { success: false; error: string }).error).toMatch(/retry/i);
@@ -151,7 +151,7 @@ describe('setup-defer', () => {
         error: vi.fn(),
         debug: vi.fn(),
       },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
   });

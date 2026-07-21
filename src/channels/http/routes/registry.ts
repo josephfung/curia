@@ -2,7 +2,7 @@
 // Session-cookie or x-web-bootstrap-secret auth (same pattern as autonomy.ts/kg.ts).
 // Only mounted when webAppBootstrapSecret + registryService are configured.
 //
-//   GET    /api/registry/skills                  — list all skills with derived state
+//   GET    /api/registry/tools                  — list all tools with derived state
 //   GET    /api/registry/agents                  — list all agents with derived state
 //   POST   /api/registry/:kind/:name/install
 //   POST   /api/registry/:kind/:name/enable
@@ -24,9 +24,9 @@ export interface RegistryRouteOptions {
 
 const ACTOR = 'web-app'; // no per-user identity in the console today (same as autonomy routes)
 
-// Map the URL plural segment ('skills', 'agents') to the internal singular kind.
+// Map the URL plural segment ('tools', 'agents') to the internal singular kind.
 function parseKind(raw: string): RegistryKind | null {
-  return raw === 'skills' ? 'skill' : raw === 'agents' ? 'agent' : null;
+  return raw === 'tools' ? 'tool' : raw === 'agents' ? 'agent' : null;
 }
 
 export async function registryRoutes(
@@ -44,15 +44,15 @@ export async function registryRoutes(
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
 
-  // -- GET /api/registry/skills — list all skills with derived state --
+  // -- GET /api/registry/tools — list all tools with derived state --
 
-  app.get('/api/registry/skills', AUTH_RATE, async (request, reply) => {
+  app.get('/api/registry/tools', AUTH_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
     try {
-      return reply.send({ skills: await registryService.list('skill') });
+      return reply.send({ tools: await registryService.list('tool') });
     } catch (err) {
-      request.log.error({ err }, 'GET /api/registry/skills failed');
-      return reply.status(500).send({ error: 'Failed to list skills. Check server logs.' });
+      request.log.error({ err }, 'GET /api/registry/tools failed');
+      return reply.status(500).send({ error: 'Failed to list tools. Check server logs.' });
     }
   });
 
@@ -81,7 +81,7 @@ export async function registryRoutes(
       const kind = parseKind(rawKind);
       if (!kind) {
         return reply.status(400).send({
-          error: `Unknown kind '${rawKind}' (expected 'skills' or 'agents')`,
+          error: `Unknown kind '${rawKind}' (expected 'tools' or 'agents')`,
         });
       }
       try {

@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { OpsLookupHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type {
   DiagnosticsRepo,
   ScheduledJobRow,
@@ -11,14 +11,14 @@ import type {
 } from '../../src/diagnostics/diagnostics-repo.js';
 import { createSilentLogger } from '../../src/logger.js';
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: {},
     secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
     log: createSilentLogger(),
     timezone: 'America/New_York',
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 function job(id: string, nextRunIso: string): ScheduledJobRow {

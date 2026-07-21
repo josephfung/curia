@@ -3,10 +3,10 @@
 // Infrastructure skill that cancels a scheduled job via the SchedulerService.
 // The job is soft-deleted (status set to cancelled) and preserved for audit history.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class SchedulerCancelHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class SchedulerCancelHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.schedulerService) {
       return {
         success: false,

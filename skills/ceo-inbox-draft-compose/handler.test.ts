@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxDraftComposeHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { readFile, realpath } from 'node:fs/promises';
 
 vi.mock('node:fs/promises', () => ({
@@ -10,10 +10,10 @@ vi.mock('node:fs/promises', () => ({
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockRealpath = realpath as ReturnType<typeof vi.fn>;
 
-function buildCtx(input?: Record<string, unknown>): SkillContext {
+function buildCtx(input?: Record<string, unknown>): ToolContext {
   return {
-    skillName: 'ceo-inbox-draft-compose',
-    skillVersion: '0.3.0',
+    toolName: 'ceo-inbox-draft-compose',
+    toolVersion: '0.3.0',
     input: input ?? {
       to: ['alice@example.com'],
       subject: 'Hello from CEO',
@@ -33,7 +33,7 @@ function buildCtx(input?: Record<string, unknown>): SkillContext {
       error: vi.fn(),
       debug: vi.fn(),
     },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 const DRAFT_RESPONSE = {
@@ -261,12 +261,12 @@ describe('CeoInboxDraftComposeHandler', () => {
   });
 
   it('Case 13: Missing secret throws — returns { success: false } without calling Nylas', async () => {
-    const ctx: SkillContext = {
+    const ctx: ToolContext = {
       ...buildCtx(),
       secret(key: string): string {
         throw new Error(`secret '${key}' is not configured`);
       },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await handler.execute(ctx);
 

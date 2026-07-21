@@ -1,16 +1,16 @@
 // handler.test.ts — behavioral-preferences-update skill
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BehavioralPreferencesUpdateHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { OfficeIdentity } from '../../src/identity/types.js';
 
-function makeContext(overrides: Partial<SkillContext> = {}): SkillContext {
+function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input: {},
     log: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     caller: { role: 'principal', contactId: 'contact-123' },
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 const BASE_IDENTITY: OfficeIdentity = {
@@ -45,7 +45,7 @@ describe('BehavioralPreferencesUpdateHandler', () => {
   it('append adds new entries to existing preferences', async () => {
     const service = makeOfficeIdentityService();
     const ctx = makeContext({
-      officeIdentityService: service as unknown as SkillContext['officeIdentityService'],
+      officeIdentityService: service as unknown as ToolContext['officeIdentityService'],
       input: { operation: 'append', entries: ['Reply within 24h'] },
     });
 
@@ -65,7 +65,7 @@ describe('BehavioralPreferencesUpdateHandler', () => {
   it('append is idempotent — entries already present are not duplicated', async () => {
     const service = makeOfficeIdentityService();
     const ctx = makeContext({
-      officeIdentityService: service as unknown as SkillContext['officeIdentityService'],
+      officeIdentityService: service as unknown as ToolContext['officeIdentityService'],
       input: { operation: 'append', entries: ['Be concise'] },
     });
 
@@ -83,7 +83,7 @@ describe('BehavioralPreferencesUpdateHandler', () => {
   it('replace overwrites the entire list', async () => {
     const service = makeOfficeIdentityService();
     const ctx = makeContext({
-      officeIdentityService: service as unknown as SkillContext['officeIdentityService'],
+      officeIdentityService: service as unknown as ToolContext['officeIdentityService'],
       input: { operation: 'replace', entries: ['New preference only'] },
     });
 
@@ -105,7 +105,7 @@ describe('BehavioralPreferencesUpdateHandler', () => {
   it('returns failure for an unrecognised operation', async () => {
     const service = makeOfficeIdentityService();
     const ctx = makeContext({
-      officeIdentityService: service as unknown as SkillContext['officeIdentityService'],
+      officeIdentityService: service as unknown as ToolContext['officeIdentityService'],
       input: { operation: 'upsert', entries: ['x'] },
     });
     const result = await handler.execute(ctx);
@@ -115,7 +115,7 @@ describe('BehavioralPreferencesUpdateHandler', () => {
   it('returns failure for an empty entries array', async () => {
     const service = makeOfficeIdentityService();
     const ctx = makeContext({
-      officeIdentityService: service as unknown as SkillContext['officeIdentityService'],
+      officeIdentityService: service as unknown as ToolContext['officeIdentityService'],
       input: { operation: 'append', entries: [] },
     });
     const result = await handler.execute(ctx);
@@ -125,7 +125,7 @@ describe('BehavioralPreferencesUpdateHandler', () => {
   it('returns failure for a non-array entries value', async () => {
     const service = makeOfficeIdentityService();
     const ctx = makeContext({
-      officeIdentityService: service as unknown as SkillContext['officeIdentityService'],
+      officeIdentityService: service as unknown as ToolContext['officeIdentityService'],
       input: { operation: 'append', entries: 'not-an-array' },
     });
     const result = await handler.execute(ctx);

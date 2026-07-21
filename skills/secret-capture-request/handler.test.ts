@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import pino from 'pino';
 import { SecretCaptureRequestHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { SecretCaptureMinter, MintResult } from '../../src/secrets/secret-capture-service.js';
 
 function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { userCalls: unknown[]; systemCalls: unknown[] } {
@@ -23,7 +23,7 @@ function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { use
   };
 }
 
-function makeCtx(input: Record<string, unknown>, overrides: Partial<SkillContext> = {}): SkillContext {
+function makeCtx(input: Record<string, unknown>, overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input,
     secret: () => 'unused',
@@ -31,7 +31,7 @@ function makeCtx(input: Record<string, unknown>, overrides: Partial<SkillContext
     secretCapture: fakeMinter(),
     appOrigin: 'https://curia.example.com',
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('SecretCaptureRequestHandler', () => {

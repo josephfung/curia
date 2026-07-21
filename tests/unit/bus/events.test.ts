@@ -4,8 +4,8 @@ import {
   createAgentTask,
   createAgentResponse,
   createOutboundMessage,
-  createSkillInvoke,
-  createSkillResult,
+  createToolInvoke,
+  createToolResult,
   createConversationCheckpoint,
   type BusEvent,
 } from '../../../src/bus/events.js';
@@ -67,31 +67,31 @@ describe('Event Types', () => {
     expect(event.sourceLayer).toBe('dispatch');
   });
 
-  it('createSkillInvoke creates a skill.invoke event', () => {
-    const event = createSkillInvoke({
+  it('createToolInvoke creates a tool.invoke event', () => {
+    const event = createToolInvoke({
       agentId: 'coordinator',
       conversationId: 'conv-1',
-      skillName: 'web-fetch',
+      toolName: 'web-fetch',
       input: { url: 'https://example.com' },
       taskEventId: 'task-1',
       parentEventId: 'parent-1',
     });
-    expect(event.type).toBe('skill.invoke');
+    expect(event.type).toBe('tool.invoke');
     expect(event.sourceLayer).toBe('agent');
-    expect(event.payload.skillName).toBe('web-fetch');
+    expect(event.payload.toolName).toBe('web-fetch');
     expect(event.parentEventId).toBe('parent-1');
   });
 
-  it('createSkillResult creates a skill.result event', () => {
-    const event = createSkillResult({
+  it('createToolResult creates a tool.result event', () => {
+    const event = createToolResult({
       agentId: 'coordinator',
       conversationId: 'conv-1',
-      skillName: 'web-fetch',
+      toolName: 'web-fetch',
       result: { success: true, data: 'page content' },
       durationMs: 250,
       parentEventId: 'invoke-1',
     });
-    expect(event.type).toBe('skill.result');
+    expect(event.type).toBe('tool.result');
     expect(event.sourceLayer).toBe('execution');
     expect(event.payload.durationMs).toBe(250);
   });

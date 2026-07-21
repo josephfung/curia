@@ -494,7 +494,7 @@ export async function setupRoutes(
     let result;
     try {
       result = await infraLlmService
-        .scoped({ skillName: 'wizard-suggest-name', conversationId: 'setup' })
+        .scoped({ toolName: 'wizard-suggest-name', conversationId: 'setup' })
         .extract(SUGGEST_NAME_PROMPT, { maxTokens: 16 });
     } catch (err) {
       logger.warn({ err }, 'POST /api/setup/suggest-name: LLM call threw unexpectedly — frontend will fall back');

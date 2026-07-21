@@ -49,7 +49,7 @@ describe('ActionLogRepo', () => {
       const id = await repo.insert({
         taskId: 'task-1',
         conversationId: 'conv-1',
-        skillName: 'calendar-create-event',
+        toolName: 'calendar-create-event',
         actionRisk: 'high',
         outcome: 'success',
         taskSummary: 'Create a lunch meeting',
@@ -66,7 +66,7 @@ describe('ActionLogRepo', () => {
       const repo = new ActionLogRepo(pool, createSilentLogger());
       const id = await repo.insert({
         taskId: 'task-1',
-        skillName: 'calendar-create-event',
+        toolName: 'calendar-create-event',
         actionRisk: 'high',
         outcome: 'success',
         parentActionId: 42,
@@ -85,7 +85,7 @@ describe('ActionLogRepo', () => {
       const repo = new ActionLogRepo(pool, createSilentLogger());
       const id = await repo.insertShadowEvaluated({
         taskId: 'shadow:src-1',
-        skillName: 'shadow-draft-eval',
+        toolName: 'shadow-draft-eval',
         actionRisk: 'none',
         outcome: 'shadow_evaluated',
         payload: { shadow: true, source_message_id: 'src-1' },
@@ -105,7 +105,7 @@ describe('ActionLogRepo', () => {
       const repo = new ActionLogRepo(pool, createSilentLogger());
       const id = await repo.insertShadowEvaluated({
         taskId: 'shadow:src-1',
-        skillName: 'shadow-draft-eval',
+        toolName: 'shadow-draft-eval',
         actionRisk: 'none',
         outcome: 'shadow_evaluated',
         payload: { shadow: true, source_message_id: 'src-1' },
@@ -134,7 +134,7 @@ describe('ActionLogRepo', () => {
       const rows = await repo.findUnscoredTerminal(10);
       expect(rows).toHaveLength(1);
       expect(rows[0]!.id).toBe(1);
-      expect(rows[0]!.skillName).toBe('send-email');
+      expect(rows[0]!.toolName).toBe('send-email');
     });
   });
 

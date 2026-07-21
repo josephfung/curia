@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import pino from 'pino';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import { CeoInboxUpdateFoldersHandler } from '../../../skills/ceo-inbox-update-folders/handler.js';
 
 const logger = pino({ level: 'silent' });
@@ -72,12 +72,12 @@ function mockNylas(opts: {
   return { spy, calls };
 }
 
-function makeCtx(input: Record<string, unknown>): SkillContext {
+function makeCtx(input: Record<string, unknown>): ToolContext {
   return {
     input,
     secret: (key: string) => `fake-${key}`,
     log: logger,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 // System folders (id === name) plus the emoji triage labels (id !== name).

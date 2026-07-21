@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { MemoryConfirmHandler } from './handler.js';
 
 function makeCtx(
@@ -7,7 +7,7 @@ function makeCtx(
   nodeId: string,
   confirmResult: { success: boolean; label?: string },
   dismissResult: { success: boolean; label?: string },
-): SkillContext {
+): ToolContext {
   return {
     input: { nodeId, action },
     entityMemory: {
@@ -15,7 +15,7 @@ function makeCtx(
       dismissDecayWarning: vi.fn().mockResolvedValue(dismissResult),
     },
     log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('MemoryConfirmHandler', () => {
@@ -76,7 +76,7 @@ describe('MemoryConfirmHandler', () => {
       input: { nodeId: 'n', action: 'confirm' },
       entityMemory: undefined,
       log: { error: vi.fn() },
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
     const handler = new MemoryConfirmHandler();
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);

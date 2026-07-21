@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyTaskManagement,
-  TASK_MANAGEMENT_SKILLS,
+  TASK_MANAGEMENT_TOOLS,
   TASK_MANAGEMENT_BLOCK,
 } from '../../../src/agents/task-management.js';
 import type { AgentYamlConfig } from '../../../src/agents/loader.js';
@@ -33,7 +33,7 @@ describe('applyTaskManagement', () => {
   it('appends the block, adds the four skills, and marks eligible when true', () => {
     const r = applyTaskManagement(cfg({ enable_task_management: true }), 'BASE PROMPT', ['x']);
     expect(r.systemPrompt).toBe(`BASE PROMPT\n\n${TASK_MANAGEMENT_BLOCK}`);
-    expect(r.pinnedSkills).toEqual(['x', ...TASK_MANAGEMENT_SKILLS]);
+    expect(r.pinnedSkills).toEqual(['x', ...TASK_MANAGEMENT_TOOLS]);
     expect(r.heartbeatEligible).toBe(true);
   });
 
@@ -46,11 +46,11 @@ describe('applyTaskManagement', () => {
   });
 
   it('exposes exactly the four task skills', () => {
-    expect([...TASK_MANAGEMENT_SKILLS]).toEqual(['task-create', 'task-list', 'task-update', 'task-complete']);
+    expect([...TASK_MANAGEMENT_TOOLS]).toEqual(['task-create', 'task-list', 'task-update', 'task-complete']);
   });
 
   it('produces exactly the four task skills when starting from an empty pinned list', () => {
     const r = applyTaskManagement(cfg({ enable_task_management: true }), 'P', []);
-    expect(r.pinnedSkills).toEqual([...TASK_MANAGEMENT_SKILLS]);
+    expect(r.pinnedSkills).toEqual([...TASK_MANAGEMENT_TOOLS]);
   });
 });

@@ -85,7 +85,7 @@ error_budget:
   max_cost_usd: 1.00
 ```
 
-Need custom logic? Add a TypeScript handler — same config, plus hooks for `onTask`, `onSkillResult`, and `beforeRespond`.
+Need custom logic? Add a TypeScript handler — same config, plus hooks for `onTask`, `onToolResult`, and `beforeRespond`.
 
 Skills come in two flavours (local handlers and MCP servers) behind a single interface. Agents discover new skills automatically; sensitive skills require your approval on first use.
 

@@ -218,7 +218,7 @@ When a task is **principal-originated** (initiated by a direct CEO message, as d
 
 Implementation: the execution layer calls `isPrincipalOriginated()` before evaluating autonomy gates. If the task traces back to a principal message, the gates are logged but not enforced. Bypasses are written to the audit log at `info` level for operator visibility.
 
-Scope: principal bypass applies to Gates A and B only. It uses task **lineage** (`isPrincipalOriginated` on effective standing) — a woken principal-lineage task can inherit it via the ladder at high trust. This is deliberately a *different* notion of "principal" from the elevated-skill gate (`sensitivity: 'elevated'`), which requires a **live principal turn** and is never bypassed or inherited (#1126). Acting *within* CEO-authorized work (a `normal` skill) can reasonably be inherited at high trust; *exercising authority* (an `elevated` skill) needs the human now. See [03-skills-and-execution.md](03-skills-and-execution.md) and ADR-017.
+Scope: principal bypass applies to Gates A and B only. It uses task **lineage** (`isPrincipalOriginated` on effective standing) — a woken principal-lineage task can inherit it via the ladder at high trust. This is deliberately a *different* notion of "principal" from the elevated-skill gate (`sensitivity: 'elevated'`), which requires a **live principal turn** and is never bypassed or inherited (#1126). Acting *within* CEO-authorized work (a `normal` skill) can reasonably be inherited at high trust; *exercising authority* (an `elevated` skill) needs the human now. See [03-tools-and-execution.md](03-tools-and-execution.md) and ADR-017.
 
 ### Effective standing — the bypass ladder (woken/derived tasks)
 

@@ -4,19 +4,19 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import pino from 'pino';
 import { parseCsv } from './csv.js';
 import { FileParseHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
 
 function makeCtx(
   input: Record<string, unknown>,
   infraLlm?: InfraLlm,
-): SkillContext {
+): ToolContext {
   return {
     input,
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     infraLlm,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 /**
@@ -87,7 +87,7 @@ describe('FileParseHandler', () => {
         secret: () => 'test-api-key',
         log: pino({ level: 'silent' }),
         // infraLlm intentionally omitted
-      } as unknown as SkillContext;
+      } as unknown as ToolContext;
       const result = await handler.execute(ctx);
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/infraLlm/);

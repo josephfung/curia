@@ -2,10 +2,10 @@
 //
 // Deletes a calendar event. Checks read-only flag before attempting deletion.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class CalendarDeleteEventHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CalendarDeleteEventHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.nylasCalendarClient) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }

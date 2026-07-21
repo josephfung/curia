@@ -10,7 +10,7 @@
 // LLM calls go through the constrained InfraLlm service (classify + extract only),
 // which routes through ModelRouter and publishes llm.call bus events for telemetry.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, NODE_TYPES } from '../../src/memory/types.js';
 import type { DecayClass, NodeType } from '../../src/memory/types.js';
 import { buildCanonicalPatch } from '../../src/contacts/canonical-attribute-guard.js';
@@ -33,8 +33,8 @@ interface ExtractedFact {
 const NODE_TYPES_LIST = NODE_TYPES.filter(t => t !== 'fact').join(', ');
 const DECAY_CLASSES_LIST = DECAY_CLASSES.join(', ');
 
-export class ExtractFactsHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ExtractFactsHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { text, source, max_stored } = ctx.input as { text?: string; source?: string; max_stored?: number };
 
     if (!text || typeof text !== 'string') {
@@ -51,7 +51,7 @@ export class ExtractFactsHandler implements SkillHandler {
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
-    // Guard: infraLlm is a required capability declared in skill.json.
+    // Guard: infraLlm is a required capability declared in tool.json.
     if (!ctx.infraLlm) {
       ctx.log.error('extract-facts: infraLlm capability missing — execution layer misconfigured');
       return { success: false, error: 'extract-facts requires infraLlm capability' };

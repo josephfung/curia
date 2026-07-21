@@ -6,10 +6,10 @@
 //
 // This skill uses contactService, which is a universal service.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class ContactLinkIdentityHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactLinkIdentityHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { contact_id, channel, identifier, label } = ctx.input as {
       contact_id?: string;
       channel?: string;

@@ -11,13 +11,13 @@
 // construction, and format encoding all happen in the runtime and
 // DelegateHandler — not here.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 /** Protocol marker used by the runtime to detect clarification requests. */
 export const CLARIFICATION_PROTOCOL = 'clarification_request' as const;
 
-export class RequestClarificationHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class RequestClarificationHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { question, context } = ctx.input as {
       question?: string;
       context?: string;

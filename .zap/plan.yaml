@@ -57,7 +57,7 @@ jobs:
       - url: http://172.17.0.1:3000/api/executive/history
       - url: http://172.17.0.1:3000/api/jobs
       - url: http://172.17.0.1:3000/api/registry/agents
-      - url: http://172.17.0.1:3000/api/registry/skills
+      - url: http://172.17.0.1:3000/api/registry/tools
       - url: http://172.17.0.1:3000/api/registry/channels
       - url: http://172.17.0.1:3000/api/vault/status
       - url: http://172.17.0.1:3000/api/kg/contacts

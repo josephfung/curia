@@ -14,7 +14,7 @@
 //     createEvent entirely and return held:false, reason:'holds disabled'.
 //   - Default ON: null (never set) and 'true' are both treated as enabled.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 import { buildHoldMetadata } from '../../src/channels/calendar/holds.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
@@ -23,8 +23,8 @@ import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 const HOLDS_NAMESPACE = 'calendar_holds';
 const HOLDS_KEY = 'enabled';
 
-export class CalendarCreateHoldHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CalendarCreateHoldHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     // Guard: Nylas calendar client is required.
     if (!ctx.nylasCalendarClient) {
       return { success: false, error: 'Calendar not configured -- Nylas credentials missing' };
@@ -70,7 +70,7 @@ export class CalendarCreateHoldHandler implements SkillHandler {
     const endUnix = Math.floor(new Date(end).getTime() / 1000);
     // toLocalIso / formatDisplayTimezone throw on a malformed timezone. Guard them
     // so a bad ctx.timezone degrades to raw values rather than making the skill throw
-    // (skills must return a SkillResult, never reject).
+    // (skills must return a ToolResult, never reject).
     let displayStart = start;
     let displayEnd = end;
     let tzLabel = 'UTC';

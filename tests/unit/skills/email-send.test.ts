@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EmailSendHandler } from '../../../skills/email-send/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -12,10 +12,10 @@ function makeCtx(
     getEmailMessage: (...args: unknown[]) => unknown;
   }>,
   opts?: { timezone?: string; agentId?: string },
-): SkillContext {
+): ToolContext {
   return {
-    skillName: 'email-send',
-    skillVersion: '1.2.2',
+    toolName: 'email-send',
+    toolVersion: '1.2.2',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
@@ -23,7 +23,7 @@ function makeCtx(
     outboundContext: undefined,
     timezone: opts?.timezone,
     agentId: opts?.agentId,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 const originalMessage = {

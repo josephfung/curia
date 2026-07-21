@@ -11,7 +11,7 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { ExtractFactsHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
 
 // -- Test helpers --
@@ -45,14 +45,14 @@ function makeCtx(
   entityMemory: EntityMemory,
   input: Record<string, unknown>,
   infraLlm: InfraLlm,
-): SkillContext {
+): ToolContext {
   return {
     input,
     secret: () => 'test-api-key',
     log: pino({ level: 'silent' }),
     entityMemory,
     infraLlm,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 // -- Tests --
@@ -256,7 +256,7 @@ describe('ExtractFactsHandler', () => {
       entityMemory,
       infraLlm,
       memoryWriteSource,
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await handler.execute(ctx);
 
@@ -360,7 +360,7 @@ describe('ExtractFactsHandler', () => {
       log: pino({ level: 'silent' }),
       entityMemory,
       // infraLlm intentionally omitted
-    } as unknown as SkillContext;
+    } as unknown as ToolContext;
 
     const result = await handler.execute(ctx);
 

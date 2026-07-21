@@ -8,13 +8,13 @@
 //
 // This skill uses contactService, which is a universal service.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 /** Valid lookup strategies */
 const VALID_BY_VALUES = new Set(['name', 'role', 'channel']);
 
-export class ContactLookupHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactLookupHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { query, by } = ctx.input as {
       query?: string;
       by?: string;
@@ -124,7 +124,7 @@ export class ContactLookupHandler implements SkillHandler {
 
 /** Enrich a contact with its channel identities */
 async function enrichContact(
-  ctx: SkillContext,
+  ctx: ToolContext,
   contact: { id: string; displayName: string; role: string | null; tier: string; kgNodeId: string | null },
 ) {
   const summary = contactToSummary(contact);

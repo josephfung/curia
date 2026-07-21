@@ -8,7 +8,7 @@ import {
   BACKFILL_BEFORE_KEY,
   BACKFILL_TARGET_KEY,
 } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { EntityMemory } from '../../src/memory/entity-memory.js';
 import { VOICE_LEARNING_DOC_TYPE } from '../_shared/voice-learning-capture.js';
 import { SHADOW_DOC_TYPE, shadowDraftPath, SHADOW_SCRATCH_PREFIX } from '../_shared/shadow-draft.js';
@@ -89,7 +89,7 @@ function buildCtx(overrides: {
   nowMs?: number;
   infraLlm?: InfraLlm;
   withActionLogRepo?: boolean;
-} = {}): SkillContext & {
+} = {}): ToolContext & {
   __mem: ReturnType<typeof makeEntityMemory>;
   __docs: Map<string, { path: string; type: string; frontmatter: Record<string, unknown>; body: string; version: number }>;
   __published: Array<{ type: string; payload: Record<string, unknown> }>;
@@ -222,7 +222,7 @@ function buildCtx(overrides: {
     __actionLog: actionLog,
   };
 
-  return ctx as unknown as SkillContext & {
+  return ctx as unknown as ToolContext & {
     __mem: ReturnType<typeof makeEntityMemory>;
     __docs: typeof docs;
     __published: typeof published;
@@ -1028,7 +1028,7 @@ describe('CeoInboxSentObserveHandler', () => {
     const row = ctx.__actionLog[0]!;
     expect(row.competenceFlag).toBe(1);
     expect(row.scoredBy).toBe('shadow-reconciler');
-    expect(row.skillName).toBe('shadow-draft-eval');
+    expect(row.toolName).toBe('shadow-draft-eval');
     expect(row.outcome).toBe('shadow_evaluated');
 
     const shadowDoc = ctx.__docs.get(shadowDraftPath('src-1'));

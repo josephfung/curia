@@ -1218,7 +1218,7 @@ export async function knowledgeGraphRoutes(
    *
    * Ack-and-stream (#985): the handler publishes the inbound message and returns
    * 202 without waiting for the agent's reply. The final reply and intermediate
-   * progress (skill.invoke / skill.result) arrive over GET /api/kg/chat/stream,
+   * progress (tool.invoke / tool.result) arrive over GET /api/kg/chat/stream,
    * which is the source of truth for the assistant turn. This removes the former
    * synchronous 120s wait that 504'd on long tasks (browser automation, delegation
    * chains, research).
@@ -1260,7 +1260,7 @@ export async function knowledgeGraphRoutes(
   /**
    * GET /api/kg/chat/stream — SSE stream of agent events for the KG web app.
    *
-   * Streams outbound.message, skill.invoke, and skill.result events from the EventRouter,
+   * Streams outbound.message, tool.invoke, and tool.result events from the EventRouter,
    * optionally filtered by ?conversationId=xxx. Mirrors GET /api/messages/stream.
    */
   app.get('/api/kg/chat/stream', KG_RATE, async (request, reply) => {

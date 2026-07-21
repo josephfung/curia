@@ -13,9 +13,9 @@ import { createSilentLogger } from '../logger.js';
 
 describe('buildApprovalDetails', () => {
   it.each(SKILL_DETAIL_FIXTURES)(
-    'renders expected labels for $skillName fixture payload',
-    ({ skillName, payload, expectedLabels }) => {
-      const details = buildApprovalDetails(skillName, payload);
+    'renders expected labels for $toolName fixture payload',
+    ({ toolName, payload, expectedLabels }) => {
+      const details = buildApprovalDetails(toolName, payload);
       expect(details.trim().length).toBeGreaterThan(0);
       for (const label of expectedLabels) {
         expect(details).toContain(label);
@@ -150,7 +150,7 @@ describe('buildApprovalNotificationBody', () => {
     preamble: 'Curia wanted to send a Signal message.',
     shortRef: 'c6fd31ad',
     expiresAt: new Date('2026-07-02T20:53:26.183Z'),
-    skillName: 'signal-send',
+    toolName: 'signal-send',
     payload: {
       recipient: '+15550142',
       message: 'Hi Dana',
@@ -192,11 +192,11 @@ describe('buildApprovalNotificationBody', () => {
       ...baseOpts,
       recipientTier: 'principal',
       payload: { account: 'curia' },
-      skillName: 'send-draft',
+      toolName: 'send-draft',
       logger: { warn: logWarn } as never,
     });
     expect(logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ skillName: 'send-draft' }),
+      expect.objectContaining({ toolName: 'send-draft' }),
       expect.stringContaining('no renderable fields in payload'),
     );
   });
@@ -295,7 +295,7 @@ describe('shared notification body — both call sites', () => {
       preamble: 'Curia wanted to run signal-send.',
       shortRef: 'abc12345',
       expiresAt: new Date('2026-07-02T12:00:00.000Z'),
-      skillName: 'signal-send',
+      toolName: 'signal-send',
       payload: { recipient: '+1', message: 'hello' },
       recipientTier: 'principal' as const,
     };

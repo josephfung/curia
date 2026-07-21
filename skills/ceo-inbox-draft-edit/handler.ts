@@ -1,4 +1,4 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import {
   CeoNylasClient,
   htmlToPlainText,
@@ -42,8 +42,8 @@ function parseEmailField(raw: unknown): { emails: string[] } | { error: string }
  * fix a wrong recipient, subject, or body on a draft that was already created —
  * the capability that was missing, which left bad drafts uneditable.
  */
-export class CeoInboxDraftEditHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CeoInboxDraftEditHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     let apiKey: string;
     let grantId: string;
     try {

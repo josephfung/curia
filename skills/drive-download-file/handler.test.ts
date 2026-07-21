@@ -1,6 +1,6 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { Readable } from 'node:stream';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { MAX_TEMP_FILE_BYTES } from '../../src/skills/temp-file-store.js';
 
@@ -39,7 +39,7 @@ const SECRET_VALUES: Record<string, string> = {
   curia_google_email: 'curia@test.com',
 };
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: { file_id_or_url: '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms' },
     secret: vi.fn((name: string): string => {
@@ -52,7 +52,7 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     taskMetadata: {},
     taskEventId: undefined,
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 function setupMetadata(opts: { name: string; mimeType: string; size?: string | null }) {

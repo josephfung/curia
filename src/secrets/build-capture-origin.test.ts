@@ -1,17 +1,17 @@
-// build-capture-origin.test.ts — shared capture-origin builder for the secret-capture skills (#995).
+// build-capture-origin.test.ts — shared capture-origin builder for the secret-capture tools (#995).
 import { describe, it, expect } from 'vitest';
 import { buildCaptureOrigin } from './build-capture-origin.js';
 import { decodeResumeToken } from '../agents/resume-token.js';
-import type { SkillContext } from '../skills/types.js';
+import type { ToolContext } from '../skills/types.js';
 
-function ctx(over: Partial<SkillContext> = {}): SkillContext {
+function ctx(over: Partial<ToolContext> = {}): ToolContext {
   return {
     conversationId: 'own-conv',
     channelId: 'internal',
     agentId: 'accounts-specialist',
     taskEventId: 'evt-1',
     ...over,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('buildCaptureOrigin (#995)', () => {

@@ -6,7 +6,7 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { DeleteRelationshipHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 
 function makeEntityMemory() {
   return makeEntityMemoryWithStore().mem;
@@ -21,13 +21,13 @@ function makeEntityMemoryWithStore() {
   return { mem: new EntityMemory(store, validator, embeddingService, createSilentLogger()), store };
 }
 
-function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): SkillContext {
+function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): ToolContext {
   return {
     input,
     secret: () => 'test-key',
     log: pino({ level: 'silent' }),
     entityMemory,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('DeleteRelationshipHandler', () => {

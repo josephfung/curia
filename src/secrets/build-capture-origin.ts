@@ -1,4 +1,4 @@
-// build-capture-origin.ts — shared origin builder for the secret-capture skills (#995).
+// build-capture-origin.ts — shared origin builder for the secret-capture tools (#995).
 //
 // Both secret-capture-request (user secrets) and system-secret-capture-request (channel/system
 // credentials) need the same logic: capture the agent's routing so redeem can re-enter it, and —
@@ -8,7 +8,7 @@
 
 import { encodeResumeToken } from '../agents/resume-token.js';
 import type { CaptureOrigin } from './secret-capture-service.js';
-import type { SkillContext } from '../skills/types.js';
+import type { ToolContext } from '../skills/types.js';
 
 /** Shape the delegate skill writes into task metadata (#995). All fields optional because it is
  *  decoded from opaque metadata; the retarget only fires when the routing trio is fully present. */
@@ -29,7 +29,7 @@ interface DelegationOrigin {
  *
  * @param resumeIntent natural-language description of what to resume (the user ask, or the label).
  */
-export function buildCaptureOrigin(ctx: SkillContext, resumeIntent: string): CaptureOrigin {
+export function buildCaptureOrigin(ctx: ToolContext, resumeIntent: string): CaptureOrigin {
   const originator = ctx.taskMetadata?.originator as Record<string, unknown> | undefined;
   const delegationOrigin = ctx.taskMetadata?.delegationOrigin as DelegationOrigin | undefined;
 

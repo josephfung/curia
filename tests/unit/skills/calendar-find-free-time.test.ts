@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CalendarFindFreeTimeHandler } from '../../../skills/calendar-find-free-time/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
 
-function makeCtx(input: Record<string, unknown>, overrides?: Partial<SkillContext>): SkillContext {
-  return { skillName: 'calendar-find-free-time', skillVersion: '1.1.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
+function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext>): ToolContext {
+  return { toolName: 'calendar-find-free-time', toolVersion: '1.1.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
 }
 
 // Realistic Unix timestamps (seconds) on 2026-04-06.

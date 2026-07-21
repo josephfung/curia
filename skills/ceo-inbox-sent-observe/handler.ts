@@ -3,7 +3,7 @@
 // Watermarked like the inbound email poll. Self-throttles via last_run_found_nothing_at
 // (t2125 pattern). Capture/match failures on individual messages log and continue.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import {
   CeoNylasClient,
   htmlToPlainText,
@@ -156,7 +156,7 @@ function selectShadowSend(
 }
 
 async function ensureDoc(
-  ctx: SkillContext,
+  ctx: ToolContext,
   path: string,
   type: string,
   title: string,
@@ -188,7 +188,7 @@ async function ensureDoc(
  *  Trimming rides along on the append write, so a lost race just retries the whole thing; there is
  *  no separate trim write that could fail independently. */
 async function appendAndTrimDoc(
-  ctx: SkillContext,
+  ctx: ToolContext,
   path: string,
   type: string,
   title: string,
@@ -215,8 +215,8 @@ async function appendAndTrimDoc(
   return false;
 }
 
-export class CeoInboxSentObserveHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CeoInboxSentObserveHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     // Skill contract: never throw. Any Nylas / config / document / task / bus rejection
     // that escapes the inner flow is normalized to a failure result here.
     try {
@@ -230,7 +230,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
     }
   }
 
-  private async runObserve(ctx: SkillContext): Promise<SkillResult> {
+  private async runObserve(ctx: ToolContext): Promise<ToolResult> {
     let apiKey: string;
     let grantId: string;
     try {
@@ -533,7 +533,7 @@ export class CeoInboxSentObserveHandler implements SkillHandler {
             await ctx.actionLogRepo.insertShadowEvaluated({
               taskId: ctx.taskEventId ?? `shadow:${j.sourceMessageId}`,
               conversationId: ctx.conversationId,
-              skillName: 'shadow-draft-eval',
+              toolName: 'shadow-draft-eval',
               actionRisk: 'none',
               outcome: 'shadow_evaluated',
               taskSummary: `Shadow vs sent (${j.sourceMessageId}): ${j.reason}`,

@@ -12,7 +12,7 @@ import { EventBus } from '../../../src/bus/bus.js';
 import {
   createAgentTask,
   createInboundMessage,
-  createSkillResult,
+  createToolResult,
   createLlmCall,
   createHumanDecision,
 } from '../../../src/bus/events.js';
@@ -38,13 +38,13 @@ describe('Bus Layer Enforcement (integration)', () => {
     );
   });
 
-  it('dispatch layer cannot publish skill.result — throws at call time', async () => {
+  it('dispatch layer cannot publish tool.result — throws at call time', async () => {
     const bus = new EventBus(logger);
-    // skill.result is owned by execution (and agent on its behalf); dispatch has no publish right
-    const event = createSkillResult({
+    // tool.result is owned by execution (and agent on its behalf); dispatch has no publish right
+    const event = createToolResult({
       agentId: 'coordinator',
       conversationId: 'conv-1',
-      skillName: 'send-email',
+      toolName: 'send-email',
       result: { success: true, data: {} },
       durationMs: 120,
       parentEventId: 'invoke-1',

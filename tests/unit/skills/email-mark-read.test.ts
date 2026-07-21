@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EmailMarkReadHandler } from '../../../skills/email-mark-read/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
 
-function makeCtx(input: Record<string, unknown>, overrides?: Partial<SkillContext>): SkillContext {
-  return { skillName: 'email-mark-read', skillVersion: '1.0.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
+function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext>): ToolContext {
+  return { toolName: 'email-mark-read', toolVersion: '1.0.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
 }
 
 describe('EmailMarkReadHandler', () => {

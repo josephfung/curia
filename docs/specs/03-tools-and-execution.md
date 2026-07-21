@@ -1,22 +1,24 @@
-# 03 — Skills & Execution Layer
+# 03 — Tools & Execution Layer
 
 ## Overview
 
-Skills are the framework's extension mechanism — how agents interact with the outside world. The execution layer handles skill invocation, permission validation, and MCP protocol.
+**Tools** are the framework's extension atoms — how agents interact with the outside world (invocation + authorization). The execution layer handles tool invocation, permission validation, and MCP protocol. Per ADR-031 / #1485, the former "skill" atom name is **tool**; a future *skill* layer is the collection/bundle unit (Phase 2).
+
+The execution layer handles tool invocation, permission validation, and MCP protocol.
 
 ---
 
-## Local Skills (directory-based)
+## Local Tools (directory-based)
 
 ```
 skills/
   email-parser/
-    skill.json      # manifest
+    tool.json      # manifest
     handler.ts      # implementation
     handler.test.ts # tests
 ```
 
-### Skill Manifest (`skill.json`)
+### Tool Manifest (`tool.json`)
 
 ```json
 {
@@ -41,18 +43,18 @@ skills/
 - `install.requires_secrets` (optional): vault secret keys that must already exist before the skill can be **installed or enabled** in the registry. `RegistryService` rejects install/enable until every listed key is present in the vault. This is the install/enable gate, distinct from the runtime `secrets` allowlist above. Example: `web-search` declares `"install": { "requires_secrets": ["tavily_api_key"] }`. (An `uninstall` block is parsed but currently inert.)
 - `skip_secret_redaction` (optional, boolean): opts the skill's output out of **only** the broad generic-long-hex secret scrub in output sanitization — the structured credential patterns (API keys, JWT/Bearer, AWS) still apply, as do tag-stripping and truncation. Gated at startup to skills that declare the `secretCapture` capability. Exists so a skill whose output legitimately carries a high-entropy capability token (e.g. the secret-capture one-time link) can relay it to the LLM intact. Default false.
 
-**Privilege access** — skills declare which privileged services they need via `"capabilities": [...]` in `skill.json`. The loader validates names against a fixed allowlist (`VALID_CAPABILITIES` in `src/skills/loader.ts`) at startup and rejects unknown names. The manifest is frozen after loading. The execution layer injects only declared services into `SkillContext` — skills cannot self-escalate at runtime. Universal services (`contactService`, `entityContextAssembler`, `agentPersona`) are available to all skills without declaration. Two capabilities were added in v0.35.0: `secretCapture` (grants `ctx.secretCapture` to mint one-time vault capture links) and `secretResolver` (grants `ctx.resolveSecretRef` to resolve a `user.*` secret by reference at runtime — additionally hard-allowlisted to `web-browser` in the execution layer). See the `capabilities` section in `docs/dev/adding-a-skill.md` for the full capability reference.
+**Privilege access** — skills declare which privileged services they need via `"capabilities": [...]` in `tool.json`. The loader validates names against a fixed allowlist (`VALID_CAPABILITIES` in `src/skills/loader.ts`) at startup and rejects unknown names. The manifest is frozen after loading. The execution layer injects only declared services into `ToolContext` — skills cannot self-escalate at runtime. Universal services (`contactService`, `entityContextAssembler`, `agentPersona`) are available to all skills without declaration. Two capabilities were added in v0.35.0: `secretCapture` (grants `ctx.secretCapture` to mint one-time vault capture links) and `secretResolver` (grants `ctx.resolveSecretRef` to resolve a `user.*` secret by reference at runtime — additionally hard-allowlisted to `web-browser` in the execution layer). See the `capabilities` section in `docs/dev/adding-a-tool.md` for the full capability reference.
 
-**Caller restrictions** — skills can declare `"allowed_callers": ["agent-name", ...]` in `skill.json` to restrict which agents may invoke them. The execution layer checks the calling agent's name against this list after the elevated-skill gate but before score-based autonomy gates — this avoids creating pointless approval requests for structurally forbidden callers. If the caller is not in the list, the invocation is rejected with a structured failure. The special value `"system"` matches system-layer invocations (checkpoint processor, etc.). CEO-approved re-executions (`humanApproved: true`) bypass the caller gate. Names in `allowed_callers` are validated against known agent names at startup — unknown names cause a hard startup failure.
+**Caller restrictions** — skills can declare `"allowed_callers": ["agent-name", ...]` in `tool.json` to restrict which agents may invoke them. The execution layer checks the calling agent's name against this list after the elevated-skill gate but before score-based autonomy gates — this avoids creating pointless approval requests for structurally forbidden callers. If the caller is not in the list, the invocation is rejected with a structured failure. The special value `"system"` matches system-layer invocations (checkpoint processor, etc.). CEO-approved re-executions (`humanApproved: true`) bypass the caller gate. Names in `allowed_callers` are validated against known agent names at startup — unknown names cause a hard startup failure.
 
 ### Skill Handler Interface
 
 ```typescript
-interface SkillHandler {
-  execute(ctx: SkillContext): Promise<SkillResult>;
+interface ToolHandler {
+  execute(ctx: ToolContext): Promise<ToolResult>;
 }
 
-interface SkillContext {
+interface ToolContext {
   input: Record<string, unknown>;  // validated against manifest inputs
   secret(name: string): string;    // scoped secret access (resolves a vault secret key)
   log: Logger;                     // scoped pino child logger
@@ -67,12 +69,12 @@ interface SkillContext {
   // ...plus service-specific fields injected per-skill by name (bus, entityMemory, etc.)
 }
 
-type SkillResult =
+type ToolResult =
   | { success: true; data: unknown }
   | { success: false; error: string };
 ```
 
-Skills cannot self-grant privileges — all service access (bus, entityMemory, calendar client, etc.) must come from the injected `SkillContext` via explicit per-skill grants in the execution layer. Skills are invoked synchronously within the agent turn via `ExecutionLayer.invoke()`. Skills are sandboxed to their declared I/O and must never throw — all error paths return `{ success: false, error: '...' }`.
+Skills cannot self-grant privileges — all service access (bus, entityMemory, calendar client, etc.) must come from the injected `ToolContext` via explicit per-skill grants in the execution layer. Skills are invoked synchronously within the agent turn via `ExecutionLayer.invoke()`. Skills are sandboxed to their declared I/O and must never throw — all error paths return `{ success: false, error: '...' }`.
 
 ---
 
@@ -115,17 +117,17 @@ Two-tier access:
 Explicitly listed in agent config (`pinned_skills`). Always available to the agent, always included in the LLM's tool list.
 
 ### Discoverable Skills
-All registered skills (local + MCP) are searchable via the built-in `skill-registry` skill. Agents with `allow_discovery: true` in their YAML automatically receive `skill-registry` in their tool list. When the LLM determines it needs a capability not in its pinned skills, it invokes:
+All registered skills (local + MCP) are searchable via the built-in `tool-registry` skill. Agents with `allow_discovery: true` in their YAML automatically receive `tool-registry` in their tool list. When the LLM determines it needs a capability not in its pinned skills, it invokes:
 
 ```text
-skill-registry({ query: "send email" })
+tool-registry({ query: "send email" })
 ```
 
-This returns a list of matching skill names and descriptions. **Discovered skills are immediately callable** — after `skill-registry` succeeds, `AgentRuntime` calls `ExecutionLayer.getToolDefinitions()` with the returned names and appends the full tool schemas to the per-task working tool list before the next LLM call. The LLM can then call any discovered skill natively, with its real input schema, in the same or subsequent turns.
+This returns a list of matching skill names and descriptions. **Discovered skills are immediately callable** — after `tool-registry` succeeds, `AgentRuntime` calls `ExecutionLayer.getToolDefinitions()` with the returned names and appends the full tool schemas to the per-task working tool list before the next LLM call. The LLM can then call any discovered skill natively, with its real input schema, in the same or subsequent turns.
 
-Tool-list expansion is **per-task**: each task gets a local copy of the startup tool list, so concurrent tasks never see each other's discoveries. Multiple `skill-registry` calls within one task accumulate — the runtime deduplicates by name. Discovered skills flow through the same `ExecutionLayer.invoke()` path as pinned skills, including the elevation gate (`sensitivity: elevated` skills require a live principal turn — see Safety Gate below).
+Tool-list expansion is **per-task**: each task gets a local copy of the startup tool list, so concurrent tasks never see each other's discoveries. Multiple `tool-registry` calls within one task accumulate — the runtime deduplicates by name. Discovered skills flow through the same `ExecutionLayer.invoke()` path as pinned skills, including the elevation gate (`sensitivity: elevated` skills require a live principal turn — see Safety Gate below).
 
-`skill-registry` itself is excluded from its own search results to avoid circular self-discovery.
+`tool-registry` itself is excluded from its own search results to avoid circular self-discovery.
 
 ### Safety Gate for First-Time Use
 
@@ -147,7 +149,7 @@ Skills (and agents) are not enabled merely by existing on disk — they are trac
 Lifecycle is driven via the registry HTTP routes (`src/channels/http/routes/registry.ts`):
 
 ```
-GET    /api/registry/skills
+GET    /api/registry/tools
 GET    /api/registry/agents
 POST   /api/registry/:kind/:name/install
 POST   /api/registry/:kind/:name/enable
@@ -162,7 +164,7 @@ Channels have their own parallel registry — see [spec 04 — Channels](04-chan
 
 ## Execution Layer
 
-Skills are invoked directly by `AgentRuntime` via `ExecutionLayer.invoke(skillName, input, caller, options)`. The execution layer is constructed once per process and shared across all agents.
+Skills are invoked directly by `AgentRuntime` via `ExecutionLayer.invoke(toolName, input, caller, options)`. The execution layer is constructed once per process and shared across all agents.
 
 Invocation flow:
 
@@ -170,10 +172,10 @@ Invocation flow:
 2. **Normalize inputs** — convert timestamp inputs to UTC-offset ISO strings using the configured local timezone
 3. **Validate elevation** — if `sensitivity: elevated`, reject unless this is a **live principal turn** (`isLivePrincipalTurn`: the distinct `options.liveTurn` flag — forwarded from `agent.task.payload.liveTurn` — plus principal lineage on the effective metadata). System, agent, scheduled, and woken/inherited principal-lineage contexts all fail — a wake is never a live turn; a synchronous delegation inside a live turn is (#1126). This is the sole enforcement point; no handler re-check duplicates it. (Distinct from the autonomy principal-bypass, which uses *lineage* via the ladder — see [14-autonomy-engine.md](14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks).)
 4. **Validate caller** — if `allowed_callers` is set on the manifest, reject unless the calling agent is in the list (CEO-approved re-executions bypass this gate)
-5. **Build context** — assemble `SkillContext` with scoped secrets, logger, and per-skill service grants
+5. **Build context** — assemble `ToolContext` with scoped secrets, logger, and per-skill service grants
 6. **Execute** — call `handler.execute(ctx)` with a timeout wrapper (local), or `tools/call` (MCP)
 7. **Sanitize output** — strip injection vectors, redact secrets, truncate, wrap errors
-8. **Return `SkillResult`** to the agent runtime for inclusion in the LLM's next turn
+8. **Return `ToolResult`** to the agent runtime for inclusion in the LLM's next turn
 
 ### Output Sanitization
 
@@ -227,7 +229,7 @@ Skills access secrets via `ctx.secret("name")`:
 
 The framework ships with these skills (in `skills/` as part of core):
 
-- `skill-registry` — search for available skills by keyword; injected into tool list for agents with `allow_discovery: true`
+- `tool-registry` — search for available skills by keyword; injected into tool list for agents with `allow_discovery: true`
 - `delegate` — route a sub-task to a specialist agent via the bus
 - `web-fetch` — HTTP GET with configurable timeouts and size limits
 - `web-browser` — Playwright-backed browser for JS-rendered pages. v0.35.0 added: secret-by-reference fill (`secret_ref` — a `user.*` secret name; the value is filled server-side and never shown to the LLM), incognito sessions (`incognito: true` — ephemeral, isolated context off the principal's persistent profile), opt-in ad-blocking (`block_ads: true`, off by default — keep off for auth/login/form-fill flows), new interaction actions (`scroll`, `hover`, `press_key`, `wait_for`), iframe awareness with per-frame SSRF gating (private/internal child frames are skipped), a persistent profile (shared cookies/storage across sessions), and fingerprint hardening (real Chrome channel + stealth, no stale UA override)

@@ -1,10 +1,10 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { ConfigStore } from '../../src/memory/config-store.js';
 import { readVoiceProposal, readCompletionDigest, digestMapToItems } from '../_shared/learning-state.js';
 import { renderCompletionSection, renderVoiceGuideSection } from '../_shared/learning-digest.js';
 
-export class ListLearningDigestHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ListLearningDigestHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     // Skill contract: never throw — a failed document read becomes a failure result.
     try {
       // Both the voice proposal and the completion digest now live in config (#1438).

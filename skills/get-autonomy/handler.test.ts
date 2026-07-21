@@ -2,7 +2,7 @@
 // Verifies that lastSetBy, trend, and scoredActionCount are returned in the response data.
 import { describe, it, expect, vi } from 'vitest';
 import { GetAutonomyHandler } from './handler.js';
-import type { SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 
 // Expected shape of the data returned by get-autonomy (Phase 3 fields).
@@ -13,7 +13,7 @@ type GetAutonomyData = {
 };
 
 /** Extract and type the data payload from a successful get-autonomy result. */
-function getData(result: SkillResult): GetAutonomyData {
+function getData(result: ToolResult): GetAutonomyData {
   if (!result.success) throw new Error(`Expected successful get-autonomy result, got error: ${result.error}`);
   return result.data as GetAutonomyData;
 }
@@ -33,14 +33,14 @@ const defaultService = {
   getScoredActionCount: vi.fn().mockResolvedValue(47),
 };
 
-function makeCtx(serviceOverrides: Partial<typeof defaultService> = {}): SkillContext {
+function makeCtx(serviceOverrides: Partial<typeof defaultService> = {}): ToolContext {
   // Spread defaults then apply overrides — each test gets a fresh merged service mock
   const autonomyService = { ...defaultService, ...serviceOverrides };
   return {
     input: {},
     log: createSilentLogger(),
     autonomyService,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('GetAutonomyHandler', () => {

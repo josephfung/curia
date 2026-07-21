@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EmailSendHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import pino from 'pino';
 
@@ -8,7 +8,7 @@ function makeLogger() {
   return pino({ level: 'silent' });
 }
 
-function makeCtx(input: Record<string, unknown>): SkillContext {
+function makeCtx(input: Record<string, unknown>): ToolContext {
   const gateway = {
     send: vi.fn().mockResolvedValue({ success: true }),
   } as unknown as OutboundGateway;
@@ -18,7 +18,7 @@ function makeCtx(input: Record<string, unknown>): SkillContext {
     secret: (name: string) => { throw new Error(`Missing secret: ${name}`); },
     log: makeLogger(),
     outboundGateway: gateway,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('EmailSendHandler', () => {

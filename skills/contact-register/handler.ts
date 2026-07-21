@@ -24,11 +24,11 @@
 //   - bus (capability: "bus" — optional; audit trail only, skill succeeds without it)
 
 import { randomUUID } from 'node:crypto';
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createContactResolved } from '../../src/bus/events.js';
 
-export class ContactRegisterHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactRegisterHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const {
       channel,
       identifier,

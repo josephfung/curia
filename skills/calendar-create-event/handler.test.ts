@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CalendarCreateEventHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';
 import type { Logger } from '../../src/logger.js';
 import { CURIA_HOLD_KEY } from '../../src/channels/calendar/holds.js';
@@ -66,12 +66,12 @@ const OVERLAPPING_REAL_MEETING = makeEvent({
   metadata: null,
 });
 
-/** Build a minimal SkillContext with configurable mocks. */
+/** Build a minimal ToolContext with configurable mocks. */
 function makeCtx(opts: {
   createEvent?: ReturnType<typeof vi.fn>;
   listEvents?: ReturnType<typeof vi.fn>;
   deleteEvent?: ReturnType<typeof vi.fn>;
-}): SkillContext {
+}): ToolContext {
   const createEvent = opts.createEvent ?? vi.fn().mockResolvedValue(CREATED_EVENT);
   const listEvents = opts.listEvents ?? vi.fn().mockResolvedValue([]);
   const deleteEvent = opts.deleteEvent ?? vi.fn().mockResolvedValue(undefined);
@@ -94,9 +94,9 @@ function makeCtx(opts: {
       createEvent,
       listEvents,
       deleteEvent,
-    } as unknown as SkillContext['nylasCalendarClient'],
+    } as unknown as ToolContext['nylasCalendarClient'],
     timezone: 'America/Toronto',
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 /** A second overlapping curia-hold — used in partial-failure tests. */

@@ -1,4 +1,4 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../_shared/ceo-nylas-client.js';
 import { markdownToHtml } from '../../src/format/markdown-to-html.js';
 import { parseAttachmentInputs } from '../_shared/parse-attachments.js';
@@ -8,8 +8,8 @@ import { captureDraftSnapshot } from '../_shared/voice-learning-capture.js';
 const MAX_BODY_LENGTH = 50_000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export class CeoInboxDraftComposeHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CeoInboxDraftComposeHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     let apiKey: string;
     let grantId: string;
     try {

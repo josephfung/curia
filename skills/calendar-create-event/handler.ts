@@ -8,13 +8,13 @@
 // overlap the new slot are deleted. This is a best-effort, fire-and-forget step
 // that MUST NOT fail the booking — if anything goes wrong here, we warn and continue.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { CreateEventInput } from '../../src/channels/calendar/nylas-calendar-client.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import { isHoldEvent, eventsOverlap } from '../../src/channels/calendar/holds.js';
 
-export class CalendarCreateEventHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class CalendarCreateEventHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.nylasCalendarClient) {
       return { success: false, error: 'Calendar not configured — Nylas credentials missing' };
     }

@@ -1,7 +1,7 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
-export class ContactUnlinkIdentityHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactUnlinkIdentityHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { contact_id, identity_id } = ctx.input as {
       contact_id?: string;
       identity_id?: string;

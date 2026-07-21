@@ -20,7 +20,7 @@
 // well-formed task — no special resume detection needed in its prompt.
 
 import { randomUUID } from 'node:crypto';
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createAgentTask, type AgentResponseEvent, type AgentResponseFailureReason } from '../../src/bus/events.js';
 // Resume-token format lives in ONE place (#995): decode + version via the shared helper, so a
 // future format change can't silently desync this handler from runtime.ts and the resume subscriber.
@@ -75,8 +75,8 @@ function formatStructuredFailureMessage(agent: string, reason: AgentResponseFail
   }
 }
 
-export class DelegateHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DelegateHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { agent, task, conversation_id, timeout_ms, resume_token } = ctx.input as {
       agent?: string;
       task?: string;
@@ -276,8 +276,8 @@ export class DelegateHandler implements SkillHandler {
 
     // Publish an agent.task event for the specialist.
     // parentEventId uses a delegate-prefixed UUID. Ideally this would trace back
-    // to the Coordinator's skill.invoke event, but SkillContext doesn't currently
-    // carry the invoking event's ID. TODO: Add invokeEventId to SkillContext so
+    // to the Coordinator's tool.invoke event, but ToolContext doesn't currently
+    // carry the invoking event's ID. TODO: Add invokeEventId to ToolContext so
     // capability-gated skills can maintain the full audit causal chain.
     const taskEvent = createAgentTask({
       agentId: agent,

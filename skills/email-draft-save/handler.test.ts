@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { EmailDraftSaveHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 
 // --- Shared test helpers ---
@@ -20,10 +20,10 @@ function makeMockGateway(overrides?: { createEmailDraft?: ReturnType<typeof vi.f
     createEmailDraft: overrides?.createEmailDraft
       ?? vi.fn().mockResolvedValue({ success: true, draftId: 'draft-abc' }),
     // Other gateway methods are not used by this skill — typed as unknown
-  } as unknown as SkillContext['outboundGateway'];
+  } as unknown as ToolContext['outboundGateway'];
 }
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: BASE_INPUT,
     secret: (name: string) => { throw new Error(`secret '${name}' not configured in test`); },
@@ -32,7 +32,7 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     taskMetadata: {},
     taskEventId: undefined,
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 // --- Baseline behaviour tests ---

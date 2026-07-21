@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ContextBridgeReleaseHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { TaskRepo } from '../../src/db/task-repo.js';
 import pino from 'pino';
 
@@ -8,7 +8,7 @@ const handler = new ContextBridgeReleaseHandler();
 const TASK_ID = '00000000-0000-4000-8000-000000000001';
 const ENTRY_ID = '00000000-0000-4000-8000-000000000002';
 
-function makeCtx(input: Record<string, unknown>, overrides: Partial<SkillContext> = {}): SkillContext {
+function makeCtx(input: Record<string, unknown>, overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input,
     secret: vi.fn((name: string) => { throw new Error(`Missing secret: ${name}`); }),
@@ -23,7 +23,7 @@ function makeCtx(input: Record<string, unknown>, overrides: Partial<SkillContext
       explicitExpiryHours: 24,
     },
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 describe('ContextBridgeReleaseHandler', () => {

@@ -12,7 +12,7 @@
 // and the follow-up LLM call fails with a non-retryable 400 (VALIDATION_ERROR),
 // which surfaces to the user as the generic "unable to process" message.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { JobRow } from '../../src/scheduler/scheduler-service.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
@@ -86,8 +86,9 @@ function clampLimit(raw: unknown): number {
   return Math.max(1, Math.min(Math.floor(raw), MAX_LIST_LIMIT));
 }
 
-export class SchedulerListHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+
+export class SchedulerListHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     if (!ctx.schedulerService) {
       return {
         success: false,

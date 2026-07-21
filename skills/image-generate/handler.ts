@@ -7,7 +7,7 @@
 // Defaults tuned for essay cover art (widescreen, high quality, vivid style).
 // All three are overridable so the skill is useful for other agents too.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/images/generations';
 
@@ -20,8 +20,8 @@ interface OpenAIImagesResponse {
   data?: OpenAIImageItem[];
 }
 
-export class ImageGenerateHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ImageGenerateHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { prompt, size, quality, style } = ctx.input as {
       prompt?: string;
       size?: string;

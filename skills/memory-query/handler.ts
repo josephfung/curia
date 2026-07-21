@@ -9,7 +9,7 @@
 //   - max_sensitivity — restrict to nodes at or below a sensitivity ceiling
 //   - limit         — cap the number of results (default 10, max 50)
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { NODE_TYPES, SENSITIVITY_LEVELS } from '../../src/memory/types.js';
 import type { NodeType, Sensitivity } from '../../src/memory/types.js';
 
@@ -19,8 +19,8 @@ const DEFAULT_LIMIT = 10;
 const NODE_TYPES_SET: ReadonlySet<string> = new Set(NODE_TYPES);
 const SENSITIVITY_LEVELS_SET: ReadonlySet<string> = new Set(SENSITIVITY_LEVELS);
 
-export class MemoryQueryHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class MemoryQueryHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { query, type, limit: limitInput, max_sensitivity } = ctx.input as {
       query?: string;
       type?: string;

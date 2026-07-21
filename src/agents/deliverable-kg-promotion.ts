@@ -13,7 +13,7 @@ import type { TaskRow } from '../db/queries/tasks.js';
 import type { TaskCompletedEvent } from '../bus/events.js';
 import { readPlanBlock } from '../db/plan-progress.js';
 import { resolvePromotionText } from './plan-execution.js';
-import type { SkillResult } from '../skills/types.js';
+import type { ToolResult } from '../skills/types.js';
 
 export interface KgPromotionConfig {
   enabled: boolean;
@@ -167,30 +167,30 @@ export async function promoteDeliverableToKg(
       ]);
 
       for (const [index, result] of skillResults.entries()) {
-        const skillName = index === 0 ? 'extract-relationships' : 'extract-facts';
+        const toolName = index === 0 ? 'extract-relationships' : 'extract-facts';
         if (result.status === 'rejected') {
           const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
-          errors.push(`${skillName}: ${message}`);
+          errors.push(`${toolName}: ${message}`);
           logger.error(
-            { err: result.reason as Error, taskId: task.id, skill: skillName },
+            { err: result.reason as Error, taskId: task.id, skill: toolName },
             'Deliverable KG promotion: skill threw unexpectedly',
           );
           continue;
         }
-        const skillResult = result.value as SkillResult;
+        const skillResult = result.value as ToolResult;
         if (!skillResult.success) {
-          errors.push(`${skillName}: ${skillResult.error ?? 'unknown error'}`);
+          errors.push(`${toolName}: ${skillResult.error ?? 'unknown error'}`);
           logger.warn(
-            { taskId: task.id, skill: skillName, error: skillResult.error },
+            { taskId: task.id, skill: toolName, error: skillResult.error },
             'Deliverable KG promotion: skill returned failure',
           );
           continue;
         }
-        if (skillName === 'extract-relationships' && skillResult.data) {
+        if (toolName === 'extract-relationships' && skillResult.data) {
           const data = skillResult.data as { extracted?: number; confirmed?: number };
           relationshipsStored = (data.extracted ?? 0) + (data.confirmed ?? 0);
         }
-        if (skillName === 'extract-facts' && skillResult.data) {
+        if (toolName === 'extract-facts' && skillResult.data) {
           const data = skillResult.data as { stored?: number; redirected?: number };
           factsStored = (data.stored ?? 0) + (data.redirected ?? 0);
         }

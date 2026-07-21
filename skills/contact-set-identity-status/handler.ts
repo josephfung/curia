@@ -6,7 +6,7 @@
 //
 // See: https://github.com/josephfung/curia/issues/377
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { IdentityStatus } from '../../src/contacts/types.js';
 import { IdentityNotFoundError } from '../../src/contacts/types.js';
 
@@ -14,8 +14,8 @@ const VALID_STATUSES = new Set<string>(['active', 'defunct', 'bounced']);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export class ContactSetIdentityStatusHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactSetIdentityStatusHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { identity_id, status } = ctx.input as {
       identity_id?: string;
       status?: string;

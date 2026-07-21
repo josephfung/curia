@@ -1,10 +1,10 @@
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export class ContactGrantPermissionHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ContactGrantPermissionHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { contact_id, permission, granted } = ctx.input as {
       contact_id?: string;
       permission?: string;

@@ -2,14 +2,14 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { CalendarFindFreeTimeHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
 // ---------------------------------------------------------------------------
 
-function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     input: {
       calendarIds: ['cal_1'],
@@ -21,9 +21,9 @@ function makeCtx(overrides?: Partial<SkillContext>): SkillContext {
     timezone: 'UTC',
     nylasCalendarClient: {
       getFreeBusy: vi.fn().mockResolvedValue([]),
-    } as unknown as SkillContext['nylasCalendarClient'],
+    } as unknown as ToolContext['nylasCalendarClient'],
     ...overrides,
-  } as SkillContext;
+  } as ToolContext;
 }
 
 // Helper to convert ISO time to Unix timestamp (seconds)
@@ -64,7 +64,7 @@ describe('CalendarFindFreeTimeHandler — free vs busy status', () => {
       },
       nylasCalendarClient: {
         getFreeBusy,
-      } as unknown as SkillContext['nylasCalendarClient'],
+      } as unknown as ToolContext['nylasCalendarClient'],
     }));
 
     expect(result.success).toBe(true);

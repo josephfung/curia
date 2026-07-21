@@ -1097,7 +1097,7 @@ export class OfficeScene extends Phaser.Scene {
     }
     agent.thinkBubble?.destroy();
     // Offset slightly right so a think bubble and a speech bubble don't fully overlap.
-    const text = (directive.skillName ?? '…').slice(0, 24);
+    const text = (directive.toolName ?? '…').slice(0, 24);
     agent.thinkBubble = this.makeBubble(agent.container.x + 12, agent.container.y - BUBBLE_GAP_THINK, text, 'think');
   }
 

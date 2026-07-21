@@ -215,7 +215,7 @@ Changes take effect on restart.
 
 ## Skill, agent, and channel registry
 
-Skills, agents, and channels are not enabled simply by existing on disk — they are tracked in three registry tables (`skill_registry`, `agent_registry`, `channel_registry`) with an explicit **install → enable** lifecycle.
+Skills, agents, and channels are not enabled simply by existing on disk — they are tracked in three registry tables (`tool_registry`, `agent_registry`, `channel_registry`) with an explicit **install → enable** lifecycle.
 
 - **Disabled by default.** A newly added skill or agent is registered at startup but starts **disabled**. It must be enabled before it can be loaded. Toggleable channels (`email`, `signal`) follow the same rule: seeding credentials does **not** install or enable them — use **Settings → Channels** (install, then enable, then restart).
 - **Restart-based enforcement.** Enabled items are loaded/registered at startup; disabled items are skipped. Changing enable state takes effect on the next restart.
@@ -225,7 +225,7 @@ Skills, agents, and channels are not enabled simply by existing on disk — they
 Lifecycle is driven via the registry HTTP API (or the admin UI):
 
 ```
-GET    /api/registry/skills
+GET    /api/registry/tools
 GET    /api/registry/agents
 POST   /api/registry/:kind/:name/install
 POST   /api/registry/:kind/:name/enable

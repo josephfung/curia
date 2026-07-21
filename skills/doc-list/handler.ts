@@ -1,6 +1,6 @@
 // handler.ts — doc-list skill (#1209).
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 import {
   listDirectoryProjection,
@@ -8,8 +8,8 @@ import {
 } from '../_shared/doc-workspace.js';
 import { looksLikeDocumentPath } from '../../src/agents/document-workspace.js';
 
-export class DocListHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class DocListHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { path } = ctx.input as { path?: string };
 
     if (!path || typeof path !== 'string' || !path.trim()) {

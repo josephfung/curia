@@ -3,7 +3,7 @@
 // Rows-direct decomposition: writes child task rows and the progress.plan block.
 // Symmetric with checkpoint — platform-owned durable state, runtime-LLM-driven.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
 import { DEFAULT_RESUMABLE_CEILINGS } from '../../src/config.js';
 import {
@@ -32,8 +32,8 @@ import type { TaskRow } from '../../src/db/queries/tasks.js';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TERMINAL_STATUSES = new Set(['done', 'cancelled', 'failed']);
 
-export class PlanHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class PlanHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as {
       task_id?: string;
       goal?: string;

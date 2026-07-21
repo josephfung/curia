@@ -1,16 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ContactDedupExcludeHandler } from '../../../skills/contact-dedup-exclude/handler.js';
-import type { SkillContext } from '../../../src/skills/types.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
 const UUID_A = '550e8400-e29b-41d4-a716-446655440000';
 const UUID_B = '550e8400-e29b-41d4-a716-446655440001';
 
-function makeCtx(input: Record<string, unknown>, overrides?: Partial<SkillContext>): SkillContext {
+function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext>): ToolContext {
   return {
-    skillName: 'contact-dedup-exclude',
-    skillVersion: '0.1.0',
+    toolName: 'contact-dedup-exclude',
+    toolVersion: '0.1.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
@@ -52,7 +52,7 @@ describe('ContactDedupExcludeHandler', () => {
   });
 
   it('fails when entityMemory is not available', async () => {
-    const contactService = { getContact: vi.fn() } as unknown as SkillContext['contactService'];
+    const contactService = { getContact: vi.fn() } as unknown as ToolContext['contactService'];
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
       { contactService },
@@ -66,8 +66,8 @@ describe('ContactDedupExcludeHandler', () => {
       getContact: vi.fn().mockImplementation(async (id: string) =>
         id === UUID_B ? { id: UUID_B, kgNodeId: 'kg-b' } : undefined,
       ),
-    } as unknown as SkillContext['contactService'];
-    const entityMemory = { storeFact: vi.fn() } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['contactService'];
+    const entityMemory = { storeFact: vi.fn() } as unknown as ToolContext['entityMemory'];
 
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
@@ -83,8 +83,8 @@ describe('ContactDedupExcludeHandler', () => {
       getContact: vi.fn().mockImplementation(async (id: string) =>
         id === UUID_A ? { id: UUID_A, kgNodeId: 'kg-a' } : undefined,
       ),
-    } as unknown as SkillContext['contactService'];
-    const entityMemory = { storeFact: vi.fn() } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['contactService'];
+    const entityMemory = { storeFact: vi.fn() } as unknown as ToolContext['entityMemory'];
 
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
@@ -103,8 +103,8 @@ describe('ContactDedupExcludeHandler', () => {
         kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
         displayName: id === UUID_A ? 'Alice' : 'Bob',
       })),
-    } as unknown as SkillContext['contactService'];
-    const entityMemory = { storeFact: storeFactMock } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['contactService'];
+    const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
 
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
@@ -137,8 +137,8 @@ describe('ContactDedupExcludeHandler', () => {
         id,
         kgNodeId: id === UUID_A ? 'kg-a' : null, // B has no KG node
       })),
-    } as unknown as SkillContext['contactService'];
-    const entityMemory = { storeFact: storeFactMock } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['contactService'];
+    const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
 
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
@@ -158,8 +158,8 @@ describe('ContactDedupExcludeHandler', () => {
   it('returns failure when getContact throws', async () => {
     const contactService = {
       getContact: vi.fn().mockRejectedValue(new Error('DB connection refused')),
-    } as unknown as SkillContext['contactService'];
-    const entityMemory = { storeFact: vi.fn() } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['contactService'];
+    const entityMemory = { storeFact: vi.fn() } as unknown as ToolContext['entityMemory'];
 
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
@@ -176,10 +176,10 @@ describe('ContactDedupExcludeHandler', () => {
         id,
         kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
       })),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
     const entityMemory = {
       storeFact: vi.fn().mockRejectedValue(new Error('KG write failed')),
-    } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['entityMemory'];
 
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
@@ -198,13 +198,13 @@ describe('ContactDedupExcludeHandler', () => {
         id,
         kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
       })),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
     const entityMemory = {
       storeFact: vi.fn()
         // First call (A-side) conflicts; second call (B-side) succeeds
         .mockResolvedValueOnce({ stored: false, action: 'conflict', conflict: 'existing exclusion' })
         .mockResolvedValue({ stored: true, action: 'created' }),
-    } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['entityMemory'];
 
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
@@ -228,14 +228,14 @@ describe('ContactDedupExcludeHandler', () => {
         id,
         kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
       })),
-    } as unknown as SkillContext['contactService'];
+    } as unknown as ToolContext['contactService'];
     const entityMemory = {
       storeFact: vi.fn().mockResolvedValue({
         stored: false,
         action: 'conflict',
         conflict: 'Contradicts existing dedup_exclusion fact for a different pair',
       }),
-    } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['entityMemory'];
 
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
@@ -250,8 +250,8 @@ describe('ContactDedupExcludeHandler', () => {
     const storeFactMock = vi.fn();
     const contactService = {
       getContact: vi.fn().mockImplementation(async (id: string) => ({ id, kgNodeId: null })),
-    } as unknown as SkillContext['contactService'];
-    const entityMemory = { storeFact: storeFactMock } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['contactService'];
+    const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
 
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
@@ -271,8 +271,8 @@ describe('ContactDedupExcludeHandler', () => {
         id,
         kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
       })),
-    } as unknown as SkillContext['contactService'];
-    const entityMemory = { storeFact: storeFactMock } as unknown as SkillContext['entityMemory'];
+    } as unknown as ToolContext['contactService'];
+    const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
 
     await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },

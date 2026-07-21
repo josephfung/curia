@@ -5,7 +5,7 @@
 //
 // Lives under src/ (not skills/) so the channel adapter — which is bound to
 // rootDir=src — can import it. Skill handlers reach into src/ for shared
-// utilities (same pattern they use for SkillContext / SkillHandler types).
+// utilities (same pattern they use for ToolContext / ToolHandler types).
 
 import { DateTime } from 'luxon';
 import sanitizeHtml from 'sanitize-html';

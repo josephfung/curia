@@ -10,7 +10,7 @@
 // LLM calls go through the constrained InfraLlm service (classify + extract only),
 // which routes through ModelRouter and publishes llm.call bus events for telemetry.
 
-import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
+import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { EDGE_TYPES, NODE_TYPES } from '../../src/memory/types.js';
 import type { EdgeType, NodeType } from '../../src/memory/types.js';
 
@@ -27,8 +27,8 @@ interface ExtractedTriple {
 const EDGE_TYPES_LIST = EDGE_TYPES.join(', ');
 const NODE_TYPES_LIST = NODE_TYPES.join(', ');
 
-export class ExtractRelationshipsHandler implements SkillHandler {
-  async execute(ctx: SkillContext): Promise<SkillResult> {
+export class ExtractRelationshipsHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
     const { text, source, max_stored } = ctx.input as { text?: string; source?: string; max_stored?: number };
 
     if (!text || typeof text !== 'string') {
@@ -45,7 +45,7 @@ export class ExtractRelationshipsHandler implements SkillHandler {
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
-    // Guard: infraLlm is a required capability declared in skill.json.
+    // Guard: infraLlm is a required capability declared in tool.json.
     if (!ctx.infraLlm) {
       ctx.log.error('extract-relationships: infraLlm capability missing — execution layer misconfigured');
       return { success: false, error: 'extract-relationships requires infraLlm capability' };

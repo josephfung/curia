@@ -8,14 +8,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import pino from 'pino';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
-import { SkillRegistry } from '../../../src/skills/registry.js';
-import type { SkillManifest, SkillHandler, SkillContext } from '../../../src/skills/types.js';
+import { ToolRegistry } from '../../../src/skills/registry.js';
+import type { ToolManifest, ToolHandler, ToolContext } from '../../../src/skills/types.js';
 import type { EntityContextAssembler } from '../../../src/entity-context/assembler.js';
 import type { EntityContext } from '../../../src/entity-context/types.js';
 
 const logger = pino({ level: 'silent' });
 
-function makeManifest(overrides: Partial<SkillManifest> = {}): SkillManifest {
+function makeManifest(overrides: Partial<ToolManifest> = {}): ToolManifest {
   return {
     name: 'test-skill',
     description: 'A test skill',
@@ -66,16 +66,16 @@ function makeMockAssembler(result: Awaited<ReturnType<EntityContextAssembler['as
 }
 
 describe('ExecutionLayer — entity_enrichment', () => {
-  let registry: SkillRegistry;
+  let registry: ToolRegistry;
 
   beforeEach(() => {
-    registry = new SkillRegistry();
+    registry = new ToolRegistry();
   });
 
   it('injects ctx.entityContext when manifest declares entity_enrichment', async () => {
-    let capturedCtx: SkillContext | undefined;
+    let capturedCtx: ToolContext | undefined;
 
-    const handler: SkillHandler = {
+    const handler: ToolHandler = {
       execute: async (ctx) => {
         capturedCtx = ctx;
         return { success: true, data: 'ok' };
@@ -101,9 +101,9 @@ describe('ExecutionLayer — entity_enrichment', () => {
   });
 
   it('uses caller contactId as default when param is empty and default=caller', async () => {
-    let capturedCtx: SkillContext | undefined;
+    let capturedCtx: ToolContext | undefined;
 
-    const handler: SkillHandler = {
+    const handler: ToolHandler = {
       execute: async (ctx) => {
         capturedCtx = ctx;
         return { success: true, data: 'ok' };
@@ -129,9 +129,9 @@ describe('ExecutionLayer — entity_enrichment', () => {
   });
 
   it('uses agentContactId as default when default=agent', async () => {
-    let capturedCtx: SkillContext | undefined;
+    let capturedCtx: ToolContext | undefined;
 
-    const handler: SkillHandler = {
+    const handler: ToolHandler = {
       execute: async (ctx) => {
         capturedCtx = ctx;
         return { success: true, data: 'ok' };
@@ -157,9 +157,9 @@ describe('ExecutionLayer — entity_enrichment', () => {
   });
 
   it('skips pre-enrichment when no assembler is configured', async () => {
-    let capturedCtx: SkillContext | undefined;
+    let capturedCtx: ToolContext | undefined;
 
-    const handler: SkillHandler = {
+    const handler: ToolHandler = {
       execute: async (ctx) => {
         capturedCtx = ctx;
         return { success: true, data: 'ok' };
@@ -180,7 +180,7 @@ describe('ExecutionLayer — entity_enrichment', () => {
   });
 
   it('does not call assembler when skill has no entity_enrichment declaration', async () => {
-    const handler: SkillHandler = {
+    const handler: ToolHandler = {
       execute: async () => ({ success: true, data: 'ok' }),
     };
 
@@ -200,7 +200,7 @@ describe('ExecutionLayer — entity_enrichment', () => {
   it('continues handler invocation when assembler throws (non-fatal)', async () => {
     let handlerCalled = false;
 
-    const handler: SkillHandler = {
+    const handler: ToolHandler = {
       execute: async () => {
         handlerCalled = true;
         return { success: true, data: 'ok' };
@@ -231,7 +231,7 @@ describe('ExecutionLayer — entity_enrichment', () => {
   });
 
   it('includes unresolved IDs in a debug log but does not fail the skill', async () => {
-    const handler: SkillHandler = {
+    const handler: ToolHandler = {
       execute: async () => ({ success: true, data: 'ok' }),
     };
 
@@ -254,9 +254,9 @@ describe('ExecutionLayer — entity_enrichment', () => {
   });
 
   it('exposes agentContactId on ctx for all skills', async () => {
-    let capturedCtx: SkillContext | undefined;
+    let capturedCtx: ToolContext | undefined;
 
-    const handler: SkillHandler = {
+    const handler: ToolHandler = {
       execute: async (ctx) => {
         capturedCtx = ctx;
         return { success: true, data: 'ok' };

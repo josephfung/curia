@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { TaskListHandler } from './handler.js';
-import type { SkillContext } from '../../src/skills/types.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import type { TaskRepo, TaskListRow } from '../../src/db/task-repo.js';
 
 const silentLog = pino({ level: 'silent' });
 
-function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input: {},
     secret: () => 'unused',
@@ -14,7 +14,7 @@ function makeCtx(overrides: Partial<SkillContext> = {}): SkillContext {
     agentId: 'coordinator',
     timezone: 'America/Toronto',
     ...overrides,
-  } as unknown as SkillContext;
+  } as unknown as ToolContext;
 }
 
 function makeListRow(overrides: Partial<TaskListRow> = {}): TaskListRow {
