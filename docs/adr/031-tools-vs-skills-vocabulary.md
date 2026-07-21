@@ -106,8 +106,16 @@ the shared runtime catalog remains; that catalog’s type is now `ToolRegistry`.
 **Harder / accepted:**
 
 - Large mechanical PR (~117 manifests, registry/API/console, bus event types,
-  docs). Custom overlays must rename manifests on upgrade.
-- Historical audit rows retain old `skill.*` event type strings; readers of
-  old logs must accept both until retention ages them out.
+  docs). Custom overlays must rename manifests on upgrade. The loader logs an
+  **error** (not a silent skip) when a directory still has `skill.json` and no
+  `tool.json`, so an unmigrated custom atom fails loudly at startup.
+- Historical `audit_log` rows retain old `skill.*` event-type strings and
+  `payload.skillName`. **Readers dual-match:** `findToolResults` /
+  `findByEventTypes`, activity-log, and antfarm interpret both vocabularies
+  (`src/audit/legacy-tool-events.ts`). New writes use only `tool.*` /
+  `toolName`. Bus permissions / live subscribers stay on the new names only
+  (they never re-read historical rows).
+- `autonomy_action_log.skill_name` column name is unchanged; app code maps
+  `toolName` ↔ that column on write/read (coherent through the rename).
 - `pinned_skills` still lists tools until Phase 2 — temporarily awkward naming
   that the follow-up phase corrects by changing pin targets, not the field.

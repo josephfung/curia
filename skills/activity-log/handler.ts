@@ -5,6 +5,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { AuditLogRow } from '../../src/audit/audit-log-repo.js';
+import { readAuditToolName } from '../../src/audit/legacy-tool-events.js';
 import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
 import { getRecapEligibleToolNames } from '../../src/skills/recap-skills.js';
 import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
@@ -94,7 +95,7 @@ function summarizeToolResult(
   detail: string | null;
   autonomy: 'autonomous' | 'approved' | 'unknown';
 } | null {
-  const toolName = typeof row.payload.toolName === 'string' ? row.payload.toolName : null;
+  const toolName = readAuditToolName(row.payload) ?? null;
   if (!toolName) return null;
 
   const result = row.payload.result as { success?: boolean; data?: unknown; error?: string } | undefined;

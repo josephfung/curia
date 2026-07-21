@@ -61,7 +61,18 @@ export function discoverToolManifests(skillsDir: string, logger?: Logger): ToolD
     if (!entry.isDirectory()) continue;
     const dir = path.join(skillsDir, entry.name);
     const manifestPath = path.join(dir, 'tool.json');
-    if (!fs.existsSync(manifestPath)) continue; // not a skill dir (e.g. _shared)
+    const legacyManifestPath = path.join(dir, 'skill.json');
+    if (!fs.existsSync(manifestPath)) {
+      // One-shot cutover (ADR-031): directories that still have skill.json but no
+      // tool.json are not loaded — warn loudly so custom overlays don't vanish silently.
+      if (fs.existsSync(legacyManifestPath)) {
+        logger?.error(
+          { dir, legacyManifest: 'skill.json' },
+          'legacy skill.json found — rename to tool.json (ADR-031); atom will not load until renamed',
+        );
+      }
+      continue; // not a tool dir (e.g. _shared) or unmigrated legacy manifest
+    }
 
     try {
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as ToolManifest;

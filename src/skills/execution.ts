@@ -1562,6 +1562,7 @@ export class ExecutionLayer {
           const truncated =
             serialized.slice(0, this.skillOutputMaxLength) + '[truncated — output exceeded limit]';
           return { success: true, data: truncated };
+        }
         return { success: true, data: sanitizedData };
       }
 

@@ -3,6 +3,9 @@ import type {
   AuditEventRow,
   SceneDirective,
 } from '@curia/shared-types';
+import {
+  readAuditToolName,
+} from '../audit/legacy-tool-events.js';
 
 function baseFields(row: AuditEventRow): Pick<SceneDirective, 'id' | 'logicalTs' | 'causedBy'> {
   return {
@@ -47,8 +50,9 @@ export function interpretEvent(row: AuditEventRow): SceneDirective | SceneDirect
         state: 'active',
       };
 
-    case 'tool.invoke': {
-      const toolName = payloadString(payload, 'toolName') ?? '';
+    case 'tool.invoke':
+    case 'skill.invoke': {
+      const toolName = readAuditToolName(payload) ?? '';
       const agentId = payloadString(payload, 'agentId') ?? row.sourceId;
       if (toolName === 'delegate') {
         const input = payload.input;
@@ -88,12 +92,13 @@ export function interpretEvent(row: AuditEventRow): SceneDirective | SceneDirect
     }
 
     case 'tool.result':
+    case 'skill.result':
       return {
         ...base,
         kind: 'agent.think',
         agentId: payloadString(payload, 'agentId') ?? row.sourceId,
         phase: 'stop',
-        toolName: payloadString(payload, 'toolName'),
+        toolName: readAuditToolName(payload),
       };
 
     case 'agent.discuss':
@@ -159,7 +164,7 @@ export function interpretEvent(row: AuditEventRow): SceneDirective | SceneDirect
           ...base,
           kind: 'badge',
           badgeKind: 'autonomy.blocked',
-          label: payloadString(payload, 'toolName')
+          label: readAuditToolName(payload)
             ?? payloadString(payload, 'reason')
             ?? row.eventType,
         };

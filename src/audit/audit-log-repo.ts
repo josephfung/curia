@@ -4,6 +4,7 @@
 
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
+import { expandLegacyToolEventTypes } from './legacy-tool-events.js';
 
 export interface AuditLogRow {
   id: string;
@@ -115,8 +116,11 @@ export class AuditLogRepo {
   ) {}
 
   /**
-   * Return `tool.result` audit rows in a half-open [since, until) window.
-   * Optional filters narrow by skill name(s) and executing agent id.
+   * Return tool-result audit rows in a half-open [since, until) window.
+   * Matches both current `tool.result` and pre-ADR-031 `skill.result` rows
+   * (and `toolName` / `skillName` payload fields) so activity-log and diagnostics
+   * keep seeing pre-upgrade history.
+   * Optional filters narrow by tool name(s) and executing agent id.
    */
   async findToolResults(query: ToolResultAuditQuery): Promise<AuditLogRow[]> {
     const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
@@ -124,7 +128,8 @@ export class AuditLogRepo {
     let skillFilter = '';
     if (query.toolNames && query.toolNames.length > 0) {
       params.push(query.toolNames);
-      skillFilter = `AND payload->>'toolName' = ANY($${params.length}::text[])`;
+      // Historical rows store the atom name as skillName; post-rename as toolName.
+      skillFilter = `AND COALESCE(payload->>'toolName', payload->>'skillName') = ANY($${params.length}::text[])`;
     }
     let agentFilter = '';
     if (query.agentId) {
@@ -139,7 +144,7 @@ export class AuditLogRepo {
        FROM audit_log
        WHERE timestamp >= $1
          AND timestamp < $2
-         AND event_type = 'tool.result'
+         AND event_type = ANY(ARRAY['tool.result', 'skill.result']::text[])
          ${skillFilter}
          ${agentFilter}
        ORDER BY timestamp ASC
@@ -205,7 +210,9 @@ export class AuditLogRepo {
     }
 
     const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
-    const params: unknown[] = [eventTypes];
+    // Dual-match tool.* ↔ skill.* so diagnostics audit-query keeps pre-upgrade rows.
+    const expandedTypes = expandLegacyToolEventTypes(eventTypes);
+    const params: unknown[] = [expandedTypes];
     const conditions: string[] = [`event_type = ANY($1::text[])`];
 
     applyTimelineFilters(query, params, conditions);
@@ -225,7 +232,7 @@ export class AuditLogRepo {
     const page = pageFromRows(result.rows.map(mapRow), limit);
 
     this.logger.debug(
-      { count: page.rows.length, hasMore: page.hasMore, eventTypes },
+      { count: page.rows.length, hasMore: page.hasMore, eventTypes, expandedTypes },
       'audit-log-repo: findByEventTypes',
     );
     return page;
