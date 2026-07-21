@@ -53,6 +53,11 @@ Do the work.
   it('rejects missing name', () => {
     expect(() => parseSkillMd('---\ndescription: x\n---\n')).toThrow(/name/);
   });
+
+  it('rejects non-boolean heartbeat / document_workspace', () => {
+    expect(() => parseSkillMd('---\nname: x\ndescription: y\nheartbeat: "true"\n---\n')).toThrow(/heartbeat/);
+    expect(() => parseSkillMd('---\nname: x\ndescription: y\ndocument_workspace: 1\n---\n')).toThrow(/document_workspace/);
+  });
 });
 
 describe('on-disk skills/tasks + skills/documents', () => {

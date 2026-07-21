@@ -1,7 +1,7 @@
 {
   "name": "task-update",
   "description": "Update an existing task's fields. Can change status, priority, owner, due date, tags, progress note, or blocked-by dependency. Status transitions from 'done' or 'cancelled' are rejected. When wake_at is set, an existing pending wake row is rescheduled in place (or revived/inserted if none is pending). Setting status='cancelled' auto-cancels pending wake-ups.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -13,7 +13,7 @@
     "wake_at": "timestamp?",
     "tags": "string[]?",
     "progress_note": "string?",
-    "blocked_by_task_id": "string?"
+    "blocked_by_task_id": "string|null? (UUID of blocking task, or null to clear)"
   },
   "outputs": {
     "task_id": "string",

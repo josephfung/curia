@@ -96,7 +96,7 @@ export async function registryRoutes(
       const kind = parseKind(rawKind);
       if (!kind) {
         return reply.status(400).send({
-          error: `Unknown kind '${rawKind}' (expected 'tools' or 'agents')`,
+          error: `Unknown kind '${rawKind}' (expected 'tools', 'agents', or 'skills')`,
         });
       }
       try {

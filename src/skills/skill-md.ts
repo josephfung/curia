@@ -81,6 +81,13 @@ export function parseSkillMd(raw: string, sourceLabel = 'SKILL.md'): ParsedSkill
     tools = fm.tools.map(t => t.trim()).filter(Boolean);
   }
 
+  if (fm.heartbeat !== undefined && typeof fm.heartbeat !== 'boolean') {
+    throw new Error(`${sourceLabel}: frontmatter.heartbeat must be a boolean when set`);
+  }
+  if (fm.document_workspace !== undefined && typeof fm.document_workspace !== 'boolean') {
+    throw new Error(`${sourceLabel}: frontmatter.document_workspace must be a boolean when set`);
+  }
+  // Only `true` is meaningful today; omit/`false` both mean "flag unset".
   const heartbeat = fm.heartbeat === true ? true : undefined;
   const document_workspace = fm.document_workspace === true ? true : undefined;
 

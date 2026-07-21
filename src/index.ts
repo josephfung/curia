@@ -2055,7 +2055,7 @@ async function main(): Promise<void> {
       memory,
       entityMemory,
       executionLayer,
-      pinnedSkills: effectivePinnedTools,
+      pinnedTools: effectivePinnedTools,
       skillToolDefs: agentToolDefs,
       // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
       modelRegistry,

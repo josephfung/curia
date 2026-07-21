@@ -17,10 +17,8 @@ export class SkillRegistry {
     if (this.skills.has(manifest.name)) {
       throw new Error(`Skill '${manifest.name}' is already registered`);
     }
-    if (!manifest.tools || manifest.tools.length === 0) {
-      // Instruction-only skills (Phase 3 imports) may have zero tools; native
-      // Phase 2 skills should list tools. Allow empty for forward compat.
-    }
+    // Instruction-only skills (Phase 3 imports) may have zero tools; native
+    // Phase 2 skills should list tools. Empty tools arrays are allowed for forward compat.
     this.skills.set(manifest.name, {
       manifest: Object.freeze({
         ...manifest,

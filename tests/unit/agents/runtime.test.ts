@@ -1206,7 +1206,7 @@ describe('AgentRuntime tool-use loop', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['web-fetch'],
+      pinnedTools: ['web-fetch'],
       skillToolDefs: [{ name: 'web-fetch', description: 'Fetch web page', input_schema: { type: 'object' as const, properties: { url: { type: 'string' } }, required: ['url'] } }],
     });
     agent.register();
@@ -1317,7 +1317,7 @@ describe('AgentRuntime tool-use loop', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['web-fetch'],
+      pinnedTools: ['web-fetch'],
       skillToolDefs: [{ name: 'web-fetch', description: 'Fetch web page', input_schema: { type: 'object' as const, properties: { url: { type: 'string' } }, required: ['url'] } }],
     });
     agent.register();
@@ -1505,7 +1505,7 @@ describe('AgentRuntime tool-use loop', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['web-fetch'],
+      pinnedTools: ['web-fetch'],
       skillToolDefs: [{ name: 'web-fetch', description: 'Fetch', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
       errorBudget: { maxTurns: 5, maxConsecutiveErrors: 10 },
     });
@@ -1592,7 +1592,7 @@ describe('AgentRuntime tool-use loop', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['web-fetch'],
+      pinnedTools: ['web-fetch'],
       skillToolDefs: [{ name: 'web-fetch', description: 'Fetch', input_schema: { type: 'object' as const, properties: { url: { type: 'string' } }, required: ['url'] } }],
     });
     agent.register();
@@ -1666,7 +1666,7 @@ describe('AgentRuntime tool-use loop', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['web-fetch'],
+      pinnedTools: ['web-fetch'],
       skillToolDefs: [{ name: 'web-fetch', description: 'Fetch', input_schema: { type: 'object' as const, properties: { url: { type: 'string' } }, required: ['url'] } }],
     });
     agent.register();
@@ -3540,7 +3540,7 @@ describe('AgentRuntime bullpen read-watermark (#1065)', () => {
       logger,
       ...(executionLayer ? { executionLayer } : {}),
       bullpenService,
-      pinnedSkills: ['signal-send'],
+      pinnedTools: ['signal-send'],
       skillToolDefs: [{ name: 'signal-send', description: 'Send a Signal message', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
     });
   }
@@ -3753,7 +3753,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: [delegateToolDef],
     });
     agent.register();
@@ -3862,7 +3862,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: [delegateToolDef],
     });
     agent.register();
@@ -3972,7 +3972,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: [delegateToolDef],
     });
     agent.register();
@@ -4063,7 +4063,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: [delegateToolDef],
     });
     agent.register();
@@ -4146,7 +4146,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: [delegateToolDef],
     });
     agent.register();
@@ -4221,7 +4221,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: [delegateToolDef],
     });
     agent.register();
@@ -4297,7 +4297,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: [delegateToolDef],
     });
     agent.register();
@@ -4378,7 +4378,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       bus,
       logger,
       executionLayer: mockExecution,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: [delegateToolDef],
     });
     agent.register();

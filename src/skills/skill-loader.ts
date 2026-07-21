@@ -31,7 +31,7 @@ export function discoverSkillManifests(skillsDir: string, logger?: Logger): Skil
       // Prefer tools declared in frontmatter (authoritative). Fall back to tools/
       // scan only when frontmatter omits tools: (instruction-only / Phase 3 imports).
       let tools = parsed.tools;
-      const nested = discoverNestedToolNames(dir);
+      const nested = discoverNestedToolNames(dir, logger);
       if (!tools) {
         tools = nested;
       } else {
@@ -99,7 +99,7 @@ export function discoverSkillManifests(skillsDir: string, logger?: Logger): Skil
 }
 
 /** Read tool.json name fields from skills/<skill>/tools/<tool>/tool.json. */
-export function discoverNestedToolNames(skillDir: string): string[] {
+export function discoverNestedToolNames(skillDir: string, logger?: Logger): string[] {
   const toolsDir = path.join(skillDir, 'tools');
   if (!fs.existsSync(toolsDir)) return [];
   const names: string[] = [];
@@ -112,8 +112,12 @@ export function discoverNestedToolNames(skillDir: string): string[] {
       if (typeof raw.name === 'string' && raw.name.trim()) {
         names.push(raw.name.trim());
       }
-    } catch {
-      // Lenient: broken nested tool is reported when tool discovery runs.
+    } catch (err) {
+      // Lenient: skip broken nested tools; full load reports them later.
+      logger?.warn(
+        { err, skillDir, manifestPath },
+        'Failed to parse nested tool.json during skill discovery',
+      );
     }
   }
   return names;

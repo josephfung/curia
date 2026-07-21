@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **CodeRabbit Phase 2 review** — calendar risk/docs, manifests, registry install, skill-md booleans. (#1489)
 - **`scheduler-list`** — bound and trim results so a large jobs table no longer overflows the model context. (#1487)
 - **`scheduler-list`** — return timestamps in the user's timezone instead of raw UTC. (#1487)
 - **Tool outputs** — cap total object-output size, not just per-leaf, matching the string-output path. (#1487)

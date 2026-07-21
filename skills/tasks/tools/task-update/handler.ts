@@ -27,7 +27,7 @@ export class TaskUpdateHandler implements ToolHandler {
       wake_at?: string;
       tags?: string[];
       progress_note?: string;
-      blocked_by_task_id?: string;
+      blocked_by_task_id?: string | null;
     };
 
     if (!input.task_id || typeof input.task_id !== 'string') {
