@@ -78,16 +78,15 @@ export interface DocumentWorkspaceResult {
 }
 
 /** Apply the document workspace capability to an agent's prompt + skills.
- *  Gated on `enable_task_management` — resumable-task agents get the workspace surface.
- *  Pure function — no side effects. */
+ *  @deprecated Phase 2 (#1489): pin the `task-management` skill instead.
+ *  Bootstrap injects doc tools + DOCUMENT_WORKSPACE_BLOCK via SKILL.md.
+ *  This helper is retained for unit tests of the merge logic only. */
 export function applyDocumentWorkspace(
-  config: AgentYamlConfig,
+  _config: AgentYamlConfig,
   systemPrompt: string,
   pinnedSkills: string[],
 ): DocumentWorkspaceResult {
-  if (!config.enable_task_management) {
-    return { systemPrompt, pinnedSkills: [...pinnedSkills] };
-  }
+  // Historical gate was enable_task_management; Phase 2 always merges when called.
   const merged = [...pinnedSkills];
   for (const skill of DOCUMENT_WORKSPACE_TOOLS) {
     if (!merged.includes(skill)) merged.push(skill);

@@ -1,5 +1,5 @@
 name: calendar
-version: "0.6.1"
+version: "0.7.0"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
@@ -523,16 +523,8 @@ system_prompt: |
   ("always do X going forward", "from now on…").
 
 pinned_skills:
-  # Calendar CRUD
-  - calendar-list-calendars
-  - calendar-register
-  - calendar-list-events
-  - calendar-create-event
-  - calendar-update-event
-  - calendar-delete-event
-  - calendar-respond-to-invite
-  - calendar-find-free-time
-  - calendar-check-conflicts
+  # Calendar CRUD + holds (skill bundle — expands to per-tool atoms; action_risk stays per-tool)
+  - calendar
   # Entity resolution
   - contact-lookup
   - entity-context
@@ -543,9 +535,6 @@ pinned_skills:
   - memory-store
   # Runtime config
   - config-store
-  # Tentative holds
-  - calendar-create-hold
-  - calendar-holds-sweep
   # Cross-specialist consultation
   - bullpen
 

@@ -2,7 +2,7 @@
 //
 // Uses NylasCalendarClient.createWithSdk() to inject a stub SDK, avoiding any
 // real Nylas API calls. Mirrors the vi.fn() / mockResolvedValue() patterns in
-// skills/calendar-list-events/handler.test.ts.
+// skills/calendar/tools/calendar-list-events/handler.test.ts.
 
 import { describe, it, expect, vi } from 'vitest';
 import { NylasCalendarClient } from './nylas-calendar-client.js';

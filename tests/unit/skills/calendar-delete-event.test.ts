@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CalendarDeleteEventHandler } from '../../../skills/calendar-delete-event/handler.js';
+import { CalendarDeleteEventHandler } from '../../../skills/calendar/tools/calendar-delete-event/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

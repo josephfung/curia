@@ -2,7 +2,7 @@
 
 Tools are how agents interact with the outside world. Every capability — sending email, fetching a web page, writing to a calendar, running a search — is a **tool** (the invocation + authorization atom). The execution layer sandboxes tool invocations: tools receive typed inputs and return typed outputs; they cannot publish bus events or access the database directly.
 
-> **Vocabulary (ADR-031):** atoms are *tools*; a future *skill* is a bundle/collection of tools + optional instructions (Phase 2 of #1436). Agent YAML still uses `pinned_skills` for the pin list — that field will pin bundles in Phase 2; today it still lists tool names.
+> **Vocabulary (ADR-031):** atoms are *tools*; a *skill* is a bundle/collection of tools + optional instructions (`skills/<skill>/SKILL.md` + `tools/<tool>/`). Agent YAML `pinned_skills` pins **skill bundles** (expanded to member tools at bootstrap).
 
 See [Adding an Agent](adding-an-agent.md) if you want to create a new agent rather than extend an existing one.
 
@@ -23,15 +23,30 @@ See [Adding an Agent](adding-an-agent.md) if you want to create a new agent rath
 
 ## Directory Layout
 
+Preferred (skill bundle — Phase 2):
+
+```
+skills/
+  calendar/                 # skill (bundle)
+    SKILL.md                # name, description, optional instructions
+    tools/
+      create-event/         # or calendar-create-event/
+        tool.json
+        handler.ts
+        handler.test.ts
+```
+
+Legacy flat layout (still loaded; auto-wrapped as a singleton skill):
+
 ```
 skills/
   web-search/
-    tool.json        # manifest — schema, metadata, risk level
-    handler.ts        # implementation
-    handler.test.ts   # unit + integration tests
+    tool.json
+    handler.ts
+    handler.test.ts
 ```
 
-Tools are self-contained. Keep external imports minimal and declare any required secrets in the manifest.
+Tools are self-contained. Keep external imports minimal and declare any required secrets in the manifest. Pin the **skill** name in agent YAML (`pinned_skills: [calendar]`), not every member tool.
 
 ---
 

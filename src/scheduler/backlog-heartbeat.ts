@@ -7,7 +7,7 @@ export interface BacklogHeartbeatOptions {
   pool: Pool;
   logger: Logger;
   schedulerService: SchedulerService;
-  /** Heartbeat-eligible agent names (enable_task_management: true). */
+  /** Heartbeat-eligible agent names (pinned task-management skill). */
   eligibleAgents: Set<string>;
   intervalMinutes: number;
   maxWakesPerTick: number;

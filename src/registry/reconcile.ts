@@ -3,7 +3,7 @@
 // Runs after migrations, before the load+register pass. For each core item named in
 // config/registry-defaults.yaml that has NO registry row, it inserts an enabled row.
 // It never touches an item that already has a row, so an admin who disables a core
-// skill stays disabled across restarts. Non-core items are left uninstalled.
+// item stays disabled across restarts. Non-core items are left uninstalled.
 //
 // The core set lives in a trusted in-repo file — NOT in individual manifests — so an
 // uploaded skill cannot self-enable on upload (spec §3, security rationale).
@@ -14,25 +14,42 @@ import type { Logger } from '../logger.js';
 export interface RegistryDefaults {
   tools: string[];
   agents: string[];
+  /** Skill (bundle) names — Phase 2. Optional for older defaults fixtures. */
+  skills?: string[];
 }
 
 export interface ReconcileDeps {
-  skillRepo: IRegistryRepo;
+  toolRepo: IRegistryRepo;
   agentRepo: IRegistryRepo;
-  skillDiscoveryNames: Set<string>;
+  skillRepo?: IRegistryRepo;
+  toolDiscoveryNames: Set<string>;
   agentDiscoveryNames: Set<string>;
+  skillDiscoveryNames?: Set<string>;
   defaults: RegistryDefaults;
   logger: Logger;
 }
 
 export async function reconcileRegistries(deps: ReconcileDeps): Promise<void> {
-  const { skillRepo, agentRepo, skillDiscoveryNames, agentDiscoveryNames, defaults, logger } = deps;
-  await reconcileOne('tool', skillRepo, skillDiscoveryNames, defaults.tools, logger);
+  const {
+    toolRepo, agentRepo, skillRepo,
+    toolDiscoveryNames, agentDiscoveryNames, skillDiscoveryNames,
+    defaults, logger,
+  } = deps;
+  await reconcileOne('tool', toolRepo, toolDiscoveryNames, defaults.tools, logger);
   await reconcileOne('agent', agentRepo, agentDiscoveryNames, defaults.agents, logger);
+  if (skillRepo) {
+    await reconcileOne(
+      'skill',
+      skillRepo,
+      skillDiscoveryNames ?? new Set(),
+      defaults.skills ?? [],
+      logger,
+    );
+  }
 }
 
 async function reconcileOne(
-  kind: 'tool' | 'agent',
+  kind: 'tool' | 'agent' | 'skill',
   repo: IRegistryRepo,
   discoveryNames: Set<string>,
   coreNames: string[],

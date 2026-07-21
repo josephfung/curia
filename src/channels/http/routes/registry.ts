@@ -24,9 +24,12 @@ export interface RegistryRouteOptions {
 
 const ACTOR = 'web-app'; // no per-user identity in the console today (same as autonomy routes)
 
-// Map the URL plural segment ('tools', 'agents') to the internal singular kind.
+// Map the URL plural segment ('tools', 'agents', 'skills') to the internal singular kind.
 function parseKind(raw: string): RegistryKind | null {
-  return raw === 'tools' ? 'tool' : raw === 'agents' ? 'agent' : null;
+  if (raw === 'tools') return 'tool';
+  if (raw === 'agents') return 'agent';
+  if (raw === 'skills') return 'skill';
+  return null;
 }
 
 export async function registryRoutes(
@@ -65,6 +68,18 @@ export async function registryRoutes(
     } catch (err) {
       request.log.error({ err }, 'GET /api/registry/agents failed');
       return reply.status(500).send({ error: 'Failed to list agents. Check server logs.' });
+    }
+  });
+
+  // -- GET /api/registry/skills — list all skill bundles with derived state --
+
+  app.get('/api/registry/skills', AUTH_RATE, async (request, reply) => {
+    if (!requireAuth(request, reply)) return;
+    try {
+      return reply.send({ skills: await registryService.list('skill') });
+    } catch (err) {
+      request.log.error({ err }, 'GET /api/registry/skills failed');
+      return reply.status(500).send({ error: 'Failed to list skills. Check server logs.' });
     }
   });
 

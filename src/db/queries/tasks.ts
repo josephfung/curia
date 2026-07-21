@@ -108,7 +108,7 @@ export interface HeartbeatCandidate {
 }
 
 export interface SelectHeartbeatOptions {
-  /** Heartbeat-eligible agent names (enable_task_management: true). */
+  /** Heartbeat-eligible agent names (pinned task-management skill). */
   eligibleAgents: string[];
   idleThresholdHours: number;
   staleWaitThresholdHours: number;

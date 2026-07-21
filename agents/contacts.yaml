@@ -1,5 +1,5 @@
 name: contacts
-version: "0.9.0"
+version: "0.10.0"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -10,10 +10,9 @@ allow_discovery: false
 # Dedup work spans multiple turns and ends in a terminal outcome (merge, exclude,
 # or defer). The agent owns closing those tasks (task-complete) and sweeping the
 # outbound-context entry for the exchange (context-bridge-release) — see the
-# "Closing a dedup task" section in the prompt. enable_task_management auto-pins
-# task-create/list/update/complete and makes contacts heartbeat-eligible so it
-# drains its own dedup queue.
-enable_task_management: true
+# "Closing a dedup task" section in the prompt. Pinning task-management (below)
+# auto-pins task-* + doc-* tools, injects the discipline block, and makes contacts
+# heartbeat-eligible so it drains its own dedup queue.
 error_budget:
   max_turns: 30  # dedup scan: 1 find + up to 20 tasks filed + 1 report; grant scan: 1 scan + up to 3 notifications + 1 report
 system_prompt: |
@@ -340,8 +339,9 @@ pinned_skills:
   - calendar-list-events
   # Scheduler observability — required for all scheduled tasks.
   - scheduler-report
+  # Task + document workspace (heartbeat-eligible; expands to task-* and doc-* tools)
+  - task-management
   # Outbound context — self-sweep the exchange entry when a dedup review closes.
-  # (task-create/list/update/complete are auto-pinned by enable_task_management.)
   - context-bridge-release
   - context-bridge-clear
 

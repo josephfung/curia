@@ -100,7 +100,7 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 1. Create `skills/<name>/tool.json` (manifest) + `handler.ts`
 2. Declare permissions and secrets in the manifest
 3. Write `handler.test.ts`
-4. **Pin it to at least one agent.** Add the skill name to `pinned_skills` in the relevant agent YAML (`agents/coordinator.yaml` for most skills). A skill that isn't pinned to any agent is invisible to that agent unless dynamic discovery happens to surface it — which is unreliable. Exception: pure infrastructure skills invoked by the system (e.g. `extract-facts`, `extract-relationships`, `scheduler-report`) intentionally have no agent owner.
+4. **Pin it to at least one agent.** Prefer pinning a **skill bundle** (`pinned_skills: [calendar]`) so the agent gets the whole toolset + any SKILL.md instructions. For singleton tools still living at `skills/<tool>/`, pin the tool name (auto-wrapped as a singleton skill). A tool that isn't reachable via any pinned skill is invisible unless discovery surfaces it. Exception: pure infrastructure tools invoked by the system (e.g. `extract-facts`, `extract-relationships`, `scheduler-report`) intentionally have no agent owner.
 5. **Timestamps:** When a skill returns timestamps for user-facing display, use `toLocalIso()` from `src/time/timestamp.ts` to convert to the user's local timezone (available as `ctx.timezone`). Never return raw UTC Z-suffix strings for times the user will see — LLMs cannot reliably perform timezone conversion. Include `displayTimezone: formatDisplayTimezone(ctx.timezone)` in the result data so the LLM can label its output.
 
 ### Versioning skills and agents

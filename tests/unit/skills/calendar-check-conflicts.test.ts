@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CalendarCheckConflictsHandler } from '../../../skills/calendar-check-conflicts/handler.js';
+import { CalendarCheckConflictsHandler } from '../../../skills/calendar/tools/calendar-check-conflicts/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

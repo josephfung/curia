@@ -118,7 +118,7 @@ Four skills, auto-pinned into every workspace-enabled agent (§7):
 The workspace is exposed the same way the resumable and plan harnesses are: a fixed-slot
 guidance block plus dynamically-pinned skills, injected by `applyDocumentWorkspace`
 (`src/agents/document-workspace.ts`). Injection is gated on the existing
-**`enable_task_management`** flag — there is no separate document-workspace flag — so the
+**`task-management`** skill — there is no separate document-workspace flag — so the
 `DOCUMENT_WORKSPACE_BLOCK` and the four `doc-*` skills are added only to task-management
 agents, appended after the task-management block (call site in `src/index.ts`).
 

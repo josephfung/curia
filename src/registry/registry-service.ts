@@ -1,7 +1,10 @@
 // registry-service.ts — merges on-disk manifest discovery with registry rows to
 // compute derived state, and exposes the install/enable/disable/uninstall lifecycle
 // the /api/registry routes call. State changes touch the DB only; the live in-memory
-// ToolRegistry/AgentRegistry are NOT mutated — enforcement is restart-based (spec §6).
+// ToolRegistry / SkillRegistry / AgentRegistry are NOT mutated — enforcement is
+// restart-based (spec §6 / ADR-022).
+//
+// Kinds: tool (atom), skill (bundle), agent.
 
 import type {
   IRegistryRepo, RegistryKind, RegistryEntry, Discovery, SecretsLister,
@@ -12,29 +15,39 @@ export class RegistryService {
   // Discovery is captured once at startup and held here. setDiscovery exists so the
   // bootstrap (and tests) can inject the lenient discovery results after construction.
   //
-  // `secrets` (optional) backs the PR2 install/enable gate: a skill that declares
+  // `secrets` (optional) backs the PR2 install/enable gate: a tool that declares
   // install.requires_secrets cannot go live until those keys exist in the vault. It is
   // optional so non-secrets call sites (and most tests) construct the service unchanged;
-  // when a skill DOES require secrets but no lister is wired, the gate fails closed.
+  // when a tool DOES require secrets but no lister is wired, the gate fails closed.
   constructor(
-    private readonly skillRepo: IRegistryRepo,
+    private readonly toolRepo: IRegistryRepo,
     private readonly agentRepo: IRegistryRepo,
-    private skillDiscovery: Discovery[],
+    private toolDiscovery: Discovery[],
     private agentDiscovery: Discovery[],
     private readonly secrets?: SecretsLister,
+    private readonly skillRepo?: IRegistryRepo,
+    private skillDiscovery: Discovery[] = [],
   ) {}
 
   setDiscovery(kind: RegistryKind, discovery: Discovery[]): void {
-    if (kind === 'tool') this.skillDiscovery = discovery;
-    else this.agentDiscovery = discovery;
+    if (kind === 'tool') this.toolDiscovery = discovery;
+    else if (kind === 'agent') this.agentDiscovery = discovery;
+    else this.skillDiscovery = discovery;
   }
 
   private repo(kind: RegistryKind): IRegistryRepo {
-    return kind === 'tool' ? this.skillRepo : this.agentRepo;
+    if (kind === 'tool') return this.toolRepo;
+    if (kind === 'agent') return this.agentRepo;
+    if (!this.skillRepo) {
+      throw new Error('RegistryService: skill_registry repo not configured');
+    }
+    return this.skillRepo;
   }
 
   private discovery(kind: RegistryKind): Discovery[] {
-    return kind === 'tool' ? this.skillDiscovery : this.agentDiscovery;
+    if (kind === 'tool') return this.toolDiscovery;
+    if (kind === 'agent') return this.agentDiscovery;
+    return this.skillDiscovery;
   }
 
   /** Every known item (on disk and/or in DB) with its derived state. */
@@ -75,15 +88,15 @@ export class RegistryService {
     return entries;
   }
 
-  /** Every vault key declared across skills' install.requires_secrets (deduped).
-   *  Scopes the vault write endpoint: only a secret some skill actually needs may be set
+  /** Every vault key declared across tools' install.requires_secrets (deduped).
+   *  Scopes the vault write endpoint: only a secret some tool actually needs may be set
    *  through it, so the console can't write arbitrary keys into the vault. Reads from
    *  in-memory discovery — no DB round-trip.
-   *  Skills only by design (agents don't declare requires_secrets); if that ever changes,
-   *  this must also union agentDiscovery, or declared agent secrets won't be settable. */
+   *  Tools only by design (agents/skills don't declare requires_secrets); if that ever
+   *  changes, this must also union those discoveries. */
   declaredSecretNames(): string[] {
     const names = new Set<string>();
-    for (const d of this.skillDiscovery) {
+    for (const d of this.toolDiscovery) {
       for (const s of d.metadata?.requiresSecrets ?? []) names.add(s);
     }
     return [...names];
@@ -111,8 +124,10 @@ export class RegistryService {
   /** PR2 (#939) secrets gate: reject install/enable when the item's manifest declares
    *  install.requires_secrets that aren't all present in the vault. Items with no declared
    *  secrets are unaffected. A declared-but-unverifiable secret (no lister wired) fails
-   *  closed — we never let something requiring secrets go live without confirming them. */
+   *  closed — we never let something requiring secrets go live without confirming them.
+   *  Bundle skills do not declare requires_secrets (member tools do). */
   private async assertSecretsConfigured(kind: RegistryKind, name: string): Promise<void> {
+    if (kind === 'skill') return; // secrets gate is per-tool
     const disc = this.discovery(kind).find(d => d.name === name);
     const required = disc?.metadata?.requiresSecrets ?? [];
     if (required.length === 0) return;
@@ -142,7 +157,7 @@ export class RegistryService {
   async enable(kind: RegistryKind, name: string, actor: string): Promise<RegistryEntry> {
     this.assertInstallable(kind, name);
     // Re-check at enable time too: secrets could have been deleted since install, and
-    // enable is the moment the skill actually goes live on the next restart.
+    // enable is the moment the item actually goes live on the next restart.
     await this.assertSecretsConfigured(kind, name);
     const row = await this.repo(kind).getRow(name);
     if (!row) throw new RegistryGuardError(`Cannot enable '${name}': not installed. Install it first.`);
