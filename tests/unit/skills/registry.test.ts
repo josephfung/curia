@@ -158,6 +158,28 @@ describe('ToolRegistry', () => {
     expect(tools[0].input_schema.required).toEqual(['ids']);
   });
 
+  it('converts string|null? inputs to JSON Schema string|null union', () => {
+    registry.register(makeManifest({
+      name: 'null-union-skill',
+      description: 'Accepts explicit null',
+      inputs: {
+        blocked_by_task_id: 'string|null? (UUID, or null to clear)',
+        required_note: 'string|null (always present, may be null)',
+      },
+    }), stubHandler);
+    const tools = registry.toToolDefinitions(['null-union-skill']);
+    const props = tools[0]!.input_schema.properties;
+    expect(props.blocked_by_task_id).toEqual({
+      type: ['string', 'null'],
+      description: 'UUID, or null to clear',
+    });
+    expect(props.required_note).toEqual({
+      type: ['string', 'null'],
+      description: 'always present, may be null',
+    });
+    expect(tools[0]!.input_schema.required).toEqual(['required_note']);
+  });
+
   it('throws on invalid primitive type in skill manifest (e.g. em-dash format)', () => {
     // Regression test: "string — description" was the format that caused a production
     // outage — the em-dash made the parser capture "string — description" as the type

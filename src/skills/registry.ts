@@ -140,6 +140,7 @@ export class ToolRegistry {
         //   "string? (required for generate)" → type "string", optional, desc "required for generate"
         //   "boolean?" → type "boolean", optional, no desc
         //   "string[]?" → array of strings, optional
+        //   "string|null?" → type ["string","null"], optional (explicit null to clear)
         const parenMatch = typeStr.match(/^(.+?)\s*\((.+)\)$/);
         // When the regex matches, groups [1] and [2] are always present
         const typePart = parenMatch ? parenMatch[1]! : typeStr;
@@ -162,17 +163,39 @@ export class ToolRegistry {
           continue;
         }
 
+        const VALID_PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'null']);
+
+        // "string|null", "string|null?" → JSON Schema type: ["string", "null"]
+        // Used when an optional field must accept explicit null (e.g. clear a FK).
+        const nullUnionMatch = /^([a-z]+)\|null$/.exec(baseType);
+        if (nullUnionMatch) {
+          const primary = nullUnionMatch[1]!;
+          if (!VALID_PRIMITIVE_TYPES.has(primary) || primary === 'null') {
+            throw new Error(
+              `Tool '${name}' input '${key}': invalid null-union primary type '${primary}' in '${typeStr}'. ` +
+              `Expected one of: string, number, integer, boolean, object.`,
+            );
+          }
+          properties[key] = {
+            type: [primary, 'null'],
+            ...(description ? { description } : {}),
+          };
+          if (!isOptional) {
+            required.push(key);
+          }
+          continue;
+        }
+
         // "string[]", "object[]", etc. → JSON Schema array type with items.
         // itemType is validated against the JSON Schema primitive type allowlist so
         // a manifest typo like "foo[]" fails loudly at startup rather than silently
         // emitting an invalid schema that causes an opaque API error at call time.
         if (baseType.endsWith('[]')) {
           const itemType = baseType.slice(0, -2);
-          const VALID_ITEM_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'null']);
-          if (!itemType || !VALID_ITEM_TYPES.has(itemType)) {
+          if (!itemType || !VALID_PRIMITIVE_TYPES.has(itemType)) {
             throw new Error(
               `Tool '${name}' input '${key}': invalid array item type '${itemType}' in '${typeStr}'. ` +
-              `Expected one of: ${[...VALID_ITEM_TYPES].join(', ')}.`,
+              `Expected one of: ${[...VALID_PRIMITIVE_TYPES].join(', ')}.`,
             );
           }
           properties[key] = { type: 'array', items: { type: itemType }, ...(description ? { description } : {}) };
@@ -181,7 +204,6 @@ export class ToolRegistry {
           // "string — description" fails loudly at startup rather than silently
           // emitting an invalid schema that causes an opaque API 400 at call time.
           // (This is the same pattern as the array-item validation above.)
-          const VALID_PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'null']);
           if (!VALID_PRIMITIVE_TYPES.has(baseType)) {
             throw new Error(
               `Tool '${name}' input '${key}': invalid type '${baseType}' in '${typeStr}'. ` +
