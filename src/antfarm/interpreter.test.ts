@@ -83,6 +83,32 @@ describe('interpretEvent', () => {
     });
   });
 
+  it('maps legacy skill.invoke / skillName payload the same as tool.invoke', () => {
+    const result = interpretEvent(row({
+      eventType: 'skill.invoke',
+      payload: { agentId: 'calendar', skillName: 'calendar-list-events', input: {} },
+    }));
+    expect(result).toMatchObject({
+      kind: 'agent.think',
+      agentId: 'calendar',
+      phase: 'start',
+      toolName: 'calendar-list-events',
+    });
+  });
+
+  it('maps legacy skill.result the same as tool.result', () => {
+    const result = interpretEvent(row({
+      eventType: 'skill.result',
+      sourceLayer: 'execution',
+      payload: { agentId: 'calendar', skillName: 'calendar-list-events' },
+    }));
+    expect(result).toMatchObject({
+      kind: 'agent.think',
+      phase: 'stop',
+      toolName: 'calendar-list-events',
+    });
+  });
+
   it('maps tool.result to agent.think stop', () => {
     const result = interpretEvent(row({
       eventType: 'tool.result',

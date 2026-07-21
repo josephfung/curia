@@ -110,6 +110,25 @@ describe('discoverToolManifests', () => {
     discoverToolManifests(dir, mockLogger);
     expect(warnFn).not.toHaveBeenCalled();
   });
+
+  it('logs a loud error when a dir has legacy skill.json but no tool.json', () => {
+    const errorFn = vi.fn();
+    const mockLogger = { error: errorFn, warn: vi.fn() } as never;
+    const legacyDir = path.join(dir, 'custom-atom');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyDir, 'skill.json'),
+      JSON.stringify({ name: 'custom-atom', description: 'd', version: '1.0.0', action_risk: 'none' }),
+    );
+    const discoveries = discoverToolManifests(dir, mockLogger);
+    expect(discoveries.find(d => d.name === 'custom-atom')).toBeUndefined();
+    expect(errorFn).toHaveBeenCalledTimes(1);
+    expect(errorFn.mock.calls[0]![0]).toMatchObject({
+      dir: legacyDir,
+      legacyManifest: 'skill.json',
+    });
+    expect(String(errorFn.mock.calls[0]![1])).toMatch(/rename to tool\.json \(ADR-031\)/);
+  });
 });
 
 // ---------------------------------------------------------------------------
