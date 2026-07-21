@@ -13,114 +13,53 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+## [0.41.0] — 2026-07-21 — "Data"
+
+> **Data** *(Star Trek: The Next Generation, 1987, Gene Roddenberry)* — the android who grows more human by patiently observing the people around him, then refining his own conduct to match, and the crew's tireless analyst when something needs explaining. This release teaches Curia both halves: it watches what you actually send and learns your voice from the edits you make, and it can now investigate its own behavior when you ask what happened.
+
 ### Added
 
-- **Learning-item surfacing** — voice-guide proposals and sent-mail task completions now notify the CEO directly, not via a digest. (#1466)
-- **`outbound.notification`** — new `learning_proposal` `notificationType` on the bus event (public API). (#1466)
-- **`web-browser`** — optional egress proxy (`browser.proxy`) routes browsing through a residential exit, plus a WebRTC-leak guard.
-- **`web-browser`** — stable per-element refs let the agent disambiguate duplicate labels (e.g. survey radios).
-- **`web-browser`** — circuit-breaker halts interaction after 4 consecutive failures to curb futile retry loops.
-- **`web-browser`** — `actions` batches a page of steps into one call, so long forms fit one turn.
-- **`web-browser`** — `session_reused` output tells a resuming agent whether its session reattached or expired.
-- **`web-browser`** — `keep_warm` pins a session so a long task resumes the same page across wakes (ADR-030).
-- **`TaskRepo.reopenTask` tests** — cover non-`done` rejection, `progress.notes` audit note, and `task.updated` emission. (#1434)
+- **Passive email observation & voice learning** — Curia watches your Sent folder, captures how you edit its drafts, and a weekly LLM pass proposes a free-form writing-voice guide you approve or dismiss. Evidence, learned voice, and task state reuse existing stores rather than new memory types (ADR-029). (#1419–#1423)
+- **Sent-mail task completion** — when an email you send fulfils an open to-do, Curia auto-completes low-risk, high-confidence matches (with one-click undo) and asks you to confirm the rest. (#1424)
+- **Shadow drafting & counterfactual competence** — for messages it triages but punts, Curia silently drafts what it would have sent, and an LLM judge scores that against your actual reply to feed the Phase 3 autonomy signal. (#1426)
+- **Learning items surface directly** — voice-guide proposals and completions notify you inline for approve / dismiss / undo instead of waiting for a digest; a new `learning_proposal` `notificationType` on `outbound.notification` (public API). (#1466)
+- **Diagnostics agent** — an opt-in, read-only investigator that answers "what happened / why" about Curia's own behavior (a duplicate notification, an email that never processed, a scheduler double-fire), grounded in cited audit events. Ships with read-only `audit-query` / `audit-trace` / `ops-lookup` skills and a `diagnosticsRepo` capability; off by default. (#1356)
+- **`scheduler-update`** — resume, pause, or edit a scheduled job by ID (cron, one-shot time, or payload) without the web UI. (#1409)
+- **`web-browser` upgrades** — an optional residential egress proxy with a WebRTC-leak guard, stable per-element refs that disambiguate duplicate labels, a circuit-breaker after repeated interaction failures, `actions` batching for long forms, and `keep_warm` sessions that survive across wakes (ADR-030).
+- **Governance & supply chain** — `GOVERNANCE.md`, a documented dependency-management policy, DCO sign-off enforcement (`.github/dco.yml`), and README cosign-verification docs for signed release artifacts. (#929–#932)
 
 ### Changed
 
-- **Daily digest** — the built-in 8am digest is now an on-demand, chat-editable morning-briefing example.
-- **`ceo-inbox`** — voice-learn queues its guide proposal as a pending learning item, not the removed digest.
-- **Dependabot** — block TypeScript 7.x majors until typescript-eslint supports the native compiler. (#1454)
-- **Coordinator** — acts on over-budget goals autonomously, hides task machinery, and writes self-contained subtasks.
-
-### Removed
-
-- **WIP design docs** — pruned 16 shipped design/plan docs; ADR-029 and source no longer cite `docs/wip/`.
-
-### Security
-
-- **`adm-zip`** — pin transitive dev dep to `>=0.6.0`, clearing GHSA-xcpc-8h2w-3j85 (crafted ZIP 4GB allocation, HIGH).
-- **Evidence-doc retention** — anchor `## Diff —` boundaries to the metadata envelope so an email-body heading can't dodge the purge. (#1444)
-- **KG trust gates** — checkpoint extraction and `memory-store` block untrusted inbound senders. (#1290)
-- **Release verification docs** — README documents `cosign verify-blob` for signed release artifacts. (#929)
+- **Morning briefing replaces the fixed daily digest** — the built-in 8 AM digest is now an on-demand, chat-editable morning-briefing example; learning items and escalations reach you directly.
+- **Learning runs on LLM judgment, not heuristics** — the writing-voice guide and shadow-competence equivalence are decided by batched LLM passes, and sensitive threads are included via the shared sensitivity classifier. (#1419)
+- **Coordinator** — breaks a large goal into self-contained subtasks and acts on them autonomously, keeping task machinery out of view; external replies stay first-person single-voice. (#1354, #1474)
+- **`SkillContext`** — exposes `skillName` / `skillVersion` from the manifest (public API); skills read their version from context instead of a hardcoded constant. (#1419)
+- **Specs & install docs** — specs 04/13/14/19 document the observation/learning loop; the spec index drops status tracking; install docs point at `releases/latest/download` with `CURIA_VERSION`. (#1282, #1420)
+- **Learning-subsystem state** — moved from OKF document bodies to config-store JSON. (#1438)
+- **Dependabot** — blocks TypeScript 7.x majors until typescript-eslint ships native-compiler support. (#1454)
 
 ### Fixed
 
-- **`web-browser`** — fix a regression that broke every browser page read after the element-refs change.
-- **`web-browser`** — element refs now resolve when passed with brackets and stay valid across later actions.
-- **`web-browser`** — the interactable list no longer drops trailing controls (e.g. "Next") when the page fits budget.
-- **`web-browser`** — clicks blocked by a sticky header/overlay now recenter and retry instead of timing out.
-- **`web-browser`** — stale or ambiguous element refs fail in ~1s with guidance, not a 40s hang.
-- **`web-browser`** — idle session TTL raised to 30 minutes so long forms aren't evicted mid-flow.
-- **Scheduler** — a run finishing after a concurrent pause/cancel no longer overwrites that state. (#1409)
-- **Coordinator** — external replies use first-person single-voice; internal specialist names forbidden. (#1354)
-- **Coordinator scheduling** — changing a recurring job now edits it in place instead of duplicating it. (#1465)
-- **Dispatcher** — content-filter blocks on relayed replies retry with reason, then salvage draft. (#1355)
-- **Scheduler** — liveness check no longer flaps `fail` every few minutes on a healthy scheduler. (#1359)
-- **`sensitivity_rules`** — now read from the merged config, so `local.yaml` overrides actually take effect. (#1369)
-- **`security.extra_injection_patterns`** — same fix: now parsed from the merged config instead of `default.yaml` directly. (#1397)
-- **Backlog heartbeat** — stops re-poking parked-open parents whose subtasks are already scheduled; reuses one wake row per task. (#1410)
-- **Dedup sweep** — stamps structured `dedup-pair` tags so repeat runs skip pending pairs. (#1416)
-- **`task-update` wake reschedule** — updates the pending wake row in place instead of cancel+insert. (#1415)
-- **Email-observation skills** — pin `voice-learn`/`task-completion-from-sent`/`ceo-inbox-shadow-draft` to ceo-inbox so their crons work. (#1419)
-- **`ceo-inbox-sent-observe`** — paginate the Sent poll so busy days don't drop unobserved messages past the first page. (#1419)
-- **`ceo-inbox-sent-observe`** — hold the watermark when evidence fails to persist; wrap failures in the skill result. (#1419)
-- **`ceo-inbox-sent-observe`** — also hold the watermark when a shadow-judge LLM batch fails, so the signal is retried. (#1419)
-- **`ceo-inbox-sent-observe`** — bound rolling evidence-doc retention to 90 days so sensitive email bodies stop accumulating. (#1419)
-- **`task-completion-from-sent`** — re-check tasks are open and CEO-owned; fail closed on subtask-lookup errors. (#1419)
-- **Voice-learning capture** — a body-only draft edit refreshes the snapshot in place, preserving its original `created_at`. (#1419)
-- **`voice-learn`** — voice-guide approval loop no longer breaks after one cycle; honors dismiss cooldown. (#1419)
-- **Learning-subsystem config writes** — soft-rejected `ConfigStore` writes now hold state instead of silently advancing. (#1438)
-- **`resolve-learning-digest`** undo now guards on task status, so a failed clear can't wedge the item. (#1432)
-- **`sent-observe`** shadow reconciliation now dedups on a DB unique index; a failed marker write can't double-score. (#1432)
-- **`ceo-inbox-sent-observe`** — drains Sent backlogs over `SENT_MAX_SCAN` oldest-first; first run stays forward-only. (#1431)
-- **`ceo-inbox-sent-observe`** — completion matching walks all open CEO tasks via keyset paging instead of capping at 100. (#1433)
-- **`setup-defer`** — reports a retryable failure instead of false success when the deferrals write soft-rejects. (#1444)
-- **Email poll watermark** — warns when a soft-rejected watermark write leaves the durable value stale. (#1444)
+- **`web-browser`** — repaired a regression that broke page reads after element-refs; bracketed refs resolve and stay valid across actions; trailing controls are no longer dropped; overlay-blocked clicks recenter and retry; stale refs fail in ~1 s instead of a 40 s hang; idle TTL raised to 30 minutes.
+- **`ceo-inbox-sent-observe`** — paginates the Sent poll, holds the watermark on evidence- or judge-failures, drains large backlogs oldest-first, walks all open CEO tasks via keyset paging, and bounds evidence-doc retention to 90 days. (#1419, #1431–#1433)
+- **Learning durability** — soft-rejected `ConfigStore` writes hold state instead of silently advancing; shadow reconciliation dedups on a DB unique index; digest undo guards on task status. (#1432, #1438, #1444)
+- **Scheduler** — a run finishing after a concurrent pause/cancel no longer clobbers that state, and the liveness check no longer flaps on a healthy scheduler. (#1359, #1409)
+- **Config merge** — `sensitivity_rules` and `security.extra_injection_patterns` are read from the merged config, so `local.yaml` overrides take effect. (#1369, #1397)
+- **Backlog heartbeat & dedup** — stops re-poking parked-open parents, reuses one wake row per task, and stamps `dedup-pair` tags so repeat sweeps skip pending pairs. (#1410, #1415, #1416)
+- **Dispatcher** — content-filter blocks on relayed replies retry with a reason, then salvage the draft. (#1355)
+- **Coordinator scheduling** — editing a recurring job updates it in place instead of duplicating. (#1465)
+
+### Security
+
+- **KG trust gates** — knowledge-graph writes (fact extraction, `memory-store`) from `unknown` / `blocked` inbound senders are blocked, so an untrusted party can't seed the graph. (#1290)
+- **Evidence-doc retention** — anchors diff-block boundaries to the metadata envelope so an email-body heading can't dodge the purge. (#1444)
+- **`adm-zip`** — pinned `>=0.6.0`, clearing GHSA-xcpc-8h2w-3j85 (crafted-ZIP 4 GB allocation, HIGH).
 
 ### Removed
 
-- **Vestigial `workingDocs` capabilities** — dropped from three learning-digest skills; their state moved to config-store. (#1444)
-- **Dead `## Candidate —` trim branch** — `trimEvidenceDoc` now handles only `## Diff —` diff blocks. (#1444)
-
-### Added
-
-- **ADR-029** — passive email observation; shadow competence feeds Phase 3 scoring. (#1420)
-- **Draft capture** — CEO-inbox draft skills snapshot proposals to OKF for voice learning. (#1421)
-- **`ceo-inbox-sent-observe`** — daily Sent poll matches drafts/tasks; emits `ceo.sent_observed`. (#1422)
-- **`voice-learn`** — weekly LLM pass proposes a free-form WritingVoice guide from draft→sent edits. (#1423)
-- **`task-completion-from-sent`** — risk-tiered auto-complete/confirm from Sent matches. (#1424)
-- **Learning digest** — voice proposals + completion undo/confirm in the daily digest. (#1425)
-- **Shadow drafting** — punted emails store silent drafts; competence feeds Phase 3. (#1426)
-- **`ceo-inbox` autonomy** — scheduled runs receive the live autonomy band block. (#1427)
-- **`scheduler-update`** — new skill lets agents resume, pause, or edit a scheduled job without the web UI. (#1409)
-- **Contact resolution** — integration test coverage for identity establishment and authorization. (#1382)
-- **`diagnostics` agent** — opt-in, read-only forensic agent that diagnoses "what happened / why" for the principal. (#1356)
-- **`audit-query` / `audit-trace` / `ops-lookup`** — read-only diagnostics skills over audit + operational state. (#1356)
-- **`diagnosticsRepo` capability** — read-only reads of the ops + agent-state tables for diagnostics skills. (#1356)
-- **Email-observation design docs** — WIP design + issue breakdown for voice learning, task-completion & capability growth (v0.42). (#1419)
-- **ADR-027** — structured secrets with schema-tagged sub-field addressing (`credit_card` first).
-- **`docs/dev/dependencies.md`** — dependency management policy (selection, pnpm lockfile, Dependabot, overrides, SBOM). (#930)
-- **`GOVERNANCE.md`** — maintainers, roles, and access to sensitive resources. (#931)
-- **DCO sign-off** — `.github/dco.yml` requires `Signed-off-by` on all commits; documented in CONTRIBUTING. (#932)
-
-### Changed
-
-- **`SkillContext`** — adds `skillName`/`skillVersion`, populated from the manifest; draft skills read version from ctx instead of a hardcoded const. (#1419)
-- **Voice learning** — LLM maintains a free-form writing-voice guide from draft→sent edits; replaces heuristics. (#1419)
-- **Shadow competence** — LLM judges substantive decision equivalence (batched, binary flag); replaces token heuristics. (#1419)
-- **Sensitivity** — shadow capture + task risk reuse the shared SensitivityClassifier; sensitive threads now included. (#1419)
-- **Specs 04/13/14/19** — document sent-observer, voice learning, task-completion, shadow competence. (#1420)
-- **`docs/dev/dependencies.md`** — adds explicit SCA remediation threshold and pre-release policy (OSPS-VM-05.01/05.02).
-- **Install docs** — README points to `releases/latest/download/install.sh` and documents `CURIA_VERSION`.
-- **`00-overview.md` Spec Index** — dropped the `Status` column and "N of M Done" counts. (#1282)
-- **Spec audit fixes** — corrected stale claims: Node 24, console UI, secrets vault, setup story, fallback-provider prose. (#1282)
-- **Learning subsystem** — queue/status/guard state moved from OKF doc bodies to config-store JSON. (#1438)
-
-### Removed
-
-- **Email policy templates** — retires `template-doc-request`, `context-for-email`, and `template-base`. (#1406)
-- **Spec "Implementation Status" tables** — dropped from `docs/specs/`; replaced by "Known Deficiencies" where work remains. (#1282)
-- **`memory.scopes`** — removed the inert, never-enforced agent memory-scope field; breaking change, see ADR-028 for deploy ordering. (#521)
+- **Email policy templates** — retired `template-doc-request`, `context-for-email`, and `template-base`. (#1406)
+- **`memory.scopes`** — removed the inert, never-enforced agent memory-scope field. **Breaking**; see ADR-028 for deploy ordering. (#521)
+- **Spec "Implementation Status" tables**, vestigial `workingDocs` capabilities, and shipped WIP design/plan docs pruned from `docs/wip/`. (#1282, #1444)
 
 ## [0.40.1] — 2026-07-09 — "Voltron"
 
