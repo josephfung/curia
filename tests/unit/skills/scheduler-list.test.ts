@@ -192,6 +192,34 @@ describe('SchedulerListHandler', () => {
     });
   });
 
+  it('treats a fractional limit in (0, 1) as 1, not an always-empty page', async () => {
+    const schedulerService = {
+      createJob: vi.fn(),
+      listJobs: vi.fn().mockResolvedValue([makeJob('job-1'), makeJob('job-2')]),
+      cancelJob: vi.fn(),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { limit: 0.5 },
+      { schedulerService: schedulerService as never },
+    ));
+
+    // effectiveLimit clamps to 1 → fetch 2 (1 + 1) to detect truncation.
+    expect(schedulerService.listJobs).toHaveBeenCalledWith({
+      status: undefined,
+      agentId: undefined,
+      limit: 2,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { count: number; truncated: boolean; limit: number };
+      expect(data.limit).toBe(1);
+      expect(data.count).toBe(1);
+      expect(data.truncated).toBe(true);
+    }
+  });
+
   it('falls back to the default limit for a non-positive or non-numeric limit', async () => {
     const schedulerService = {
       createJob: vi.fn(),
