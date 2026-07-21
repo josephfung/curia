@@ -210,7 +210,7 @@ describe('startup validator — real project files', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('all skills/*/tool.json pass schema validation', async () => {
+  it('all flat and nested skills/**/tool.json pass schema validation', async () => {
     await expect(
       runStartupValidation({
         skillsDir: path.join(ROOT, 'skills'),
