@@ -433,6 +433,44 @@ describe('SchedulerService', () => {
       expect(sql).toContain('agent_id');
       expect(params).toContain('agent-x');
     });
+
+    it('applies a SQL LIMIT when a limit is provided (#1487)', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.listJobs({ limit: 50 });
+
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('LIMIT');
+      expect(params).toContain(50);
+    });
+
+    it('does NOT add a LIMIT clause when no limit is provided', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.listJobs();
+
+      const [sql] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).not.toContain('LIMIT');
+    });
+
+    it('floors a fractional limit and combines it with filters at the right param index', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.listJobs({ status: 'pending', limit: 10.9 });
+
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('LIMIT $2');
+      expect(params).toEqual(['pending', 10]);
+    });
+
+    it('ignores a non-positive limit (no LIMIT clause)', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.listJobs({ limit: 0 });
+
+      const [sql] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).not.toContain('LIMIT');
+    });
   });
 
   // -- getJob --

@@ -1541,12 +1541,27 @@ export class ExecutionLayer {
           maxLength: this.skillOutputMaxLength,
           skipSecretRedaction,
         });
-        // Rough post-sanitize size check for observability: if the sanitized object
-        // would serialize larger than the limit, at least one leaf was truncated.
-        // This is a warn-only signal — sanitizeObjectOutput already capped each leaf.
-        const sanitizedSize = JSON.stringify(sanitizedData).length;
-        if (sanitizedSize > this.skillOutputMaxLength) {
-          skillLogger.warn({ skillName, outputLength: sanitizedSize }, 'Skill output truncated to configured limit');
+        // Enforce an AGGREGATE size cap, not just per-leaf. sanitizeObjectOutput bounds
+        // every string leaf to skillOutputMaxLength, but a result with many leaves or
+        // array elements (e.g. scheduler-list over a large jobs table) can still serialize
+        // far larger than the limit. Left unbounded, that payload becomes a single oversized
+        // tool_result and overflows the next LLM call's context window — the provider rejects
+        // it with a non-retryable 400 (VALIDATION_ERROR) and the agent falls back to the
+        // generic "unable to process" message. String outputs are hard-capped above; object
+        // outputs must be too. (#1487)
+        const serialized = JSON.stringify(sanitizedData);
+        if (serialized.length > this.skillOutputMaxLength) {
+          skillLogger.warn(
+            { skillName, outputLength: serialized.length, limit: this.skillOutputMaxLength },
+            'Object skill output exceeded size limit — truncating to protect the LLM context window',
+          );
+          // Last-resort fallback: collapse to a bounded string form. Structure is lost,
+          // but a truncated, clearly-marked payload is safe to feed back to the model —
+          // an unbounded one is not. Skills that can legitimately return large results
+          // should page or trim at the source (see scheduler-list) so this never fires.
+          const truncated =
+            serialized.slice(0, this.skillOutputMaxLength) + '[truncated — output exceeded limit]';
+          return { success: true, data: truncated };
         }
         return { success: true, data: sanitizedData };
       }
