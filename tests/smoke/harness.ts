@@ -22,8 +22,15 @@ import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { ToolRegistry } from '../../src/skills/registry.js';
+import { SkillRegistry } from '../../src/skills/skill-registry.js';
 import { ExecutionLayer } from '../../src/skills/execution.js';
 import { discoverToolManifests, loadToolsFromDirectory } from '../../src/skills/loader.js';
+import {
+  discoverSkillManifests,
+  loadSkillsFromDiscovery,
+  registerSyntheticSingletonSkills,
+} from '../../src/skills/skill-loader.js';
+import { resolvePinnedSkills, appendSkillInstructions } from '../../src/skills/pin-resolution.js';
 import { ModelRegistry } from '../../src/agents/llm/model-registry.js';
 import { ContactService } from '../../src/contacts/contact-service.js';
 import { ContactResolver } from '../../src/contacts/contact-resolver.js';
@@ -107,14 +114,19 @@ export async function createHarness(): Promise<CuriaHarness> {
   const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
   const contactResolver = new ContactResolver(contactService, entityMemory, undefined, logger);
 
-  // Skill registry — loads all skills from the skills/ directory.
-  // Smoke tests enable all skills (no registry DB available) so every handler is
-  // registered. The two-step API mirrors the production bootstrap path.
-  const skillRegistry = new ToolRegistry();
+  // Tool + skill registries — load atoms and bundles from skills/.
+  // Smoke tests enable everything (no registry DB) so every handler is registered.
+  // Mirrors the production bootstrap path in src/index.ts (Phase 2 pin expansion).
+  const toolRegistry = new ToolRegistry();
+  const skillRegistry = new SkillRegistry();
   const skillsDir = path.resolve(import.meta.dirname, '../../skills');
-  const skillDiscoveries = discoverToolManifests(skillsDir);
+  const toolDiscoveries = discoverToolManifests(skillsDir);
+  const allToolNames = new Set(toolDiscoveries.map(d => d.name));
+  await loadToolsFromDirectory(toolDiscoveries, toolRegistry, logger, allToolNames);
+  const skillDiscoveries = discoverSkillManifests(skillsDir, logger);
   const allSkillNames = new Set(skillDiscoveries.map(d => d.name));
-  await loadToolsFromDirectory(skillDiscoveries, skillRegistry, logger, allSkillNames);
+  loadSkillsFromDiscovery(skillDiscoveries, skillRegistry, logger, allSkillNames);
+  registerSyntheticSingletonSkills(toolRegistry, skillRegistry, logger);
 
   // Agent registry — tracks all running agents for delegation and listing.
   const agentRegistry = new AgentRegistry();
@@ -160,7 +172,7 @@ export async function createHarness(): Promise<CuriaHarness> {
   // Execution layer — with bus, agent registry, and outbound gateway for
   // infrastructure skills. outboundGateway passed through so email skills
   // work in tests that exercise them.
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway });
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway });
 
   // Load all agent configs from the agents/ directory.
   const agentsDir = path.resolve(import.meta.dirname, '../../agents');
@@ -177,9 +189,18 @@ export async function createHarness(): Promise<CuriaHarness> {
   }
 
   // Pass 2: Create AgentRuntime instances with fully interpolated prompts.
+  // Expand pinned_skills (bundles) → member tools + instruction blocks + flags.
   for (const agentConfig of agentConfigs) {
     const agentPinnedSkills = agentConfig.pinned_skills ?? [];
-    const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
+    const pinResolution = resolvePinnedSkills(
+      agentPinnedSkills,
+      skillRegistry,
+      toolRegistry,
+      logger,
+      agentConfig.name,
+    );
+    const effectivePinnedTools = pinResolution.toolNames;
+    const agentToolDefs = toolRegistry.toToolDefinitions(effectivePinnedTools);
 
     let systemPrompt = agentConfig.system_prompt;
     if (agentConfig.role === 'coordinator') {
@@ -190,6 +211,7 @@ export async function createHarness(): Promise<CuriaHarness> {
         availableSpecialists: agentRegistry.specialistSummary(),
       });
     }
+    systemPrompt = appendSkillInstructions(systemPrompt, pinResolution.instructionBlocks);
 
     const agent = new AgentRuntime({
       agentId: agentConfig.name,
@@ -200,11 +222,12 @@ export async function createHarness(): Promise<CuriaHarness> {
       memory,
       entityMemory,
       executionLayer,
-      pinnedTools: agentPinnedSkills,
+      pinnedTools: effectivePinnedTools,
       skillToolDefs: agentToolDefs,
       // Coordinator gets per-turn date/timezone injection so the agent always
       // has a current date (replacing the old baked-in currentDate approach).
       timezone: agentConfig.role === 'coordinator' ? config.timezone : undefined,
+      documentWorkspaceEnabled: pinResolution.documentWorkspaceEnabled,
     });
     agent.register();
   }
