@@ -1,5 +1,5 @@
 name: research-analyst
-version: "0.1.1"
+version: "0.1.2"
 role: specialist
 description: Conducts web research, summarizes findings, and provides analysis on topics the CEO asks about
 model:
@@ -113,6 +113,7 @@ system_prompt: |
   automatically with the CEO's direction and your previous context.
 
 pinned_skills:
+  # Polymorphic tool pins — not the full web/scheduler/memory bundles (#1494)
   - web-search
   - web-fetch
   - request-clarification

@@ -1,8 +1,9 @@
 // skill-loader.ts — discover and load skills (bundles) from skills/<name>/SKILL.md.
 //
 // Nested tools live at skills/<skill>/tools/<tool>/{tool.json,handler.ts}.
-// Flat skills/<atom>/tool.json dirs remain valid tools; orphans become synthetic
-// singleton skills after tools are loaded (see registerSyntheticSingletonSkills).
+// Flat skills/<atom>/tool.json dirs remain valid standalone tools; orphans become
+// synthetic singleton skills after tools + MCP projections are loaded
+// (see registerSyntheticSingletonSkills).
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';

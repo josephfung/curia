@@ -1,8 +1,10 @@
 // mcp-loader.ts — reads config/skills.yaml, connects to each MCP server,
 // discovers tools via tools/list, and registers them in the ToolRegistry.
 //
-// Called once at startup, right after loadToolsFromDirectory. Returns the live
-// McpSession array so the bootstrap orchestrator can close them on shutdown.
+// Called once at startup, right after loadToolsFromDirectory. Returns live
+// McpSession objects plus per-server projected tool names so the bootstrap
+// orchestrator can close sessions and register MCP-as-skill projections
+// (ADR-032).
 //
 // Connection failures are warn-only — a missing MCP server should not take
 // down the whole system. The failed server's tools are simply not registered.
@@ -12,6 +14,7 @@ import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import type { ToolManifest, ToolHandler, ToolContext, ToolResult } from './types.js';
 import type { ToolRegistry } from './registry.js';
+import type { SkillRegistry } from './skill-registry.js';
 import { connectStdio, connectSse } from './mcp-client.js';
 import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
@@ -22,6 +25,16 @@ import type {
   McpStdioServerEntry,
   SkillsConfig,
 } from './mcp-config-types.js';
+
+/** Result of loading MCP servers: live sessions + tools registered per server. */
+export interface McpLoadResult {
+  sessions: McpSession[];
+  /**
+   * Server name → tool names successfully registered this boot.
+   * Used to project each MCP server as a skill into SkillRegistry (ADR-032).
+   */
+  projectedTools: Map<string, string[]>;
+}
 
 // ---------------------------------------------------------------------------
 // Config loader
@@ -279,7 +292,7 @@ export async function resolveSecretsBlock(
  * @param enabledServerNames - When provided, only servers whose name is in this set are spawned.
  *                             Servers absent from the set are skipped with a debug log (not an error).
  *                             Pass undefined to skip the filter (legacy / test behavior).
- * @returns Array of live McpSession objects. Pass to the shutdown handler to close them.
+ * @returns Live sessions plus per-server tool names registered this boot.
  */
 export async function loadMcpServers(
   configDir: string,
@@ -287,16 +300,17 @@ export async function loadMcpServers(
   logger: Logger,
   secrets: SecretsService,
   enabledServerNames?: Set<string>,
-): Promise<McpSession[]> {
+): Promise<McpLoadResult> {
   const config = loadSkillsConfig(configDir);
   const servers = config.servers ?? [];
 
   if (servers.length === 0) {
     logger.debug('No MCP servers configured in config/skills.yaml');
-    return [];
+    return { sessions: [], projectedTools: new Map() };
   }
 
   const sessions: McpSession[] = [];
+  const projectedTools = new Map<string, string[]>();
 
   for (const serverEntry of servers) {
     // Validate required transport-specific fields here rather than in the JSON Schema
@@ -465,11 +479,14 @@ export async function loadMcpServers(
       // the google-workspace server. Token cache: ~/.workspace-mcp/cli-tokens/
       logger.warn({ server: serverEntry.name }, 'MCP server advertises no tools — nothing to register. If this is the google-workspace server, the OAuth flow may not have been completed (see docs/dev/google-drive.md Step 5).');
       // Keep the session open — the server might add tools in a future protocol version.
+      // Still project an empty skill so the server name is pinnable/discoverable.
+      projectedTools.set(serverEntry.name, []);
       sessions.push(session);
       continue;
     }
 
     let registered = 0;
+    const registeredNames: string[] = [];
     for (const tool of tools) {
       // Build a minimal ToolManifest from the tool's metadata.
       // inputs is left empty ({}) because toToolDefinitions() uses mcpInputSchema
@@ -548,6 +565,7 @@ export async function loadMcpServers(
       try {
         registry.register(manifest, handler, mcpInputSchema);
         registered++;
+        registeredNames.push(tool.name);
         logger.debug(
           { server: serverEntry.name, tool: tool.name },
           'MCP tool registered',
@@ -570,12 +588,55 @@ export async function loadMcpServers(
       }
     }
 
+    projectedTools.set(serverEntry.name, registeredNames);
     logger.info(
-      { server: serverEntry.name, registered, total: tools.length },
+      { server: serverEntry.name, registered, total: tools.length, tools: registeredNames },
       'MCP server tools registered',
     );
     sessions.push(session);
   }
 
-  return sessions;
+  return { sessions, projectedTools };
+}
+
+/**
+ * Project each connected MCP server as a skill into SkillRegistry (ADR-032).
+ *
+ * Membership is the live tool set registered this boot (dynamic — can change
+ * between restarts). Pinning the server name (e.g. `google-workspace`) expands
+ * to those tools. Individual MCP tool pins remain first-class via polymorphic pins.
+ *
+ * Returns the number of skills registered.
+ */
+export function registerMcpProjectedSkills(
+  projectedTools: Map<string, string[]>,
+  skillRegistry: SkillRegistry,
+  logger: Logger,
+): number {
+  let added = 0;
+  for (const [serverName, tools] of projectedTools) {
+    if (skillRegistry.get(serverName)) {
+      logger.warn(
+        { server: serverName },
+        'MCP skill projection skipped — a skill with this name is already registered',
+      );
+      continue;
+    }
+    skillRegistry.register(
+      {
+        name: serverName,
+        description: `MCP server '${serverName}' — ${tools.length} tool${tools.length === 1 ? '' : 's'} projected as a skill (ADR-032)`,
+        version: '1.0.0',
+        tools: [...tools],
+        instructions: '',
+      },
+      '', // no on-disk SKILL.md — membership is live from tools/list
+    );
+    logger.info(
+      { skill: serverName, tools, kind: 'mcp' },
+      'MCP server projected as skill',
+    );
+    added++;
+  }
+  return added;
 }

@@ -53,7 +53,7 @@ import { ExecutionLayer } from './skills/execution.js';
 import { resolveBypassLadder } from './autonomy/effective-standing.js';
 import { loadToolsFromDirectory, discoverToolManifests, validateAllowedCallers } from './skills/loader.js';
 import type { ToolDiscovery } from './skills/loader.js';
-import { loadMcpServers, loadSkillsConfig } from './skills/mcp-loader.js';
+import { loadMcpServers, loadSkillsConfig, registerMcpProjectedSkills } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
 import type { ChannelIdentity, Contact } from './contacts/types.js';
@@ -1028,8 +1028,11 @@ async function main(): Promise<void> {
   // take down the system. The failed server's tools are simply not available
   // until the next restart.
   let mcpSessions: McpSession[] = [];
+  let mcpProjectedTools = new Map<string, string[]>();
   try {
-    mcpSessions = await loadMcpServers(configDir, toolRegistry, logger, secretsService, enabledMcpServers);
+    const mcpLoad = await loadMcpServers(configDir, toolRegistry, logger, secretsService, enabledMcpServers);
+    mcpSessions = mcpLoad.sessions;
+    mcpProjectedTools = mcpLoad.projectedTools;
   } catch (err) {
     // Malformed skills.yaml or unexpected loader error — degrade gracefully rather
     // than crashing. The startup validator catches schema violations, but a YAML
@@ -1040,6 +1043,14 @@ async function main(): Promise<void> {
   }
   if (mcpSessions.length > 0) {
     logger.info({ mcpServers: mcpSessions.map(s => s.serverId) }, 'MCP servers connected');
+  }
+
+  // ADR-032: each connected MCP server projects a skill into SkillRegistry so
+  // agents can pin `google-workspace` (etc.) instead of listing every MCP tool.
+  // Must run before synthetic singletons so projected members are not re-wrapped.
+  const mcpSkillCount = registerMcpProjectedSkills(mcpProjectedTools, skillRegistry, logger);
+  if (mcpSkillCount > 0) {
+    logger.info({ mcpSkillCount }, 'MCP servers projected as skills');
   }
 
   // Wrap any tool (native orphan or MCP) that no real skill owns as a synthetic

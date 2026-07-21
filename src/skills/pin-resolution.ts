@@ -1,16 +1,18 @@
-// pin-resolution.ts — expand agent pinned_skills (skill bundle names) to tools
-// + instruction blocks + capability flags.
+// pin-resolution.ts — expand agent pinned_skills to tools + instruction blocks
+// + capability flags.
 //
-// Pin target is a **skill** (bundle). Resolution expands member tools and, when
-// the skill ships instructions / heartbeat / document_workspace flags, applies
-// those. Synthetic singleton skills cover unbundled flat/MCP tools so existing
-// pin lists that still name individual tools keep working.
+// Pins are polymorphic (ADR-032): a pin may name a skill (bundle), a tool, or an
+// MCP-projected skill. Skill pins expand member tools + instructions; tool pins
+// resolve to exactly that one tool (never siblings). The skill remains the
+// install/enable unit; the pin is the per-agent runtime-availability unit.
 //
 // Fine-grained "pin skill but exclude tool" is intentionally unsupported (YAGNI).
 
 import type { SkillRegistry } from './skill-registry.js';
 import type { ToolRegistry } from './registry.js';
 import type { Logger } from '../logger.js';
+
+export type PinReferentKind = 'skill' | 'tool';
 
 export interface PinResolution {
   /** Deduped tool names to pass to ToolRegistry.toToolDefinitions(). */
@@ -21,15 +23,20 @@ export interface PinResolution {
   heartbeatEligible: boolean;
   /** True when any pinned skill sets document_workspace: true. */
   documentWorkspaceEnabled: boolean;
-  /** Skill names that were successfully resolved. */
+  /** Skill names that were successfully resolved (bundle / MCP-projected). */
   resolvedSkills: string[];
+  /** Per-pin referent kind for auditability (ADR-032). */
+  resolvedPins: Array<{ pin: string; kind: PinReferentKind }>;
 }
 
 /**
- * Resolve an agent's pinned_skills list against the SkillRegistry.
- * Unknown names that match a ToolRegistry tool are accepted as a transitional
- * fallback (warn once) so specialist YAMLs that still list atoms keep working
- * until they retarget to bundles.
+ * Resolve an agent's pinned_skills list against SkillRegistry + ToolRegistry.
+ *
+ * Resolution order per pin name:
+ * 1. SkillRegistry hit (bundle or MCP-projected skill, including synthetic
+ *    singletons) → expand members + instructions/flags.
+ * 2. Else ToolRegistry hit → first-class single-tool pin (ADR-032).
+ * 3. Else warn and skip.
  */
 export function resolvePinnedSkills(
   pinnedSkills: string[],
@@ -42,6 +49,7 @@ export function resolvePinnedSkills(
   const seenTools = new Set<string>();
   const instructionBlocks: string[] = [];
   const resolvedSkills: string[] = [];
+  const resolvedPins: Array<{ pin: string; kind: PinReferentKind }> = [];
   let heartbeatEligible = false;
   let documentWorkspaceEnabled = false;
 
@@ -62,21 +70,36 @@ export function resolvePinnedSkills(
     const skill = skillRegistry.get(pin);
     if (skill) {
       resolvedSkills.push(pin);
+      resolvedPins.push({ pin, kind: 'skill' });
       for (const t of skill.manifest.tools) pushTool(t, pin);
       const body = skill.manifest.instructions.trim();
       if (body) instructionBlocks.push(body);
       if (skill.manifest.heartbeat) heartbeatEligible = true;
       if (skill.manifest.document_workspace) documentWorkspaceEnabled = true;
+      if (!skill.synthetic) {
+        logger?.debug?.(
+          {
+            agent: agentName,
+            pin,
+            kind: 'skill',
+            tools: skill.manifest.tools,
+            synthetic: false,
+          },
+          'Resolved capability pin',
+        );
+      }
       continue;
     }
 
-    // Transitional fallback: pin names a tool directly.
+    // First-class tool pin (ADR-032 polymorphic pins). Resolves to exactly this
+    // tool — never the owning bundle's siblings.
     if (toolRegistry.get(pin)) {
-      logger?.warn(
-        { agent: agentName, pin },
-        'pinned_skills entry is a tool name; prefer pinning its skill bundle (ADR-031 Phase 2)',
-      );
+      resolvedPins.push({ pin, kind: 'tool' });
       pushTool(pin, pin);
+      logger?.debug?.(
+        { agent: agentName, pin, kind: 'tool' },
+        'Resolved capability pin',
+      );
       continue;
     }
 
@@ -92,6 +115,7 @@ export function resolvePinnedSkills(
     heartbeatEligible,
     documentWorkspaceEnabled,
     resolvedSkills,
+    resolvedPins,
   };
 }
 

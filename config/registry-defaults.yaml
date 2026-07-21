@@ -9,15 +9,27 @@
 # MCP-backed tools (create_doc, search_drive_files, etc.) are NOT listed here —
 # they are loaded by loadMcpServers and are not on-disk ToolDiscovery items.
 #
-# skills: — Phase 2 bundles (SKILL.md). Member tools still enroll via tools:.
+# skills: — SKILL.md bundles (Phase 2 + #1494). Member tools still enroll via tools:.
+# MCP-projected skills (google-workspace, etc.) are NOT listed — they appear in
+# SkillRegistry at runtime from loadMcpServers (ADR-032).
 skills:
   - tasks
   - documents
   - calendar
+  - email
+  - contacts
+  - autonomy
+  - scheduler
+  - web
+  - memory
+  - context-bridge
+  - executive-profile
+  - setup
   # calendar skill may be enabled while calendar-* tools stay off until credentials
   # are configured (same pattern as the calendar agent).
-  # NOTE: tasks = heartbeat + task-* tools; documents = doc-* workspace (pin both for
-  #        the historical enable_task_management surface).
+  # NOTE: tasks = heartbeat + task-*/plan/checkpoint; documents = doc-* workspace.
+  # NOTE: ceo-inbox / learning / diagnostics skill bundles excluded — enable alongside
+  #        their agents (same rationale as the member-tool exclusions below).
 tools:
   - tool-registry
   - skill-activate

@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.2.1"
+version: "0.2.2"
 role: specialist
 description: >
   Proactively debriefs the CEO after external meetings. Three times a day it
@@ -14,29 +14,22 @@ model:
 inject_specialists: true  # see research-analyst for cross-specialist research tasks
 
 pinned_skills:
-  # Calendar scanning
+  # Polymorphic tool pins — keep resolved set unchanged when bundles grow (#1494)
   - calendar-list-events
-  # Entity enrichment for attendees
   - entity-context
   - contact-lookup
-  # Follow-up actions (delegated mode)
   - email-draft-save
   - calendar-create-event
   - calendar-check-conflicts
-  # Knowledge graph
   - memory-query
   - memory-store
-  # Platform task backlog
   - task-create
   - task-list
   - task-update
   - task-complete
-  # Inter-agent communication
   - bullpen
-  # Utilities + idempotency guards
   - date-resolve
   - config-store
-  # Outbound context — self-clear this meeting's entries when a debrief closes
   - context-bridge-clear
 
 allow_discovery: false

@@ -1,5 +1,5 @@
 name: contacts
-version: "0.10.0"
+version: "0.11.0"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -305,33 +305,10 @@ system_prompt: |
   Declining is permanent — never resurface a declined recommendation.
 
 pinned_skills:
-  # Identity & CRUD
-  - contact-create
-  - contact-lookup
-  - contact-link-identity
-  - contact-unlink-identity
-  - contact-set-identity-status
-  - contact-set-role
-  - contact-set-tier
-  - contact-rename
-  - contact-update
-  - contact-list
-  # Lifecycle
-  - contact-merge
-  - contact-find-duplicates
-  - contact-dedup-exclude
-  - contact-grant-permission
-  - contact-revoke-permission
-  # Grant recommendations (issue #952)
-  - scan-grant-recommendations
-  - approve-grant-recommendation
-  - decline-grant-recommendation
-  # Knowledge graph
-  - query-relationships
-  - delete-relationship
-  # Context enrichment
+  - contacts
+  # Context enrichment — stays standalone (not part of contacts; #1494 guard)
   - entity-context
-  # Memory
+  # Memory — query/store only (not memory-confirm / decay-warnings-list)
   - memory-query
   - memory-store
   # Calendar — read-only, used for meeting history enrichment in briefings only.
@@ -342,9 +319,7 @@ pinned_skills:
   # Task backlog (heartbeat-eligible) + document workspace
   - tasks
   - documents
-  # Outbound context — self-sweep the exchange entry when a dedup review closes.
-  - context-bridge-release
-  - context-bridge-clear
+  - context-bridge
 
 schedule:
   - cron: "0 9 * * 1"   # Mondays at 9 AM

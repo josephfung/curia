@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { EmailCreateFolderHandler } from '../../../skills/email-create-folder/handler.js';
+import { EmailCreateFolderHandler } from '../../../skills/email/tools/email-create-folder/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

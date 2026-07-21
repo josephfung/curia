@@ -17,13 +17,16 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Skill (bundle) model** — `SKILL.md` + nested `tools/`; `pinned_skills` expands bundles; `skill_registry` table. (#1489)
 - **Skill activation runtime** — `toolSearch` returns `kind:"skill"`; `skill-activate` loads tools + instructions; Tier 1 persists in `progress.activeSkills`. (#1495)
+- **Native skill bundles** — email, ceo-inbox, contacts, autonomy, diagnostics, scheduler, web, memory, learning, context-bridge, executive-profile, setup. (#1494)
+- **MCP-as-skill** — each connected MCP server projects a pinnable skill into `SkillRegistry`. (#1494)
 
 ### Changed
 
 - **Tools vs skills vocabulary** — atoms are **tools** (`tool.json`, `ToolRegistry`); audit readers dual-match legacy `skill.*`. (#1485)
 - **`enable_task_management`** — retired; pin `tasks` + `documents` skills instead. (#1489)
-- **`pinned_skills`** — pins skill bundles (not atoms); per-tool `action_risk` unchanged. (#1489)
+- **`pinned_skills`** — polymorphic (skill, tool, or MCP-projected skill); per-tool `action_risk` unchanged. (#1489, #1494)
 - **ADR-032** — polymorphic pins (skill/tool/MCP) + MCP servers project skills; prerequisites for #1494. (#1494)
+- **`tasks` skill** — adds `plan` and `checkpoint` members; `memory` includes `decay-warnings-list`. (#1494)
 
 ### Fixed
 

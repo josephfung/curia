@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SchedulerUpdateHandler } from '../../../skills/scheduler-update/handler.js';
+import { SchedulerUpdateHandler } from '../../../skills/scheduler/tools/scheduler-update/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 
 import pino from 'pino';

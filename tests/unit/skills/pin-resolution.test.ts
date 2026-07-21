@@ -25,7 +25,14 @@ function toolManifest(name: string, action_risk: ToolManifest['action_risk'] = '
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };
 
-const TASK_TOOLS = ['task-create', 'task-list', 'task-update', 'task-complete'] as const;
+const TASK_TOOLS = [
+  'task-create',
+  'task-list',
+  'task-update',
+  'task-complete',
+  'plan',
+  'checkpoint',
+] as const;
 const DOC_TOOLS = ['doc-read', 'doc-list', 'doc-write', 'doc-search'] as const;
 
 describe('parseSkillMd', () => {
@@ -179,13 +186,105 @@ describe('resolvePinnedSkills', () => {
     expect(r.toolNames).toEqual(['calendar-list-events']);
   });
 
-  it('falls back to a tool name when no skill matches (transitional)', () => {
+  it('resolves a first-class tool pin when no skill name matches (ADR-032)', () => {
     const tools = new ToolRegistry();
     tools.register(toolManifest('web-fetch'), noopHandler);
     const skills = new SkillRegistry();
     const r = resolvePinnedSkills(['web-fetch'], skills, tools);
     expect(r.toolNames).toEqual(['web-fetch']);
     expect(r.heartbeatEligible).toBe(false);
+    expect(r.resolvedPins).toEqual([{ pin: 'web-fetch', kind: 'tool' }]);
+  });
+
+  it('pinning one tool of a bundle does not resolve sibling tools (ADR-032)', () => {
+    const tools = new ToolRegistry();
+    tools.register(toolManifest('ceo-inbox-search', 'none'), noopHandler);
+    tools.register(toolManifest('ceo-inbox-download-attachment', 'none'), noopHandler);
+    tools.register(toolManifest('ceo-inbox-draft-compose', 'medium'), noopHandler);
+    tools.register(toolManifest('ceo-inbox-archive', 'low'), noopHandler);
+
+    const skills = new SkillRegistry();
+    skills.register(
+      {
+        name: 'ceo-inbox',
+        description: 'CEO inbox',
+        tools: [
+          'ceo-inbox-search',
+          'ceo-inbox-download-attachment',
+          'ceo-inbox-draft-compose',
+          'ceo-inbox-archive',
+        ],
+        instructions: '## CEO Inbox\n\nTriage carefully.',
+      },
+      '/tmp/ceo-inbox',
+    );
+
+    // Direct tool pins — must not expand the owning bundle.
+    const r = resolvePinnedSkills(
+      ['ceo-inbox-search', 'ceo-inbox-download-attachment'],
+      skills,
+      tools,
+    );
+    expect(r.toolNames).toEqual(['ceo-inbox-search', 'ceo-inbox-download-attachment']);
+    expect(r.instructionBlocks).toHaveLength(0);
+    expect(r.resolvedSkills).toEqual([]);
+    expect(r.resolvedPins).toEqual([
+      { pin: 'ceo-inbox-search', kind: 'tool' },
+      { pin: 'ceo-inbox-download-attachment', kind: 'tool' },
+    ]);
+  });
+
+  it('pinning an MCP-projected skill expands its live tool set (ADR-032)', () => {
+    const tools = new ToolRegistry();
+    tools.register(toolManifest('create_doc', 'low'), noopHandler);
+    tools.register(toolManifest('search_drive_files', 'low'), noopHandler);
+    const skills = new SkillRegistry();
+    skills.register(
+      {
+        name: 'google-workspace',
+        description: 'MCP server google-workspace',
+        tools: ['create_doc', 'search_drive_files'],
+        instructions: '',
+      },
+      '',
+    );
+
+    const r = resolvePinnedSkills(['google-workspace'], skills, tools);
+    expect(r.toolNames).toEqual(['create_doc', 'search_drive_files']);
+    expect(r.resolvedSkills).toEqual(['google-workspace']);
+    expect(r.resolvedPins).toEqual([{ pin: 'google-workspace', kind: 'skill' }]);
+  });
+
+  it('preserves mixed per-tool action_risk through the contacts bundle', () => {
+    const tools = new ToolRegistry();
+    tools.register(toolManifest('contact-lookup', 'none'), noopHandler);
+    tools.register(toolManifest('contact-grant-permission', 'critical'), noopHandler);
+    const skills = new SkillRegistry();
+    skills.register(
+      {
+        name: 'contacts',
+        description: 'contacts',
+        tools: ['contact-lookup', 'contact-grant-permission'],
+        instructions: '',
+      },
+      '/tmp/contacts',
+    );
+
+    resolvePinnedSkills(['contacts'], skills, tools);
+    expect(tools.get('contact-lookup')!.manifest.action_risk).toBe('none');
+    expect(tools.get('contact-grant-permission')!.manifest.action_risk).toBe('critical');
+  });
+});
+
+describe('on-disk contacts bundle guards', () => {
+  it('does not list entity-context as a contacts member', () => {
+    const raw = readFileSync(
+      resolve(import.meta.dirname, '../../../skills/contacts/SKILL.md'),
+      'utf-8',
+    );
+    const parsed = parseSkillMd(raw);
+    expect(parsed.tools).not.toContain('entity-context');
+    expect(parsed.tools).toEqual(expect.arrayContaining(['contact-lookup', 'contact-grant-permission']));
   });
 });
 

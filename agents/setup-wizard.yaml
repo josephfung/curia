@@ -1,5 +1,5 @@
 name: setup-wizard
-version: "0.2.0"
+version: "0.3.0"
 role: specialist
 description: >
   Resumable first-conversation concierge and setup guide. Invoke when the principal
@@ -110,8 +110,8 @@ system_prompt: |
   - After any credential setup, call setup-status to confirm — never assume success.
 
 pinned_skills:
-  - setup-status
-  - setup-defer
+  - setup
+  # Polymorphic tool pins — not the full executive-profile / scheduler / memory bundles
   - behavioral-preferences-update
   - scheduler-create
   - scheduler-list
@@ -119,6 +119,5 @@ pinned_skills:
   - tool-registry
   - memory-store
   - executive-profile-update
-  - system-secret-capture-request
 allow_discovery: false
 inject_specialists: false

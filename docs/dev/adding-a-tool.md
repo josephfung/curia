@@ -46,7 +46,7 @@ skills/
     handler.test.ts
 ```
 
-Tools are self-contained. Keep external imports minimal and declare any required secrets in the manifest. Pin the **skill** name in agent YAML (`pinned_skills: [calendar]`), not every member tool.
+Tools are self-contained. Keep external imports minimal and declare any required secrets in the manifest. Prefer pinning the **skill** name in agent YAML (`pinned_skills: [calendar]`). When an agent must have only one member tool, pin that tool name directly (polymorphic pins, ADR-032) — it will not receive siblings.
 
 ---
 

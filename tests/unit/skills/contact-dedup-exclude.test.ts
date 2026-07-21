@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ContactDedupExcludeHandler } from '../../../skills/contact-dedup-exclude/handler.js';
+import { ContactDedupExcludeHandler } from '../../../skills/contacts/tools/contact-dedup-exclude/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

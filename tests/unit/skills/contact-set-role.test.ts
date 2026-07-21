@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ContactSetRoleHandler } from '../../../skills/contact-set-role/handler.js';
+import { ContactSetRoleHandler } from '../../../skills/contacts/tools/contact-set-role/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

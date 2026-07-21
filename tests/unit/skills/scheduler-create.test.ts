@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SchedulerCreateHandler } from '../../../skills/scheduler-create/handler.js';
+import { SchedulerCreateHandler } from '../../../skills/scheduler/tools/scheduler-create/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 

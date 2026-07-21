@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.15.0"
+version: "0.16.0"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -18,23 +18,10 @@ model:
 inject_specialists: true
 
 pinned_skills:
-  - ceo-inbox-list
-  - ceo-inbox-read
-  - ceo-inbox-download-attachment
-  - ceo-inbox-draft-reply
-  - ceo-inbox-draft-compose
-  - ceo-inbox-draft-edit
+  - ceo-inbox
   - file-parse
-  - ceo-inbox-search
-  - ceo-inbox-archive
-  - ceo-inbox-update-folders
-  - ceo-inbox-label
-  - ceo-inbox-mark-read
-  - ceo-inbox-mark-starred
-  - ceo-inbox-sent-observe
-  # Email-observation learning (#1419): the daily/weekly crons and the shadow-draft
-  # triage step call these — they must be pinned or the agent cannot see them.
-  - ceo-inbox-shadow-draft
+  # Email-observation learning producers (#1419) — polymorphic tool pins so the
+  # digest review tools stay with the coordinator (ADR-032 / #1494).
   - task-completion-from-sent
   - voice-learn
   - config-store
@@ -47,10 +34,7 @@ pinned_skills:
   - contact-update
   - date-resolve
   - scheduler-report
-  # Outbound context — self-sweep the exchange entry when a multi-turn email
-  # exchange completes (see "Closing a multi-turn exchange" in the prompt).
-  - context-bridge-release
-  - context-bridge-clear
+  - context-bridge
   - tasks
   - documents
 
