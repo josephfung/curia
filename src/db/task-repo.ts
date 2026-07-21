@@ -30,6 +30,11 @@ import {
   type ResumableProgressBlock,
   type ResumableWriteResult,
 } from './resumable-progress.js';
+import {
+  prepareActiveSkillsBlock,
+  type ActiveSkillsBlock,
+  type ActiveSkillsWriteResult,
+} from './active-skills-progress.js';
 import { prepareResumableBlockWithSpill } from './resumable-accumulator-spill.js';
 import type { WorkingDocsRepo } from './working-docs-repo.js';
 import { type ResumableCircuitState } from '../agents/resumable-circuit-breaker.js';
@@ -1199,6 +1204,62 @@ export class TaskRepo {
     this.logger.info(
       { taskId: updated.id, done: prepared.block.done, total: prepared.block.total },
       'task-repo: persisted plan block',
+    );
+    return { task: updated, block: prepared.block };
+  }
+
+  async setActiveSkillsBlock(
+    taskId: string,
+    block: ActiveSkillsBlock,
+    callerAgentId?: string,
+  ): Promise<{ task: TaskRow; block: ActiveSkillsBlock } | ActiveSkillsWriteResult> {
+    const current = await this.getTask(taskId);
+    if (!current) {
+      return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
+    }
+    if (TERMINAL_STATUSES.has(current.status)) {
+      return { ok: false, code: 'invalid_block', message: `task ${taskId} is in a terminal state` };
+    }
+
+    const prepared = prepareActiveSkillsBlock(block);
+    if (!prepared.ok) return prepared;
+
+    const { rows } = await this.pool.query(
+      `UPDATE tasks
+          SET progress = jsonb_set(COALESCE(progress, '{}'::jsonb), '{activeSkills}', $1::jsonb, true),
+              updated_at = now()
+        WHERE id = $2
+          AND status NOT IN ('done', 'cancelled')
+        RETURNING ${TASK_COLUMNS}`,
+      [JSON.stringify(prepared.block), taskId],
+    );
+    const row = rows[0] as DbTaskRow | undefined;
+    if (!row) {
+      const currentTask = await this.getTask(taskId);
+      if (!currentTask) {
+        return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
+      }
+      if (TERMINAL_STATUSES.has(currentTask.status)) {
+        return { ok: false, code: 'invalid_block', message: `task ${taskId} is in a terminal state` };
+      }
+      throw new Error(`task-repo: setActiveSkillsBlock update returned no row for non-terminal task ${taskId}`);
+    }
+
+    const updated = mapTaskRow(row);
+
+    try {
+      await this.bus.publish('execution', createTaskUpdated({
+        taskId: updated.id,
+        previousStatus: current.status,
+        agentId: callerAgentId ?? null,
+      }));
+    } catch (busErr) {
+      this.logger.error({ busErr, taskId: updated.id }, 'task-repo: bus publish failed after setActiveSkillsBlock');
+    }
+
+    this.logger.info(
+      { taskId: updated.id, skills: prepared.block.skills.map((s) => s.name) },
+      'task-repo: persisted activeSkills block',
     );
     return { task: updated, block: prepared.block };
   }

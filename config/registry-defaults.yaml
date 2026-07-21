@@ -20,6 +20,7 @@ skills:
   #        the historical enable_task_management surface).
 tools:
   - tool-registry
+  - skill-activate
   # Core communication
   - email-send
   - email-reply

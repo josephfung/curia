@@ -227,13 +227,19 @@ export interface ToolContext {
   browserService?: import('../browser/browser-service.js').BrowserService;
   /** Skill search — available to skills declaring 'toolSearch' in capabilities.
    *  Searches all registered skills by keyword, excluding tool-registry itself. */
-  /** Search tools (and optionally skills) by keyword. Used by tool-registry. */
+  /** Search tools and skills by keyword. Used by tool-registry (Phase 3a unified discovery). */
   toolSearch?: (query: string) => Array<{
     name: string;
     description: string;
-    /** Phase 2: 'tool' (atom) or 'skill' (bundle). Omitted → treat as tool. */
+    /** 'tool' (atom) or 'skill' (bundle). Omitted → treat as tool. */
     kind?: 'tool' | 'skill';
   }>;
+  /** Skill (bundle) registry — available to tools declaring 'skillRegistry' in capabilities.
+   *  Used by skill-activate for Tier-2 activation (#1495). */
+  skillRegistry?: import('./skill-registry.js').SkillRegistry;
+  /** Atom tool catalog — injected alongside skillRegistry for activation resolution.
+   *  Not a separate capability; accompanies skillRegistry. */
+  toolRegistry?: import('./registry.js').ToolRegistry;
   /** Arbitrary task-level metadata forwarded from the agent.task event payload.
    *  Skills that do not need it can ignore this field entirely. */
   taskMetadata?: Record<string, unknown>;

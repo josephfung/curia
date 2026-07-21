@@ -2158,6 +2158,74 @@ describe('toolSearch filters by allowed_callers', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 3a unified discovery (kind:skill)
+// ---------------------------------------------------------------------------
+
+describe('toolSearch unified skill discovery (#1495)', () => {
+  it('returns kind:skill for non-synthetic bundles and promotes member atoms', async () => {
+    const { SkillRegistry } = await import('./skill-registry.js');
+    const registry = new ToolRegistry();
+    const skillRegistry = new SkillRegistry();
+
+    registry.register(makeManifest('task-create'), makeHandler('ok'));
+    skillRegistry.register(
+      {
+        name: 'tasks',
+        description: 'Task management bundle',
+        tools: ['task-create'],
+        instructions: '## Tasks\nDecide.',
+      },
+      '/tmp/tasks',
+    );
+
+    const searcher = { ...makeManifest('searcher'), capabilities: ['toolSearch'] };
+    const searchResults: Array<{ name: string; kind?: string }> = [];
+    registry.register(searcher, {
+      execute: async (ctx: ToolContext) => {
+        searchResults.push(...ctx.toolSearch!('task'));
+        return { success: true, data: searchResults };
+      },
+    });
+
+    const layer = new ExecutionLayer(registry, logger, { skillRegistry });
+    await layer.invoke('searcher', {}, undefined, { agentId: 'coordinator' });
+
+    expect(searchResults).toContainEqual({
+      name: 'tasks',
+      description: 'Task management bundle',
+      kind: 'skill',
+    });
+    expect(searchResults.some((r) => r.name === 'task-create')).toBe(false);
+  });
+
+  it('resolveSkillActivationForAgent skips disallowed member tools', async () => {
+    const { SkillRegistry } = await import('./skill-registry.js');
+    const registry = new ToolRegistry();
+    const skillRegistry = new SkillRegistry();
+    registry.register(
+      { ...makeManifest('secret-admin'), allowed_callers: ['coordinator'] },
+      makeHandler('ok'),
+    );
+    skillRegistry.register(
+      {
+        name: 'admin-bundle',
+        description: 'Admin',
+        tools: ['secret-admin'],
+        instructions: 'Careful.',
+      },
+      '/tmp/admin',
+    );
+
+    const layer = new ExecutionLayer(registry, logger, { skillRegistry });
+    const result = layer.resolveSkillActivationForAgent('admin-bundle', 'research-analyst');
+    expect('error' in result).toBe(false);
+    if ('error' in result) return;
+    expect(result.tools).toEqual([]);
+    expect(result.skippedTools).toEqual(['secret-admin']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // secret resolution: vault-first with env fallback + audit source tag
 // ---------------------------------------------------------------------------
 describe('ctx.secret resolution', () => {

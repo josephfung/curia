@@ -1823,7 +1823,7 @@ async function main(): Promise<void> {
   // validated here (the JSON-schema startup check only covers default.yaml, not local overrides,
   // and cannot express the derived_child >= same_task invariant). Throws → boot fails loudly.
   const bypassLadder = resolveBypassLadder(yamlConfig.autonomy?.bypass_ladder);
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier });
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -1983,20 +1983,22 @@ async function main(): Promise<void> {
 
     const agentToolDefs = toolRegistry.toToolDefinitions(effectivePinnedTools);
 
-    // allow_discovery: true → inject the tool-registry discovery tool into the agent's
+    // allow_discovery: true → inject tool-registry + skill-activate into the agent's
     // tool list. Skipped if already pinned to avoid duplicate tool definitions.
-    // The tool-registry handler is loaded by the standard file loader like any other
-    // tool; this only controls whether it appears in the LLM's tool list for this agent.
-    if (agentConfig.allow_discovery && !effectivePinnedTools.includes('tool-registry')) {
-      const discoveryToolDefs = toolRegistry.toToolDefinitions(['tool-registry']);
-      if (discoveryToolDefs.length === 0) {
-        // tool-registry is not in the registry — it either failed to load (bad manifest,
-        // missing handler) or was never registered. Error-level: a declared capability is
-        // unavailable for this agent's entire lifetime. Root cause will be in the earlier
-        // skill-loader error log; this connects the agent-level consequence to it.
-        logger.error({ agent: agentConfig.name }, 'allow_discovery is true but tool-registry is not registered — discovery unavailable; check startup logs for skill load errors');
-      } else {
-        agentToolDefs.push(...discoveryToolDefs);
+    // tool-registry discovers tools/skills; skill-activate loads a skill's tools +
+    // SKILL.md instructions into the turn (Phase 3a / #1495).
+    if (agentConfig.allow_discovery) {
+      for (const discoveryTool of ['tool-registry', 'skill-activate'] as const) {
+        if (effectivePinnedTools.includes(discoveryTool)) continue;
+        const discoveryToolDefs = toolRegistry.toToolDefinitions([discoveryTool]);
+        if (discoveryToolDefs.length === 0) {
+          logger.error(
+            { agent: agentConfig.name, tool: discoveryTool },
+            `allow_discovery is true but ${discoveryTool} is not registered — discovery/activation unavailable; check startup logs for skill load errors`,
+          );
+        } else {
+          agentToolDefs.push(...discoveryToolDefs);
+        }
       }
     }
 
@@ -2057,6 +2059,8 @@ async function main(): Promise<void> {
       executionLayer,
       pinnedTools: effectivePinnedTools,
       skillToolDefs: agentToolDefs,
+      pinnedSkillNames: pinResolution.resolvedSkills,
+      skillRegistry,
       // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
       modelRegistry,
       estimateCostUsd,

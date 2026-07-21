@@ -114,6 +114,15 @@ Preserved verbatim from `agent_tasks`: `intent_anchor` (durable goal statement),
 `progress` JSONB (multi-burst execution state), `error_budget`, `conversation_id`,
 `agent_id`, timestamps.
 
+`progress` keys used by the platform (all optional; absent when unused):
+
+| Key | Purpose |
+|-----|---------|
+| `notes` | Human-readable progress notes (`task-update`) |
+| `resumable` | Checkpoint cursor / accumulator (spec 20) |
+| `plan` | Planned child-step descriptors (spec 20) |
+| `activeSkills` | Tier-1 skill activations for this task — MRU list of `{ name, activatedAt }`, capped; re-loaded on wake with relevance re-check (spec 03 / #1495) |
+
 ### 2.2 Status lifecycle
 
 The status `CHECK` constraint carries **both** the new task-lifecycle values and the

@@ -1,11 +1,12 @@
 // handler.ts — tool-registry built-in skill.
 //
-// Thin wrapper around ToolRegistry.search() that lets discovery-enabled agents
-// find capabilities not in their pinned skill list.
+// Thin wrapper around unified tool/skill search (ctx.toolSearch) that lets
+// discovery-enabled agents find capabilities not in their pinned skill list.
+// Results may be kind:'tool' (callable immediately) or kind:'skill' (activate
+// via skill-activate to load member tools + SKILL.md instructions).
 //
-// The registry reference is injected by the execution layer as ctx.toolSearch —
-// a closure scoped to this skill by name, following the same name-gated pattern
-// used for autonomyService and browserService. Declare "toolSearch" in capabilities.
+// The search closure is injected by the execution layer as ctx.toolSearch —
+// declare "toolSearch" in capabilities.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
