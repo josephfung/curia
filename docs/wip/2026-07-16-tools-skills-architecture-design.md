@@ -243,8 +243,13 @@ imported skill tool access the agent didn't already have.
 
 - **Skill-level gating knobs:** does a skill *aggregate/display* its tools' risk, or move any
   gate (e.g. `allowed_callers`) to the skill level for convenience, with per-tool override?
-- **Fine-grained pin override:** pin a skill but exclude a tool (e.g. `calendar` without
-  `calendar-delete-event`)? Needed, or YAGNI?
+- **Fine-grained pin override — RESOLVED ([ADR-032](../adr/032-polymorphic-pins-and-mcp-as-skill.md)):**
+  pins are **polymorphic** — a pin references a skill, a tool, or (future) an MCP capability,
+  so a narrow consumer pins the narrow tool and gains nothing else. Pin-minus-tool exclusion
+  is deferred as a later subtractive modifier, not the base model.
+- **MCP-as-skill — RESOLVED ([ADR-032](../adr/032-polymorphic-pins-and-mcp-as-skill.md)):**
+  each MCP server projects a skill into `SkillRegistry` (discoverable + pinnable by name);
+  its tools still register into `ToolRegistry` per §4 / ADR-016.
 - **Selection UX for skills with instructions:** how does discovery weigh a skill's description
   vs its cost before activating? (Anthropic leans entirely on the description string.)
 - **Sandbox go/no-go:** what fraction of the skills operators actually want to import ship
