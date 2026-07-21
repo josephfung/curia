@@ -7,7 +7,7 @@ import {
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { ExecutiveProfile } from '../../../../src/executive/types.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
-import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
+import { PENDING_DIFFS_PATH } from '../../../ceo-inbox/tools/ceo-inbox-sent-observe/handler.js';
 import { VOICE_PROPOSAL_KEY } from '../../../_shared/learning-state.js';
 
 const DIFFS = `

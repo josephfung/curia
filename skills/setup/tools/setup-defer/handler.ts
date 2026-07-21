@@ -13,7 +13,7 @@ const KEY = 'deferrals';
 
 // Canonical task IDs from catalog.yaml. Validated here so out-of-catalog
 // deferrals fail fast rather than silently being stored and never matched.
-// Keep in sync with skills/setup-status/catalog.yaml when tasks are added/removed.
+// Keep in sync with skills/setup/tools/setup-status/catalog.yaml when tasks are added/removed.
 const VALID_TASK_IDS = new Set([
   'persona',
   'debrief',

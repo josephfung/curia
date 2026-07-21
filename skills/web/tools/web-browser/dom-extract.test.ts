@@ -169,7 +169,7 @@ describe('extractFrameContent — interactable refs', () => {
   it('stays self-contained when serialized into a page after a keepNames transpile (prod pipeline)', async () => {
     // Resolve via cwd (worktree root under `pnpm -C`, repo root in CI) rather than
     // import.meta.url — happy-dom gives a non-file: import.meta.url here.
-    const srcPath = resolve(process.cwd(), 'skills/web-browser/dom-extract.ts');
+    const srcPath = resolve(process.cwd(), 'skills/web/tools/web-browser/dom-extract.ts');
     const { code } = await transformWithEsbuild(readFileSync(srcPath, 'utf8'), srcPath, {
       keepNames: true, loader: 'ts', format: 'cjs',
     });
