@@ -13,7 +13,8 @@
     "jobs": "array",
     "count": "number",
     "truncated": "boolean",
-    "limit": "number"
+    "limit": "number",
+    "displayTimezone": "string"
   },
   "permissions": [],
   "secrets": [],

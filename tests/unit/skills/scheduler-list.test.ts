@@ -89,10 +89,13 @@ describe('SchedulerListHandler', () => {
         count: number;
         truncated: boolean;
         limit: number;
+        displayTimezone: string;
       };
       expect(data.count).toBe(2);
       expect(data.truncated).toBe(false);
       expect(data.limit).toBe(50);
+      // With no ctx.timezone the handler falls back to UTC and leaves Z-suffix strings.
+      expect(data.displayTimezone).toBe('UTC');
 
       // Heavy JSONB fields are stripped from the list view.
       const job = data.jobs[0]!;
@@ -104,6 +107,40 @@ describe('SchedulerListHandler', () => {
       expect(job).not.toHaveProperty('lastRunSummary');
       expect(job).not.toHaveProperty('taskErrorBudget');
       expect(job).not.toHaveProperty('originator');
+    }
+  });
+
+  it('converts timestamps to the user timezone and reports displayTimezone (#1487)', async () => {
+    const schedulerService = {
+      createJob: vi.fn(),
+      listJobs: vi.fn().mockResolvedValue([makeJob('job-1')]),
+      cancelJob: vi.fn(),
+    };
+
+    const result = await handler.execute(makeCtx(
+      {},
+      { schedulerService: schedulerService as never, timezone: 'America/Toronto' },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as {
+        jobs: Array<Record<string, unknown>>;
+        displayTimezone: string;
+      };
+      const job = data.jobs[0]!;
+      // These are fixed July instants → always EDT (UTC-04:00), regardless of when the
+      // test runs. Crucially, NOT a raw Z-suffix string the LLM would misread.
+      expect(job['nextRunAt']).toBe('2026-07-22T04:00:00.000-04:00');
+      expect(job['createdAt']).toBe('2026-06-30T20:00:00.000-04:00');
+      expect(job['nextRunAt']).not.toMatch(/Z$/);
+      // Null instants stay null.
+      expect(job['runAt']).toBeNull();
+      expect(job['lastRunAt']).toBeNull();
+      // The job's own cron zone is preserved as metadata (not an instant).
+      expect(job['timezone']).toBe('America/Toronto');
+      // displayTimezone depends on the real "now" for DST, so match either EST/EDT.
+      expect(data.displayTimezone).toMatch(/UTC-0[45]:00/);
     }
   });
 

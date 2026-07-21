@@ -14,6 +14,7 @@
 
 import type { SkillHandler, SkillContext, SkillResult } from '../../src/skills/types.js';
 import type { JobRow } from '../../src/scheduler/scheduler-service.js';
+import { toLocalIso, formatDisplayTimezone } from '../../src/time/timestamp.js';
 
 /** Default number of jobs returned when the caller doesn't specify a limit. */
 const DEFAULT_LIST_LIMIT = 50;
@@ -21,7 +22,12 @@ const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;
 
 /** Compact, LLM-friendly projection of a job — identification + management fields
- *  only. Heavy JSONB fields are intentionally excluded (see file header). */
+ *  only. Heavy JSONB fields are intentionally excluded (see file header).
+ *
+ *  Timestamp fields (runAt, nextRunAt, lastRunAt, createdAt) are converted to the
+ *  user's display timezone via toLocalIso — never returned as raw UTC Z-suffix
+ *  strings, which LLMs cannot reliably convert. `timezone` remains the job's own
+ *  IANA zone (the wall-clock basis for its cron), which is metadata, not an instant. */
 interface JobSummary {
   id: string;
   agentId: string;
@@ -39,18 +45,25 @@ interface JobSummary {
   taskTags: string[] | null;
   agentTaskId: string | null;
   createdBy: string;
-  createdAt: string;
+  createdAt: string | null;
 }
 
-function toJobSummary(job: JobRow): JobSummary {
+/** Convert a DB ISO-string instant to the user's local-timezone ISO for display.
+ *  Returns null for null/invalid inputs (toLocalIso guards non-finite seconds). */
+function toLocalDisplay(iso: string | null, tz: string | undefined): string | null {
+  if (!iso) return null;
+  return toLocalIso(Math.floor(new Date(iso).getTime() / 1000), tz);
+}
+
+function toJobSummary(job: JobRow, tz: string | undefined): JobSummary {
   return {
     id: job.id,
     agentId: job.agentId,
     status: job.status,
     cronExpr: job.cronExpr,
-    runAt: job.runAt,
-    nextRunAt: job.nextRunAt,
-    lastRunAt: job.lastRunAt,
+    runAt: toLocalDisplay(job.runAt, tz),
+    nextRunAt: toLocalDisplay(job.nextRunAt, tz),
+    lastRunAt: toLocalDisplay(job.lastRunAt, tz),
     lastRunOutcome: job.lastRunOutcome,
     consecutiveFailures: job.consecutiveFailures,
     lastError: job.lastError,
@@ -60,7 +73,7 @@ function toJobSummary(job: JobRow): JobSummary {
     taskTags: job.taskTags,
     agentTaskId: job.agentTaskId,
     createdBy: job.createdBy,
-    createdAt: job.createdAt,
+    createdAt: toLocalDisplay(job.createdAt, tz),
   };
 }
 
@@ -87,6 +100,7 @@ export class SchedulerListHandler implements SkillHandler {
     };
 
     const effectiveLimit = clampLimit(limit);
+    const tz = ctx.timezone;
 
     try {
       // Fetch one extra row so we can report *exactly* whether more jobs exist beyond
@@ -98,7 +112,7 @@ export class SchedulerListHandler implements SkillHandler {
       });
 
       const truncated = rows.length > effectiveLimit;
-      const jobs = (truncated ? rows.slice(0, effectiveLimit) : rows).map(toJobSummary);
+      const jobs = (truncated ? rows.slice(0, effectiveLimit) : rows).map(job => toJobSummary(job, tz));
 
       return {
         success: true,
@@ -109,6 +123,8 @@ export class SchedulerListHandler implements SkillHandler {
           // showing the most recent N and can narrow with a status/agent filter.
           truncated,
           limit: effectiveLimit,
+          // Timezone the displayed timestamps are in, so the agent can label them.
+          displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : 'UTC',
         },
       };
     } catch (err) {
