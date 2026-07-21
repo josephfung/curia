@@ -15,7 +15,7 @@ import {
   type ResumableCircuitState,
 } from '../../src/agents/resumable-circuit-breaker.js';
 import { buildDelegationEscalation, renderEscalation } from '../../src/agents/task-escalation.js';
-import { TaskCreateHandler } from '../../skills/task-management/tools/task-create/handler.js';
+import { TaskCreateHandler } from '../../skills/tasks/tools/task-create/handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
 
 const { Pool } = pg;

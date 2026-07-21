@@ -26,7 +26,8 @@ export interface SkillManifest {
   heartbeat?: boolean;
   /**
    * When true, agents that pin this skill get the document-workspace runtime
-   * surface (workingDocs + taskRepo wiring). Coupled to task-management historically.
+   * surface (`documentWorkspaceEnabled` + workingDocs). `taskRepo` is wired when
+   * either this flag or `heartbeat` is set (tasks and documents both need it).
    */
   document_workspace?: boolean;
 }

@@ -20,7 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Tools vs skills vocabulary** — atoms are **tools** (`tool.json`, `ToolRegistry`); audit readers dual-match legacy `skill.*`. (#1485)
-- **`enable_task_management`** — retired; pin `task-management` skill for heartbeat + doc workspace. (#1489)
+- **`enable_task_management`** — retired; pin `tasks` + `documents` skills instead. (#1489)
 - **`pinned_skills`** — pins skill bundles (not atoms); per-tool `action_risk` unchanged. (#1489)
 
 ### Fixed

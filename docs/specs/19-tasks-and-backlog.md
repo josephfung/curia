@@ -46,7 +46,7 @@ The design leans on infrastructure that already existed: the Postgres-backed sch
 - **Four skills.** `task-create`, `task-list`, `task-update`, `task-complete` — granular
   domain skills matching the existing `calendar-*` / `ceo-inbox-*` pattern.
 - **No new specialist agent.** Task management is a platform-level capability available
-  to any agent (like memory), gated by pinning the `task-management` skill (§4).
+  to any agent (like memory), gated by pinning the `tasks` skill (§4).
 - **Three reactivation channels drain the backlog** (§5): an inbound event, a per-task
   `wake_at` timer, and the deterministic `BacklogHeartbeat` backstop.
 
@@ -148,40 +148,50 @@ bus events for audit and future subscribers.
 
 Cancellation is `status='cancelled'` (no `task-delete`, to preserve the audit trail).
 Single-row reads use `task-list` with a filter (no `task-get`). The skills are pinned to
-participating agents via the `task-management` skill bundle (§4).
+participating agents via the `tasks` skill bundle (§4); document workspace is a separate
+`documents` skill.
 
 ---
 
-## 4. The `task-management` Skill
+## 4. The `tasks` and `documents` Skills
 
 The executor discipline (§6) is behavioral; hand-injecting it into each agent prompt
-would drift the moment someone hand-builds a custom agent. Instead agents pin the
-`task-management` skill bundle:
+would drift the moment someone hand-builds a custom agent. Instead agents pin skill
+bundles:
 
 ```yaml
 # agents/<name>.yaml
 pinned_skills:
-  - task-management
+  - tasks       # heartbeat + task-* tools + Task Management instructions
+  - documents   # doc-* tools + Document Workspace instructions
 ```
 
-Pinning that skill does three things (via `skills/task-management/SKILL.md` + bootstrap
-`resolvePinnedSkills`):
+These replace the former `enable_task_management` flag (two capabilities welded together).
 
-1. **Expands** to `task-create`, `task-list`, `task-update`, `task-complete` plus the
-   `doc-*` document-workspace tools.
-2. **Injects** the Task Management and Document Workspace guidance blocks from the
-   SKILL.md body into the effective system prompt.
+**`tasks`** (`skills/tasks/SKILL.md`):
+
+1. **Expands** to `task-create`, `task-list`, `task-update`, `task-complete`.
+2. **Injects** the Task Management guidance block from the SKILL.md body.
 3. **Marks the agent heartbeat-eligible** — only agents that pin a skill with
    `heartbeat: true` appear in the heartbeat's `source_agent_id` allow-list (§5).
 
-Shipped on **`coordinator`**, **`ceo-inbox`**, and **`contacts`**. An agent may still
-list individual `task-*` tool names in `pinned_skills` *without* the bundle for a bespoke
-need (e.g. read-only `task-list`) — that agent is not heartbeat-eligible and gets no
-injected block. If a task's `source_agent_id` points at a non-eligible or null agent, the
-heartbeat routes the wake to the coordinator.
+**`documents`** (`skills/documents/SKILL.md`):
 
-The `task_management` block lives in `skills/task-management/SKILL.md`, versioned with
-the platform, so every opted-in agent gets the identical current rules.
+1. **Expands** to `doc-read`, `doc-list`, `doc-write`, `doc-search`.
+2. **Injects** the Document Workspace guidance block.
+3. **Enables** the document-workspace runtime surface (`documentWorkspaceEnabled`).
+
+`taskRepo` is wired whenever **either** skill is pinned (task-wake scheduler refresh and
+document project-root resolution both need it). `workingDocsRepo` stays documents-only.
+
+Shipped on **`coordinator`**, **`ceo-inbox`**, and **`contacts`** (both pins). An agent
+may still list individual `task-*` tool names in `pinned_skills` *without* the bundle for
+a bespoke need (e.g. read-only `task-list`) — that agent is not heartbeat-eligible and
+gets no injected block. If a task's `source_agent_id` points at a non-eligible or null
+agent, the heartbeat routes the wake to the coordinator.
+
+Instruction prose lives only in the SKILL.md files — there is no parallel TypeScript
+constant.
 
 ---
 
@@ -323,7 +333,7 @@ for these learning surfaces are explicitly deferred.
   `pendingDebriefs` / `judgedEvents` state maps were deleted in favor of platform tasks
   (`tag='debrief-pending'`, per-meeting wake-ups). Pending debriefs now appear in the
   digest's "For you to do."
-- **`ceo-inbox`** joins the system (`pinned_skills` includes `task-management`): reification in the
+- **`ceo-inbox`** joins the system (`pinned_skills` includes `tasks` + `documents`): reification in the
   NEEDS DRAFT path prevents bare forward commitments; resume mode drafts the complete reply
   when a deferred follow-up task wakes. Large unread bursts are handled by **batch draining**
   rather than load-shedding: each run fully triages one fixed-size batch and, if more unread

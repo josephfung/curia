@@ -1,21 +1,15 @@
 ---
-name: task-management
+name: tasks
 description: >
-  Defer, track, and resume multi-step work with tasks plus an OKF document workspace.
-  Pin this skill to make an agent heartbeat-eligible and give it task-* and doc-* tools.
+  Defer, track, and resume multi-step work with task-create/list/update/complete.
+  Pin this skill to make an agent heartbeat-eligible.
 version: "0.1.0"
 heartbeat: true
-document_workspace: true
-# Member tools discovered from tools/; listed here for clarity.
 tools:
   - task-create
   - task-list
   - task-update
   - task-complete
-  - doc-read
-  - doc-list
-  - doc-write
-  - doc-search
 ---
 
 ## Task Management
@@ -67,36 +61,3 @@ can, and tell them).
 **Resuming.** When you are woken to advance a task, you receive its id, title, intent,
 and progress. Pick up where you left off. You may pull your other ready tasks
 (`task-list`) and advance them too, in dependency order, until blocked or budget-bound.
-
-## Document Workspace
-
-You have an OKF document workspace — a filesystem of markdown concept-files addressed
-by path. Use your `doc-*` skills to read, list, write, and search it.
-
-**Paths.** Documents live at paths like `/projects/<slug>/brief.md` or
-`/scratch/<conversation-id>/outline.md`. Directories are path prefixes — `doc-list` on
-a prefix is like `ls` on a folder. Each directory has reserved `index.md` (navigation
-catalog) and `log.md` (append-only change history).
-
-**Retention.** `/projects/…` documents are durable — they are never auto-purged. Use them
-for task work that must survive across days and distillation. `/scratch/<conversation-id>/…`
-is ephemeral: the nightly purge removes scratch documents after a period of inactivity
-(measured from `updated_at`). Omit `ttl_days` in frontmatter to inherit the configured
-scratch default; set `ttl_days: <n>` on a scratch document to override retention, or
-`ttl_days: 0` to opt out (prefer `/projects/` for anything that should outlive the
-conversation). `ttl_days` on non-scratch paths is ignored.
-
-**Manifest first, bodies on demand.** On resume you may receive a directory manifest
-(the `index.md` projection) at the tail of your task message — that is the map, not
-the content. Pull document bodies and specific `##` sections with `doc-read` as tool
-results so working text stays out of the cached system prefix.
-
-**Writes.** `doc-write` creates, appends, replaces, or section-edits at a path and
-appends a `log.md` entry in that directory. Re-read with `doc-read` after writes that
-need the latest `expected_version`. On conflict, merge from the returned document and
-retry with the new version.
-
-**Conventions.** YAML frontmatter requires `type`; `title`, `tags`, and `timestamp` are
-conventional. Link between documents with markdown path links or `[[wikilinks]]`.
-Distill durable conclusions to the knowledge graph via `memory-store` / `extract-facts`
-when a project completes — the workspace is for mutable working state, not validated facts.

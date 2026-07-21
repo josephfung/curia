@@ -1,4 +1,3 @@
-import type { AgentYamlConfig } from './loader.js';
 import type { WorkingDocRow } from '../db/working-docs-repo.js';
 import {
   docDirectory,
@@ -9,22 +8,12 @@ import {
 import type { ResumableDocumentPointer } from '../db/resumable-progress.js';
 import { isDocumentPointer } from '../db/resumable-progress.js';
 
-/** The four skills every document-workspace-enabled agent can call. */
-export const DOCUMENT_WORKSPACE_TOOLS = [
-  'doc-read',
-  'doc-list',
-  'doc-write',
-  'doc-search',
-] as const;
-
 export const INDEX_FILENAME = 'index.md';
 export const LOG_FILENAME = 'log.md';
 
 /** Reserved leaf names — not overwritten by generic create/replace. */
 export const RESERVED_LEAF_NAMES = new Set([INDEX_FILENAME, LOG_FILENAME]);
 
-/** Single source of truth for the workspace discipline block injected into every
- *  document-workspace-enabled agent's effective system prompt (#1209). */
 /** Default inactivity TTL for `/scratch/<conversation-id>/…` when config omits scratchTtlDays (#1212). */
 export const DEFAULT_SCRATCH_DOC_TTL_DAYS = 7;
 
@@ -36,66 +25,6 @@ export const MAX_SCRATCH_DOC_TTL_DAYS = 36500;
  * leaf segment (excludes bare `/scratch` and root-level `/scratch/foo.md`).
  */
 export const SCRATCH_CONVERSATION_PATH_RE = /^\/scratch\/[^/]+\/.+/;
-
-export const DOCUMENT_WORKSPACE_BLOCK = [
-  '## Document Workspace',
-  '',
-  'You have an OKF document workspace — a filesystem of markdown concept-files addressed',
-  'by path. Use your `doc-*` skills to read, list, write, and search it.',
-  '',
-  '**Paths.** Documents live at paths like `/projects/<slug>/brief.md` or',
-  '`/scratch/<conversation-id>/outline.md`. Directories are path prefixes — `doc-list` on',
-  'a prefix is like `ls` on a folder. Each directory has reserved `index.md` (navigation',
-  'catalog) and `log.md` (append-only change history).',
-  '',
-  '**Retention.** `/projects/…` documents are durable — they are never auto-purged. Use them',
-  'for task work that must survive across days and distillation. `/scratch/<conversation-id>/…`',
-  'is ephemeral: the nightly purge removes scratch documents after a period of inactivity',
-  '(measured from `updated_at`). Omit `ttl_days` in frontmatter to inherit the configured',
-  'scratch default; set `ttl_days: <n>` on a scratch document to override retention, or',
-  '`ttl_days: 0` to opt out (prefer `/projects/` for anything that should outlive the',
-  'conversation). `ttl_days` on non-scratch paths is ignored.',
-  '',
-  '**Manifest first, bodies on demand.** On resume you may receive a directory manifest',
-  '(the `index.md` projection) at the tail of your task message — that is the map, not',
-  'the content. Pull document bodies and specific `##` sections with `doc-read` as tool',
-  'results so working text stays out of the cached system prefix.',
-  '',
-  '**Writes.** `doc-write` creates, appends, replaces, or section-edits at a path and',
-  'appends a `log.md` entry in that directory. Re-read with `doc-read` after writes that',
-  'need the latest `expected_version`. On conflict, merge from the returned document and',
-  'retry with the new version.',
-  '',
-  '**Conventions.** YAML frontmatter requires `type`; `title`, `tags`, and `timestamp` are',
-  'conventional. Link between documents with markdown path links or `[[wikilinks]]`.',
-  'Distill durable conclusions to the knowledge graph via `memory-store` / `extract-facts`',
-  'when a project completes — the workspace is for mutable working state, not validated facts.',
-].join('\n');
-
-export interface DocumentWorkspaceResult {
-  systemPrompt: string;
-  pinnedSkills: string[];
-}
-
-/** Apply the document workspace capability to an agent's prompt + skills.
- *  @deprecated Phase 2 (#1489): pin the `task-management` skill instead.
- *  Bootstrap injects doc tools + DOCUMENT_WORKSPACE_BLOCK via SKILL.md.
- *  This helper is retained for unit tests of the merge logic only. */
-export function applyDocumentWorkspace(
-  _config: AgentYamlConfig,
-  systemPrompt: string,
-  pinnedSkills: string[],
-): DocumentWorkspaceResult {
-  // Historical gate was enable_task_management; Phase 2 always merges when called.
-  const merged = [...pinnedSkills];
-  for (const skill of DOCUMENT_WORKSPACE_TOOLS) {
-    if (!merged.includes(skill)) merged.push(skill);
-  }
-  return {
-    systemPrompt: `${systemPrompt}\n\n${DOCUMENT_WORKSPACE_BLOCK}`,
-    pinnedSkills: merged,
-  };
-}
 
 /** Normalize a directory prefix — always ends with `/`, never bare `/` unless root. */
 export function normalizeDirectoryPrefix(prefix: string): string {

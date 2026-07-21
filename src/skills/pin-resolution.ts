@@ -45,8 +45,15 @@ export function resolvePinnedSkills(
   let heartbeatEligible = false;
   let documentWorkspaceEnabled = false;
 
-  const pushTool = (name: string) => {
+  const pushTool = (name: string, via: string) => {
     if (seenTools.has(name)) return;
+    if (!toolRegistry.get(name)) {
+      logger?.warn(
+        { agent: agentName, tool: name, via },
+        'Pinned skill expands to a tool that is not loaded; skipping tool definition',
+      );
+      return;
+    }
     seenTools.add(name);
     toolNames.push(name);
   };
@@ -55,7 +62,7 @@ export function resolvePinnedSkills(
     const skill = skillRegistry.get(pin);
     if (skill) {
       resolvedSkills.push(pin);
-      for (const t of skill.manifest.tools) pushTool(t);
+      for (const t of skill.manifest.tools) pushTool(t, pin);
       const body = skill.manifest.instructions.trim();
       if (body) instructionBlocks.push(body);
       if (skill.manifest.heartbeat) heartbeatEligible = true;
@@ -69,7 +76,7 @@ export function resolvePinnedSkills(
         { agent: agentName, pin },
         'pinned_skills entry is a tool name; prefer pinning its skill bundle (ADR-031 Phase 2)',
       );
-      pushTool(pin);
+      pushTool(pin, pin);
       continue;
     }
 
