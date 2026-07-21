@@ -362,6 +362,17 @@ export class EmailAdapter implements Channel {
       return;
     }
 
+    // Defensive: a misbehaving gateway mock/client must not throw an unhandled
+    // rejection mid-poll (Vitest treats those as suite failures).
+    if (!Array.isArray(messages)) {
+      this.config.logger.error(
+        { messagesType: typeof messages },
+        'Email polling returned a non-array — will retry',
+      );
+      this.processing = false;
+      return;
+    }
+
     fetched = messages.length;
 
     try {

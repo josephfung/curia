@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **CodeRabbit Phase 2 review** — calendar risk/docs, manifests, registry install, skill-md booleans. (#1489)
 - **Tool input shorthand** — `string|null?` parses to JSON Schema `["string","null"]` (clearable fields). (#1489)
 - **Smoke harness** — expands `pinned_skills` bundles via `resolvePinnedSkills` like production. (#1489)
+- **Email poll tests** — interval ticks after `mockResolvedValueOnce` no longer reject the suite. (#1489)
 - **`scheduler-list`** — bound and trim results so a large jobs table no longer overflows the model context. (#1487)
 - **`scheduler-list`** — return timestamps in the user's timezone instead of raw UTC. (#1487)
 - **Tool outputs** — cap total object-output size, not just per-leaf, matching the string-output path. (#1487)
