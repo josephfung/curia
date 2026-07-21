@@ -200,7 +200,7 @@ describe('discover → invoke round-trip', () => {
 
 describe('object output size cap', () => {
   it('collapses an oversized OBJECT output to a bounded string instead of returning it unbounded', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     // An object whose JSON serialization far exceeds the tiny cap below. Each string
     // leaf is small (so per-leaf truncation never fires) — the bloat is in the number
     // of array elements, exactly the scheduler-list-over-a-large-jobs-table shape.
@@ -223,7 +223,7 @@ describe('object output size cap', () => {
   });
 
   it('leaves a small object output as a structured object', async () => {
-    const registry = new SkillRegistry();
+    const registry = new ToolRegistry();
     registry.register(makeManifest('small-list'), makeHandler({ jobs: [{ id: 'job-1' }] }));
 
     const layer = new ExecutionLayer(registry, logger, { skillOutputMaxLength: 200 });
