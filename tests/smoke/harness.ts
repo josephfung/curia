@@ -200,7 +200,7 @@ export async function createHarness(): Promise<CuriaHarness> {
       memory,
       entityMemory,
       executionLayer,
-      pinnedSkills: agentPinnedSkills,
+      pinnedTools: agentPinnedSkills,
       skillToolDefs: agentToolDefs,
       // Coordinator gets per-turn date/timezone injection so the agent always
       // has a current date (replacing the old baked-in currentDate approach).

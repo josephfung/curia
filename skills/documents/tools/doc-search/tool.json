@@ -1,7 +1,7 @@
 {
   "name": "doc-search",
   "description": "Search the OKF document workspace with a case-sensitive substring grep. Optionally limit to a path prefix (defaults to the whole workspace). Returns matching paths, line numbers, and line text — up to 50 matches. Use `doc-read` to pull full context around a hit.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -13,7 +13,7 @@
     "path_prefix": "string",
     "match_count": "number",
     "matches": "array of {path, line_number, line}",
-    "displayTimezone": "string"
+    "displayTimezone": "string?"
   },
   "permissions": [],
   "secrets": [],

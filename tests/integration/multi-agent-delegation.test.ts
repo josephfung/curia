@@ -97,7 +97,7 @@ describe('Multi-agent delegation integration', () => {
       bus,
       logger,
       executionLayer,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: toolDefs,
     });
     coordinator.register();

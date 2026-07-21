@@ -109,7 +109,7 @@ describe('setup-wizard delegation', () => {
       bus,
       logger,
       executionLayer,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: toolDefs,
     });
     coordinator.register();
@@ -189,7 +189,7 @@ describe('setup-wizard delegation', () => {
       bus,
       logger,
       executionLayer,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: toolDefs,
     });
     coordinator.register();

@@ -356,7 +356,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
       bus,
       logger,
       executionLayer,
-      pinnedSkills: ['delegate', 'signal-send', 'context-bridge-release'],
+      pinnedTools: ['delegate', 'signal-send', 'context-bridge-release'],
       skillToolDefs: coordinatorToolDefs,
     });
     coordinator.register();
@@ -370,7 +370,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
       bus,
       logger,
       executionLayer,
-      pinnedSkills: ['request-clarification'],
+      pinnedTools: ['request-clarification'],
       skillToolDefs: specialistToolDefs,
     });
     specialist.register();
@@ -524,7 +524,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
       bus,
       logger,
       executionLayer,
-      pinnedSkills: ['delegate'],
+      pinnedTools: ['delegate'],
       skillToolDefs: toolDefs,
     });
     coordinator.register();

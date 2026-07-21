@@ -93,9 +93,11 @@ const SQL: Record<RegistryTable, {
   skill_registry: {
     list: `SELECT ${COLS} FROM skill_registry`,
     get: `SELECT ${COLS} FROM skill_registry WHERE name = $1`,
+    // DO NOTHING on conflict so we do not fire skill_registry_updated_at.
+    // install() falls back to SELECT when RETURNING is empty.
     install: `INSERT INTO skill_registry (name, enabled, installed_by)
               VALUES ($1, false, $2)
-              ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+              ON CONFLICT (name) DO NOTHING
               RETURNING ${COLS}`,
     installAndEnable: `INSERT INTO skill_registry (name, enabled, installed_by, enabled_at, enabled_by)
                        VALUES ($1, true, $2, now(), $2)
@@ -136,10 +138,15 @@ export class RegistryRepo implements IRegistryRepo {
 
   async install(name: string, actor: string): Promise<RegistryRow> {
     // Insert a disabled row; if it already exists, leave it untouched and return it.
-    // ON CONFLICT DO UPDATE requires at least one SET clause, so we use a no-op
-    // (name = EXCLUDED.name) to trigger RETURNING without modifying any columns.
+    // skill_registry uses ON CONFLICT DO NOTHING (avoids updated_at trigger).
+    // tool/agent still use a no-op DO UPDATE so RETURNING always yields a row.
     const { rows } = await this.pool.query<DbRegistryRow>(this.sql.install, [name, actor]);
-    return mapRow(rows[0]!);
+    if (rows[0]) return mapRow(rows[0]);
+    const existing = await this.getRow(name);
+    if (!existing) {
+      throw new Error(`Registry install failed for '${name}': insert returned no row`);
+    }
+    return existing;
   }
 
   async installAndEnable(name: string, actor: string): Promise<RegistryRow | null> {

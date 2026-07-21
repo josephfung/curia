@@ -81,7 +81,7 @@ describe('Skill invocation integration', () => {
       bus,
       logger,
       executionLayer,
-      pinnedSkills: ['echo'],
+      pinnedTools: ['echo'],
       skillToolDefs: toolDefs,
     });
     agent.register();
@@ -167,7 +167,7 @@ describe('Skill invocation integration', () => {
       bus,
       logger,
       executionLayer,
-      pinnedSkills: ['fail-skill'],
+      pinnedTools: ['fail-skill'],
       skillToolDefs: toolDefs,
     });
     agent.register();

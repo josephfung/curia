@@ -90,8 +90,8 @@ export interface AgentConfig {
   entityMemory?: EntityMemory;
   /** Optional execution layer for skill invocations via tool-use. */
   executionLayer?: ExecutionLayer;
-  /** Skill names to include as tools in every LLM call. */
-  pinnedSkills?: string[];
+  /** Tool names to include as tools in every LLM call (after pin expansion). */
+  pinnedTools?: string[];
   /** Pre-built tool definitions for the LLM (from ToolRegistry.toToolDefinitions). */
   skillToolDefs?: ToolDefinition[];
   /** Optional autonomy service — when provided, the autonomy block is injected
