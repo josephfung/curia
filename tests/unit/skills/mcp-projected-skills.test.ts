@@ -30,7 +30,12 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
     tools.register(toolManifest('create_doc'), noopHandler);
     tools.register(toolManifest('search_drive_files'), noopHandler);
 
-    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } as never;
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+      error: vi.fn(),
+    } as unknown as import('../../../src/logger.js').Logger;
     const projected = new Map<string, string[]>([
       ['google-workspace', ['create_doc', 'search_drive_files']],
       ['atproto-mcp', ['create_post']],
@@ -63,13 +68,19 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
       },
       '/tmp/gw',
     );
-    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } as never;
+    const warn = vi.fn();
+    const logger = {
+      info: vi.fn(),
+      warn,
+      debug: vi.fn(),
+      error: vi.fn(),
+    } as unknown as import('../../../src/logger.js').Logger;
     const added = registerMcpProjectedSkills(
       new Map([['google-workspace', ['create_doc']]]),
       skills,
       logger,
     );
     expect(added).toBe(0);
-    expect(logger.warn).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
   });
 });

@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the human-behavior module so dwell/presence/click/type are observable spies with no
 // real delays. Hoisted by vitest; the handler imports these and gets the spies. (#1053)
-vi.mock('../../src/browser/human-behavior.js', () => ({
+vi.mock('../../../../src/browser/human-behavior.js', () => ({
   jitteredDelay: vi.fn().mockResolvedValue(undefined),
   simulateHumanPresence: vi.fn().mockResolvedValue(undefined),
   humanClick: vi.fn().mockResolvedValue(undefined),

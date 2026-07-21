@@ -8,7 +8,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
 import { buildVoiceGuidePrompt, parsePendingDiffs } from '../../../_shared/voice-learn-logic.js';
-import { PENDING_DIFFS_PATH } from '../ceo-inbox-sent-observe/handler.js';
+import { PENDING_DIFFS_PATH } from '../../../ceo-inbox/tools/ceo-inbox-sent-observe/handler.js';
 import { writeVoiceProposal } from '../../../_shared/learning-state.js';
 import { buildVoiceProposalNotification } from '../../../_shared/learning-digest.js';
 import { notifyLearningProposal } from '../../../_shared/learning-notify.js';

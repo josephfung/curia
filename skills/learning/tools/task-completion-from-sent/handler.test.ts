@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TaskCompletionFromSentHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { EntityMemory } from '../../../../src/memory/entity-memory.js';
-import { CONFIG_NAMESPACE } from '../ceo-inbox-sent-observe/handler.js';
+import { CONFIG_NAMESPACE } from '../../../ceo-inbox/tools/ceo-inbox-sent-observe/handler.js';
 import {
   COMPLETION_CANDIDATES_KEY,
   COMPLETION_DIGEST_KEY,
@@ -263,7 +263,7 @@ describe('TaskCompletionFromSentHandler', () => {
   });
 
   it('reopenTask undoes an auto-complete (reversible path)', async () => {
-    const { TaskRepo } = await import('../../src/db/task-repo.js');
+    const { TaskRepo } = await import('../../../../src/db/task-repo.js');
     // Lightweight behavioural check that reopenTask exists and rejects non-done.
     expect(typeof TaskRepo.prototype.reopenTask).toBe('function');
   });
