@@ -1,4 +1,4 @@
-# Trusted, in-repo list of tools/agents enabled by default on a FRESH install.
+# Trusted, in-repo list of tools/agents/skills enabled by default on a FRESH install.
 # NOT read from individual manifests (which are attacker-controlled on upload) —
 # this file ships with the codebase. Reconciliation enrolls these as enabled ONLY
 # when no registry row already exists (it never overrides an admin's choice).
@@ -8,6 +8,13 @@
 #
 # MCP-backed tools (create_doc, search_drive_files, etc.) are NOT listed here —
 # they are loaded by loadMcpServers and are not on-disk ToolDiscovery items.
+#
+# skills: — Phase 2 bundles (SKILL.md). Member tools still enroll via tools:.
+skills:
+  - task-management
+  - calendar
+  # calendar skill may be enabled while calendar-* tools stay off until credentials
+  # are configured (same pattern as the calendar agent).
 tools:
   - tool-registry
   # Core communication

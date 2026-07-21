@@ -53,24 +53,14 @@ function doc(path: string, overrides: Partial<WorkingDocRow> = {}): WorkingDocRo
 }
 
 describe('applyDocumentWorkspace', () => {
-  it('is a no-op when task management is disabled', () => {
-    const r = applyDocumentWorkspace(cfg(), 'BASE PROMPT', ['a']);
-    expect(r.systemPrompt).toBe('BASE PROMPT');
-    expect(r.pinnedSkills).toEqual(['a']);
-  });
-
-  it('appends the block and pins doc skills when task management is enabled', () => {
-    const r = applyDocumentWorkspace(cfg({ enable_task_management: true }), 'BASE PROMPT', ['x']);
+  it('appends the block and pins doc skills', () => {
+    const r = applyDocumentWorkspace(cfg(), 'BASE PROMPT', ['x']);
     expect(r.systemPrompt).toBe(`BASE PROMPT\n\n${DOCUMENT_WORKSPACE_BLOCK}`);
     expect(r.pinnedSkills).toEqual(['x', ...DOCUMENT_WORKSPACE_TOOLS]);
   });
 
   it('does not duplicate already-pinned doc skills', () => {
-    const r = applyDocumentWorkspace(
-      cfg({ enable_task_management: true }),
-      'P',
-      ['doc-read', 'other'],
-    );
+    const r = applyDocumentWorkspace(cfg(), 'P', ['doc-read', 'other']);
     expect(r.pinnedSkills.filter(s => s === 'doc-read')).toHaveLength(1);
     expect(r.pinnedSkills).toEqual(['doc-read', 'other', 'doc-list', 'doc-write', 'doc-search']);
   });

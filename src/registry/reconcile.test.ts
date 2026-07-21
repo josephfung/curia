@@ -31,53 +31,74 @@ class FakeRepo implements IRegistryRepo {
 const logger = createLogger('silent');
 
 describe('reconcileRegistries', () => {
-  let skillRepo: FakeRepo;
+  let toolRepo: FakeRepo;
   let agentRepo: FakeRepo;
-  beforeEach(() => { skillRepo = new FakeRepo(); agentRepo = new FakeRepo(); });
+  let skillRepo: FakeRepo;
+  beforeEach(() => {
+    toolRepo = new FakeRepo();
+    agentRepo = new FakeRepo();
+    skillRepo = new FakeRepo();
+  });
 
-  const run = (defaults: { tools: string[]; agents: string[] }, onDisk: { tools: string[]; agents: string[] }) =>
+  const run = (
+    defaults: { tools: string[]; agents: string[]; skills?: string[] },
+    onDisk: { tools: string[]; agents: string[]; skills?: string[] },
+  ) =>
     reconcileRegistries({
-      skillRepo, agentRepo,
-      skillDiscoveryNames: new Set(onDisk.tools),
+      toolRepo,
+      agentRepo,
+      skillRepo,
+      toolDiscoveryNames: new Set(onDisk.tools),
       agentDiscoveryNames: new Set(onDisk.agents),
-      defaults, logger,
+      skillDiscoveryNames: new Set(onDisk.skills ?? []),
+      defaults,
+      logger,
     });
 
   it('enrolls a core item with no row as enabled', async () => {
     await run({ tools: ['core-skill'], agents: [] }, { tools: ['core-skill', 'other'], agents: [] });
-    const row = await skillRepo.getRow('core-skill');
+    const row = await toolRepo.getRow('core-skill');
     expect(row?.enabled).toBe(true);
     expect(row?.enabledBy).toBe('reconciliation');
     // Non-core stays uninstalled (no row).
-    expect(await skillRepo.getRow('other')).toBeNull();
+    expect(await toolRepo.getRow('other')).toBeNull();
   });
 
   it('is idempotent — second run changes nothing', async () => {
     const defaults = { tools: ['core-skill'], agents: [] };
     const onDisk = { tools: ['core-skill'], agents: [] };
     await run(defaults, onDisk);
-    const first = await skillRepo.getRow('core-skill');
+    const first = await toolRepo.getRow('core-skill');
     await run(defaults, onDisk);
-    const second = await skillRepo.getRow('core-skill');
+    const second = await toolRepo.getRow('core-skill');
     expect(second).toEqual(first);
   });
 
   it('respects an admin-disabled core item (row present, disabled)', async () => {
-    await skillRepo.install('core-skill', 'web-app'); // row exists, enabled=false
+    await toolRepo.install('core-skill', 'web-app'); // row exists, enabled=false
     await run({ tools: ['core-skill'], agents: [] }, { tools: ['core-skill'], agents: [] });
-    expect((await skillRepo.getRow('core-skill'))?.enabled).toBe(false);
+    expect((await toolRepo.getRow('core-skill'))?.enabled).toBe(false);
   });
 
   it('respects an admin-enabled core item (row present, enabled)', async () => {
-    await skillRepo.install('core-skill', 'web-app');
-    await skillRepo.enable('core-skill', 'web-app');
-    const before = await skillRepo.getRow('core-skill');
+    await toolRepo.install('core-skill', 'web-app');
+    await toolRepo.enable('core-skill', 'web-app');
+    const before = await toolRepo.getRow('core-skill');
     await run({ tools: ['core-skill'], agents: [] }, { tools: ['core-skill'], agents: [] });
-    expect(await skillRepo.getRow('core-skill')).toEqual(before);
+    expect(await toolRepo.getRow('core-skill')).toEqual(before);
   });
 
   it('warns (no throw) when a core default is not on disk', async () => {
     await expect(run({ tools: ['missing'], agents: [] }, { tools: [], agents: [] })).resolves.toBeUndefined();
-    expect(await skillRepo.getRow('missing')).toBeNull();
+    expect(await toolRepo.getRow('missing')).toBeNull();
+  });
+
+  it('enrolls core skill bundles into skill_registry', async () => {
+    await run(
+      { tools: [], agents: [], skills: ['task-management'] },
+      { tools: [], agents: [], skills: ['task-management', 'other-bundle'] },
+    );
+    expect((await skillRepo.getRow('task-management'))?.enabled).toBe(true);
+    expect(await skillRepo.getRow('other-bundle')).toBeNull();
   });
 });

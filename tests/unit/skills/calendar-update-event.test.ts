@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CalendarUpdateEventHandler } from '../../../skills/calendar-update-event/handler.js';
+import { CalendarUpdateEventHandler } from '../../../skills/calendar/tools/calendar-update-event/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

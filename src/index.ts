@@ -127,8 +127,14 @@ import { runStartupValidation } from './startup/validator.js';
 import { runReadinessChecks } from './startup/readiness.js';
 import { compileSecurityContextBlock } from './security/security-context.js';
 import { OutboundContextService } from './dispatch/outbound-context.js';
-import { applyTaskManagement } from './agents/task-management.js';
-import { applyDocumentWorkspace, DEFAULT_SCRATCH_DOC_TTL_DAYS } from './agents/document-workspace.js';
+import { DEFAULT_SCRATCH_DOC_TTL_DAYS } from './agents/document-workspace.js';
+import { SkillRegistry } from './skills/skill-registry.js';
+import {
+  discoverSkillManifests,
+  loadSkillsFromDiscovery,
+  registerSyntheticSingletonSkills,
+} from './skills/skill-loader.js';
+import { resolvePinnedSkills, appendSkillInstructions } from './skills/pin-resolution.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
@@ -862,27 +868,31 @@ async function main(): Promise<void> {
     browserService = undefined;
   }
 
-  // Skill registry — loads all skills from the skills/ directory.
-  // Skills are the framework's extension mechanism; agents invoke them
-  // via the LLM's tool-use API through the execution layer.
-  const skillRegistry = new ToolRegistry(config.timezone);
+  // Tool registry — loads all tools from the skills/ directory (flat + nested).
+  // Tools are the invocation atoms; agents invoke them via the LLM tool-use API
+  // through the execution layer. Skill bundles are a separate SkillRegistry.
+  const toolRegistry = new ToolRegistry(config.timezone);
+  const bundleRegistry = new SkillRegistry();
   const skillsDir = path.resolve(import.meta.dirname, '../skills');
   const agentsDir = path.resolve(import.meta.dirname, '../agents');
 
   // --- Registry: discover everything on disk (lenient), reconcile the core set,
-  // then load+register ONLY enabled skills/agents. (Spec: skill/agent registry, #541.)
-  let skillDiscovery: ToolDiscovery[];
+  // then load+register ONLY enabled tools/skills/agents. (Spec: skill/agent registry, #541.)
+  let toolDiscovery: ToolDiscovery[];
+  let skillBundleDiscovery: ReturnType<typeof discoverSkillManifests>;
   let agentDiscovery: AgentDiscovery[];
   try {
-    skillDiscovery = discoverToolManifests(skillsDir, logger);
+    toolDiscovery = discoverToolManifests(skillsDir, logger);
+    skillBundleDiscovery = discoverSkillManifests(skillsDir, logger);
     agentDiscovery = discoverAgentManifests(agentsDir);
   } catch (err) {
-    logger.fatal({ err }, 'Failed to discover skills/agents on disk');
+    logger.fatal({ err }, 'Failed to discover tools/skills/agents on disk');
     process.exit(1);
   }
 
-  const skillRegistryRepo = new RegistryRepo(pool, 'tool_registry');
+  const toolRegistryRepo = new RegistryRepo(pool, 'tool_registry');
   const agentRegistryRepo = new RegistryRepo(pool, 'agent_registry');
+  const skillRegistryRepo = new RegistryRepo(pool, 'skill_registry');
 
   // Load the trusted fresh-install core set. The file MUST exist and be valid —
   // a missing file would silently leave nothing enrolled on a fresh DB, so treat
@@ -912,10 +922,12 @@ async function main(): Promise<void> {
 
   try {
     await reconcileRegistries({
-      skillRepo: skillRegistryRepo,
+      toolRepo: toolRegistryRepo,
       agentRepo: agentRegistryRepo,
-      skillDiscoveryNames: new Set(skillDiscovery.map(d => d.name)),
+      skillRepo: skillRegistryRepo,
+      toolDiscoveryNames: new Set(toolDiscovery.map(d => d.name)),
       agentDiscoveryNames: new Set(agentDiscovery.map(d => d.name)),
+      skillDiscoveryNames: new Set(skillBundleDiscovery.map(d => d.name)),
       defaults: registryDefaults,
       logger,
     });
@@ -926,30 +938,63 @@ async function main(): Promise<void> {
 
   // Ghost warnings: a registry row whose files are gone never loads.
   // One listRows() call per table; used for both ghost scan and enabled-name set.
-  let skillRows: RegistryRow[];
+  let toolRows: RegistryRow[];
   try {
-    skillRows = await skillRegistryRepo.listRows();
+    toolRows = await toolRegistryRepo.listRows();
   } catch (err) {
     logger.fatal({ err }, 'Failed to read tool_registry rows after reconciliation');
     process.exit(1);
   }
-  const skillDiscNames = new Set(skillDiscovery.map(d => d.name));
-  for (const row of skillRows) {
-    if (!skillDiscNames.has(row.name)) {
-      logger.warn({ skill: row.name }, 'registry: enabled/installed skill has no files on disk (ghost); not loaded');
+  const toolDiscNames = new Set(toolDiscovery.map(d => d.name));
+  for (const row of toolRows) {
+    if (!toolDiscNames.has(row.name)) {
+      logger.warn({ tool: row.name }, 'registry: enabled/installed tool has no files on disk (ghost); not loaded');
     }
   }
-  const enabledSkillNames = new Set(skillRows.filter(r => r.enabled).map(r => r.name));
+  const enabledToolNames = new Set(toolRows.filter(r => r.enabled).map(r => r.name));
   try {
-    const skillCount = await loadToolsFromDirectory(skillDiscovery, skillRegistry, logger, enabledSkillNames);
-    logger.info({ skillCount }, 'Skills loaded');
+    const toolCount = await loadToolsFromDirectory(toolDiscovery, toolRegistry, logger, enabledToolNames);
+    logger.info({ toolCount }, 'Tools loaded');
   } catch (err) {
-    // Fail hard on skill loading errors — a broken tool.json or handler should
+    // Fail hard on tool loading errors — a broken tool.json or handler should
     // not silently degrade the system to no-tools mode. Consistent with how we
     // handle missing DATABASE_URL and ANTHROPIC_API_KEY.
-    logger.fatal({ err }, 'Failed to load skills');
+    logger.fatal({ err }, 'Failed to load tools');
     process.exit(1);
   }
+
+  // Skill (bundle) lifecycle — load enabled SKILL.md bundles, then wrap orphan
+  // tools as synthetic singleton skills so pinned_skills always resolves via SkillRegistry.
+  let skillBundleRows: RegistryRow[];
+  try {
+    skillBundleRows = await skillRegistryRepo.listRows();
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to read skill_registry rows after reconciliation');
+    process.exit(1);
+  }
+  const skillBundleDiscNames = new Set(skillBundleDiscovery.map(d => d.name));
+  for (const row of skillBundleRows) {
+    if (!skillBundleDiscNames.has(row.name)) {
+      logger.warn({ skill: row.name }, 'registry: enabled/installed skill bundle has no SKILL.md on disk (ghost); not loaded');
+    }
+  }
+  const enabledSkillBundleNames = new Set(skillBundleRows.filter(r => r.enabled).map(r => r.name));
+  try {
+    const skillCount = loadSkillsFromDiscovery(
+      skillBundleDiscovery,
+      bundleRegistry,
+      logger,
+      enabledSkillBundleNames,
+    );
+    logger.info({ skillCount }, 'Skill bundles loaded');
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to load skill bundles');
+    process.exit(1);
+  }
+
+  // Keep the historical local name `skillRegistry` for ToolRegistry so the rest
+  // of bootstrap (MCP load, execution layer, etc.) needs minimal churn this PR.
+  const skillRegistry = toolRegistry;
 
   // ── MCP server registry ────────────────────────────────────────────────────
   // Auto-installs all declared servers; auto-enables those whose required secrets resolve.
@@ -1000,6 +1045,11 @@ async function main(): Promise<void> {
   if (mcpSessions.length > 0) {
     logger.info({ mcpServers: mcpSessions.map(s => s.serverId) }, 'MCP servers connected');
   }
+
+  // Wrap any tool (native orphan or MCP) that no real skill owns as a synthetic
+  // singleton skill so pinned_skills always resolves through SkillRegistry.
+  const syntheticCount = registerSyntheticSingletonSkills(toolRegistry, bundleRegistry, logger);
+  logger.info({ syntheticCount }, 'Synthetic singleton skills registered');
 
   // Agent registry — tracks all running agents for delegation and listing.
   const agentRegistry = new AgentRegistry();
@@ -1777,7 +1827,7 @@ async function main(): Promise<void> {
   // validated here (the JSON-schema startup check only covers default.yaml, not local overrides,
   // and cannot express the derived_child >= same_task invariant). Throws → boot fails loudly.
   const bypassLadder = resolveBypassLadder(yamlConfig.autonomy?.bypass_ladder);
-  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier });
+  const executionLayer = new ExecutionLayer(skillRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillBundleRegistry: bundleRegistry });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -1816,9 +1866,9 @@ async function main(): Promise<void> {
   // RegistryService backs the /api/registry/* routes. Seed it with the discovery
   // captured above so the UI can show uninstalled/ghost/error items, not just enabled.
   const registryService = new RegistryService(
-    skillRegistryRepo,
+    toolRegistryRepo,
     agentRegistryRepo,
-    skillDiscovery as unknown as Discovery[],
+    toolDiscovery as unknown as Discovery[],
     agentDiscovery.map(d => ({
       name: d.name,
       metadata: d.config
@@ -1832,9 +1882,21 @@ async function main(): Promise<void> {
         : null,
       error: d.error,
     })),
-    // PR2 (#939): backs the install/enable secrets gate — a skill declaring
+    // PR2 (#939): backs the install/enable secrets gate — a tool declaring
     // install.requires_secrets can't go live until those keys exist in the vault.
     secretsService,
+    skillRegistryRepo,
+    skillBundleDiscovery.map(d => ({
+      name: d.name,
+      metadata: d.metadata
+        ? {
+            name: d.metadata.name,
+            description: d.metadata.description,
+            version: d.metadata.version,
+          }
+        : null,
+      error: d.error,
+    })),
   );
 
   // Wire skill-declared key names into McpRegistryService so uninstall
@@ -1855,22 +1917,21 @@ async function main(): Promise<void> {
   // (which the allowlist thunk depends on). Mirrors setAgentContactId's post-hoc injection.
   executionLayer.setSecretCaptureService(secretCaptureService);
 
-  // Agents with enable_task_management: true — read by the BacklogHeartbeat to
+  // Agents that pin a skill with heartbeat: true — read by the BacklogHeartbeat to
   // know which source_agent_ids it may wake (and as the fallback target list).
   const taskManagementAgents = new Set<string>();
 
   // Pass 2: Create AgentRuntime for each config (now all specialists are known)
   for (const agentConfig of agentConfigs) {
-    // Build tool definitions from pinned skills
+    // Expand pinned_skills (bundles) → member tools + instruction blocks + flags.
     const agentPinnedSkills = agentConfig.pinned_skills ?? [];
-    for (const toolName of agentPinnedSkills) {
-      if (!skillRegistry.get(toolName)) {
-        logger.warn(
-          { agent: agentConfig.name, skill: toolName },
-          'Pinned skill not found in registry; skipping tool definition',
-        );
-      }
-    }
+    const pinResolution = resolvePinnedSkills(
+      agentPinnedSkills,
+      bundleRegistry,
+      skillRegistry,
+      logger,
+      agentConfig.name,
+    );
     // For the coordinator, interpolate runtime context (just the principal contact ID).
     // The specialist roster and the coordinator's own contact ID are no longer resolved
     // here — they are injected per-turn by AgentRuntime (## Available Specialists block
@@ -1917,18 +1978,12 @@ async function main(): Promise<void> {
       });
     }
 
-    // Apply the enable_task_management capability: auto-pin task skills, append the
-    // discipline block, and register heartbeat-eligibility. No-op when the flag is off.
-    const taskMgmt = applyTaskManagement(agentConfig, systemPrompt, agentPinnedSkills);
-    systemPrompt = taskMgmt.systemPrompt;
-    let effectivePinnedSkills = taskMgmt.pinnedSkills;
-    if (taskMgmt.heartbeatEligible) {
+    // Inject pinned skill instruction blocks (e.g. task-management discipline).
+    systemPrompt = appendSkillInstructions(systemPrompt, pinResolution.instructionBlocks);
+    const effectivePinnedSkills = pinResolution.toolNames;
+    if (pinResolution.heartbeatEligible) {
       taskManagementAgents.add(agentConfig.name);
     }
-
-    const docWorkspace = applyDocumentWorkspace(agentConfig, systemPrompt, effectivePinnedSkills);
-    systemPrompt = docWorkspace.systemPrompt;
-    effectivePinnedSkills = docWorkspace.pinnedSkills;
 
     // was: const agentToolDefs = skillRegistry.toToolDefinitions(agentPinnedSkills);
     const agentToolDefs = skillRegistry.toToolDefinitions(effectivePinnedSkills);
@@ -2063,9 +2118,9 @@ async function main(): Promise<void> {
       } : undefined,
       bullpenService,
       bullpenWindowMinutes: 60,
-      documentWorkspaceEnabled: agentConfig.enable_task_management === true,
+      documentWorkspaceEnabled: pinResolution.documentWorkspaceEnabled,
       workingDocsRepo,
-      taskRepo: agentConfig.enable_task_management === true ? taskRepo : undefined,
+      taskRepo: pinResolution.documentWorkspaceEnabled ? taskRepo : undefined,
     });
     agent.register();
 

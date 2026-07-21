@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.14.1"
+version: "0.15.0"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -51,9 +51,9 @@ pinned_skills:
   # exchange completes (see "Closing a multi-turn exchange" in the prompt).
   - context-bridge-release
   - context-bridge-clear
+  - task-management
 
 allow_discovery: false
-enable_task_management: true
 
 error_budget:
   max_turns: 30

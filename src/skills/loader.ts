@@ -1,11 +1,12 @@
-// loader.ts — loads skills from the skills/ directory at startup.
+// loader.ts — loads tools from the skills/ directory at startup.
 //
-// Each skill lives in its own subdirectory with:
-//   - tool.json (manifest)
-//   - handler.ts (or handler.js) (implementation)
+// Layouts (Phase 2 / ADR-031):
+//   Nested (preferred): skills/<skill>/tools/<tool>/{tool.json,handler.ts}
+//   Flat (legacy/singleton): skills/<tool>/{tool.json,handler.ts}
 //
-// The loader reads each subdirectory, validates the manifest,
-// dynamically imports the handler, and registers both in the ToolRegistry.
+// Bundles are discovered separately via skill-loader.ts (SKILL.md).
+// The loader validates each tool manifest, dynamically imports the handler,
+// and registers both in the ToolRegistry.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -47,82 +48,128 @@ export interface ToolDiscovery {
 }
 
 /**
- * Scan skillsDir and parse every tool.json leniently (no handler import).
- * A parse error is captured per-skill rather than thrown, so a broken DISABLED
- * skill never crashes startup. Used by the registry UI, reconciliation, and as
+ * Parse a single tool directory (flat or nested) leniently.
+ * Returns null when the directory is not a tool (no tool.json / legacy-only).
+ */
+export function parseToolDiscoveryDir(
+  dir: string,
+  entryName: string,
+  logger?: Logger,
+): ToolDiscovery | null {
+  const manifestPath = path.join(dir, 'tool.json');
+  const legacyManifestPath = path.join(dir, 'skill.json');
+  if (!fs.existsSync(manifestPath)) {
+    // One-shot cutover (ADR-031): directories that still have skill.json but no
+    // tool.json are not loaded — warn loudly so custom overlays don't vanish silently.
+    if (fs.existsSync(legacyManifestPath)) {
+      logger?.error(
+        { dir, legacyManifest: 'skill.json' },
+        'legacy skill.json found — rename to tool.json (ADR-031); atom will not load until renamed',
+      );
+    }
+    return null;
+  }
+
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as ToolManifest;
+    // Apply the same defaults that loadToolsFromDirectory used to apply inline,
+    // so the pre-parsed manifest is consistent with what the loader will register.
+    manifest.timeout ??= 30000;
+    manifest.sensitivity ??= 'normal';
+    manifest.permissions ??= [];
+    manifest.secrets ??= [];
+    manifest.inputs ??= {};
+    manifest.outputs ??= {};
+
+    // Normalize install.requires_secrets at this single untrusted-input boundary.
+    // Discovery is deliberately lenient (raw JSON.parse, no Ajv here — see the comment
+    // on discoverToolManifests), so a hand-edited/malformed manifest could carry a
+    // non-array or non-string entries. Coerce to a clean string[] (dropping non-strings)
+    // so the downstream registry gate and vault scope guard are guaranteed a valid shape
+    // and never iterate a string char-by-char or throw on `.filter`. Absent/empty → undefined.
+    // (A genuinely malformed manifest is still caught by the schema-validation CI test.)
+    const rawRequires: unknown = manifest.install?.requires_secrets;
+    const requiresSecrets = Array.isArray(rawRequires)
+      ? rawRequires.filter((s): s is string => typeof s === 'string')
+      : undefined;
+    if (entryName !== manifest.name) {
+      logger?.warn(
+        { dir, manifestName: manifest.name },
+        'tool discovery: directory name does not match manifest.name',
+      );
+    }
+    return {
+      name: manifest.name,
+      dir,
+      manifest,
+      metadata: {
+        name: manifest.name,
+        description: manifest.description,
+        version: manifest.version,
+        actionRisk: manifest.action_risk,
+        sensitivity: manifest.sensitivity,
+        capabilities: manifest.capabilities,
+        // PR2 (#939): surface the install-time secrets gate to the registry UI + service.
+        // Normalized above to a clean string[] | undefined.
+        requiresSecrets,
+      },
+    };
+  } catch (err) {
+    return {
+      name: entryName,
+      dir,
+      metadata: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Scan skillsDir for tool.json manifests (flat + nested under skill/tools/).
+ * A parse error is captured per-tool rather than thrown, so a broken DISABLED
+ * tool never crashes startup. Used by the registry UI, reconciliation, and as
  * the input to loadToolsFromDirectory.
  */
 export function discoverToolManifests(skillsDir: string, logger?: Logger): ToolDiscovery[] {
   if (!fs.existsSync(skillsDir)) {
     throw new Error(`Skills directory not found: ${skillsDir}`);
   }
-  const out: ToolDiscovery[] = [];
+  const byName = new Map<string, ToolDiscovery>();
+
+  const add = (disc: ToolDiscovery) => {
+    const existing = byName.get(disc.name);
+    if (existing) {
+      logger?.warn(
+        { tool: disc.name, kept: existing.dir, skipped: disc.dir },
+        'duplicate tool name during discovery; keeping first',
+      );
+      return;
+    }
+    byName.set(disc.name, disc);
+  };
+
+  // Flat: skills/<tool>/tool.json (skip dirs that are skill bundles with tools/)
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
+    if (entry.name.startsWith('_')) continue;
     const dir = path.join(skillsDir, entry.name);
-    const manifestPath = path.join(dir, 'tool.json');
-    const legacyManifestPath = path.join(dir, 'skill.json');
-    if (!fs.existsSync(manifestPath)) {
-      // One-shot cutover (ADR-031): directories that still have skill.json but no
-      // tool.json are not loaded — warn loudly so custom overlays don't vanish silently.
-      if (fs.existsSync(legacyManifestPath)) {
-        logger?.error(
-          { dir, legacyManifest: 'skill.json' },
-          'legacy skill.json found — rename to tool.json (ADR-031); atom will not load until renamed',
-        );
-      }
-      continue; // not a tool dir (e.g. _shared) or unmigrated legacy manifest
-    }
+    // Skill bundle root may have SKILL.md + tools/ and no top-level tool.json —
+    // parseToolDiscoveryDir returns null in that case.
+    const disc = parseToolDiscoveryDir(dir, entry.name, logger);
+    if (disc) add(disc);
 
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as ToolManifest;
-      // Apply the same defaults that loadToolsFromDirectory used to apply inline,
-      // so the pre-parsed manifest is consistent with what the loader will register.
-      manifest.timeout ??= 30000;
-      manifest.sensitivity ??= 'normal';
-      manifest.permissions ??= [];
-      manifest.secrets ??= [];
-      manifest.inputs ??= {};
-      manifest.outputs ??= {};
-
-      // Normalize install.requires_secrets at this single untrusted-input boundary.
-      // Discovery is deliberately lenient (raw JSON.parse, no Ajv here — see the comment
-      // on this function), so a hand-edited/malformed manifest could carry a non-array or
-      // non-string entries. Coerce to a clean string[] (dropping non-strings) so the
-      // downstream registry gate and vault scope guard are guaranteed a valid shape and
-      // never iterate a string char-by-char or throw on `.filter`. Absent/empty → undefined.
-      // (A genuinely malformed manifest is still caught by the schema-validation CI test.)
-      const rawRequires: unknown = manifest.install?.requires_secrets;
-      const requiresSecrets = Array.isArray(rawRequires)
-        ? rawRequires.filter((s): s is string => typeof s === 'string')
-        : undefined;
-      if (entry.name !== manifest.name) {
-        logger?.warn(
-          { dir, manifestName: manifest.name },
-          'skill discovery: directory name does not match manifest.name',
-        );
-      }
-      out.push({
-        name: manifest.name,
-        dir,
-        manifest,
-        metadata: {
-          name: manifest.name,
-          description: manifest.description,
-          version: manifest.version,
-          actionRisk: manifest.action_risk,
-          sensitivity: manifest.sensitivity,
-          capabilities: manifest.capabilities,
-          // PR2 (#939): surface the install-time secrets gate to the registry UI + service.
-          // Normalized above to a clean string[] | undefined.
-          requiresSecrets,
-        },
-      });
-    } catch (err) {
-      out.push({ name: entry.name, dir, metadata: null, error: err instanceof Error ? err.message : String(err) });
+    // Nested: skills/<skill>/tools/<tool>/tool.json
+    const toolsDir = path.join(dir, 'tools');
+    if (!fs.existsSync(toolsDir)) continue;
+    for (const toolEntry of fs.readdirSync(toolsDir, { withFileTypes: true })) {
+      if (!toolEntry.isDirectory()) continue;
+      const toolDir = path.join(toolsDir, toolEntry.name);
+      const nested = parseToolDiscoveryDir(toolDir, toolEntry.name, logger);
+      if (nested) add(nested);
     }
   }
-  return out;
+
+  return [...byName.values()];
 }
 
 /**

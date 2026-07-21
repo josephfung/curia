@@ -1,6 +1,4 @@
-import type { AgentYamlConfig } from './loader.js';
-
-/** The task skills every task-management-enabled agent can call. */
+/** The task tools every task-management skill includes (also listed in SKILL.md). */
 export const TASK_MANAGEMENT_TOOLS = [
   'task-create',
   'task-list',
@@ -8,9 +6,12 @@ export const TASK_MANAGEMENT_TOOLS = [
   'task-complete',
 ] as const;
 
-/** Single source of truth for the executor-discipline block injected into every
- *  task-management-enabled agent's effective system prompt.
- *  See docs/wip/2026-06-04-task-execution-heartbeat-design.md §6.1. */
+/**
+ * Task-management discipline block — kept in sync with the body of
+ * `skills/task-management/SKILL.md` (Task Management section). Bootstrap injects
+ * the on-disk SKILL.md body via `resolvePinnedSkills`; this constant remains for
+ * unit tests and docs that reference the prose.
+ */
 export const TASK_MANAGEMENT_BLOCK = [
   '## Task Management',
   '',
@@ -62,32 +63,3 @@ export const TASK_MANAGEMENT_BLOCK = [
   'and progress. Pick up where you left off. You may pull your other ready tasks',
   '(`task-list`) and advance them too, in dependency order, until blocked or budget-bound.',
 ].join('\n');
-
-export interface TaskManagementResult {
-  systemPrompt: string;
-  pinnedSkills: string[];
-  heartbeatEligible: boolean;
-}
-
-/** Apply the enable_task_management capability to an agent's prompt + skills.
- *  Pure function — no side effects. When the flag is off (default), returns the
- *  inputs unchanged and heartbeatEligible=false. */
-export function applyTaskManagement(
-  config: AgentYamlConfig,
-  systemPrompt: string,
-  pinnedSkills: string[],
-): TaskManagementResult {
-  if (!config.enable_task_management) {
-    return { systemPrompt, pinnedSkills: [...pinnedSkills], heartbeatEligible: false };
-  }
-  // Keep the author's explicit pins; append any task skills not already present.
-  const merged = [...pinnedSkills];
-  for (const skill of TASK_MANAGEMENT_TOOLS) {
-    if (!merged.includes(skill)) merged.push(skill);
-  }
-  return {
-    systemPrompt: `${systemPrompt}\n\n${TASK_MANAGEMENT_BLOCK}`,
-    pinnedSkills: merged,
-    heartbeatEligible: true,
-  };
-}

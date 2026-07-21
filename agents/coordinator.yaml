@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.14.3"
+version: "0.15.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -737,12 +737,11 @@ pinned_skills:
   - list-learning-digest
   - resolve-learning-digest
   - activity-log
-  - task-list
+  - task-management
   - approval-expiry-sweep
   - scheduler-report
   - secret-capture-request
 allow_discovery: true
-enable_task_management: true
 error_budget:
   max_turns: 40
   max_cost_usd: 1.00

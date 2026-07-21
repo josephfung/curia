@@ -4,7 +4,7 @@
 
 import type { ActionRisk } from '../skills/types.js';
 
-export type RegistryKind = 'tool' | 'agent';
+export type RegistryKind = 'tool' | 'agent' | 'skill';
 
 /** Operational state of a registry item. Derived, not stored. */
 export type DerivedState = 'uninstalled' | 'installed' | 'enabled' | 'ghost';

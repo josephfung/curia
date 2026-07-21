@@ -39,8 +39,8 @@ import { createSilentLogger } from '../../src/logger.js';
 import { BullpenService } from '../../src/memory/bullpen.js';
 
 // Skill handlers under test
-import { CalendarCreateHoldHandler } from '../../skills/calendar-create-hold/handler.js';
-import { CalendarCreateEventHandler } from '../../skills/calendar-create-event/handler.js';
+import { CalendarCreateHoldHandler } from '../../skills/calendar/tools/calendar-create-hold/handler.js';
+import { CalendarCreateEventHandler } from '../../skills/calendar/tools/calendar-create-event/handler.js';
 
 // Nylas types for mock events
 import type { NylasCalendarClient, NylasCalendarEvent } from '../../src/channels/calendar/nylas-calendar-client.js';

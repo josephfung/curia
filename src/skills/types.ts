@@ -227,7 +227,13 @@ export interface ToolContext {
   browserService?: import('../browser/browser-service.js').BrowserService;
   /** Skill search — available to skills declaring 'toolSearch' in capabilities.
    *  Searches all registered skills by keyword, excluding tool-registry itself. */
-  toolSearch?: (query: string) => Array<{ name: string; description: string }>;
+  /** Search tools (and optionally skills) by keyword. Used by tool-registry. */
+  toolSearch?: (query: string) => Array<{
+    name: string;
+    description: string;
+    /** Phase 2: 'tool' (atom) or 'skill' (bundle). Omitted → treat as tool. */
+    kind?: 'tool' | 'skill';
+  }>;
   /** Arbitrary task-level metadata forwarded from the agent.task event payload.
    *  Skills that do not need it can ignore this field entirely. */
   taskMetadata?: Record<string, unknown>;

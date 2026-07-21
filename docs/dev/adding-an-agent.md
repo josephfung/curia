@@ -56,20 +56,15 @@ system_prompt: |
 # Skills (optional but almost always needed)
 # ------------------------------------------------------------------
 
-pinned_skills:                 # skills always available in the agent's tool list
-  - web-fetch                  # see skills/ directory for all options
+pinned_skills:                 # skill bundles always available (expanded to member tools)
+  - web-fetch                  # singleton skills still use the tool name
+  - task-management            # bundle: task-* + doc-* + instruction block + heartbeat
   - scheduler-create
-  - scheduler-list
-  - scheduler-cancel
 
-allow_discovery: true          # if true, agent can search the skill registry at runtime
-                               # and request skills not in pinned_skills
-                               # "normal" sensitivity skills auto-approve; "elevated" ones
-                               # require one-time human approval per agent-skill pair
-
-enable_task_management: false  # if true, auto-pins the task-* skills, injects the
-                               # task-management discipline block, and makes the agent
-                               # heartbeat-eligible (see the field reference below)
+allow_discovery: true          # if true, agent can search tools + skills at runtime
+                               # and request tools not in pinned_skills
+                               # "normal" sensitivity tools auto-approve; "elevated" ones
+                               # require one-time human approval per agent-tool pair
 
 # ------------------------------------------------------------------
 # Scheduled Tasks (optional)
@@ -135,35 +130,35 @@ The LLM instructions for this agent. Written in plain text. Key points:
 
 - The runtime injects additional context automatically (current date/time, autonomy band, memory context) — you do not need to add boilerplate for these
 - The Coordinator's system prompt uses `${office_identity_block}` to receive the compiled identity (name, tone, constraints, etc.) from `OfficeIdentityService`. Specialist agents do not need this — identity is a Coordinator concern.
-- Write for a single-turn task frame. For deferred or multi-step work, use the task system (`enable_task_management`, see below and [spec 19](../specs/19-tasks-and-backlog.md)) — `task-create` for CEO-visible work, `scheduler-create` for operational sweeps. When a task wakes the agent, its `intent_anchor`, title, and progress are supplied as context so the agent resumes where it left off.
+- Write for a single-turn task frame. For deferred or multi-step work, use the task system (pin `task-management`, see below and [spec 19](../specs/19-tasks-and-backlog.md)) — `task-create` for CEO-visible work, `scheduler-create` for operational sweeps. When a task wakes the agent, its `intent_anchor`, title, and progress are supplied as context so the agent resumes where it left off.
 
 ### `pinned_skills` (optional)
 
-List of skill names always included in this agent's tool list. These are the skills the agent can call without discovery.
+List of **skill (bundle) names** always included for this agent. Bootstrap expands each pin to its member tools and injects any SKILL.md instruction body.
 
-**Choosing which skills to pin:**
+**Choosing what to pin:**
 
-Browse the `skills/` directory for available skills. As a heuristic:
-- Pin skills the agent needs on *every* task (e.g., `web-fetch` for a research agent)
-- Don't pin skills that are rarely needed — use `allow_discovery: true` instead so they're available on demand without cluttering the tool list
+Browse `skills/*/SKILL.md` (bundles) and flat `skills/<tool>/` (singleton skills). As a heuristic:
+- Pin skills the agent needs on *every* task (e.g., `web-fetch` for a research agent, `task-management` for heartbeat-eligible work)
+- Don't pin skills that are rarely needed — use `allow_discovery: true` instead
 - The Coordinator should pin a broad set since it handles all inbound routing
 
-**`allowed_callers` and custom skills:** If a custom skill in your deploy repo has `allowed_callers` set and your new agent needs to use it, add your agent's name to that skill's `allowed_callers` list. This only applies to custom skills in the same deploy repo — core skills should never restrict by deployment-specific agent name. See [Adding a Skill — `allowed_callers`](adding-a-tool.md#allowed_callers-optional) for the full pattern.
+**`allowed_callers` and custom tools:** If a custom tool in your deploy repo has `allowed_callers` set and your new agent needs to use it, add your agent's name to that tool's `allowed_callers` list. This only applies to custom tools in the same deploy repo — core tools should never restrict by deployment-specific agent name. See [Adding a Tool — `allowed_callers`](adding-a-tool.md#allowed_callers-optional) for the full pattern.
 
-Current built-in skills include (see `skills/` for the full list):
+Current built-in skills/tools include (see `skills/` for the full list):
 
-| Category | Skills |
+| Category | Pin |
 |---|---|
-| **Email** | `email-send`, `email-reply` (both accept `attachments`); `drive-download-file` (fetch a Drive file to a `file://` URL for attaching) |
-| **Tasks** | `task-create`, `task-list`, `task-update`, `task-complete` — usually auto-pinned via `enable_task_management` (see below); see [spec 19](../specs/19-tasks-and-backlog.md) |
-| **Calendar** | `calendar-list-events`, `calendar-create-event`, `calendar-update-event`, `calendar-delete-event`, `calendar-find-free-time`, `calendar-check-conflicts`, `calendar-list-calendars`, `calendar-register` |
-| **Contacts** | `contact-lookup`, `contact-create`, `contact-list`, `contact-update` (canonical attributes), `contact-link-identity`, `contact-unlink-identity`, `contact-set-role`, `contact-grant-permission`, `contact-revoke-permission` |
+| **Email** | `email-send`, `email-reply` (atoms / singleton skills); `drive-download-file` |
+| **Tasks** | `task-management` — expands to `task-*` + `doc-*`, injects discipline blocks, heartbeat-eligible; see [spec 19](../specs/19-tasks-and-backlog.md) |
+| **Calendar** | `calendar` — expands to all `calendar-*` tools (per-tool `action_risk` preserved) |
+| **Contacts** | `contact-lookup`, `contact-create`, `contact-list`, … |
 | **Web** | `web-fetch`, `web-search`, `web-browser` |
 | **Scheduling** | `scheduler-create`, `scheduler-list`, `scheduler-cancel` |
 | **Delegation** | `delegate` |
 | **Autonomy** | `get-autonomy`, `set-autonomy` |
-| **Context** | `entity-context`, `held-messages-list`, `held-messages-process` |
-| **Config** | `config-store` — generic key-value agent config; namespace-scoped, KG-backed, permanent decay |
+| **Context** | `entity-context` |
+| **Config** | `config-store` |
 
 This table is hand-maintained — run `ls skills/` for the authoritative current set.
 
@@ -217,25 +212,23 @@ When `true`, the agent can call the skill registry at runtime to find and reques
 
 Turn this on for general-purpose agents (like the Coordinator) that may encounter novel tasks. Keep it `false` for focused specialist agents to prevent scope creep.
 
-### `enable_task_management` (optional, default: `false`)
+### Pinning `task-management`
 
-A single declarative capability flag that bundles the platform task system onto an agent.
-When `true`, the runtime:
+Pin the `task-management` skill bundle to give an agent the platform task system:
 
-1. **Auto-pins** `task-create`, `task-list`, `task-update`, `task-complete` (merged and
-   deduped with your explicit `pinned_skills` — you do not list them yourself).
-2. **Auto-injects** the shared `task-management` discipline block (the advance-until-blocked
-   loop, the no-dangling-commitment invariant, and the project-decomposition rule) at a
-   fixed slot in the effective system prompt. The block is platform code, so every enabled
-   agent gets the identical, current rules.
-3. **Marks the agent heartbeat-eligible** — the `BacklogHeartbeat` only wakes agents that
-   have this flag set.
+```yaml
+pinned_skills:
+  - task-management
+```
 
-Enable it on agents that uncover deferrable, multi-step work (the Coordinator and
-`ceo-inbox` ship with it on). Leave it `false` for pure act-and-return specialists. An agent
-that needs only read-only `task-list` access can still pin that one skill manually without
-the flag — it just won't be heartbeat-eligible or get the injected block. See
-[spec 19 — Tasks & Backlog](../specs/19-tasks-and-backlog.md) for the full design.
+That skill expands to `task-create` / `task-list` / `task-update` / `task-complete` plus
+`doc-*` workspace tools, injects the shared discipline blocks from
+`skills/task-management/SKILL.md`, and marks the agent heartbeat-eligible for
+`BacklogHeartbeat`. Pin it on agents that uncover deferrable, multi-step work (the
+Coordinator, `ceo-inbox`, and `contacts` ship with it). Pure act-and-return specialists
+omit it. An agent that needs only read-only `task-list` can still pin that tool name
+directly (transitional) without the bundle — it won't be heartbeat-eligible or get the
+injected block. See [spec 19 — Tasks & Backlog](../specs/19-tasks-and-backlog.md).
 
 `task-create` accepts an optional `target_agent_id` input that assigns the task (and its
 wake-up) to another registered agent — for example, the Coordinator scheduling a debrief task

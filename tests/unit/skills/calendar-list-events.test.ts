@@ -1,6 +1,6 @@
 // tests/unit/skills/calendar-list-events.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { CalendarListEventsHandler } from '../../../skills/calendar-list-events/handler.js';
+import { CalendarListEventsHandler } from '../../../skills/calendar/tools/calendar-list-events/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

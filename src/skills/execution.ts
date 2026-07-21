@@ -201,6 +201,8 @@ export class ExecutionLayer {
    *  'sensitivityClassifier' in capabilities. Built once at startup from
    *  yamlConfig.sensitivity_rules and reused across skills and EntityMemory. */
   private sensitivityClassifier?: SensitivityClassifier;
+  /** Phase 2 skill (bundle) catalog — used by unified toolSearch discovery. */
+  private skillBundleRegistry?: import('./skill-registry.js').SkillRegistry;
 
   constructor(registry: ToolRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -246,6 +248,8 @@ export class ExecutionLayer {
     exportControlService?: ExportControlService;
     /** Shared sensitivity classifier (#1419) — available to skills declaring 'sensitivityClassifier'. */
     sensitivityClassifier?: SensitivityClassifier;
+    /** Phase 2 skill (bundle) catalog for unified discovery. */
+    skillBundleRegistry?: import('./skill-registry.js').SkillRegistry;
   }) {
     this.registry = registry;
     this.logger = logger;
@@ -287,6 +291,7 @@ export class ExecutionLayer {
     this.principalIdentities = options?.principalIdentities ?? [];
     this.exportControlService = options?.exportControlService;
     this.sensitivityClassifier = options?.sensitivityClassifier;
+    this.skillBundleRegistry = options?.skillBundleRegistry;
   }
 
   /**
@@ -1315,19 +1320,33 @@ export class ExecutionLayer {
           ? buildEntityMemoryObserver(this.entityMemory!, this.bus, memAudit, skillLogger)
           : this.entityMemory;
       } else if (cap === 'toolSearch') {
-        // Special case: toolSearch is a closure over the registry, not a service field.
-        // Filters out tool-registry itself (circular self-discovery) and skills whose
+        // Special case: toolSearch is a closure over the registries, not a service field.
+        // Unified discovery (Phase 2): returns tools and non-synthetic skill bundles.
+        // Filters out tool-registry itself (circular self-discovery) and tools whose
         // allowed_callers list does not include the calling agent (defense-in-depth —
-        // prevents LLM from discovering skills it cannot invoke).
-        ctx.toolSearch = (query: string) =>
-          this.registry.search(query)
+        // prevents LLM from discovering tools it cannot invoke).
+        ctx.toolSearch = (query: string) => {
+          const tools = this.registry.search(query)
             .filter(s => s.manifest.name !== 'tool-registry')
             .filter(s => {
               const allowed = s.manifest.allowed_callers;
               if (!allowed || allowed.length === 0) return true;
               return allowed.includes(options?.agentId ?? 'system');
             })
-            .map(s => ({ name: s.manifest.name, description: s.manifest.description }));
+            .map(s => ({
+              name: s.manifest.name,
+              description: s.manifest.description,
+              kind: 'tool' as const,
+            }));
+          const skills = (this.skillBundleRegistry?.search(query) ?? [])
+            .filter(s => !s.synthetic)
+            .map(s => ({
+              name: s.manifest.name,
+              description: s.manifest.description,
+              kind: 'skill' as const,
+            }));
+          return [...skills, ...tools];
+        };
       } else if (cap === 'infraLlm') {
         // Special case: infraLlm creates a scoped instance per invocation that
         // carries telemetry context (agentId, taskEventId, conversationId, toolName).
