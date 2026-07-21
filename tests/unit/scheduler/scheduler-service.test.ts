@@ -471,6 +471,17 @@ describe('SchedulerService', () => {
       const [sql] = pool.query.mock.calls[0] as [string, unknown[]];
       expect(sql).not.toContain('LIMIT');
     });
+
+    it('floors a fractional limit in (0, 1) up to 1, not down to a zero-row LIMIT', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await svc.listJobs({ limit: 0.5 });
+
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('LIMIT');
+      expect(params).toContain(1);
+      expect(params).not.toContain(0);
+    });
   });
 
   // -- getJob --

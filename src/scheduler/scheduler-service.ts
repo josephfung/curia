@@ -378,7 +378,9 @@ export class SchedulerService {
     let limitClause = '';
     if (filters?.limit !== undefined && Number.isFinite(filters.limit) && filters.limit > 0) {
       limitClause = `LIMIT $${paramIndex}`;
-      params.push(Math.floor(filters.limit));
+      // Math.max(1, …) so a fractional limit in (0, 1) becomes LIMIT 1, not LIMIT 0
+      // (Math.floor(0.5) === 0 would silently return zero rows).
+      params.push(Math.max(1, Math.floor(filters.limit)));
       paramIndex++;
     }
 

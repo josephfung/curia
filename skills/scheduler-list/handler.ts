@@ -81,7 +81,9 @@ function toJobSummary(job: JobRow, tz: string | undefined): JobSummary {
  *  default for missing / non-numeric / non-positive values. */
 function clampLimit(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return DEFAULT_LIST_LIMIT;
-  return Math.min(Math.floor(raw), MAX_LIST_LIMIT);
+  // Math.max(1, …) so a fractional value in (0, 1) — which passes the > 0 guard but
+  // floors to 0 — yields a 1-row page rather than an always-empty, falsely-truncated one.
+  return Math.max(1, Math.min(Math.floor(raw), MAX_LIST_LIMIT));
 }
 
 export class SchedulerListHandler implements SkillHandler {
