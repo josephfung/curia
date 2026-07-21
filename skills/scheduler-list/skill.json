@@ -1,15 +1,19 @@
 {
   "name": "scheduler-list",
-  "description": "List scheduled jobs. Optionally filter by status (pending, running, completed, failed, suspended, cancelled) or agent_id.",
-  "version": "1.1.0",
+  "description": "List scheduled jobs (most recent first, trimmed summary view). Optionally filter by status (pending, running, completed, failed, suspended, cancelled, paused) or agent_id, and cap results with limit (default 50, max 200). For full detail on a single job, use scheduler-report.",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "status": "string?",
-    "agent_id": "string?"
+    "agent_id": "string?",
+    "limit": "number?"
   },
   "outputs": {
-    "jobs": "array"
+    "jobs": "array",
+    "count": "number",
+    "truncated": "boolean",
+    "limit": "number"
   },
   "permissions": [],
   "secrets": [],

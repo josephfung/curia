@@ -195,6 +195,48 @@ describe('discover → invoke round-trip', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Object output size cap (#1487)
+// ---------------------------------------------------------------------------
+
+describe('object output size cap', () => {
+  it('collapses an oversized OBJECT output to a bounded string instead of returning it unbounded', async () => {
+    const registry = new SkillRegistry();
+    // An object whose JSON serialization far exceeds the tiny cap below. Each string
+    // leaf is small (so per-leaf truncation never fires) — the bloat is in the number
+    // of array elements, exactly the scheduler-list-over-a-large-jobs-table shape.
+    const bigData = {
+      jobs: Array.from({ length: 100 }, (_, i) => ({ id: `job-${i}`, note: 'x'.repeat(40) })),
+    };
+    registry.register(makeManifest('big-list'), makeHandler(bigData));
+
+    const maxLen = 200;
+    const layer = new ExecutionLayer(registry, logger, { skillOutputMaxLength: maxLen });
+
+    const result = await layer.invoke('big-list', { query: 'x' });
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: unknown }).data;
+    // Collapsed to a bounded string with a truncation marker — never an unbounded object.
+    expect(typeof data).toBe('string');
+    expect(data as string).toContain('truncated');
+    expect((data as string).length).toBeLessThanOrEqual(maxLen + 40);
+  });
+
+  it('leaves a small object output as a structured object', async () => {
+    const registry = new SkillRegistry();
+    registry.register(makeManifest('small-list'), makeHandler({ jobs: [{ id: 'job-1' }] }));
+
+    const layer = new ExecutionLayer(registry, logger, { skillOutputMaxLength: 200 });
+
+    const result = await layer.invoke('small-list', { query: 'x' });
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: unknown }).data;
+    expect(data).toEqual({ jobs: [{ id: 'job-1' }] });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Capability-gated service injection
 // ---------------------------------------------------------------------------
 

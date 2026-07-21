@@ -75,6 +75,10 @@ export interface JobRow {
 export interface ListJobsFilters {
   status?: string;
   agentId?: string;
+  /** Cap the number of rows returned (most recent first). Omitted → no cap.
+   *  Callers that feed results to an LLM must set this — an unbounded listing over
+   *  a large jobs table overflows the model context window. (#1487) */
+  limit?: number;
 }
 
 // -- Internal DB row shape (snake_case) --
@@ -366,10 +370,20 @@ export class SchedulerService {
       paramIndex++;
     }
 
-    // Suppress unused-variable warning — paramIndex is incremented to stay ready for future filters.
-    void paramIndex;
-
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Optional row cap, applied in SQL so a large jobs table never loads fully into
+    // memory. Only added when the caller asks for one, so existing callers (HTTP
+    // /api/jobs, setup-status) keep their full-list behaviour unchanged. (#1487)
+    let limitClause = '';
+    if (filters?.limit !== undefined && Number.isFinite(filters.limit) && filters.limit > 0) {
+      limitClause = `LIMIT $${paramIndex}`;
+      params.push(Math.floor(filters.limit));
+      paramIndex++;
+    }
+
+    // Suppress unused-variable warning — paramIndex stays incremented for future filters.
+    void paramIndex;
 
     const sql = `
       SELECT sj.*,
@@ -383,6 +397,7 @@ export class SchedulerService {
         LEFT JOIN tasks t ON sj.task_id = t.id
        ${whereClause}
        ORDER BY sj.created_at DESC
+       ${limitClause}
     `;
     const { rows } = await this.pool.query(sql, params);
     return (rows as DbJobRow[]).map(mapJobRow);

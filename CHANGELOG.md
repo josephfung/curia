@@ -13,6 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`scheduler-list`** — bound and trim results so a large jobs table no longer overflows the model context. (#1487)
+- **Skill outputs** — cap total object-output size, not just per-leaf, matching the string-output path. (#1487)
+
 ## [0.41.0] — 2026-07-21 — "Data"
 
 > **Data** *(Star Trek: The Next Generation, 1987, Gene Roddenberry)* — the android who grows more human by patiently observing the people around him, then refining his own conduct to match, and the crew's tireless analyst when something needs explaining. This release teaches Curia both halves: it watches what you actually send and learns your voice from the edits you make, and it can now investigate its own behavior when you ask what happened.
