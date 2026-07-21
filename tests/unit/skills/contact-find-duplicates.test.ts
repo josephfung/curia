@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ContactFindDuplicatesHandler } from '../../../skills/contact-find-duplicates/handler.js';
+import { ContactFindDuplicatesHandler } from '../../../skills/contacts/tools/contact-find-duplicates/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import type { DuplicatePair } from '../../../src/contacts/types.js';
 import type { TaskRow } from '../../../src/db/queries/tasks.js';

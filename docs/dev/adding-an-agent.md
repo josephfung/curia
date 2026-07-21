@@ -232,9 +232,10 @@ pinned_skills:
 
 Pin both on agents that uncover deferrable, multi-step work (the Coordinator,
 `ceo-inbox`, and `contacts` ship with both). Pure act-and-return specialists omit them.
-An agent that needs only read-only `task-list` can still pin that tool name directly
-(transitional) without the bundle — it won't be heartbeat-eligible or get the injected
-block. See [spec 19 — Tasks & Backlog](../specs/19-tasks-and-backlog.md).
+An agent that needs only read-only `task-list` can pin that **tool** name directly
+(polymorphic pins, [ADR-032](../adr/032-polymorphic-pins-and-mcp-as-skill.md)) without
+the bundle — it won't be heartbeat-eligible or get the injected block, and it will
+not receive sibling tools like `plan`/`checkpoint`. See [spec 19 — Tasks & Backlog](../specs/19-tasks-and-backlog.md).
 
 `task-create` accepts an optional `target_agent_id` input that assigns the task (and its
 wake-up) to another registered agent — for example, the Coordinator scheduling a debrief task

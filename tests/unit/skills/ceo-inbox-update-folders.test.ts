@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import pino from 'pino';
 import type { ToolContext } from '../../../src/skills/types.js';
-import { CeoInboxUpdateFoldersHandler } from '../../../skills/ceo-inbox-update-folders/handler.js';
+import { CeoInboxUpdateFoldersHandler } from '../../../skills/ceo-inbox/tools/ceo-inbox-update-folders/handler.js';
 
 const logger = pino({ level: 'silent' });
 

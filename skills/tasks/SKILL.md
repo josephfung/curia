@@ -1,15 +1,17 @@
 ---
 name: tasks
 description: >
-  Defer, track, and resume multi-step work with task-create/list/update/complete.
-  Pin this skill to make an agent heartbeat-eligible.
-version: "0.1.0"
+  Defer, track, and resume multi-step work with task-create/list/update/complete,
+  plus plan and checkpoint primitives. Pin this skill to make an agent heartbeat-eligible.
+version: "0.2.0"
 heartbeat: true
 tools:
   - task-create
   - task-list
   - task-update
   - task-complete
+  - plan
+  - checkpoint
 ---
 
 ## Task Management

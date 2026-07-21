@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { WebFetchHandler } from '../../../skills/web-fetch/handler.js';
+import { WebFetchHandler } from '../../../skills/web/tools/web-fetch/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

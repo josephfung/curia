@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ContactMergeHandler } from '../../../skills/contact-merge/handler.js';
+import { ContactMergeHandler } from '../../../skills/contacts/tools/contact-merge/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

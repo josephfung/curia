@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ExecutiveProfileGetHandler } from '../../../skills/executive-profile-get/handler.js';
+import { ExecutiveProfileGetHandler } from '../../../skills/executive-profile/tools/executive-profile-get/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import type { ExecutiveProfile } from '../../../src/executive/types.js';
 import pino from 'pino';

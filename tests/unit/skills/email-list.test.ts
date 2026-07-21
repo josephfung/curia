@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { EmailListHandler } from '../../../skills/email-list/handler.js';
+import { EmailListHandler } from '../../../skills/email/tools/email-list/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

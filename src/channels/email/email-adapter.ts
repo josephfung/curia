@@ -24,7 +24,7 @@ import { sanitizeOutput } from '../../skills/sanitize.js';
 import { buildReplyQuote } from '../../skills/_shared/reply-quote.js';
 import type { Channel } from '../channel.js';
 
-// Mirrors MAX_BODY_LENGTH in skills/email-send/handler.ts and skills/email-reply/handler.ts.
+// Mirrors MAX_BODY_LENGTH in skills/email/tools/email-send/handler.ts and skills/email/tools/email-reply/handler.ts.
 // When the agent's response plus the quoted original would exceed this, the quote
 // is silently dropped so the reply still sends.
 const MAX_REPLY_BODY_LENGTH = 50_000;

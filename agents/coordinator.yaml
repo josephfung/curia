@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.15.0"
+version: "0.16.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -668,79 +668,32 @@ system_prompt: |
   approving/denying pending actions, listing the backlog) are under "What I Do Directly".
   This section governs only *when and how* I raise them.
 pinned_skills:
-  - web-fetch
-  - web-browser
-  - web-search
+  # Bundles (ADR-031 / #1494)
+  - web
+  - google-workspace   # MCP-projected skill (ADR-032) — live tool set from tools/list
+  - executive-profile
+  - email
+  - context-bridge
+  - memory
+  - scheduler
+  - autonomy
+  - tasks
+  - documents
+  # Learning review surface only (producers stay on ceo-inbox via tool pins)
+  - list-learning-digest
+  - resolve-learning-digest
+  # Narrow / standalone pins (polymorphic — do not pull sibling tools)
   - delegate
-  # Google Workspace (MCP) — document creation, editing, and formatting
-  - create_doc
-  - get_doc_content
-  - get_doc_as_markdown
-  - modify_doc_text
-  - find_and_replace_doc
-  - insert_doc_elements
-  - update_paragraph_style
-  - import_to_google_doc
-  - export_doc_to_pdf
-  - list_document_comments
-  - manage_document_comment
-  # Google Workspace (MCP) — drive operations and sharing
-  - search_drive_files
-  - get_drive_file_content
-  - list_drive_items
-  - list_docs_in_folder
-  - create_drive_file
-  - create_drive_folder
-  - copy_drive_file
-  - update_drive_file
-  - manage_drive_access
-  - set_drive_file_permissions
-  - get_drive_shareable_link
   - drive-download-file
-  - executive-profile-get
-  - executive-profile-update
-  - email-send
-  - email-reply
-  - email-archive
-  - email-list
-  - email-get
-  - email-download-attachment
-  - email-draft-save
-  - email-label
-  - email-list-folders
-  - email-create-folder
-  - email-mark-read
-  - send-draft
   - signal-send
-  - context-bridge-release
-  - context-bridge-clear
-  - decay-warnings-list
-  - memory-confirm
-  - scheduler-create
-  - scheduler-list
-  - scheduler-cancel
-  - scheduler-update
   - config-store
   - date-resolve
-  - get-autonomy
-  - set-autonomy
-  - memory-query
-  - memory-store
   - contact-update
   - image-generate
   - file-parse
   - tool-registry
-  - approve-action
-  - deny-action
-  - dismiss-action
-  - list-pending-actions
-  - list-learning-digest
-  - resolve-learning-digest
   - activity-log
-  - tasks
-  - documents
   - approval-expiry-sweep
-  - scheduler-report
   - secret-capture-request
 allow_discovery: true
 error_budget:

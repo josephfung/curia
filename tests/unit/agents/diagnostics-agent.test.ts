@@ -21,7 +21,7 @@ const config = loadAgentConfig(path.join(agentsDir, 'diagnostics.yaml'));
  * pauses and routes a question to the PRINCIPAL (via the coordinator's resume
  * flow); it cannot address an arbitrary recipient.
  */
-const ALLOWED_SKILLS = new Set(['date-resolve', 'audit-query', 'audit-trace', 'ops-lookup', 'request-clarification']);
+const ALLOWED_SKILLS = new Set(['date-resolve', 'diagnostics', 'request-clarification']);
 
 describe('diagnostics agent config', () => {
   it('runs on the powerful tier', () => {
@@ -32,8 +32,10 @@ describe('diagnostics agent config', () => {
     expect(config.role).toBe('specialist');
   });
 
-  it('pins the three diagnostics query skills plus date-resolve', () => {
-    expect(config.pinned_skills).toEqual(expect.arrayContaining(['audit-query', 'audit-trace', 'ops-lookup', 'date-resolve']));
+  it('pins the diagnostics skill bundle plus date-resolve', () => {
+    expect(config.pinned_skills).toEqual(
+      expect.arrayContaining(['diagnostics', 'date-resolve']),
+    );
   });
 
   it('pins request-clarification so it can ask the principal mid-diagnosis', () => {

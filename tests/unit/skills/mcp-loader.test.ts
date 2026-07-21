@@ -75,7 +75,7 @@ function emptyConfigDir(): string {
 describe('loadMcpServers — absent / empty config', () => {
   it('returns empty array when skills.yaml is absent', async () => {
     const registry = new ToolRegistry();
-    const sessions = await loadMcpServers(emptyConfigDir(), registry, logger, secrets);
+    const { sessions } = await loadMcpServers(emptyConfigDir(), registry, logger, secrets);
     expect(sessions).toHaveLength(0);
     expect(registry.list()).toHaveLength(0);
   });
@@ -83,14 +83,14 @@ describe('loadMcpServers — absent / empty config', () => {
   it('returns empty array when skills.yaml is empty', async () => {
     const dir = writeSkillsYaml('');
     const registry = new ToolRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger, secrets);
+    const { sessions } = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
   });
 
   it('returns empty array when servers list is empty', async () => {
     const dir = writeSkillsYaml('servers: []');
     const registry = new ToolRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger, secrets);
+    const { sessions } = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
   });
 });
@@ -121,7 +121,7 @@ servers:
     action_risk: none
 `);
     const registry = new ToolRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger, secrets);
+    const { sessions } = await loadMcpServers(dir, registry, logger, secrets);
 
     // Only the working server's session is returned.
     expect(sessions).toHaveLength(1);
@@ -143,7 +143,7 @@ servers:
     action_risk: none
 `);
     const registry = new ToolRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger, secrets);
+    const { sessions } = await loadMcpServers(dir, registry, logger, secrets);
 
     expect(sessions).toHaveLength(0);
     // Session must be closed when tools/list fails.
@@ -158,7 +158,7 @@ servers:
     action_risk: none
 `);
     const registry = new ToolRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger, secrets);
+    const { sessions } = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
     expect(mockConnectStdio).not.toHaveBeenCalled();
   });
@@ -171,7 +171,7 @@ servers:
     action_risk: none
 `);
     const registry = new ToolRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger, secrets);
+    const { sessions } = await loadMcpServers(dir, registry, logger, secrets);
     expect(sessions).toHaveLength(0);
     expect(mockConnectSse).not.toHaveBeenCalled();
   });
@@ -220,7 +220,7 @@ servers:
     timeout_ms: 15000
 `);
     const registry = new ToolRegistry();
-    const sessions = await loadMcpServers(dir, registry, logger, secrets);
+    const { sessions } = await loadMcpServers(dir, registry, logger, secrets);
 
     expect(sessions).toHaveLength(1);
 

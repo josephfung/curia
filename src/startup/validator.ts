@@ -138,41 +138,51 @@ export async function runStartupValidation(opts: {
     }
   }
 
-  // 4. Validate all skills/*/tool.json (skipped when skillsDir is omitted)
+  // 4. Validate tool.json manifests under skillsDir (skipped when skillsDir is omitted)
   //
-  // Supports two layouts:
-  //   a) skillsDir is a parent containing multiple skill subdirectories (production):
-  //        skills/web-search/tool.json, skills/email-send/tool.json, ...
+  // Supports three layouts:
+  //   a) skillsDir is a parent containing flat tools and/or skill bundles (production):
+  //        skills/web/tools/web-search/tool.json
+  //        skills/email/tools/email-send/tool.json
   //   b) skillsDir is a single skill directory directly containing tool.json (tests):
   //        skills/valid-skill/tool.json — tests pass path.join(F, 'skills/valid-skill')
   //
   // In case (b), the directory is checked first for a direct tool.json, then
   // subdirectories are scanned as in case (a).
   if (skillsDir && fs.existsSync(skillsDir)) {
+    const validateManifestFile = (manifestPath: string) => {
+      const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+      if (!validateSkill(raw)) {
+        throw new Error(
+          `Startup validation failed for ${manifestPath}:\n  - ${formatErrors(validateSkill.errors ?? [])}`,
+        );
+      }
+    };
+
     // Case (b): direct tool.json in skillsDir itself
     const directManifest = path.join(skillsDir, 'tool.json');
     if (fs.existsSync(directManifest)) {
-      const raw = JSON.parse(fs.readFileSync(directManifest, 'utf-8')) as unknown;
-      if (!validateSkill(raw)) {
-        throw new Error(
-          `Startup validation failed for ${directManifest}:\n  - ${formatErrors(validateSkill.errors ?? [])}`,
-        );
-      }
+      validateManifestFile(directManifest);
     } else {
-      // Case (a): parent directory — iterate subdirectories
+      // Case (a): parent directory — flat tools + nested skills/<bundle>/tools/<tool>/
       const skillEntries = fs
         .readdirSync(skillsDir, { withFileTypes: true })
         .filter(e => e.isDirectory());
 
       for (const entry of skillEntries) {
-        const manifestPath = path.join(skillsDir, entry.name, 'tool.json');
-        if (!fs.existsSync(manifestPath)) continue;
+        const flatManifest = path.join(skillsDir, entry.name, 'tool.json');
+        if (fs.existsSync(flatManifest)) {
+          validateManifestFile(flatManifest);
+        }
 
-        const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
-        if (!validateSkill(raw)) {
-          throw new Error(
-            `Startup validation failed for ${manifestPath}:\n  - ${formatErrors(validateSkill.errors ?? [])}`,
-          );
+        const nestedToolsDir = path.join(skillsDir, entry.name, 'tools');
+        if (!fs.existsSync(nestedToolsDir)) continue;
+        for (const toolEntry of fs.readdirSync(nestedToolsDir, { withFileTypes: true })) {
+          if (!toolEntry.isDirectory()) continue;
+          const nestedManifest = path.join(nestedToolsDir, toolEntry.name, 'tool.json');
+          if (fs.existsSync(nestedManifest)) {
+            validateManifestFile(nestedManifest);
+          }
         }
       }
     }

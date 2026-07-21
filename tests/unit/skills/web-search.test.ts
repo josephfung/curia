@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { WebSearchHandler } from '../../../skills/web-search/handler.js';
+import { WebSearchHandler } from '../../../skills/web/tools/web-search/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 

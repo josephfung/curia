@@ -4,7 +4,7 @@
 // Tests verify action dispatch, input validation, session_id threading, and error paths.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { WebBrowserHandler } from '../../../skills/web-browser/handler.js';
+import { WebBrowserHandler } from '../../../skills/web/tools/web-browser/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import type { BrowserService } from '../../../src/browser/browser-service.js';
 import pino from 'pino';
@@ -78,7 +78,7 @@ function makeMockBrowserService(): BrowserService {
     // Circuit-breaker surface: the handler calls isTripped() before an interaction action and
     // records success/failure around every action. A never-tripped stub keeps these
     // (non-breaker) tests on the normal path; the breaker's own behavior is covered in
-    // skills/web-browser/handler.test.ts against a real BrowserSession.
+    // skills/web/tools/web-browser/handler.test.ts against a real BrowserSession.
     consecutiveFailures: 0,
     isTripped: vi.fn().mockReturnValue(false),
     recordFailure: vi.fn(),

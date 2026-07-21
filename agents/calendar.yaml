@@ -525,17 +525,13 @@ system_prompt: |
 pinned_skills:
   # Calendar CRUD + holds (skill bundle — expands to per-tool atoms; action_risk stays per-tool)
   - calendar
-  # Entity resolution
+  # Polymorphic / standalone pins
   - contact-lookup
   - entity-context
-  # Date verification
   - date-resolve
-  # Context
   - memory-query
   - memory-store
-  # Runtime config
   - config-store
-  # Cross-specialist consultation
   - bullpen
 
 schedule:

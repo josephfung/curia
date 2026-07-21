@@ -16,7 +16,7 @@ import type { AgentTaskEvent } from '../../src/bus/events.js';
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
 import { createSilentLogger } from '../../src/logger.js';
-import { ContextBridgeReleaseHandler } from '../../skills/context-bridge-release/handler.js';
+import { ContextBridgeReleaseHandler } from '../../skills/context-bridge/tools/context-bridge-release/handler.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;

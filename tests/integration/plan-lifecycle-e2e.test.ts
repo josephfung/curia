@@ -17,7 +17,7 @@ import { SchedulerService } from '../../src/scheduler/scheduler-service.js';
 import { PlanFrontierSubscriber } from '../../src/agents/plan-frontier-subscriber.js';
 import { createScheduleFired } from '../../src/bus/events.js';
 import { DEFAULT_RESUMABLE_CEILINGS } from '../../src/config.js';
-import { PlanHandler } from '../../skills/plan/handler.js';
+import { PlanHandler } from '../../skills/tasks/tools/plan/handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
 
 const { Pool } = pg;

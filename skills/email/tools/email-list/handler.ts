@@ -1,0 +1,109 @@
+// handler.ts — email-list skill implementation.
+//
+// Lists messages from any configured email account via OutboundGateway.
+// Returns lightweight summaries (no body — use email-get for full content).
+// Account resolution is handled by the gateway's named-client map.
+
+import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import type { ListMessagesOptions } from '../../../../src/channels/email/nylas-client.js';
+
+const MAX_LIMIT = 50;
+const DEFAULT_LIMIT = 20;
+
+export class EmailListHandler implements ToolHandler {
+  async execute(ctx: ToolContext): Promise<ToolResult> {
+    if (!ctx.outboundGateway) {
+      return { success: false, error: 'email-list requires outboundGateway (capabilities: ["outboundGateway"])' };
+    }
+
+    // Handlers must never throw — destructuring a non-object ctx.input would.
+    const input =
+      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
+    const { account, folder, unread_only, from, subject, search, limit } = input as {
+      account?: string;
+      folder?: string;
+      unread_only?: boolean;
+      from?: string;
+      subject?: string;
+      search?: string;
+      limit?: number;
+    };
+
+    const accountId = typeof account === 'string' && account.trim() ? account.trim() : undefined;
+
+    const options: ListMessagesOptions = {};
+    if (typeof folder === 'string' && folder.trim()) options.folders = [folder.trim()];
+    if (typeof from === 'string' && from.trim()) options.from = from.trim();
+    if (typeof subject === 'string' && subject.trim()) options.subject = subject.trim();
+
+    const rawSearch = typeof search === 'string' && search.trim() ? search.trim() : undefined;
+    if (rawSearch !== undefined) {
+      // Nylas v3: search_query_native cannot be combined with unread, folders, receivedAfter,
+      // from, or subject — they are silently dropped (see NylasClient.listMessages). For the
+      // unread filter specifically, embed the provider-native unread operator directly into
+      // the search string so it is preserved despite the Nylas limitation.
+      //
+      // NOTE: `is:unread` is Gmail-specific syntax. Curia currently operates Gmail-only
+      // accounts, so this is correct. If a non-Gmail provider is ever configured (e.g.
+      // Outlook KQL uses `isRead:false`), the embedding here will need to be gated on
+      // account provider type — which will require threading provider metadata through
+      // OutboundGateway into the skill context.
+      // TODO(#662): make unread embedding provider-aware when multi-provider support is added.
+      const effectiveSearch = unread_only === true ? `${rawSearch} is:unread` : rawSearch;
+      options.searchQueryNative = effectiveSearch;
+    } else {
+      if (unread_only === true) options.unread = true;
+    }
+    // Coerce to a positive integer before forwarding — LLMs occasionally emit floats
+    // (e.g. 12.7) and Nylas expects an int. Non-finite or non-positive values fall back
+    // to DEFAULT_LIMIT.
+    const normalizedLimit =
+      typeof limit === 'number' && Number.isFinite(limit) ? Math.floor(limit) : undefined;
+    options.limit =
+      normalizedLimit !== undefined && normalizedLimit > 0
+        ? Math.min(normalizedLimit, MAX_LIMIT)
+        : DEFAULT_LIMIT;
+
+    // Avoid logging raw filter values — sender addresses, subject text, and
+    // provider-native search terms can carry PII. Log presence/shape only.
+    ctx.log.info(
+      {
+        accountId,
+        unread: options.unread,
+        limit: options.limit,
+        folderCount: options.folders?.length ?? 0,
+        hasFrom: options.from !== undefined,
+        hasSubject: options.subject !== undefined,
+        hasSearchQueryNative: options.searchQueryNative !== undefined,
+      },
+      'email-list: listing messages',
+    );
+
+    let messages: Awaited<ReturnType<typeof ctx.outboundGateway.listEmailMessages>>;
+    try {
+      messages = await ctx.outboundGateway.listEmailMessages(options, accountId);
+    } catch (err) {
+      ctx.log.error({ err, accountId }, 'email-list: failed to list messages');
+      return { success: false, error: 'Failed to list messages' };
+    }
+
+    return {
+      success: true,
+      data: {
+        messages: messages.map((m) => ({
+          id: m.id,
+          threadId: m.threadId,
+          subject: m.subject,
+          from: m.from,
+          snippet: m.snippet,
+          date: m.date,
+          unread: m.unread,
+          folders: m.folders,
+          attachmentCount: m.attachments?.length ?? 0,
+          hasAttachments: (m.attachments?.length ?? 0) > 0,
+        })),
+        count: messages.length,
+      },
+    };
+  }
+}
