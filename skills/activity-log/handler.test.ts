@@ -74,7 +74,7 @@ describe('ActivityLogHandler', () => {
     const data = (result as { success: true; data: { actions: Array<Record<string, unknown>> } }).data;
     expect(data.actions).toHaveLength(1);
     expect(data.actions[0]).toMatchObject({
-      skill: 'calendar-respond-to-invite',
+      tool: 'calendar-respond-to-invite',
       target: 'accept — Sync with John Doe',
       outcome: 'completed',
       autonomy: 'autonomous',
@@ -82,7 +82,7 @@ describe('ActivityLogHandler', () => {
     expect(data.actions[0]!.detail).toContain('RSVP accept');
   });
 
-  it('filters to calendar-respond-to-invite when skill_name is provided', async () => {
+  it('filters to calendar-respond-to-invite when tool_name is provided', async () => {
     const auditLogRepo = {
       findToolResults: vi.fn().mockResolvedValue([makeAuditRow()]),
     } as unknown as AuditLogRepo;
@@ -92,14 +92,14 @@ describe('ActivityLogHandler', () => {
       auditLogRepo,
       input: {
         since: '2026-06-25T00:00:00.000Z',
-        skill_name: 'calendar-respond-to-invite',
+        tool_name: 'calendar-respond-to-invite',
       },
     }));
 
     expect(result.success).toBe(true);
     const data = (result as { success: true; data: { actions: Array<Record<string, unknown>> } }).data;
     expect(data.actions).toHaveLength(1);
-    expect(data.actions[0]!.skill).toBe('calendar-respond-to-invite');
+    expect(data.actions[0]!.tool).toBe('calendar-respond-to-invite');
     expect(auditLogRepo.findToolResults).toHaveBeenCalledWith(expect.objectContaining({
       toolNames: ['calendar-respond-to-invite'],
     }));

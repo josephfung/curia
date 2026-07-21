@@ -53,7 +53,7 @@ describeIf('activity-log integration', () => {
       input: {
         since: since.toISOString(),
         until: until.toISOString(),
-        skill_name: 'calendar-respond-to-invite',
+        tool_name: 'calendar-respond-to-invite',
       },
       secret: () => { throw new Error('no secrets'); },
       log: logger,
@@ -62,8 +62,8 @@ describeIf('activity-log integration', () => {
     } as never);
 
     expect(result.success).toBe(true);
-    const data = (result as { success: true; data: { actions: Array<{ skill: string; target: string }> } }).data;
-    expect(data.actions.some((action) => action.skill === 'calendar-respond-to-invite')).toBe(true);
+    const data = (result as { success: true; data: { actions: Array<{ tool: string; target: string }> } }).data;
+    expect(data.actions.some((action) => action.tool === 'calendar-respond-to-invite')).toBe(true);
     expect(data.actions.some((action) => action.target.includes('Project sync'))).toBe(true);
   });
 });

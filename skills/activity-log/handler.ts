@@ -15,7 +15,7 @@ const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|
 interface ActivityLogInput {
   since?: string;
   until?: string;
-  skill_name?: string;
+  tool_name?: string;
   agent_id?: string;
   limit?: number;
 }
@@ -43,8 +43,8 @@ export class ActivityLogHandler implements ToolHandler {
       return { success: false, error: 'until must be after since' };
     }
 
-    const toolNames = input.skill_name
-      ? [input.skill_name.trim()].filter(Boolean)
+    const toolNames = input.tool_name
+      ? [input.tool_name.trim()].filter(Boolean)
       : undefined;
 
     try {
@@ -61,11 +61,11 @@ export class ActivityLogHandler implements ToolHandler {
         : [];
 
       const tz = ctx.timezone;
-      const recapSkills = getRecapEligibleToolNames();
+      const recapTools = getRecapEligibleToolNames();
       const actions = rows
         .map((row) => summarizeToolResult(row, autonomyRows, tz))
         .filter((action): action is NonNullable<typeof action> => action !== null)
-        .filter((action) => toolNames ? true : recapSkills.has(action.skill));
+        .filter((action) => toolNames ? true : recapTools.has(action.tool));
 
       return {
         success: true,
@@ -88,7 +88,7 @@ function summarizeToolResult(
   tz?: string,
 ): {
   timestamp: string;
-  skill: string;
+  tool: string;
   agent_id: string;
   target: string;
   outcome: 'completed' | 'failed';
@@ -104,7 +104,7 @@ function summarizeToolResult(
 
   return {
     timestamp: toLocalIso(Math.floor(row.timestamp.getTime() / 1000), tz) ?? row.timestamp.toISOString(),
-    skill: toolName,
+    tool: toolName,
     agent_id: row.sourceId,
     target: extractTarget(toolName, result),
     outcome: success ? 'completed' : 'failed',
