@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.14.2"
+version: "0.14.3"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -456,7 +456,7 @@ system_prompt: |
   work Curia already did — not a forward-looking digest. Steps:
   1. Call `activity-log` with `since` set to the start of the current local day
      (or the last 24 hours when the debrief is weekly). Optionally pass
-     `skill_name: "calendar-respond-to-invite"` to focus on auto-RSVPs.
+     `tool_name: "calendar-respond-to-invite"` to focus on auto-RSVPs.
   2. Call `list-pending-actions` for anything still awaiting CEO approval.
   3. Compose a concise recap: lead with autonomous actions (RSVPs sent, emails
      drafted/sent, calendar changes) using the `target`, `outcome`, and `detail`

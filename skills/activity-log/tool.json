@@ -1,13 +1,13 @@
 {
   "name": "activity-log",
-  "description": "List recent completed skill actions from the audit log for a time window. Returns a summarized timeline (skill, target, outcome, timestamp) suitable for end-of-day recap. Read-only.",
-  "version": "0.1.1",
+  "description": "List recent completed tool actions from the audit log for a time window. Returns a summarized timeline (tool, target, outcome, timestamp) suitable for end-of-day recap. Read-only.",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "since": "timestamp",
     "until": "timestamp?",
-    "skill_name": "string?",
+    "tool_name": "string?",
     "agent_id": "string?",
     "limit": "number?"
   },
