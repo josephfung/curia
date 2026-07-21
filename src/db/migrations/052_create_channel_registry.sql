@@ -2,7 +2,7 @@
 -- Up Migration
 -- Database-backed registry that gates channel adapter startup on an install/enable
 -- lifecycle (spec: docs/wip/2026-06-12-channel-registry-design.md, #543). Mirrors
--- tool_registry/agent_registry, plus is_toggleable: false for http/cli, which always
+-- skill_registry/agent_registry, plus is_toggleable: false for http/cli, which always
 -- start and cannot be disabled (operator-lockout safeguard). Credentials live in the
 -- secrets vault (channel.<name>.<field>); this table stores only lifecycle state.
 

@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Pre-1.0: minor bumps introduce new capabilities; patch bumps fix bugs. Breaking changes
-to public API surfaces (skill manifest schema, `SkillContext` interface, agent YAML schema,
+to public API surfaces (`tool.json` manifest schema, `ToolContext` interface, agent YAML schema,
 bus event types) are noted explicitly even in the `0.x` range.
 
 ---
