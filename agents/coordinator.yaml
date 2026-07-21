@@ -737,7 +737,8 @@ pinned_skills:
   - list-learning-digest
   - resolve-learning-digest
   - activity-log
-  - task-management
+  - tasks
+  - documents
   - approval-expiry-sweep
   - scheduler-report
   - secret-capture-request

@@ -116,11 +116,11 @@ Four skills, auto-pinned into every workspace-enabled agent (§7):
 ## 7. Harness injection & auto-pin
 
 The workspace is exposed the same way the resumable and plan harnesses are: a fixed-slot
-guidance block plus dynamically-pinned skills, injected by `applyDocumentWorkspace`
-(`src/agents/document-workspace.ts`). Injection is gated on the existing
-**`task-management`** skill — there is no separate document-workspace flag — so the
-`DOCUMENT_WORKSPACE_BLOCK` and the four `doc-*` skills are added only to task-management
-agents, appended after the task-management block (call site in `src/index.ts`).
+guidance block plus dynamically-pinned tools. Pin the **`documents`** skill
+(`skills/documents/SKILL.md`) — bootstrap expands it to `doc-*` tools and injects the
+SKILL.md body via `resolvePinnedSkills` (call site in `src/index.ts`). There is no
+separate document-workspace YAML flag. Agents that historically had
+`enable_task_management` now pin both `tasks` and `documents`.
 
 The guidance block teaches the path conventions, retention rules, and **manifest-first**
 discipline: on resume an agent may receive the directory manifest (the `index.md`

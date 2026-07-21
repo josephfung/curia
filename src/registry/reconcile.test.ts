@@ -95,10 +95,10 @@ describe('reconcileRegistries', () => {
 
   it('enrolls core skill bundles into skill_registry', async () => {
     await run(
-      { tools: [], agents: [], skills: ['task-management'] },
-      { tools: [], agents: [], skills: ['task-management', 'other-bundle'] },
+      { tools: [], agents: [], skills: ['tasks'] },
+      { tools: [], agents: [], skills: ['tasks', 'other-bundle'] },
     );
-    expect((await skillRepo.getRow('task-management'))?.enabled).toBe(true);
+    expect((await skillRepo.getRow('tasks'))?.enabled).toBe(true);
     expect(await skillRepo.getRow('other-bundle')).toBeNull();
   });
 });

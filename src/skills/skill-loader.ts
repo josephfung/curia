@@ -28,22 +28,30 @@ export function discoverSkillManifests(skillsDir: string, logger?: Logger): Skil
       const raw = fs.readFileSync(skillMdPath, 'utf-8');
       const parsed = parseSkillMd(raw, skillMdPath);
 
-      // Prefer tools declared in frontmatter; otherwise scan tools/ subdirs.
+      // Prefer tools declared in frontmatter (authoritative). Fall back to tools/
+      // scan only when frontmatter omits tools: (instruction-only / Phase 3 imports).
       let tools = parsed.tools;
+      const nested = discoverNestedToolNames(dir);
       if (!tools) {
-        tools = discoverNestedToolNames(dir);
+        tools = nested;
       } else {
-        // Cross-check nested dirs when both exist — warn on drift, keep frontmatter.
-        const nested = discoverNestedToolNames(dir);
-        if (nested.length > 0) {
-          const declared = new Set(tools);
-          for (const n of nested) {
-            if (!declared.has(n)) {
-              logger?.warn(
-                { skill: parsed.name, tool: n },
-                'skill tools/ contains tool not listed in SKILL.md frontmatter',
-              );
-            }
+        // Bidirectional drift: frontmatter ↔ tools/ dirs must agree when both exist.
+        const declared = new Set(tools);
+        const nestedSet = new Set(nested);
+        for (const n of nested) {
+          if (!declared.has(n)) {
+            logger?.warn(
+              { skill: parsed.name, tool: n },
+              'skill tools/ contains tool not listed in SKILL.md frontmatter.tools',
+            );
+          }
+        }
+        for (const t of tools) {
+          if (nested.length > 0 && !nestedSet.has(t)) {
+            logger?.warn(
+              { skill: parsed.name, tool: t },
+              'SKILL.md frontmatter.tools lists tool with no matching tools/ directory',
+            );
           }
         }
       }

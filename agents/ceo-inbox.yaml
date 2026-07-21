@@ -51,7 +51,8 @@ pinned_skills:
   # exchange completes (see "Closing a multi-turn exchange" in the prompt).
   - context-bridge-release
   - context-bridge-clear
-  - task-management
+  - tasks
+  - documents
 
 allow_discovery: false
 

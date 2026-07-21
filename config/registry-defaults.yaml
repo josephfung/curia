@@ -11,10 +11,13 @@
 #
 # skills: — Phase 2 bundles (SKILL.md). Member tools still enroll via tools:.
 skills:
-  - task-management
+  - tasks
+  - documents
   - calendar
   # calendar skill may be enabled while calendar-* tools stay off until credentials
   # are configured (same pattern as the calendar agent).
+  # NOTE: tasks = heartbeat + task-* tools; documents = doc-* workspace (pin both for
+  #        the historical enable_task_management surface).
 tools:
   - tool-registry
   # Core communication

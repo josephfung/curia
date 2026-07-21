@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applyDocumentWorkspace,
   buildIndexProjection,
-  DOCUMENT_WORKSPACE_BLOCK,
-  DOCUMENT_WORKSPACE_TOOLS,
   documentPointerFromTaskContent,
   extractSectionContent,
   formatAccumulatorResumeBlock,
@@ -20,17 +17,7 @@ import {
   resolveWorkspacePrefixFromTaskContent,
   ttlDaysFrontmatterWarning,
 } from '../../../src/agents/document-workspace.js';
-import type { AgentYamlConfig } from '../../../src/agents/loader.js';
 import type { WorkingDocRow } from '../../../src/db/working-docs-repo.js';
-
-function cfg(overrides: Partial<AgentYamlConfig> = {}): AgentYamlConfig {
-  return {
-    name: 'test-agent',
-    model: { tier: 'standard' },
-    system_prompt: 'BASE PROMPT',
-    ...overrides,
-  };
-}
 
 function doc(path: string, overrides: Partial<WorkingDocRow> = {}): WorkingDocRow {
   return {
@@ -51,20 +38,6 @@ function doc(path: string, overrides: Partial<WorkingDocRow> = {}): WorkingDocRo
     ...overrides,
   };
 }
-
-describe('applyDocumentWorkspace', () => {
-  it('appends the block and pins doc skills', () => {
-    const r = applyDocumentWorkspace(cfg(), 'BASE PROMPT', ['x']);
-    expect(r.systemPrompt).toBe(`BASE PROMPT\n\n${DOCUMENT_WORKSPACE_BLOCK}`);
-    expect(r.pinnedSkills).toEqual(['x', ...DOCUMENT_WORKSPACE_TOOLS]);
-  });
-
-  it('does not duplicate already-pinned doc skills', () => {
-    const r = applyDocumentWorkspace(cfg(), 'P', ['doc-read', 'other']);
-    expect(r.pinnedSkills.filter(s => s === 'doc-read')).toHaveLength(1);
-    expect(r.pinnedSkills).toEqual(['doc-read', 'other', 'doc-list', 'doc-write', 'doc-search']);
-  });
-});
 
 describe('buildIndexProjection', () => {
   it('lists direct children with titles and types', () => {
