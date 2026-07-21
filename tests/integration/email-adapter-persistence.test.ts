@@ -144,9 +144,11 @@ describeIf('email-adapter watermark persistence (#846)', () => {
     const expectedWatermark = SEED_WATERMARK + 22;
 
     // First adapter run — ingest the three test messages.
+    // mockResolvedValueOnce for the seed poll; subsequent interval ticks (100ms)
+    // must still get an array or a late in-flight poll races stop() and rejects.
     const adapter1 = new EmailAdapter(makeAdapterConfig(
       new EventBus(pino({ level: 'silent' })),
-      makeGateway(vi.fn().mockResolvedValueOnce(msgs)),
+      makeGateway(vi.fn().mockResolvedValueOnce(msgs).mockResolvedValue([])),
       configStore,
     ));
     await adapter1.start();
@@ -157,7 +159,7 @@ describeIf('email-adapter watermark persistence (#846)', () => {
     expect(persisted).toBe(String(expectedWatermark));
 
     // Second adapter run — verify receivedAfter uses the persisted watermark.
-    const listFn = vi.fn().mockResolvedValueOnce([]);
+    const listFn = vi.fn().mockResolvedValue([]);
     const adapter2 = new EmailAdapter(makeAdapterConfig(
       new EventBus(pino({ level: 'silent' })),
       makeGateway(listFn),
@@ -182,7 +184,7 @@ describeIf('email-adapter watermark persistence (#846)', () => {
 
     const adapter = new EmailAdapter(makeAdapterConfig(
       bus,
-      makeGateway(vi.fn().mockResolvedValueOnce([makeTestMessage('msg-poll', SEED_WATERMARK + 1)])),
+      makeGateway(vi.fn().mockResolvedValueOnce([makeTestMessage('msg-poll', SEED_WATERMARK + 1)]).mockResolvedValue([])),
       configStore,
     ));
     await adapter.start();
@@ -206,7 +208,7 @@ describeIf('email-adapter watermark persistence (#846)', () => {
 
     const adapter = new EmailAdapter(makeAdapterConfig(
       new EventBus(pino({ level: 'silent' })),
-      makeGateway(vi.fn().mockResolvedValueOnce([])), // empty poll
+      makeGateway(vi.fn().mockResolvedValue([])), // empty poll (incl. interval ticks)
       configStore,
     ));
     await adapter.start();
