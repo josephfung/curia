@@ -23,7 +23,7 @@
     "rows": "object[]",
     "count": "number",
     "available": "boolean",
-    "displayTimezone": "string"
+    "displayTimezone": "string?"
   },
   "permissions": [],
   "secrets": [],

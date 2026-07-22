@@ -1,6 +1,6 @@
 {
   "name": "ceo-inbox-download-attachment",
-  "description": "Download an email attachment from the CEO's personal inbox by its Nylas attachment ID. Returns base64-encoded file content ready to pass directly to file-parse. Use ceo-inbox-read first to find attachment IDs. Enforces a 10 MB size limit.",
+  "description": "Download an email attachment from the CEO's personal inbox by its Nylas attachment ID. Returns the file content ready to pass to file-parse: when temporary-file storage succeeds the output provides a temporary file reference (temp_file_url) instead of content_base64; otherwise it returns base64-encoded content_base64. Use ceo-inbox-read first to find attachment IDs. Enforces a 10 MB size limit.",
   "version": "0.1.0",
   "sensitivity": "normal",
   "action_risk": "low",

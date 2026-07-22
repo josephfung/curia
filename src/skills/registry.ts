@@ -165,19 +165,48 @@ export class ToolRegistry {
 
         const VALID_PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'null']);
 
-        // "string|null", "string|null?" → JSON Schema type: ["string", "null"]
-        // Used when an optional field must accept explicit null (e.g. clear a FK).
-        const nullUnionMatch = /^([a-z]+)\|null$/.exec(baseType);
-        if (nullUnionMatch) {
-          const primary = nullUnionMatch[1]!;
-          if (!VALID_PRIMITIVE_TYPES.has(primary) || primary === 'null') {
-            throw new Error(
-              `Tool '${name}' input '${key}': invalid null-union primary type '${primary}' in '${typeStr}'. ` +
-              `Expected one of: string, number, integer, boolean, object.`,
-            );
+        // Pipe unions → JSON Schema type-array. Covers both the common
+        // "string|null" (optional field that accepts explicit null, e.g. clear a
+        // FK) and genuinely polymorphic inputs like the checkpoint tool's
+        // `cursor` (string | object | null) or `accumulator` (an inline
+        // "object[]" OR a single spilled pointer "object"). Each member is a
+        // primitive or an array type ("object[]"); an array member contributes
+        // "array" to the type list and its item type to a shared `items`.
+        if (baseType.includes('|')) {
+          const members = baseType.split('|').map((m) => m.trim());
+          const types: string[] = [];
+          let arrayItemType: string | undefined;
+          for (const member of members) {
+            if (member.endsWith('[]')) {
+              const itemType = member.slice(0, -2);
+              if (!itemType || !VALID_PRIMITIVE_TYPES.has(itemType)) {
+                throw new Error(
+                  `Tool '${name}' input '${key}': invalid array item type '${itemType}' in union '${typeStr}'. ` +
+                  `Expected one of: ${[...VALID_PRIMITIVE_TYPES].join(', ')}.`,
+                );
+              }
+              // JSON Schema `items` is shared across the type-array; two array
+              // members with different item types can't be represented — fail loudly.
+              if (arrayItemType && arrayItemType !== itemType) {
+                throw new Error(
+                  `Tool '${name}' input '${key}': conflicting array item types in union '${typeStr}'.`,
+                );
+              }
+              arrayItemType = itemType;
+              if (!types.includes('array')) types.push('array');
+            } else {
+              if (!VALID_PRIMITIVE_TYPES.has(member)) {
+                throw new Error(
+                  `Tool '${name}' input '${key}': invalid union member type '${member}' in '${typeStr}'. ` +
+                  `Expected one of: ${[...VALID_PRIMITIVE_TYPES].join(', ')}, or an array type (e.g. object[]).`,
+                );
+              }
+              if (!types.includes(member)) types.push(member);
+            }
           }
           properties[key] = {
-            type: [primary, 'null'],
+            type: types,
+            ...(arrayItemType ? { items: { type: arrayItemType } } : {}),
             ...(description ? { description } : {}),
           };
           if (!isOptional) {

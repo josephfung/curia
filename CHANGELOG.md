@@ -27,11 +27,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`pinned_skills`** — polymorphic (skill, tool, or MCP-projected skill); per-tool `action_risk` unchanged. (#1489, #1494)
 - **ADR-032** — polymorphic pins (skill/tool/MCP) + MCP servers project skills; prerequisites for #1494. (#1494)
 - **`tasks` skill** — adds `plan` and `checkpoint` members; `memory` includes `decay-warnings-list`. (#1494)
+- **`approve-grant-recommendation`** — `action_risk` raised low→critical, matching direct permission grants. (#1499)
 
 ### Fixed
 
 - **CodeRabbit Phase 2 review** — calendar risk/docs, manifests, registry install, skill-md booleans. (#1489)
 - **Tool input shorthand** — `string|null?` parses to JSON Schema `["string","null"]` (clearable fields). (#1489)
+- **Tool input shorthand** — general multi-type unions (`string|object|null`, `object[]|object`) parse to a JSON Schema type array. (#1499)
+- **`checkpoint` manifest** — declares polymorphic `cursor` (string/object/null) and `accumulator` (inline array or spilled pointer). (#1499)
+- **Tool manifests** — output/description contracts synced to handler behavior across ten skill tools; missing `capabilities` restored. (#1499)
 - **Smoke harness** — expands `pinned_skills` bundles via `resolvePinnedSkills` like production. (#1489)
 - **Email poll tests** — interval ticks after `mockResolvedValueOnce` no longer reject the suite. (#1489)
 - **`scheduler-list`** — bound and trim results so a large jobs table no longer overflows the model context. (#1487)

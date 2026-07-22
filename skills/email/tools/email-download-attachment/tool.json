@@ -1,6 +1,6 @@
 {
   "name": "email-download-attachment",
-  "description": "Download an email attachment by its Nylas attachment ID and return the file content as base64. Use email-get first to get the attachment ID. Pass the returned content_base64 and content_type directly to file-parse for processing. Enforces a 10 MB size limit.",
+  "description": "Download an email attachment by its Nylas attachment ID. Use email-get first to get the attachment ID. The output provides EITHER temp_file_url (a file:// URL to the bytes on disk, returned when temp storage is available) OR content_base64 (base64-encoded file content, returned only when temp storage is unavailable) — never both, to stay under the output size limit. When content_base64 is present, pass it and content_type directly to file-parse for processing; when only temp_file_url is present, use it for binary-safe Drive uploads (see the temp_file_url output field). Enforces a 10 MB size limit.",
   "version": "1.0.0",
   "sensitivity": "normal",
   "action_risk": "low",

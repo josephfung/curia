@@ -19,7 +19,7 @@
     "count": "number",
     "hasMore": "boolean",
     "available": "boolean",
-    "displayTimezone": "string"
+    "displayTimezone": "string?"
   },
   "permissions": [],
   "secrets": [],

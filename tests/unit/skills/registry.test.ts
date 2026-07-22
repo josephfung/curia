@@ -180,6 +180,56 @@ describe('ToolRegistry', () => {
     expect(tools[0]!.input_schema.required).toEqual(['required_note']);
   });
 
+  it('converts multi-type unions (string|object|null) to a JSON Schema type array', () => {
+    // Polymorphic inputs: the checkpoint tool's `cursor` is string | object | null
+    // (ResumableCursor), which the shorthand must express so the LLM isn't told the
+    // value must be a string. Generalizes the string|null union to arbitrary members.
+    registry.register(makeManifest({
+      name: 'union-skill',
+      description: 'Accepts a polymorphic cursor',
+      inputs: {
+        cursor: 'string|object|null? (opaque resume position)',
+      },
+    }), stubHandler);
+    const tools = registry.toToolDefinitions(['union-skill']);
+    const props = tools[0]!.input_schema.properties;
+    expect(props.cursor).toEqual({
+      type: ['string', 'object', 'null'],
+      description: 'opaque resume position',
+    });
+    // Optional → not required
+    expect(tools[0]!.input_schema.required).toEqual([]);
+  });
+
+  it('converts an array|object union (object[]|object) to a type array with items', () => {
+    // The checkpoint tool's `accumulator` is either an inline object array or a single
+    // spilled document-pointer object. The array member contributes `items`.
+    registry.register(makeManifest({
+      name: 'array-union-skill',
+      description: 'Accepts an inline array or a single pointer object',
+      inputs: {
+        accumulator: 'object[]|object? (inline results, or a spilled pointer)',
+      },
+    }), stubHandler);
+    const tools = registry.toToolDefinitions(['array-union-skill']);
+    const props = tools[0]!.input_schema.properties;
+    expect(props.accumulator).toEqual({
+      type: ['array', 'object'],
+      items: { type: 'object' },
+      description: 'inline results, or a spilled pointer',
+    });
+  });
+
+  it('throws on a union member with an invalid primitive type', () => {
+    registry.register(makeManifest({
+      name: 'bad-union-skill',
+      description: 'Bad union',
+      inputs: { cursor: 'string|widget' },
+    }), stubHandler);
+    expect(() => registry.toToolDefinitions(['bad-union-skill']))
+      .toThrow(/invalid/i);
+  });
+
   it('throws on invalid primitive type in skill manifest (e.g. em-dash format)', () => {
     // Regression test: "string — description" was the format that caused a production
     // outage — the em-dash made the parser capture "string — description" as the type

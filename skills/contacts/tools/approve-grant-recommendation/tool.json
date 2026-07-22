@@ -3,7 +3,7 @@
   "description": "Approve a pending grant recommendation. Marks the recommendation as approved and immediately grants the underlying permission to the contact. Use when the CEO says yes to a suggested grant ('yes, grant Dana scheduling access', 'approve that recommendation'). recommendation_id must be the UUID from the recommendation.",
   "version": "0.1.1",
   "sensitivity": "elevated",
-  "action_risk": "low",
+  "action_risk": "critical",
   "inputs": {
     "recommendation_id": "string (UUID of the pending grant recommendation)"
   },
