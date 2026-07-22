@@ -1,6 +1,6 @@
 {
   "name": "memory-store",
-  "description": "Write a named fact about a known entity to the knowledge graph. Resolves the entity by name (finding or auto-creating the KG node) or by node ID. Returns one of five outcomes: created (new fact node), updated (near-duplicate merged), conflict (contradicts an existing attribute fact — surface to CEO before proceeding), entity_not_found (UUID entity gone — retry with name), or rate_limited (write limit reached for this task). When multiple entities share the same name and none matches the expected type, returns an ambiguous response with candidates for disambiguation.",
+  "description": "Write a named fact about a known entity to the knowledge graph. Resolves the entity by name (finding or auto-creating the KG node) or by node ID. Returns one of several outcomes: created (new fact node, stored), updated (near-duplicate merged, stored), auto_resolved (contradiction auto-resolved in favor of the incoming fact because the existing one had lower confidence, stored), auto_rejected (incoming fact discarded because an existing contradicting fact had higher confidence, not stored), conflict (contradicts an existing attribute fact of comparable confidence — surface to CEO before proceeding, not stored), entity_not_found (UUID entity gone — retry with name, not stored), rate_limited (write limit reached for this task, not stored), or redirected_to_contact (a canonical contact attribute was written to the contact record instead of the KG, not stored). When multiple entities share the same name and none matches the expected type, returns an ambiguous response with candidates for disambiguation — that response omits both action and stored.",
   "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "low",
@@ -17,12 +17,12 @@
     "alias_for": "string? (original name variant the CEO used, supplied when re-submitting after disambiguation — e.g. 'Darlise' when the confirmed entity is 'Darlise Restaurant'. The handler stores this as an alias on the confirmed entity so future calls with the same variant resolve instantly via exact match rather than embedding search)"
   },
   "outputs": {
-    "stored": "boolean — true when the fact was persisted (created or updated)",
-    "action": "string — one of: created, updated, conflict, entity_not_found, rate_limited, redirected_to_contact",
+    "stored": "boolean — true when the fact was persisted (created, updated, or auto_resolved); false otherwise. Omitted entirely on the ambiguous response",
+    "action": "string — one of: created, updated, auto_resolved, auto_rejected, conflict, entity_not_found, rate_limited, redirected_to_contact. Omitted entirely on the ambiguous response",
     "node_id": "string — ID of the persisted or existing fact node (present when stored is true)",
     "sensitivity": "string — the sensitivity level actually assigned to the node (present when stored is true)",
-    "reason": "string — human-readable explanation when action is conflict, entity_not_found, or rate_limited",
-    "existing_node_id": "string — ID of the contradicting fact node (present when action is conflict)",
+    "reason": "string — human-readable explanation when action is conflict, auto_rejected, entity_not_found, or rate_limited",
+    "existing_node_id": "string — ID of the contradicting fact node (present when action is conflict or auto_rejected)",
     "contact_id": "string — ID of the contact record that was updated (present when action is redirected_to_contact)",
     "ambiguous": "boolean — true when multiple entities matched the given name with no type winner",
     "candidates": "array of {id, label, type} — populated when ambiguous is true"

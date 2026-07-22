@@ -5,8 +5,8 @@
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
-    "subjects": "string[]",
-    "subject": "string"
+    "subjects": "string[]?",
+    "subject": "string?"
   },
   "outputs": {
     "released": "number",

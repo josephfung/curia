@@ -6,11 +6,11 @@
   "action_risk": "low",
   "inputs": {
     "entry_id": "string",
-    "reply": "string"
+    "reply": "string?"
   },
   "outputs": {
     "released": "string",
-    "task_id": "string"
+    "task_id": "string?"
   },
   "permissions": [],
   "secrets": [],

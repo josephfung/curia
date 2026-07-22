@@ -224,7 +224,8 @@ pinned_skills:
   - documents
 ```
 
-- **`tasks`** expands to `task-create` / `task-list` / `task-update` / `task-complete`,
+- **`tasks`** expands to `task-create` / `task-list` / `task-update` / `task-complete`
+  plus the sibling tools `plan` and `checkpoint`,
   injects the discipline block from `skills/tasks/SKILL.md`, and marks the agent
   heartbeat-eligible for `BacklogHeartbeat`.
 - **`documents`** expands to `doc-*`, injects the workspace block from

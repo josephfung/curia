@@ -17,7 +17,7 @@
     "truncated": "boolean",
     "chain_broken": "boolean",
     "available": "boolean",
-    "displayTimezone": "string"
+    "displayTimezone": "string?"
   },
   "permissions": [],
   "secrets": [],

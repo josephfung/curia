@@ -7,6 +7,9 @@
   "outputs": {
     "score": "number",
     "band": "string",
+    "lastSetBy": "string",
+    "trend": "string | null",
+    "scoredActionCount": "number",
     "summary": "string"
   },
   "permissions": [],

@@ -8,7 +8,8 @@
     "job_id": "string"
   },
   "outputs": {
-    "cancelled": "boolean"
+    "cancelled": "boolean",
+    "jobId": "string"
   },
   "permissions": [],
   "secrets": [],

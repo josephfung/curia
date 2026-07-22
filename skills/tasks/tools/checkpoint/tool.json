@@ -6,10 +6,10 @@
   "action_risk": "low",
   "inputs": {
     "task_id": "string?",
-    "cursor": "string?",
+    "cursor": "string|object|null? (opaque resume position — a string token or a structured object; null to clear)",
     "done": "number",
     "total": "number",
-    "accumulator": "object[]? (optional inline slice results — defaults to [] when omitted; after spill use { kind: document, path, section? } object instead)",
+    "accumulator": "object[]|object? (optional inline slice results as an object array — defaults to [] when omitted; after spill pass a single { kind: document, path, section? } pointer object instead)",
     "last_slice_units": "number",
     "next": "string"
   },

@@ -10,7 +10,8 @@
   "outputs": {
     "score": "number",
     "band": "string",
-    "previous_score": "number"
+    "previous_score": "number | null",
+    "summary": "string"
   },
   "permissions": [],
   "secrets": [],

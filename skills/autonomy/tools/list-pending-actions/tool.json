@@ -6,7 +6,9 @@
   "action_risk": "none",
   "inputs": {},
   "outputs": {
-    "pending": "object[] (list of pending approval requests)"
+    "pending": "object[] (list of pending approval requests)",
+    "displayTimezone": "string?",
+    "message": "string?"
   },
   "permissions": [],
   "secrets": [],
