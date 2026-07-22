@@ -63,6 +63,16 @@ export function readActiveSkillNames(
   return readActiveSkillsBlock(progress)?.skills.map((s) => s.name) ?? [];
 }
 
+/** True when both name lists contain the same set (order-independent). */
+export function activeSkillNameSetsEqual(
+  a: readonly string[],
+  b: readonly string[],
+): boolean {
+  if (a.length !== b.length) return false;
+  const setB = new Set(b);
+  return a.every((name) => setB.has(name));
+}
+
 /**
  * Merge `skillName` into the active set (MRU at front), capped at ACTIVE_SKILLS_CAP.
  * Drops oldest when over cap.
@@ -79,22 +89,41 @@ export function activateSkillInBlock(
   return { skills };
 }
 
-/** Replace the active set wholesale (wake re-selection). */
+/**
+ * Reconcile the wake-selected name list into a block.
+ * Preserves `activatedAt` for skills already present (stable prompt-cache prefix);
+ * only stamps `now` for newly added names. Does not restamp survivors.
+ */
+export function reconcileActiveSkillsBlock(
+  selectedNames: string[],
+  existing: ActiveSkillsBlock | null | undefined,
+  now: string = new Date().toISOString(),
+  cap: number = ACTIVE_SKILLS_CAP,
+): ActiveSkillsBlock {
+  const priorByName = new Map((existing?.skills ?? []).map((s) => [s.name, s]));
+  const seen = new Set<string>();
+  const skills: ActiveSkillEntry[] = [];
+  for (const raw of selectedNames) {
+    const name = raw.trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const prior = priorByName.get(name);
+    skills.push({ name, activatedAt: prior?.activatedAt ?? now });
+    if (skills.length >= cap) break;
+  }
+  return { skills };
+}
+
+/**
+ * @deprecated Prefer reconcileActiveSkillsBlock — this restamps every activatedAt
+ * and should not be used on the wake path (prompt-cache / bus churn).
+ */
 export function replaceActiveSkillsBlock(
   names: string[],
   activatedAt: string = new Date().toISOString(),
   cap: number = ACTIVE_SKILLS_CAP,
 ): ActiveSkillsBlock {
-  const seen = new Set<string>();
-  const skills: ActiveSkillEntry[] = [];
-  for (const raw of names) {
-    const name = raw.trim();
-    if (!name || seen.has(name)) continue;
-    seen.add(name);
-    skills.push({ name, activatedAt });
-    if (skills.length >= cap) break;
-  }
-  return { skills };
+  return reconcileActiveSkillsBlock(names, null, activatedAt, cap);
 }
 
 export function activeSkillsBlockBytes(block: ActiveSkillsBlock): number {

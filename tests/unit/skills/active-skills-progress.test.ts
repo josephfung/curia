@@ -5,6 +5,8 @@ import {
   readActiveSkillNames,
   readActiveSkillsBlock,
   replaceActiveSkillsBlock,
+  reconcileActiveSkillsBlock,
+  activeSkillNameSetsEqual,
   ACTIVE_SKILLS_CAP,
 } from '../../../src/db/active-skills-progress.js';
 
@@ -46,6 +48,29 @@ describe('active-skills-progress', () => {
   it('replaceActiveSkillsBlock dedupes and caps', () => {
     const block = replaceActiveSkillsBlock(['tasks', 'tasks', 'calendar', 'x', 'y', 'z'], 't', 3);
     expect(block.skills.map((s) => s.name)).toEqual(['tasks', 'calendar', 'x']);
+  });
+
+  it('reconcileActiveSkillsBlock preserves activatedAt for survivors', () => {
+    const existing = {
+      skills: [
+        { name: 'tasks', activatedAt: '2026-07-21T00:00:00.000Z' },
+        { name: 'calendar', activatedAt: '2026-07-21T01:00:00.000Z' },
+      ],
+    };
+    const next = reconcileActiveSkillsBlock(
+      ['calendar', 'email'],
+      existing,
+      '2026-07-22T12:00:00.000Z',
+    );
+    expect(next.skills).toEqual([
+      { name: 'calendar', activatedAt: '2026-07-21T01:00:00.000Z' },
+      { name: 'email', activatedAt: '2026-07-22T12:00:00.000Z' },
+    ]);
+  });
+
+  it('activeSkillNameSetsEqual is order-independent', () => {
+    expect(activeSkillNameSetsEqual(['a', 'b'], ['b', 'a'])).toBe(true);
+    expect(activeSkillNameSetsEqual(['a'], ['a', 'b'])).toBe(false);
   });
 
   it('prepareActiveSkillsBlock rejects overflow', () => {

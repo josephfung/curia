@@ -164,9 +164,11 @@ export function resolveSkillActivation(options: {
 }
 
 /**
- * On wake: treat stored active skills as a strong prior, re-check relevance
- * against the current step text, and cap the set. Pinned skills are excluded
- * (already eager in the bootstrap prompt).
+ * On wake: treat stored active skills as a strong prior, drop skills that no
+ * longer share a whole-token overlap (≥3 chars) with the current step text,
+ * and cap the set. When *no* stored skill is relevant, fall back to MRU up to
+ * cap (still a strong prior, just without a relevance signal). Pinned skills
+ * are excluded (already eager in the bootstrap prompt).
  */
 export function selectActiveSkillsForWake(options: {
   progress: Record<string, unknown> | undefined | null;
@@ -183,7 +185,7 @@ export function selectActiveSkillsForWake(options: {
   const stored = readActiveSkillsBlock(options.progress)?.skills ?? [];
   if (stored.length === 0) return [];
 
-  const relevance = options.relevanceText.toLowerCase();
+  const relevanceTokens = tokenizeForRelevance(options.relevanceText);
   const scored: Array<{ name: string; relevant: boolean; activatedAt: string }> = [];
 
   for (const entry of stored) {
@@ -191,25 +193,39 @@ export function selectActiveSkillsForWake(options: {
     const skill = options.skillRegistry.get(entry.name);
     if (!skill || skill.synthetic) continue;
 
-    const haystack = [
+    const haystackTokens = tokenizeForRelevance([
       skill.manifest.name,
       skill.manifest.description,
       ...skill.manifest.tools,
-    ].join(' ').toLowerCase();
-    const relevant = relevance.length === 0
-      || haystack.split(/[^a-z0-9]+/).some((token) => token.length >= 3 && relevance.includes(token))
-      || relevance.split(/[^a-z0-9]+/).some((token) => token.length >= 3 && haystack.includes(token));
+    ].join(' '));
+    const relevant = relevanceTokens.size === 0
+      || intersectsTokens(relevanceTokens, haystackTokens);
 
     scored.push({ name: entry.name, relevant, activatedAt: entry.activatedAt });
   }
 
-  // Relevant first (strong prior that still matches), then MRU by activatedAt.
-  scored.sort((a, b) => {
-    if (a.relevant !== b.relevant) return a.relevant ? -1 : 1;
-    return b.activatedAt.localeCompare(a.activatedAt);
-  });
+  const relevant = scored.filter((s) => s.relevant);
+  const pool = relevant.length > 0 ? relevant : scored;
 
-  return scored.slice(0, cap).map((s) => s.name);
+  // MRU within the chosen pool.
+  pool.sort((a, b) => b.activatedAt.localeCompare(a.activatedAt));
+  return pool.slice(0, cap).map((s) => s.name);
+}
+
+/** Whole tokens of length ≥ 3 — avoids "task" matching "multitask". */
+function tokenizeForRelevance(text: string): Set<string> {
+  const tokens = new Set<string>();
+  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length >= 3) tokens.add(raw);
+  }
+  return tokens;
+}
+
+function intersectsTokens(a: Set<string>, b: Set<string>): boolean {
+  for (const t of a) {
+    if (b.has(t)) return true;
+  }
+  return false;
 }
 
 /** Format a system-message block for a lazily activated skill's instructions. */

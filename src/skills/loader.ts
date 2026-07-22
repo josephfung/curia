@@ -25,6 +25,10 @@ import type { ManifestMetadata } from '../registry/types.js';
  *
  * Services NOT in this list (contactService, entityContextAssembler, agentPersona)
  * are universal — available to every skill without declaration.
+ *
+ * Note: declaring `skillRegistry` also injects `toolRegistry` on the context
+ * (ExecutionLayer special-case) so skill-activate can resolve member tools under
+ * allowed_callers without a separate capability. `toolRegistry` is not listed here.
  */
 export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'bus', 'agentRegistry', 'outboundGateway',

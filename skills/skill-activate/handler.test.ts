@@ -54,7 +54,7 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input: {},
     toolName: 'skill-activate',
-    toolVersion: '0.1.0',
+    toolVersion: '0.1.1',
     log: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -97,7 +97,7 @@ describe('skill-activate handler', () => {
     expect(data.skippedTools).toEqual(['secret-admin']);
   });
 
-  it('persists activeSkills on a bound task', async () => {
+  it('persists activeSkills only for the bound task from taskMetadata', async () => {
     const taskId = '11111111-1111-4111-8111-111111111111';
     const progress: Record<string, unknown> = {};
     const setActiveSkillsBlock = vi.fn(async (_id: string, block: unknown) => {
@@ -105,7 +105,10 @@ describe('skill-activate handler', () => {
       return { task: { id: taskId, progress }, block };
     });
     const ctx = makeCtx({
-      input: { skill: 'tasks', task_id: taskId },
+      input: { skill: 'tasks' },
+      taskMetadata: {
+        boundTask: { taskId, errorBudget: {}, progress: {} },
+      },
       taskRepo: {
         getTask: async () => ({ id: taskId, progress, status: 'open' }),
         setActiveSkillsBlock,
@@ -114,7 +117,23 @@ describe('skill-activate handler', () => {
     const result = await handler.execute(ctx);
     expect(result.success).toBe(true);
     expect(setActiveSkillsBlock).toHaveBeenCalledOnce();
+    expect(setActiveSkillsBlock.mock.calls[0]![0]).toBe(taskId);
     expect(readActiveSkillsBlock(progress)?.skills.map((s) => s.name)).toEqual(['tasks']);
+  });
+
+  it('ignores LLM-supplied task_id and does not write without a bound task', async () => {
+    const setActiveSkillsBlock = vi.fn();
+    const ctx = makeCtx({
+      // LLM might still hallucinate task_id — must be ignored.
+      input: { skill: 'tasks', task_id: '11111111-1111-4111-8111-111111111111' },
+      taskRepo: {
+        getTask: vi.fn(),
+        setActiveSkillsBlock,
+      } as unknown as ToolContext['taskRepo'],
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(setActiveSkillsBlock).not.toHaveBeenCalled();
   });
 
   it('rejects unknown skills', async () => {
