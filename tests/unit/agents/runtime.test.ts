@@ -1691,6 +1691,233 @@ describe('AgentRuntime tool-use loop', () => {
   });
 });
 
+// -- Phase 3a skill activation runtime (#1495) --
+
+describe('AgentRuntime skill-activate (#1495)', () => {
+  const skillActivateToolDef = {
+    name: 'skill-activate',
+    description: 'Activate a skill',
+    input_schema: {
+      type: 'object' as const,
+      properties: { skill: { type: 'string' } },
+      required: ['skill'],
+    },
+  };
+  const taskCreateToolDef = {
+    name: 'task-create',
+    description: 'Create a task',
+    input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+  };
+  const taskListToolDef = {
+    name: 'task-list',
+    description: 'List tasks',
+    input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+  };
+
+  it('splices instruction block and expands workingToolDefs after skill-activate', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const chatCalls: Array<{ messages: unknown[]; tools?: Array<{ name: string }> }> = [];
+    let callCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: async (params) => {
+        callCount++;
+        chatCalls.push({
+          messages: params.messages as unknown[],
+          tools: params.tools?.map((t) => ({ name: t.name })),
+        });
+        if (callCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-1', name: 'skill-activate', input: { skill: 'tasks' } }],
+            usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Activated and ready.',
+          usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      },
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({
+        success: true,
+        data: {
+          _curia_protocol: 'skill_activation',
+          skill: 'tasks',
+          tools: ['task-create', 'task-list'],
+          skippedTools: [],
+          instructions: '## Task Management\nDecide, don\'t drop.',
+          instructionsLoaded: true,
+        },
+      }),
+      getToolDefinitions: vi.fn((names: string[]) => {
+        const defs = [taskCreateToolDef, taskListToolDef];
+        return defs.filter((d) => names.includes(d.name));
+      }),
+    } as unknown as ExecutionLayer;
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [skillActivateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-activate-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Track this work',
+      senderContext: CONFIRMED_SENDER_CONTEXT,
+      parentEventId: 'parent-activate-1',
+    }));
+
+    expect(mockExecution.invoke).toHaveBeenCalledWith(
+      'skill-activate',
+      { skill: 'tasks' },
+      expect.anything(),
+      expect.objectContaining({ agentId: 'coordinator' }),
+    );
+    expect(chatCalls).toHaveLength(2);
+
+    // Second LLM round sees expanded member tools.
+    const secondTools = chatCalls[1]!.tools?.map((t) => t.name) ?? [];
+    expect(secondTools).toContain('skill-activate');
+    expect(secondTools).toContain('task-create');
+    expect(secondTools).toContain('task-list');
+
+    // Instruction block spliced as a system message.
+    const secondMessages = chatCalls[1]!.messages as Array<{ role: string; content: unknown }>;
+    const instructionMsg = secondMessages.find(
+      (m) => m.role === 'system'
+        && typeof m.content === 'string'
+        && m.content.includes('[Activated skill: tasks]')
+        && m.content.includes('Task Management'),
+    );
+    expect(instructionMsg).toBeDefined();
+  });
+
+  it('re-loads active skills on wake without rewriting when the set is unchanged', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    const chatCalls: Array<{ tools?: Array<{ name: string }>; messages: Array<{ role: string; content: unknown }> }> = [];
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: async (params) => {
+        chatCalls.push({
+          tools: params.tools?.map((t) => ({ name: t.name })),
+          messages: params.messages as Array<{ role: string; content: unknown }>,
+        });
+        return {
+          type: 'text' as const,
+          content: 'Resumed.',
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      },
+    };
+
+    const setActiveSkillsBlock = vi.fn();
+    const taskId = '22222222-2222-4222-8222-222222222222';
+    const activeSkills = {
+      skills: [{ name: 'tasks', activatedAt: '2026-07-21T00:00:00.000Z' }],
+    };
+    const mockTaskRepo = {
+      getTask: vi.fn().mockResolvedValue({
+        id: taskId,
+        status: 'open',
+        progress: { activeSkills },
+      }),
+      setActiveSkillsBlock,
+    };
+
+    const { SkillRegistry } = await import('../../../src/skills/skill-registry.js');
+    const skillRegistry = new SkillRegistry();
+    skillRegistry.register(
+      {
+        name: 'tasks',
+        description: 'Defer and track multi-step work with tasks',
+        tools: ['task-create', 'task-list'],
+        instructions: '## Task Management\nOwn the how.',
+      },
+      '/tmp/tasks',
+    );
+
+    const mockExecution = {
+      invoke: vi.fn(),
+      getToolDefinitions: vi.fn((names: string[]) => {
+        const defs = [taskCreateToolDef, taskListToolDef];
+        return defs.filter((d) => names.includes(d.name));
+      }),
+      resolveSkillActivationForAgent: vi.fn().mockReturnValue({
+        skill: 'tasks',
+        tools: ['task-create', 'task-list'],
+        skippedTools: [],
+        instructions: '## Task Management\nOwn the how.',
+      }),
+    } as unknown as ExecutionLayer;
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [skillActivateToolDef],
+      skillRegistry,
+      taskRepo: mockTaskRepo as never,
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-wake-1',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: JSON.stringify({ task_id: taskId }),
+      metadata: {
+        boundTask: {
+          taskId,
+          progress: { activeSkills },
+        },
+      },
+      parentEventId: 'parent-wake-1',
+    }));
+
+    expect(mockExecution.resolveSkillActivationForAgent).toHaveBeenCalledWith('tasks', 'coordinator');
+    expect(setActiveSkillsBlock).not.toHaveBeenCalled(); // unchanged set → no write
+
+    const tools = chatCalls[0]!.tools?.map((t) => t.name) ?? [];
+    expect(tools).toContain('task-create');
+    expect(tools).toContain('task-list');
+
+    const sys = chatCalls[0]!.messages.find(
+      (m) => m.role === 'system'
+        && typeof m.content === 'string'
+        && m.content.includes('[Activated skill: tasks]'),
+    );
+    expect(sys).toBeDefined();
+  });
+});
+
 // -- Error budget enforcement tests --
 
 describe('AgentRuntime error budget', () => {

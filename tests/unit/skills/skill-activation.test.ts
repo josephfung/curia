@@ -213,7 +213,7 @@ describe('selectActiveSkillsForWake', () => {
     expect(selected).toEqual(['tasks']);
   });
 
-  it('caps and prefers relevant over irrelevant', () => {
+  it('caps and drops irrelevant when any skill still matches', () => {
     const { skills } = setup();
     skills.register(
       {
@@ -243,9 +243,46 @@ describe('selectActiveSkillsForWake', () => {
       pinnedSkillNames: [],
       skillRegistry: skills,
       relevanceText: 'reschedule the calendar meeting',
-      cap: 2,
+      cap: 5,
     });
-    expect(selected[0]).toBe('calendar');
-    expect(selected).toHaveLength(2);
+    // Only calendar shares a whole token with the step — email/tasks are dropped.
+    expect(selected).toEqual(['calendar']);
+  });
+
+  it('does not match substring tokens (multitask ≠ task)', () => {
+    const { skills } = setup();
+    let block = activateSkillInBlock(null, 'tasks', '2026-07-21T00:00:00.000Z');
+    const selected = selectActiveSkillsForWake({
+      progress: { activeSkills: block },
+      pinnedSkillNames: [],
+      skillRegistry: skills,
+      relevanceText: 'finish the multitask spreadsheet review',
+      cap: 5,
+    });
+    // No whole-token overlap → fall back to MRU (tasks still returned).
+    expect(selected).toEqual(['tasks']);
+  });
+
+  it('falls back to MRU when nothing is relevant', () => {
+    const { skills } = setup();
+    skills.register(
+      {
+        name: 'calendar',
+        description: 'Google Calendar scheduling',
+        tools: [],
+        instructions: '',
+      },
+      '/tmp/calendar',
+    );
+    let block = activateSkillInBlock(null, 'tasks', '2026-07-21T00:00:00.000Z');
+    block = activateSkillInBlock(block, 'calendar', '2026-07-21T01:00:00.000Z');
+    const selected = selectActiveSkillsForWake({
+      progress: { activeSkills: block },
+      pinnedSkillNames: [],
+      skillRegistry: skills,
+      relevanceText: 'xyzzy completely unrelated',
+      cap: 1,
+    });
+    expect(selected).toEqual(['calendar']); // MRU
   });
 });

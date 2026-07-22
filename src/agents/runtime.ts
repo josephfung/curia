@@ -46,7 +46,10 @@ import {
 } from '../skills/skill-activation.js';
 import {
   prepareActiveSkillsBlock,
-  replaceActiveSkillsBlock,
+  readActiveSkillNames,
+  readActiveSkillsBlock,
+  reconcileActiveSkillsBlock,
+  activeSkillNameSetsEqual,
 } from '../db/active-skills-progress.js';
 import { readResumableBlock, type ResumableProgressBlock } from '../db/resumable-progress.js';
 import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
@@ -525,17 +528,25 @@ export class AgentRuntime {
         for (const block of instructionBlocks) {
           effectiveSystemPrompt += `\n\n${block}`;
         }
-        // Persist the re-selected set so dropped (irrelevant / over-cap) skills stay dropped.
+        // Persist only when the re-selected set actually changed — a no-op write
+        // would bump updated_at + publish task-updated on every wake (#1410/#1064).
+        // reconcileActiveSkillsBlock preserves activatedAt for survivors (prompt-cache).
         if (this.config.taskRepo) {
-          try {
-            const next = replaceActiveSkillsBlock(wakeSkills);
-            const prepared = prepareActiveSkillsBlock(next);
-            if (prepared.ok) {
-              await this.config.taskRepo.setActiveSkillsBlock(boundTaskCtx.taskId, next, agentId);
-              boundTaskCtx = { ...boundTaskCtx, progress: { ...boundTaskCtx.progress, activeSkills: next } };
+          const storedNames = readActiveSkillNames(boundTaskCtx.progress);
+          if (!activeSkillNameSetsEqual(wakeSkills, storedNames)) {
+            try {
+              const next = reconcileActiveSkillsBlock(
+                wakeSkills,
+                readActiveSkillsBlock(boundTaskCtx.progress),
+              );
+              const prepared = prepareActiveSkillsBlock(next);
+              if (prepared.ok) {
+                await this.config.taskRepo.setActiveSkillsBlock(boundTaskCtx.taskId, next, agentId);
+                boundTaskCtx = { ...boundTaskCtx, progress: { ...boundTaskCtx.progress, activeSkills: next } };
+              }
+            } catch (err) {
+              logger.warn({ err, agentId, taskId: boundTaskCtx.taskId }, 'Failed to persist re-selected activeSkills on wake');
             }
-          } catch (err) {
-            logger.warn({ err, agentId, taskId: boundTaskCtx.taskId }, 'Failed to persist re-selected activeSkills on wake');
           }
         }
         logger.info(

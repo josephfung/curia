@@ -125,7 +125,7 @@ Two orthogonal axes (design §6 / #1495):
 ### Tiered lookup
 
 1. **Tier 0 — pinned skills** — expanded at bootstrap via `resolvePinnedSkills` (member tools + instruction blocks). Unchanged by activation.
-2. **Tier 1 — task-active skills** — recorded in `tasks.progress.activeSkills`. On each wake, re-loaded as a strong prior, re-checked for relevance against the current step, and capped (default 5).
+2. **Tier 1 — task-active skills** — recorded in `tasks.progress.activeSkills`. On each wake, re-loaded as a strong prior: skills with no whole-token overlap (≥3 chars) against the current step are dropped when any other active skill still matches; if none match, MRU fills up to the cap (default 5). Unchanged sets are not re-written (no `updated_at` / bus churn).
 3. **Tier 2 — discovery** — only when Tiers 0/1 miss and the agent has `allow_discovery: true`.
 
 ### Pinned skills (Tier 0)
