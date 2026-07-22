@@ -15,27 +15,18 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Skill (bundle) model** — `SKILL.md` + nested `tools/`; `pinned_skills` expands bundles; `skill_registry` table. (#1489)
-- **Skill activation runtime** — `toolSearch` returns `kind:"skill"`; `skill-activate` loads tools + instructions; Tier 1 persists in `progress.activeSkills`. (#1495)
-- **Native skill bundles** — email, ceo-inbox, contacts, autonomy, diagnostics, scheduler, web, memory, learning, context-bridge, executive-profile, setup. (#1494)
-- **MCP-as-skill** — each connected MCP server projects a pinnable skill into `SkillRegistry`. (#1494)
+- **Skills-as-bundles** — `SKILL.md` + nested `tools/`; `pinned_skills` expands a bundle to its member tools + instructions; `skill_registry` table. Native bundles: email, ceo-inbox, contacts, autonomy, diagnostics, scheduler, web, memory, learning, context-bridge, executive-profile, setup. (#1489, #1494)
+- **Runtime skill activation & MCP-as-skill** — `toolSearch` returns `kind:"skill"`; `skill-activate` loads a skill's tools + instructions (Tier 1 persists in `progress.activeSkills`); each connected MCP server projects a pinnable skill. (#1494, #1495)
 
 ### Changed
 
-- **Tools vs skills vocabulary** — atoms are **tools** (`tool.json`, `ToolRegistry`); audit readers dual-match legacy `skill.*`. (#1485)
-- **`enable_task_management`** — retired; pin `tasks` + `documents` skills instead. (#1489)
-- **`pinned_skills`** — polymorphic (skill, tool, or MCP-projected skill); per-tool `action_risk` unchanged. (#1489, #1494)
-- **ADR-032** — polymorphic pins (skill/tool/MCP) + MCP servers project skills; prerequisites for #1494. (#1494)
-- **`tasks` skill** — adds `plan` and `checkpoint` members; `memory` includes `decay-warnings-list`. (#1494)
+- **Tools vs skills vocabulary** — atoms are **tools** (`tool.json`, `ToolRegistry`; audit readers dual-match legacy `skill.*`); collections are **skills**. (#1485, #1489; ADR-031)
+- **Polymorphic pins** — a pin resolves a skill, a single tool, or an MCP-projected skill (per-tool `action_risk` preserved); `enable_task_management` retired for pinning `tasks` + `documents`; `tasks` gains `plan`/`checkpoint`, `memory` gains `decay-warnings-list`. (#1489, #1494; ADR-032)
 - **`approve-grant-recommendation`** — `action_risk` raised low→critical, matching direct permission grants. (#1499)
 
 ### Fixed
 
-- **CodeRabbit Phase 2 review** — calendar risk/docs, manifests, registry install, skill-md booleans. (#1489)
-- **Tool input shorthand** — `string|null?` parses to JSON Schema `["string","null"]` (clearable fields). (#1489)
-- **Tool input shorthand** — general multi-type unions (`string|object|null`, `object[]|object`) parse to a JSON Schema type array. (#1499)
-- **`checkpoint` manifest** — declares polymorphic `cursor` (string/object/null) and `accumulator` (inline array or spilled pointer). (#1499)
-- **Tool manifests** — output/description contracts synced to handler behavior across ten skill tools; missing `capabilities` restored. (#1499)
+- **Bundling review fixes** — calendar risk/docs, manifest & registry-install correctness, skill-md booleans, tool-input shorthand (`string|null` + polymorphic `string|object|null`/`object[]|object` unions), and manifest output/description contracts synced to handlers. (#1489, #1499)
 - **Smoke harness** — expands `pinned_skills` bundles via `resolvePinnedSkills` like production. (#1489)
 - **Email poll tests** — interval ticks after `mockResolvedValueOnce` no longer reject the suite. (#1489)
 - **`scheduler-list`** — bound and trim results so a large jobs table no longer overflows the model context. (#1487)
