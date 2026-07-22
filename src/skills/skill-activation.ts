@@ -86,8 +86,8 @@ export function unifiedToolSearch(options: {
     const name = tool.manifest.name;
     if (excludeToolNames.has(name)) continue;
 
-    const allowed = tool.manifest.allowed_callers;
-    if (allowed && allowed.length > 0 && !allowed.includes(agentId)) continue;
+    // Single source of truth for the allowed_callers rule (see agentMayCallTool).
+    if (!agentMayCallTool(toolRegistry, name, agentId)) continue;
 
     const owner = skillRegistry.toolOwner(name);
     if (owner && !owner.synthetic) {
