@@ -225,8 +225,6 @@ export interface ToolContext {
    *  Provides a warm Playwright Chromium instance with session management.
    *  Skills use this to interact with JS-rendered pages and web forms. */
   browserService?: import('../browser/browser-service.js').BrowserService;
-  /** Skill search — available to skills declaring 'toolSearch' in capabilities.
-   *  Searches all registered skills by keyword, excluding tool-registry itself. */
   /** Search tools and skills by keyword. Used by tool-registry (Phase 3a unified discovery). */
   toolSearch?: (query: string) => Array<{
     name: string;

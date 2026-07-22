@@ -73,6 +73,13 @@ describe('active-skills-progress', () => {
     expect(activeSkillNameSetsEqual(['a'], ['a', 'b'])).toBe(false);
   });
 
+  it('activeSkillNameSetsEqual compares unique membership, not array length', () => {
+    // Equal length but different sets — duplicates must not mask a real difference.
+    expect(activeSkillNameSetsEqual(['x', 'x'], ['x', 'y'])).toBe(false);
+    // Same set, differing duplicate counts — still equal.
+    expect(activeSkillNameSetsEqual(['x', 'x', 'y'], ['x', 'y'])).toBe(true);
+  });
+
   it('prepareActiveSkillsBlock rejects overflow', () => {
     const huge = activateSkillInBlock(null, 'x'.repeat(5000), 't');
     const prepared = prepareActiveSkillsBlock(huge);

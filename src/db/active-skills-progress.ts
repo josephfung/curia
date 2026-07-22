@@ -63,14 +63,20 @@ export function readActiveSkillNames(
   return readActiveSkillsBlock(progress)?.skills.map((s) => s.name) ?? [];
 }
 
-/** True when both name lists contain the same set (order-independent). */
+/** True when both name lists represent the same set (order- and duplicate-independent). */
 export function activeSkillNameSetsEqual(
   a: readonly string[],
   b: readonly string[],
 ): boolean {
-  if (a.length !== b.length) return false;
+  // Compare unique membership, not array length — duplicates in one list must not
+  // make it compare equal to a differently-sized set (e.g. ['x','x'] vs ['x','y']).
+  const setA = new Set(a);
   const setB = new Set(b);
-  return a.every((name) => setB.has(name));
+  if (setA.size !== setB.size) return false;
+  for (const name of setA) {
+    if (!setB.has(name)) return false;
+  }
+  return true;
 }
 
 /**
