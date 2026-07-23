@@ -6,6 +6,8 @@ Tools are how agents interact with the outside world. Every capability — sendi
 
 See [Adding an Agent](adding-an-agent.md) if you want to create a new agent rather than extend an existing one.
 
+To **import an unmodified Anthropic Agent Skill** (`SKILL.md` + `references/`, no Curia manifest), see [Importing a Skill](importing-a-skill.md).
+
 ---
 
 ## Quick Start

@@ -136,6 +136,41 @@ describe('skill-activate handler', () => {
     expect(setActiveSkillsBlock).not.toHaveBeenCalled();
   });
 
+  it('loads a reference when `reference` is passed', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const os = await import('node:os');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-activate-ref-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'references'));
+      fs.writeFileSync(path.join(tmp, 'references', 'notes.md'), 'Clause guidance.');
+      const ctx = makeCtx({ input: { skill: 'tasks', reference: 'notes.md' } });
+      ctx.skillRegistry!.register(
+        {
+          name: 'imported-notes',
+          description: 'Imported',
+          tools: [],
+          instructions: 'Use notes.',
+          references: ['notes.md'],
+        },
+        tmp,
+      );
+      const result = await handler.execute({
+        ...ctx,
+        input: { skill: 'imported-notes', reference: 'notes.md' },
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const data = result.data as {
+        referenceContent?: { path: string; content: string };
+      };
+      expect(data.referenceContent?.path).toBe('references/notes.md');
+      expect(data.referenceContent?.content).toContain('Clause guidance');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('rejects unknown skills', async () => {
     const ctx = makeCtx({ input: { skill: 'nope' } });
     const result = await handler.execute(ctx);

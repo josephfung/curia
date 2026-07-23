@@ -41,6 +41,7 @@ import {
 import {
   SKILL_ACTIVATE_TOOL_NAME,
   formatActivatedSkillInstructionBlock,
+  formatSkillReferenceBlock,
   parseSkillActivationProtocol,
   selectActiveSkillsForWake,
 } from '../skills/skill-activation.js';
@@ -522,7 +523,11 @@ export class AgentRuntime {
           if (newNames.length > 0) {
             workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
           }
-          const block = formatActivatedSkillInstructionBlock(resolved.skill, resolved.instructions);
+          const block = formatActivatedSkillInstructionBlock(
+            resolved.skill,
+            resolved.instructions,
+            { references: resolved.references, assets: resolved.assets },
+          );
           if (block) instructionBlocks.push(block);
         }
         for (const block of instructionBlocks) {
@@ -1268,7 +1273,8 @@ export class AgentRuntime {
             }
           }
 
-          // Skill activation (#1495): expand member tools + inject SKILL.md instructions
+          // Skill activation (#1495/#1490): expand member tools + inject SKILL.md
+          // instructions (and optional progressive-disclosure reference content)
           // into the in-flight turn. Durable persistence is handled by skill-activate itself.
           if (toolCall.name === SKILL_ACTIVATE_TOOL_NAME && workingToolDefs) {
             try {
@@ -1285,14 +1291,28 @@ export class AgentRuntime {
                 const instructionBlock = formatActivatedSkillInstructionBlock(
                   activation.skill,
                   activation.instructions,
+                  { references: activation.references, assets: activation.assets },
                 );
+                const insertAt = messages.findIndex(m => m.role !== 'system') === -1
+                  ? messages.length
+                  : Math.max(1, messages.findIndex(m => m.role !== 'system'));
+                let spliceAt = insertAt;
                 if (instructionBlock) {
                   // Inject after the system prompt so subsequent LLM rounds see the
                   // discipline block (mirrors Bullpen mid-turn system-message splice).
-                  const insertAt = messages.findIndex(m => m.role !== 'system') === -1
-                    ? messages.length
-                    : Math.max(1, messages.findIndex(m => m.role !== 'system'));
-                  messages.splice(insertAt, 0, { role: 'system', content: instructionBlock });
+                  messages.splice(spliceAt, 0, { role: 'system', content: instructionBlock });
+                  spliceAt += 1;
+                }
+                if (activation.referenceContent) {
+                  messages.splice(spliceAt, 0, {
+                    role: 'system',
+                    content: formatSkillReferenceBlock(
+                      activation.skill,
+                      activation.referenceContent.path,
+                      activation.referenceContent.content,
+                      activation.referenceContent.truncated,
+                    ),
+                  });
                 }
                 logger.info(
                   {
@@ -1301,6 +1321,9 @@ export class AgentRuntime {
                     addedTools: newNames,
                     instructionsLoaded: activation.instructions.length > 0,
                     skippedTools: activation.skippedTools,
+                    references: activation.references.length,
+                    assets: activation.assets.length,
+                    referenceLoaded: activation.referenceContent?.path,
                   },
                   'Activated skill for task turn',
                 );
