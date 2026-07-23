@@ -145,32 +145,24 @@ export class SignalAdapter implements Channel {
     // so the dispatcher's contact resolver can find the record immediately.
     let isKnownSender = false;
     try {
-      const existing = await this.config.contactService.resolveByChannelIdentity('signal', senderId);
-
-      if (existing) {
-        // Known sender: tier >= 'known' counts as "known" for read-receipt purposes.
-        // The dispatcher enforces hold/block policy. Uses a positive allowlist via
-        // meetsMinimumTier() (issue #945) so an unexpected tier value fails safe to
-        // "not known" rather than the prior denylist (!== 'unknown' && !== 'blocked'),
-        // which would have treated any unrecognized value as known.
-        isKnownSender = meetsMinimumTier(existing.tier, 'known');
-      } else {
-        // New sender — auto-create a contact at tier='unknown'.
-        // signal_participant is auto-verified (per contact-service.ts) so the phone
-        // number identity gets verified:true at creation time, matching email_participant.
-        // Display name comes from Signal's profile; phone number is the E.164 fallback.
-        const contact = await this.config.contactService.createContact({
-          displayName: metadata.sourceName || senderId,
-          fallbackDisplayName: senderId,
-          source: 'signal_participant',
-          tier: 'unknown',
-        });
-        await this.config.contactService.linkIdentity({
-          contactId: contact.id,
-          channel: 'signal',
-          channelIdentifier: senderId,
-          source: 'signal_participant',
-        });
+      // Resolve-or-create via ContactService so the create→link→orphan-cleanup dance
+      // is shared with Slack (and future Voice/SMS). signal_participant is auto-verified
+      // inside linkIdentity. Display name stays resolved here (Signal profile / E.164).
+      const { contact, created } = await this.config.contactService.ensureChannelContact({
+        channel: 'signal',
+        channelIdentifier: senderId,
+        source: 'signal_participant',
+        displayName: metadata.sourceName || senderId,
+        fallbackDisplayName: senderId,
+        tier: 'unknown',
+      });
+      // Known sender: tier >= 'known' counts as "known" for read-receipt purposes.
+      // The dispatcher enforces hold/block policy. Uses a positive allowlist via
+      // meetsMinimumTier() (issue #945) so an unexpected tier value fails safe to
+      // "not known" rather than the prior denylist (!== 'unknown' && !== 'blocked'),
+      // which would have treated any unrecognized value as known.
+      isKnownSender = meetsMinimumTier(contact.tier, 'known');
+      if (created) {
         this.log.info({ senderId, sourceName: metadata.sourceName }, 'Auto-created contact from Signal sender');
       }
     } catch (err) {
@@ -340,46 +332,18 @@ export class SignalAdapter implements Channel {
       // ledger stays complete. The group message routes to the coordinator in low-trust mode
       // rather than being held — the coordinator applies read-only constraints.
       for (const phone of trust.unknownMembers) {
-        let contact: { id: string } | null = null;
         try {
-          contact = await this.config.contactService.createContact({
-            displayName: phone,
-            fallbackDisplayName: phone,
-            source: 'signal_participant',
-            tier: 'unknown',
-          });
-        } catch (err) {
-          this.log.warn({ err, phone }, 'Signal adapter: failed to create contact for unknown group member');
-          continue;
-        }
-        try {
-          await this.config.contactService.linkIdentity({
-            contactId: contact.id,
+          await this.config.contactService.ensureChannelContact({
             channel: 'signal',
             channelIdentifier: phone,
             source: 'signal_participant',
+            displayName: phone,
+            fallbackDisplayName: phone,
+            tier: 'unknown',
           });
-        } catch (linkErr) {
-          const isDuplicate = (linkErr as { code?: string }).code === '23505';
-          // Always clean up the newly created contact — linkIdentity failed regardless of reason.
-          // 23505: identity already belongs to an existing contact (prior 1:1 message from this
-          // phone). Non-23505: unexpected DB failure. In both cases the new contact row is
-          // orphaned with no identity and must be deleted.
-          try {
-            await this.config.contactService.deleteContact(contact.id);
-          } catch (cleanupErr) {
-            this.log.warn(
-              { cleanupErr, orphanId: contact.id, phone },
-              'Signal adapter: failed to clean up orphan contact after linkIdentity failure',
-            );
-          }
-          if (isDuplicate) {
-            // Expected: phone already has a signal identity from a prior 1:1 message.
-            // The existing contact will be resolved normally by the dispatcher.
-            this.log.debug({ phone }, 'Signal adapter: skipping group member create — signal identity already exists for this phone');
-          } else {
-            this.log.warn({ err: linkErr, phone }, 'Signal adapter: linkIdentity failed for unknown group member — orphan cleaned up');
-          }
+        } catch (err) {
+          // Best-effort: a failed ensure must not block the group inbound publish.
+          this.log.warn({ err, phone }, 'Signal adapter: failed to ensure contact for unknown group member');
         }
       }
 
