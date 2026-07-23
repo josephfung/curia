@@ -300,6 +300,40 @@ export function buildSkillActivationProtocol(
   return payload;
 }
 
+/**
+ * Slim acknowledgement for the skill-activate *tool result* (#1505 review).
+ *
+ * The runtime splices the SKILL.md `instructions` and any loaded
+ * `referenceContent.content` into the turn as their own `system` messages, so
+ * echoing those bodies back inside the generic `tool_result` JSON would inject
+ * each one twice. For a size-capped reference file that doubles its context
+ * cost and can push an otherwise-budgeted turn over the provider limit. Keep
+ * only metadata here (skill, tools, listings, and the reference path/truncated
+ * flag) — the actual content reaches the LLM via the spliced system messages.
+ */
+export function buildSkillActivationAck(
+  activation: SkillActivationResult,
+): Record<string, unknown> {
+  const ack: Record<string, unknown> = {
+    _curia_protocol: SKILL_ACTIVATION_PROTOCOL,
+    skill: activation.skill,
+    tools: activation.tools,
+    skippedTools: activation.skippedTools,
+    instructionsLoaded: activation.instructions.length > 0,
+    references: activation.references,
+    assets: activation.assets,
+  };
+  if (activation.referenceContent) {
+    // Path + truncated flag only; the content is in the spliced system message.
+    ack.referenceContent = {
+      path: activation.referenceContent.path,
+      truncated: activation.referenceContent.truncated,
+      loaded: true,
+    };
+  }
+  return ack;
+}
+
 /** Parse a skill-activate tool result; null when not an activation protocol payload. */
 export function parseSkillActivationProtocol(data: unknown): SkillActivationResult | null {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;

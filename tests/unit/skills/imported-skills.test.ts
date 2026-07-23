@@ -16,6 +16,7 @@ import {
   formatActivatedSkillInstructionBlock,
   formatSkillReferenceBlock,
   buildSkillActivationProtocol,
+  buildSkillActivationAck,
   parseSkillActivationProtocol,
   selectActiveSkillsForWake,
 } from '../../../src/skills/skill-activation.js';
@@ -171,6 +172,38 @@ describe('discoverSkillResources / readSkillResource', () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  // path.extname('.env.example') is '.example', so extension-based detection alone
+  // would reject it as non-text. It must be matched by basename instead (#1505).
+  it('loads .env.example as a text asset', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-skill-env-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'assets'));
+      fs.writeFileSync(path.join(tmp, 'assets', '.env.example'), 'API_KEY=changeme\n');
+      const lists = { references: [] as string[], assets: ['.env.example'] };
+      const result = readSkillResource(tmp, 'assets/.env.example', lists);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.content).toContain('API_KEY=changeme');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a binary asset (non-text extension)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'curia-skill-bin-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'assets'));
+      fs.writeFileSync(path.join(tmp, 'assets', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      const lists = { references: [] as string[], assets: ['logo.png'] };
+      const result = readSkillResource(tmp, 'assets/logo.png', lists);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatch(/not a text file/i);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('activation of imported skills — authority containment', () => {
@@ -252,6 +285,36 @@ describe('activation of imported skills — authority containment', () => {
     const protocol = buildSkillActivationProtocol(result);
     const parsed = parseSkillActivationProtocol(protocol);
     expect(parsed?.referenceContent?.content).toContain('Limitation of liability');
+  });
+
+  // The runtime splices instructions + reference content into the turn as system
+  // messages, so the tool_result must NOT echo those bodies — else each is injected
+  // twice and a size-capped reference doubles its context cost (#1505).
+  it('builds a slim tool-result ack that omits instruction/reference bodies', () => {
+    const { skills, tools } = loadImported();
+    const result = resolveSkillActivation({
+      skillName: 'not-a-lawyer',
+      skillRegistry: skills,
+      toolRegistry: tools,
+      agentId: 'coordinator',
+      reference: 'common-clauses.md',
+    });
+    expect('error' in result).toBe(false);
+    if ('error' in result) return;
+
+    const ack = buildSkillActivationAck(result);
+    // Metadata is preserved (skill, listings, path, truncated flag)…
+    expect(ack.skill).toBe('not-a-lawyer');
+    expect(ack.instructionsLoaded).toBe(true);
+    expect(ack.referenceContent).toMatchObject({
+      path: 'references/common-clauses.md',
+      truncated: false,
+      loaded: true,
+    });
+    // …but neither heavy body is echoed back.
+    expect(ack.instructions).toBeUndefined();
+    expect((ack.referenceContent as Record<string, unknown>).content).toBeUndefined();
+    expect(JSON.stringify(ack)).not.toContain('Limitation of liability');
   });
 
   it('is discoverable via unified toolSearch by description keywords', () => {
