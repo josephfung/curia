@@ -17,6 +17,12 @@ import {
   type ActiveSkillEntry,
 } from '../db/active-skills-progress.js';
 import { appendSkillInstructions } from './pin-resolution.js';
+import { readSkillResource } from './skill-resources.js';
+
+export {
+  formatActivatedSkillInstructionBlock,
+  formatSkillReferenceBlock,
+} from './skill-instruction-format.js';
 
 export const SKILL_ACTIVATE_TOOL_NAME = 'skill-activate';
 export const SKILL_ACTIVATION_PROTOCOL = 'skill_activation' as const;
@@ -35,6 +41,19 @@ export interface SkillActivationResult {
   skippedTools: string[];
   /** SKILL.md body (may be empty for instruction-light bundles). */
   instructions: string;
+  /** Progressive-disclosure files under references/ (Phase 3). */
+  references: string[];
+  /** Progressive-disclosure files under assets/ (Phase 3). */
+  assets: string[];
+  /**
+   * When skill-activate was called with `reference`, the loaded file payload.
+   * Absent on plain activation.
+   */
+  referenceContent?: {
+    path: string;
+    content: string;
+    truncated: boolean;
+  };
 }
 
 export interface SkillActivationFailure {
@@ -124,14 +143,19 @@ export function agentMayCallTool(
 /**
  * Resolve activation of a skill for an agent. Does not mutate registries.
  * Synthetic skills cannot be activated (they are pin-resolution shims only).
+ *
+ * Optional `reference` loads one progressive-disclosure file from the skill's
+ * `references/` or `assets/` tree (Phase 3). Activation never widens authority.
  */
 export function resolveSkillActivation(options: {
   skillName: string;
   skillRegistry: SkillRegistry;
   toolRegistry: ToolRegistry;
   agentId: string;
+  /** Optional reference/asset path to load into context (Phase 3). */
+  reference?: string;
 }): SkillActivationResult | SkillActivationFailure {
-  const { skillName, skillRegistry, toolRegistry, agentId } = options;
+  const { skillName, skillRegistry, toolRegistry, agentId, reference } = options;
   const name = skillName.trim();
   if (!name) return { error: 'skill name is required' };
 
@@ -155,11 +179,31 @@ export function resolveSkillActivation(options: {
     }
   }
 
+  const references = skill.manifest.references ?? [];
+  const assets = skill.manifest.assets ?? [];
+
+  let referenceContent: SkillActivationResult['referenceContent'];
+  if (reference !== undefined && reference.trim() !== '') {
+    if (!skill.dir) {
+      return { error: `Skill '${name}' has no on-disk directory — cannot load references` };
+    }
+    const read = readSkillResource(skill.dir, reference, { references, assets });
+    if (!read.ok) return { error: read.error };
+    referenceContent = {
+      path: read.path,
+      content: read.content,
+      truncated: read.truncated,
+    };
+  }
+
   return {
     skill: skill.manifest.name,
     tools,
     skippedTools,
     instructions: skill.manifest.instructions.trim(),
+    references: [...references],
+    assets: [...assets],
+    referenceContent,
   };
 }
 
@@ -228,16 +272,6 @@ function intersectsTokens(a: Set<string>, b: Set<string>): boolean {
   return false;
 }
 
-/** Format a system-message block for a lazily activated skill's instructions. */
-export function formatActivatedSkillInstructionBlock(
-  skillName: string,
-  instructions: string,
-): string | null {
-  const body = instructions.trim();
-  if (!body) return null;
-  return `[Activated skill: ${skillName}]\n\n${body}`;
-}
-
 /** Apply multiple instruction blocks onto a system prompt (pinned path reuse). */
 export function applyActivatedSkillInstructions(
   systemPrompt: string,
@@ -250,14 +284,20 @@ export function applyActivatedSkillInstructions(
 export function buildSkillActivationProtocol(
   result: SkillActivationResult,
 ): Record<string, unknown> {
-  return {
+  const payload: Record<string, unknown> = {
     _curia_protocol: SKILL_ACTIVATION_PROTOCOL,
     skill: result.skill,
     tools: result.tools,
     skippedTools: result.skippedTools,
     instructions: result.instructions,
     instructionsLoaded: result.instructions.length > 0,
+    references: result.references,
+    assets: result.assets,
   };
+  if (result.referenceContent) {
+    payload.referenceContent = result.referenceContent;
+  }
+  return payload;
 }
 
 /** Parse a skill-activate tool result; null when not an activation protocol payload. */
@@ -271,11 +311,37 @@ export function parseSkillActivationProtocol(data: unknown): SkillActivationResu
     ? obj.skippedTools.filter((t): t is string => typeof t === 'string')
     : [];
   const instructions = typeof obj.instructions === 'string' ? obj.instructions : '';
+  const references = Array.isArray(obj.references)
+    ? obj.references.filter((t): t is string => typeof t === 'string')
+    : [];
+  const assets = Array.isArray(obj.assets)
+    ? obj.assets.filter((t): t is string => typeof t === 'string')
+    : [];
+
+  let referenceContent: SkillActivationResult['referenceContent'];
+  if (obj.referenceContent && typeof obj.referenceContent === 'object' && !Array.isArray(obj.referenceContent)) {
+    const rc = obj.referenceContent as Record<string, unknown>;
+    if (
+      typeof rc.path === 'string' &&
+      typeof rc.content === 'string' &&
+      typeof rc.truncated === 'boolean'
+    ) {
+      referenceContent = {
+        path: rc.path,
+        content: rc.content,
+        truncated: rc.truncated,
+      };
+    }
+  }
+
   return {
     skill: obj.skill.trim(),
     tools: obj.tools as string[],
     skippedTools,
     instructions,
+    references,
+    assets,
+    referenceContent,
   };
 }
 

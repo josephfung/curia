@@ -11,6 +11,7 @@
 import type { SkillRegistry } from './skill-registry.js';
 import type { ToolRegistry } from './registry.js';
 import type { Logger } from '../logger.js';
+import { formatActivatedSkillInstructionBlock } from './skill-instruction-format.js';
 
 export type PinReferentKind = 'skill' | 'tool';
 
@@ -72,8 +73,22 @@ export function resolvePinnedSkills(
       resolvedSkills.push(pin);
       resolvedPins.push({ pin, kind: 'skill' });
       for (const t of skill.manifest.tools) pushTool(t, pin);
-      const body = skill.manifest.instructions.trim();
-      if (body) instructionBlocks.push(body);
+      // Prefer the shared formatter when the skill has progressive-disclosure
+      // files so pinned imports get the references index. Native instruction
+      // blocks without references stay as the raw body (no activation wrapper).
+      const refs = skill.manifest.references ?? [];
+      const assets = skill.manifest.assets ?? [];
+      if (refs.length > 0 || assets.length > 0) {
+        const block = formatActivatedSkillInstructionBlock(
+          skill.manifest.name,
+          skill.manifest.instructions,
+          { references: refs, assets },
+        );
+        if (block) instructionBlocks.push(block);
+      } else {
+        const body = skill.manifest.instructions.trim();
+        if (body) instructionBlocks.push(body);
+      }
       if (skill.manifest.heartbeat) heartbeatEligible = true;
       if (skill.manifest.document_workspace) documentWorkspaceEnabled = true;
       if (!skill.synthetic) {

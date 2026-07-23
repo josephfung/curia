@@ -155,6 +155,21 @@ Activation loads member tools into the working toolkit and injects the skill's `
 body into the turn. It **never widens authority** — member tools still pass `allowed_callers`
 and `action_risk` at invoke time; disallowed members are listed in `skippedTools` and omitted.
 
+### Imported Anthropic skills (Phase 3 / #1490)
+
+An unmodified Anthropic Agent Skill folder (`SKILL.md` + optional `references/` / `assets/` /
+`scripts/`) loads as a skill bundle with **no Curia `tool.json` required**. Operator flow:
+drop the folder into the skills directory, install+enable in the registry, restart. See
+[`docs/dev/importing-a-skill.md`](../dev/importing-a-skill.md).
+
+- **Progressive disclosure:** activation returns the `references` / `assets` index; call
+  `skill-activate({ skill, reference: "…" })` to load one text file into the turn (path-traversal
+  safe; binary assets are rejected).
+- **Scripts:** if `scripts/` is present, startup emits a warning and leaves scripts **inert**
+  (sandbox execution is Phase 4).
+- **Authority:** an imported skill cannot grant tools the activating agent was not already
+  allowed to call — instructions only steer.
+
 When a task is bound, activation also appends the skill to `progress.activeSkills` (MRU,
 capped) so park/resume wakes restore Tier 1.
 

@@ -20,11 +20,12 @@ import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
 
 export class SkillActivateHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const input = ctx.input as { skill?: string };
+    const input = ctx.input as { skill?: string; reference?: string };
     const skillName = typeof input.skill === 'string' ? input.skill.trim() : '';
     if (!skillName) {
       return { success: false, error: 'Missing required input: skill (non-empty string)' };
     }
+    const reference = typeof input.reference === 'string' ? input.reference : undefined;
 
     if (!ctx.skillRegistry) {
       return {
@@ -45,6 +46,7 @@ export class SkillActivateHandler implements ToolHandler {
       skillRegistry: ctx.skillRegistry,
       toolRegistry: ctx.toolRegistry,
       agentId,
+      reference,
     });
     if ('error' in resolved) {
       return { success: false, error: resolved.error };

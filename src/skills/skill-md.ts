@@ -3,7 +3,7 @@
 // Required Anthropic fields: name, description.
 // Curia extensions (native skills): version, tools, heartbeat, document_workspace.
 // Extra unknown frontmatter keys are ignored so unmodified Anthropic skills can
-// load later (Phase 3) without failing on license/compatibility/metadata/etc.
+// load (Phase 3 / #1490) without failing on license/compatibility/metadata/etc.
 
 import * as yaml from 'js-yaml';
 

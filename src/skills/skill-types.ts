@@ -10,15 +10,31 @@ export interface SkillManifest {
   name: string;
   /** Discovery / pin description. */
   description: string;
-  /** Semver for native skills; optional for future imported Anthropic skills. */
+  /** Semver for native skills; optional for imported Anthropic skills. */
   version?: string;
   /**
    * Member tool names. When omitted at parse time, the loader fills this from
    * the skill's `tools/` subdirectories (manifest.name of each tool.json).
+   * Imported Anthropic skills (NL + assets) typically have an empty list.
    */
   tools: string[];
   /** Markdown body after frontmatter — injected into the agent prompt when pinned. */
   instructions: string;
+  /**
+   * Relative paths under `references/` (progressive disclosure, Phase 3).
+   * Listed at activation; loaded on demand via skill-activate `reference`.
+   */
+  references?: string[];
+  /**
+   * Relative paths under `assets/` (templates / static files, Phase 3).
+   * Same on-demand read path as references.
+   */
+  assets?: string[];
+  /**
+   * True when a `scripts/` directory is present. Scripts are never executed in
+   * Phase 3 — import emits a warning and leaves them inert until Phase 4.
+   */
+  hasScripts?: boolean;
   /**
    * When true, agents that pin this skill are heartbeat-eligible (BacklogHeartbeat
    * may wake them for ready tasks). Replaces `enable_task_management`.
@@ -54,6 +70,10 @@ export interface SkillDiscovery {
     tools: string[];
     heartbeat?: boolean;
     documentWorkspace?: boolean;
+    /** Present when references/ or assets/ were discovered (imported NL+asset skills). */
+    references?: string[];
+    assets?: string[];
+    hasScripts?: boolean;
   } | null;
   error?: string;
   dir: string;

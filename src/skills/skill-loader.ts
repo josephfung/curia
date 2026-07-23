@@ -4,14 +4,20 @@
 // Flat skills/<atom>/tool.json dirs remain valid standalone tools; orphans become
 // synthetic singleton skills after tools + MCP projections are loaded
 // (see registerSyntheticSingletonSkills).
+//
+// Phase 3 (#1490): unmodified Anthropic Agent Skills (SKILL.md + references/,
+// optional assets/, optional inert scripts/) load as instruction-only bundles
+// with no Curia tool.json required.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseSkillMd } from './skill-md.js';
+import { discoverSkillResources } from './skill-resources.js';
 import type { SkillDiscovery, SkillManifest } from './skill-types.js';
 import type { SkillRegistry } from './skill-registry.js';
 import type { ToolRegistry } from './registry.js';
 import type { Logger } from '../logger.js';
+
 /** Discover SKILL.md bundles under skillsDir (immediate children only). */
 export function discoverSkillManifests(skillsDir: string, logger?: Logger): SkillDiscovery[] {
   if (!fs.existsSync(skillsDir)) {
@@ -64,12 +70,31 @@ export function discoverSkillManifests(skillsDir: string, logger?: Logger): Skil
         );
       }
 
+      const resources = discoverSkillResources(dir);
+      if (resources.hasScripts) {
+        // Phase 3: scripts are inert. Warn loudly so operators know why
+        // `scripts/foo.py` referenced from SKILL.md will not run until Phase 4.
+        logger?.warn(
+          {
+            skill: parsed.name,
+            dir,
+            scriptsDir: path.join(dir, 'scripts'),
+          },
+          'Imported skill ships a scripts/ directory — scripts are NOT executed ' +
+            '(Phase 3). Instructions and references/assets still load; sandboxed ' +
+            'script execution is Phase 4.',
+        );
+      }
+
       const manifest: SkillManifest = {
         name: parsed.name,
         description: parsed.description,
         version: parsed.version,
         tools,
         instructions: parsed.instructions,
+        references: resources.references.length > 0 ? resources.references : undefined,
+        assets: resources.assets.length > 0 ? resources.assets : undefined,
+        hasScripts: resources.hasScripts || undefined,
         heartbeat: parsed.heartbeat,
         document_workspace: parsed.document_workspace,
       };
@@ -85,6 +110,9 @@ export function discoverSkillManifests(skillsDir: string, logger?: Logger): Skil
           tools: [...manifest.tools],
           heartbeat: manifest.heartbeat,
           documentWorkspace: manifest.document_workspace,
+          references: manifest.references,
+          assets: manifest.assets,
+          hasScripts: manifest.hasScripts,
         },
       });
     } catch (err) {
@@ -145,7 +173,14 @@ export function loadSkillsFromDiscovery(
     }
     registry.register(disc.manifest, disc.dir);
     logger.info(
-      { skill: disc.manifest.name, tools: disc.manifest.tools.length, version: disc.manifest.version },
+      {
+        skill: disc.manifest.name,
+        tools: disc.manifest.tools.length,
+        version: disc.manifest.version,
+        references: disc.manifest.references?.length ?? 0,
+        assets: disc.manifest.assets?.length ?? 0,
+        hasScripts: disc.manifest.hasScripts === true,
+      },
       'Skill bundle loaded',
     );
     loaded++;
