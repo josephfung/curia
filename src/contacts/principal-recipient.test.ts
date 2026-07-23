@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { ChannelIdentity } from './types.js';
 import {
-  isPrincipalEmail,
-  isPrincipalSignal,
-  isPrincipalSlack,
+  isPrincipalIdentity,
   computePrincipalIsSoleRecipient,
   resolvePrincipalIsSoleRecipientFromSkillInput,
+  GATE_C_PRINCIPAL_CARVEOUT_SKILLS,
 } from './principal-recipient.js';
+import { PRINCIPAL_CHANNEL_RULES } from './principal-channel-registry.js';
 
 function makeIdentity(channel: string, identifier: string): ChannelIdentity {
   return {
@@ -31,38 +31,47 @@ const PRINCIPAL_IDENTITIES = [
 ];
 
 describe('principal-recipient', () => {
-  describe('isPrincipalEmail', () => {
+  describe('GATE_C_PRINCIPAL_CARVEOUT_SKILLS', () => {
+    it('opts in email-send and signal-send only (Slack fails closed)', () => {
+      expect([...GATE_C_PRINCIPAL_CARVEOUT_SKILLS].sort()).toEqual(['email-send', 'signal-send']);
+      const slack = PRINCIPAL_CHANNEL_RULES.find((r) => r.channel === 'slack');
+      expect(slack).toBeDefined();
+      expect(slack!.carveoutSkill).toBeUndefined();
+    });
+  });
+
+  describe('isPrincipalIdentity', () => {
     it('matches verified principal email case-insensitively', () => {
-      expect(isPrincipalEmail('CEO@example.com', PRINCIPAL_IDENTITIES)).toBe(true);
+      expect(isPrincipalIdentity('email', 'CEO@example.com', PRINCIPAL_IDENTITIES)).toBe(true);
     });
 
-    it('rejects unverified-looking display names', () => {
-      expect(isPrincipalEmail('CEO', PRINCIPAL_IDENTITIES)).toBe(false);
+    it('rejects unverified-looking display names for email', () => {
+      expect(isPrincipalIdentity('email', 'CEO', PRINCIPAL_IDENTITIES)).toBe(false);
     });
-  });
 
-  describe('isPrincipalSignal', () => {
     it('matches verified principal Signal identity exactly', () => {
-      expect(isPrincipalSignal('+15551234567', PRINCIPAL_IDENTITIES)).toBe(true);
+      expect(isPrincipalIdentity('signal', '+15551234567', PRINCIPAL_IDENTITIES)).toBe(true);
     });
 
-    it('rejects a different phone number', () => {
-      expect(isPrincipalSignal('+15559999999', PRINCIPAL_IDENTITIES)).toBe(false);
+    it('rejects a different Signal phone number', () => {
+      expect(isPrincipalIdentity('signal', '+15559999999', PRINCIPAL_IDENTITIES)).toBe(false);
     });
-  });
 
-  describe('isPrincipalSlack', () => {
     it('matches verified principal Slack user id exactly', () => {
-      expect(isPrincipalSlack('U_CEO', PRINCIPAL_IDENTITIES)).toBe(true);
+      expect(isPrincipalIdentity('slack', 'U_CEO', PRINCIPAL_IDENTITIES)).toBe(true);
     });
 
     it('rejects a different Slack user id', () => {
-      expect(isPrincipalSlack('U_OTHER', PRINCIPAL_IDENTITIES)).toBe(false);
+      expect(isPrincipalIdentity('slack', 'U_OTHER', PRINCIPAL_IDENTITIES)).toBe(false);
     });
 
-    it('rejects conversation ids (D…/C…)', () => {
-      expect(isPrincipalSlack('D123', PRINCIPAL_IDENTITIES)).toBe(false);
-      expect(isPrincipalSlack('C123', PRINCIPAL_IDENTITIES)).toBe(false);
+    it('rejects Slack conversation ids (D…/C…)', () => {
+      expect(isPrincipalIdentity('slack', 'D123', PRINCIPAL_IDENTITIES)).toBe(false);
+      expect(isPrincipalIdentity('slack', 'C123', PRINCIPAL_IDENTITIES)).toBe(false);
+    });
+
+    it('fails closed for an unregistered channel', () => {
+      expect(isPrincipalIdentity('telegram', 'ceo@example.com', PRINCIPAL_IDENTITIES)).toBe(false);
     });
   });
 
@@ -165,6 +174,14 @@ describe('principal-recipient', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
         'signal-send',
         { recipient: '+15551234567', recipients: ['+15559999999'], message: 'hi' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
+    it('fails closed for a hypothetical slack-send until Slack opts in', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'slack-send',
+        { recipient: 'U_CEO', message: 'hi' },
         PRINCIPAL_IDENTITIES,
       )).toBe(false);
     });

@@ -1,0 +1,44 @@
+// principal-channel-registry.ts — single auditable list of channel contributions
+// for principal-identity matching and Gate C carve-out opt-in.
+//
+// AUDIT POINT: a skill receives the Gate C principal carve-out ONLY if it appears
+// as `carveoutSkill.skillName` on an entry below. Channels listed without
+// `carveoutSkill` (Slack today) still get identity matching for the outbound
+// gateway, but fail closed for Gate C. Unknown / unregistered channels and
+// skills also fail closed.
+//
+// Adding a channel: export `*PrincipalRules` from the channel package and append
+// exactly one entry here. Do not add per-channel branches to principal-recipient.ts.
+
+import type { PrincipalChannelRules } from './principal-channel-rules.js';
+import { emailPrincipalRules } from '../channels/email/principal-rules.js';
+import { signalPrincipalRules } from '../channels/signal/principal-rules.js';
+import { slackPrincipalRules } from '../channels/slack/principal-rules.js';
+
+/** Ordered registry of channel principal rules. This is the Gate C opt-in list. */
+export const PRINCIPAL_CHANNEL_RULES: readonly PrincipalChannelRules[] = [
+  emailPrincipalRules,
+  signalPrincipalRules,
+  slackPrincipalRules,
+];
+
+/** Derived allowlist of skill names opted into the Gate C principal carve-out. */
+export const GATE_C_PRINCIPAL_CARVEOUT_SKILLS: ReadonlySet<string> = new Set(
+  PRINCIPAL_CHANNEL_RULES.flatMap((rules) =>
+    rules.carveoutSkill ? [rules.carveoutSkill.skillName] : [],
+  ),
+);
+
+export function findPrincipalChannelRules(
+  channel: string,
+): PrincipalChannelRules | undefined {
+  return PRINCIPAL_CHANNEL_RULES.find((rules) => rules.channel === channel);
+}
+
+export function findCarveoutRulesBySkill(
+  skillName: string,
+): PrincipalChannelRules | undefined {
+  return PRINCIPAL_CHANNEL_RULES.find(
+    (rules) => rules.carveoutSkill?.skillName === skillName,
+  );
+}

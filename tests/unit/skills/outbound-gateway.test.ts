@@ -1886,7 +1886,7 @@ describe('OutboundGateway.sendEmailDraft', () => {
       contactService,
       contentFilter,
       bus,
-      // principalIdentities enables the CEO email bypass check in isPrincipalEmail()
+      // principalIdentities enables the CEO email bypass check in isPrincipalIdentity()
       principalIdentities: [makePrincipalIdentity('ceo@example.com')],
       logger,
       autonomyService: overrides.autonomyService,

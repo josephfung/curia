@@ -3,8 +3,19 @@
 // Determines whether an outbound recipient matches the principal's verified channel
 // identities. Used by the outbound content filter, outbound gateway, and Gate C
 // (issue #1301). Never uses display name, role, or unverified identifiers.
+//
+// Channel-specific compare/parse/carve-out opt-in lives on each channel's
+// `principal-rules.ts` and is listed in `principal-channel-registry.ts` (the
+// single auditable Gate C opt-in surface). This file stays channel-agnostic.
 
 import type { ChannelIdentity } from './types.js';
+import {
+  GATE_C_PRINCIPAL_CARVEOUT_SKILLS,
+  findCarveoutRulesBySkill,
+  findPrincipalChannelRules,
+} from './principal-channel-registry.js';
+
+export { GATE_C_PRINCIPAL_CARVEOUT_SKILLS };
 
 export interface TaggedRecipient {
   identifier: string;
@@ -12,45 +23,20 @@ export interface TaggedRecipient {
 }
 
 /**
- * Send skills whose input recipient shape is fully modeled in
- * `resolvePrincipalIsSoleRecipientFromSkillInput`. Gate C's principal-only carve-out
- * applies ONLY here — the parser sniffs input keys by convention (not types), so any
- * skill not on this list, or any input with recipient-shaped keys we do not parse,
- * fails closed (no carve-out). Update this set when adding a new outbound send skill.
+ * Whether `identifier` matches a verified principal identity on `channel`.
+ * Comparison rules come from the channel's registered contribution; unknown
+ * channels fail closed (false).
  */
-export const GATE_C_PRINCIPAL_CARVEOUT_SKILLS = new Set(['email-send', 'signal-send']);
-
-/** Whether an email address matches one of the principal's verified email identities. */
-export function isPrincipalEmail(
-  email: string | undefined | null,
-  principalIdentities: readonly ChannelIdentity[],
-): boolean {
-  if (!email || principalIdentities.length === 0) return false;
-  const normalized = email.toLowerCase();
-  return principalIdentities.some(
-    (id) => id.channel === 'email' && id.channelIdentifier.toLowerCase() === normalized,
-  );
-}
-
-/** Whether a Signal identifier (E.164) matches the principal's verified Signal identity. */
-export function isPrincipalSignal(
+export function isPrincipalIdentity(
+  channel: string,
   identifier: string | undefined | null,
   principalIdentities: readonly ChannelIdentity[],
 ): boolean {
   if (!identifier || principalIdentities.length === 0) return false;
+  const rules = findPrincipalChannelRules(channel);
+  if (!rules) return false;
   return principalIdentities.some(
-    (id) => id.channel === 'signal' && id.channelIdentifier === identifier,
-  );
-}
-
-/** Whether a Slack user id (U…) matches the principal's verified Slack identity. */
-export function isPrincipalSlack(
-  identifier: string | undefined | null,
-  principalIdentities: readonly ChannelIdentity[],
-): boolean {
-  if (!identifier || principalIdentities.length === 0) return false;
-  return principalIdentities.some(
-    (id) => id.channel === 'slack' && id.channelIdentifier === identifier,
+    (id) => id.channel === channel && rules.identifiersEqual(id.channelIdentifier, identifier),
   );
 }
 
@@ -70,67 +56,14 @@ export function computePrincipalIsSoleRecipient(recipients: readonly TaggedRecip
   return deduped.length === 1 && deduped[0]!.isPrincipal;
 }
 
-function hasPresentValue(value: unknown): boolean {
-  if (value === undefined || value === null) return false;
-  if (typeof value === 'string') return value.trim().length > 0;
-  if (Array.isArray(value)) return value.length > 0;
-  return true;
-}
-
-function splitCommaSeparatedAddresses(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-}
-
-/**
- * Parse email-send recipients from skill input. Returns null when the input contains
- * recipient-shaped keys this parser does not model (fail closed).
- */
-function parseEmailSendRecipients(input: Record<string, unknown>): string[] | null {
-  const unparsedRecipientKeys = ['bcc', 'recipients', 'recipient', 'group_id', 'groupId'] as const;
-  for (const key of unparsedRecipientKeys) {
-    if (hasPresentValue(input[key])) return null;
-  }
-
-  const to = input['to'];
-  const cc = input['cc'];
-  if (to !== undefined && to !== null && typeof to !== 'string') return null;
-  if (cc !== undefined && cc !== null && typeof cc !== 'string') return null;
-  if (!hasPresentValue(to) || typeof to !== 'string') return null;
-
-  const emails = splitCommaSeparatedAddresses(to);
-  if (typeof cc === 'string' && cc.trim().length > 0) {
-    emails.push(...splitCommaSeparatedAddresses(cc));
-  }
-  return emails;
-}
-
-/**
- * Parse signal-send 1:1 recipient from skill input. Returns null for group sends or
- * when the input contains recipient-shaped keys this parser does not model.
- */
-function parseSignalSendRecipient(input: Record<string, unknown>): string | null {
-  const unparsedRecipientKeys = ['to', 'cc', 'bcc', 'recipients'] as const;
-  for (const key of unparsedRecipientKeys) {
-    if (hasPresentValue(input[key])) return null;
-  }
-
-  const recipient = input['recipient'];
-  const groupId = input['group_id'] ?? input['groupId'];
-  if (recipient !== undefined && recipient !== null && typeof recipient !== 'string') return null;
-  if (hasPresentValue(groupId)) return null;
-  if (!hasPresentValue(recipient)) return null;
-
-  return (recipient as string).trim();
-}
-
 /**
  * Resolve whether a skill invocation's recipient set is exclusively the principal,
  * using verified channel identities. Returns false when recipients cannot be
  * determined from the input (e.g. email-reply without explicit to/cc) or when the
  * skill/input shape is not fully understood (fail closed).
+ *
+ * Fail-closed: only skills listed via `carveoutSkill` on a registered channel
+ * contribution (see `GATE_C_PRINCIPAL_CARVEOUT_SKILLS`) can receive the carve-out.
  */
 export function resolvePrincipalIsSoleRecipientFromSkillInput(
   toolName: string,
@@ -138,23 +71,19 @@ export function resolvePrincipalIsSoleRecipientFromSkillInput(
   principalIdentities: readonly ChannelIdentity[],
 ): boolean {
   if (principalIdentities.length === 0) return false;
+  // Explicit allowlist check keeps the fail-closed default auditable in one Set.
   if (!GATE_C_PRINCIPAL_CARVEOUT_SKILLS.has(toolName)) return false;
 
-  if (toolName === 'email-send') {
-    const emails = parseEmailSendRecipients(input);
-    if (emails === null) return false;
-    const tagged = emails.map((email) => ({
-      identifier: email,
-      isPrincipal: isPrincipalEmail(email, principalIdentities),
-    }));
-    return computePrincipalIsSoleRecipient(tagged);
-  }
+  const rules = findCarveoutRulesBySkill(toolName);
+  const carveout = rules?.carveoutSkill;
+  if (!carveout) return false;
 
-  if (toolName === 'signal-send') {
-    const recipient = parseSignalSendRecipient(input);
-    if (recipient === null) return false;
-    return isPrincipalSignal(recipient, principalIdentities);
-  }
+  const recipients = carveout.parseRecipients(input);
+  if (recipients === null) return false;
 
-  return false;
+  const tagged = recipients.map((identifier) => ({
+    identifier,
+    isPrincipal: isPrincipalIdentity(rules.channel, identifier, principalIdentities),
+  }));
+  return computePrincipalIsSoleRecipient(tagged);
 }
