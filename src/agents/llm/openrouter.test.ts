@@ -199,6 +199,44 @@ describe('OpenRouterProvider', () => {
     expect(result.error.source).toBe('openrouter');
   });
 
+  it('surfaces OpenRouter upstream provider_error detail in the classified error message', async () => {
+    // OpenRouter wraps upstream provider (Google/Anthropic/etc.) failures as a
+    // terse "400 Provider returned error", burying the real cause in
+    // err.error.metadata. This is exactly the shape the OpenAI SDK's APIError
+    // carries for an OpenRouter 400 whose upstream Google request was rejected.
+    const upstreamRaw = JSON.stringify({
+      error: {
+        code: 400,
+        message:
+          '* GenerateContentRequest.tools[0].function_declarations[31].parameters.required[0]: property is not defined',
+        status: 'INVALID_ARGUMENT',
+      },
+    });
+    const apiError = Object.assign(new Error('400 Provider returned error'), {
+      status: 400,
+      error: {
+        message: 'Provider returned error',
+        code: 400,
+        metadata: { provider_name: 'Google', raw: upstreamRaw },
+      },
+    });
+    mockCreate.mockRejectedValue(apiError);
+
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'google/gemini-3.1-flash-lite',
+    });
+
+    expect(result.type).toBe('error');
+    if (result.type !== 'error') return;
+    // The upstream provider name and the underlying reason must both survive
+    // into last_error so the next failure isn't a week-long silent suspension.
+    expect(result.error.message).toContain('Google');
+    expect(result.error.message).toContain('property is not defined');
+    expect(result.error.context.providerName).toBe('Google');
+  });
+
   it('returns error when no model is provided', async () => {
     const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     const result = await provider.chat({

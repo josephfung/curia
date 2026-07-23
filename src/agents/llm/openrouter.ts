@@ -21,6 +21,62 @@ import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
 
+/**
+ * Best-effort message extraction, mirroring classify.ts's own logic so the
+ * enriched message keeps the original wrapper text (e.g. "400 Provider returned
+ * error") as its prefix.
+ */
+function extractRawMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  return 'OpenRouter request failed';
+}
+
+/**
+ * OpenRouter wraps upstream provider (Google, Anthropic, DeepSeek, …) failures
+ * as a terse top-level message ("Provider returned error") and buries the real
+ * cause in `error.metadata`. The OpenAI SDK surfaces that body on the thrown
+ * APIError as `err.error.metadata.{provider_name, raw}`. Without pulling it out,
+ * a scheduled job's `last_error` reads only "400 Provider returned error" — the
+ * actual reason (e.g. a Gemini-incompatible tool schema) is lost, which is how a
+ * broken tier can silently suspend an agent's jobs for a week.
+ *
+ * Returns the upstream provider name and a human-readable reason, or undefined
+ * when the error is not an OpenRouter-shaped provider error.
+ */
+function extractOpenRouterProviderError(
+  err: unknown,
+): { providerName?: string; detail: string } | undefined {
+  if (typeof err !== 'object' || err === null) return undefined;
+  const body = (err as { error?: unknown }).error;
+  if (typeof body !== 'object' || body === null) return undefined;
+  const metadata = (body as { metadata?: unknown }).metadata;
+  if (typeof metadata !== 'object' || metadata === null) return undefined;
+
+  const rawProvider = (metadata as { provider_name?: unknown }).provider_name;
+  const providerName = typeof rawProvider === 'string' && rawProvider ? rawProvider : undefined;
+
+  const rawUpstream = (metadata as { raw?: unknown }).raw;
+  if (typeof rawUpstream !== 'string' || !rawUpstream) {
+    // No upstream body — only useful if we at least learned the provider name.
+    return providerName ? { providerName, detail: 'no upstream detail provided' } : undefined;
+  }
+
+  // `raw` is usually a JSON string of the upstream provider's own error body.
+  // Prefer its nested `.error.message`; fall back to the raw string verbatim.
+  let detail = rawUpstream;
+  try {
+    const parsed: unknown = JSON.parse(rawUpstream);
+    const nested = (parsed as { error?: { message?: unknown } })?.error?.message;
+    if (typeof nested === 'string' && nested) detail = nested;
+  } catch {
+    // Not JSON — the raw string is the best detail we have. classify.ts
+    // truncates and PII-scrubs it downstream, so passing it through is safe.
+  }
+
+  return { providerName, detail };
+}
+
 export class OpenRouterProvider implements LLMProvider {
   id = 'openrouter';
   private client: OpenAI;
@@ -335,9 +391,33 @@ export class OpenRouterProvider implements LLMProvider {
       };
     } catch (err) {
       this.logger.error({ err, model }, 'OpenRouter API call failed');
+
+      // Pull OpenRouter's buried upstream-provider detail up into the error
+      // message before classification, so `last_error` (and the LLM-facing
+      // <task_error> block) carry the real cause instead of the opaque
+      // "400 Provider returned error" wrapper.
+      const providerDetail = extractOpenRouterProviderError(err);
+      const errorForClassification = providerDetail
+        ? Object.assign(
+            new Error(
+              `${extractRawMessage(err)} (${providerDetail.providerName ?? 'upstream provider'}: ${providerDetail.detail})`,
+            ),
+            // Preserve status/code so classifyError still maps the HTTP status
+            // (400 → VALIDATION_ERROR, 5xx → PROVIDER_ERROR, etc.) correctly.
+            {
+              status: (err as { status?: unknown }).status,
+              code: (err as { code?: unknown }).code,
+            },
+          )
+        : err;
+
       // Classify the error into a structured AgentError so the runtime
       // can make informed retry and budget decisions.
-      return { type: 'error', error: classifyError(err, 'openrouter') };
+      const classified = classifyError(errorForClassification, 'openrouter');
+      if (providerDetail?.providerName) {
+        classified.context.providerName = providerDetail.providerName;
+      }
+      return { type: 'error', error: classified };
     }
   }
 }

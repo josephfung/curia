@@ -33,6 +33,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`scheduler-list`** — bound and trim results so a large jobs table no longer overflows the model context. (#1487)
 - **`scheduler-list`** — return timestamps in the user's timezone instead of raw UTC. (#1487)
 - **Tool outputs** — cap total object-output size, not just per-leaf, matching the string-output path. (#1487)
+- **OpenRouter errors** — surface the upstream provider name and reason in `last_error` instead of the opaque "Provider returned error".
 
 ## [0.41.0] — 2026-07-21 — "Data"
 
