@@ -46,6 +46,7 @@ function extractRawMessage(err: unknown): string {
  */
 function extractOpenRouterProviderError(
   err: unknown,
+  logger: Logger,
 ): { providerName?: string; detail: string } | undefined {
   if (typeof err !== 'object' || err === null) return undefined;
   const body = (err as { error?: unknown }).error;
@@ -72,6 +73,12 @@ function extractOpenRouterProviderError(
   } catch {
     // Not JSON — the raw string is the best detail we have. classify.ts
     // truncates and PII-scrubs it downstream, so passing it through is safe.
+    // This is an expected branch (some providers return a plain-string `raw`),
+    // not an error condition, so log at debug rather than swallowing silently.
+    logger.debug(
+      { rawPreview: rawUpstream.slice(0, 200) },
+      'OpenRouter metadata.raw is not JSON — using the verbatim string as the error detail',
+    );
   }
 
   // Cap the detail so a large unparsed upstream blob can't push the actual
@@ -405,7 +412,7 @@ export class OpenRouterProvider implements LLMProvider {
       // message before classification, so `last_error` (and the LLM-facing
       // <task_error> block) carry the real cause instead of the opaque
       // "400 Provider returned error" wrapper.
-      const providerDetail = extractOpenRouterProviderError(err);
+      const providerDetail = extractOpenRouterProviderError(err, this.logger);
       const errorForClassification = providerDetail
         ? Object.assign(
             // Lead with the distilled upstream reason so it survives the
