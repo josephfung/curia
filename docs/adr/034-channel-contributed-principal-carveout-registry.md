@@ -38,3 +38,6 @@ matching for the outbound gateway, no Gate C carve-out until a send skill opts i
 - Trade-off: the registry still imports each channel module explicitly (no
   side-effect self-registration), by design — an invisible register call would
   weaken the audit story.
+- The outbound gateway still owns request-shape → recipient projection
+  (`projectRecipients`) in one place until channels fully own that wire-shape
+  (#1513). Identity compare and Gate C skill parsing do not live there.

@@ -15,12 +15,42 @@ import { emailPrincipalRules } from '../channels/email/principal-rules.js';
 import { signalPrincipalRules } from '../channels/signal/principal-rules.js';
 import { slackPrincipalRules } from '../channels/slack/principal-rules.js';
 
+/**
+ * Fail fast on duplicate channel ids or carve-out skill names. First-match
+ * `.find` lookups would otherwise silently shadow a second entry.
+ */
+export function assertPrincipalChannelRegistryUnique(
+  rules: readonly PrincipalChannelRules[],
+): void {
+  const channels = new Set<string>();
+  const skills = new Set<string>();
+  for (const entry of rules) {
+    if (channels.has(entry.channel)) {
+      throw new Error(
+        `principal-channel-registry: duplicate channel '${entry.channel}'`,
+      );
+    }
+    channels.add(entry.channel);
+    const skillName = entry.carveoutSkill?.skillName;
+    if (skillName !== undefined) {
+      if (skills.has(skillName)) {
+        throw new Error(
+          `principal-channel-registry: duplicate carveout skill '${skillName}'`,
+        );
+      }
+      skills.add(skillName);
+    }
+  }
+}
+
 /** Ordered registry of channel principal rules. This is the Gate C opt-in list. */
 export const PRINCIPAL_CHANNEL_RULES: readonly PrincipalChannelRules[] = [
   emailPrincipalRules,
   signalPrincipalRules,
   slackPrincipalRules,
 ];
+
+assertPrincipalChannelRegistryUnique(PRINCIPAL_CHANNEL_RULES);
 
 /** Derived allowlist of skill names opted into the Gate C principal carve-out. */
 export const GATE_C_PRINCIPAL_CARVEOUT_SKILLS: ReadonlySet<string> = new Set(

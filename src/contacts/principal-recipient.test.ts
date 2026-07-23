@@ -6,7 +6,11 @@ import {
   resolvePrincipalIsSoleRecipientFromSkillInput,
   GATE_C_PRINCIPAL_CARVEOUT_SKILLS,
 } from './principal-recipient.js';
-import { PRINCIPAL_CHANNEL_RULES } from './principal-channel-registry.js';
+import {
+  PRINCIPAL_CHANNEL_RULES,
+  assertPrincipalChannelRegistryUnique,
+} from './principal-channel-registry.js';
+import type { PrincipalChannelRules } from './principal-channel-rules.js';
 
 function makeIdentity(channel: string, identifier: string): ChannelIdentity {
   return {
@@ -37,6 +41,30 @@ describe('principal-recipient', () => {
       const slack = PRINCIPAL_CHANNEL_RULES.find((r) => r.channel === 'slack');
       expect(slack).toBeDefined();
       expect(slack!.carveoutSkill).toBeUndefined();
+    });
+
+    it('rejects duplicate channel ids and carve-out skill names', () => {
+      expect(() => assertPrincipalChannelRegistryUnique(PRINCIPAL_CHANNEL_RULES)).not.toThrow();
+
+      const dupChannel: PrincipalChannelRules = {
+        channel: 'email',
+        identifiersEqual: (a, b) => a === b,
+      };
+      expect(() =>
+        assertPrincipalChannelRegistryUnique([...PRINCIPAL_CHANNEL_RULES, dupChannel]),
+      ).toThrow(/duplicate channel 'email'/);
+
+      const dupSkill: PrincipalChannelRules = {
+        channel: 'other',
+        identifiersEqual: (a, b) => a === b,
+        carveoutSkill: {
+          skillName: 'email-send',
+          parseRecipients: () => [],
+        },
+      };
+      expect(() =>
+        assertPrincipalChannelRegistryUnique([...PRINCIPAL_CHANNEL_RULES, dupSkill]),
+      ).toThrow(/duplicate carveout skill 'email-send'/);
     });
   });
 
