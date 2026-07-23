@@ -74,6 +74,15 @@ function extractOpenRouterProviderError(
     // truncates and PII-scrubs it downstream, so passing it through is safe.
   }
 
+  // Cap the detail so a large unparsed upstream blob can't push the actual
+  // reason past classify.ts's 400-char message truncation — that would
+  // reproduce, in milder form, the very burial this extraction fixes. The
+  // caller leads the message with this detail, so the head always survives.
+  const MAX_DETAIL_LENGTH = 300;
+  if (detail.length > MAX_DETAIL_LENGTH) {
+    detail = `${detail.slice(0, MAX_DETAIL_LENGTH)}…`;
+  }
+
   return { providerName, detail };
 }
 
@@ -399,8 +408,10 @@ export class OpenRouterProvider implements LLMProvider {
       const providerDetail = extractOpenRouterProviderError(err);
       const errorForClassification = providerDetail
         ? Object.assign(
+            // Lead with the distilled upstream reason so it survives the
+            // downstream 400-char truncation; the opaque wrapper trails.
             new Error(
-              `${extractRawMessage(err)} (${providerDetail.providerName ?? 'upstream provider'}: ${providerDetail.detail})`,
+              `${providerDetail.providerName ?? 'upstream provider'}: ${providerDetail.detail} (${extractRawMessage(err)})`,
             ),
             // Preserve status/code so classifyError still maps the HTTP status
             // (400 → VALIDATION_ERROR, 5xx → PROVIDER_ERROR, etc.) correctly.

@@ -232,9 +232,36 @@ describe('OpenRouterProvider', () => {
     if (result.type !== 'error') return;
     // The upstream provider name and the underlying reason must both survive
     // into last_error so the next failure isn't a week-long silent suspension.
-    expect(result.error.message).toContain('Google');
+    // The reason leads (so it survives truncation); the wrapper trails.
+    expect(result.error.message).toMatch(/^Google: /);
     expect(result.error.message).toContain('property is not defined');
+    expect(result.error.message).toContain('400 Provider returned error');
     expect(result.error.context.providerName).toBe('Google');
+    // Status-derived classification must be unchanged by the enrichment.
+    expect(result.error.type).toBe('VALIDATION_ERROR');
+  });
+
+  it('caps an oversized non-JSON upstream raw body so the reason is not truncated away', async () => {
+    // When metadata.raw is not JSON, we fall back to the raw string. A large
+    // blob must be capped so the leading provider+reason survives classify.ts's
+    // 400-char message truncation.
+    const hugeRaw = 'x'.repeat(5000);
+    const apiError = Object.assign(new Error('400 Provider returned error'), {
+      status: 400,
+      error: { metadata: { provider_name: 'Google', raw: hugeRaw } },
+    });
+    mockCreate.mockRejectedValue(apiError);
+
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'google/gemini-3.1-flash-lite',
+    });
+
+    expect(result.type).toBe('error');
+    if (result.type !== 'error') return;
+    expect(result.error.message).toMatch(/^Google: /);
+    expect(result.error.message).toContain('…');
   });
 
   it('returns error when no model is provided', async () => {
