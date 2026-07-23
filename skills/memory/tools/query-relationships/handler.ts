@@ -60,9 +60,12 @@ export class QueryRelationshipsHandler implements ToolHandler {
 
       const relationships = edges.map(({ edge, node, direction }) => ({
         edge_id: edge.id,
-        subject: direction === 'outbound' ? entity : node.label,
+        // Use the resolved node's canonical label for the queried side (not the raw
+        // `entity` input), so both sides read consistently — e.g. querying "jane doe"
+        // returns "Jane Doe" to match the KG, not the caller's casing.
+        subject: direction === 'outbound' ? entityNode.label : node.label,
         predicate: edge.type,
-        object: direction === 'outbound' ? node.label : entity,
+        object: direction === 'outbound' ? node.label : entityNode.label,
         direction,
         confidence: edge.temporal.confidence,
         last_confirmed_at: edge.temporal.lastConfirmedAt.toISOString(),
