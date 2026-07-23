@@ -28,9 +28,7 @@ import type { ContactService } from '../contacts/contact-service.js';
 import { classifyEmailSender } from '../contacts/contact-service.js';
 import type { ContactTier, ChannelIdentity } from '../contacts/types.js';
 import {
-  isPrincipalEmail as checkPrincipalEmail,
-  isPrincipalSignal as checkPrincipalSignal,
-  isPrincipalSlack as checkPrincipalSlack,
+  isPrincipalIdentity,
   computePrincipalIsSoleRecipient,
 } from '../contacts/principal-recipient.js';
 import type { OutboundContentFilter, FilterRecipient } from '../dispatch/outbound-filter.js';
@@ -1230,49 +1228,38 @@ export class OutboundGateway {
   /**
    * Check whether the recipient is the principal (the human Curia serves).
    * Resolves against the principal contact's verified channel identities,
-   * loaded from the database at startup.
+   * loaded from the database at startup. Channel-specific compare rules come
+   * from each channel's registered principal-rules contribution.
    */
   private isPrincipalRecipient(request: OutboundSendRequest): boolean {
     if (request.channel === 'email' && request.to) {
-      return checkPrincipalEmail(request.to, this.principalIdentities);
+      return this.isPrincipalOnChannel('email', request.to);
     }
     if (request.channel === 'signal' && 'recipient' in request && request.recipient) {
-      return checkPrincipalSignal(request.recipient, this.principalIdentities);
+      return this.isPrincipalOnChannel('signal', request.recipient);
     }
     // Slack: trust the sender/recipient U…, never the D…/C… conversation id.
     if (request.channel === 'slack') {
-      return checkPrincipalSlack(request.slackUserId, this.principalIdentities);
+      return this.isPrincipalOnChannel('slack', request.slackUserId);
     }
     return false;
   }
 
   /**
-   * Check whether an email address belongs to the principal.
-   * Used by sendEmailDraft() for the autonomy bypass.
+   * Channel-parameterized principal identity check. Must pass the channel that
+   * owns the identifier (email matcher must NOT be used for Signal/Slack).
    */
-  private isPrincipalEmail(email: string | undefined | null): boolean {
-    return checkPrincipalEmail(email, this.principalIdentities);
-  }
-
-  /**
-   * Check whether a Signal identifier (E.164 phone) belongs to the principal.
-   * Matches against the principal's verified SIGNAL channel identities — the email
-   * matcher (isPrincipalEmail) must NOT be used for Signal, or a 1:1 principal Signal
-   * reply would be mis-tagged as a third party and lose its private-channel skip.
-   */
-  private isPrincipalSignal(identifier: string | undefined | null): boolean {
-    return checkPrincipalSignal(identifier, this.principalIdentities);
-  }
-
-  private isPrincipalSlack(identifier: string | undefined | null): boolean {
-    return checkPrincipalSlack(identifier, this.principalIdentities);
+  private isPrincipalOnChannel(
+    channel: string,
+    identifier: string | undefined | null,
+  ): boolean {
+    return isPrincipalIdentity(channel, identifier, this.principalIdentities);
   }
 
   /**
    * Build the structural recipient set for the content filter's Stage 2 judge.
    * `isPrincipal` is computed from the principal's verified channel identities —
-   * channel-aware (email matcher for email, Signal matcher for Signal, Slack
-   * matcher for Slack user ids) — NOT the free-text contact role.
+   * channel-aware via `isPrincipalIdentity` — NOT the free-text contact role.
    *
    * For email: To + CC merged, in order. For Signal: the single recipient (matched
    * via the principal's Signal identity) or a groupId (never a sole-principal channel,
@@ -1290,11 +1277,11 @@ export class OutboundGateway {
       const emails = [request.to, ...(request.cc ?? [])];
       tagged = emails
         .filter((e) => e.length > 0)
-        .map((email) => ({ email, isPrincipal: this.isPrincipalEmail(email) }));
+        .map((email) => ({ email, isPrincipal: this.isPrincipalOnChannel('email', email) }));
     } else if (request.channel === 'slack') {
       const identifier = request.slackUserId ?? request.slackChannelId;
       const isPrincipal = request.slackUserId
-        ? this.isPrincipalSlack(request.slackUserId)
+        ? this.isPrincipalOnChannel('slack', request.slackUserId)
         : false;
       tagged = identifier.length > 0
         ? [{ email: identifier, isPrincipal }]
@@ -1303,7 +1290,9 @@ export class OutboundGateway {
       // Signal: tag via the principal's verified Signal identity. A groupId is never
       // the principal's private channel, so it is always a non-principal recipient.
       const identifier = request.recipient ?? request.groupId ?? '';
-      const isPrincipal = request.recipient ? this.isPrincipalSignal(request.recipient) : false;
+      const isPrincipal = request.recipient
+        ? this.isPrincipalOnChannel('signal', request.recipient)
+        : false;
       tagged = identifier.length > 0 ? [{ email: identifier, isPrincipal }] : [];
     }
     return this.finalizeRecipientSet(tagged);
@@ -1311,8 +1300,9 @@ export class OutboundGateway {
 
   /**
    * Build the structural recipient set from a flat list of recipient emails.
-   * `isPrincipal` is from the principal's verified email identities (isPrincipalEmail),
-   * never the contact role. Used by the email draft-send path (drafts are email-only).
+   * `isPrincipal` is from the principal's verified email identities
+   * (`isPrincipalIdentity('email', …)`), never the contact role. Used by the
+   * email draft-send path (drafts are email-only).
    */
   private buildRecipientSet(emails: string[]): {
     recipients: FilterRecipient[];
@@ -1321,7 +1311,7 @@ export class OutboundGateway {
   } {
     const tagged: FilterRecipient[] = emails
       .filter((e) => e.length > 0)
-      .map((email) => ({ email, isPrincipal: this.isPrincipalEmail(email) }));
+      .map((email) => ({ email, isPrincipal: this.isPrincipalOnChannel('email', email) }));
     return this.finalizeRecipientSet(tagged);
   }
 
@@ -1635,7 +1625,7 @@ export class OutboundGateway {
         { draftId },
         'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized draft send, see ADR-017)',
       );
-    } else if (this.autonomyService && this.isPrincipalEmail(draftMeta.recipientEmail)) {
+    } else if (this.autonomyService && this.isPrincipalOnChannel('email', draftMeta.recipientEmail)) {
       // Agent-to-principal: principal-bound draft sends bypass the autonomy gate.
       // Same rationale as the send() principal bypass — see isPrincipalRecipient() comment.
       this.log.info(

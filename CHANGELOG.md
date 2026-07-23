@@ -24,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Principal carve-out** — channels contribute Gate C rules via a registry; no central per-channel switch. (#1510)
 - **Tools vs skills vocabulary** — atoms are **tools** (`tool.json`, `ToolRegistry`; audit readers dual-match legacy `skill.*`); collections are **skills**. (#1485, #1489; ADR-031)
 - **Polymorphic pins** — a pin resolves a skill, a single tool, or an MCP-projected skill (per-tool `action_risk` preserved); `enable_task_management` retired for pinning `tasks` + `documents`; `tasks` gains `plan`/`checkpoint`, `memory` gains `decay-warnings-list`. (#1489, #1494; ADR-032)
 - **`approve-grant-recommendation`** — `action_risk` raised low→critical, matching direct permission grants. (#1499)
