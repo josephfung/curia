@@ -40,6 +40,7 @@ import {
 } from './planned-task.js';
 import {
   SKILL_ACTIVATE_TOOL_NAME,
+  buildSkillActivationAck,
   formatActivatedSkillInstructionBlock,
   formatSkillReferenceBlock,
   parseSkillActivationProtocol,
@@ -1240,6 +1241,12 @@ export class AgentRuntime {
           // Success: reset consecutive error counter
           budget.consecutiveErrors = 0;
 
+          // When a tool result is (partly) re-emitted into the turn by the runtime
+          // — e.g. skill-activate, whose instructions/reference bodies are spliced
+          // as system messages below — the generic tool_result JSON is slimmed to a
+          // metadata-only acknowledgement so the payload is not injected twice (#1505).
+          let toolResultOverride: string | undefined;
+
           // Dynamic tool-list expansion: when tool-registry returns successfully,
           // append discovered kind:'tool' atoms to the working list. kind:'skill'
           // results require skill-activate (instructions + member tools together).
@@ -1327,6 +1334,10 @@ export class AgentRuntime {
                   },
                   'Activated skill for task turn',
                 );
+                // Instructions + reference content are now in the turn as system
+                // messages; slim the tool_result to metadata so they aren't injected
+                // a second time via the generic JSON stringify below (#1505).
+                toolResultOverride = JSON.stringify(buildSkillActivationAck(activation));
               }
             } catch (err) {
               logger.warn({ err, agentId }, 'Failed to apply skill-activate result to working tool list');
@@ -1409,7 +1420,8 @@ export class AgentRuntime {
             }
           }
 
-          const resultContent = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
+          const resultContent = toolResultOverride
+            ?? (typeof result.data === 'string' ? result.data : JSON.stringify(result.data));
           toolResultBlocks.push({
             type: 'tool_result',
             tool_use_id: toolCall.id,

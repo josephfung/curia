@@ -18,8 +18,13 @@ export type SkillResourceKind = (typeof SKILL_RESOURCE_KINDS)[number];
 
 const TEXT_EXTENSIONS = new Set([
   '.md', '.txt', '.json', '.yaml', '.yml', '.csv', '.tsv', '.xml', '.html',
-  '.css', '.js', '.ts', '.py', '.sh', '.toml', '.ini', '.cfg', '.env.example',
+  '.css', '.js', '.ts', '.py', '.sh', '.toml', '.ini', '.cfg',
 ]);
+
+// Text files whose real "extension" fools path.extname — e.g. it returns
+// '.example' for '.env.example', so an extension entry would never match.
+// Matched by full (lowercased) basename instead.
+const TEXT_BASENAMES = new Set(['.env.example']);
 
 export interface SkillResourceLists {
   references: string[];
@@ -121,8 +126,9 @@ export function readSkillResource(
     return { ok: false, error: 'Invalid skill resource path (symlink escape)' };
   }
 
+  const base = path.basename(realFile).toLowerCase();
   const ext = path.extname(realFile).toLowerCase();
-  if (ext && !TEXT_EXTENSIONS.has(ext)) {
+  if (ext && !TEXT_EXTENSIONS.has(ext) && !TEXT_BASENAMES.has(base)) {
     return {
       ok: false,
       error:

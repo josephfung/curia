@@ -10,7 +10,7 @@ This is Phase 3 of the tools/skills rework (#1490). Design:
 | Payload | Behavior |
 |---------|----------|
 | `SKILL.md` (name + description + body) | Discovered and activatable. Body injected on `skill-activate` (or at bootstrap if pinned). |
-| `references/*.md`, `assets/*` | Listed at activation; loaded on demand via `skill-activate({ skill, reference })`. |
+| `references/*.md`, `assets/*` | Listed at activation. **Text files** load on demand via `skill-activate({ skill, reference })`; **binary assets** stay listed but are rejected when requested (never injected into context). |
 | `scripts/` | **Warned at import, never run.** Instructions + assets still load. |
 
 **Authority containment:** an imported skill cannot expand the activating agent's tool authority. Instructions only steer toward tools the agent already holds (`allowed_callers` / `action_risk` still apply). Imported skills typically declare no tools at all.
