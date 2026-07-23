@@ -20,7 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Runtime skill activation & MCP-as-skill** — `toolSearch` returns `kind:"skill"`; `skill-activate` loads a skill's tools + instructions (Tier 1 persists in `progress.activeSkills`); each connected MCP server projects a pinnable skill. (#1494, #1495)
 - **Slack channel** — Socket Mode DMs, @mentions, in-thread replies; `inbound.reaction` bus event (ADR-033). (#1477)
 - **`OutboundSendRequest`** — new `slack` variant for gateway `chat.postMessage` delivery (public API).
-- **`inbound.reaction`** — channel-agnostic reaction signal for approval UX (emoji→intent in dispatch).
+- **`inbound.reaction`** — channel-agnostic reaction signal for approval UX; emoji→intent mapping follows in #1479.
 
 ### Changed
 

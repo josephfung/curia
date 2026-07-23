@@ -52,7 +52,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [029](029-passive-email-observation-and-counterfactual-competence.md) | Passive email observation with counterfactual (shadow) competence as a Phase 3 input — reuse existing stores, no new memory types | Accepted |
 | [030](030-per-task-warm-browser-session.md) | Opt-in, per-task warm browser session (`keep_warm`) — reject a global canonical session (collision); profile-level warmth stays always-on | Accepted |
 | [031](031-tools-vs-skills-vocabulary.md) | Tools vs skills vocabulary — atom rename to **tool**; free **skill** for collections (Phase 1 of #1436) | Accepted |
-| [032](032-polymorphic-pins-and-mcp-as-skill.md) | Polymorphic capability pins (skill | tool | future MCP) + MCP servers project skills into `SkillRegistry` — prerequisites for #1494 | Accepted |
+| [032](032-polymorphic-pins-and-mcp-as-skill.md) | Polymorphic capability pins (skill \| tool \| future MCP) + MCP servers project skills into `SkillRegistry` — prerequisites for #1494 | Accepted |
 | [033](033-slack-channel-socket-mode.md) | Slack via Socket Mode — workspace-owned app, DMs + @mentions + in-thread continuation, sender-identity trust, `inbound.reaction` | Accepted |
 
 ## Adding new ADRs

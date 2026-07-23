@@ -62,6 +62,7 @@ describe('principal-recipient', () => {
 
     it('rejects conversation ids (D…/C…)', () => {
       expect(isPrincipalSlack('D123', PRINCIPAL_IDENTITIES)).toBe(false);
+      expect(isPrincipalSlack('C123', PRINCIPAL_IDENTITIES)).toBe(false);
     });
   });
 
