@@ -1,34 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import pino from 'pino';
-import { KnowledgeGraphStore } from '../../../../src/memory/knowledge-graph.js';
-import { EmbeddingService } from '../../../../src/memory/embedding.js';
-import { EntityMemory } from '../../../../src/memory/entity-memory.js';
-import { MemoryValidator } from '../../../../src/memory/validation.js';
-import { createSilentLogger } from '../../../../src/logger.js';
 import { QueryRelationshipsHandler } from './handler.js';
-import type { ToolContext } from '../../../../src/skills/types.js';
-
-// makeEntityMemoryWithStore returns both for tests that need direct store access
-// (e.g. to simulate pre-migration duplicates by bypassing upsert logic)
-function makeEntityMemoryWithStore() {
-  const embeddingService = EmbeddingService.createForTesting();
-  const store = KnowledgeGraphStore.createInMemory(embeddingService);
-  const validator = new MemoryValidator(store, embeddingService);
-  return { mem: new EntityMemory(store, validator, embeddingService, createSilentLogger()), store };
-}
-
-function makeEntityMemory() {
-  return makeEntityMemoryWithStore().mem;
-}
-
-function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): ToolContext {
-  return {
-    input,
-    secret: () => 'test-key',
-    log: pino({ level: 'silent' }),
-    entityMemory,
-  } as unknown as ToolContext;
-}
+import { makeEntityMemory, makeEntityMemoryWithStore, makeCtx } from '../_shared/test-helpers.js';
 
 describe('QueryRelationshipsHandler', () => {
   it('returns empty relationships when entity is not found', async () => {
@@ -153,5 +125,22 @@ describe('QueryRelationshipsHandler', () => {
     expect(xiaopuData.relationships[0]!.direction).toBe('inbound');
     expect(xiaopuData.relationships[0]!.subject).toBe('Jane Doe');
     expect(xiaopuData.relationships[0]!.object).toBe('John Smith');
+  });
+
+  it('uses the resolved canonical label for the queried side, not the raw input casing', async () => {
+    const mem = makeEntityMemory();
+    const { entity: jane } = await mem.createEntity({ type: 'person', label: 'Jane Doe', properties: {}, source: 'test' });
+    const { entity: acme } = await mem.createEntity({ type: 'organization', label: 'Acme Corp', properties: {}, source: 'test' });
+    await mem.upsertEdge(jane.id, acme.id, 'member_of', {}, 'test', 0.8);
+
+    const handler = new QueryRelationshipsHandler();
+    // Query with a differently-cased label; resolution is case-insensitive, so this
+    // resolves to the 'Jane Doe' node whose canonical label must be what we return.
+    const ctx = makeCtx(mem, { entity: 'jane doe' });
+    const result = await handler.execute(ctx);
+
+    const data = (result as { success: true; data: { relationships: Array<{ subject: string; object: string }> } }).data;
+    expect(data.relationships[0]!.subject).toBe('Jane Doe'); // canonical, not 'jane doe'
+    expect(data.relationships[0]!.object).toBe('Acme Corp');
   });
 });

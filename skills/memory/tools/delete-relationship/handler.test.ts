@@ -1,34 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import pino from 'pino';
-import { KnowledgeGraphStore } from '../../../../src/memory/knowledge-graph.js';
-import { EmbeddingService } from '../../../../src/memory/embedding.js';
-import { EntityMemory } from '../../../../src/memory/entity-memory.js';
-import { MemoryValidator } from '../../../../src/memory/validation.js';
-import { createSilentLogger } from '../../../../src/logger.js';
 import { DeleteRelationshipHandler } from './handler.js';
-import type { ToolContext } from '../../../../src/skills/types.js';
-
-function makeEntityMemory() {
-  return makeEntityMemoryWithStore().mem;
-}
-
-// Returns both mem and store for tests that need to bypass upsert
-// (e.g. to simulate pre-migration duplicate data by inserting directly)
-function makeEntityMemoryWithStore() {
-  const embeddingService = EmbeddingService.createForTesting();
-  const store = KnowledgeGraphStore.createInMemory(embeddingService);
-  const validator = new MemoryValidator(store, embeddingService);
-  return { mem: new EntityMemory(store, validator, embeddingService, createSilentLogger()), store };
-}
-
-function makeCtx(entityMemory: EntityMemory, input: Record<string, unknown>): ToolContext {
-  return {
-    input,
-    secret: () => 'test-key',
-    log: pino({ level: 'silent' }),
-    entityMemory,
-  } as unknown as ToolContext;
-}
+import { makeEntityMemory, makeEntityMemoryWithStore, makeCtx } from '../_shared/test-helpers.js';
 
 describe('DeleteRelationshipHandler', () => {
   it('returns error for unknown predicate', async () => {
