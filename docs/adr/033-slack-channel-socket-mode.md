@@ -49,3 +49,6 @@ App distribution alternatives:
 - Reaction→approval wiring is intentionally a follow-up (#1479) so the bus primitive ships with Slack.
 - Contact auto-create (create → link → orphan cleanup) is shared via
   `ContactService.ensureChannelContact` (#1480) so Voice/SMS can call the same helper.
+  Best-effort cleanup (not a DB transaction): neither approach closes the KG-node
+  orphan window on a raced create — `createEntity` may return a label-shared node, so
+  we intentionally leave it and only delete the orphaned contact row.

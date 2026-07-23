@@ -48,7 +48,8 @@ function makeMockContactService(resolved: { contactId: string } | null = null) {
   return {
     resolveByChannelIdentity: vi.fn().mockResolvedValue(resolved),
     ensureChannelContact: vi.fn().mockResolvedValue({
-      contact: { id: resolved?.contactId ?? 'new-contact-id', tier: 'unknown' },
+      contactId: resolved?.contactId ?? 'new-contact-id',
+      tier: 'unknown',
       created: resolved == null,
     }),
     createContact: vi.fn().mockResolvedValue({ id: 'new-contact-id' }),
