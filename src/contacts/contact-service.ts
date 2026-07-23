@@ -830,6 +830,103 @@ export class ContactService {
     return this.backend.resolveByChannelIdentity(channel, channelIdentifier);
   }
 
+  /**
+   * Resolve-or-create a contact for an inbound channel identity.
+   *
+   * Shared by Signal / Slack (and future Voice / SMS) adapters so each channel does
+   * not re-implement the create → link → orphan-cleanup dance (#1480).
+   *
+   * Design: best-effort create+link with orphan cleanup — not a single DB transaction.
+   * `createContact` creates a KG entity outside Postgres before inserting the contact
+   * row, and neither `createContact` nor `createIdentity` accept a transaction client
+   * today. Wrapping only the SQL inserts would still leave the orphan window for the
+   * KG node and would require a larger backend-interface refactor. Lifting the proven
+   * adapter cleanup path keeps behavior identical while closing the Signal 1:1 leak
+   * (that path previously lacked cleanup on link race).
+   *
+   * `23505` on link is expected (concurrent create for the same identifier): the
+   * orphan contact is deleted and the existing contact is resolved and returned with
+   * `created: false`. Non-duplicate link failures clean up the orphan and rethrow.
+   *
+   * Display-name resolution stays in the caller (channel-specific lookups). Auto-verify
+   * semantics are unchanged: `source` is passed through to `linkIdentity` so
+   * `signal_participant` / `slack_participant` remain in AUTO_VERIFIED_SOURCES.
+   */
+  async ensureChannelContact(params: {
+    channel: string;
+    channelIdentifier: string;
+    source: IdentitySource;
+    displayName: string;
+    fallbackDisplayName?: string;
+    tier?: ContactTier;
+  }): Promise<{ contact: Contact; created: boolean }> {
+    const existing = await this.resolveByChannelIdentity(params.channel, params.channelIdentifier);
+    if (existing) {
+      const contact = await this.getContact(existing.contactId);
+      if (!contact) {
+        // Identity JOIN succeeded but the contact row is gone — impossible under the
+        // Postgres FK (ON DELETE CASCADE) and the in-memory cascade mirror. Fail loud.
+        throw new Error(
+          `ensureChannelContact: identity resolved to missing contact ${existing.contactId}`,
+        );
+      }
+      return { contact, created: false };
+    }
+
+    const contact = await this.createContact({
+      displayName: params.displayName,
+      fallbackDisplayName: params.fallbackDisplayName,
+      source: params.source,
+      tier: params.tier ?? 'unknown',
+    });
+
+    try {
+      await this.linkIdentity({
+        contactId: contact.id,
+        channel: params.channel,
+        channelIdentifier: params.channelIdentifier,
+        source: params.source,
+      });
+      return { contact, created: true };
+    } catch (linkErr) {
+      const isDuplicate = (linkErr as { code?: string }).code === '23505';
+      // Always clean up the newly created contact — linkIdentity failed regardless of reason.
+      // 23505: identity already belongs to an existing contact (concurrent create).
+      // Non-23505: unexpected failure. In both cases the new contact row is orphaned.
+      try {
+        await this.deleteContact(contact.id);
+      } catch (cleanupErr) {
+        this.logger?.warn(
+          {
+            cleanupErr,
+            orphanId: contact.id,
+            channel: params.channel,
+            channelIdentifier: params.channelIdentifier,
+          },
+          'ensureChannelContact: failed to clean up orphan contact after linkIdentity failure',
+        );
+      }
+
+      if (isDuplicate) {
+        this.logger?.debug(
+          { channel: params.channel, channelIdentifier: params.channelIdentifier },
+          'ensureChannelContact: identity already exists from a prior message — resolving existing contact',
+        );
+        const resolved = await this.resolveByChannelIdentity(params.channel, params.channelIdentifier);
+        if (resolved) {
+          const existingContact = await this.getContact(resolved.contactId);
+          if (existingContact) {
+            return { contact: existingContact, created: false };
+          }
+        }
+        // Winner's contact vanished between link failure and re-resolve — surface original error.
+        throw linkErr;
+      }
+
+      throw linkErr;
+    }
+  }
+
   /** Get a contact together with all its linked channel identities. */
   async getContactWithIdentities(
     id: string,

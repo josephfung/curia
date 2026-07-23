@@ -247,6 +247,7 @@ export class SlackAdapter implements Channel {
 
   private async ensureSlackContact(senderId: string): Promise<void> {
     try {
+      // Skip users.info when the contact already exists — avoid an API round-trip per message.
       const existing = await this.config.contactService.resolveByChannelIdentity('slack', senderId);
       if (existing) return;
 
@@ -254,43 +255,19 @@ export class SlackAdapter implements Channel {
       const userInfo = await this.config.client.lookupUser(senderId);
       if (userInfo?.displayName) displayName = userInfo.displayName;
 
-      let contact: { id: string } | null = null;
-      try {
-        contact = await this.config.contactService.createContact({
-          displayName,
-          fallbackDisplayName: senderId,
-          source: 'slack_participant',
-          tier: 'unknown',
-        });
-      } catch (err) {
-        this.log.warn({ err, senderId }, 'Failed to create contact for Slack sender');
-      }
-
-      if (contact) {
-        try {
-          await this.config.contactService.linkIdentity({
-            contactId: contact.id,
-            channel: 'slack',
-            channelIdentifier: senderId,
-            source: 'slack_participant',
-          });
-          this.log.info({ senderId, displayName }, 'Auto-created contact from Slack sender');
-        } catch (linkErr) {
-          const isDuplicate = (linkErr as { code?: string }).code === '23505';
-          try {
-            await this.config.contactService.deleteContact(contact.id);
-          } catch (cleanupErr) {
-            this.log.warn(
-              { cleanupErr, orphanId: contact.id, senderId },
-              'Slack adapter: failed to clean up orphan contact after linkIdentity failure',
-            );
-          }
-          if (!isDuplicate) {
-            this.log.warn({ err: linkErr, senderId }, 'Slack adapter: linkIdentity failed');
-          }
-        }
+      const { created } = await this.config.contactService.ensureChannelContact({
+        channel: 'slack',
+        channelIdentifier: senderId,
+        source: 'slack_participant',
+        displayName,
+        fallbackDisplayName: senderId,
+        tier: 'unknown',
+      });
+      if (created) {
+        this.log.info({ senderId, displayName }, 'Auto-created contact from Slack sender');
       }
     } catch (err) {
+      // Non-fatal: contact creation is best-effort. The inbound message is still published.
       this.log.warn({ err, senderId }, 'Failed to resolve/auto-create Slack contact');
     }
   }

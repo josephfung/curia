@@ -47,6 +47,10 @@ function makeMockGateway() {
 function makeMockContactService(resolved: { contactId: string } | null = null) {
   return {
     resolveByChannelIdentity: vi.fn().mockResolvedValue(resolved),
+    ensureChannelContact: vi.fn().mockResolvedValue({
+      contact: { id: resolved?.contactId ?? 'new-contact-id', tier: 'unknown' },
+      created: resolved == null,
+    }),
     createContact: vi.fn().mockResolvedValue({ id: 'new-contact-id' }),
     linkIdentity: vi.fn().mockResolvedValue(undefined),
     deleteContact: vi.fn().mockResolvedValue(undefined),
@@ -102,12 +106,12 @@ describe('SlackAdapter', () => {
     expect(event.payload.channelId).toBe('slack');
     expect(event.payload.senderId).toBe('U_ALICE');
     expect(event.payload.conversationId).toBe('slack:D123');
-    expect(contactService.createContact).toHaveBeenCalled();
-    expect(contactService.linkIdentity).toHaveBeenCalledWith(
+    expect(contactService.ensureChannelContact).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: 'slack',
         channelIdentifier: 'U_ALICE',
         source: 'slack_participant',
+        displayName: 'Alice',
       }),
     );
   });

@@ -60,6 +60,13 @@ function makeMockGateway() {
 function makeMockContactService(resolved: { contactId: string; tier: ContactTier } | null = null) {
   return {
     resolveByChannelIdentity: vi.fn().mockResolvedValue(resolved),
+    ensureChannelContact: vi.fn().mockResolvedValue({
+      contact: {
+        id: resolved?.contactId ?? 'new-contact-id',
+        tier: resolved?.tier ?? 'unknown',
+      },
+      created: resolved == null,
+    }),
     createContact: vi.fn().mockResolvedValue({ id: 'new-contact-id' }),
     linkIdentity: vi.fn().mockResolvedValue(undefined),
   } as unknown as ContactService;
@@ -253,11 +260,13 @@ describe('SignalAdapter', () => {
     rpcClient.simulateMessage(makeEnvelope());
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(unknownService.createContact).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'signal_participant', tier: 'unknown' }),
-    );
-    expect(unknownService.linkIdentity).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: 'signal', channelIdentifier: '+14155551234' }),
+    expect(unknownService.ensureChannelContact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: 'signal',
+        channelIdentifier: '+14155551234',
+        source: 'signal_participant',
+        tier: 'unknown',
+      }),
     );
 
     await unknownAdapter.stop();
@@ -436,8 +445,13 @@ describe('SignalAdapter', () => {
       // Message should be published (not held)
       expect(published).toHaveLength(1);
       // Auto-create contact for the unknown member at tier='unknown'
-      expect(contactService.createContact).toHaveBeenCalledWith(
-        expect.objectContaining({ source: 'signal_participant', tier: 'unknown' }),
+      expect(contactService.ensureChannelContact).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: 'signal',
+          channelIdentifier: '+14155551234',
+          source: 'signal_participant',
+          tier: 'unknown',
+        }),
       );
       // No hold notification sent
       expect(gateway.sendNotification).not.toHaveBeenCalled();

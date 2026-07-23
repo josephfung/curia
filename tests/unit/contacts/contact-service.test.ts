@@ -553,6 +553,119 @@ describe('ContactService', () => {
     });
   });
 
+  describe('ensureChannelContact', () => {
+    it('creates and links a contact for a new channel identity', async () => {
+      const { contact, created } = await service.ensureChannelContact({
+        channel: 'signal',
+        channelIdentifier: '+14165550199',
+        source: 'signal_participant',
+        displayName: 'New Signal User',
+        fallbackDisplayName: '+14165550199',
+        tier: 'unknown',
+      });
+
+      expect(created).toBe(true);
+      expect(contact.tier).toBe('unknown');
+      expect(contact.displayName).toBe('New Signal User');
+
+      const resolved = await service.resolveByChannelIdentity('signal', '+14165550199');
+      expect(resolved).not.toBeNull();
+      expect(resolved!.contactId).toBe(contact.id);
+      expect(resolved!.verified).toBe(true); // signal_participant is auto-verified
+    });
+
+    it('returns the existing contact without creating when identity already linked', async () => {
+      const existing = await service.createContact({
+        displayName: 'Already Known',
+        source: 'signal_participant',
+        tier: 'known',
+      });
+      await service.linkIdentity({
+        contactId: existing.id,
+        channel: 'signal',
+        channelIdentifier: '+14165550100',
+        source: 'signal_participant',
+      });
+
+      const before = await service.listContacts();
+      const { contact, created } = await service.ensureChannelContact({
+        channel: 'signal',
+        channelIdentifier: '+14165550100',
+        source: 'signal_participant',
+        displayName: 'Should Not Matter',
+        tier: 'unknown',
+      });
+
+      expect(created).toBe(false);
+      expect(contact.id).toBe(existing.id);
+      expect(contact.tier).toBe('known');
+      const after = await service.listContacts();
+      expect(after).toHaveLength(before.length);
+    });
+
+    it('on link race (23505): deletes the orphan and returns the existing contact', async () => {
+      const winner = await service.createContact({
+        displayName: 'Race Winner',
+        source: 'slack_participant',
+        tier: 'unknown',
+      });
+      await service.linkIdentity({
+        contactId: winner.id,
+        channel: 'slack',
+        channelIdentifier: 'U_RACE',
+        source: 'slack_participant',
+      });
+
+      // Identity already exists, but the first resolve inside ensureChannelContact
+      // misses it (simulating a concurrent insert between resolve and link).
+      const resolveSpy = vi.spyOn(service, 'resolveByChannelIdentity');
+      resolveSpy.mockImplementationOnce(async () => null);
+
+      const beforeIds = new Set((await service.listContacts()).map((c) => c.id));
+      const { contact, created } = await service.ensureChannelContact({
+        channel: 'slack',
+        channelIdentifier: 'U_RACE',
+        source: 'slack_participant',
+        displayName: 'Race Loser',
+        fallbackDisplayName: 'U_RACE',
+        tier: 'unknown',
+      });
+
+      expect(created).toBe(false);
+      expect(contact.id).toBe(winner.id);
+
+      const after = await service.listContacts();
+      // No orphan: contact count unchanged (loser's row deleted)
+      expect(after.map((c) => c.id).sort()).toEqual([...beforeIds].sort());
+      resolveSpy.mockRestore();
+    });
+
+    it('on non-duplicate link failure: deletes the orphan and surfaces the error', async () => {
+      const linkSpy = vi.spyOn(service, 'linkIdentity').mockRejectedValueOnce(
+        Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }),
+      );
+
+      const beforeCount = (await service.listContacts()).length;
+      await expect(
+        service.ensureChannelContact({
+          channel: 'signal',
+          channelIdentifier: '+14165550999',
+          source: 'signal_participant',
+          displayName: 'Will Fail',
+          fallbackDisplayName: '+14165550999',
+          tier: 'unknown',
+        }),
+      ).rejects.toThrow(/connection reset/);
+
+      const after = await service.listContacts();
+      expect(after).toHaveLength(beforeCount); // orphan cleaned up
+      // Identity must not have been linked
+      const resolved = await service.resolveByChannelIdentity('signal', '+14165550999');
+      expect(resolved).toBeNull();
+      linkSpy.mockRestore();
+    });
+  });
+
   describe('getContactWithIdentities', () => {
     it('returns contact with all channel identities', async () => {
       const contact = await service.createContact({ displayName: 'Jenna', source: 'test' });

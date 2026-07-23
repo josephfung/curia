@@ -47,4 +47,5 @@ App distribution alternatives:
 - Events API remains a later alternative if a deployment prefers webhooks.
 - Meeting-debrief and other proactive flows can target `channel_id: "slack"` once the gateway path exists, without agent changes.
 - Reaction→approval wiring is intentionally a follow-up (#1479) so the bus primitive ships with Slack.
-- Contact auto-create (create → link → orphan cleanup) is duplicated with Signal’s adapter; extract into `ContactService` when a fourth channel lands.
+- Contact auto-create (create → link → orphan cleanup) is shared via
+  `ContactService.ensureChannelContact` (#1480) so Voice/SMS can call the same helper.
