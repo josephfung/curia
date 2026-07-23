@@ -148,7 +148,7 @@ export class SignalAdapter implements Channel {
       // Resolve-or-create via ContactService so the create→link→orphan-cleanup dance
       // is shared with Slack (and future Voice/SMS). signal_participant is auto-verified
       // inside linkIdentity. Display name stays resolved here (Signal profile / E.164).
-      const { contact, created } = await this.config.contactService.ensureChannelContact({
+      const { tier, created } = await this.config.contactService.ensureChannelContact({
         channel: 'signal',
         channelIdentifier: senderId,
         source: 'signal_participant',
@@ -161,7 +161,7 @@ export class SignalAdapter implements Channel {
       // meetsMinimumTier() (issue #945) so an unexpected tier value fails safe to
       // "not known" rather than the prior denylist (!== 'unknown' && !== 'blocked'),
       // which would have treated any unrecognized value as known.
-      isKnownSender = meetsMinimumTier(contact.tier, 'known');
+      isKnownSender = meetsMinimumTier(tier, 'known');
       if (created) {
         this.log.info({ senderId, sourceName: metadata.sourceName }, 'Auto-created contact from Signal sender');
       }

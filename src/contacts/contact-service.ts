@@ -837,20 +837,29 @@ export class ContactService {
    * not re-implement the create → link → orphan-cleanup dance (#1480).
    *
    * Design: best-effort create+link with orphan cleanup — not a single DB transaction.
-   * `createContact` creates a KG entity outside Postgres before inserting the contact
-   * row, and neither `createContact` nor `createIdentity` accept a transaction client
-   * today. Wrapping only the SQL inserts would still leave the orphan window for the
-   * KG node and would require a larger backend-interface refactor. Lifting the proven
-   * adapter cleanup path keeps behavior identical while closing the Signal 1:1 leak
-   * (that path previously lacked cleanup on link race).
+   * Neither `createContact` nor `createIdentity` accept a transaction client today, so
+   * a true create+link transaction would need a backend-interface refactor. Either
+   * approach leaves a KG-node orphan on a failed/raced create: `createContact` mints a
+   * person node via `entityMemory.createEntity` before the row insert, and cleanup is
+   * just `DELETE FROM contacts` (it never touches `kg_node_id`). We intentionally do
+   * not delete that node — `createEntity` returns `created: false` when a label already
+   * exists, so the node may be shared across contacts. Lifting the proven adapter
+   * cleanup path keeps contact-row behavior identical while closing the Signal 1:1
+   * contact-row leak (that path previously lacked cleanup on link race).
+   *
+   * Returns `{ contactId, tier, created }` from fields already on `ResolvedSender` /
+   * the created contact — no extra `getContact` round-trip on the known-sender hot path.
    *
    * `23505` on link is expected (concurrent create for the same identifier): the
-   * orphan contact is deleted and the existing contact is resolved and returned with
+   * orphan contact row is deleted and the existing contact is resolved and returned with
    * `created: false`. Non-duplicate link failures clean up the orphan and rethrow.
    *
    * Display-name resolution stays in the caller (channel-specific lookups). Auto-verify
    * semantics are unchanged: `source` is passed through to `linkIdentity` so
    * `signal_participant` / `slack_participant` remain in AUTO_VERIFIED_SOURCES.
+   *
+   * Note on naming: this is resolve-or-create-once, not upsert — `displayName` / `source`
+   * / `tier` are ignored when the identity already exists.
    */
   async ensureChannelContact(params: {
     channel: string;
@@ -859,18 +868,12 @@ export class ContactService {
     displayName: string;
     fallbackDisplayName?: string;
     tier?: ContactTier;
-  }): Promise<{ contact: Contact; created: boolean }> {
+  }): Promise<{ contactId: string; tier: ContactTier; created: boolean }> {
     const existing = await this.resolveByChannelIdentity(params.channel, params.channelIdentifier);
     if (existing) {
-      const contact = await this.getContact(existing.contactId);
-      if (!contact) {
-        // Identity JOIN succeeded but the contact row is gone — impossible under the
-        // Postgres FK (ON DELETE CASCADE) and the in-memory cascade mirror. Fail loud.
-        throw new Error(
-          `ensureChannelContact: identity resolved to missing contact ${existing.contactId}`,
-        );
-      }
-      return { contact, created: false };
+      // ResolvedSender already carries contactId + tier — avoid a second getContact query
+      // on every inbound message from a known sender (the common case).
+      return { contactId: existing.contactId, tier: existing.tier, created: false };
     }
 
     const contact = await this.createContact({
@@ -887,7 +890,7 @@ export class ContactService {
         channelIdentifier: params.channelIdentifier,
         source: params.source,
       });
-      return { contact, created: true };
+      return { contactId: contact.id, tier: contact.tier, created: true };
     } catch (linkErr) {
       const isDuplicate = (linkErr as { code?: string }).code === '23505';
       // Always clean up the newly created contact — linkIdentity failed regardless of reason.
@@ -914,10 +917,7 @@ export class ContactService {
         );
         const resolved = await this.resolveByChannelIdentity(params.channel, params.channelIdentifier);
         if (resolved) {
-          const existingContact = await this.getContact(resolved.contactId);
-          if (existingContact) {
-            return { contact: existingContact, created: false };
-          }
+          return { contactId: resolved.contactId, tier: resolved.tier, created: false };
         }
         // Winner's contact vanished between link failure and re-resolve — surface original error.
         throw linkErr;

@@ -555,7 +555,7 @@ describe('ContactService', () => {
 
   describe('ensureChannelContact', () => {
     it('creates and links a contact for a new channel identity', async () => {
-      const { contact, created } = await service.ensureChannelContact({
+      const { contactId, tier, created } = await service.ensureChannelContact({
         channel: 'signal',
         channelIdentifier: '+14165550199',
         source: 'signal_participant',
@@ -565,13 +565,15 @@ describe('ContactService', () => {
       });
 
       expect(created).toBe(true);
-      expect(contact.tier).toBe('unknown');
-      expect(contact.displayName).toBe('New Signal User');
+      expect(tier).toBe('unknown');
 
       const resolved = await service.resolveByChannelIdentity('signal', '+14165550199');
       expect(resolved).not.toBeNull();
-      expect(resolved!.contactId).toBe(contact.id);
+      expect(resolved!.contactId).toBe(contactId);
       expect(resolved!.verified).toBe(true); // signal_participant is auto-verified
+
+      const contact = await service.getContact(contactId);
+      expect(contact?.displayName).toBe('New Signal User');
     });
 
     it('returns the existing contact without creating when identity already linked', async () => {
@@ -587,8 +589,12 @@ describe('ContactService', () => {
         source: 'signal_participant',
       });
 
+      const createSpy = vi.spyOn(service, 'createContact');
+      const linkSpy = vi.spyOn(service, 'linkIdentity');
+      const getSpy = vi.spyOn(service, 'getContact');
+
       const before = await service.listContacts();
-      const { contact, created } = await service.ensureChannelContact({
+      const { contactId, tier, created } = await service.ensureChannelContact({
         channel: 'signal',
         channelIdentifier: '+14165550100',
         source: 'signal_participant',
@@ -597,10 +603,18 @@ describe('ContactService', () => {
       });
 
       expect(created).toBe(false);
-      expect(contact.id).toBe(existing.id);
-      expect(contact.tier).toBe('known');
+      expect(contactId).toBe(existing.id);
+      expect(tier).toBe('known');
+      expect(createSpy).not.toHaveBeenCalled();
+      expect(linkSpy).not.toHaveBeenCalled();
+      // Hot path: tier comes from ResolvedSender — no second getContact round-trip
+      expect(getSpy).not.toHaveBeenCalled();
       const after = await service.listContacts();
       expect(after).toHaveLength(before.length);
+
+      createSpy.mockRestore();
+      linkSpy.mockRestore();
+      getSpy.mockRestore();
     });
 
     it('on link race (23505): deletes the orphan and returns the existing contact', async () => {
@@ -622,7 +636,7 @@ describe('ContactService', () => {
       resolveSpy.mockImplementationOnce(async () => null);
 
       const beforeIds = new Set((await service.listContacts()).map((c) => c.id));
-      const { contact, created } = await service.ensureChannelContact({
+      const { contactId, created } = await service.ensureChannelContact({
         channel: 'slack',
         channelIdentifier: 'U_RACE',
         source: 'slack_participant',
@@ -632,7 +646,7 @@ describe('ContactService', () => {
       });
 
       expect(created).toBe(false);
-      expect(contact.id).toBe(winner.id);
+      expect(contactId).toBe(winner.id);
 
       const after = await service.listContacts();
       // No orphan: contact count unchanged (loser's row deleted)
