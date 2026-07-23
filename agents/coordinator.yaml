@@ -674,6 +674,8 @@ pinned_skills:
   - executive-profile
   - email
   - context-bridge
+  # memory bundle now also carries the KG relationship tools (query/delete edges,
+  # #1502); the coordinator intentionally gains them as the KG-central agent.
   - memory
   - scheduler
   - autonomy

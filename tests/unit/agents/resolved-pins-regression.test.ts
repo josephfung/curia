@@ -164,4 +164,38 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(config.pinned_skills).toContain('contact-update');
     expect(config.pinned_skills).not.toContain('contact-lookup');
   });
+
+  // #1502: the KG relationship tools moved from the contacts bundle to the memory
+  // bundle. They must NOT come along with the contacts bundle anymore, and the
+  // contacts agent keeps them only via its explicit individual pins (resolved set
+  // unchanged). The coordinator gains them because it pins the whole memory bundle.
+  it('query/delete-relationship live in the memory bundle, not contacts', () => {
+    const skills = new SkillRegistry();
+    loadOnDiskSkills(skills);
+    const memory = skills.get('memory');
+    const contacts = skills.get('contacts');
+    expect(memory?.manifest.tools).toEqual(
+      expect.arrayContaining(['query-relationships', 'delete-relationship']),
+    );
+    expect(contacts?.manifest.tools).not.toContain('query-relationships');
+    expect(contacts?.manifest.tools).not.toContain('delete-relationship');
+  });
+
+  it('contacts still resolves the relationship tools via explicit individual pins', () => {
+    const config = loadAgentConfig(resolve(agentsDir, 'contacts.yaml'));
+    // contacts pins the contacts bundle (which no longer carries them) AND the two
+    // tools individually — so removing them from the bundle is behavior-preserving.
+    expect(config.pinned_skills).toContain('query-relationships');
+    expect(config.pinned_skills).toContain('delete-relationship');
+    const tools = resolveAgent('contacts.yaml');
+    expect(tools).toContain('query-relationships');
+    expect(tools).toContain('delete-relationship');
+  });
+
+  it('coordinator gains the relationship tools via the memory bundle (#1502)', () => {
+    const tools = resolveAgent('coordinator.yaml');
+    expect(tools).toEqual(
+      expect.arrayContaining(['query-relationships', 'delete-relationship']),
+    );
+  });
 });

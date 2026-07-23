@@ -1,5 +1,5 @@
 name: contacts
-version: "0.11.0"
+version: "0.12.0"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -311,6 +311,11 @@ pinned_skills:
   # Memory — query/store only (not memory-confirm / decay-warnings-list)
   - memory-query
   - memory-store
+  # KG relationship tools — moved to the `memory` skill (#1502); contacts still
+  # manages interpersonal edges (spouse, reports_to), so pin them individually here
+  # rather than pulling the whole memory bundle.
+  - query-relationships
+  - delete-relationship
   # Calendar — read-only, used for meeting history enrichment in briefings only.
   # Calendar specialist owns the domain; contacts keeps this read-only pin for briefing enrichment.
   - calendar-list-events

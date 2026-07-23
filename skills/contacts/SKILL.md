@@ -1,8 +1,8 @@
 ---
 name: contacts
 description: >
-  Contact identity, lifecycle, grant recommendations, and relationship graph tools. Mixed action_risk (lookup=none … grant/revoke=critical) preserved per tool.
-version: "0.1.0"
+  Contact identity, lifecycle, and grant recommendations. Mixed action_risk (lookup=none … grant/revoke=critical) preserved per tool.
+version: "0.2.0"
 tools:
   - contact-create
   - contact-lookup
@@ -23,6 +23,4 @@ tools:
   - scan-grant-recommendations
   - approve-grant-recommendation
   - decline-grant-recommendation
-  - query-relationships
-  - delete-relationship
 ---
