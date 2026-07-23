@@ -1226,23 +1226,56 @@ export class OutboundGateway {
   }
 
   /**
-   * Check whether the recipient is the principal (the human Curia serves).
-   * Resolves against the principal contact's verified channel identities,
-   * loaded from the database at startup. Channel-specific compare rules come
-   * from each channel's registered principal-rules contribution.
+   * Project an outbound request onto recipient identifiers for principal checks.
+   *
+   * Single place that knows request wire-shape → identifiers, including which
+   * fields are never-principal (Signal `groupId`, Slack `slackChannelId`). Adding
+   * a channel touches this method once; `isPrincipalRecipient` and
+   * `buildFilterRecipients` both derive from it. Deeper ownership by channel
+   * packages is tracked in #1513.
+   */
+  private projectRecipients(
+    request: OutboundSendRequest,
+  ): { identifier: string; principalEligible: boolean }[] {
+    if (request.channel === 'email') {
+      return [request.to, ...(request.cc ?? [])]
+        .filter((e) => e.length > 0)
+        .map((identifier) => ({ identifier, principalEligible: true }));
+    }
+    if (request.channel === 'signal') {
+      if (request.recipient && request.recipient.length > 0) {
+        return [{ identifier: request.recipient, principalEligible: true }];
+      }
+      if (request.groupId && request.groupId.length > 0) {
+        // Group sends are never principal-eligible (other members present).
+        return [{ identifier: request.groupId, principalEligible: false }];
+      }
+      return [];
+    }
+    if (request.channel === 'slack') {
+      // Trust the peer U… only — never the D…/C… conversation id.
+      if (request.slackUserId && request.slackUserId.length > 0) {
+        return [{ identifier: request.slackUserId, principalEligible: true }];
+      }
+      if (request.slackChannelId.length > 0) {
+        return [{ identifier: request.slackChannelId, principalEligible: false }];
+      }
+      return [];
+    }
+    // Exhaustiveness: a new OutboundSendRequest variant must project recipients here.
+    const _exhaustive: never = request;
+    return _exhaustive;
+  }
+
+  /**
+   * Check whether the primary recipient is the principal (the human Curia serves).
+   * Uses the first principal-eligible identifier from `projectRecipients` (email
+   * `to`, Signal `recipient`, Slack `slackUserId`) against verified identities.
    */
   private isPrincipalRecipient(request: OutboundSendRequest): boolean {
-    if (request.channel === 'email' && request.to) {
-      return this.isPrincipalOnChannel('email', request.to);
-    }
-    if (request.channel === 'signal' && 'recipient' in request && request.recipient) {
-      return this.isPrincipalOnChannel('signal', request.recipient);
-    }
-    // Slack: trust the sender/recipient U…, never the D…/C… conversation id.
-    if (request.channel === 'slack') {
-      return this.isPrincipalOnChannel('slack', request.slackUserId);
-    }
-    return false;
+    const primary = this.projectRecipients(request).find((r) => r.principalEligible);
+    if (!primary) return false;
+    return this.isPrincipalOnChannel(request.channel, primary.identifier);
   }
 
   /**
@@ -1258,43 +1291,20 @@ export class OutboundGateway {
 
   /**
    * Build the structural recipient set for the content filter's Stage 2 judge.
-   * `isPrincipal` is computed from the principal's verified channel identities —
-   * channel-aware via `isPrincipalIdentity` — NOT the free-text contact role.
-   *
-   * For email: To + CC merged, in order. For Signal: the single recipient (matched
-   * via the principal's Signal identity) or a groupId (never a sole-principal channel,
-   * since a group carries other members, so isPrincipal is false there).
-   * For Slack: the peer U… when known; channel targets without a user id are
-   * non-principal (fail closed).
+   * Recipients come from `projectRecipients`; `isPrincipal` requires both
+   * principalEligible and a verified identity match on that channel.
    */
   private buildFilterRecipients(request: OutboundSendRequest): {
     recipients: FilterRecipient[];
     principalIncluded: boolean;
     principalIsSoleRecipient: boolean;
   } {
-    let tagged: FilterRecipient[];
-    if (request.channel === 'email') {
-      const emails = [request.to, ...(request.cc ?? [])];
-      tagged = emails
-        .filter((e) => e.length > 0)
-        .map((email) => ({ email, isPrincipal: this.isPrincipalOnChannel('email', email) }));
-    } else if (request.channel === 'slack') {
-      const identifier = request.slackUserId ?? request.slackChannelId;
-      const isPrincipal = request.slackUserId
-        ? this.isPrincipalOnChannel('slack', request.slackUserId)
-        : false;
-      tagged = identifier.length > 0
-        ? [{ email: identifier, isPrincipal }]
-        : [];
-    } else {
-      // Signal: tag via the principal's verified Signal identity. A groupId is never
-      // the principal's private channel, so it is always a non-principal recipient.
-      const identifier = request.recipient ?? request.groupId ?? '';
-      const isPrincipal = request.recipient
-        ? this.isPrincipalOnChannel('signal', request.recipient)
-        : false;
-      tagged = identifier.length > 0 ? [{ email: identifier, isPrincipal }] : [];
-    }
+    const tagged: FilterRecipient[] = this.projectRecipients(request).map((r) => ({
+      email: r.identifier,
+      isPrincipal:
+        r.principalEligible
+        && this.isPrincipalOnChannel(request.channel, r.identifier),
+    }));
     return this.finalizeRecipientSet(tagged);
   }
 

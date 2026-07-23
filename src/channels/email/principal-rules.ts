@@ -1,20 +1,10 @@
 // Email channel contribution: principal identity compare + email-send carve-out.
 
 import type { PrincipalChannelRules } from '../../contacts/principal-channel-rules.js';
-
-function hasPresentValue(value: unknown): boolean {
-  if (value === undefined || value === null) return false;
-  if (typeof value === 'string') return value.trim().length > 0;
-  if (Array.isArray(value)) return value.length > 0;
-  return true;
-}
-
-function splitCommaSeparatedAddresses(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-}
+import {
+  hasPresentValue,
+  splitCommaSeparatedAddresses,
+} from '../../contacts/principal-carveout-parse.js';
 
 /**
  * Parse email-send recipients from skill input. Returns null when the input contains

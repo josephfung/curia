@@ -1,13 +1,7 @@
 // Signal channel contribution: principal identity compare + signal-send carve-out.
 
 import type { PrincipalChannelRules } from '../../contacts/principal-channel-rules.js';
-
-function hasPresentValue(value: unknown): boolean {
-  if (value === undefined || value === null) return false;
-  if (typeof value === 'string') return value.trim().length > 0;
-  if (Array.isArray(value)) return value.length > 0;
-  return true;
-}
+import { hasPresentValue } from '../../contacts/principal-carveout-parse.js';
 
 /**
  * Parse signal-send 1:1 recipient from skill input. Returns null for group sends or
