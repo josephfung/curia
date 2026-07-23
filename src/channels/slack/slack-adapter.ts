@@ -42,10 +42,16 @@ export class SlackAdapter implements Channel {
   /**
    * Short-lived dedupe of Slack event keys. Process-local only — cleared on
    * stop() and lost on restart/reconnect. Absorbs Slack redelivery-on-missed-ack
-   * (and mention vs thread double-delivery of the same ts).
+   * (and mention vs thread double-delivery of the same ts). TTL + size-capped
+   * (same primitive as activeThreads / dmPeerByChannel) so a reaction/message
+   * burst inside the TTL window can't grow it without bound.
    */
-  private readonly recentDedupeKeys = new Map<string, number>();
   private static readonly DEDUPE_TTL_MS = 60_000;
+  private static readonly DEDUPE_MAX = 2_000;
+  private readonly recentDedupeKeys = new BoundedTtlMap<true>(
+    SlackAdapter.DEDUPE_TTL_MS,
+    SlackAdapter.DEDUPE_MAX,
+  );
   /** Active channel threads (`channel:thread_ts`) — TTL + size-capped. */
   private static readonly ACTIVE_THREAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   private static readonly ACTIVE_THREAD_MAX = 500;
@@ -188,6 +194,22 @@ export class SlackAdapter implements Channel {
       return;
     }
 
+    // Reactions in channels ride the same allowlist as mentions/thread replies;
+    // DM reactions (D…) are never filtered, matching handleInbound. Without this
+    // a reaction in a non-allowlisted channel would still auto-create a contact
+    // and publish inbound.reaction.
+    const reactionChannel = converted.metadata.slackChannel;
+    if (!reactionChannel.startsWith('D')) {
+      const allowed = isSlackChannelAllowed(reactionChannel, this.config.allowedChannelIds);
+      if (!allowed) {
+        this.log.debug(
+          { channel: reactionChannel },
+          'Slack adapter: reaction dropped — channel not on allowlist',
+        );
+        return;
+      }
+    }
+
     if (this.isDuplicate(converted.metadata.dedupeKey)) {
       this.log.debug(
         { dedupeKey: converted.metadata.dedupeKey },
@@ -325,13 +347,9 @@ export class SlackAdapter implements Channel {
   }
 
   private isDuplicate(dedupeKey: string): boolean {
-    const now = Date.now();
-    // Prune expired entries opportunistically.
-    for (const [key, ts] of this.recentDedupeKeys) {
-      if (now - ts > SlackAdapter.DEDUPE_TTL_MS) this.recentDedupeKeys.delete(key);
-    }
+    // BoundedTtlMap prunes expired entries and enforces the size cap internally.
     if (this.recentDedupeKeys.has(dedupeKey)) return true;
-    this.recentDedupeKeys.set(dedupeKey, now);
+    this.recentDedupeKeys.set(dedupeKey, true);
     return false;
   }
 }

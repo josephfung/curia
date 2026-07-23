@@ -44,41 +44,16 @@ export class SlackClient extends EventEmitter {
     this.log = config.logger.child({ component: 'slack-client' });
     this.web = new WebClient(config.botToken);
     this.socket = new SocketModeClient({ appToken: config.appToken });
+    // Register socket handlers exactly once, tied to the SocketModeClient's own
+    // lifetime (it outlives connect/disconnect). Registering inside connect()
+    // stacked a fresh listener on every stop→start, so a toggled channel would
+    // ack + emit each Slack event N times. The `stopping` flag gates emission
+    // during teardown; the `started` guard in connect() prevents a double start().
+    this.registerSocketHandlers();
   }
 
-  /** Resolved after successful auth.test during start. */
-  getBotIdentity(): SlackAuthIdentity | undefined {
-    return this.identity;
-  }
-
-  /**
-   * Start Socket Mode. Resolves after auth.test + socket start attempt begins.
-   * Does not block boot on a live Slack connection — Socket Mode reconnects
-   * internally; we surface connected/disconnected for operators.
-   */
-  async connect(): Promise<void> {
-    this.stopping = false;
-    if (this.started) return;
-
-    try {
-      const auth = await this.web.auth.test();
-      const botUserId = typeof auth.user_id === 'string' ? auth.user_id : undefined;
-      if (!botUserId) {
-        throw new Error('auth.test did not return user_id — check bot token');
-      }
-      this.identity = {
-        botUserId,
-        teamId: typeof auth.team_id === 'string' ? auth.team_id : undefined,
-        botName: typeof auth.user === 'string' ? auth.user : undefined,
-      };
-      this.log.info(
-        { botUserId: this.identity.botUserId, botName: this.identity.botName, teamId: this.identity.teamId },
-        'Slack auth.test succeeded',
-      );
-    } catch (err) {
-      this.log.error({ err }, 'Slack auth.test failed — Socket Mode will still attempt to connect');
-    }
-
+  /** Attach the Socket Mode event handlers. Called once from the constructor. */
+  private registerSocketHandlers(): void {
     this.socket.on('connected', () => {
       this.log.info('Slack Socket Mode connected');
       this.emit('connected');
@@ -134,7 +109,42 @@ export class SlackClient extends EventEmitter {
       if (payload.type !== 'reaction_added') return;
       this.emit('event', payload, 'reaction');
     });
+  }
 
+  /** Resolved after successful auth.test during start. */
+  getBotIdentity(): SlackAuthIdentity | undefined {
+    return this.identity;
+  }
+
+  /**
+   * Start Socket Mode. Resolves after auth.test + socket start attempt begins.
+   * Does not block boot on a live Slack connection — Socket Mode reconnects
+   * internally; we surface connected/disconnected for operators.
+   */
+  async connect(): Promise<void> {
+    this.stopping = false;
+    if (this.started) return;
+
+    try {
+      const auth = await this.web.auth.test();
+      const botUserId = typeof auth.user_id === 'string' ? auth.user_id : undefined;
+      if (!botUserId) {
+        throw new Error('auth.test did not return user_id — check bot token');
+      }
+      this.identity = {
+        botUserId,
+        teamId: typeof auth.team_id === 'string' ? auth.team_id : undefined,
+        botName: typeof auth.user === 'string' ? auth.user : undefined,
+      };
+      this.log.info(
+        { botUserId: this.identity.botUserId, botName: this.identity.botName, teamId: this.identity.teamId },
+        'Slack auth.test succeeded',
+      );
+    } catch (err) {
+      this.log.error({ err }, 'Slack auth.test failed — Socket Mode will still attempt to connect');
+    }
+
+    // Socket handlers are registered once in the constructor (see registerSocketHandlers).
     this.started = true;
     // start() reconnects with backoff internally — do not await forever on boot.
     void this.socket.start().catch((err: unknown) => {
