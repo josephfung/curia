@@ -473,3 +473,37 @@ autonomy:
   bypass_ladder:
     same_task: 70      # posture B floor — must not drop below 60
     derived_child: 90  # posture D floor
+
+  # Emoji → approval intent for inbound.reaction (#1479). Channel-agnostic —
+  # Slack shortcodes and unicode glyphs both listed. Adapters never map intent.
+  # Skin tones / VS16 are stripped before matching (see normalizeReactionEmoji).
+  reaction_intents:
+    approve:
+      - thumbsup
+      - "+1"
+      - white_check_mark
+      - heavy_check_mark
+      - ok_hand
+      - raised_hands
+      - "100"
+      - ok
+      - "👍"
+      - "✅"
+      - "✔"
+      - "✔️"
+      - "👌"
+      - "🙌"
+      - "💯"
+      - "🆗"
+    reject:
+      - thumbsdown
+      - "-1"
+      - x
+      - no_entry
+      - no_entry_sign
+      - person_gesturing_no
+      - "👎"
+      - "❌"
+      - "🚫"
+      - "⛔"
+      - "🙅"

@@ -573,6 +573,14 @@ export interface YamlConfig {
        *  Default 90. */
       derived_child?: number;
     };
+    /**
+     * Emoji sets mapped to approve/reject for inbound.reaction (#1479).
+     * Channel-agnostic — include Slack shortcodes and unicode glyphs.
+     */
+    reaction_intents?: {
+      approve?: string[];
+      reject?: string[];
+    };
   };
 }
 

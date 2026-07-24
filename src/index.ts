@@ -104,6 +104,8 @@ import { ActionLogRepo } from './autonomy/action-log-repo.js';
 import { TaskRepo } from './db/task-repo.js';
 import { WorkingDocsRepo } from './db/working-docs-repo.js';
 import { ApprovalTriggerService } from './autonomy/approval-trigger.js';
+import { ReactionApprovalMapper } from './autonomy/reaction-approval-mapper.js';
+import { DEFAULT_REACTION_INTENTS } from './autonomy/reaction-intent.js';
 import { AutonomyScoringPass } from './autonomy/scoring-pass.js';
 import type { ScoringPassConfig } from './autonomy/scoring-pass.js';
 import { BrowserService } from './browser/browser-service.js';
@@ -1819,7 +1821,12 @@ async function main(): Promise<void> {
   // outboundGateway and ceoEmail are optional: if absent, the row is created but
   // notification is skipped (CEO will see it in the next digest, #429).
   const approvalTrigger = new ApprovalTriggerService(
-    actionLogRepo, outboundGateway, logger, principalEmail || undefined, contactService,
+    actionLogRepo,
+    outboundGateway,
+    logger,
+    principalEmail || undefined,
+    contactService,
+    principalIdentities,
   );
 
   // Temp file store — secure tmpfs-backed storage for binary attachment handoff.
@@ -2340,6 +2347,23 @@ async function main(): Promise<void> {
     outboundContextService,
   });
   dispatcher.register();
+
+  // Reaction → approval mapper (#1479): channel-agnostic inbound.reaction handling.
+  // Registered after ExecutionLayer so approve can re-invoke the blocked skill.
+  const reactionIntentsConfig = yamlConfig.autonomy?.reaction_intents;
+  const reactionApprovalMapper = new ReactionApprovalMapper({
+    bus,
+    logger,
+    actionLogRepo,
+    contactService,
+    executionLayer,
+    principalIdentities,
+    reactionIntents: {
+      approve: reactionIntentsConfig?.approve ?? [...DEFAULT_REACTION_INTENTS.approve],
+      reject: reactionIntentsConfig?.reject ?? [...DEFAULT_REACTION_INTENTS.reject],
+    },
+  });
+  reactionApprovalMapper.register();
 
   // Resume-after-capture subscriber (#972) — listens for secret.captured (published by the
   // capture endpoint on a successful redeem) and re-enters the originating agent with a synthetic

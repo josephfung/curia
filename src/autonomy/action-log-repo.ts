@@ -464,6 +464,71 @@ export class ActionLogRepo {
     );
     return result.rows.map(mapRow);
   }
+
+  /**
+   * Bind a delivered provider message id to a pending approval row (#1479).
+   * Idempotent on (channel, message_id) — re-bind of the same pair is a no-op.
+   * Returns true when a new binding was inserted.
+   */
+  async bindDeliveryMessage(
+    actionLogId: number,
+    channel: string,
+    messageId: string,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `INSERT INTO approval_message_bindings (action_log_id, channel, message_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (channel, message_id) DO NOTHING
+       RETURNING id`,
+      [actionLogId, channel, messageId],
+    );
+    const inserted = result.rows.length > 0;
+    this.logger.debug(
+      { actionLogId, channel, messageId, inserted },
+      'action-log-repo: bindDeliveryMessage',
+    );
+    return inserted;
+  }
+
+  /**
+   * Look up a still-pending (non-expired) approval by the delivered provider
+   * message id the principal reacted to. Correlation is (channel, message_id)
+   * only — conversationId must not be used (ADR-033 / #1479).
+   */
+  async findPendingByDeliveryMessage(
+    channel: string,
+    messageId: string,
+  ): Promise<ActionLogRow | null> {
+    const result = await this.pool.query(
+      `SELECT a.*
+       FROM approval_message_bindings b
+       JOIN autonomy_action_log a ON a.id = b.action_log_id
+       WHERE b.channel = $1
+         AND b.message_id = $2
+         AND a.outcome = 'pending_approval'
+         AND a.expires_at > now()
+       LIMIT 1`,
+      [channel, messageId],
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : null;
+  }
+
+  /**
+   * Resolve a pending approval by its short_ref among non-expired pending rows.
+   * Used when binding from outbound.delivered content that embeds `Reference: <ref>`.
+   */
+  async findPendingByShortRef(shortRef: string): Promise<ActionLogRow | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE short_ref = $1
+         AND outcome = 'pending_approval'
+         AND expires_at > now()
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [shortRef],
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : null;
+  }
 }
 
 /** Map a snake_case DB row to a camelCase ActionLogRow. */

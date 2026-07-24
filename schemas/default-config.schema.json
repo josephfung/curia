@@ -414,6 +414,21 @@
             "same_task": { "type": "integer", "minimum": 60, "maximum": 100 },
             "derived_child": { "type": "integer", "minimum": 0, "maximum": 100 }
           }
+        },
+        "reaction_intents": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Emoji → approve/reject for inbound.reaction (#1479). Channel-agnostic.",
+          "properties": {
+            "approve": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "reject": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
         }
       }
     },

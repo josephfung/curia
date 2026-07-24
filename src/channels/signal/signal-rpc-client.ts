@@ -146,10 +146,17 @@ export class SignalRpcClient extends EventEmitter {
 
   /**
    * Send a text message via signal-cli.
-   * Resolves when signal-cli acknowledges the send. Rejects on error or timeout.
+   * Resolves with the sent message's Signal timestamp (stringified) — the
+   * provider message id used for reaction correlation (#1479).
+   * Rejects on error or timeout.
    */
-  async send(params: SignalSendParams): Promise<void> {
-    await this.call('send', params as unknown as Record<string, unknown>);
+  async send(params: SignalSendParams): Promise<string> {
+    const result = await this.call('send', params as unknown as Record<string, unknown>);
+    const timestamp = extractSendTimestamp(result);
+    if (timestamp === undefined) {
+      throw new Error('signal-cli send: response missing timestamp');
+    }
+    return timestamp;
   }
 
   /**
@@ -406,4 +413,24 @@ export class SignalRpcClient extends EventEmitter {
 
     this.emit('message', envelope);
   }
+}
+
+/**
+ * Extract the Signal send timestamp from a signal-cli `send` JSON-RPC result.
+ * The timestamp is the provider message id used for reaction correlation (#1479).
+ * Exported for unit tests.
+ */
+export function extractSendTimestamp(result: unknown): string | undefined {
+  if (typeof result === 'number' && Number.isFinite(result)) {
+    return String(result);
+  }
+  if (typeof result === 'string' && result.trim() && Number.isFinite(Number(result))) {
+    return result.trim();
+  }
+  if (result && typeof result === 'object') {
+    const ts = (result as { timestamp?: unknown }).timestamp;
+    if (typeof ts === 'number' && Number.isFinite(ts)) return String(ts);
+    if (typeof ts === 'string' && ts.trim() && Number.isFinite(Number(ts))) return ts.trim();
+  }
+  return undefined;
 }
