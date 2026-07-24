@@ -11,6 +11,8 @@ export const LINKABLE_CHANNEL_IDENTITIES = [
   'signal',
   'telegram',
   'slack',
+  /** Telnyx SMS transport identity (E.164). Distinct from CRM `phone`. */
+  'sms',
 ] as const;
 
 export type LinkableChannelIdentity = (typeof LINKABLE_CHANNEL_IDENTITIES)[number];

@@ -56,6 +56,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [033](033-slack-channel-socket-mode.md) | Slack via Socket Mode — workspace-owned app, DMs + @mentions + in-thread continuation, sender-identity trust, `inbound.reaction` | Accepted |
 | [034](034-channel-contributed-principal-carveout-registry.md) | Channel-contributed principal carve-out registry — Gate C opt-in without scattering fail-closed logic | Accepted |
 | [035](035-channel-owned-outbound-recipient-projection.md) | Channel-owned outbound recipient projection — request variants + `extractRecipients` so the gateway needs no per-channel projection edit | Accepted |
+| [036](036-telnyx-sms-channel.md) | Telnyx SMS on a dedicated office DID — medium trust, new-DID-only, 10DLC Low-Volume Mixed, voice Phase 2 SIP note | Accepted |
 
 ## Adding new ADRs
 

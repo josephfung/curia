@@ -15,6 +15,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **SMS channel** — Telnyx office DID two-way text; medium-trust webhook inbound. (#1478)
+- **`OutboundSendRequest`** — new `sms` variant for Telnyx Messages API delivery (public API).
+- **`sms-send`** — coordinator-pinned skill for 1:1 SMS via OutboundGateway.
+- **ADR-036** — Telnyx SMS vendor choice, new-DID-only, 10DLC, voice Phase 2 note.
+
+### Changed
+
 - **Contact identity editing** — console + API add/update/verify/remove channel identities and merge lookalikes; binds principal Slack/Signal for outbound detection. (#1514)
 - **Reaction approvals** — Slack/Signal 👍/👎 (incl. skin tones) resolve pending approvals; unrecognized principal reactions get a hint. (#1479)
 - **Imported Anthropic skills** — drop an unmodified `SKILL.md` + `references/` folder; discover/activate with inert scripts warned. (#1490)

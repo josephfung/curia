@@ -17,6 +17,7 @@ import type { PrincipalChannelRules } from './principal-channel-rules.js';
 import { emailPrincipalRules } from '../channels/email/principal-rules.js';
 import { signalPrincipalRules } from '../channels/signal/principal-rules.js';
 import { slackPrincipalRules } from '../channels/slack/principal-rules.js';
+import { smsPrincipalRules } from '../channels/sms/principal-rules.js';
 
 /**
  * Fail fast on duplicate channel ids or carve-out skill names. First-match
@@ -51,6 +52,7 @@ export const PRINCIPAL_CHANNEL_RULES: readonly PrincipalChannelRules[] = [
   emailPrincipalRules,
   signalPrincipalRules,
   slackPrincipalRules,
+  smsPrincipalRules,
 ];
 
 assertPrincipalChannelRegistryUnique(PRINCIPAL_CHANNEL_RULES);

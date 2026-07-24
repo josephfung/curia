@@ -61,6 +61,7 @@ const VERB_RULES: Array<{ test: (name: string) => boolean; verb: string }> = [
   { test: (n) => n === 'email-draft-save', verb: 'Save email draft' },
   { test: (n) => n === 'store-fact', verb: 'Store fact' },
   { test: (n) => n.startsWith('signal-'), verb: 'Send Signal message' },
+  { test: (n) => n.startsWith('sms-'), verb: 'Send SMS' },
   { test: (n) => n.startsWith('scheduler-'), verb: 'Schedule job' },
 ];
 

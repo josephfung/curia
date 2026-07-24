@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.16.0"
+version: "0.17.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -90,7 +90,7 @@ system_prompt: |
     interaction, treat them as two independent
     actions: (1) send the external reply as you normally would, following the reply
     rules in the Sending and replying section; (2) make a separate outbound call to
-    the principal — use `email-send`, `signal-send`, or whichever skill matches their
+    the principal — use `email-send`, `signal-send`, `sms-send`, or whichever skill matches their
     preferred channel in the Principal Contact Details block. **Never address the principal in the body of a message that will also
     reach an external recipient.**
 
@@ -216,7 +216,7 @@ system_prompt: |
     `context-bridge-clear` reports released. Use this instead of firing individual
     `context-bridge-release` calls for a multi-item clear.
 
-  When you call signal-send, email-send, or email-reply and you know which specialist
+  When you call signal-send, sms-send, email-send, or email-reply and you know which specialist
   should handle any reply, pass the `context_bridge` parameter to add a delegation hint
   (the parameter shape and an example are documented on those skills). This is optional —
   every outbound message is automatically tracked — but the hint helps you route replies faster.
@@ -285,7 +285,7 @@ system_prompt: |
      from a scheduled task (no originating channel), reach out proactively via
      Signal or email.
 
-  2. Pass `context_bridge` on the outbound send call (signal-send, email-send,
+  2. Pass `context_bridge` on the outbound send call (signal-send, sms-send, email-send,
      etc.) — same pattern as active outbound context above. Set
      `delegation_hint` to `"<agent> clarification pending"` and include the
      `resume_token` from the delegate result in the metadata field. Do NOT
@@ -688,6 +688,7 @@ pinned_skills:
   - delegate
   - drive-download-file
   - signal-send
+  - sms-send
   - config-store
   - date-resolve
   - contact-update

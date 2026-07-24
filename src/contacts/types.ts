@@ -71,6 +71,8 @@ export type IdentitySource =
   | 'email_participant'
   | 'signal_participant'
   | 'slack_participant'
+  /** Inbound SMS peer (Telnyx From). Spoofable — not auto-verified (ADR-036). */
+  | 'sms_participant'
   | 'crm_import'
   | 'calendar_attendee'
   | 'self_claimed'

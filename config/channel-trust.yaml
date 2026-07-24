@@ -35,3 +35,9 @@ channels:
     trust: medium
     unknown_sender: allow
     threaded: true
+  # SMS via Telnyx office DID — medium trust (spoofable From; not E2E). ADR-036.
+  # Non-threaded → context bridging. Unknown senders may text; land as tier=unknown.
+  sms:
+    trust: medium
+    unknown_sender: allow
+    threaded: false

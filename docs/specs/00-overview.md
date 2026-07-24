@@ -11,7 +11,7 @@
 | 01 | [Memory System](01-memory-system.md) | Knowledge graph, entity memory, working memory, Bullpen, embeddings |
 | 02 | [Agent System](02-agent-system.md) | Agent definition, lifecycle, state, execution modes, LLM providers |
 | 03 | [Skills & Execution](03-tools-and-execution.md) | Local skills, MCP, discovery, secrets, permissions, allowed_callers |
-| 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email channels, message normalization |
+| 04 | [Channels](04-channels.md) | Adapter interface, CLI, HTTP, Signal, Email, Slack, SMS channels, message normalization |
 | 05 | [Error Recovery](05-error-recovery.md) | Error budgets, state continuity, pattern detection, failure model |
 | 06 | [Audit & Security](06-audit-and-security.md) | Audit log, redaction, tool sanitization, intent drift, security |
 | 07 | [Scheduler](07-scheduler.md) | Job model, cron, one-shot, persistent tasks, burst execution, stale-job cleanup |
