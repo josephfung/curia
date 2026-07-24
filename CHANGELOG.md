@@ -42,6 +42,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Tool outputs** — cap total object-output size, not just per-leaf, matching the string-output path. (#1487)
 - **OpenRouter errors** — `last_error` now carries the upstream provider name and reason, not the opaque wrapper.
 
+### Security
+
+- **`hono`** — pinned ≥4.12.27 to clear JSX cross-request leak + `cx()` XSS CVEs.
+- **`fast-uri`** — pinned ≥4.1.1 to clear GHSA-v2hh-gcrm-f6hx and GHSA-4c8g-83qw-93j6.
+- **`sharp`** — pinned ≥0.35.0 to clear GHSA-f88m-g3jw-g9cj (libvips CVEs).
+- **`find-my-way`** — pinned ≥9.7.0 to clear GHSA-c96f-x56v-gq3h (HTTP/2 DoS).
+- **`shell-quote`** — pinned ≥1.9.0 to clear GHSA-395f-4hp3-45gv (quadratic DoS).
+
 ## [0.41.0] — 2026-07-21 — "Data"
 
 > **Data** *(Star Trek: The Next Generation, 1987, Gene Roddenberry)* — the android who grows more human by patiently observing the people around him, then refining his own conduct to match, and the crew's tireless analyst when something needs explaining. This release teaches Curia both halves: it watches what you actually send and learns your voice from the edits you make, and it can now investigate its own behavior when you ask what happened.
@@ -83,11 +91,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **KG trust gates** — knowledge-graph writes (fact extraction, `memory-store`) from `unknown` / `blocked` inbound senders are blocked, so an untrusted party can't seed the graph. (#1290)
 - **Evidence-doc retention** — anchors diff-block boundaries to the metadata envelope so an email-body heading can't dodge the purge. (#1444)
 - **`adm-zip`** — pinned `>=0.6.0`, clearing GHSA-xcpc-8h2w-3j85 (crafted-ZIP 4 GB allocation, HIGH).
-- **`hono`** — pinned ≥4.12.27 to clear JSX cross-request leak + `cx()` XSS CVEs.
-- **`fast-uri`** — pinned ≥4.1.1 to clear GHSA-v2hh-gcrm-f6hx and GHSA-4c8g-83qw-93j6.
-- **`sharp`** — pinned ≥0.35.0 to clear GHSA-f88m-g3jw-g9cj (libvips CVEs).
-- **`find-my-way`** — pinned ≥9.7.0 to clear GHSA-c96f-x56v-gq3h (HTTP/2 DoS).
-- **`shell-quote`** — pinned ≥1.9.0 to clear GHSA-395f-4hp3-45gv (quadratic DoS).
 
 ### Removed
 
