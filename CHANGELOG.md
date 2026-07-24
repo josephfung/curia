@@ -45,6 +45,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Docs** — correct the setup-status catalog path to `skills/setup/tools/setup-status/catalog.yaml` (moved by skills-as-bundles).
 - **Bundling review fixes** — calendar risk/docs, manifest & registry-install correctness, skill-md booleans, tool-input shorthand (`string|null` + polymorphic `string|object|null`/`object[]|object` unions), and manifest output/description contracts synced to handlers. (#1489, #1499)
 - **Smoke harness** — expands `pinned_skills` bundles via `resolvePinnedSkills` like production. (#1489)
 - **Email poll tests** — interval ticks after `mockResolvedValueOnce` no longer reject the suite. (#1489)

@@ -264,7 +264,7 @@ Integration tests should run through a real bus instance so events flow the full
 - [ ] `principal-rules.ts` contributes `identifiersEqual` + `extractRecipients` (group/conversation ids `principalEligible: false`); appended to `principal-channel-registry.ts`; `carveoutSkill` omitted unless a send skill needs Gate C
 - [ ] `channels.<name>` block in `config/channel-trust.yaml` (`trust`, `unknown_sender`, `threaded`); channel-specific settings in `config/default.yaml`
 - [ ] Bootstrap wiring in `src/index.ts` (client + adapter, gated on `channelShouldStart`, adapter constructed after the gateway)
-- [ ] If the channel is something a new user would set up, a matching entry exists in `skills/setup-status/catalog.yaml` with a `docs_url`, and a setup guide exists in the `curia-docs` repo
+- [ ] If the channel is something a new user would set up, a matching entry exists in `skills/setup/tools/setup-status/catalog.yaml` with a `docs_url`, and a setup guide exists in the `curia-docs` repo
 - [ ] Tests: inbound, outbound, `extractRecipients`, catalog, conformance
 - [ ] Remember the channel starts **disabled** — enabling it is a restart-based registry action
 

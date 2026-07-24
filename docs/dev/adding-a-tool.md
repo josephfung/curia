@@ -619,7 +619,7 @@ For **freeform working state that grows** — running notes, a draft, or a resea
 - [ ] Any required secrets are declared in `"secrets"` array
 - [ ] If the skill is useless without a specific credential, it declares that vault key in `install.requires_secrets` so the registry blocks install/enable until it is configured
 - [ ] If the skill sends bulk data externally (attachments, Workspace exports), it accepts `export_items` so the bulk-export gates can resolve sensitivity
-- [ ] If the skill adds a configurable capability a new user would set up (new channel, third-party integration, credential-requiring bundle), a matching entry exists in `skills/setup-status/catalog.yaml` with a `docs_url`
+- [ ] If the skill adds a configurable capability a new user would set up (new channel, third-party integration, credential-requiring bundle), a matching entry exists in `skills/setup/tools/setup-status/catalog.yaml` with a `docs_url`
 - [ ] Skill is pinned in at least one agent YAML (or documented as discoverable)
 - [ ] Remember the skill starts **disabled** in the registry — enabling it is a restart-based registry action, not just adding the directory
 

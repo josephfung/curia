@@ -217,7 +217,7 @@ The v0.2.0 prompt replaces the fixed 4-turn interview script with an
    and can be deferred with `setup-defer` (`setup_wizard/deferrals` in
    config-store).
 
-The catalog of setup tasks (`skills/setup-status/catalog.yaml`) is owned
+The catalog of setup tasks (`skills/setup/tools/setup-status/catalog.yaml`) is owned
 by the skill bundle. The agent can show the full menu on request and can
 resume deferred tasks in any subsequent session.
 
