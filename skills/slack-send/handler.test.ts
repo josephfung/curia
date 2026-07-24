@@ -21,6 +21,15 @@ describe('slack-send handler', () => {
     }));
     expect(bad.success).toBe(false);
     if (!bad.success) expect(bad.error).toMatch(/Slack user id/);
+
+    // Lowercase U… and Enterprise Grid W… ids are rejected (exact-match principal compare).
+    for (const recipient of ['u012abcdef', 'W012ABCDEF']) {
+      const rejected = await handler.execute(makeCtx({
+        input: { recipient, message: 'hi' },
+      }));
+      expect(rejected.success).toBe(false);
+      if (!rejected.success) expect(rejected.error).toMatch(/Slack user id/);
+    }
   });
 
   it('rejects missing gateway', async () => {

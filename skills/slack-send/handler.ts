@@ -3,6 +3,9 @@
 // Sends a 1:1 Slack DM via OutboundGateway → chat.postMessage. The gateway
 // enforces content filter, blocked-contact, and autonomy. Pass the U… as both
 // slackChannelId and slackUserId (Slack opens/uses the IM for a user id channel).
+//
+// Out of scope for v1: Enterprise Grid workspace user ids (W…) — rejected by
+// the recipient regex so Gate C / proactive DMs fail closed for those ids.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
@@ -10,8 +13,12 @@ import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
 
 /** Slack chat.postMessage hard limit. */
 const MAX_MESSAGE_LENGTH = 40_000;
-/** Slack user ids are U… (enterprise workspace users may be W… — out of scope for v1). */
-const SLACK_USER_ID_REGEX = /^U[A-Z0-9]+$/i;
+/**
+ * Standard Slack user ids are uppercase U…. Case-sensitive on purpose: a
+ * lowercase `u…` would pass a case-insensitive check but miss exact-match
+ * principal identity comparison. Enterprise Grid `W…` ids are out of scope.
+ */
+const SLACK_USER_ID_REGEX = /^U[A-Z0-9]+$/;
 
 export class SlackSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -53,8 +60,11 @@ export class SlackSendHandler implements ToolHandler {
     ctx.log.info({ destinationType: '1:1' }, 'slack-send: dispatching Slack DM via gateway');
 
     try {
-      // chat.postMessage accepts a user id (U…) as channel and opens a DM.
-      // Set both fields so principal / blocked-contact checks use the peer U….
+      // Overload: put U… in slackChannelId even though that field's type doc
+      // describes D…/C…/G… conversation ids. chat.postMessage accepts a user
+      // id as channel and opens/uses the IM (same precedent as
+      // approval-channel-notify.ts). Principal eligibility / blocked-contact
+      // resolve from slackUserId (also the U…), never from slackChannelId alone.
       const result = await ctx.outboundGateway.send(
         {
           channel: 'slack',
