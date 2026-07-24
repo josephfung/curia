@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 
-/** CC0 procedural placeholder textures (replaced by LimeZu art from curia-deploy at build). */
+/** CC0 procedural placeholder textures (fallback used when the in-repo LimeZu art is absent). */
 
 function fillRect(
   ctx: CanvasRenderingContext2D,

@@ -1,12 +1,14 @@
 // antfarm-assets.ts — Fastify plugin that serves LICENSED LimeZu art behind session auth.
 //
-// Licensed sheets must NOT be world-downloadable (LimeZu forbids redistribution), so
-// unlike antfarm-static.ts (the unauthenticated /antfarm/* SPA mount) this route:
+// The LimeZu sheets now live in-repo (apps/antfarm/assets-licensed/limezu/ — LimeZu granted
+// redistribution) and ship in the open-core image. We still keep them off the unauthenticated
+// static surface: unlike antfarm-static.ts (the unauthenticated /antfarm/* SPA mount) this route:
 //   1. reads from apps/antfarm/assets-licensed/ — OUTSIDE the Vite public/ web root, so
 //      the bytes never appear on the unauthenticated static surface;
 //   2. requires a valid session (assertSecret — same check as /api/antfarm/timeline);
-//   3. 404s when the file or the whole dir is absent, so the open-core image (which ships
-//      no licensed art) makes the Phaser loader fall back to procedural placeholders.
+//   3. 404s when the file or the whole dir is absent, so a build that omits the art (e.g. a
+//      source checkout without the assets) makes the Phaser loader fall back to procedural
+//      placeholders instead of erroring.
 
 import type { FastifyPluginAsync } from 'fastify';
 import { createReadStream } from 'node:fs';

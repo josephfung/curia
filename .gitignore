@@ -51,6 +51,3 @@ tests/redteam/results/
 # Superpowers subagent-driven-development scratch (task briefs, reports, review
 # diffs) — local workflow artifacts, never committed
 .superpowers/
-
-# Licensed Ant Farm art — layered in by curia-deploy at image build, never committed.
-/apps/antfarm/assets-licensed/

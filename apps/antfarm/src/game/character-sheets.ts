@@ -1,7 +1,7 @@
 /** Deterministic 1-of-20 premade LimeZu character sheet per agent id.
  *
- * The staged asset master (curia-deploy custom/assets/antfarm) ships 20 ready-made
- * Modern Interiors character spritesheets. v1 picks one per agent deterministically
+ * The in-repo licensed art (apps/antfarm/assets-licensed/limezu/characters) ships 20
+ * ready-made Modern Interiors character spritesheets. v1 picks one per agent deterministically
  * (generator-part compositing is deferred post-v1 — that layer library isn't staged).
  * Uses the SAME hash as the placeholder appearance map so a given agent's identity is
  * consistent whether real art or placeholders are rendered. */

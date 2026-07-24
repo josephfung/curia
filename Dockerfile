@@ -140,6 +140,13 @@ COPY --from=build /app/apps/console/dist ./apps/console/dist
 # Copy Ant Farm static bundle — served under /antfarm/
 COPY --from=build /app/apps/antfarm/dist ./apps/antfarm/dist
 
+# Copy licensed LimeZu art — served ONLY behind auth by /api/antfarm/assets/*
+# (never under /antfarm/; the dir sits outside the Vite public/ web root). LimeZu
+# granted redistribution, so the art now lives in-repo (apps/antfarm/assets-licensed/)
+# and ships in the open-core image. Without this the route 404s and the Phaser
+# scene falls back to procedural placeholders.
+COPY --from=build /app/apps/antfarm/assets-licensed ./apps/antfarm/assets-licensed
+
 # Copy runtime data files loaded at startup
 # Full src/ is needed because skill handlers import from src/ (e.g., bus/events.ts)
 # and tsx resolves these at runtime
