@@ -59,6 +59,10 @@ overrides:
   sharp: '>=0.35.0'                         # GHSA-f88m-g3jw-g9cj (libvips CVEs); allowBuilds stays false (prebuilt binary)
   find-my-way: '>=9.7.0'                    # GHSA-c96f-x56v-gq3h (HTTP/2 DoS)
   shell-quote: '>=1.9.0'                    # GHSA-395f-4hp3-45gv (quadratic-complexity DoS)
+  # MED/LOW CVEs from Dependabot, 2026-07-24 (#1518):
+  body-parser: '>=2.3.0'                    # GHSA-v422-hmwv-36x6 (invalid limit disables size enforcement DoS)
+  '@hono/node-server': '>=2.0.5'            # GHSA-frvp-7c67-39w9 (Windows serve-static path traversal via %5C); consumer is @modelcontextprotocol/sdk (^1.19.9)
+  'promptfoo>js-yaml': '>=5.2.1'            # GHSA-724g-mxrg-4qvm (!!omap quadratic DoS); targeted — js-yaml@4.x via @apidevtools/json-schema-ref-parser stays on 4.x
 
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
