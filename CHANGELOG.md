@@ -52,6 +52,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`sharp`** — pinned ≥0.35.0 to clear GHSA-f88m-g3jw-g9cj (libvips CVEs).
 - **`find-my-way`** — pinned ≥9.7.0 to clear GHSA-c96f-x56v-gq3h (HTTP/2 DoS).
 - **`shell-quote`** — pinned ≥1.9.0 to clear GHSA-395f-4hp3-45gv (quadratic DoS).
+- **`body-parser`** — pinned ≥2.3.0 to clear GHSA-v422-hmwv-36x6 (limit DoS). (#1518)
+- **`@hono/node-server`** — pinned ≥2.0.5 to clear GHSA-frvp-7c67-39w9 (Windows path traversal). (#1518)
+- **`js-yaml`** — targeted `promptfoo>js-yaml` ≥5.2.1 clears GHSA-724g-mxrg-4qvm. (#1518)
 
 ## [0.41.0] — 2026-07-21 — "Data"
 
