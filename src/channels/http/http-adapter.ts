@@ -115,6 +115,11 @@ export interface HttpAdapterConfig {
    */
   setupRequiredAtBoot: boolean;
   /**
+   * Hot-reload the startup-cached principalIdentities array after console identity
+   * mutations (#1514). Optional — omitted in tests that don't exercise principal matching.
+   */
+  onPrincipalIdentitiesChanged?: () => void | Promise<void>;
+  /**
    * ISO timestamp captured at the very start of main() so the wizard's post-
    * setup polling loop can detect a process restart (the value changes after
    * the supervisor brings the new process up). Exposed via GET /api/setup/status.
@@ -495,6 +500,7 @@ export class HttpAdapter implements Channel {
         eventRouter: this.eventRouter,
         contactService: this.config.contactService,
         sessions,
+        onPrincipalIdentitiesChanged: this.config.onPrincipalIdentitiesChanged,
       });
     }
 
