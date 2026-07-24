@@ -36,6 +36,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Polymorphic pins** — a pin resolves a skill, a single tool, or an MCP-projected skill (per-tool `action_risk` preserved); `enable_task_management` retired for pinning `tasks` + `documents`; `tasks` gains `plan`/`checkpoint`, `memory` gains `decay-warnings-list`. (#1489, #1494; ADR-032)
 - **`approve-grant-recommendation`** — `action_risk` raised low→critical, matching direct permission grants. (#1499)
 - **KG relationship tools** — `query-relationships`/`delete-relationship` moved from the `contacts` skill to `memory`. (#1502)
+- **Ant Farm art** — LimeZu sheets committed to core (redistribution approved); open-core images render the real office, not placeholders. (#1504)
 
 ### Fixed
 

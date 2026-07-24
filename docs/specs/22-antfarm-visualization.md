@@ -9,7 +9,7 @@ Replay Curia's `audit_log` as an animated pixel-art office so an observer can *w
 - **Demonstration-first.** Ant Farm exists to make the platform legible to a human. It is an observability surface, not a control surface: there is no way to command an agent or mutate state from it.
 - **Real-data-only.** Every animation is derived from a real `audit_log` row (replay) or a real live bus event (stream). There is no synthetic or demo mode — an empty office means the audit log is empty for the selected window.
 - **"DVR" replay + live.** A single Conductor drives playback: scrub to any point in a historical window, adjust velocity, pause, or snap to the live edge where newly-arriving events fire as they happen. Replay and live are the same timeline, merged at a boundary rather than two separate views.
-- **Clean degradation.** Licensed art is optional. When it is absent (the open-core image, a clean dev checkout), the office renders entirely from procedural CC0 placeholder textures — no hard failure, no missing-texture gaps.
+- **Clean degradation.** Licensed art is optional. When it is absent (e.g. a source checkout that omits it), the office renders entirely from procedural CC0 placeholder textures — no hard failure, no missing-texture gaps.
 
 ---
 
@@ -122,10 +122,10 @@ Both additions are load-bearing and image-only (neither can execute script, so `
 
 ## Assets & Licensing
 
-Ant Farm renders in the visual style of **LimeZu** pixel-art packs (Modern Office for tiles/furniture/props, Modern Interiors for character sprites). The LimeZu license forbids redistribution, which shapes the whole asset story:
+Ant Farm renders in the visual style of **LimeZu** pixel-art packs (Modern Office for tiles/furniture/props, Modern Interiors for character sprites). LimeZu granted written redistribution approval (2026-07-02, curia#1504), so the licensed art now ships in-repo and in every image — the placeholder path remains as a graceful fallback:
 
-- **Placeholders are the baseline.** `placeholder-textures.ts` registers procedural CC0 stand-ins for every prop and character. This is what the open-core image ships and always renders — the acceptance-criteria floor.
-- **Licensed art is a hosted-build / BYO-license layer.** Runtime PNGs (the Modern Office tileset + room-builder floor; up to 20 premade Modern Interiors character spritesheets at the 32×32 size) are supplied by the hosted build and layered into `apps/antfarm/assets-licensed/` at image build. That directory is gitignored, absent from the open-core image, and served **only** behind the session-gated assets route — the licensed bytes never touch the unauthenticated static mount.
+- **Placeholders are the fallback baseline.** `placeholder-textures.ts` registers procedural CC0 stand-ins for every prop and character. They render whenever the licensed art is absent (e.g. a source checkout without it) — the acceptance-criteria floor, no hard failure.
+- **Licensed art ships in-repo.** Runtime PNGs (the Modern Office tileset + room-builder floor; up to 20 premade Modern Interiors character spritesheets at the 32×32 size) are committed to `apps/antfarm/assets-licensed/limezu/` and baked into the image (open-core included). That directory sits **outside** the Vite `public/` web root and is served **only** behind the session-gated assets route — the licensed bytes never touch the unauthenticated static mount.
 - **Characters: deterministic 1-of-20.** Each agent id is hashed to one of the 20 premade sheets (`characterSheetForAgent`), giving every agent a stable, visually distinct look. When the real sheet loaded, the agent renders as an animated `Sprite` (idle + 4-direction walk); when absent, it falls back to the tinted procedural placeholder driven by the `agent-appearance` map. *(Generator-part compositing — building characters from skin/hair/outfit layers — is deferred post-v1; that ~80M layer library is not staged.)*
 - **Office props: real where covered.** Floor, desks, the boss desk, the tasks board, and the wastebasket are swapped to cropped regions of the Modern Office tileset when present. The claw, vacuum tubes, and scheduler-machine have **no pack coverage** and stay procedural by design.
 - **Attribution.** The in-app `CreditsFooter` links both LimeZu packs, satisfying the attribution clause whether or not the licensed art is present.
@@ -138,7 +138,7 @@ The loader never throws: `OfficeScene.preload()` records load errors in a `faile
 
 - The Docker image **builds both SPAs** (`@curia/console` and `@curia/antfarm`) and copies each `dist/` into the runtime image.
 - The Fastify HTTP channel registers `antfarmStaticRoutes` (the `/antfarm/*` mount) **before** `consoleRoutes`, so the console's `/*` wildcard does not swallow Ant Farm requests. When the antfarm `dist/` is absent, the static route serves a `503` "not built" page instead of falling through.
-- The curated licensed-art subtree is supplied by the hosted build and `COPY`-layered into `apps/antfarm/assets-licensed/` at build (runtime PNGs only — no `.ase`/`.gif`/`.txt` masters). A checkout without the subtree still builds; the open-core image simply has no licensed art and renders placeholders.
+- The curated licensed-art subtree lives in-repo at `apps/antfarm/assets-licensed/limezu/` (runtime PNGs only — no `.ase`/`.gif`/`.txt` masters) and the runtime stage `COPY`s `apps/antfarm/assets-licensed` into the image, so every build (open-core included) ships the real art. A checkout that omits the subtree still builds and renders placeholders.
 
 ---
 

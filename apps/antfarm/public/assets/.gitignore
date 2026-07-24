@@ -1,2 +1,3 @@
-# Licensed LimeZu art — supplied by curia-deploy at build time, never committed here.
+# Licensed LimeZu art must never sit under public/ (world-downloadable). It lives
+# auth-gated at apps/antfarm/assets-licensed/limezu/ instead — never here.
 limezu/

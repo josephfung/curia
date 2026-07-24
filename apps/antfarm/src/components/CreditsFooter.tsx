@@ -1,4 +1,4 @@
-/** Pixel-art assets for Ant Farm (CC0 placeholders; licensed LimeZu art layered at deploy). */
+/** Pixel-art credits for Ant Farm — licensed LimeZu art (in-repo) with CC0 procedural fallback. */
 
 export function CreditsFooter() {
   return (
@@ -12,7 +12,7 @@ export function CreditsFooter() {
         <a href="https://limezu.itch.io/moderninteriors" target="_blank" rel="noopener noreferrer">
           Modern Interiors
         </a>
-        . CC0 placeholders in-repo; production builds layer licensed assets from curia-deploy.
+        , used with permission. CC0 procedural placeholders render when the art is unavailable.
       </span>
     </footer>
   );
