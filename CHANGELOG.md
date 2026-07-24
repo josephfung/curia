@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Slack channel** — Socket Mode DMs, @mentions, in-thread replies; `inbound.reaction` bus event (ADR-033). (#1477)
 - **`OutboundSendRequest`** — new `slack` variant for gateway `chat.postMessage` delivery (public API).
 - **`inbound.reaction`** — channel-agnostic reaction signal for approval UX; emoji→intent wired in #1479.
+- **Adding-a-channel dev guide** — `docs/dev/` how-to for building a channel end-to-end (adapter, principal rules, gateway wiring, trust config).
 
 ### Changed
 
