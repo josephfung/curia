@@ -2,14 +2,19 @@
 //
 // The Ant Farm is served by the backend at /antfarm/ (its own SPA), NOT a
 // TanStack route, so this is a plain <a href> with a trailing slash to trigger
-// a full navigation. The hero image is a placeholder served from public/;
-// @TODO: replace public/antfarm-promo.gif with the user-provided promo gif.
+// a full navigation.
+//
+// The hero image (public/antfarm-promo.png) is the coordinator's office desk
+// assembled from the SAME licensed LimeZu glyphs the Ant Farm renders with
+// (grey desk 213/214/215 + monitors 125/126/127 + chair 101 + character sheet).
+// LimeZu attribution (a license condition) is satisfied by this banner linking
+// to the Ant Farm, whose credits footer links both packs (see apps/antfarm/CREDITS.md).
 
 import { useState } from 'react';
 
 export function AntFarmPromo() {
-  // If the placeholder gif isn't present yet, hide the broken <img> so the
-  // styled media panel shows instead of a broken-image icon.
+  // If the image is somehow absent, hide the broken <img> so the styled media
+  // panel shows instead of a broken-image icon.
   const [imageOk, setImageOk] = useState(true);
 
   return (
@@ -17,8 +22,8 @@ export function AntFarmPromo() {
       <div className="dash-promo-media">
         {imageOk && (
           <img
-            src="/antfarm-promo.gif"
-            alt="Ant Farm — the bullpen rendered as a live office floor plan"
+            src="/antfarm-promo.png"
+            alt="The coordinator at their desk in the Ant Farm office"
             className="dash-promo-img"
             onError={() => setImageOk(false)}
           />
