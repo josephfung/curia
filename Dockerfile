@@ -36,6 +36,11 @@ RUN pnpm --filter @curia/console run build
 # Build Ant Farm frontend — output lands in apps/antfarm/dist/
 COPY apps/antfarm/ ./apps/antfarm/
 RUN pnpm --filter @curia/antfarm run build
+# The licensed art normally ships in-repo (apps/antfarm/assets-licensed/limezu/),
+# but it is optional: ensure the directory exists so the runtime COPY below never
+# fails on a checkout that stripped the art. An empty dir → the assets route 404s
+# → the Phaser scene falls back to procedural placeholders (graceful degradation).
+RUN mkdir -p /app/apps/antfarm/assets-licensed
 
 # Production stage: minimal runtime image.
 # Same node:24-slim digest pin as the build stage above (see that comment for the
