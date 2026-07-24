@@ -123,17 +123,27 @@ export class DbAvailabilityMonitor {
   async probe(): Promise<DbAvailabilitySnapshot> {
     if (this.probing) return this.getSnapshot();
     this.probing = true;
+    let probeTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       try {
         await Promise.race([
           this.config.pool.query('SELECT 1'),
           new Promise<never>((_, reject) => {
-            setTimeout(() => reject(Object.assign(new Error('db probe timeout'), { code: 'ETIMEDOUT' })), 2_000);
+            probeTimer = setTimeout(
+              () => reject(Object.assign(new Error('db probe timeout'), { code: 'ETIMEDOUT' })),
+              2_000,
+            );
+            // Don't keep the process alive solely for a probe timeout.
+            if (typeof probeTimer === 'object' && probeTimer !== null && 'unref' in probeTimer) {
+              (probeTimer as NodeJS.Timeout).unref();
+            }
           }),
         ]);
         await this.onAvailable();
       } catch (err) {
         await this.onUnavailable(err);
+      } finally {
+        if (probeTimer !== undefined) clearTimeout(probeTimer);
       }
       return this.getSnapshot();
     } finally {

@@ -19,6 +19,7 @@ import { createLogger } from '../../src/logger.js';
 import { WorkingMemory } from '../../src/memory/working-memory.js';
 import { createPool, type DbPool } from '../../src/db/connection.js';
 import { AuditLogger } from '../../src/audit/logger.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const hasDb = !!process.env['DATABASE_URL'];
 const describeIf = hasDb ? describe : describe.skip;
@@ -29,14 +30,27 @@ const MOCK_PROVENANCE = {
   providerRequestId: 'msg_mock_int',
 } as const;
 
+const CONV_ID_PREFIX = 'conv-db-int-';
+
 describeIf('integration: database unavailable mid-task (#1381)', () => {
   let healthyPool: DbPool;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     healthyPool = createPool(process.env['DATABASE_URL']!, createLogger('error'));
+    // Refuse to write audit_log rows against anything other than curia_test.
+    await requireCuriaTestDatabase(healthyPool);
   });
 
   afterAll(async () => {
+    try {
+      await healthyPool.query(
+        `DELETE FROM audit_log WHERE conversation_id LIKE $1`,
+        [`${CONV_ID_PREFIX}%`],
+      );
+    } catch (err) {
+      // Cleanup must not block pool shutdown.
+      createLogger('error').error({ err }, 'db-unavailable integration: audit_log cleanup failed');
+    }
     await healthyPool.end();
   });
 
@@ -96,7 +110,7 @@ describeIf('integration: database unavailable mid-task (#1381)', () => {
 
     const task = createAgentTask({
       agentId: 'coordinator',
-      conversationId: `conv-db-int-${Date.now()}`,
+      conversationId: `${CONV_ID_PREFIX}${Date.now()}`,
       channelId: 'cli',
       senderId: 'user',
       content: 'ping',

@@ -141,12 +141,11 @@ class PostgresBackend implements StorageBackend {
     // the turn has already been persisted. Catch here (not inside maybeSummarize)
     // so errors propagate cleanly out of the private method and the non-fatal
     // decision is explicit and visible at the call site.
-    // Non-critical: retry briefly on transient DB blips before giving up (#1381).
+    // DB retries for the post-LLM persistence half live inside maybeSummarize —
+    // wrapping the whole call would re-bill the summarization LLM on a DB blip.
     if (this.summarization) {
       try {
-        await withDbRetry(() =>
-          this.maybeSummarize(conversationId, agentId, this.summarization!),
-        );
+        await this.maybeSummarize(conversationId, agentId, this.summarization);
       } catch (err) {
         this.logger.error(
           { err, conversationId, agentId },
@@ -315,6 +314,31 @@ class PostgresBackend implements StorageBackend {
     }
     const summaryContent = response.content.trim();
 
+    // Persist only — retry transient DB blips here without re-running the LLM
+    // call above (#1381 review). The transaction is atomic, so a failed attempt
+    // rolls back cleanly before the next retry.
+    const archiveIds = turnsToArchive.map((t) => t.id);
+    await withDbRetry(() =>
+      this.persistSummary(
+        conversationId,
+        agentId,
+        archiveIds,
+        summaryContent,
+      ),
+    );
+  }
+
+  /**
+   * Post-LLM half of summarization: anchor timestamp + archive/insert transaction.
+   * Idempotent across retries only when the prior attempt rolled back (COMMIT
+   * success means withDbRetry does not re-enter).
+   */
+  private async persistSummary(
+    conversationId: string,
+    agentId: string,
+    archiveIds: string[],
+    summaryContent: string,
+  ): Promise<void> {
     // The synthetic summary is inserted 1ms before the oldest *kept* turn so that
     // chronological ordering places it at the head of the active window.
     const oldestKeptResult = await this.pool.query<{ created_at: Date }>(
@@ -326,7 +350,7 @@ class PostgresBackend implements StorageBackend {
          AND id != ALL($3::uuid[])
        ORDER BY created_at ASC
        LIMIT 1`,
-      [conversationId, agentId, turnsToArchive.map((t) => t.id)],
+      [conversationId, agentId, archiveIds],
     );
 
     // If toArchiveCount < activeCount, there must always be at least one kept row.
@@ -341,7 +365,6 @@ class PostgresBackend implements StorageBackend {
 
     // Atomic transaction: archive old turns + insert synthetic summary.
     // If either step fails the whole operation rolls back — no partial state.
-    const archiveIds = turnsToArchive.map((t) => t.id);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');

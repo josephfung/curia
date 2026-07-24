@@ -65,10 +65,7 @@ import {
   maxItemSensitivity,
 } from '../security/export-controls.js';
 import { createExportDelivered } from '../bus/events.js';
-import {
-  isDbUnavailableError,
-  withDbRetry,
-} from '../db/resilience.js';
+import { isDbUnavailableError } from '../db/resilience.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -1628,11 +1625,13 @@ export class ExecutionLayer {
     });
 
     try {
-      // Non-critical path (#1381): transient DB outages during skill execution
-      // are retried with bounded backoff before surfacing to the agent. The
-      // skill timeout still races the whole retry sequence so we never hang.
+      // Do NOT wrap handler.execute in withDbRetry: handlers may have already
+      // sent external messages or mutated other systems before a later DB write
+      // fails, and a full replay would duplicate side effects (#1381 review).
+      // Transient DB faults are classified below as DATABASE_UNAVAILABLE so the
+      // runtime can degrade without burning the consecutive-error budget.
       const result = await Promise.race([
-        withDbRetry(() => handler.execute(ctx)),
+        handler.execute(ctx),
         timeoutPromise,
       ]);
 
