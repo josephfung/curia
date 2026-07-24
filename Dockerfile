@@ -75,8 +75,8 @@ RUN corepack enable
 #   - CVE-2026-59871: node-tar <= 7.5.17 (crash via PAX numeric path type confusion)
 #   - CVE-2026-59875: node-tar <= 7.5.16 (uncaught exception on NUL byte in PAX records)
 #   - CVE-2026-13149: brace-expansion < 5.0.7 (exponential-time expansion DoS)
-# 11.17.0's bundled tar@7.5.16 / brace-expansion@5.0.6 predate these fixes (disclosed
-# 2026-07-21). 11.18.0 is the lowest npm release whose bundled deps clear all five above:
+# 11.17.0's bundled tar@7.5.16 / brace-expansion@5.0.6 predate these fixes.
+# 11.18.0 is the lowest npm release whose bundled deps clear all five above:
 # it bundles tar@7.5.19 (>= the 7.5.19 floor CVE-2026-59873 requires) and
 # brace-expansion@5.0.7, and still ships ip-address@10.2.0 (clears the earlier
 # CVE-2026-42338 that motivated the previous bump). Staying on the npm 11 major avoids
