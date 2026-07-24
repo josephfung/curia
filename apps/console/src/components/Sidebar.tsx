@@ -4,6 +4,7 @@ import { useMobileMenu } from '../context/MobileMenu';
 import { apiFetch } from '../api.js';
 import {
   CuriaWordmark,
+  IconHome,
   IconChat,
   IconMemory,
   IconGraph,
@@ -26,6 +27,7 @@ interface SidebarProps {
 }
 
 const ROUTES: Record<string, string> = {
+  dashboard: '/',
   chat:     '/chat',
   kg:       '/kg',
   contacts: '/contacts',
@@ -120,6 +122,14 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
       </div>
 
       <div className="nav-group">
+        <button
+          className={`nav-item${activeView === 'dashboard' ? ' active' : ''}`}
+          onClick={() => go('dashboard')}
+        >
+          <IconHome />
+          Home
+        </button>
+
         <button
           className={`nav-item${activeView === 'chat' ? ' active' : ''}`}
           onClick={() => go('chat')}

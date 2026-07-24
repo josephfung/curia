@@ -373,6 +373,176 @@ input:focus, textarea:focus, select:focus {
   font-size: 16px;
 }
 
+/* ── 9b. Operator home (dashboard) ───────────────────────────────────── */
+.dash-scroll { flex: 1; overflow-y: auto; padding: 24px 20px 48px; }
+.dash-inner {
+  max-width: 1180px; margin: 0 auto;
+  display: flex; flex-direction: column; gap: 20px;
+}
+
+.dash-greeting {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px;
+}
+.dash-greeting-title {
+  margin: 0;
+  font-family: 'Lora', Georgia, serif; font-weight: 500;
+  font-size: 26px; line-height: 1.2; color: var(--app-fg);
+}
+.dash-greeting-sub { margin: 0; font-size: 14px; color: var(--app-fg-muted); }
+
+/* Card grid — auto-fit so it drops from 3 → 2 → 1 columns as width shrinks. */
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+  gap: 16px; align-items: start;
+}
+
+.dash-card {
+  background: var(--app-card);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  padding: 18px;
+  display: flex; flex-direction: column; gap: 14px;
+  min-width: 0;
+}
+.dash-card-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.dash-card-title {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--app-fg-subtle);
+}
+.dash-count {
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--app-border); color: var(--app-fg-muted);
+}
+.dash-card-quiet { font-size: 13px; color: var(--app-fg-muted); }
+
+/* Shared status dot */
+.dash-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dash-dot-lg { width: 12px; height: 12px; }
+
+/* Health card */
+.dash-health-status { display: flex; align-items: center; gap: 12px; }
+.dash-health-status-text { display: flex; flex-direction: column; min-width: 0; }
+.dash-health-label {
+  font-size: 20px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2;
+  color: var(--app-fg);
+}
+.dash-health-meta {
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--app-fg-muted);
+}
+.dash-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Attention rows — each a deep link */
+.dash-rows { display: flex; flex-direction: column; gap: 2px; }
+.dash-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 10px 8px; margin: 0 -8px;
+  border-radius: 6px; text-decoration: none; color: inherit;
+  min-height: 44px;
+  transition: background 120ms;
+}
+.dash-row:hover { background: var(--app-row-hover); text-decoration: none; }
+.dash-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.dash-row-title { font-size: 14px; font-weight: 600; color: var(--app-fg); }
+.dash-row-detail { font-size: 12px; color: var(--app-fg-muted); }
+.dash-row-chevron { color: var(--app-fg-subtle); flex: none; }
+
+/* Scoped alert / empty states inside a card */
+.dash-alert {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 14px; border-radius: 6px;
+  border: 1px solid var(--app-border);
+}
+.dash-alert.ok {
+  background: var(--app-teal-soft);
+  border-color: color-mix(in srgb, var(--app-green) 28%, transparent);
+}
+.dash-alert.danger {
+  background: color-mix(in srgb, var(--app-destructive) 8%, transparent);
+  border-color: color-mix(in srgb, var(--app-destructive) 28%, transparent);
+}
+.dash-alert-title { font-size: 14px; font-weight: 600; color: var(--app-fg); }
+.dash-alert-body { font-size: 13px; color: var(--app-fg-muted); }
+.dash-alert .btn { align-self: flex-start; margin-top: 8px; }
+
+/* Activity feed */
+.dash-activity { display: flex; flex-direction: column; }
+.dash-activity-item {
+  display: flex; gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--app-border-soft);
+  min-width: 0;
+}
+.dash-activity-item:last-child { border-bottom: none; }
+.dash-activity-time {
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  color: var(--app-fg-subtle); flex: none; width: 44px; padding-top: 2px;
+}
+.dash-activity-text {
+  flex: 1; min-width: 0; font-size: 13px; line-height: 1.45; color: var(--app-fg-muted);
+}
+.dash-activity-text strong { color: var(--app-fg); font-weight: 600; }
+
+/* Ask Curia CTA */
+.dash-ask {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
+  background: var(--app-card); border: 1px solid var(--app-border);
+  border-radius: 8px; padding: 20px;
+}
+.dash-ask-copy { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.dash-ask-title {
+  margin: 0; font-family: 'Lora', Georgia, serif; font-weight: 500;
+  font-size: 20px; color: var(--app-fg);
+}
+.dash-ask-text { margin: 0; font-size: 14px; color: var(--app-fg-muted); max-width: 520px; }
+.dash-ask-cta {
+  flex: 0 0 auto; height: 44px;
+  background: var(--app-teal); color: #FFFFFF; border: none;
+  text-decoration: none;
+}
+.dash-ask-cta:hover { filter: brightness(1.08); text-decoration: none; }
+
+/* Ant Farm promo banner */
+.dash-promo {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 0;
+  background: var(--app-card); border: 1px solid var(--app-border);
+  border-radius: 8px; overflow: hidden;
+  text-decoration: none; color: inherit;
+  transition: border-color 120ms;
+}
+.dash-promo:hover { border-color: var(--app-teal); text-decoration: none; }
+.dash-promo-media {
+  flex: 1 1 240px; align-self: stretch; min-width: 200px; max-width: 380px;
+  min-height: 140px;
+  background: var(--app-muted);
+  display: flex; align-items: center; justify-content: center;
+}
+.dash-promo-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dash-promo-body {
+  flex: 4 1 260px; min-width: 200px; padding: 22px;
+  display: flex; flex-direction: column; justify-content: center; gap: 10px;
+}
+.dash-promo-eyebrow {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--app-teal);
+}
+.dash-promo-title {
+  margin: 0; font-family: 'Lora', Georgia, serif; font-weight: 500;
+  font-size: 22px; color: var(--app-fg);
+}
+.dash-promo-text { margin: 0; font-size: 14px; color: var(--app-fg-muted); max-width: 460px; }
+.dash-promo-cta {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 14px; font-weight: 600; color: var(--app-teal); margin-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .dash-scroll { padding: 18px 14px 40px; }
+}
+
 /* ── 10. Settings shell ──────────────────────────────────────────────── */
 .settings-shell {
   flex: 1; display: flex; overflow: hidden; min-height: 0;
