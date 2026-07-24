@@ -25,12 +25,17 @@ import type { SchedulerService } from './scheduler-service.js';
 import {
   loadJobNotificationContext,
 } from './job-notification-context.js';
+import {
+  resolvePrincipalEmail,
+  type PrincipalEmailRef,
+} from '../contacts/types.js';
 
 export interface RecoveryNotifierConfig {
   bus: EventBus;
   outboundGateway: OutboundGateway;
   schedulerService: SchedulerService;
-  ceoEmail: string;
+  /** Plain string (tests) or live ref so post-boot email binds hot-reload (#1514). */
+  ceoEmail: string | PrincipalEmailRef;
   logger: Logger;
   appOrigin?: string;
   httpPort: number;
@@ -98,12 +103,21 @@ export class RecoveryNotifier {
       'The job has been rescheduled automatically and will run again on its next trigger.',
     ].join('\n');
 
+    const ceoEmail = resolvePrincipalEmail(this.config.ceoEmail);
+    if (!ceoEmail) {
+      this.log.warn(
+        { jobId, agentId },
+        'RecoveryNotifier: principal email not bound yet — skipping notification',
+      );
+      return;
+    }
+
     // sendNotification() catches its own errors and returns false on failure —
     // it does not throw. We log at error if it returns false so the anomaly is
     // visible in alerting.
     const sent = await this.config.outboundGateway.sendNotification({
       notificationType: 'schedule_recovered',
-      ceoEmail: this.config.ceoEmail,
+      ceoEmail,
       subject,
       body,
     });

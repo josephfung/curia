@@ -5,6 +5,10 @@ import { Topbar, TopbarSearch, TopbarDivider } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 import { buildContactViewFields, kgNodeHref, formatDateTime } from './contacts-utils.js';
+import {
+  LINKABLE_CHANNEL_IDENTITIES,
+  type LinkableChannelIdentity,
+} from '../linkable-channels.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -149,7 +153,7 @@ interface AuthOverride {
   granted: boolean;
 }
 
-const IDENTITY_CHANNEL_OPTIONS = ['email', 'phone', 'signal', 'telegram', 'slack'] as const;
+const IDENTITY_CHANNEL_OPTIONS = LINKABLE_CHANNEL_IDENTITIES;
 
 function ContactEditDrawer({ contact, creating, allContacts, onClose, onSaved, onDeleted, onMerged }: DrawerProps) {
   const [displayName, setDisplayName] = useState(contact?.displayName ?? '');
@@ -182,7 +186,7 @@ function ContactEditDrawer({ contact, creating, allContacts, onClose, onSaved, o
   // Channel identities (#1514)
   const [identities, setIdentities] = useState<ContactIdentity[]>([]);
   const [identitiesError, setIdentitiesError] = useState<string | null>(null);
-  const [newChannel, setNewChannel] = useState<typeof IDENTITY_CHANNEL_OPTIONS[number]>('email');
+  const [newChannel, setNewChannel] = useState<LinkableChannelIdentity>('email');
   const [newIdentifier, setNewIdentifier] = useState('');
   const [newLabel, setNewLabel] = useState('');
   const [identityBusy, setIdentityBusy] = useState<string | null>(null);
@@ -652,7 +656,7 @@ function ContactEditDrawer({ contact, creating, allContacts, onClose, onSaved, o
                   <select
                     id="ci-channel"
                     value={newChannel}
-                    onChange={e => setNewChannel(e.target.value as typeof IDENTITY_CHANNEL_OPTIONS[number])}
+                    onChange={e => setNewChannel(e.target.value as LinkableChannelIdentity)}
                   >
                     {IDENTITY_CHANNEL_OPTIONS.map(ch => (
                       <option key={ch} value={ch}>{ch}</option>

@@ -12,6 +12,8 @@ import type { Logger } from '../../logger.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { EmailSendRequest } from './outbound-request.js';
 import type { ContactService } from '../../contacts/contact-service.js';
+import type { PrincipalEmailRef } from '../../contacts/types.js';
+import { resolvePrincipalEmail } from '../../contacts/types.js';
 import type { ConfigStore } from '../../memory/config-store.js';
 import { convertNylasMessage } from './message-converter.js';
 import {
@@ -76,9 +78,10 @@ export interface EmailAdapterConfig {
   suppressedSenderEmails: string[];
   /**
    * CEO's email address — used as the recipient for rate-limit notification emails.
-   * When absent, rate-limit notifications are logged but not emailed.
+   * When absent/empty, rate-limit notifications are logged but not emailed.
+   * Accepts a mutable PrincipalEmailRef so post-boot binds hot-reload (#1514).
    */
-  ceoEmail?: string;
+  ceoEmail?: string | PrincipalEmailRef;
   /**
    * Maximum new contacts to auto-create from a single email's participant list.
    * Existing contacts (already in DB) don't count. Default: 10.
@@ -1047,7 +1050,8 @@ export class EmailAdapter implements Channel {
     emailSubject: string,
     emailSender: string,
   ): Promise<void> {
-    const { outboundGateway, logger, ceoEmail } = this.config;
+    const { outboundGateway, logger } = this.config;
+    const ceoEmail = resolvePrincipalEmail(this.config.ceoEmail);
     const now = Date.now();
 
     // Dedup: skip if we already sent a notification for this limit type within the last hour

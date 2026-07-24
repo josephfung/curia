@@ -56,7 +56,7 @@ import type { ToolDiscovery } from './skills/loader.js';
 import { loadMcpServers, loadSkillsConfig, registerMcpProjectedSkills } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
-import type { ChannelIdentity, Contact } from './contacts/types.js';
+import type { ChannelIdentity, Contact, PrincipalEmailRef } from './contacts/types.js';
 import { ConfidencePipeline } from './contacts/confidence-pipeline.js';
 import { DedupService } from './contacts/dedup-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
@@ -704,17 +704,21 @@ async function main(): Promise<void> {
   // principalIdentities is a shared mutable array (never reassigned) so console / agent
   // identity writes can hot-reload it in place (#1514) — OutboundGateway, ExecutionLayer,
   // and AgentRuntime all hold a reference to this same array.
+  //
+  // principalEmail is a mutable holder (never replaced) for the same reason: OutboundContentFilter,
+  // EmailAdapter, notifiers, and ApprovalTrigger read `.current` at use time so binding an
+  // email identity post-boot updates the allow-list / notification target without restart.
   let principalContact: Contact | null = null;
   const principalIdentities: ChannelIdentity[] = [];
   // Empty string when there is no principal or no verified email (fresh setup, Signal-only).
   // Downstream consumers already treat '' as "absent" — the same contract the old unset
   // CEO_PRIMARY_EMAIL had.
-  let principalEmail = '';
+  const principalEmail: PrincipalEmailRef = { current: '' };
 
   async function refreshPrincipalIdentities(): Promise<void> {
     if (!principalContact) {
       principalIdentities.length = 0;
-      principalEmail = '';
+      principalEmail.current = '';
       return;
     }
     const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
@@ -722,9 +726,14 @@ async function main(): Promise<void> {
     const next = allIdentities.filter((id) => id.verified && id.status === 'active');
     principalIdentities.length = 0;
     principalIdentities.push(...next);
-    principalEmail = principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
+    principalEmail.current =
+      principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
     logger.info(
-      { contactId: principalContact.id, identityCount: principalIdentities.length, hasEmail: !!principalEmail },
+      {
+        contactId: principalContact.id,
+        identityCount: principalIdentities.length,
+        hasEmail: !!principalEmail.current,
+      },
       'Principal identities refreshed',
     );
   }
@@ -742,7 +751,7 @@ async function main(): Promise<void> {
       await refreshPrincipalIdentities();
 
       logger.info(
-        { contactId: principalContact.id, kgNodeId: principalContact.kgNodeId, hasEmail: !!principalEmail },
+        { contactId: principalContact.id, kgNodeId: principalContact.kgNodeId, hasEmail: !!principalEmail.current },
         'Principal identity resolved',
       );
     } else {
@@ -1206,8 +1215,8 @@ async function main(): Promise<void> {
     // not from config. Must NOT be Curia's own Nylas address (nylasSelfEmail): using
     // Curia's address here was a bug that (a) treated the CEO's email as a third-party
     // leak and (b) routed blocked-content notifications to Curia's inbox instead of the CEO's.
-    const ceoEmail = principalEmail;
-    if (!ceoEmail) {
+    // Pass the mutable PrincipalEmailRef so post-boot identity binds update the allow-list (#1514).
+    if (!principalEmail.current) {
       logger.warn('Outbound content filter initialized without principal email (no verified principal email on file) — contact-data-leak rule may produce false positives');
     }
     // Canary: with markers now derived from the identity AND the coordinator prompt,
@@ -1270,7 +1279,7 @@ async function main(): Promise<void> {
 
     outboundFilter = new OutboundContentFilter({
       systemPromptMarkers,
-      ceoEmail,
+      ceoEmail: principalEmail,
       judge: outboundJudge,
       logger,
     });
@@ -1613,8 +1622,8 @@ async function main(): Promise<void> {
         selfEmail: account.selfEmail,
         suppressedSenderEmails: ownedMailboxAddresses,
         // Principal's email, resolved from findContactBySystemRole('principal') (#1049).
-        // undefined when unknown — EmailAdapter treats it as optional.
-        ceoEmail: principalEmail || undefined,
+        // Mutable ref so post-boot email binds update rate-limit notifications (#1514).
+        ceoEmail: principalEmail,
         contactCreationMaxPerMessage: yamlConfig.contact_creation_limits?.max_per_message ?? 10,
         contactCreationMaxPerHour: yamlConfig.contact_creation_limits?.max_per_hour ?? 100,
         timezone: config.timezone,
@@ -1638,7 +1647,7 @@ async function main(): Promise<void> {
   // to their contact and is held as provisional. Surface at error for log aggregators.
   // Lives here (not in the principal-resolution block) because adapter activeness is only
   // known after this point.
-  if (emailAdapters.length > 0 && principalContact && !principalEmail) {
+  if (emailAdapters.length > 0 && principalContact && !principalEmail.current) {
     logger.error(
       { contactId: principalContact.id },
       'Email adapter(s) active but the principal has no verified active email — inbound email from the principal WILL be held as provisional until an email identity is bound',
@@ -1783,8 +1792,10 @@ async function main(): Promise<void> {
 
   // SuspensionNotifier — emails the CEO when a scheduled job is auto-suspended.
   // Bypasses the LLM pipeline: notifies even when Anthropic is the thing that's down.
-  // Skipped (with a warning) if outboundGateway or the principal's email is absent.
-  if (outboundGateway && principalEmail) {
+  // Always registered when the gateway exists; ceoEmail is a live ref so a post-boot
+  // email bind enables notifications without restart (#1514). Sends no-op/skip when
+  // current is empty.
+  if (outboundGateway) {
     const suspensionNotifier = new SuspensionNotifier({
       bus,
       outboundGateway,
@@ -1795,18 +1806,23 @@ async function main(): Promise<void> {
       httpPort: config.httpPort,
     });
     suspensionNotifier.register();
+    if (!principalEmail.current) {
+      logger.warn(
+        'SuspensionNotifier registered without principal email yet — will notify once an email identity is bound',
+      );
+    }
   } else {
     logger.warn(
-      { hasGateway: !!outboundGateway, hasCeoEmail: !!principalEmail },
-      'SuspensionNotifier not registered — outboundGateway or principal email absent; suspended jobs will not trigger CEO email alerts',
+      { hasGateway: false, hasCeoEmail: !!principalEmail.current },
+      'SuspensionNotifier not registered — outboundGateway absent; suspended jobs will not trigger CEO email alerts',
     );
   }
 
   // RecoveryNotifier — emails the CEO when the watchdog auto-recovers a stuck job.
   // Bypasses the LLM pipeline for the same reason as SuspensionNotifier: the LLM
   // may be the reason the job is stuck in the first place.
-  // Skipped (with a warning) if outboundGateway or the principal's email is absent.
-  if (outboundGateway && principalEmail) {
+  // Same live-ref pattern as SuspensionNotifier (#1514).
+  if (outboundGateway) {
     const recoveryNotifier = new RecoveryNotifier({
       bus,
       outboundGateway,
@@ -1817,10 +1833,15 @@ async function main(): Promise<void> {
       httpPort: config.httpPort,
     });
     recoveryNotifier.register();
+    if (!principalEmail.current) {
+      logger.warn(
+        'RecoveryNotifier registered without principal email yet — will notify once an email identity is bound',
+      );
+    }
   } else {
     logger.warn(
-      { hasGateway: !!outboundGateway, hasCeoEmail: !!principalEmail },
-      'RecoveryNotifier not registered — outboundGateway or principal email absent; recovered stuck jobs will not trigger CEO email alerts',
+      { hasGateway: false, hasCeoEmail: !!principalEmail.current },
+      'RecoveryNotifier not registered — outboundGateway absent; recovered stuck jobs will not trigger CEO email alerts',
     );
   }
 
@@ -1859,7 +1880,7 @@ async function main(): Promise<void> {
     actionLogRepo,
     outboundGateway,
     logger,
-    principalEmail || undefined,
+    principalEmail,
     contactService,
     principalIdentities,
   );
@@ -2452,8 +2473,6 @@ async function main(): Promise<void> {
     secretCaptureService,
     setupRequiredAtBoot,
     bootStartedAt,
-    // Hot-reload principal identities after console link/unlink/verify/merge (#1514).
-    onPrincipalIdentitiesChanged: refreshPrincipalIdentities,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
     infraLlmService,
     // Powers principal profile endpoints in setup routes (#392). Undefined when

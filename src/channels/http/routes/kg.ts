@@ -7,7 +7,12 @@ import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import { ContactValidationError } from '../../../contacts/contact-service.js';
 import type { ChannelIdentity, Contact, ContactCanonicalFields, ContactKind, ContactTier, IdentityStatus } from '../../../contacts/types.js';
-import { IdentityNotFoundError } from '../../../contacts/types.js';
+import {
+  IdentityNotFoundError,
+  ContactNotFoundError,
+  StructuralContactMergeError,
+} from '../../../contacts/types.js';
+import { LINKABLE_CHANNEL_IDENTITY_SET } from '../../../contacts/linkable-channels.js';
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { resolveConsoleOriginator } from '../console-originator.js';
@@ -32,12 +37,6 @@ export interface KnowledgeGraphRouteOptions {
   // Shared session store — created in HttpAdapter, passed to both KG and identity routes
   // so both can accept the curia_session cookie for authentication.
   sessions: SessionStore;
-  /**
-   * Hot-reload the startup-cached principalIdentities array after console identity
-   * mutations (#1514). Optional so unit tests that don't care about principal matching
-   * can omit it.
-   */
-  onPrincipalIdentitiesChanged?: () => void | Promise<void>;
 }
 
 // Channel identifier used when the KG web app dispatches messages to the agent layer.
@@ -85,16 +84,8 @@ export async function knowledgeGraphRoutes(
   app: FastifyInstance,
   options: KnowledgeGraphRouteOptions,
 ): Promise<void> {
-  const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService, sessions, onPrincipalIdentitiesChanged } = options;
-
-  async function notifyPrincipalIdentitiesChanged(): Promise<void> {
-    if (!onPrincipalIdentitiesChanged) return;
-    try {
-      await onPrincipalIdentitiesChanged();
-    } catch (err) {
-      logger.warn({ err }, 'onPrincipalIdentitiesChanged failed (non-fatal)');
-    }
-  }
+  const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService, sessions } = options;
+  // sessions is managed by HttpAdapter — no local Map creation needed here.
   // sessions is managed by HttpAdapter — no local Map creation needed here.
 
   // POST /auth — exchanges the bootstrap secret for an HttpOnly session cookie.
@@ -1176,13 +1167,13 @@ export async function knowledgeGraphRoutes(
     }
   });
 
-  // Channels the console may bind. Matches contact-link-identity (plus slack — #1514).
-  const IDENTITY_CHANNELS = new Set(['email', 'phone', 'signal', 'telegram', 'slack']);
+  // Channels the console may bind — single allowlist shared with contact-link-identity (#1514).
   const IDENTITY_STATUSES = new Set<IdentityStatus>(['active', 'defunct', 'bounced']);
 
   // POST /api/kg/contacts/:id/identities — link a channel identity (CEO-stated → verified).
   // Binding a Slack/Signal/SMS identity to the principal is the durable fix for the
-  // outbound-filter principal-detection gap (#1514).
+  // outbound-filter principal-detection gap (#1514). Principal cache refresh is handled
+  // by ContactService.onIdentitiesChanged (no route-level duplicate).
   app.post('/api/kg/contacts/:id/identities', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
@@ -1199,9 +1190,9 @@ export async function knowledgeGraphRoutes(
       ? body.label.trim()
       : undefined;
 
-    if (!IDENTITY_CHANNELS.has(channel)) {
+    if (!LINKABLE_CHANNEL_IDENTITY_SET.has(channel)) {
       return reply.status(400).send({
-        error: `Invalid channel. Allowed: ${[...IDENTITY_CHANNELS].join(', ')}.`,
+        error: `Invalid channel. Allowed: ${[...LINKABLE_CHANNEL_IDENTITY_SET].join(', ')}.`,
       });
     }
     if (!channelIdentifier) {
@@ -1226,7 +1217,6 @@ export async function knowledgeGraphRoutes(
         source: 'ceo_stated',
         verified: true,
       });
-      await notifyPrincipalIdentitiesChanged();
       return reply.status(201).send({ identity: serializeIdentity(identity) });
     } catch (err) {
       const code = (err as { code?: string }).code;
@@ -1283,7 +1273,6 @@ export async function knowledgeGraphRoutes(
       if (hasVerified && body.verified === true && !updated.verified) {
         updated = await contactService.verifyIdentity(identityId);
       }
-      await notifyPrincipalIdentitiesChanged();
       return reply.send({ identity: serializeIdentity(updated) });
     } catch (err) {
       if (err instanceof IdentityNotFoundError) {
@@ -1313,7 +1302,6 @@ export async function knowledgeGraphRoutes(
 
       const removed = await contactService.unlinkIdentity(identityId);
       if (!removed) return reply.status(404).send({ error: 'Identity not found.' });
-      await notifyPrincipalIdentitiesChanged();
       return reply.status(204).send();
     } catch (err) {
       logger.error({ err, contactId: id, identityId }, 'DELETE /api/kg/contacts/:id/identities/:identityId failed');
@@ -1323,6 +1311,7 @@ export async function knowledgeGraphRoutes(
 
   // POST /api/kg/contacts/merge — merge secondary into primary (re-points identities).
   // dryRun defaults to true so a preview is always available before commit.
+  // Principal cache refresh (when primary is the principal) is via onIdentitiesChanged.
   app.post('/api/kg/contacts/merge', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
 
@@ -1343,7 +1332,6 @@ export async function knowledgeGraphRoutes(
 
     try {
       const result = await contactService.mergeContacts(primaryContactId, secondaryContactId, dryRun);
-      if (!dryRun) await notifyPrincipalIdentitiesChanged();
       return reply.send({
         primaryContactId: result.primaryContactId,
         secondaryContactId: result.secondaryContactId,
@@ -1361,11 +1349,14 @@ export async function knowledgeGraphRoutes(
           : {}),
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('not found')) {
-        return reply.status(404).send({ error: message });
+      if (err instanceof ContactNotFoundError) {
+        return reply.status(404).send({ error: err.message });
       }
-      if (message.includes('structural contact') || message.includes('must be different')) {
+      if (err instanceof StructuralContactMergeError) {
+        return reply.status(400).send({ error: err.message });
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('must be different')) {
         return reply.status(400).send({ error: message });
       }
       logger.error({ err, primaryContactId, secondaryContactId }, 'POST /api/kg/contacts/merge failed');

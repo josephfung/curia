@@ -18,12 +18,17 @@ import type { SchedulerService } from './scheduler-service.js';
 import {
   loadJobNotificationContext,
 } from './job-notification-context.js';
+import {
+  resolvePrincipalEmail,
+  type PrincipalEmailRef,
+} from '../contacts/types.js';
 
 export interface SuspensionNotifierConfig {
   bus: EventBus;
   outboundGateway: OutboundGateway;
   schedulerService: SchedulerService;
-  ceoEmail: string;
+  /** Plain string (tests) or live ref so post-boot email binds hot-reload (#1514). */
+  ceoEmail: string | PrincipalEmailRef;
   logger: Logger;
   appOrigin?: string;
   httpPort: number;
@@ -80,12 +85,21 @@ export class SuspensionNotifier {
       'To resume this job, open the link above and click Resume.',
     ].join('\n');
 
+    const ceoEmail = resolvePrincipalEmail(this.config.ceoEmail);
+    if (!ceoEmail) {
+      this.log.warn(
+        { jobId, agentId },
+        'SuspensionNotifier: principal email not bound yet — skipping notification',
+      );
+      return;
+    }
+
     // sendNotification() catches its own errors and returns false on failure —
     // it does not throw. We log at error if it returns false so the anomaly is
     // visible in alerting.
     const sent = await this.config.outboundGateway.sendNotification({
       notificationType: 'schedule_suspended',
-      ceoEmail: this.config.ceoEmail,
+      ceoEmail,
       subject,
       body,
     });

@@ -417,6 +417,47 @@ export class IdentityNotFoundError extends Error {
   }
 }
 
+/** Thrown when a contact id does not resolve (merge / lookup paths). */
+export class ContactNotFoundError extends Error {
+  readonly code = 'CONTACT_NOT_FOUND' as const;
+
+  constructor(contactId: string) {
+    super(`Contact not found: ${contactId}`);
+    this.name = 'ContactNotFoundError';
+  }
+}
+
+/**
+ * Thrown when mergeContacts would delete a structural contact (principal/agent).
+ * The structural row must be the primary (survivor), never the secondary.
+ */
+export class StructuralContactMergeError extends Error {
+  readonly code = 'STRUCTURAL_CONTACT_MERGE' as const;
+
+  constructor(secondaryId: string) {
+    super(
+      `Cannot merge structural contact ${secondaryId} (principal/agent/system-role) — a merge ` +
+        `deletes the secondary, which would destroy the structural row. Make it the primary instead.`,
+    );
+    this.name = 'StructuralContactMergeError';
+  }
+}
+
+/**
+ * Mutable holder for the principal's verified email so post-boot identity
+ * refreshes propagate to consumers that captured a reference at construction
+ * (#1514). Prefer this over a reassigned string primitive.
+ */
+export interface PrincipalEmailRef {
+  current: string;
+}
+
+/** Resolve a ceoEmail config that may be a plain string (tests) or a live ref. */
+export function resolvePrincipalEmail(email: string | PrincipalEmailRef | undefined): string {
+  if (email === undefined) return '';
+  return typeof email === 'string' ? email : email.current;
+}
+
 // -- Grant recommendation types (issue #952) --
 
 export type GrantRecommendationStatus = 'pending' | 'approved' | 'declined';
