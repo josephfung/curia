@@ -3,7 +3,7 @@
 // carve-out opt-in.
 //
 // AUDIT POINT: a skill receives the Gate C principal carve-out ONLY if it appears
-// as `carveoutSkill.skillName` on an entry below. Channels listed without
+// as `carveoutSkill.skillName` on an entry below. Channels without a
 // `carveoutSkill` still get identity matching + recipient projection for the
 // outbound gateway, but fail closed for Gate C. Unknown / unregistered channels
 // and skills also fail closed (empty projection ⇒ no principal carve-out in the
