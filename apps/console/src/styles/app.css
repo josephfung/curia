@@ -520,7 +520,11 @@ input:focus, textarea:focus, select:focus {
   background: var(--app-muted);
   display: flex; align-items: center; justify-content: center;
 }
-.dash-promo-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dash-promo-img {
+  width: 100%; height: 100%; object-fit: cover; object-position: center; display: block;
+  /* Pixel art — keep the LimeZu tiles crisp when the hero panel scales the image up. */
+  image-rendering: pixelated;
+}
 .dash-promo-body {
   flex: 4 1 260px; min-width: 200px; padding: 22px;
   display: flex; flex-direction: column; justify-content: center; gap: 10px;
