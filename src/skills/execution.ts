@@ -65,6 +65,10 @@ import {
   maxItemSensitivity,
 } from '../security/export-controls.js';
 import { createExportDelivered } from '../bus/events.js';
+import {
+  isDbUnavailableError,
+  withDbRetry,
+} from '../db/resilience.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -1624,8 +1628,11 @@ export class ExecutionLayer {
     });
 
     try {
+      // Non-critical path (#1381): transient DB outages during skill execution
+      // are retried with bounded backoff before surfacing to the agent. The
+      // skill timeout still races the whole retry sequence so we never hang.
       const result = await Promise.race([
-        handler.execute(ctx),
+        withDbRetry(() => handler.execute(ctx)),
         timeoutPromise,
       ]);
 
@@ -1710,6 +1717,15 @@ export class ExecutionLayer {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       skillLogger.error({ err }, 'Skill invocation failed');
+      // Classify DB outages so the runtime can track them separately from the
+      // consecutive error budget (spec 05 / #1381).
+      if (isDbUnavailableError(err)) {
+        return {
+          success: false,
+          error: this.wrapSkillError(message),
+          errorType: 'DATABASE_UNAVAILABLE',
+        };
+      }
       return { success: false, error: this.wrapSkillError(message) };
     } finally {
       // Clean up the timeout timer whether we succeeded, failed, or timed out

@@ -328,10 +328,20 @@ export interface ToolContext {
  * Skills NEVER throw — they return success or failure as a value.
  * This makes error handling explicit and prevents unhandled exceptions
  * from propagating through the execution layer.
+ *
+ * `errorType` is optional and additive (#1381): when the execution layer
+ * classifies a thrown failure (e.g. DATABASE_UNAVAILABLE), it attaches the
+ * type so the runtime can track DB outages separately from the consecutive
+ * error budget. Handlers may omit it — absence means a generic SKILL_ERROR.
  */
 export type ToolResult =
   | { success: true; data: unknown }
-  | { success: false; error: string };
+  | {
+      success: false;
+      error: string;
+      /** Structured classification when known (e.g. DATABASE_UNAVAILABLE). */
+      errorType?: import('../errors/types.js').ErrorType;
+    };
 
 /**
  * Interface that all skill handlers implement.

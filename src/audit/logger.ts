@@ -1,6 +1,11 @@
 import type { DbPool } from '../db/connection.js';
 import type { BusEvent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
+import {
+  createDbUnavailableAgentError,
+  isDbUnavailableError,
+  withDbRetry,
+} from '../db/resilience.js';
 
 /**
  * Recursively strip null bytes (U+0000) from all string values in an object.
@@ -101,6 +106,9 @@ export class AuditLogger {
     }
 
     try {
+      // Critical path: fail fast on DB unavailability (no long retry loop).
+      // Spec 05 / #1381 — audit is write-ahead; an outage must surface as a
+      // classified error to publishers rather than hang or swallow.
       await this.pool.query(
         // All columns are explicitly listed so schema additions don't silently
         // shift positional parameters.
@@ -121,6 +129,17 @@ export class AuditLogger {
     } catch (err) {
       // Audit failures must not be silent — log and re-throw so the bus can
       // decide whether to halt delivery or enter a degraded mode.
+      if (isDbUnavailableError(err)) {
+        const agentErr = createDbUnavailableAgentError('audit', err);
+        this.logger.error(
+          { err: agentErr, eventId: event.id, eventType: event.type },
+          'Audit log write failed — database unavailable',
+        );
+        throw Object.assign(new Error(agentErr.message), {
+          code: agentErr.context.code,
+          agentError: agentErr,
+        });
+      }
       this.logger.error({ err, eventId: event.id, eventType: event.type }, 'Audit log write failed');
       throw err;
     }
@@ -141,12 +160,17 @@ export class AuditLogger {
    */
   async markAcknowledged(eventId: string): Promise<void> {
     try {
-      const result = await this.pool.query(
-        // The WHERE clause guards against double-acknowledgement. The DB trigger
-        // also rejects acknowledged = true → true flips, but the WHERE makes
-        // the intent explicit in the application layer.
-        `UPDATE audit_log SET acknowledged = true WHERE id = $1 AND acknowledged = false`,
-        [eventId],
+      // Non-critical path: acknowledgement can retry briefly on transient
+      // outages. Delivery already completed; a delayed ack is preferable to
+      // an immediate throw that the bus would only log anyway (#1381).
+      const result = await withDbRetry(() =>
+        this.pool.query(
+          // The WHERE clause guards against double-acknowledgement. The DB trigger
+          // also rejects acknowledged = true → true flips, but the WHERE makes
+          // the intent explicit in the application layer.
+          `UPDATE audit_log SET acknowledged = true WHERE id = $1 AND acknowledged = false`,
+          [eventId],
+        ),
       );
       if ((result.rowCount ?? 0) === 0) {
         // 0 rows updated — either the row is already acknowledged (acceptable) or
@@ -155,6 +179,17 @@ export class AuditLogger {
         this.logger.warn({ eventId }, 'markAcknowledged matched 0 rows — row may already be acknowledged or eventId not found in audit_log');
       }
     } catch (err) {
+      if (isDbUnavailableError(err)) {
+        const agentErr = createDbUnavailableAgentError('audit', err);
+        this.logger.error(
+          { err: agentErr, eventId },
+          'Failed to mark audit log row as acknowledged — database unavailable',
+        );
+        throw Object.assign(new Error(agentErr.message), {
+          code: agentErr.context.code,
+          agentError: agentErr,
+        });
+      }
       this.logger.error({ err, eventId }, 'Failed to mark audit log row as acknowledged');
       throw err;
     }

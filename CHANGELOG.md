@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **DB outage resilience** — `DATABASE_UNAVAILABLE` errors, pool timeouts, skill retry, CEO alert after 5 min. (#1381)
 - **Operator home** — console `/` shows health, attention and activity cards plus a chat CTA. (#1375)
 - **`authorization.decision`** — audit-logs Gate-1/authz and Gate C allow/deny/escalate. (#1379)
 - **`slack-send`** — coordinator-pinned skill for 1:1 Slack DMs via OutboundGateway. (#1526)
@@ -34,6 +35,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`ToolResult` / `ErrorType`** — optional failure `errorType`; new `DATABASE_UNAVAILABLE` (public API). (#1381)
+- **Spec 05** — documents in-operation DB handling; removes that Known Deficiency (#1381).
 - **Scheduled pin gaps** — unresolved pins log at error so monitoring catches blind runs. (#1501)
 - **Outbound recipient projection** — channels own request variants + `extractRecipients`; gateway has no projection switch. (#1513; ADR-035)
 - **Signal outbound** — `outbound.delivered.messageId` records the signal-cli send timestamp for reaction correlation. (#1479)

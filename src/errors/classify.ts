@@ -93,6 +93,11 @@ function sanitizeMessage(message: string): string {
  * 1. HTTP status code (most reliable — from API responses)
  * 2. Node.js error code (system-level failures)
  * 3. Fallback to UNKNOWN
+ *
+ * Note: Postgres outages are classified at DB call sites via
+ * `createDbUnavailableAgentError` / `isDbUnavailableError` (#1381). Generic
+ * ECONNREFUSED here remains PROVIDER_ERROR so LLM/network failures are not
+ * mislabeled as DATABASE_UNAVAILABLE.
  */
 export function classifyError(err: unknown, source: string): AgentError {
   const rawMessage = extractMessage(err);
@@ -115,6 +120,12 @@ export function classifyError(err: unknown, source: string): AgentError {
     if (type === 'UNKNOWN' && CODE_MAP[code]) {
       type = CODE_MAP[code];
     }
+  }
+
+  // 3. Prefer an AgentError already attached by a DB call site (#1381).
+  const attached = (err as { agentError?: AgentError })?.agentError;
+  if (attached && attached.type === 'DATABASE_UNAVAILABLE') {
+    return attached;
   }
 
   return {

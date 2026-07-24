@@ -15,6 +15,7 @@ import type { ChannelIdentity, TaskOriginator } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
+import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
 // Value import (not type-only) — we call AutonomyService.formatPromptBlock() as a static method.
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
@@ -234,27 +235,53 @@ export class AgentRuntime {
   /**
    * Top-level error boundary for task processing.
    * Ensures the user always gets a response, even if something unexpected throws.
+   * Database outages are classified as retryable DATABASE_UNAVAILABLE (#1381).
    */
   private async handleTask(taskEvent: AgentTaskEvent): Promise<void> {
     try {
       await this.processTask(taskEvent);
     } catch (err) {
+      const attached =
+        err !== null && typeof err === 'object'
+          ? (err as { agentError?: AgentError }).agentError
+          : undefined;
+      const agentErr =
+        attached?.type === 'DATABASE_UNAVAILABLE'
+          ? attached
+          : isDbUnavailableError(err)
+            ? createDbUnavailableAgentError('runtime', err)
+            : null;
+
       this.config.logger.error(
-        { err, agentId: this.config.agentId, conversationId: taskEvent.payload.conversationId },
-        'Unhandled error in agent task processing',
-      );
-      // Best-effort: try to send an error response so the user isn't left hanging
-      try {
-        const responseEvent = createAgentResponse({
+        {
+          err: agentErr ?? err,
           agentId: this.config.agentId,
           conversationId: taskEvent.payload.conversationId,
-          content: "I'm sorry, an unexpected error occurred while processing your request.",
-          // Mark as an error response (same as sendErrorResponse) so delegate and other
-          // consumers don't treat this fallback message as a real agent result.
-          isError: true,
-          parentEventId: taskEvent.id,
-        });
-        await this.config.bus.publish('agent', responseEvent);
+          dbUnavailable: agentErr?.type === 'DATABASE_UNAVAILABLE',
+        },
+        agentErr?.type === 'DATABASE_UNAVAILABLE'
+          ? 'Database unavailable during agent task processing — failing with retryable error'
+          : 'Unhandled error in agent task processing',
+      );
+
+      // Best-effort: try to send an error response so the user isn't left hanging.
+      // When the outage is the audit DB itself, publish may also fail — log and move on.
+      try {
+        if (agentErr) {
+          await this.publishAgentError(agentErr, taskEvent);
+          await this.sendErrorResponse(taskEvent, agentErr);
+        } else {
+          const responseEvent = createAgentResponse({
+            agentId: this.config.agentId,
+            conversationId: taskEvent.payload.conversationId,
+            content: "I'm sorry, an unexpected error occurred while processing your request.",
+            // Mark as an error response (same as sendErrorResponse) so delegate and other
+            // consumers don't treat this fallback message as a real agent result.
+            isError: true,
+            parentEventId: taskEvent.id,
+          });
+          await this.config.bus.publish('agent', responseEvent);
+        }
       } catch (publishErr) {
         this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
       }
@@ -464,6 +491,7 @@ export class AgentRuntime {
       maxConsecutiveErrors: budgetConfig?.maxConsecutiveErrors ?? DEFAULT_ERROR_BUDGET.maxConsecutiveErrors,
       turnsUsed: 0,
       consecutiveErrors: 0,
+      dbFailures: 0,
     };
 
     // Append turn budget block — tells the model the exact number of turns it has
@@ -1433,14 +1461,30 @@ export class AgentRuntime {
         } else {
           // Failure: classify the error and format as a structured <task_error> block
           // so the LLM gets machine-readable error context instead of raw strings.
-          budget.consecutiveErrors++;
-          const agentErr = classifySkillError(toolCall.name, result.error);
+          // Transient DB outages (#1381) are tracked on budget.dbFailures and do NOT
+          // burn the consecutive error budget — temporary infra must not abort the task.
+          const isDbFailure = result.errorType === 'DATABASE_UNAVAILABLE';
+          if (isDbFailure) {
+            budget.dbFailures++;
+          } else {
+            budget.consecutiveErrors++;
+          }
+          const agentErr = isDbFailure
+            ? {
+                type: 'DATABASE_UNAVAILABLE' as const,
+                source: `skill:${toolCall.name}`,
+                message: result.error,
+                retryable: true,
+                context: { toolName: toolCall.name },
+                timestamp: new Date(),
+              }
+            : classifySkillError(toolCall.name, result.error);
           const formattedError = formatTaskError(
             toolCall.name,
             agentErr.type,
             agentErr.message,
-            budget.consecutiveErrors,
-            budget.maxConsecutiveErrors,
+            isDbFailure ? budget.dbFailures : budget.consecutiveErrors,
+            isDbFailure ? budget.dbFailures : budget.maxConsecutiveErrors,
           );
           toolResultBlocks.push({
             type: 'tool_result',
@@ -2280,6 +2324,9 @@ function mapAgentErrorToResponseFields(agentErr: AgentError): {
   }
   if (agentErr.type === 'SKILL_ERROR') {
     return { errorType: agentErr.type, reason: 'tool_error', retryable: agentErr.retryable };
+  }
+  if (agentErr.type === 'DATABASE_UNAVAILABLE') {
+    return { errorType: agentErr.type, reason: 'api_error', retryable: agentErr.retryable };
   }
   if (agentErr.type === 'AUTH_FAILURE' || agentErr.type === 'VALIDATION_ERROR') {
     return { errorType: agentErr.type, reason: 'blocked', retryable: agentErr.retryable };

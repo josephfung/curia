@@ -23,6 +23,7 @@ import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig } f
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { createPool } from './db/connection.js';
+import { DbAvailabilityMonitor } from './db/availability-monitor.js';
 import { EventBus } from './bus/bus.js';
 import { AuditLogger } from './audit/logger.js';
 import { AuditLogRepo } from './audit/audit-log-repo.js';
@@ -1895,6 +1896,26 @@ async function main(): Promise<void> {
     );
   }
 
+  // DbAvailabilityMonitor — probes Postgres and emails the CEO after >5 min of
+  // continuous unavailability (#1381 / spec 05). LLM-free; retries notification
+  // until the bus/audit path can deliver (typically on recovery).
+  const dbAvailabilityMonitor = new DbAvailabilityMonitor({
+    pool,
+    logger,
+    outboundGateway,
+    ceoEmail: principalEmail,
+  });
+  dbAvailabilityMonitor.start();
+  if (!outboundGateway) {
+    logger.warn(
+      'DbAvailabilityMonitor started without outbound gateway — will log outages but cannot email CEO',
+    );
+  } else if (!principalEmail.current) {
+    logger.warn(
+      'DbAvailabilityMonitor started without principal email yet — will notify once an email identity is bound',
+    );
+  }
+
   // HealthService — observability layer for liveness probes and canary jobs (#434).
   // Requires: pool, bus, logger (always available), scheduler (just constructed),
   // mcpSessions (loaded at line 926), and modelRoutingConfig (from line 393).
@@ -2634,6 +2655,12 @@ async function main(): Promise<void> {
       dispatcher.close();
     } catch (err) {
       logger.error({ err }, 'Error clearing checkpoint timers during shutdown');
+    }
+    // Stop DB probes before closing the pool so the last SELECT 1 isn't racing end().
+    try {
+      dbAvailabilityMonitor.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping DB availability monitor during shutdown');
     }
     // Purge temp files and stop the sweep timer before exit.
     if (tempFileStore) {
