@@ -1,8 +1,12 @@
 // SMS channel wire types — Telnyx Messaging webhook + Messages API shapes we care about.
 
-/** Thin provider seam so a later Twilio (etc.) swap stays local to the client. */
+/**
+ * Thin provider seam so a later Twilio (etc.) swap stays local to the client.
+ * The sender DID is pinned by the client (configured office `from_number`) and is
+ * deliberately NOT a caller-supplied parameter — no send path may spoof the From.
+ */
 export interface SmsProvider {
-  sendSms(params: { to: string; from: string; text: string }): Promise<{ messageId: string }>;
+  sendSms(params: { to: string; text: string }): Promise<{ messageId: string }>;
 }
 
 /** Telnyx Messaging webhook envelope (API v2) — only fields we read. */

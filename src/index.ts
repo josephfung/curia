@@ -879,7 +879,7 @@ async function main(): Promise<void> {
     });
     logger.info('SMS client created (Telnyx Messaging)');
   } else {
-    logger.warn('SMS Telnyx credentials not fully configured — SMS channel disabled. Set them in the console (Settings → Channels → SMS), or via TELNYX_API_KEY / TELNYX_FROM_NUMBER / TELNYX_PUBLIC_KEY env fallbacks.');
+    logger.warn('SMS Telnyx credentials not fully configured — SMS channel disabled. Set them in the console (Settings → Channels → SMS); Telnyx credentials are vault-only (no env fallback).');
   }
 
   // Calendar client — operates as the PRINCIPAL (the CEO), not as Curia's mailbox.

@@ -47,7 +47,7 @@ export class SmsClient implements SmsProvider {
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
 
-  async sendSms(params: { to: string; from: string; text: string }): Promise<{ messageId: string }> {
+  async sendSms(params: { to: string; text: string }): Promise<{ messageId: string }> {
     const res = await this.fetchImpl(this.messagesUrl, {
       method: 'POST',
       headers: {
@@ -56,7 +56,8 @@ export class SmsClient implements SmsProvider {
         Accept: 'application/json',
       },
       body: JSON.stringify({
-        from: params.from,
+        // From is pinned to the configured office DID — never caller-supplied.
+        from: this.fromNumber,
         to: params.to,
         text: params.text,
       }),

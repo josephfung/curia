@@ -60,14 +60,15 @@ export const CHANNEL_CATALOG: ChannelDescriptor[] = [
     name: 'sms',
     description: 'SMS via Telnyx Messaging on a dedicated office DID (1:1 text).',
     isToggleable: true,
+    // Vault-only (no envFallback): Telnyx credentials must live in the encrypted
+    // vault, not .env. The gate resolver and the config overlay both honor this.
     credentialFields: [
-      { key: 'api_key', label: 'Telnyx API key', secret: true, envFallback: 'TELNYX_API_KEY' },
-      { key: 'from_number', label: 'Office DID (E.164)', secret: false, envFallback: 'TELNYX_FROM_NUMBER' },
+      { key: 'api_key', label: 'Telnyx API key', secret: true },
+      { key: 'from_number', label: 'Office DID (E.164)', secret: false },
       {
         key: 'webhook_public_key',
         label: 'Telnyx webhook public key',
         secret: true,
-        envFallback: 'TELNYX_PUBLIC_KEY',
       },
     ],
     requiredSecretKeys: ['api_key', 'from_number', 'webhook_public_key'],

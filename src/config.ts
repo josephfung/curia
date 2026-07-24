@@ -1223,8 +1223,10 @@ export function loadConfig(): Config {
     signalPhoneNumber: undefined,
     slackBotToken: process.env.SLACK_BOT_TOKEN?.trim() || undefined,
     slackAppToken: process.env.SLACK_APP_TOKEN?.trim() || undefined,
-    smsApiKey: process.env.TELNYX_API_KEY?.trim() || undefined,
-    smsFromNumber: process.env.TELNYX_FROM_NUMBER?.trim() || undefined,
-    smsWebhookPublicKey: process.env.TELNYX_PUBLIC_KEY?.trim() || undefined,
+    // SMS (Telnyx) is vault-only — resolved from channel.sms.* in
+    // applyChannelVaultSecrets, never from TELNYX_* env vars.
+    smsApiKey: undefined,
+    smsFromNumber: undefined,
+    smsWebhookPublicKey: undefined,
   };
 }
