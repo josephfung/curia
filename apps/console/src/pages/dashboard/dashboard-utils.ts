@@ -354,10 +354,16 @@ export function mapDirective(d: SceneDirective): ActivityLine | null {
   }
 }
 
-// GET /api/antfarm/timeline?limit=20 → interpreted lines, newest first.
+// Lookback window for the home Recent Activity card. Matches Ant Farm's
+// default 24h preload; also satisfies assertTimelineScope (requires ≥1 filter).
+const ACTIVITY_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+// GET /api/antfarm/timeline?from=<now-24h>&limit=20 → interpreted lines, newest first.
 export async function fetchActivity(signal?: AbortSignal): Promise<ActivityLine[]> {
+  const from = new Date(Date.now() - ACTIVITY_LOOKBACK_MS).toISOString();
+  const params = new URLSearchParams({ from, limit: '20' });
   const data = await fetchJson<{ directives?: SceneDirective[] }>(
-    '/api/antfarm/timeline?limit=20',
+    `/api/antfarm/timeline?${params.toString()}`,
     signal,
   );
   const directives = requireArray<SceneDirective>(data.directives, '/api/antfarm/timeline');
