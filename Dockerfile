@@ -6,7 +6,7 @@
 # version and apply the "don't chase Current majors" ignore rule in
 # .github/dependabot.yml — a bare `node@sha256:…` pin would otherwise track `latest`.
 # Node 24 "Krypton" is the Active LTS (node 22 is Maintenance, node 26 is Current).
-FROM node:24-slim@sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5 AS build
+FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS build
 
 WORKDIR /app
 
@@ -40,7 +40,7 @@ RUN pnpm --filter @curia/antfarm run build
 # Production stage: minimal runtime image.
 # Same node:24-slim digest pin as the build stage above (see that comment for the
 # Scorecard / Dependabot rationale). Both stages must stay on the same digest.
-FROM node:24-slim@sha256:cb4e8f7c443347358b7875e717c29e27bf9befc8f5a26cf18af3c3dec80e58c5
+FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
 
 # curl is needed for the HEALTHCHECK command
 # Copy uv/uvx binaries from the official signed image (Astral's recommended
@@ -69,14 +69,21 @@ WORKDIR /app
 
 RUN corepack enable
 
-# Upgrade npm to 11.17.0 to clear CVEs in npm's own bundled packages:
-#   - CVE-2026-53655: node-tar < 7.5.14 (PAX size override / file smuggling)
-#   - CVE-2026-45149: brace-expansion < 5.0.6 (arbitrary string generation)
-#   - CVE-2026-42338: ip-address < 10.1.1 (XSS via improper HTML escaping)
-# npm@11.17.0 bundles tar@7.5.16, brace-expansion@5.0.6, ip-address@10.2.0.
+# Upgrade npm to 11.18.0 to clear CVEs in npm's own bundled packages:
+#   - CVE-2026-59873: node-tar <= 7.5.18 (decompression/parse DoS via unlimited input)
+#   - CVE-2026-59874: node-tar <= 7.5.17 (infinite loop on negative-size entry in replace)
+#   - CVE-2026-59871: node-tar <= 7.5.17 (crash via PAX numeric path type confusion)
+#   - CVE-2026-59875: node-tar <= 7.5.16 (uncaught exception on NUL byte in PAX records)
+#   - CVE-2026-13149: brace-expansion < 5.0.7 (exponential-time expansion DoS)
+# 11.17.0's bundled tar@7.5.16 / brace-expansion@5.0.6 predate these fixes (disclosed
+# 2026-07-21). 11.18.0 is the lowest npm release whose bundled deps clear all five above:
+# it bundles tar@7.5.19 (>= the 7.5.19 floor CVE-2026-59873 requires) and
+# brace-expansion@5.0.7, and still ships ip-address@10.2.0 (clears the earlier
+# CVE-2026-42338 that motivated the previous bump). Staying on the npm 11 major avoids
+# npm 12's breaking changes for a build/CLI-only tool not on the runtime request path.
 # TODO: Dependabot does not track RUN-instruction version pins — bump this
 # manually when npm publishes a patch that addresses new bundled CVEs.
-RUN npm install -g npm@11.17.0
+RUN npm install -g npm@11.18.0
 
 # Copy manifest and lockfile, then install production deps only
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

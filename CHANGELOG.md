@@ -55,6 +55,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`body-parser`** — pinned ≥2.3.0 to clear GHSA-v422-hmwv-36x6 (limit DoS). (#1518)
 - **`@hono/node-server`** — pinned ≥2.0.5 to clear GHSA-frvp-7c67-39w9 (Windows path traversal). (#1518)
 - **`js-yaml`** — targeted `promptfoo>js-yaml` ≥5.2.1 clears GHSA-724g-mxrg-4qvm. (#1518)
+- **Baked npm** — bumped 11.17.0→11.18.0 (tar 7.5.19, brace-expansion 5.0.7); refreshed node:24-slim digest. (#1521)
 
 ## [0.41.0] — 2026-07-21 — "Data"
 
