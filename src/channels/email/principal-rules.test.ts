@@ -23,4 +23,33 @@ describe('emailPrincipalRules.extractRecipients', () => {
       message: 'hi',
     })).toBeNull();
   });
+
+  it('returns null when cc is a string rather than an array (fail closed)', () => {
+    // A string cc would otherwise spread into char-sized "recipients".
+    expect(emailPrincipalRules.extractRecipients({
+      channel: 'email',
+      to: 'ceo@example.com',
+      body: 'hi',
+      cc: 'other@example.com',
+    })).toBeNull();
+  });
+
+  it('returns null when cc is a non-iterable value (fail closed)', () => {
+    // A non-array/non-iterable cc would otherwise throw at the spread.
+    expect(emailPrincipalRules.extractRecipients({
+      channel: 'email',
+      to: 'ceo@example.com',
+      body: 'hi',
+      cc: 42,
+    })).toBeNull();
+  });
+
+  it('returns null when cc is an array containing non-strings (fail closed)', () => {
+    expect(emailPrincipalRules.extractRecipients({
+      channel: 'email',
+      to: 'ceo@example.com',
+      body: 'hi',
+      cc: ['ok@example.com', 123],
+    })).toBeNull();
+  });
 });
