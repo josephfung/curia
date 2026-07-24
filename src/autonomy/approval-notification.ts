@@ -36,6 +36,13 @@ const SKILL_DETAIL_FIELDS: Array<{ test: (name: string) => boolean; fields: Deta
     ],
   },
   {
+    test: (n) => n.startsWith('sms-'),
+    fields: [
+      { key: 'recipient', label: 'To' },
+      { key: 'message', label: 'Message' },
+    ],
+  },
+  {
     test: (n) => n === 'email-reply',
     fields: [
       { key: 'reply_to_message_id', label: 'Reply to' },

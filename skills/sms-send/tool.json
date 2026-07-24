@@ -1,0 +1,23 @@
+{
+  "name": "sms-send",
+  "description": "Send an SMS text message to a person by their E.164 phone number via the office Telnyx DID. Use the contact's verified SMS (or phone) number from contact-lookup — display names are not trusted for SMS identity. 1:1 only (no groups/MMS in v1). Recipients who texted STOP are refused.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "medium",
+  "inputs": {
+    "recipient": "string (E.164 phone number, e.g. +14155552671)",
+    "message": "string",
+    "context_bridge": "string? (JSON — optional context bridge registration that adds a delegation hint so the agent can route any reply faster; every outbound is auto-tracked even without it. Shape: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?}. Example: {\"agent_id\":\"coordinator\",\"delegation_hint\":\"calendar-specialist\",\"expected_reply\":\"confirmation or reschedule request\"})"
+  },
+  "outputs": {
+    "delivered_to": "string",
+    "channel": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": [
+    "outboundGateway",
+    "outboundContext"
+  ]
+}

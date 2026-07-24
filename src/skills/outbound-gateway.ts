@@ -28,8 +28,11 @@ import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput
 import type { EmailSendRequest } from '../channels/email/outbound-request.js';
 import type { SignalOutboundRequest } from '../channels/signal/outbound-request.js';
 import type { SlackOutboundRequest } from '../channels/slack/outbound-request.js';
+import type { SmsOutboundRequest } from '../channels/sms/outbound-request.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { SlackClient } from '../channels/slack/slack-client.js';
+import type { SmsClient } from '../channels/sms/sms-client.js';
+import type { SmsOptOutStore } from '../channels/sms/sms-opt-out.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import { classifyEmailSender } from '../contacts/contact-service.js';
 import type { ContactTier, ChannelIdentity } from '../contacts/types.js';
@@ -73,6 +76,7 @@ import type { ExportItem } from '../security/export-controls.js';
 export type { EmailSendRequest } from '../channels/email/outbound-request.js';
 export type { SignalOutboundRequest } from '../channels/signal/outbound-request.js';
 export type { SlackOutboundRequest } from '../channels/slack/outbound-request.js';
+export type { SmsOutboundRequest } from '../channels/sms/outbound-request.js';
 
 // Re-export so callers can construct attachment lists without importing from read-attachments directly.
 export type { OutboundAttachmentInput };
@@ -87,7 +91,11 @@ export type { OutboundAttachmentInput };
  * backwards-compatible, but changing existing field names or types is a breaking
  * change that must be called out in CHANGELOG.md.
  */
-export type OutboundSendRequest = EmailSendRequest | SignalOutboundRequest | SlackOutboundRequest;
+export type OutboundSendRequest =
+  | EmailSendRequest
+  | SignalOutboundRequest
+  | SlackOutboundRequest
+  | SmsOutboundRequest;
 
 // Re-export the old name as an alias so existing callers don't break.
 // Previously OutboundSendRequest was a single interface (email-only). Now it's a
@@ -158,6 +166,17 @@ export interface OutboundGatewayConfig {
    * Slack Socket Mode / Web API client. Optional — only when Slack channel is enabled.
    */
   slackClient?: SlackClient;
+
+  /**
+   * Telnyx SMS client. Optional — only when SMS channel is enabled.
+   */
+  smsClient?: SmsClient;
+
+  /**
+   * Durable STOP/opt-out ledger for SMS. When present with smsClient, dispatch
+   * refuses sends to opted-out numbers (US A2P).
+   */
+  smsOptOutStore?: SmsOptOutStore;
 
   contactService: ContactService;
   contentFilter: OutboundContentFilter;
@@ -290,6 +309,8 @@ export class OutboundGateway {
   private readonly signalClient?: SignalRpcClient;
   private readonly signalPhoneNumber?: string;
   private readonly slackClient?: SlackClient;
+  private readonly smsClient?: SmsClient;
+  private readonly smsOptOutStore?: SmsOptOutStore;
   private readonly contactService: ContactService;
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
@@ -307,6 +328,8 @@ export class OutboundGateway {
     this.signalClient = config.signalClient;
     this.signalPhoneNumber = config.signalPhoneNumber;
     this.slackClient = config.slackClient;
+    this.smsClient = config.smsClient;
+    this.smsOptOutStore = config.smsOptOutStore;
     this.contactService = config.contactService;
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
@@ -509,7 +532,9 @@ export class OutboundGateway {
                 ? { to: request.to, subject: request.subject, body: request.body }
                 : request.channel === 'slack'
                   ? { slackChannelId: request.slackChannelId, message: request.message }
-                  : { recipient: request.recipient, message: request.message },
+                  : request.channel === 'sms'
+                    ? { recipient: request.recipient, message: request.message }
+                    : { recipient: request.recipient, message: request.message },
             );
             const extraLines = [
               `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
@@ -604,11 +629,14 @@ export class OutboundGateway {
     // Derive a stable recipient identifier for the blocked-contact check and logging.
     // Email: the To address. Signal: phone number (1:1) or base64 group ID.
     // Slack: prefer the peer user id (U…); fall back to conversation id only for logging.
+    // SMS: peer E.164.
     const recipientId = request.channel === 'email'
       ? request.to
       : request.channel === 'slack'
         ? (request.slackUserId ?? request.slackChannelId)
-        : (request.recipient ?? request.groupId ?? '');
+        : request.channel === 'sms'
+          ? request.recipient
+          : (request.recipient ?? request.groupId ?? '');
 
     // The message body field differs between channel types.
     const messageBody = request.channel === 'email' ? request.body : request.message;
@@ -1092,6 +1120,24 @@ export class OutboundGateway {
       if (result.success) {
         await this.publishDelivered({
           channel: 'slack',
+          recipientId,
+          recipientContactId,
+          content: redactedBody,
+          conversationId: options?.conversationId,
+          taskEventId: options?.taskEventId,
+          messageId: result.messageId,
+          parentEventId: options?.parentEventId,
+        });
+      }
+      return result;
+    }
+
+    if (request.channel === 'sms') {
+      const result = await this.dispatchSms({ ...request, message: redactedBody });
+      if (result.success) {
+        await this.promoteOrCreateRecipientContact('sms', request.recipient);
+        await this.publishDelivered({
+          channel: 'sms',
           recipientId,
           recipientContactId,
           content: redactedBody,
@@ -2294,5 +2340,52 @@ export class OutboundGateway {
       'outbound-gateway: Slack message sent successfully',
     );
     return { success: true, messageId: result.ts };
+  }
+
+  /**
+   * Dispatch a send request to Telnyx Messaging for SMS delivery.
+   * Enforces the STOP/opt-out ledger when smsOptOutStore is configured.
+   */
+  private async dispatchSms(request: SmsOutboundRequest): Promise<OutboundSendResult> {
+    if (!this.smsClient) {
+      return { success: false, blockedReason: 'SMS client not configured' };
+    }
+
+    if (!request.recipient.trim()) {
+      this.log.warn({ channel: 'sms' }, 'outbound-gateway: SMS send missing recipient');
+      return { success: false, blockedReason: 'SMS send requires recipient' };
+    }
+
+    if (this.smsOptOutStore) {
+      try {
+        if (await this.smsOptOutStore.isOptedOut(request.recipient)) {
+          this.log.info(
+            { channel: 'sms', phoneSuffix: request.recipient.slice(-4) },
+            'outbound-gateway: SMS send blocked — recipient opted out (STOP)',
+          );
+          return {
+            success: false,
+            blockedReason: 'Recipient opted out of SMS (STOP) — cannot send',
+          };
+        }
+      } catch (err) {
+        // Fail-open on ledger errors so a DB blip does not silence all SMS.
+        this.log.warn({ err, channel: 'sms' }, 'outbound-gateway: SMS opt-out lookup failed — proceeding');
+      }
+    }
+
+    try {
+      const { messageId } = await this.smsClient.sendSms({
+        to: request.recipient,
+        from: this.smsClient.fromNumber,
+        text: request.message,
+      });
+      this.log.info({ channel: 'sms', destinationType: '1:1' }, 'outbound-gateway: SMS sent successfully');
+      return { success: true, messageId };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ err, channel: 'sms' }, 'outbound-gateway: Telnyx SMS send failed');
+      return { success: false, blockedReason: `Send failed: ${message}` };
+    }
   }
 }

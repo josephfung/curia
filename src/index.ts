@@ -71,6 +71,10 @@ import { SignalRpcClient } from './channels/signal/signal-rpc-client.js';
 import { SignalAdapter } from './channels/signal/signal-adapter.js';
 import { SlackClient } from './channels/slack/slack-client.js';
 import { SlackAdapter } from './channels/slack/slack-adapter.js';
+import { SmsClient } from './channels/sms/sms-client.js';
+import { SmsAdapter } from './channels/sms/sms-adapter.js';
+import { SmsOptOutStore } from './channels/sms/sms-opt-out.js';
+import { SmsWebhookBridge } from './channels/sms/webhook-bridge.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
@@ -860,6 +864,26 @@ async function main(): Promise<void> {
     logger.warn('Slack bot token or app token not configured — Slack channel disabled. Set them in the console (Settings → Channels → Slack), or via SLACK_BOT_TOKEN / SLACK_APP_TOKEN env fallbacks.');
   }
 
+  // SMS channel — optional, requires channel.sms.api_key + from_number + webhook_public_key.
+  // SmsClient is constructed here for OutboundGateway; SmsAdapter starts after dispatcher.
+  // Webhook bridge is always created so HttpAdapter can mount the Telnyx route; the
+  // adapter installs the handler on start() when the channel is enabled.
+  const smsWebhookBridge = new SmsWebhookBridge();
+  const smsOptOutStore = new SmsOptOutStore(pool, logger);
+  let smsClient: SmsClient | undefined;
+  let smsAdapter: SmsAdapter | undefined;
+  if (config.smsApiKey && config.smsFromNumber && config.smsWebhookPublicKey) {
+    smsClient = new SmsClient({
+      apiKey: config.smsApiKey,
+      fromNumber: config.smsFromNumber,
+      webhookPublicKey: config.smsWebhookPublicKey,
+      logger,
+    });
+    logger.info('SMS client created (Telnyx Messaging)');
+  } else {
+    logger.warn('SMS Telnyx credentials not fully configured — SMS channel disabled. Set them in the console (Settings → Channels → SMS), or via TELNYX_API_KEY / TELNYX_FROM_NUMBER / TELNYX_PUBLIC_KEY env fallbacks.');
+  }
+
   // Calendar client — operates as the PRINCIPAL (the CEO), not as Curia's mailbox.
   // RSVP is first-person: Nylas/Google records the response of the attendee whose
   // identity matches the authenticated grant. So the calendar client binds to the
@@ -1556,17 +1580,18 @@ async function main(): Promise<void> {
     signalRpcClient,
     config.signalPhoneNumber,
     slackClient,
+    smsClient,
   );
   const hasAnyOutboundClient = hasRegistryGatedOutboundClient(registryGatedOutbound);
   // Defense-in-depth for setup-required mode: even though inbound email/Signal
   // adapters are skipped (so no inbound traffic should be triggering outbound
   // replies), the OutboundGateway is also used by notifiers (suspension, recovery,
   // approval) and skills that send directly. Skipping the gateway construction
-  // here closes those non-reply send paths too — there is no email/Signal/Slack
+  // here closes those non-reply send paths too — there is no email/Signal/Slack/SMS
   // egress at all until the operator completes setup and restarts.
   if (setupRequiredAtBoot && hasAnyOutboundClient) {
     logger.warn(
-      'SETUP-REQUIRED mode: outbound gateway NOT initialized — no email/Signal/Slack egress (notifiers, autonomy alerts) until restart',
+      'SETUP-REQUIRED mode: outbound gateway NOT initialized — no email/Signal/Slack/SMS egress (notifiers, autonomy alerts) until restart',
     );
   }
   const exportControlsConfig = resolveExportControls(yamlConfig);
@@ -1578,6 +1603,8 @@ async function main(): Promise<void> {
       signalClient: registryGatedOutbound.signalClient,
       signalPhoneNumber: registryGatedOutbound.signalPhoneNumber,
       slackClient: registryGatedOutbound.slackClient,
+      smsClient: registryGatedOutbound.smsClient,
+      smsOptOutStore: registryGatedOutbound.smsClient ? smsOptOutStore : undefined,
       contactService,
       contentFilter: outboundFilter,
       bus,
@@ -1597,13 +1624,14 @@ async function main(): Promise<void> {
       emailAccounts: registryGatedOutbound.nylasClients ? [...registryGatedOutbound.nylasClients.keys()] : [],
       hasSignal: !!registryGatedOutbound.signalClient,
       hasSlack: !!registryGatedOutbound.slackClient,
+      hasSms: !!registryGatedOutbound.smsClient,
       channelShouldStart: [...channelShouldStart],
     }, 'Outbound gateway initialized');
   } else if (nylasClientMap.size > 0 && !outboundFilter) {
     // Nylas clients are available but outboundFilter is missing (no coordinator config found).
     // Email skills will be unavailable because they check ctx.outboundGateway before sending.
     logger.warn('Outbound gateway NOT initialized — outboundFilter not ready (coordinator config missing?). Outbound send skills will be unavailable.');
-  } else if ((nylasClientMap.size > 0 || signalRpcClient || slackClient) && !hasAnyOutboundClient) {
+  } else if ((nylasClientMap.size > 0 || signalRpcClient || slackClient || smsClient) && !hasAnyOutboundClient) {
     logger.info(
       { channelShouldStart: [...channelShouldStart] },
       'Outbound gateway NOT initialized — toggleable channels with credentials are disabled or uninstalled in the registry',
@@ -1696,6 +1724,21 @@ async function main(): Promise<void> {
     });
   } else if (outboundGateway && channelShouldStart.has('slack') && !slackClient) {
     logger.warn('channel slack is enabled + resolvable but its runtime client/credentials are missing (bot token or app token); no Slack adapter constructed — check vault/env credentials and restart');
+  }
+
+  // Construct the SMS adapter (after gateway; webhook handler installed on start).
+  if (outboundGateway && smsClient && channelShouldStart.has('sms')) {
+    smsAdapter = new SmsAdapter({
+      bus,
+      logger,
+      client: smsClient,
+      outboundGateway,
+      contactService,
+      optOutStore: smsOptOutStore,
+      webhookBridge: smsWebhookBridge,
+    });
+  } else if (outboundGateway && channelShouldStart.has('sms') && !smsClient) {
+    logger.warn('channel sms is enabled + resolvable but its runtime client/credentials are missing (api key, from number, or webhook public key); no SMS adapter constructed — check vault/env credentials and restart');
   }
 
   // Scheduler — Postgres-backed job scheduler for cron and one-shot tasks.
@@ -2493,6 +2536,7 @@ async function main(): Promise<void> {
     // Powers GET /api/health with real probes and canary state (#434).
     healthService,
     auditLogRepo,
+    smsWebhookBridge,
   });
 
   try {
@@ -2528,6 +2572,13 @@ async function main(): Promise<void> {
         await slackAdapter.stop();
       } catch (err) {
         logger.error({ err }, 'Error stopping Slack adapter during shutdown');
+      }
+    }
+    if (smsAdapter) {
+      try {
+        await smsAdapter.stop();
+      } catch (err) {
+        logger.error({ err }, 'Error stopping SMS adapter during shutdown');
       }
     }
     try {
@@ -2647,6 +2698,13 @@ async function main(): Promise<void> {
       logger.info('Slack channel adapter started');
     } else if (slackAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Slack adapter startup — restart after setup to enable');
+    }
+
+    if (smsAdapter && !setupRequiredAtBoot) {
+      await smsAdapter.start();
+      logger.info('SMS channel adapter started');
+    } else if (smsAdapter && setupRequiredAtBoot) {
+      logger.warn('SETUP-REQUIRED mode: skipping SMS adapter startup — restart after setup to enable');
     }
   } catch (err) {
     logger.fatal({ err }, 'Fatal error during channel adapter startup — invoking shutdown');

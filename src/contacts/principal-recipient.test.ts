@@ -33,12 +33,17 @@ const PRINCIPAL_IDENTITIES = [
   makeIdentity('email', 'ceo@example.com'),
   makeIdentity('signal', '+15551234567'),
   makeIdentity('slack', 'U_CEO'),
+  makeIdentity('sms', '+15559876543'),
 ];
 
 describe('principal-recipient', () => {
   describe('GATE_C_PRINCIPAL_CARVEOUT_SKILLS', () => {
-    it('opts in email-send and signal-send only (Slack fails closed)', () => {
-      expect([...GATE_C_PRINCIPAL_CARVEOUT_SKILLS].sort()).toEqual(['email-send', 'signal-send']);
+    it('opts in email-send, signal-send, and sms-send (Slack fails closed)', () => {
+      expect([...GATE_C_PRINCIPAL_CARVEOUT_SKILLS].sort()).toEqual([
+        'email-send',
+        'signal-send',
+        'sms-send',
+      ]);
       const slack = PRINCIPAL_CHANNEL_RULES.find((r) => r.channel === 'slack');
       expect(slack).toBeDefined();
       expect(slack!.carveoutSkill).toBeUndefined();
@@ -101,6 +106,14 @@ describe('principal-recipient', () => {
       expect(isPrincipalIdentity('slack', 'C123', PRINCIPAL_IDENTITIES)).toBe(false);
     });
 
+    it('matches verified principal SMS identity exactly', () => {
+      expect(isPrincipalIdentity('sms', '+15559876543', PRINCIPAL_IDENTITIES)).toBe(true);
+    });
+
+    it('rejects a different SMS phone number', () => {
+      expect(isPrincipalIdentity('sms', '+15551234567', PRINCIPAL_IDENTITIES)).toBe(false);
+    });
+
     it('fails closed for an unregistered channel', () => {
       expect(isPrincipalIdentity('telegram', 'ceo@example.com', PRINCIPAL_IDENTITIES)).toBe(false);
     });
@@ -147,6 +160,22 @@ describe('principal-recipient', () => {
         { recipient: '+15551234567', message: 'heads up' },
         PRINCIPAL_IDENTITIES,
       )).toBe(true);
+    });
+
+    it('detects sms-send to the principal only', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'sms-send',
+        { recipient: '+15559876543', message: 'heads up' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(true);
+    });
+
+    it('rejects sms-send to a non-principal number', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'sms-send',
+        { recipient: '+15551234567', message: 'heads up' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
     });
 
     it('rejects signal group sends', () => {

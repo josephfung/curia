@@ -114,11 +114,12 @@ CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 | `email_participant` | Extracted from To/CC on an email the CEO sent or was part of | Yes |
 | `signal_participant` | Extracted from a Signal sender (E.164) on inbound | Yes |
 | `slack_participant` | Extracted from a Slack user id (`U…`) on inbound DM/@mention/thread/reaction | Yes |
+| `sms_participant` | Extracted from an SMS sender (E.164) on inbound Telnyx webhook | No (spoofable From; ADR-036) |
 | `crm_import` | Pulled from the CEO's CRM during an action | Yes |
 | `calendar_attendee` | Extracted from a calendar event | Yes |
 | `self_claimed` | The sender identified themselves ("Hi, it's Jenna") | No |
 
-CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`.
+CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`. SMS participant identities also start unverified because carrier From can be spoofed; link a verified `sms` identity on the principal for Gate C (distinct from CRM `phone`).
 
 ### contact_auth_overrides
 

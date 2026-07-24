@@ -60,6 +60,9 @@ export async function applyChannelVaultSecrets(
     signalSocketPath,
     slackBotToken,
     slackAppToken,
+    smsApiKey,
+    smsFromNumber,
+    smsWebhookPublicKey,
   ] = await Promise.all([
     resolve('channel.email.nylas_api_key', 'NYLAS_API_KEY', config.nylasApiKey),
     resolve('channel.email.nylas_grant_id', 'NYLAS_GRANT_ID', config.nylasGrantId),
@@ -68,6 +71,9 @@ export async function applyChannelVaultSecrets(
     resolve('channel.signal.socket_path', 'SIGNAL_SOCKET_PATH', config.signalSocketPath),
     resolve('channel.slack.bot_token', 'SLACK_BOT_TOKEN', config.slackBotToken),
     resolve('channel.slack.app_token', 'SLACK_APP_TOKEN', config.slackAppToken),
+    resolve('channel.sms.api_key', 'TELNYX_API_KEY', config.smsApiKey),
+    resolve('channel.sms.from_number', 'TELNYX_FROM_NUMBER', config.smsFromNumber),
+    resolve('channel.sms.webhook_public_key', 'TELNYX_PUBLIC_KEY', config.smsWebhookPublicKey),
   ]);
 
   config.nylasApiKey = nylasApiKey;
@@ -78,6 +84,9 @@ export async function applyChannelVaultSecrets(
   config.signalSocketPath = signalSocketPath;
   config.slackBotToken = slackBotToken;
   config.slackAppToken = slackAppToken;
+  config.smsApiKey = smsApiKey;
+  config.smsFromNumber = smsFromNumber;
+  config.smsWebhookPublicKey = smsWebhookPublicKey;
 
   // Names only — never values. Lets an operator confirm which channel creds the vault/env
   // supplied vs. which are absent (feature-off), the same debuggability win as applyVaultSecrets.
@@ -89,6 +98,9 @@ export async function applyChannelVaultSecrets(
     'channel.signal.socket_path': signalSocketPath !== undefined,
     'channel.slack.bot_token': slackBotToken !== undefined,
     'channel.slack.app_token': slackAppToken !== undefined,
+    'channel.sms.api_key': smsApiKey !== undefined,
+    'channel.sms.from_number': smsFromNumber !== undefined,
+    'channel.sms.webhook_public_key': smsWebhookPublicKey !== undefined,
   };
   logger.info({ present }, 'Applied channel credentials onto config (vault ▸ env ▸ config)');
 }

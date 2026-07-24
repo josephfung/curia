@@ -52,6 +52,13 @@ export interface Config {
   // slackAppToken: App-Level Token (xapp-…) with connections:write for Socket Mode.
   slackBotToken: string | undefined;
   slackAppToken: string | undefined;
+  // SMS channel config (Telnyx Messaging). All three must be set to enable the SMS adapter.
+  // smsApiKey: Telnyx API v2 key.
+  // smsFromNumber: office DID in E.164 (voice+SMS capable preferred).
+  // smsWebhookPublicKey: account public key for Ed25519 webhook verify (base64).
+  smsApiKey: string | undefined;
+  smsFromNumber: string | undefined;
+  smsWebhookPublicKey: string | undefined;
 }
 
 /** Per-resumable-task aggregate ceilings — progress-based circuit breaker (#1176). */
@@ -1216,5 +1223,8 @@ export function loadConfig(): Config {
     signalPhoneNumber: undefined,
     slackBotToken: process.env.SLACK_BOT_TOKEN?.trim() || undefined,
     slackAppToken: process.env.SLACK_APP_TOKEN?.trim() || undefined,
+    smsApiKey: process.env.TELNYX_API_KEY?.trim() || undefined,
+    smsFromNumber: process.env.TELNYX_FROM_NUMBER?.trim() || undefined,
+    smsWebhookPublicKey: process.env.TELNYX_PUBLIC_KEY?.trim() || undefined,
   };
 }

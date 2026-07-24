@@ -57,6 +57,22 @@ export const CHANNEL_CATALOG: ChannelDescriptor[] = [
     requiredSecretKeys: ['bot_token', 'app_token'],
   },
   {
+    name: 'sms',
+    description: 'SMS via Telnyx Messaging on a dedicated office DID (1:1 text).',
+    isToggleable: true,
+    credentialFields: [
+      { key: 'api_key', label: 'Telnyx API key', secret: true, envFallback: 'TELNYX_API_KEY' },
+      { key: 'from_number', label: 'Office DID (E.164)', secret: false, envFallback: 'TELNYX_FROM_NUMBER' },
+      {
+        key: 'webhook_public_key',
+        label: 'Telnyx webhook public key',
+        secret: true,
+        envFallback: 'TELNYX_PUBLIC_KEY',
+      },
+    ],
+    requiredSecretKeys: ['api_key', 'from_number', 'webhook_public_key'],
+  },
+  {
     name: 'http',
     description: 'HTTP API channel. Always on — serves the web console and API.',
     isToggleable: false,

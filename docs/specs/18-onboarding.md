@@ -254,7 +254,7 @@ the underlying service contract.
 ### Out of scope
 
 - In-app Nylas OAuth flow and grant capture.
-- Phone number provisioning (Twilio) walkthrough.
+- In-app Telnyx OAuth / automated DID purchase (SMS uses Mission Control + vault; see ADR-036 / setup catalog).
 - Signal channel verification.
 
 ---

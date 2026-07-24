@@ -47,6 +47,7 @@ tools:
   - email-mark-read
   - send-draft
   - signal-send
+  - sms-send
   # Memory + knowledge
   - memory-query
   - memory-store

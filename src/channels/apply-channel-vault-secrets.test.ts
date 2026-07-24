@@ -27,6 +27,9 @@ function baseConfig(): Config {
     signalPhoneNumber: undefined,
     slackBotToken: undefined,
     slackAppToken: undefined,
+    smsApiKey: undefined,
+    smsFromNumber: undefined,
+    smsWebhookPublicKey: undefined,
   } as Config;
 }
 
@@ -36,7 +39,7 @@ function fakeSecrets(values: Record<string, string>) {
 }
 
 describe('applyChannelVaultSecrets', () => {
-  it('populates config from vault-only channel.email.* / channel.signal.* / channel.slack.* keys', async () => {
+  it('populates config from vault-only channel.email.* / channel.signal.* / channel.slack.* / channel.sms.* keys', async () => {
     const config = baseConfig();
     const secrets = fakeSecrets({
       'channel.email.nylas_api_key': 'nyk_vault',
@@ -46,6 +49,9 @@ describe('applyChannelVaultSecrets', () => {
       'channel.signal.socket_path': '/run/signal/socket',
       'channel.slack.bot_token': 'xoxb-vault',
       'channel.slack.app_token': 'xapp-vault',
+      'channel.sms.api_key': 'KEY_vault',
+      'channel.sms.from_number': '+15550002222',
+      'channel.sms.webhook_public_key': 'pubkey_vault',
     });
 
     await applyChannelVaultSecrets(config, secrets, {}, logger);
@@ -57,6 +63,9 @@ describe('applyChannelVaultSecrets', () => {
     expect(config.signalSocketPath).toBe('/run/signal/socket');
     expect(config.slackBotToken).toBe('xoxb-vault');
     expect(config.slackAppToken).toBe('xapp-vault');
+    expect(config.smsApiKey).toBe('KEY_vault');
+    expect(config.smsFromNumber).toBe('+15550002222');
+    expect(config.smsWebhookPublicKey).toBe('pubkey_vault');
   });
 
   it('activates Signal from a console-only entry — channel.signal.phone_number alone, no flat bootstrap, no env', async () => {

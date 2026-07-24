@@ -48,6 +48,8 @@ import { vaultRoutes } from './routes/vault.js';
 import { emailAccountsRoutes } from './routes/email-accounts.js';
 import { secretCaptureRoutes } from './routes/secret-capture.js';
 import { setupRoutes } from './routes/setup.js';
+import { smsWebhookRoutes } from '../sms/webhook-route.js';
+import { SmsWebhookBridge } from '../sms/webhook-bridge.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
 import type { ExecutiveProfileService } from '../../executive/service.js';
 import type { ContactService } from '../../contacts/contact-service.js';
@@ -134,6 +136,11 @@ export interface HttpAdapterConfig {
   entityMemory?: import('../../memory/entity-memory.js').EntityMemory;
   /** Backs GET /api/antfarm/timeline (replay window queries). */
   auditLogRepo?: AuditLogRepo;
+  /**
+   * Telnyx SMS webhook bridge — HttpAdapter mounts POST /api/webhooks/telnyx/sms
+   * and delegates to the handler installed by SmsAdapter.start() (ADR-036).
+   */
+  smsWebhookBridge?: import('../sms/webhook-bridge.js').SmsWebhookBridge;
 }
 
 export class HttpAdapter implements Channel {
@@ -233,7 +240,9 @@ export class HttpAdapter implements Channel {
         // Secret-capture routes are token-authed (the single-use token in the URL is the
         // capability), so they bypass bearer auth and self-authorize via the token (#971).
         routeUrl.startsWith('/api/secret-capture') ||
-        routeUrl.startsWith('/api/setup')
+        routeUrl.startsWith('/api/setup') ||
+        // Telnyx SMS webhooks authenticate via Ed25519 signature, not bearer token (ADR-036).
+        routeUrl.startsWith('/api/webhooks/telnyx')
       ) return;
 
       if (!validateBearerToken(request.headers.authorization, apiToken)) {
@@ -510,6 +519,13 @@ export class HttpAdapter implements Channel {
         bus,
       });
     }
+
+    // Telnyx SMS webhook — always mounted; SmsAdapter installs the handler on start.
+    // Authenticates via Ed25519 (bearer-exempt above). Returns 503 when SMS is not started.
+    await this.app.register(smsWebhookRoutes, {
+      bridge: this.config.smsWebhookBridge ?? new SmsWebhookBridge(),
+      logger,
+    });
 
     // Ant Farm SPA — registered before the console wildcard so /antfarm/* resolves
     // to this static bundle instead of the console /* fallback.

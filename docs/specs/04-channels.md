@@ -46,7 +46,7 @@ interface ChannelCredentialField {
 ```
 
 - **Registry table** (`channel_registry`, migration `052_create_channel_registry.sql`): `name` (PK), `enabled`, `is_toggleable`, `installed_at`/`installed_by`, `enabled_at`/`enabled_by`, `updated_at`.
-- **Always-on safeguard:** the `http` and `cli` channels have `isToggleable: false` — they always start and cannot be disabled (operator-lockout protection). `email`, `signal`, and `slack` are toggleable.
+- **Always-on safeguard:** the `http` and `cli` channels have `isToggleable: false` — they always start and cannot be disabled (operator-lockout protection). `email`, `signal`, `slack`, and `sms` are toggleable.
 - **Vault key convention:** channel credentials are stored under structured vault keys of the form `channel.<name>.<field>` — e.g. the email channel's Nylas API key lives at `channel.email.nylas_api_key`. A `ChannelCredentialField` may also declare an `envFallback` env var used at bootstrap.
 
 ---
@@ -80,7 +80,7 @@ interface OutboundMessage {
 
 ## Launch Channels
 
-Channels are not started merely by being configured — like skills and agents, they are tracked in the `channel_registry` with an install/enable lifecycle (restart-based). The `http` and `cli` channels are non-toggleable and always start; `email`, `signal`, and `slack` must be installed and enabled in the registry (via **Settings → Channels**). Seeding channel credentials alone does not enroll a toggleable channel. Inbound adapters and outbound egress both derive from the same registry gate.
+Channels are not started merely by being configured — like skills and agents, they are tracked in the `channel_registry` with an install/enable lifecycle (restart-based). The `http` and `cli` channels are non-toggleable and always start; `email`, `signal`, `slack`, and `sms` must be installed and enabled in the registry (via **Settings → Channels**). Seeding channel credentials alone does not enroll a toggleable channel. Inbound adapters and outbound egress both derive from the same registry gate.
 
 ### CLI
 Interactive terminal for local dev and testing. Reads from stdin, writes to stdout. Simplest adapter — useful for testing agent logic without external services. **Non-toggleable** (`isToggleable: false`): always starts, cannot be disabled.
@@ -116,6 +116,14 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - **Conversation ID:** DM `slack:D<conversationId>` or `slack:D…:<thread_ts>` when threaded; channel thread `slack:C<channelId>:<thread_ts>` (reversible per ADR-025).
 - **Trust:** `medium`, `unknown_sender: allow`, `threaded: true` (`config/channel-trust.yaml`). Sender `U…` resolves through the unified contact ledger — principal-linked Slack identities get principal-tier override. Optional `channels.slack.allowed_channel_ids` allowlist for @mentions / thread replies.
 - **Identity:** Slack user id (`U…`) as `channel_identifier`, source `slack_participant` (same `contact_channel_identities` table as email/Signal).
+
+### SMS (via Telnyx Messaging)
+- Toggleable channel: operator buys a **new** Telnyx **voice+SMS** local DID (never port a consumer/TextNow number), completes **Low-Volume Mixed** 10DLC, points the Messaging Profile webhook at `POST /api/webhooks/telnyx/sms`, and vaults `channel.sms.api_key` + `channel.sms.from_number` + `channel.sms.webhook_public_key`. See ADR-036.
+- **Inbound:** signed Telnyx webhook (Ed25519). Invalid signatures → 401. Conversation id `sms:<E.164>` (ADR-025). 1:1 text only in v1 (no MMS/groups). Unknown senders auto-create via `ensureChannelContact` with source `sms_participant` (**not** auto-verified — SMS From is spoofable).
+- **Outbound:** `OutboundGateway` + `sms-send` skill → Telnyx Messages API. Autonomy, content filter, blocked-contact, and STOP/opt-out (`sms_opt_outs`) apply. Principal Gate C uses a verified **`sms`** channel identity (CRM `phone` remains profile/reach-CEO data).
+- **Compliance:** inbound `STOP`/`START`/`HELP` handled before agent publish; STOP persists and blocks further outbound.
+- **Trust:** `medium`, `unknown_sender: allow`, `threaded: false` (`config/channel-trust.yaml`).
+- **Voice:** orthogonal to #1414 Phase 1 LiveKit path; prefer the same Telnyx account/DID as Phase 2 PSTN SIP trunk.
 
 ### HTTP API
 - REST endpoints for programmatic access
@@ -155,6 +163,7 @@ Each channel is assigned a trust level that the dispatch layer tags on every inb
 | **Signal** | `high` | Strong identity via phone number + Signal protocol |
 | **HTTP API** | `medium` | Token-authenticated, but tokens can be leaked |
 | **Slack** | `medium` | Workspace OAuth / bot token — weaker than Signal (ADR-033) |
+| **SMS** | `medium` | Telnyx office DID — spoofable From, not E2E (ADR-036) |
 | **Email** | `low` | From headers are trivially spoofable; relies on SPF/DKIM/DMARC |
 
 Trust levels gate which actions the Coordinator can take based on the originating channel. See [06-audit-and-security.md](06-audit-and-security.md#trust-gated-actions) for policy configuration.
