@@ -169,7 +169,9 @@ describe('AgentRuntime — database unavailable mid-task (#1381)', () => {
           input_schema: { type: 'object' as const, properties: {}, required: [] },
         },
       ],
-      errorBudget: { maxTurns: 5, maxConsecutiveErrors: 2 },
+      // maxConsecutiveErrors: 1 — if a DB failure were wrongly counted against
+      // consecutiveErrors, the task would abort before the second chat call.
+      errorBudget: { maxTurns: 5, maxConsecutiveErrors: 1 },
     });
     runtime.register();
 

@@ -265,12 +265,21 @@ export class AgentRuntime {
       );
 
       // Best-effort: try to send an error response so the user isn't left hanging.
-      // When the outage is the audit DB itself, publish may also fail — log and move on.
-      try {
-        if (agentErr) {
+      // Isolate agent.error from agent.response — a failed audit write on the
+      // error event must not skip the user-facing response (#1381 review).
+      if (agentErr) {
+        try {
           await this.publishAgentError(agentErr, taskEvent);
+        } catch (publishErr) {
+          this.config.logger.error({ err: publishErr }, 'Failed to publish agent.error');
+        }
+        try {
           await this.sendErrorResponse(taskEvent, agentErr);
-        } else {
+        } catch (publishErr) {
+          this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
+        }
+      } else {
+        try {
           const responseEvent = createAgentResponse({
             agentId: this.config.agentId,
             conversationId: taskEvent.payload.conversationId,
@@ -281,9 +290,9 @@ export class AgentRuntime {
             parentEventId: taskEvent.id,
           });
           await this.config.bus.publish('agent', responseEvent);
+        } catch (publishErr) {
+          this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
         }
-      } catch (publishErr) {
-        this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
       }
     } finally {
       // Clean up the rate limit entry for this task so the validator's writeCounts map

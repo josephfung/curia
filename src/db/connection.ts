@@ -29,6 +29,10 @@ export interface CreatePoolOptions {
  *
  * connectionTimeoutMillis ensures connection acquire failures surface to
  * callers as rejected promises instead of silent hangs (#1381).
+ *
+ * Note: this bounds pool checkout only — a connection that hangs mid-query
+ * (half-alive server, lock wait) still needs a future `statement_timeout` /
+ * `query_timeout` policy. Out of scope for #1381.
  */
 export function createPool(
   databaseUrl: string,

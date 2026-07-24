@@ -121,7 +121,7 @@ A `known_failures` table records tool + error-type combinations that consistentl
 - The framework requires Postgres at startup — fails fast with a clear error if unreachable
 - During operation:
   - **Critical paths** (write-ahead audit insert, working-memory load/persist, bus publish that depends on audit) fail fast with a retryable `DATABASE_UNAVAILABLE` `AgentError` — no silent hangs (`connectionTimeoutMillis` on the pool)
-  - **Non-critical paths** (audit acknowledgement, working-memory summarization, skill execution) retry with bounded exponential backoff via `withDbRetry`, then degrade (skills return `{ success: false, errorType: 'DATABASE_UNAVAILABLE' }`)
+  - **Non-critical paths** (audit acknowledgement, working-memory summary *persistence*) retry with bounded exponential backoff via `withDbRetry`. Skill handlers are **not** retried wholesale (side-effect duplication risk) — they classify the fault and return `{ success: false, errorType: 'DATABASE_UNAVAILABLE' }`
 - Task error budgets track DB failures on a separate `dbFailures` counter — temporary outages do **not** burn `consecutiveErrors`
 - The health endpoint detects DB connectivity issues immediately (`checkDb`)
 - `DbAvailabilityMonitor` probes every 30s; after **>5 minutes** of continuous unavailability it escalates to the CEO via `outbound.notification` (`database_unavailable`), retrying until delivery succeeds (typically once Postgres recovers)

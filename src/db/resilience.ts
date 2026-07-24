@@ -163,7 +163,10 @@ export async function withDbRetry<T>(
       if (!isDbUnavailableError(err) || attempt >= maxAttempts) {
         throw err;
       }
-      const delay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
+      // Full-jitter exponential backoff so concurrent retryers don't stampede
+      // Postgres as it recovers (base/2 … base, doubled each attempt, capped).
+      const rawDelay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
+      const delay = rawDelay / 2 + Math.random() * (rawDelay / 2);
       await sleep(delay);
     }
   }
