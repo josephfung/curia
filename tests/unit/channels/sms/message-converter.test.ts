@@ -1,7 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   buildSmsConversationId,
-  classifySmsKeyword,
   convertTelnyxWebhook,
   normalizeE164,
   parseSmsConversationId,
@@ -20,15 +19,6 @@ describe('SMS message-converter', () => {
     expect(normalizeE164('  +14155552671  ')).toBe('+14155552671');
     expect(normalizeE164('4155552671')).toBeNull();
     expect(normalizeE164(undefined)).toBeNull();
-  });
-
-  it('classifies A2P keywords case-insensitively', () => {
-    expect(classifySmsKeyword('STOP')).toBe('stop');
-    expect(classifySmsKeyword(' stop ')).toBe('stop');
-    expect(classifySmsKeyword('unsubscribe')).toBe('stop');
-    expect(classifySmsKeyword('START')).toBe('start');
-    expect(classifySmsKeyword('HELP')).toBe('help');
-    expect(classifySmsKeyword('hello there')).toBeNull();
   });
 
   it('converts message.received webhooks to inbound fields', () => {
@@ -58,6 +48,20 @@ describe('SMS message-converter', () => {
         direction: 'inbound',
       },
     });
+  });
+
+  it('publishes STOP text as ordinary content (no keyword filter)', () => {
+    const converted = convertTelnyxWebhook({
+      data: {
+        event_type: 'message.received',
+        id: 'evt_stop',
+        payload: {
+          text: 'STOP',
+          from: { phone_number: '+14155552671' },
+        },
+      },
+    });
+    expect(converted?.content).toBe('STOP');
   });
 
   it('ignores non-inbound events and bad payloads', () => {

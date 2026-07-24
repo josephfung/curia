@@ -118,10 +118,9 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - **Identity:** Slack user id (`U…`) as `channel_identifier`, source `slack_participant` (same `contact_channel_identities` table as email/Signal).
 
 ### SMS (via Telnyx Messaging)
-- Toggleable channel: operator buys a **new** Telnyx **voice+SMS** local DID (never port a consumer/TextNow number), completes **Low-Volume Mixed** 10DLC, points the Messaging Profile webhook at `POST /api/webhooks/telnyx/sms`, and vaults `channel.sms.api_key` + `channel.sms.from_number` + `channel.sms.webhook_public_key`. See ADR-036.
-- **Inbound:** signed Telnyx webhook (Ed25519). Invalid signatures → 401. Conversation id `sms:<E.164>` (ADR-025). 1:1 text only in v1 (no MMS/groups). Unknown senders auto-create via `ensureChannelContact` with source `sms_participant` (**not** auto-verified — SMS From is spoofable).
-- **Outbound:** `OutboundGateway` + `sms-send` skill → Telnyx Messages API. Autonomy, content filter, blocked-contact, and STOP/opt-out (`sms_opt_outs`) apply. Principal Gate C uses a verified **`sms`** channel identity (CRM `phone` remains profile/reach-CEO data).
-- **Compliance:** inbound `STOP`/`START`/`HELP` handled before agent publish; STOP persists and blocks further outbound.
+- Toggleable channel: operator buys a **new** Telnyx **voice+SMS** DID (never port a consumer/TextNow number), points the Messaging Profile webhook at `POST /api/webhooks/telnyx/sms`, and vaults `channel.sms.api_key` + `channel.sms.from_number` + `channel.sms.webhook_public_key`. Default docs path is US long code + **Low-Volume Mixed** 10DLC; a Canadian DID is a viable alternative (outside 10DLC). See ADR-036.
+- **Inbound:** signed Telnyx webhook (Ed25519). Invalid signatures → 401. Conversation id `sms:<E.164>` (ADR-025). 1:1 text only in v1 (no MMS/groups). Unknown senders auto-create via `ensureChannelContact` with source `sms_participant` (**not** auto-verified — SMS From is spoofable). STOP and other natural-language opt-out text publish as ordinary inbound for the agent.
+- **Outbound:** `OutboundGateway` + `sms-send` skill → Telnyx Messages API. Autonomy, content filter, and blocked-contact apply. Carrier STOP is enforced by Telnyx (error **40300** → clear `blockedReason`); Curia keeps no parallel opt-out ledger — preferences are contact KG facts. Principal Gate C uses a verified **`sms`** channel identity (CRM `phone` remains profile/reach-CEO data).
 - **Trust:** `medium`, `unknown_sender: allow`, `threaded: false` (`config/channel-trust.yaml`).
 - **Voice:** orthogonal to #1414 Phase 1 LiveKit path; prefer the same Telnyx account/DID as Phase 2 PSTN SIP trunk.
 

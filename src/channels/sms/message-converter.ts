@@ -1,11 +1,6 @@
 // message-converter.ts — Telnyx webhook payload → normalized inbound SMS fields.
 
 import type { ConvertedSmsMessage, TelnyxWebhookEnvelope } from './types.js';
-import {
-  SMS_HELP_KEYWORDS,
-  SMS_START_KEYWORDS,
-  SMS_STOP_KEYWORDS,
-} from './types.js';
 
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
@@ -28,25 +23,14 @@ export function normalizeE164(raw: string | undefined | null): string | null {
 }
 
 /**
- * Classify A2P keyword commands from inbound SMS text (whole-message match).
- * Returns null when the message is ordinary content for the agent.
- */
-export function classifySmsKeyword(
-  text: string,
-): 'stop' | 'start' | 'help' | null {
-  const normalized = text.trim().toUpperCase();
-  if (SMS_STOP_KEYWORDS.has(normalized)) return 'stop';
-  if (SMS_START_KEYWORDS.has(normalized)) return 'start';
-  if (SMS_HELP_KEYWORDS.has(normalized)) return 'help';
-  return null;
-}
-
-/**
  * Convert a Telnyx Messaging webhook body into a normalized inbound message.
  *
  * Returns null when the event is not an inbound SMS we should publish
  * (wrong event type, missing from/text, non-E.164 peer, empty body).
  * MMS is accepted as text-only in v1 (media ignored).
+ *
+ * STOP / natural-language opt-out text is published like any other message —
+ * Telnyx enforces carrier STOP; Curia records preferences as contact KG facts.
  */
 export function convertTelnyxWebhook(
   body: TelnyxWebhookEnvelope,
@@ -61,9 +45,6 @@ export function convertTelnyxWebhook(
   if (!senderId) return null;
 
   const text = typeof payload.text === 'string' ? payload.text : '';
-  // Whitespace-only is still a message for keyword detection (STOP etc.);
-  // empty string after trim with no content is ignored for agent publish —
-  // keyword classifier runs on the raw text in the adapter before this matters.
   if (text.trim().length === 0) return null;
 
   const toNumber = normalizeE164(payload.to?.[0]?.phone_number) ?? undefined;

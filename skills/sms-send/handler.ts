@@ -1,7 +1,8 @@
 // handler.ts — sms-send skill implementation.
 //
 // Sends a 1:1 SMS via OutboundGateway → Telnyx. The gateway enforces content
-// filter, blocked-contact, autonomy, and STOP/opt-out checks.
+// filter, blocked-contact, and autonomy. Carrier STOP (Telnyx 40300) surfaces as
+// blockedReason so the agent can record a KG fact instead of retrying.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';

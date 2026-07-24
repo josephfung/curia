@@ -32,7 +32,8 @@ import type { SmsOutboundRequest } from '../channels/sms/outbound-request.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { SlackClient } from '../channels/slack/slack-client.js';
 import type { SmsClient } from '../channels/sms/sms-client.js';
-import type { SmsOptOutStore } from '../channels/sms/sms-opt-out.js';
+import { TelnyxSendError } from '../channels/sms/sms-client.js';
+import { TELNYX_ERROR_OPTED_OUT } from '../channels/sms/types.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import { classifyEmailSender } from '../contacts/contact-service.js';
 import type { ContactTier, ChannelIdentity } from '../contacts/types.js';
@@ -172,12 +173,6 @@ export interface OutboundGatewayConfig {
    */
   smsClient?: SmsClient;
 
-  /**
-   * Durable STOP/opt-out ledger for SMS. When present with smsClient, dispatch
-   * refuses sends to opted-out numbers (US A2P).
-   */
-  smsOptOutStore?: SmsOptOutStore;
-
   contactService: ContactService;
   contentFilter: OutboundContentFilter;
   bus: EventBus;
@@ -310,7 +305,6 @@ export class OutboundGateway {
   private readonly signalPhoneNumber?: string;
   private readonly slackClient?: SlackClient;
   private readonly smsClient?: SmsClient;
-  private readonly smsOptOutStore?: SmsOptOutStore;
   private readonly contactService: ContactService;
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
@@ -329,7 +323,6 @@ export class OutboundGateway {
     this.signalPhoneNumber = config.signalPhoneNumber;
     this.slackClient = config.slackClient;
     this.smsClient = config.smsClient;
-    this.smsOptOutStore = config.smsOptOutStore;
     this.contactService = config.contactService;
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
@@ -532,9 +525,7 @@ export class OutboundGateway {
                 ? { to: request.to, subject: request.subject, body: request.body }
                 : request.channel === 'slack'
                   ? { slackChannelId: request.slackChannelId, message: request.message }
-                  : request.channel === 'sms'
-                    ? { recipient: request.recipient, message: request.message }
-                    : { recipient: request.recipient, message: request.message },
+                  : { recipient: request.recipient, message: request.message },
             );
             const extraLines = [
               `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
@@ -2344,7 +2335,8 @@ export class OutboundGateway {
 
   /**
    * Dispatch a send request to Telnyx Messaging for SMS delivery.
-   * Enforces the STOP/opt-out ledger when smsOptOutStore is configured.
+   * Carrier STOP surfaces as Telnyx error 40300 — mapped to a clear blockedReason
+   * so the agent can record a KG fact instead of retrying (no app-level ledger).
    */
   private async dispatchSms(request: SmsOutboundRequest): Promise<OutboundSendResult> {
     if (!this.smsClient) {
@@ -2356,24 +2348,6 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'SMS send requires recipient' };
     }
 
-    if (this.smsOptOutStore) {
-      try {
-        if (await this.smsOptOutStore.isOptedOut(request.recipient)) {
-          this.log.info(
-            { channel: 'sms', phoneSuffix: request.recipient.slice(-4) },
-            'outbound-gateway: SMS send blocked — recipient opted out (STOP)',
-          );
-          return {
-            success: false,
-            blockedReason: 'Recipient opted out of SMS (STOP) — cannot send',
-          };
-        }
-      } catch (err) {
-        // Fail-open on ledger errors so a DB blip does not silence all SMS.
-        this.log.warn({ err, channel: 'sms' }, 'outbound-gateway: SMS opt-out lookup failed — proceeding');
-      }
-    }
-
     try {
       const { messageId } = await this.smsClient.sendSms({
         to: request.recipient,
@@ -2383,6 +2357,13 @@ export class OutboundGateway {
       this.log.info({ channel: 'sms', destinationType: '1:1' }, 'outbound-gateway: SMS sent successfully');
       return { success: true, messageId };
     } catch (err) {
+      if (err instanceof TelnyxSendError && err.code === TELNYX_ERROR_OPTED_OUT) {
+        this.log.info(
+          { channel: 'sms', phoneSuffix: request.recipient.slice(-4) },
+          'outbound-gateway: SMS send blocked — recipient opted out at carrier (STOP)',
+        );
+        return { success: false, blockedReason: 'recipient opted out at carrier (STOP)' };
+      }
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err, channel: 'sms' }, 'outbound-gateway: Telnyx SMS send failed');
       return { success: false, blockedReason: `Send failed: ${message}` };
