@@ -67,7 +67,7 @@ export interface TaskTrashDirective extends SceneDirectiveBase {
 
 export interface BadgeDirective extends SceneDirectiveBase {
   kind: 'badge';
-  badgeKind: 'human.decision' | 'autonomy.blocked';
+  badgeKind: 'human.decision' | 'autonomy.blocked' | 'authorization.decision';
   label: string;
 }
 
