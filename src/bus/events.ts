@@ -153,7 +153,7 @@ interface OutboundMessagePayload {
 // or a skill calling gateway.send() directly. See issue #729.
 interface OutboundDeliveredPayload {
   /** Channel that carried the message — matches OutboundSendRequest.channel. */
-  channel: 'signal' | 'email' | 'slack';
+  channel: 'signal' | 'email' | 'slack' | 'sms';
   /** External recipient identifier: E.164 (signal 1:1), base64 group ID
    *  (signal group), email address, or Slack conversation id (D…/C…). */
   recipientId: string;

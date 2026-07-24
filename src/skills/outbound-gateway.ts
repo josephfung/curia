@@ -1217,7 +1217,7 @@ export class OutboundGateway {
    * send conditional on the audit subsystem.
    */
   private async publishDelivered(payload: {
-    channel: 'signal' | 'email' | 'slack';
+    channel: 'signal' | 'email' | 'slack' | 'sms';
     recipientId: string;
     recipientContactId?: string;
     content: string;

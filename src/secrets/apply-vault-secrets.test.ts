@@ -28,6 +28,9 @@ function baseConfig(): Config {
     signalPhoneNumber: undefined,
     slackBotToken: undefined,
     slackAppToken: undefined,
+    smsApiKey: undefined,
+    smsFromNumber: undefined,
+    smsWebhookPublicKey: undefined,
   };
 }
 

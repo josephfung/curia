@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { smsPrincipalRules } from '../../../../src/channels/sms/principal-rules.js';
-import { isSmsOutboundRequest } from '../../../../src/channels/sms/outbound-request.js';
+import { smsPrincipalRules } from './principal-rules.js';
+import { isSmsOutboundRequest } from './outbound-request.js';
 
 describe('sms principal-rules', () => {
   it('extracts peer E.164 as principal-eligible', () => {
