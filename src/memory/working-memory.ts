@@ -1,6 +1,11 @@
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { LLMProvider } from '../agents/llm/provider.js';
+import {
+  createDbUnavailableAgentError,
+  isDbUnavailableError,
+  withDbRetry,
+} from '../db/resilience.js';
 
 export interface ConversationTurn {
   role: 'user' | 'assistant' | 'system';
@@ -107,20 +112,41 @@ class PostgresBackend implements StorageBackend {
     const expiresAt = this.ttlDays != null
       ? new Date(Date.now() + this.ttlDays * 24 * 60 * 60 * 1000)
       : null;
-    await this.pool.query(
-      `INSERT INTO working_memory (conversation_id, agent_id, role, content, expires_at)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [conversationId, agentId, turn.role, turn.content, expiresAt],
-    );
+    // Critical path: reading/writing working memory must fail fast with a
+    // classified DATABASE_UNAVAILABLE error so the runtime can publish
+    // agent.error rather than hang (#1381 / spec 05).
+    try {
+      await this.pool.query(
+        `INSERT INTO working_memory (conversation_id, agent_id, role, content, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [conversationId, agentId, turn.role, turn.content, expiresAt],
+      );
+    } catch (err) {
+      if (isDbUnavailableError(err)) {
+        const agentErr = createDbUnavailableAgentError('working-memory', err);
+        this.logger.error(
+          { err: agentErr, conversationId, agentId },
+          'working_memory: add failed — database unavailable',
+        );
+        throw Object.assign(new Error(agentErr.message), {
+          code: agentErr.context.code,
+          agentError: agentErr,
+        });
+      }
+      throw err;
+    }
 
     // After writing, check whether we've crossed the summarization threshold.
     // Summarization is best-effort — a failure must not abort the agent turn since
     // the turn has already been persisted. Catch here (not inside maybeSummarize)
     // so errors propagate cleanly out of the private method and the non-fatal
     // decision is explicit and visible at the call site.
+    // Non-critical: retry briefly on transient DB blips before giving up (#1381).
     if (this.summarization) {
       try {
-        await this.maybeSummarize(conversationId, agentId, this.summarization);
+        await withDbRetry(() =>
+          this.maybeSummarize(conversationId, agentId, this.summarization!),
+        );
       } catch (err) {
         this.logger.error(
           { err, conversationId, agentId },
@@ -133,26 +159,42 @@ class PostgresBackend implements StorageBackend {
   async get(conversationId: string, agentId: string, maxTurns?: number): Promise<ConversationTurn[]> {
     const limit = maxTurns ?? 50;
 
-    // Subquery gets the most recent N active (non-archived) rows (newest first),
-    // then the outer query reverses to chronological order for LLM context.
-    // Archived rows are excluded — they're represented by the synthetic summary turn.
-    const result = await this.pool.query<{ role: string; content: string }>(
-      `SELECT role, content FROM (
-         SELECT role, content, created_at
-         FROM working_memory
-         WHERE conversation_id = $1
-           AND agent_id = $2
-           AND archived = false
-         ORDER BY created_at DESC
-         LIMIT $3
-       ) sub ORDER BY created_at ASC`,
-      [conversationId, agentId, limit],
-    );
+    // Critical path: history load must fail fast on DB outage (#1381).
+    try {
+      // Subquery gets the most recent N active (non-archived) rows (newest first),
+      // then the outer query reverses to chronological order for LLM context.
+      // Archived rows are excluded — they're represented by the synthetic summary turn.
+      const result = await this.pool.query<{ role: string; content: string }>(
+        `SELECT role, content FROM (
+           SELECT role, content, created_at
+           FROM working_memory
+           WHERE conversation_id = $1
+             AND agent_id = $2
+             AND archived = false
+           ORDER BY created_at DESC
+           LIMIT $3
+         ) sub ORDER BY created_at ASC`,
+        [conversationId, agentId, limit],
+      );
 
-    return result.rows.map((row) => ({
-      role: row.role as ConversationTurn['role'],
-      content: row.content,
-    }));
+      return result.rows.map((row) => ({
+        role: row.role as ConversationTurn['role'],
+        content: row.content,
+      }));
+    } catch (err) {
+      if (isDbUnavailableError(err)) {
+        const agentErr = createDbUnavailableAgentError('working-memory', err);
+        this.logger.error(
+          { err: agentErr, conversationId, agentId },
+          'working_memory: get failed — database unavailable',
+        );
+        throw Object.assign(new Error(agentErr.message), {
+          code: agentErr.context.code,
+          agentError: agentErr,
+        });
+      }
+      throw err;
+    }
   }
 
   async purgeExpired(): Promise<number> {

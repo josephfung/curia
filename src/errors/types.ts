@@ -4,15 +4,16 @@
 // ErrorType is a discriminated union — never match error strings.
 
 export type ErrorType =
-  | 'AUTH_FAILURE'       // 401/403 — never retry, counts double against budget
-  | 'RATE_LIMIT'         // 429 — retryable with backoff
-  | 'TIMEOUT'            // request timeout, ETIMEDOUT
-  | 'NOT_FOUND'          // 404, ENOENT
-  | 'VALIDATION_ERROR'   // malformed input, schema violation
-  | 'PROVIDER_ERROR'     // 5xx, upstream LLM failure
-  | 'SKILL_ERROR'        // skill returned { success: false }
-  | 'BUDGET_EXCEEDED'    // turn or error budget exhausted
-  | 'UNKNOWN';           // fallback — something unexpected
+  | 'AUTH_FAILURE'           // 401/403 — never retry, counts double against budget
+  | 'RATE_LIMIT'             // 429 — retryable with backoff
+  | 'TIMEOUT'                // request timeout, ETIMEDOUT
+  | 'NOT_FOUND'              // 404, ENOENT
+  | 'VALIDATION_ERROR'       // malformed input, schema violation
+  | 'PROVIDER_ERROR'         // 5xx, upstream LLM failure
+  | 'DATABASE_UNAVAILABLE'   // Postgres / pool unreachable — retryable, tracked separately (#1381)
+  | 'SKILL_ERROR'            // skill returned { success: false }
+  | 'BUDGET_EXCEEDED'        // turn or error budget exhausted
+  | 'UNKNOWN';               // fallback — something unexpected
 
 export interface AgentError {
   type: ErrorType;
@@ -28,15 +29,23 @@ export interface ErrorBudget {
   maxConsecutiveErrors: number;  // max consecutive errors before abort (default: 5)
   turnsUsed: number;
   consecutiveErrors: number;
+  /**
+   * Transient DB outage failures observed this task. Tracked for observability
+   * but do NOT increment consecutiveErrors — temporary infra blips must not
+   * burn the agent's error budget (spec 05 / #1381).
+   */
+  dbFailures: number;
 }
 
 // Retryable is deterministic from ErrorType — no per-instance overrides.
 // AUTH_FAILURE and BUDGET_EXCEEDED are never retryable.
-// RATE_LIMIT, TIMEOUT, and PROVIDER_ERROR are retryable (transient failures).
+// RATE_LIMIT, TIMEOUT, PROVIDER_ERROR, and DATABASE_UNAVAILABLE are retryable
+// (transient failures).
 const RETRYABLE_TYPES: ReadonlySet<ErrorType> = new Set([
   'RATE_LIMIT',
   'TIMEOUT',
   'PROVIDER_ERROR',
+  'DATABASE_UNAVAILABLE',
 ]);
 
 export function isRetryable(type: ErrorType): boolean {

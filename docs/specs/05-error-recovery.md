@@ -119,9 +119,12 @@ A `known_failures` table records tool + error-type combinations that consistentl
 ### Database Unavailable
 
 - The framework requires Postgres at startup — fails fast with a clear error if unreachable
-- During operation: DB failures in non-critical paths (e.g., audit write) are retried with backoff
-- DB failures in critical paths (e.g., loading agent config, reading working memory) bubble up as `agent.error`
-- The health endpoint detects DB connectivity issues immediately
+- During operation:
+  - **Critical paths** (write-ahead audit insert, working-memory load/persist, bus publish that depends on audit) fail fast with a retryable `DATABASE_UNAVAILABLE` `AgentError` — no silent hangs (`connectionTimeoutMillis` on the pool)
+  - **Non-critical paths** (audit acknowledgement, working-memory summarization, skill execution) retry with bounded exponential backoff via `withDbRetry`, then degrade (skills return `{ success: false, errorType: 'DATABASE_UNAVAILABLE' }`)
+- Task error budgets track DB failures on a separate `dbFailures` counter — temporary outages do **not** burn `consecutiveErrors`
+- The health endpoint detects DB connectivity issues immediately (`checkDb`)
+- `DbAvailabilityMonitor` probes every 30s; after **>5 minutes** of continuous unavailability it escalates to the CEO via `outbound.notification` (`database_unavailable`), retrying until delivery succeeds (typically once Postgres recovers)
 
 ---
 
@@ -214,12 +217,13 @@ type ErrorType =
   | 'NOT_FOUND'
   | 'VALIDATION_ERROR'
   | 'PROVIDER_ERROR'
+  | 'DATABASE_UNAVAILABLE'  // Postgres / pool unreachable — retryable (#1381)
   | 'SKILL_ERROR'
   | 'BUDGET_EXCEEDED'
   | 'UNKNOWN';
 ```
 
-Provider-specific errors are mapped to `ErrorType` inside the provider implementation — never leaked as raw strings to the agent runtime. This prevents the fragile string-matching pattern Zora suffered from.
+Provider-specific errors are mapped to `ErrorType` inside the provider implementation — never leaked as raw strings to the agent runtime. This prevents the fragile string-matching pattern Zora suffered from. Database connection failures (pg SQLSTATE class `08` / `57P0x`, Node `ECONNREFUSED` / `ETIMEDOUT`, pool acquire timeouts) map to `DATABASE_UNAVAILABLE` rather than `PROVIDER_ERROR`.
 
 ---
 
@@ -244,5 +248,4 @@ This is enforced by code review convention. A lint rule (`no-empty-catch` + cust
 - **Per-task error pattern detection** — sliding window of last 10 tool invocations is not yet implemented.
 - **Cross-task `known_failures` table** — data collection for future warnings is not yet implemented.
 - **Outbound message queue** — max 100 queue for disconnected channels is not yet implemented. (#1380)
-- **Database unavailable: in-operation handling** — health check detects it, but path-specific handling (retry in non-critical paths, bubble up in critical) is not verified. (#1381)
 - **`no-empty-catch` ESLint rule** — the "Never Swallow" rule is enforced by convention only; the rule is absent from `eslint.config.js`.
