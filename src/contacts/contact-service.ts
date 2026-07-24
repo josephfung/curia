@@ -14,7 +14,7 @@ import type { DbPool, DbPoolClient } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import { sanitizeDisplayName } from '../skills/sanitize.js';
-import { TIER_RANK, IdentityNotFoundError } from './types.js';
+import { TIER_RANK, IdentityNotFoundError, ContactNotFoundError, StructuralContactMergeError } from './types.js';
 import type {
   AuthOverride,
   Contact,
@@ -273,19 +273,34 @@ export class ContactService {
     this.onDuplicateDetected = options?.onDuplicateDetected;
   }
 
-  /** Fire-and-forget identity-mutation notifier (#1514). Never fails the caller. */
-  private notifyIdentitiesChanged(contactId: string): void {
-    if (!this.onIdentitiesChanged) return;
+  /** Fire-and-forget maybe-async callback. Never fails the caller (#1514). */
+  private invokeNonFatalCallback(
+    label: string,
+    callback: (() => void | Promise<void>) | undefined,
+    context: Record<string, unknown>,
+  ): void {
+    if (!callback) return;
     try {
-      const maybePromise = this.onIdentitiesChanged(contactId);
+      const maybePromise = callback();
       if (maybePromise instanceof Promise) {
         maybePromise.catch(err => {
-          this.logger?.warn({ err, contactId }, 'onIdentitiesChanged callback rejected (non-fatal)');
+          this.logger?.warn({ err, ...context }, `${label} callback rejected (non-fatal)`);
         });
       }
     } catch (err) {
-      this.logger?.warn({ err, contactId }, 'onIdentitiesChanged callback threw (non-fatal)');
+      this.logger?.warn({ err, ...context }, `${label} callback threw (non-fatal)`);
     }
+  }
+
+  /** Fire-and-forget identity-mutation notifier (#1514). Never fails the caller. */
+  private notifyIdentitiesChanged(contactId: string): void {
+    this.invokeNonFatalCallback(
+      'onIdentitiesChanged',
+      this.onIdentitiesChanged
+        ? () => this.onIdentitiesChanged!(contactId)
+        : undefined,
+      { contactId },
+    );
   }
 
   /** Create a Postgres-backed instance for production use */
@@ -817,21 +832,15 @@ export class ContactService {
     await this.backend.createIdentity(identity);
 
     // Fire-and-forget: notify scoring pipeline when a verified identity is linked.
-    // The callback may return a promise (async pipeline update), so we handle both
-    // sync throws and async rejections. Scoring is non-blocking — must not fail
-    // the linkIdentity operation.
-    if (verified && this.onIdentityVerified) {
-      try {
-        const maybePromise = this.onIdentityVerified(options.contactId) as void | Promise<void>;
-        // Handle async callbacks — catch unhandled rejections
-        if (maybePromise instanceof Promise) {
-          maybePromise.catch(err => {
-            this.logger?.warn({ err, contactId: options.contactId }, 'onIdentityVerified callback rejected (non-fatal)');
-          });
-        }
-      } catch (err) {
-        this.logger?.warn({ err, contactId: options.contactId }, 'onIdentityVerified callback threw (non-fatal)');
-      }
+    // Scoring is non-blocking — must not fail the linkIdentity operation.
+    if (verified) {
+      this.invokeNonFatalCallback(
+        'onIdentityVerified',
+        this.onIdentityVerified
+          ? () => this.onIdentityVerified!(options.contactId)
+          : undefined,
+        { contactId: options.contactId },
+      );
     }
 
     this.notifyIdentitiesChanged(options.contactId);
@@ -1137,18 +1146,13 @@ export class ContactService {
    */
   async verifyIdentity(identityId: string): Promise<ChannelIdentity> {
     const updated = await this.backend.verifyIdentity(identityId);
-    if (this.onIdentityVerified) {
-      try {
-        const maybePromise = this.onIdentityVerified(updated.contactId) as void | Promise<void>;
-        if (maybePromise instanceof Promise) {
-          maybePromise.catch(err => {
-            this.logger?.warn({ err, contactId: updated.contactId }, 'onIdentityVerified callback rejected (non-fatal)');
-          });
-        }
-      } catch (err) {
-        this.logger?.warn({ err, contactId: updated.contactId }, 'onIdentityVerified callback threw (non-fatal)');
-      }
-    }
+    this.invokeNonFatalCallback(
+      'onIdentityVerified',
+      this.onIdentityVerified
+        ? () => this.onIdentityVerified!(updated.contactId)
+        : undefined,
+      { contactId: updated.contactId },
+    );
     this.notifyIdentitiesChanged(updated.contactId);
     return updated;
   }
@@ -1379,9 +1383,9 @@ export class ContactService {
     }
 
     const primary = await this.backend.getContact(primaryId);
-    if (!primary) throw new Error(`Contact not found: ${primaryId}`);
+    if (!primary) throw new ContactNotFoundError(primaryId);
     const secondary = await this.backend.getContact(secondaryId);
-    if (!secondary) throw new Error(`Contact not found: ${secondaryId}`);
+    if (!secondary) throw new ContactNotFoundError(secondaryId);
 
     // Structural-contact guard. A merge writes the golden record onto the primary and
     // deletes the secondary, but it only copies scalar fields (tier/displayName/role/
@@ -1391,11 +1395,10 @@ export class ContactService {
     // of the primary — a structural→structural merge is just as destructive as
     // structural→non-structural. If two rows really are the same structural entity, the
     // structural one must be the primary (the survivor).
+    // notifyIdentitiesChanged(primaryId) after merge relies on this: the principal can
+    // never be the deleted secondary, so refreshing the survivor is sufficient (#1514).
     if (isStructuralContact(secondary)) {
-      throw new Error(
-        `Cannot merge structural contact ${secondaryId} (principal/agent/system-role) — a merge ` +
-          `deletes the secondary, which would destroy the structural row. Make it the primary instead.`,
-      );
+      throw new StructuralContactMergeError(secondaryId);
     }
 
     const primaryIdentities = await this.backend.getIdentitiesForContact(primaryId);

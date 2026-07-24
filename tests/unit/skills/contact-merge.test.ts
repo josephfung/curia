@@ -136,8 +136,9 @@ describe('ContactMergeHandler', () => {
   });
 
   it('surfaces "not found" error with contact-lookup guidance', async () => {
+    const { ContactNotFoundError } = await import('../../../src/contacts/types.js');
     const contactService = {
-      mergeContacts: vi.fn().mockRejectedValue(new Error(`Contact not found: ${VALID_UUID_A}`)),
+      mergeContacts: vi.fn().mockRejectedValue(new ContactNotFoundError(VALID_UUID_A)),
     };
     const result = await handler.execute(makeCtx(
       { primary_contact_id: VALID_UUID_A, secondary_contact_id: VALID_UUID_B },

@@ -16,7 +16,10 @@ import {
   resolveNotificationRecipientTier,
 } from './approval-notification.js';
 import { deliverApprovalToChatChannels } from './approval-channel-notify.js';
-
+import {
+  resolvePrincipalEmail,
+  type PrincipalEmailRef,
+} from '../contacts/types.js';
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -107,7 +110,8 @@ export class ApprovalTriggerService {
     // If absent, notification is skipped (same as when ceoEmail is not configured).
     private readonly outboundGateway: OutboundGateway | undefined,
     private readonly logger: Logger,
-    private readonly ceoEmail?: string,
+    /** Plain string (tests) or live ref so post-boot email binds hot-reload (#1514). */
+    private readonly ceoEmail?: string | PrincipalEmailRef,
     // Optional — used to resolve the notification recipient's tier for detail gating.
     private readonly contactService?: ContactService,
     /** Verified principal channel identities — used for Slack/Signal approval DMs (#1479). */
@@ -225,11 +229,12 @@ export class ApprovalTriggerService {
       `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
       `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).`;
     const preamble = opts.reason ?? defaultBody;
+    const ceoEmail = resolvePrincipalEmail(this.ceoEmail);
 
-    if (this.ceoEmail && this.outboundGateway) {
+    if (ceoEmail && this.outboundGateway) {
       const recipientTier = await resolveNotificationRecipientTier(
         this.contactService,
-        this.ceoEmail,
+        ceoEmail,
         this.logger,
       );
       const emailBody = buildApprovalNotificationBody({
@@ -240,11 +245,11 @@ export class ApprovalTriggerService {
         payload: input,
         recipientTier,
         logger: this.logger,
-        ceoEmail: this.ceoEmail,
+        ceoEmail,
       });
       const sent = await this.outboundGateway.sendNotification({
         notificationType: 'approval_requested',
-        ceoEmail: this.ceoEmail,
+        ceoEmail,
         subject: `Approval needed — ${description}`,
         body: emailBody,
       });
@@ -258,7 +263,7 @@ export class ApprovalTriggerService {
           'approval-trigger: CEO notification failed — row exists, CEO will see it in digest',
         );
       }
-    } else if (!this.ceoEmail) {
+    } else if (!ceoEmail) {
       this.logger.warn(
         { rowId, shortRef },
         'approval-trigger: ceoEmail not configured — skipping email notification',

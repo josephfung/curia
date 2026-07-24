@@ -17,7 +17,7 @@
 import { createHash } from 'node:crypto';
 
 import type { ContactTier } from '../contacts/types.js';
-import { meetsMinimumTier } from '../contacts/types.js';
+import { meetsMinimumTier, resolvePrincipalEmail, type PrincipalEmailRef } from '../contacts/types.js';
 import type { Logger } from '../logger.js';
 import { normalizeFragmentText } from './prompt-exfiltration-markers.js';
 import type { OutboundJudge, JudgeInput } from './outbound-judge.js';
@@ -72,7 +72,8 @@ export interface OutboundContentFilterConfig {
   // a signal the agent accidentally echoed its own instructions.
   systemPromptMarkers: string[];
   // CEO email — allowed in outbound content (not a third-party leak).
-  ceoEmail: string;
+  // Accepts a mutable PrincipalEmailRef so post-boot identity binds hot-reload (#1514).
+  ceoEmail: string | PrincipalEmailRef;
   /** Optional Stage 2 LLM judge. When absent, Stage 2 is a no-op pass. */
   judge?: OutboundJudge;
   /**
@@ -433,12 +434,13 @@ export class OutboundContentFilter {
     recipientEmail: string,
     recipientTier: ContactTier,
   ): FilterFinding[] {
+    const ceoEmail = resolvePrincipalEmail(this.config.ceoEmail);
     // Only add ceoEmail if it is actually known — an empty string (no verified
     // principal email on file) would be a no-op entry that never matches but
     // obscures the fact that the principal identity is incomplete.
     const allowedEmails = new Set([
       recipientEmail.toLowerCase(),
-      ...(this.config.ceoEmail ? [this.config.ceoEmail.toLowerCase()] : []),
+      ...(ceoEmail ? [ceoEmail.toLowerCase()] : []),
     ]);
 
     // Recipients at 'trusted' or above may receive third-party email addresses.

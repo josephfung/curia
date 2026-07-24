@@ -7,6 +7,7 @@
 // This skill uses contactService, which is a universal service.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { LINKABLE_CHANNEL_IDENTITY_SET } from '../../../../src/contacts/linkable-channels.js';
 
 export class ContactLinkIdentityHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -36,10 +37,12 @@ export class ContactLinkIdentityHandler implements ToolHandler {
       return { success: false, error: 'Label must be 200 characters or fewer' };
     }
 
-    // Channel allowlist — only accept known channel types
-    const ALLOWED_CHANNELS = ['email', 'phone', 'signal', 'telegram', 'slack'];
-    if (!ALLOWED_CHANNELS.includes(channel)) {
-      return { success: false, error: `Invalid channel '${channel}'. Allowed: ${ALLOWED_CHANNELS.join(', ')}` };
+    // Channel allowlist — single shared constant with the console HTTP API (#1514).
+    if (!LINKABLE_CHANNEL_IDENTITY_SET.has(channel)) {
+      return {
+        success: false,
+        error: `Invalid channel '${channel}'. Allowed: ${[...LINKABLE_CHANNEL_IDENTITY_SET].join(', ')}`,
+      };
     }
 
     // contactService is a universal service — always injected by ExecutionLayer

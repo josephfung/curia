@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-oxc';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json') as { version: string };
 
@@ -19,6 +20,10 @@ export default defineConfig({
     sourcemap: process.env['NODE_ENV'] !== 'production',
   },
   server: {
+    fs: {
+      // Permit resolving the shared linkable-channels module outside apps/console (#1514).
+      allow: [path.resolve(import.meta.dirname, '../..')],
+    },
     // In dev, proxy backend-served paths to the Fastify server on :3000.
     // This mirrors the production layout where Fastify serves everything from
     // the same origin.
