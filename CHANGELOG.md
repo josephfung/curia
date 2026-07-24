@@ -24,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Outbound recipient projection** — channels own request variants + `extractRecipients`; gateway has no projection switch. (#1513; ADR-035)
 - **Principal carve-out** — channels contribute Gate C rules via a registry; no central per-channel switch. (#1510)
 - **`ContactService.ensureChannelContact`** — shared resolve-or-create for Signal/Slack; closes 1:1 orphan leak. (#1480)
 - **Tools vs skills vocabulary** — atoms are **tools** (`tool.json`, `ToolRegistry`; audit readers dual-match legacy `skill.*`); collections are **skills**. (#1485, #1489; ADR-031)

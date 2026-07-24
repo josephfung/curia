@@ -12,16 +12,22 @@
 // blocked-contact check.
 //
 // Adding a new channel:
-//   1. Add a new variant to OutboundSendRequest (discriminated union by `channel`)
-//   2. Add the channel client to OutboundGatewayConfig
-//   3. Add a private dispatch<Channel>() method
-//   4. Add a branch in send() to call it
+//   1. Add `src/channels/<name>/outbound-request.ts` and contribute
+//      `extractRecipients` on that channel's `principal-rules.ts` (ADR-035) —
+//      recipient projection for principal tagging needs no gateway edit.
+//   2. Re-export the new request variant into OutboundSendRequest below
+//      (public API union) and add the channel client to OutboundGatewayConfig.
+//   3. Add a private dispatch<Channel>() method and a branch in send() to call it.
 //   The blocked-contact check and content filter in send() are channel-agnostic and
-//   run for all channels before dispatch.
+//   run for all channels before dispatch. Principal identity compare + Gate C
+//   carve-out live on PrincipalChannelRules (ADR-034).
 
 import { randomUUID } from 'node:crypto';
 import type { NylasClient, NylasMessage, NylasFolder, ListMessagesOptions, SendEmailOptions, AttachmentContent } from '../channels/email/nylas-client.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput } from './_shared/read-attachments.js';
+import type { EmailSendRequest } from '../channels/email/outbound-request.js';
+import type { SignalOutboundRequest } from '../channels/signal/outbound-request.js';
+import type { SlackOutboundRequest } from '../channels/slack/outbound-request.js';
 import type { SignalRpcClient } from '../channels/signal/signal-rpc-client.js';
 import type { SlackClient } from '../channels/slack/slack-client.js';
 import type { ContactService } from '../contacts/contact-service.js';
@@ -31,6 +37,8 @@ import {
   isPrincipalIdentity,
   computePrincipalIsSoleRecipient,
 } from '../contacts/principal-recipient.js';
+import { findPrincipalChannelRules } from '../contacts/principal-channel-registry.js';
+import type { ProjectedRecipient } from '../contacts/principal-channel-rules.js';
 import type { OutboundContentFilter, FilterRecipient } from '../dispatch/outbound-filter.js';
 import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
@@ -57,68 +65,22 @@ import {
 import type { ExportItem } from '../security/export-controls.js';
 
 // ---------------------------------------------------------------------------
-// Public types
+// Public types — request variants owned by channel packages; re-exported here
+// so existing callers keep a stable import path (public API surface).
 // ---------------------------------------------------------------------------
 
-export interface EmailSendRequest {
-  channel: 'email';
-  /** Which named account should send this message (e.g. "curia", "joseph").
-   *  Used by the gateway to select the right NylasClient from its map.
-   *  Defaults to the first configured account when absent. */
-  accountId?: string;
-  /** Recipient email address */
-  to: string;
-  subject?: string;
-  body: string;
-  cc?: string[];
-  /** When set, Nylas threads the outbound message as a reply */
-  replyToMessageId?: string;
-  /** Pre-formed HTML fragment appended verbatim after markdownToHtml(body, { wrap: true }).
-   *  Used for the quoted original message block: the quote is already sanitized
-   *  HTML and must remain outside the generated-body wrapper. */
-  htmlQuote?: string;
-  /** File attachments to include. Each entry must have a file:// URL pointing
-   *  to a temp file (from email-download-attachment or similar). The gateway
-   *  reads the files from disk before passing them to Nylas. */
-  attachments?: OutboundAttachmentInput[];
-}
+export type { EmailSendRequest } from '../channels/email/outbound-request.js';
+export type { SignalOutboundRequest } from '../channels/signal/outbound-request.js';
+export type { SlackOutboundRequest } from '../channels/slack/outbound-request.js';
 
 // Re-export so callers can construct attachment lists without importing from read-attachments directly.
 export type { OutboundAttachmentInput };
 
-export interface SignalOutboundRequest {
-  channel: 'signal';
-  /**
-   * E.164 phone number for 1:1 sends (e.g. "+14155552671").
-   * Mutually exclusive with groupId — set exactly one.
-   */
-  recipient?: string;
-  /**
-   * Base64-encoded group V2 ID for group sends.
-   * Mutually exclusive with recipient — set exactly one.
-   */
-  groupId?: string;
-  message: string;
-}
-
-export interface SlackOutboundRequest {
-  channel: 'slack';
-  /** Slack conversation id (D… for DM, C…/G… for channel). */
-  slackChannelId: string;
-  /** When set, reply in this thread (channel mentions / DM threads). */
-  threadTs?: string;
-  message: string;
-  /**
-   * Slack user id (U…) of the human recipient when known (DM peer or
-   * dispatcher-stamped recipientId). Used for principal checks, blocked-contact
-   * resolution, and disclosure tier — never the D…/C… conversation id.
-   */
-  slackUserId?: string;
-}
-
 /**
  * Discriminated union of all supported outbound send requests.
- * Add a new variant here when adding a new channel.
+ * Variants live in `src/channels/<name>/outbound-request.ts`; re-export the new
+ * variant into this union when adding a channel (delivery dispatch still needs
+ * a gateway branch — recipient projection for principal tagging does not).
  *
  * Note: OutboundSendRequest is a public API surface — adding a new variant is
  * backwards-compatible, but changing existing field names or types is a breaking
@@ -1228,43 +1190,14 @@ export class OutboundGateway {
   /**
    * Project an outbound request onto recipient identifiers for principal checks.
    *
-   * Single place that knows request wire-shape → identifiers, including which
-   * fields are never-principal (Signal `groupId`, Slack `slackChannelId`). Adding
-   * a channel touches this method once; `isPrincipalRecipient` and
-   * `buildFilterRecipients` both derive from it. Deeper ownership by channel
-   * packages is tracked in #1513.
+   * Delegates to the channel's `PrincipalChannelRules.extractRecipients` (ADR-035).
+   * Unregistered channels / unrecognized shapes fail closed (empty list ⇒ no
+   * principal carve-out). `isPrincipalRecipient` and `buildFilterRecipients`
+   * both derive from this.
    */
-  private projectRecipients(
-    request: OutboundSendRequest,
-  ): { identifier: string; principalEligible: boolean }[] {
-    if (request.channel === 'email') {
-      return [request.to, ...(request.cc ?? [])]
-        .filter((e) => e.length > 0)
-        .map((identifier) => ({ identifier, principalEligible: true }));
-    }
-    if (request.channel === 'signal') {
-      if (request.recipient && request.recipient.length > 0) {
-        return [{ identifier: request.recipient, principalEligible: true }];
-      }
-      if (request.groupId && request.groupId.length > 0) {
-        // Group sends are never principal-eligible (other members present).
-        return [{ identifier: request.groupId, principalEligible: false }];
-      }
-      return [];
-    }
-    if (request.channel === 'slack') {
-      // Trust the peer U… only — never the D…/C… conversation id.
-      if (request.slackUserId && request.slackUserId.length > 0) {
-        return [{ identifier: request.slackUserId, principalEligible: true }];
-      }
-      if (request.slackChannelId.length > 0) {
-        return [{ identifier: request.slackChannelId, principalEligible: false }];
-      }
-      return [];
-    }
-    // Exhaustiveness: a new OutboundSendRequest variant must project recipients here.
-    const _exhaustive: never = request;
-    return _exhaustive;
+  private projectRecipients(request: OutboundSendRequest): ProjectedRecipient[] {
+    const rules = findPrincipalChannelRules(request.channel);
+    return rules?.extractRecipients(request) ?? [];
   }
 
   /**

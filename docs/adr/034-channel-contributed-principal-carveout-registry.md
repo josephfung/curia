@@ -30,14 +30,15 @@ matching for the outbound gateway, no Gate C carve-out until a send skill opts i
 
 ## Consequences
 
-- Adding a channel means writing `channels/<name>/principal-rules.ts` and appending
-  one registry entry — no new branches inside `principal-recipient.ts`.
+- Adding a channel means writing `channels/<name>/principal-rules.ts` (now also
+  with `extractRecipients` per ADR-035) and appending one registry entry — no new
+  branches inside `principal-recipient.ts`.
 - Reviewers audit Gate C opt-in by reading the registry (and the derived
   `GATE_C_PRINCIPAL_CARVEOUT_SKILLS` Set), not by grepping adapters.
 - Call sites use `isPrincipalIdentity(channel, …)` instead of per-channel helpers.
 - Trade-off: the registry still imports each channel module explicitly (no
   side-effect self-registration), by design — an invisible register call would
   weaken the audit story.
-- The outbound gateway still owns request-shape → recipient projection
-  (`projectRecipients`) in one place until channels fully own that wire-shape
-  (#1513). Identity compare and Gate C skill parsing do not live there.
+- Outbound request-shape → recipient projection was deferred to #1513 and is
+  now channel-owned via `extractRecipients` on the same contributions (ADR-035).
+  Identity compare and Gate C skill parsing do not live in the gateway.

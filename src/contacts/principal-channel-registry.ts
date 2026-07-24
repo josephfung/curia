@@ -1,14 +1,17 @@
 // principal-channel-registry.ts — single auditable list of channel contributions
-// for principal-identity matching and Gate C carve-out opt-in.
+// for principal-identity matching, outbound recipient projection, and Gate C
+// carve-out opt-in.
 //
 // AUDIT POINT: a skill receives the Gate C principal carve-out ONLY if it appears
 // as `carveoutSkill.skillName` on an entry below. Channels listed without
-// `carveoutSkill` (Slack today) still get identity matching for the outbound
-// gateway, but fail closed for Gate C. Unknown / unregistered channels and
-// skills also fail closed.
+// `carveoutSkill` (Slack today) still get identity matching + recipient
+// projection for the outbound gateway, but fail closed for Gate C. Unknown /
+// unregistered channels and skills also fail closed (empty projection ⇒ no
+// principal carve-out in the gateway).
 //
-// Adding a channel: export `*PrincipalRules` from the channel package and append
-// exactly one entry here. Do not add per-channel branches to principal-recipient.ts.
+// Adding a channel: export `*PrincipalRules` (with `extractRecipients`) from the
+// channel package and append exactly one entry here. Do not add per-channel
+// branches to principal-recipient.ts or outbound-gateway recipient projection.
 
 import type { PrincipalChannelRules } from './principal-channel-rules.js';
 import { emailPrincipalRules } from '../channels/email/principal-rules.js';

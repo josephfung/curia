@@ -9,6 +9,7 @@ import {
 import {
   PRINCIPAL_CHANNEL_RULES,
   assertPrincipalChannelRegistryUnique,
+  findPrincipalChannelRules,
 } from './principal-channel-registry.js';
 import type { PrincipalChannelRules } from './principal-channel-rules.js';
 
@@ -49,6 +50,7 @@ describe('principal-recipient', () => {
       const dupChannel: PrincipalChannelRules = {
         channel: 'email',
         identifiersEqual: (a, b) => a === b,
+        extractRecipients: () => null,
       };
       expect(() =>
         assertPrincipalChannelRegistryUnique([...PRINCIPAL_CHANNEL_RULES, dupChannel]),
@@ -57,6 +59,7 @@ describe('principal-recipient', () => {
       const dupSkill: PrincipalChannelRules = {
         channel: 'other',
         identifiersEqual: (a, b) => a === b,
+        extractRecipients: () => null,
         carveoutSkill: {
           skillName: 'email-send',
           parseRecipients: () => [],
@@ -100,6 +103,18 @@ describe('principal-recipient', () => {
 
     it('fails closed for an unregistered channel', () => {
       expect(isPrincipalIdentity('telegram', 'ceo@example.com', PRINCIPAL_IDENTITIES)).toBe(false);
+    });
+  });
+
+  describe('extractRecipients registry fail-closed', () => {
+    it('returns undefined rules for an unregistered channel (no gateway carve-out)', () => {
+      expect(findPrincipalChannelRules('telegram')).toBeUndefined();
+    });
+
+    it('every registered channel contributes extractRecipients', () => {
+      for (const rules of PRINCIPAL_CHANNEL_RULES) {
+        expect(typeof rules.extractRecipients).toBe('function');
+      }
     });
   });
 
