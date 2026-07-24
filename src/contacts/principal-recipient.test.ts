@@ -38,15 +38,16 @@ const PRINCIPAL_IDENTITIES = [
 
 describe('principal-recipient', () => {
   describe('GATE_C_PRINCIPAL_CARVEOUT_SKILLS', () => {
-    it('opts in email-send, signal-send, and sms-send (Slack fails closed)', () => {
+    it('opts in email-send, signal-send, sms-send, and slack-send', () => {
       expect([...GATE_C_PRINCIPAL_CARVEOUT_SKILLS].sort()).toEqual([
         'email-send',
         'signal-send',
+        'slack-send',
         'sms-send',
       ]);
       const slack = PRINCIPAL_CHANNEL_RULES.find((r) => r.channel === 'slack');
       expect(slack).toBeDefined();
-      expect(slack!.carveoutSkill).toBeUndefined();
+      expect(slack!.carveoutSkill?.skillName).toBe('slack-send');
     });
 
     it('rejects duplicate channel ids and carve-out skill names', () => {
@@ -250,12 +251,12 @@ describe('principal-recipient', () => {
       )).toBe(false);
     });
 
-    it('fails closed for a hypothetical slack-send until Slack opts in', () => {
+    it('opts in slack-send when recipient is the principal Slack user id', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
         'slack-send',
         { recipient: 'U_CEO', message: 'hi' },
         PRINCIPAL_IDENTITIES,
-      )).toBe(false);
+      )).toBe(true);
     });
   });
 });

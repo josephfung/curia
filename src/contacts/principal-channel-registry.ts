@@ -4,10 +4,10 @@
 //
 // AUDIT POINT: a skill receives the Gate C principal carve-out ONLY if it appears
 // as `carveoutSkill.skillName` on an entry below. Channels listed without
-// `carveoutSkill` (Slack today) still get identity matching + recipient
-// projection for the outbound gateway, but fail closed for Gate C. Unknown /
-// unregistered channels and skills also fail closed (empty projection ⇒ no
-// principal carve-out in the gateway).
+// `carveoutSkill` still get identity matching + recipient projection for the
+// outbound gateway, but fail closed for Gate C. Unknown / unregistered channels
+// and skills also fail closed (empty projection ⇒ no principal carve-out in the
+// gateway).
 //
 // Adding a channel: export `*PrincipalRules` (with `extractRecipients`) from the
 // channel package and append exactly one entry here. Do not add per-channel

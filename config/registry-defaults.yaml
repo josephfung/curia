@@ -48,6 +48,7 @@ tools:
   - send-draft
   - signal-send
   - sms-send
+  - slack-send
   # Memory + knowledge
   - memory-query
   - memory-store
