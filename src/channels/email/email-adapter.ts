@@ -9,7 +9,8 @@
 
 import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
-import type { OutboundGateway, EmailSendRequest } from '../../skills/outbound-gateway.js';
+import type { OutboundGateway } from '../../skills/outbound-gateway.js';
+import type { EmailSendRequest } from './outbound-request.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import type { ConfigStore } from '../../memory/config-store.js';
 import { convertNylasMessage } from './message-converter.js';

@@ -92,10 +92,11 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 ### New Channel Adapter
 1. Create `src/channels/<name>/` implementing the `Channel` interface from `src/channels/channel.ts` (`name`, `isToggleable`, `start()`, `stop()`)
 2. Add a `ChannelDescriptor` to `src/channels/catalog.ts` (credential fields + required secret keys)
-3. Export `src/channels/<name>/principal-rules.ts` (`PrincipalChannelRules`: identity comparator + optional Gate C `carveoutSkill`) and append it to `src/contacts/principal-channel-registry.ts` — omit `carveoutSkill` to fail closed (ADR-034)
-4. Register as `layer: "channel"` with the bus
-5. Add config section to `config/default.yaml`
-6. Write tests
+3. Add `src/channels/<name>/outbound-request.ts` (the channel's `OutboundSendRequest` variant) and export `principal-rules.ts` with `PrincipalChannelRules`: identity comparator, `extractRecipients` (principal-eligible vs never-principal ids — group/conversation ids must be never-principal), and optional Gate C `carveoutSkill`. Append the contribution to `src/contacts/principal-channel-registry.ts` — omit `carveoutSkill` to fail closed for Gate C (ADR-034, ADR-035). Recipient projection for principal tagging needs **no** edit to `src/skills/outbound-gateway.ts`.
+4. Re-export the new request variant into the `OutboundSendRequest` union in `outbound-gateway.ts` and add delivery dispatch (`OutboundGatewayConfig` client + `dispatch<Channel>()` + `send()` branch) when the channel sends externally
+5. Register as `layer: "channel"` with the bus
+6. Add config section to `config/default.yaml`
+7. Write tests (include never-principal fields in `extractRecipients` tests)
 
 ### New Tool
 1. Create `skills/<name>/tool.json` (manifest) + `handler.ts`

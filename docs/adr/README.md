@@ -55,6 +55,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [032](032-polymorphic-pins-and-mcp-as-skill.md) | Polymorphic capability pins (skill \| tool \| future MCP) + MCP servers project skills into `SkillRegistry` — prerequisites for #1494 | Accepted |
 | [033](033-slack-channel-socket-mode.md) | Slack via Socket Mode — workspace-owned app, DMs + @mentions + in-thread continuation, sender-identity trust, `inbound.reaction` | Accepted |
 | [034](034-channel-contributed-principal-carveout-registry.md) | Channel-contributed principal carve-out registry — Gate C opt-in without scattering fail-closed logic | Accepted |
+| [035](035-channel-owned-outbound-recipient-projection.md) | Channel-owned outbound recipient projection — request variants + `extractRecipients` so the gateway needs no per-channel projection edit | Accepted |
 
 ## Adding new ADRs
 
