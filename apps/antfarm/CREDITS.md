@@ -16,11 +16,14 @@ this repo — no build-time layering from any private source.
 | Location | Contents |
 |---|---|
 | `public/assets/` (this repo) | CC0 placeholders + README only |
-| `assets-licensed/limezu/` (this repo) | Licensed LimeZu sheets (`office/` + `characters/`), served only behind session auth via `GET /api/antfarm/assets/*` |
+| `assets-licensed/limezu/` (this repo) | Licensed LimeZu sheets (`office/` + `characters/`), served via `GET /api/antfarm/assets/*` only to an authenticated caller (a valid session cookie, or the `x-web-bootstrap-secret` header for programmatic access) |
 | Runtime (`placeholder-textures.ts`) | Procedural CC0 stand-ins used when the licensed art is absent (e.g. a source checkout without it) |
 
 The licensed sheets sit **outside** `public/` (which Vite exposes unauthenticated),
-so they are never world-downloadable — the auth-gated route is the only way to reach them.
+so the only way to fetch them at runtime over HTTP is the auth-gated route — they never
+appear on the unauthenticated static surface. (The bytes are still in this public repo and
+image; that is intended, since LimeZu granted redistribution. The route gating is about the
+runtime surface, not secrecy.)
 
 Character appearance is driven by a deterministic map from agent id to generator
 parts (skin, hair, outfit, accessory), so each agent has a stable, distinct look.

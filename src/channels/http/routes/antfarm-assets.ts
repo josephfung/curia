@@ -5,7 +5,9 @@
 // static surface: unlike antfarm-static.ts (the unauthenticated /antfarm/* SPA mount) this route:
 //   1. reads from apps/antfarm/assets-licensed/ — OUTSIDE the Vite public/ web root, so
 //      the bytes never appear on the unauthenticated static surface;
-//   2. requires a valid session (assertSecret — same check as /api/antfarm/timeline);
+//   2. requires an authenticated caller — a valid session cookie, or the
+//      x-web-bootstrap-secret header for programmatic access (assertSecret — same
+//      check as /api/antfarm/timeline);
 //   3. 404s when the file or the whole dir is absent, so a build that omits the art (e.g. a
 //      source checkout without the assets) makes the Phaser loader fall back to procedural
 //      placeholders instead of erroring.
