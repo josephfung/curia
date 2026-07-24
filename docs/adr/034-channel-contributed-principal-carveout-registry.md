@@ -25,8 +25,9 @@ Each channel exports a `PrincipalChannelRules` contribution (comparator + option
 surface. `principal-recipient.ts` stays channel-agnostic: it looks up the registry
 and fails closed when the skill/channel is absent or has no `carveoutSkill`.
 
-Omit `carveoutSkill` to keep the conservative default (Slack today: identity
-matching for the outbound gateway, no Gate C carve-out until a send skill opts in).
+Omit `carveoutSkill` to keep the conservative default (identity matching for the
+outbound gateway, no Gate C carve-out until a send skill opts in). Slack opted in
+via `slack-send` (#1526); channels without a send skill still omit the field.
 
 ## Consequences
 

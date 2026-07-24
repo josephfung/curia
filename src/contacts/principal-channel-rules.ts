@@ -25,8 +25,8 @@ export interface ProjectedRecipient {
  * - `extractRecipients` — maps this channel's outbound request wire-shape onto
  *   recipient identifiers for principal tagging. Returns null when the request
  *   is not this channel's shape (fail closed).
- * - `carveoutSkill` — explicit opt-in. Absent ⇒ fail closed for Gate C (Slack
- *   today: comparator + projector exist for the outbound gateway, but no
+ * - `carveoutSkill` — explicit opt-in. Absent ⇒ fail closed for Gate C
+ *   (comparator + projector may still exist for the outbound gateway without a
  *   send-skill carve-out).
  */
 export interface PrincipalChannelRules {

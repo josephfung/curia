@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`slack-send`** — coordinator-pinned skill for 1:1 Slack DMs via OutboundGateway. (#1526)
 - **SMS channel** — Telnyx office DID two-way text; medium-trust webhook inbound. (#1478)
 - **`OutboundSendRequest`** — new `sms` variant for Telnyx Messages API delivery (public API).
 - **`sms-send`** — coordinator-pinned skill for 1:1 SMS via OutboundGateway.

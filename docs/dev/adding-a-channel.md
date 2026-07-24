@@ -185,7 +185,7 @@ export const myChannelPrincipalRules: PrincipalChannelRules = {
 Two fail-closed rules to internalize:
 
 - **Group / conversation ids are never principal-eligible.** In `extractRecipients`, mark a shared conversation id (a Slack `C…`/`D…`, a Signal group id) with `principalEligible: false`. Only a per-human identifier (a Slack `U…`, a phone number, an email address) may be principal-eligible. Getting this wrong could let a group thread be treated as a private principal channel.
-- **Omit `carveoutSkill` unless a send skill needs the Gate C principal-only carve-out.** Absent ⇒ the channel still gets identity matching for the outbound gateway, but fails closed for Gate C. Slack ships this way today (no `slack-send` skill yet). When you do add `carveoutSkill`, its `parseRecipients` must fully model the skill's recipient-shaped input and return `null` on any unmodeled key.
+- **Omit `carveoutSkill` unless a send skill needs the Gate C principal-only carve-out.** Absent ⇒ the channel still gets identity matching for the outbound gateway, but fails closed for Gate C. When you do add `carveoutSkill`, its `parseRecipients` must fully model the skill's recipient-shaped input and return `null` on any unmodeled key.
 
 The registry asserts channel ids and carve-out skill names are unique at load (`assertPrincipalChannelRegistryUnique`) — a duplicate is a hard startup failure, not a silent shadow. Reviewers audit the entire Gate C opt-in surface by reading this one file; that is the point of centralizing it. See `docs/adr/034-channel-contributed-principal-carveout-registry.md` and `docs/adr/035-channel-owned-outbound-recipient-projection.md`.
 

@@ -54,4 +54,12 @@ describe('slackPrincipalRules.extractRecipients', () => {
       body: 'hi',
     })).toBeNull();
   });
+
+  it('Gate C carve-out parses recipient and fails closed on unmodeled keys', () => {
+    const parse = slackPrincipalRules.carveoutSkill!.parseRecipients;
+    expect(parse({ recipient: 'U_CEO', message: 'hi' })).toEqual(['U_CEO']);
+    expect(parse({ recipient: 'U_CEO', to: 'other@example.com' })).toBeNull();
+    expect(parse({ recipient: 'U_CEO', slackChannelId: 'C123' })).toBeNull();
+    expect(parse({ message: 'hi' })).toBeNull();
+  });
 });

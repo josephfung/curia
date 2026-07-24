@@ -1,0 +1,23 @@
+{
+  "name": "slack-send",
+  "description": "Send a 1:1 Slack DM to a person by their Slack user id (U…). Use the contact's verified Slack identity from contact-lookup — display names are not trusted for Slack identity. 1:1 DM only (no channel/group proactive posting in v1). chat.postMessage accepts a U… as channel and opens/uses the IM.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "medium",
+  "inputs": {
+    "recipient": "string (Slack user id, e.g. U012ABCDEF)",
+    "message": "string",
+    "context_bridge": "string? (JSON — optional context bridge registration that adds a delegation hint so the agent can route any reply faster; every outbound is auto-tracked even without it. Shape: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?}. Example: {\"agent_id\":\"coordinator\",\"delegation_hint\":\"calendar-specialist\",\"expected_reply\":\"confirmation or reschedule request\"})"
+  },
+  "outputs": {
+    "delivered_to": "string",
+    "channel": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 30000,
+  "capabilities": [
+    "outboundGateway",
+    "outboundContext"
+  ]
+}

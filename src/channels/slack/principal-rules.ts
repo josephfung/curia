@@ -1,14 +1,38 @@
-// Slack channel contribution: principal identity compare + outbound recipient
-// projection.
-//
-// No carveoutSkill — there is no slack-send skill yet, so Gate C fails closed
-// for Slack outbound (intentional; see issue #1510 / ADR-034).
+// Slack channel contribution: principal identity compare, outbound recipient
+// projection, and slack-send Gate C carve-out.
 
 import type {
   PrincipalChannelRules,
   ProjectedRecipient,
 } from '../../contacts/principal-channel-rules.js';
+import { hasPresentValue } from '../../contacts/principal-carveout-parse.js';
 import { isSlackOutboundRequest } from './outbound-request.js';
+
+/**
+ * Parse slack-send 1:1 recipient from skill input. Returns null when the input
+ * contains recipient-shaped keys this parser does not model (fail closed).
+ */
+function parseSlackSendRecipients(input: Record<string, unknown>): string[] | null {
+  const unparsedRecipientKeys = [
+    'to',
+    'cc',
+    'bcc',
+    'recipients',
+    'group_id',
+    'groupId',
+    'slackChannelId',
+    'channel_id',
+  ] as const;
+  for (const key of unparsedRecipientKeys) {
+    if (hasPresentValue(input[key])) return null;
+  }
+
+  const recipient = input['recipient'];
+  if (recipient !== undefined && recipient !== null && typeof recipient !== 'string') return null;
+  if (!hasPresentValue(recipient)) return null;
+
+  return [(recipient as string).trim()];
+}
 
 /**
  * Project a Slack outbound request onto its recipient identifier.
@@ -31,5 +55,8 @@ export const slackPrincipalRules: PrincipalChannelRules = {
     return a === b;
   },
   extractRecipients: extractSlackRecipients,
-  // carveoutSkill omitted ⇒ no Gate C principal carve-out for Slack.
+  carveoutSkill: {
+    skillName: 'slack-send',
+    parseRecipients: parseSlackSendRecipients,
+  },
 };
