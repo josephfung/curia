@@ -580,6 +580,36 @@ interface SecretCapturedPayload {
   resumeToken?: string;
 }
 
+// AuthorizationDecisionPayload — published when an authorization gate decides
+// allow / deny / escalate (#1379, spec 09). Emitted by the dispatch layer after
+// AuthorizationService.evaluate (Gate-1 + three-layer check) and by the
+// execution layer for Gate C (contact-tier gate). Flows to audit_log via the
+// write-ahead bus hook like every other system event.
+interface AuthorizationDecisionPayload {
+  /** Primary decision for this check. */
+  decision: 'allow' | 'deny' | 'escalate';
+  /** Which gate produced the decision. */
+  gate: 'authorization' | 'gate_c';
+  /** Contact under evaluation (absent when originator tier is unresolved). */
+  contactId?: string;
+  role?: string | null;
+  /** Contact capability tier at decision time (or 'unresolved' for Gate C #1059). */
+  tier: ContactTier | 'unresolved';
+  channel?: string;
+  channelTrust?: TrustLevel;
+  /** Skill name (Gate C) or omitted for the multi-permission AuthorizationService snapshot. */
+  action?: string;
+  /** Full AuthorizationService lists — present when gate === 'authorization'. */
+  allowed?: string[];
+  denied?: string[];
+  escalate?: string[];
+  trustBlocked?: string[];
+  /** Human-readable summary for audit UI / queries. */
+  subjectSummary: string;
+  agentId?: string;
+  taskEventId?: string;
+}
+
 // AutonomySkillBlockedPayload — published by the execution layer when a skill
 // invocation is blocked because the live autonomy score is below the skill's
 // action_risk threshold. Advisory-only — the agent receives a { success: false }
@@ -1026,6 +1056,15 @@ export interface HumanDecisionEvent extends BaseEvent {
   payload: HumanDecisionPayload;
 }
 
+// AuthorizationDecisionEvent — published when Gate-1 / AuthorizationService / Gate C decides.
+// sourceLayer is 'dispatch' for contact-resolution auth checks, 'execution' for Gate C.
+// parentEventId traces to the inbound.message (dispatch) or agent.task (execution) that triggered it.
+export interface AuthorizationDecisionEvent extends BaseEvent {
+  type: 'authorization.decision';
+  sourceLayer: 'dispatch' | 'execution';
+  payload: AuthorizationDecisionPayload;
+}
+
 // SecretAccessedEvent — published by the execution layer for every ctx.secret() call.
 // Goes through the write-ahead audit logger like all bus events, giving a durable
 // record of which skill accessed which secret without the value ever leaving the process.
@@ -1214,6 +1253,7 @@ export type BusEvent =
   | ModelFallbackEngagedEvent  // #813: primary tier model unavailable, routing to fallback tier
   | ContextBudgetEvent        // #24: context budget utilization per LLM call
   | HumanDecisionEvent       // Spec 10: human-in-the-loop decision record (approve/deny/etc.)
+  | AuthorizationDecisionEvent // Spec 09 / #1379: authorization gate allow/deny/escalate audit
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | AutonomyToolBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
@@ -1754,6 +1794,25 @@ export function createHumanDecision(
     timestamp: new Date(),
     type: 'human.decision',
     sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createAuthorizationDecision(
+  // parentEventId traces to inbound.message (dispatch) or agent.task (execution).
+  // sourceLayer defaults to 'dispatch'; pass 'execution' for Gate C.
+  payload: AuthorizationDecisionPayload & {
+    parentEventId?: string;
+    sourceLayer?: 'dispatch' | 'execution';
+  },
+): AuthorizationDecisionEvent {
+  const { parentEventId, sourceLayer = 'dispatch', ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'authorization.decision',
+    sourceLayer,
     payload: rest,
     parentEventId,
   };

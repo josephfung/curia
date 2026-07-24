@@ -30,7 +30,7 @@ import type { ToolRegistry } from './registry.js';
 import type { SkillRegistry } from './skill-registry.js';
 import { unifiedToolSearch, resolveSkillActivation } from './skill-activation.js';
 import { sanitizeOutput, sanitizeObjectOutput } from './sanitize.js';
-import { createSecretAccessed, createAutonomySkillBlocked } from '../bus/events.js';
+import { createSecretAccessed, createAutonomySkillBlocked, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
@@ -48,6 +48,7 @@ import type { AutonomyConfig } from '../autonomy/autonomy-service.js';
 import { computeEffectiveTaskMetadata, DEFAULT_BYPASS_LADDER } from '../autonomy/effective-standing.js';
 import type { BypassLadderConfig } from '../autonomy/effective-standing.js';
 import type { BrowserService } from '../browser/browser-service.js';
+import { formatAuthorizationSubjectSummary } from '../contacts/authorization.js';
 import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import { TempFileStore } from './temp-file-store.js';
 import type { InfraLlmService } from './infra-llm.js';
@@ -449,6 +450,47 @@ export class ExecutionLayer {
     }
 
     return baseMsg + `No approval request was created — the CEO must authorize this action manually.`;
+  }
+
+  /**
+   * Publish authorization.decision for a Gate C allow/escalate outcome (#1379).
+   * Fire-and-forget — audit failure must not block the skill path.
+   */
+  private publishGateCDecision(
+    decision: 'allow' | 'escalate',
+    toolName: string,
+    tier: ContactTier | 'unresolved',
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): void {
+    if (!this.bus) return;
+    const originator = options?.taskMetadata?.['originator'] as
+      | { contactId?: string; channel?: string }
+      | undefined;
+    const contactId = originator?.contactId;
+    const channel = originator?.channel ?? options?.channelId;
+    this.bus.publish('execution', createAuthorizationDecision({
+      decision,
+      gate: 'gate_c',
+      contactId,
+      tier,
+      channel,
+      action: toolName,
+      subjectSummary: formatAuthorizationSubjectSummary({
+        decision,
+        gate: 'gate_c',
+        contactId,
+        tier,
+        channel,
+        action: toolName,
+      }),
+      agentId: options?.agentId,
+      taskEventId: options?.taskEventId,
+      parentEventId: options?.taskEventId ?? options?.parentEventId,
+      sourceLayer: 'execution',
+    })).catch((err) => {
+      skillLogger.warn({ err, toolName }, 'Gate C: failed to publish authorization.decision event');
+    });
   }
 
   /**
@@ -919,6 +961,7 @@ export class ExecutionLayer {
                 { toolName, initiatingTier, actionRisk: manifest.action_risk },
                 'autonomy gate: skill blocked — KG write from untrusted external originator (Gate C, #1290)',
               );
+              this.publishGateCDecision('escalate', toolName, initiatingTier, options, skillLogger);
               const gateCError = await this.buildTierGateError(
                 toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
               );
@@ -942,6 +985,7 @@ export class ExecutionLayer {
                 { toolName, initiatingTier, actionClass, actionRisk: manifest.action_risk },
                 'autonomy gate: skill blocked — initiating contact tier below required minimum (Gate C)',
               );
+              this.publishGateCDecision('escalate', toolName, initiatingTier, options, skillLogger);
               const gateCError = await this.buildTierGateError(
                 toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
               );
@@ -950,6 +994,7 @@ export class ExecutionLayer {
                 error: this.wrapSkillError(gateCError),
               };
             }
+            this.publishGateCDecision('allow', toolName, initiatingTier, options, skillLogger);
           } else if (
             manifest.action_risk !== 'none' &&
             isExternalOriginatorMissingTier(effectiveTaskMetadata)
@@ -977,6 +1022,7 @@ export class ExecutionLayer {
               },
               'autonomy gate: skill blocked — external originator has no resolved tier, failing closed (Gate C, see #1059)',
             );
+            this.publishGateCDecision('escalate', toolName, 'unresolved', options, skillLogger);
             // No tier to feed buildTierGateError — pass an explicit sentinel label so the
             // escalation message and approval request read sensibly (tier 'unresolved').
             const gateCError = await this.buildTierGateError(
