@@ -73,7 +73,6 @@ import { SlackClient } from './channels/slack/slack-client.js';
 import { SlackAdapter } from './channels/slack/slack-adapter.js';
 import { SmsClient } from './channels/sms/sms-client.js';
 import { SmsAdapter } from './channels/sms/sms-adapter.js';
-import { SmsOptOutStore } from './channels/sms/sms-opt-out.js';
 import { SmsWebhookBridge } from './channels/sms/webhook-bridge.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
@@ -869,7 +868,6 @@ async function main(): Promise<void> {
   // Webhook bridge is always created so HttpAdapter can mount the Telnyx route; the
   // adapter installs the handler on start() when the channel is enabled.
   const smsWebhookBridge = new SmsWebhookBridge();
-  const smsOptOutStore = new SmsOptOutStore(pool, logger);
   let smsClient: SmsClient | undefined;
   let smsAdapter: SmsAdapter | undefined;
   if (config.smsApiKey && config.smsFromNumber && config.smsWebhookPublicKey) {
@@ -1604,7 +1602,6 @@ async function main(): Promise<void> {
       signalPhoneNumber: registryGatedOutbound.signalPhoneNumber,
       slackClient: registryGatedOutbound.slackClient,
       smsClient: registryGatedOutbound.smsClient,
-      smsOptOutStore: registryGatedOutbound.smsClient ? smsOptOutStore : undefined,
       contactService,
       contentFilter: outboundFilter,
       bus,
@@ -1734,7 +1731,6 @@ async function main(): Promise<void> {
       client: smsClient,
       outboundGateway,
       contactService,
-      optOutStore: smsOptOutStore,
       webhookBridge: smsWebhookBridge,
     });
   } else if (outboundGateway && channelShouldStart.has('sms') && !smsClient) {

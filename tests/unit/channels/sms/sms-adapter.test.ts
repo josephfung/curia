@@ -4,7 +4,6 @@ import { SmsAdapter } from '../../../../src/channels/sms/sms-adapter.js';
 import type { SmsClient } from '../../../../src/channels/sms/sms-client.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
-import type { SmsOptOutStore } from '../../../../src/channels/sms/sms-opt-out.js';
 import { SmsWebhookBridge } from '../../../../src/channels/sms/webhook-bridge.js';
 import { createLogger } from '../../../../src/logger.js';
 import pino from 'pino';
@@ -43,7 +42,6 @@ describe('SmsAdapter', () => {
   let client: SmsClient;
   let gateway: OutboundGateway;
   let contactService: ContactService;
-  let optOutStore: SmsOptOutStore;
   let adapter: SmsAdapter;
   let keys: ReturnType<typeof telnyxKeyPair>;
 
@@ -66,11 +64,6 @@ describe('SmsAdapter', () => {
         created: true,
       }),
     } as unknown as ContactService;
-    optOutStore = {
-      isOptedOut: vi.fn().mockResolvedValue(false),
-      recordOptOut: vi.fn().mockResolvedValue(undefined),
-      clearOptOut: vi.fn().mockResolvedValue(undefined),
-    } as unknown as SmsOptOutStore;
 
     adapter = new SmsAdapter({
       bus,
@@ -78,7 +71,6 @@ describe('SmsAdapter', () => {
       client,
       outboundGateway: gateway,
       contactService,
-      optOutStore,
       webhookBridge: bridge,
     });
     await adapter.start();
@@ -133,7 +125,7 @@ describe('SmsAdapter', () => {
     expect(event.payload.content).toBe('Hello Curia');
   });
 
-  it('handles STOP without publishing inbound.message', async () => {
+  it('publishes STOP as ordinary inbound (no keyword short-circuit)', async () => {
     const published: unknown[] = [];
     bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
 
@@ -151,9 +143,32 @@ describe('SmsAdapter', () => {
     const { signature, timestamp } = signBody(rawBody, keys.privateKey);
 
     await bridge.getHandler()!(rawBody, { signature, timestamp });
-    expect(optOutStore.recordOptOut).toHaveBeenCalledWith('+14155552671');
-    expect(client.sendSms).toHaveBeenCalled();
-    expect(published).toHaveLength(0);
+    expect(client.sendSms).not.toHaveBeenCalled();
+    expect(published).toHaveLength(1);
+    const event = published[0] as { payload: { content: string } };
+    expect(event.payload.content).toBe('STOP');
+  });
+
+  it('dedupes redelivered webhook event ids', async () => {
+    const published: unknown[] = [];
+    bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+
+    const payload = {
+      data: {
+        event_type: 'message.received',
+        id: 'evt_dup',
+        payload: {
+          text: 'Hello once',
+          from: { phone_number: '+14155552671' },
+        },
+      },
+    };
+    const rawBody = Buffer.from(JSON.stringify(payload), 'utf8');
+    const { signature, timestamp } = signBody(rawBody, keys.privateKey);
+
+    await bridge.getHandler()!(rawBody, { signature, timestamp });
+    await bridge.getHandler()!(rawBody, { signature, timestamp });
+    expect(published).toHaveLength(1);
   });
 
   it('routes outbound.message through the gateway', async () => {
@@ -168,9 +183,7 @@ describe('SmsAdapter', () => {
       },
     } as unknown as OutboundMessageEvent;
 
-    // Re-trigger via bus publish (adapter subscribed in start)
     await bus.publish('dispatch', outbound);
-    // Allow async subscriber
     await new Promise((r) => setTimeout(r, 10));
 
     expect(gateway.send).toHaveBeenCalledWith(

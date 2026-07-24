@@ -39,18 +39,9 @@ export interface ConvertedSmsMessage {
   };
 }
 
-/** Keywords that trigger US A2P opt-out (CTIA common set). */
-export const SMS_STOP_KEYWORDS = new Set([
-  'STOP',
-  'STOPALL',
-  'UNSUBSCRIBE',
-  'CANCEL',
-  'END',
-  'QUIT',
-]);
-
-/** Keywords that re-enable messaging after opt-out. */
-export const SMS_START_KEYWORDS = new Set(['START', 'YES', 'UNSTOP']);
-
-/** HELP auto-reply trigger. */
-export const SMS_HELP_KEYWORDS = new Set(['HELP', 'INFO']);
+/**
+ * Telnyx error code when the destination previously texted STOP (carrier
+ * suppression). Surfaced as a clear blockedReason so the agent can record a KG
+ * fact instead of retrying — Curia keeps no parallel opt-out ledger (ADR-036).
+ */
+export const TELNYX_ERROR_OPTED_OUT = 40300;

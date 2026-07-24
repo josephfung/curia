@@ -87,7 +87,7 @@ tasks:
         - channel.sms.api_key
         - channel.sms.from_number
         - channel.sms.webhook_public_key
-    credential_how_to: "Create a Telnyx account, complete Low-Volume Mixed 10DLC, buy a voice+SMS local number, point the Messaging Profile webhook at https://<your-host>/api/webhooks/telnyx/sms, then enter the API key, office DID, and webhook public key in Settings → Channels → SMS. After enabling, open Contacts → your principal and add your personal mobile as an sms channel identity (and optionally CRM phone) so outbound principal detection works. Do not port consumer apps like TextNow as the office DID."
+    credential_how_to: "Create a Telnyx account (complete Low-Volume Mixed 10DLC for a US long code, or use a Canadian DID outside 10DLC), buy a voice+SMS number, point the Messaging Profile webhook at https://<your-host>/api/webhooks/telnyx/sms, then enter the API key, office DID, and webhook public key in Settings → Channels → SMS. After enabling, open Contacts → your principal and add your personal mobile as an sms channel identity (and optionally CRM phone) so outbound principal detection works. Do not port consumer apps like TextNow as the office DID. Carrier STOP is enforced by Telnyx; Curia records natural-language opt-out as a contact KG fact."
     docs_url: /channels/sms-setup
 
   - id: web_research

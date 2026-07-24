@@ -2,7 +2,8 @@
 //
 // Inbound: signed webhook → normalize → ensureChannelContact → inbound.message.
 // Outbound: outbound.message (channelId sms) → OutboundGateway.
-// A2P: STOP/START/HELP handled before agent publish; STOP persists in sms_opt_outs.
+// Carrier STOP is enforced by Telnyx (error 40300); natural-language opt-out
+// flows to the agent as ordinary inbound and is recorded as a contact KG fact.
 
 import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
@@ -12,23 +13,12 @@ import type { OutboundMessageEvent } from '../../bus/events.js';
 import { createInboundMessage } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
+import { BoundedTtlMap } from '../slack/bounded-ttl-map.js';
 import type { SmsClient } from './sms-client.js';
-import type { SmsOptOutStore } from './sms-opt-out.js';
 import type { SmsWebhookBridge, SmsWebhookHeaders, SmsWebhookResult } from './webhook-bridge.js';
 import type { TelnyxWebhookEnvelope } from './types.js';
-import {
-  classifySmsKeyword,
-  convertTelnyxWebhook,
-  parseSmsConversationId,
-} from './message-converter.js';
+import { convertTelnyxWebhook, parseSmsConversationId } from './message-converter.js';
 import { TelnyxSignatureError, verifyTelnyxSignature } from './verify-signature.js';
-
-const STOP_CONFIRMATION =
-  'You have been unsubscribed and will no longer receive SMS from this number. Reply START to resume.';
-const START_CONFIRMATION =
-  'You have been resubscribed and may receive SMS from this number again. Reply STOP to opt out.';
-const HELP_REPLY =
-  'Curia office SMS. Msg & data rates may apply. Reply STOP to opt out, START to resume, HELP for help.';
 
 export interface SmsAdapterConfig {
   bus: EventBus;
@@ -36,7 +26,6 @@ export interface SmsAdapterConfig {
   client: SmsClient;
   outboundGateway: OutboundGateway;
   contactService: ContactService;
-  optOutStore: SmsOptOutStore;
   webhookBridge: SmsWebhookBridge;
 }
 
@@ -45,9 +34,8 @@ export class SmsAdapter implements Channel {
   readonly isToggleable = true;
   private readonly config: SmsAdapterConfig;
   private readonly log: Logger;
-  private readonly seenEventIds = new Map<string, number>();
-  private static readonly DEDUPE_TTL_MS = 10 * 60 * 1000;
-  private static readonly DEDUPE_MAX = 2_000;
+  /** Telnyx may redeliver; dedupe by webhook event id (same TTL/size as Slack). */
+  private readonly seenEventIds = new BoundedTtlMap<true>(10 * 60 * 1000, 2_000);
 
   constructor(config: SmsAdapterConfig) {
     this.config = config;
@@ -112,8 +100,7 @@ export class SmsAdapter implements Channel {
       return { status: 200, body: { ok: true } };
     }
 
-    // Process inbound asynchronously after we've validated — but Telnyx wants
-    // 2xx within ~2s. Keyword handling + publish are light; still catch errors.
+    // Telnyx wants 2xx within ~2s; convert + publish is light. Still catch errors.
     try {
       await this.handleInboundEnvelope(envelope);
     } catch (err) {
@@ -131,38 +118,16 @@ export class SmsAdapter implements Channel {
 
   private async handleInboundEnvelope(envelope: TelnyxWebhookEnvelope): Promise<void> {
     const eventId = envelope.data?.id;
-    if (eventId && this.isDuplicate(eventId)) {
+    if (eventId && this.seenEventIds.has(eventId)) {
       this.log.debug({ eventId }, 'SMS adapter: duplicate webhook event ignored');
       return;
     }
-
-    const payloadText = envelope.data?.payload?.text ?? '';
-    const keyword = classifySmsKeyword(payloadText);
-    const fromRaw = envelope.data?.payload?.from?.phone_number;
-    const peer = fromRaw?.trim();
-
-    if (keyword && peer) {
-      await this.handleKeyword(keyword, peer);
-      return;
-    }
+    if (eventId) this.seenEventIds.set(eventId, true);
 
     const converted = convertTelnyxWebhook(envelope);
     if (!converted) {
       this.log.debug('SMS adapter: ignoring non-publishable webhook payload');
       return;
-    }
-
-    // Refuse to engage when the peer previously opted out (except START, handled above).
-    try {
-      if (await this.config.optOutStore.isOptedOut(converted.senderId)) {
-        this.log.info(
-          { phoneSuffix: converted.senderId.slice(-4) },
-          'SMS adapter: dropping inbound from opted-out number',
-        );
-        return;
-      }
-    } catch (err) {
-      this.log.warn({ err }, 'SMS adapter: opt-out lookup failed — continuing fail-open for inbound');
     }
 
     try {
@@ -200,68 +165,6 @@ export class SmsAdapter implements Channel {
       { conversationId: converted.conversationId, phoneSuffix: converted.senderId.slice(-4) },
       'SMS received and published to bus',
     );
-  }
-
-  private async handleKeyword(
-    keyword: 'stop' | 'start' | 'help',
-    peerRaw: string,
-  ): Promise<void> {
-    // Keyword messages may arrive without surviving convertTelnyxWebhook if empty —
-    // but STOP etc. always have text. Normalize lightly.
-    const peer = peerRaw.startsWith('+') ? peerRaw : peerRaw;
-    if (!/^\+[1-9]\d{6,14}$/.test(peer)) {
-      this.log.warn('SMS adapter: keyword from non-E.164 peer — ignored');
-      return;
-    }
-
-    if (keyword === 'stop') {
-      try {
-        await this.config.optOutStore.recordOptOut(peer);
-      } catch (err) {
-        this.log.error({ err }, 'SMS adapter: failed to persist STOP opt-out');
-      }
-      await this.sendComplianceSms(peer, STOP_CONFIRMATION);
-      return;
-    }
-
-    if (keyword === 'start') {
-      try {
-        await this.config.optOutStore.clearOptOut(peer);
-      } catch (err) {
-        this.log.error({ err }, 'SMS adapter: failed to clear opt-out on START');
-      }
-      await this.sendComplianceSms(peer, START_CONFIRMATION);
-      return;
-    }
-
-    await this.sendComplianceSms(peer, HELP_REPLY);
-  }
-
-  /** Compliance auto-reply — bypasses OutboundGateway / autonomy (carrier requirement). */
-  private async sendComplianceSms(to: string, text: string): Promise<void> {
-    try {
-      await this.config.client.sendSms({
-        to,
-        from: this.config.client.fromNumber,
-        text,
-      });
-    } catch (err) {
-      this.log.warn({ err, phoneSuffix: to.slice(-4) }, 'SMS adapter: compliance auto-reply failed');
-    }
-  }
-
-  private isDuplicate(eventId: string): boolean {
-    const now = Date.now();
-    for (const [id, ts] of this.seenEventIds) {
-      if (now - ts > SmsAdapter.DEDUPE_TTL_MS) this.seenEventIds.delete(id);
-    }
-    if (this.seenEventIds.has(eventId)) return true;
-    this.seenEventIds.set(eventId, now);
-    if (this.seenEventIds.size > SmsAdapter.DEDUPE_MAX) {
-      const oldest = this.seenEventIds.keys().next().value;
-      if (oldest !== undefined) this.seenEventIds.delete(oldest);
-    }
-    return false;
   }
 
   // ---------------------------------------------------------------------------

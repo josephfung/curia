@@ -1,7 +1,7 @@
 {
   "name": "sms-send",
-  "description": "Send an SMS text message to a person by their E.164 phone number via the office Telnyx DID. Use the contact's verified SMS (or phone) number from contact-lookup — display names are not trusted for SMS identity. 1:1 only (no groups/MMS in v1). Recipients who texted STOP are refused.",
-  "version": "0.1.0",
+  "description": "Send an SMS text message to a person by their E.164 phone number via the office Telnyx DID. Use the contact's verified SMS (or phone) number from contact-lookup — display names are not trusted for SMS identity. 1:1 only (no groups/MMS in v1). If Telnyx returns a carrier STOP (error 40300), treat the recipient as opted out and record a contact KG fact — do not retry.",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
