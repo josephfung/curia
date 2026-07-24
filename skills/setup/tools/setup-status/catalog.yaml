@@ -58,7 +58,7 @@ tasks:
       keys:
         - channel.signal.socket_path
         - channel.signal.phone_number
-    credential_how_to: "Set up signal-cli (included in docker-compose.yml), then enter the socket path and your phone number in Settings → Channels → Signal."
+    credential_how_to: "Set up signal-cli (included in docker-compose.yml), then enter the socket path and your phone number in Settings → Channels → Signal. After enabling, open Contacts → your principal and add your Signal number as a channel identity so outbound principal detection works."
     docs_url: /channels/signal-setup
 
   - id: slack
@@ -72,7 +72,7 @@ tasks:
       keys:
         - channel.slack.bot_token
         - channel.slack.app_token
-    credential_how_to: "Import Curia's Slack app manifest, name the bot after your office identity, install it into your workspace, then enter the bot token and app-level token in Settings → Channels → Slack."
+    credential_how_to: "Import Curia's Slack app manifest, name the bot after your office identity, install it into your workspace, then enter the bot token and app-level token in Settings → Channels → Slack. After enabling, open Contacts → your principal and add your Slack user ID (U…) as a channel identity so DMs to you skip the outbound judge."
     docs_url: /channels/slack-setup
 
   - id: web_research

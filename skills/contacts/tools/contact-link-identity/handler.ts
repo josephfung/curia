@@ -1,6 +1,6 @@
 // handler.ts — contact-link-identity skill implementation.
 //
-// Adds a channel identity (email, phone, Signal, Telegram) to an existing
+// Adds a channel identity (email, phone, Signal, Telegram, Slack) to an existing
 // contact. Uses source 'ceo_stated' since the coordinator acts on behalf
 // of the CEO, which means the identity is auto-verified.
 //
@@ -37,7 +37,7 @@ export class ContactLinkIdentityHandler implements ToolHandler {
     }
 
     // Channel allowlist — only accept known channel types
-    const ALLOWED_CHANNELS = ['email', 'phone', 'signal', 'telegram'];
+    const ALLOWED_CHANNELS = ['email', 'phone', 'signal', 'telegram', 'slack'];
     if (!ALLOWED_CHANNELS.includes(channel)) {
       return { success: false, error: `Invalid channel '${channel}'. Allowed: ${ALLOWED_CHANNELS.join(', ')}` };
     }

@@ -6,7 +6,8 @@ import { createInboundMessage } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactService } from '../../../contacts/contact-service.js';
 import { ContactValidationError } from '../../../contacts/contact-service.js';
-import type { ChannelIdentity, Contact, ContactCanonicalFields, ContactKind, ContactTier } from '../../../contacts/types.js';
+import type { ChannelIdentity, Contact, ContactCanonicalFields, ContactKind, ContactTier, IdentityStatus } from '../../../contacts/types.js';
+import { IdentityNotFoundError } from '../../../contacts/types.js';
 import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { resolveConsoleOriginator } from '../console-originator.js';
@@ -31,6 +32,12 @@ export interface KnowledgeGraphRouteOptions {
   // Shared session store — created in HttpAdapter, passed to both KG and identity routes
   // so both can accept the curia_session cookie for authentication.
   sessions: SessionStore;
+  /**
+   * Hot-reload the startup-cached principalIdentities array after console identity
+   * mutations (#1514). Optional so unit tests that don't care about principal matching
+   * can omit it.
+   */
+  onPrincipalIdentitiesChanged?: () => void | Promise<void>;
 }
 
 // Channel identifier used when the KG web app dispatches messages to the agent layer.
@@ -78,7 +85,16 @@ export async function knowledgeGraphRoutes(
   app: FastifyInstance,
   options: KnowledgeGraphRouteOptions,
 ): Promise<void> {
-  const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService, sessions } = options;
+  const { pool, logger, webAppBootstrapSecret, secureCookies, bus, eventRouter, contactService, sessions, onPrincipalIdentitiesChanged } = options;
+
+  async function notifyPrincipalIdentitiesChanged(): Promise<void> {
+    if (!onPrincipalIdentitiesChanged) return;
+    try {
+      await onPrincipalIdentitiesChanged();
+    } catch (err) {
+      logger.warn({ err }, 'onPrincipalIdentitiesChanged failed (non-fatal)');
+    }
+  }
   // sessions is managed by HttpAdapter — no local Map creation needed here.
 
   // POST /auth — exchanges the bootstrap secret for an HttpOnly session cookie.
@@ -1157,6 +1173,203 @@ export async function knowledgeGraphRoutes(
     } catch (err) {
       logger.error({ err, contactId: id }, 'GET /api/kg/contacts/:id/identities failed');
       return reply.status(500).send({ error: 'Failed to load identities.' });
+    }
+  });
+
+  // Channels the console may bind. Matches contact-link-identity (plus slack — #1514).
+  const IDENTITY_CHANNELS = new Set(['email', 'phone', 'signal', 'telegram', 'slack']);
+  const IDENTITY_STATUSES = new Set<IdentityStatus>(['active', 'defunct', 'bounced']);
+
+  // POST /api/kg/contacts/:id/identities — link a channel identity (CEO-stated → verified).
+  // Binding a Slack/Signal/SMS identity to the principal is the durable fix for the
+  // outbound-filter principal-detection gap (#1514).
+  app.post('/api/kg/contacts/:id/identities', KG_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const { id } = request.params as { id: string };
+    if (!UUID_RE.test(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
+
+    const body = (request.body ?? {}) as {
+      channel?: unknown;
+      channelIdentifier?: unknown;
+      label?: unknown;
+    };
+    const channel = typeof body.channel === 'string' ? body.channel.trim() : '';
+    const channelIdentifier = typeof body.channelIdentifier === 'string' ? body.channelIdentifier.trim() : '';
+    const label = typeof body.label === 'string' && body.label.trim().length > 0
+      ? body.label.trim()
+      : undefined;
+
+    if (!IDENTITY_CHANNELS.has(channel)) {
+      return reply.status(400).send({
+        error: `Invalid channel. Allowed: ${[...IDENTITY_CHANNELS].join(', ')}.`,
+      });
+    }
+    if (!channelIdentifier) {
+      return reply.status(400).send({ error: 'channelIdentifier is required.' });
+    }
+    if (channelIdentifier.length > 500) {
+      return reply.status(400).send({ error: 'channelIdentifier must be 500 characters or fewer.' });
+    }
+    if (label && label.length > 200) {
+      return reply.status(400).send({ error: 'label must be 200 characters or fewer.' });
+    }
+
+    try {
+      const contact = await contactService.getContact(id);
+      if (!contact) return reply.status(404).send({ error: 'Contact not found.' });
+
+      const identity = await contactService.linkIdentity({
+        contactId: id,
+        channel,
+        channelIdentifier,
+        label,
+        source: 'ceo_stated',
+        verified: true,
+      });
+      await notifyPrincipalIdentitiesChanged();
+      return reply.status(201).send({ identity: serializeIdentity(identity) });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === '23505') {
+        return reply.status(409).send({
+          error: 'That channel identity is already linked to a contact. Merge the lookalike or unlink it first.',
+        });
+      }
+      logger.error({ err, contactId: id }, 'POST /api/kg/contacts/:id/identities failed');
+      return reply.status(500).send({ error: 'Failed to link identity.' });
+    }
+  });
+
+  // PATCH /api/kg/contacts/:id/identities/:identityId — update status and/or verify.
+  app.patch('/api/kg/contacts/:id/identities/:identityId', KG_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const { id, identityId } = request.params as { id: string; identityId: string };
+    if (!UUID_RE.test(id) || !UUID_RE.test(identityId)) {
+      return reply.status(400).send({ error: 'Invalid contact or identity ID.' });
+    }
+
+    const body = (request.body ?? {}) as { status?: unknown; verified?: unknown };
+    const hasStatus = 'status' in body;
+    const hasVerified = 'verified' in body;
+    if (!hasStatus && !hasVerified) {
+      return reply.status(400).send({ error: 'Provide status and/or verified.' });
+    }
+
+    let nextStatus: IdentityStatus | undefined;
+    if (hasStatus) {
+      if (typeof body.status !== 'string' || !IDENTITY_STATUSES.has(body.status as IdentityStatus)) {
+        return reply.status(400).send({ error: "status must be 'active', 'defunct', or 'bounced'." });
+      }
+      nextStatus = body.status as IdentityStatus;
+    }
+    if (hasVerified && body.verified !== true) {
+      // Console verify is one-way: un-verifying would silently drop principal detection.
+      return reply.status(400).send({ error: 'verified may only be set to true (use status to retire an identity).' });
+    }
+
+    try {
+      const contact = await contactService.getContact(id);
+      if (!contact) return reply.status(404).send({ error: 'Contact not found.' });
+
+      const existing = await contactService.getIdentity(identityId);
+      if (!existing || existing.contactId !== id) {
+        return reply.status(404).send({ error: 'Identity not found on this contact.' });
+      }
+
+      let updated = existing;
+      if (nextStatus !== undefined) {
+        updated = await contactService.setIdentityStatus(identityId, nextStatus);
+      }
+      if (hasVerified && body.verified === true && !updated.verified) {
+        updated = await contactService.verifyIdentity(identityId);
+      }
+      await notifyPrincipalIdentitiesChanged();
+      return reply.send({ identity: serializeIdentity(updated) });
+    } catch (err) {
+      if (err instanceof IdentityNotFoundError) {
+        return reply.status(404).send({ error: 'Identity not found.' });
+      }
+      logger.error({ err, contactId: id, identityId }, 'PATCH /api/kg/contacts/:id/identities/:identityId failed');
+      return reply.status(500).send({ error: 'Failed to update identity.' });
+    }
+  });
+
+  // DELETE /api/kg/contacts/:id/identities/:identityId — unlink a channel identity.
+  app.delete('/api/kg/contacts/:id/identities/:identityId', KG_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+    const { id, identityId } = request.params as { id: string; identityId: string };
+    if (!UUID_RE.test(id) || !UUID_RE.test(identityId)) {
+      return reply.status(400).send({ error: 'Invalid contact or identity ID.' });
+    }
+
+    try {
+      const contact = await contactService.getContact(id);
+      if (!contact) return reply.status(404).send({ error: 'Contact not found.' });
+
+      const existing = await contactService.getIdentity(identityId);
+      if (!existing || existing.contactId !== id) {
+        return reply.status(404).send({ error: 'Identity not found on this contact.' });
+      }
+
+      const removed = await contactService.unlinkIdentity(identityId);
+      if (!removed) return reply.status(404).send({ error: 'Identity not found.' });
+      await notifyPrincipalIdentitiesChanged();
+      return reply.status(204).send();
+    } catch (err) {
+      logger.error({ err, contactId: id, identityId }, 'DELETE /api/kg/contacts/:id/identities/:identityId failed');
+      return reply.status(500).send({ error: 'Failed to unlink identity.' });
+    }
+  });
+
+  // POST /api/kg/contacts/merge — merge secondary into primary (re-points identities).
+  // dryRun defaults to true so a preview is always available before commit.
+  app.post('/api/kg/contacts/merge', KG_RATE, async (request, reply) => {
+    if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
+
+    const body = (request.body ?? {}) as {
+      primaryContactId?: unknown;
+      secondaryContactId?: unknown;
+      dryRun?: unknown;
+    };
+    const primaryContactId = typeof body.primaryContactId === 'string' ? body.primaryContactId : '';
+    const secondaryContactId = typeof body.secondaryContactId === 'string' ? body.secondaryContactId : '';
+    if (!UUID_RE.test(primaryContactId) || !UUID_RE.test(secondaryContactId)) {
+      return reply.status(400).send({ error: 'primaryContactId and secondaryContactId must be valid UUIDs.' });
+    }
+    if (primaryContactId === secondaryContactId) {
+      return reply.status(400).send({ error: 'primaryContactId and secondaryContactId must differ.' });
+    }
+    const dryRun = body.dryRun !== false;
+
+    try {
+      const result = await contactService.mergeContacts(primaryContactId, secondaryContactId, dryRun);
+      if (!dryRun) await notifyPrincipalIdentitiesChanged();
+      return reply.send({
+        primaryContactId: result.primaryContactId,
+        secondaryContactId: result.secondaryContactId,
+        dryRun: result.dryRun,
+        goldenRecord: {
+          displayName: result.goldenRecord.displayName,
+          role: result.goldenRecord.role,
+          notes: result.goldenRecord.notes,
+          tier: result.goldenRecord.tier,
+          identityCount: result.goldenRecord.identities.length,
+          authOverrideCount: result.goldenRecord.authOverrides.length,
+        },
+        ...('mergedAt' in result && result.mergedAt
+          ? { mergedAt: result.mergedAt.toISOString() }
+          : {}),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('not found')) {
+        return reply.status(404).send({ error: message });
+      }
+      if (message.includes('structural contact') || message.includes('must be different')) {
+        return reply.status(400).send({ error: message });
+      }
+      logger.error({ err, primaryContactId, secondaryContactId }, 'POST /api/kg/contacts/merge failed');
+      return reply.status(500).send({ error: 'Failed to merge contacts.' });
     }
   });
 

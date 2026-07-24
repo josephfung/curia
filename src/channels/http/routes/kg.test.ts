@@ -292,3 +292,244 @@ describe('GET /api/kg/contacts/:id/identities', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+function makeIdentity(overrides: Partial<ChannelIdentity> = {}): ChannelIdentity {
+  return {
+    id: '22222222-2222-4222-8222-222222222222',
+    contactId: '11111111-1111-4111-8111-111111111111',
+    channel: 'slack',
+    channelIdentifier: 'U_CEO',
+    label: null,
+    verified: true,
+    verifiedAt: new Date('2024-01-02T00:00:00Z'),
+    status: 'active',
+    source: 'ceo_stated',
+    createdAt: new Date('2024-01-02T00:00:00Z'),
+    updatedAt: new Date('2024-01-02T00:00:00Z'),
+    ...overrides,
+  };
+}
+
+describe('POST /api/kg/contacts/:id/identities — link (#1514)', () => {
+  let app: FastifyInstance;
+  const CID = '11111111-1111-4111-8111-111111111111';
+  const contact = { ...BASE_CONTACT, id: CID };
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  it('links a verified ceo_stated identity and returns 201', async () => {
+    const linked = makeIdentity({ contactId: CID });
+    const linkIdentity = vi.fn().mockResolvedValue(linked);
+    const svc = fakeContactService({
+      linkIdentity,
+      getContact: vi.fn().mockResolvedValue(contact),
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/kg/contacts/${CID}/identities`,
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'slack', channelIdentifier: 'U_CEO' }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().identity.channel).toBe('slack');
+    expect(res.json().identity.verified).toBe(true);
+    expect(linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: CID,
+      channel: 'slack',
+      channelIdentifier: 'U_CEO',
+      source: 'ceo_stated',
+      verified: true,
+    }));
+  });
+
+  it('rejects an unknown channel with 400', async () => {
+    const svc = fakeContactService({ getContact: vi.fn().mockResolvedValue(contact) });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/kg/contacts/${CID}/identities`,
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'discord', channelIdentifier: 'x' }),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 409 when the identity is already linked elsewhere', async () => {
+    const err = Object.assign(new Error('duplicate'), { code: '23505' });
+    const svc = fakeContactService({
+      getContact: vi.fn().mockResolvedValue(contact),
+      linkIdentity: vi.fn().mockRejectedValue(err),
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/kg/contacts/${CID}/identities`,
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'slack', channelIdentifier: 'U_CEO' }),
+    });
+    expect(res.statusCode).toBe(409);
+  });
+});
+
+describe('PATCH /api/kg/contacts/:id/identities/:identityId — verify/status (#1514)', () => {
+  let app: FastifyInstance;
+  const CID = '11111111-1111-4111-8111-111111111111';
+  const contact = { ...BASE_CONTACT, id: CID };
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  it('verifies an unverified identity', async () => {
+    const existing = makeIdentity({ contactId: CID, verified: false, verifiedAt: null, source: 'self_claimed' });
+    const verified = { ...existing, verified: true, verifiedAt: new Date() };
+    const svc = fakeContactService({
+      getContact: vi.fn().mockResolvedValue(contact),
+      getIdentity: vi.fn().mockResolvedValue(existing),
+      verifyIdentity: vi.fn().mockResolvedValue(verified),
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/kg/contacts/${CID}/identities/${existing.id}`,
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ verified: true }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().identity.verified).toBe(true);
+  });
+
+  it('updates identity status', async () => {
+    const existing = makeIdentity({ contactId: CID });
+    const updated = { ...existing, status: 'defunct' as const };
+    const svc = fakeContactService({
+      getContact: vi.fn().mockResolvedValue(contact),
+      getIdentity: vi.fn().mockResolvedValue(existing),
+      setIdentityStatus: vi.fn().mockResolvedValue(updated),
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/kg/contacts/${CID}/identities/${existing.id}`,
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'defunct' }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().identity.status).toBe('defunct');
+  });
+});
+
+describe('DELETE /api/kg/contacts/:id/identities/:identityId — unlink (#1514)', () => {
+  let app: FastifyInstance;
+  const CID = '11111111-1111-4111-8111-111111111111';
+  const contact = { ...BASE_CONTACT, id: CID };
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  it('unlinks an identity owned by the contact', async () => {
+    const existing = makeIdentity({ contactId: CID });
+    const unlinkIdentity = vi.fn().mockResolvedValue(true);
+    const svc = fakeContactService({
+      getContact: vi.fn().mockResolvedValue(contact),
+      getIdentity: vi.fn().mockResolvedValue(existing),
+      unlinkIdentity,
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/kg/contacts/${CID}/identities/${existing.id}`,
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(204);
+    expect(unlinkIdentity).toHaveBeenCalledWith(existing.id);
+  });
+
+  it('returns 404 when the identity belongs to another contact', async () => {
+    const existing = makeIdentity({ contactId: '33333333-3333-4333-8333-333333333333' });
+    const svc = fakeContactService({
+      getContact: vi.fn().mockResolvedValue(contact),
+      getIdentity: vi.fn().mockResolvedValue(existing),
+      unlinkIdentity: vi.fn(),
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/kg/contacts/${CID}/identities/${existing.id}`,
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('POST /api/kg/contacts/merge — merge lookalikes (#1514)', () => {
+  let app: FastifyInstance;
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  const PRIMARY = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const SECONDARY = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+  it('defaults to dryRun and returns a golden-record preview', async () => {
+    const mergeContacts = vi.fn().mockResolvedValue({
+      primaryContactId: PRIMARY,
+      secondaryContactId: SECONDARY,
+      dryRun: true,
+      goldenRecord: {
+        displayName: 'Principal',
+        role: null,
+        notes: null,
+        tier: 'principal',
+        identities: [makeIdentity()],
+        authOverrides: [],
+      },
+    });
+    const svc = fakeContactService({ mergeContacts });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/kg/contacts/merge',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ primaryContactId: PRIMARY, secondaryContactId: SECONDARY }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().dryRun).toBe(true);
+    expect(res.json().goldenRecord.identityCount).toBe(1);
+    expect(mergeContacts).toHaveBeenCalledWith(PRIMARY, SECONDARY, true);
+  });
+
+  it('commits when dryRun is false', async () => {
+    const mergeContacts = vi.fn().mockResolvedValue({
+      primaryContactId: PRIMARY,
+      secondaryContactId: SECONDARY,
+      dryRun: false,
+      mergedAt: new Date('2024-06-01T00:00:00Z'),
+      goldenRecord: {
+        displayName: 'Principal',
+        role: null,
+        notes: null,
+        tier: 'principal',
+        identities: [],
+        authOverrides: [],
+      },
+    });
+    const svc = fakeContactService({ mergeContacts });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/kg/contacts/merge',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        primaryContactId: PRIMARY,
+        secondaryContactId: SECONDARY,
+        dryRun: false,
+      }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().dryRun).toBe(false);
+    expect(res.json().mergedAt).toBe('2024-06-01T00:00:00.000Z');
+    expect(mergeContacts).toHaveBeenCalledWith(PRIMARY, SECONDARY, false);
+  });
+});

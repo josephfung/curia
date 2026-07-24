@@ -148,10 +148,12 @@ interface ContactServiceBackend {
   listContacts(filters?: { tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]>;
   updateContact(contact: Contact, client?: DbPoolClient): Promise<void>;
   createIdentity(identity: ChannelIdentity): Promise<void>;
+  getIdentity(identityId: string): Promise<ChannelIdentity | null>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
   unlinkIdentity(identityId: string): Promise<boolean>;
   setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity>;
+  verifyIdentity(identityId: string): Promise<ChannelIdentity>;
 
   /**
    * Atomically elevate a contact's tier from 'unknown' to 'known'.
@@ -247,6 +249,7 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
 export class ContactService {
   private onContactMerged?: (primaryId: string, secondaryId: string, mergedAt: Date) => void;
   private onIdentityVerified?: (contactId: string) => void;
+  private onIdentitiesChanged?: (contactId: string) => void | Promise<void>;
   private onContactElevated?: (contactId: string, reason: 'correspondence' | 'domain-validated' | 'judgment') => void;
   private dedupService?: DedupService;
   private onDuplicateDetected?: (
@@ -264,9 +267,25 @@ export class ContactService {
   ) {
     this.onContactMerged = options?.onContactMerged;
     this.onIdentityVerified = options?.onIdentityVerified;
+    this.onIdentitiesChanged = options?.onIdentitiesChanged;
     this.onContactElevated = options?.onContactElevated;
     this.dedupService = options?.dedupService;
     this.onDuplicateDetected = options?.onDuplicateDetected;
+  }
+
+  /** Fire-and-forget identity-mutation notifier (#1514). Never fails the caller. */
+  private notifyIdentitiesChanged(contactId: string): void {
+    if (!this.onIdentitiesChanged) return;
+    try {
+      const maybePromise = this.onIdentitiesChanged(contactId);
+      if (maybePromise instanceof Promise) {
+        maybePromise.catch(err => {
+          this.logger?.warn({ err, contactId }, 'onIdentitiesChanged callback rejected (non-fatal)');
+        });
+      }
+    } catch (err) {
+      this.logger?.warn({ err, contactId }, 'onIdentitiesChanged callback threw (non-fatal)');
+    }
   }
 
   /** Create a Postgres-backed instance for production use */
@@ -815,6 +834,8 @@ export class ContactService {
       }
     }
 
+    this.notifyIdentitiesChanged(options.contactId);
+
     return identity;
   }
 
@@ -1088,14 +1109,48 @@ export class ContactService {
     return this.backend.getIdentitiesForContact(contactId);
   }
 
+  /** Look up a single channel identity by ID. Returns null if not found. */
+  async getIdentity(identityId: string): Promise<ChannelIdentity | null> {
+    return this.backend.getIdentity(identityId);
+  }
+
   /** Remove a channel identity by its ID. Returns true if found and removed, false if not found. */
   async unlinkIdentity(identityId: string): Promise<boolean> {
-    return this.backend.unlinkIdentity(identityId);
+    const existing = await this.backend.getIdentity(identityId);
+    if (!existing) return false;
+    const removed = await this.backend.unlinkIdentity(identityId);
+    if (removed) this.notifyIdentitiesChanged(existing.contactId);
+    return removed;
   }
 
   /** Update the status of a channel identity (active, defunct, bounced). */
   async setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity> {
-    return this.backend.setIdentityStatus(identityId, status);
+    const updated = await this.backend.setIdentityStatus(identityId, status);
+    this.notifyIdentitiesChanged(updated.contactId);
+    return updated;
+  }
+
+  /**
+   * Mark a channel identity as verified (CEO confirmation). This is the console /
+   * agent path for verifying `self_claimed` identities and re-confirming any other
+   * identity so it counts toward the structural principal match (#1514).
+   */
+  async verifyIdentity(identityId: string): Promise<ChannelIdentity> {
+    const updated = await this.backend.verifyIdentity(identityId);
+    if (this.onIdentityVerified) {
+      try {
+        const maybePromise = this.onIdentityVerified(updated.contactId) as void | Promise<void>;
+        if (maybePromise instanceof Promise) {
+          maybePromise.catch(err => {
+            this.logger?.warn({ err, contactId: updated.contactId }, 'onIdentityVerified callback rejected (non-fatal)');
+          });
+        }
+      } catch (err) {
+        this.logger?.warn({ err, contactId: updated.contactId }, 'onIdentityVerified callback threw (non-fatal)');
+      }
+    }
+    this.notifyIdentitiesChanged(updated.contactId);
+    return updated;
   }
 
   /** Get active (non-revoked) auth overrides for a contact. */
@@ -1404,6 +1459,11 @@ export class ContactService {
         this.logger?.warn({ err: callbackErr }, 'onContactMerged callback threw (non-fatal, merge already committed)');
       }
     }
+
+    // Primary absorbs the secondary's identities — refresh principal cache if either side
+    // was (or is) the principal contact. Secondary is already deleted; notifying primary
+    // is enough when the principal was the survivor.
+    this.notifyIdentitiesChanged(primaryId);
 
     this.logger?.info({ primaryId, secondaryId }, 'Contacts merged');
 
@@ -1756,6 +1816,28 @@ class PostgresContactBackend implements ContactServiceBackend {
     );
   }
 
+  async getIdentity(identityId: string): Promise<ChannelIdentity | null> {
+    const result = await this.pool.query<{
+      id: string;
+      contact_id: string;
+      channel: string;
+      channel_identifier: string;
+      label: string | null;
+      verified: boolean;
+      verified_at: Date | null;
+      status: string;
+      source: string;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
+       FROM contact_channel_identities WHERE id = $1`,
+      [identityId],
+    );
+    const row = result.rows[0];
+    return row ? this.rowToIdentity(row) : null;
+  }
+
   async getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]> {
     const result = await this.pool.query<{
       id: string;
@@ -1900,6 +1982,37 @@ class PostgresContactBackend implements ContactServiceBackend {
        WHERE id = $2
        RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at`,
       [status, identityId],
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      throw new IdentityNotFoundError(identityId);
+    }
+    return this.rowToIdentity(row);
+  }
+
+  async verifyIdentity(identityId: string): Promise<ChannelIdentity> {
+    this.logger.debug({ identityId }, 'contacts: verifying identity');
+    const result = await this.pool.query<{
+      id: string;
+      contact_id: string;
+      channel: string;
+      channel_identifier: string;
+      label: string | null;
+      verified: boolean;
+      verified_at: Date | null;
+      status: string;
+      source: string;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `UPDATE contact_channel_identities
+       SET verified = true,
+           verified_at = COALESCE(verified_at, now()),
+           updated_at = now()
+       WHERE id = $1
+       RETURNING id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at`,
+      [identityId],
     );
 
     const row = result.rows[0];
@@ -2484,6 +2597,10 @@ class InMemoryContactBackend implements ContactServiceBackend {
     this.identities.set(identity.id, identity);
   }
 
+  async getIdentity(identityId: string): Promise<ChannelIdentity | null> {
+    return this.identities.get(identityId) ?? null;
+  }
+
   async getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]> {
     const results: ChannelIdentity[] = [];
     for (const identity of this.identities.values()) {
@@ -2541,6 +2658,22 @@ class InMemoryContactBackend implements ContactServiceBackend {
       ...identity,
       status,
       updatedAt: new Date(),
+    };
+    this.identities.set(identityId, updated);
+    return updated;
+  }
+
+  async verifyIdentity(identityId: string): Promise<ChannelIdentity> {
+    const identity = this.identities.get(identityId);
+    if (!identity) {
+      throw new IdentityNotFoundError(identityId);
+    }
+    const now = new Date();
+    const updated: ChannelIdentity = {
+      ...identity,
+      verified: true,
+      verifiedAt: identity.verifiedAt ?? now,
+      updatedAt: now,
     };
     this.identities.set(identityId, updated);
     return updated;

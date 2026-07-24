@@ -573,6 +573,18 @@ async function main(): Promise<void> {
   // callback references the pipeline, which depends on contactService.
   let confidencePipeline: ConfidencePipeline | undefined;
 
+  // Hot-reload holder for principal identities (#1514). Assigned after the principal
+  // contact is resolved below; ContactService callbacks close over this object so
+  // agent-skill identity writes (link/unlink/merge) refresh the shared cache without
+  // a process restart.
+  const principalIdentityHotReload: {
+    contactId: string | null;
+    refresh: () => Promise<void>;
+  } = {
+    contactId: null,
+    refresh: async () => { /* wired after principal resolution */ },
+  };
+
   // Contact system — provides identity resolution and contact management.
   // Always initialized (contacts work even without entity memory / KG).
   // DedupService is wired here so that createContact() automatically checks for
@@ -599,6 +611,14 @@ async function main(): Promise<void> {
     onIdentityVerified: (contactId: string) => {
       confidencePipeline?.incrementalUpdate(contactId, { type: 'pairing_confirmed' })
         .catch(err => logger.warn({ err, contactId }, 'pairing_confirmed pipeline update failed (non-fatal)'));
+    },
+    onIdentitiesChanged: async (contactId: string) => {
+      if (
+        principalIdentityHotReload.contactId
+        && contactId === principalIdentityHotReload.contactId
+      ) {
+        await principalIdentityHotReload.refresh();
+      }
     },
     onContactMerged: (primaryContactId, secondaryContactId, mergedAt) => {
       const event = createContactMerged({
@@ -680,12 +700,35 @@ async function main(): Promise<void> {
   // setup-required mode so the operator can finish onboarding via the web UI. That keeps
   // the env-var-unset and fresh-setup paths identical (principalEmail = '', no bypass),
   // which is exactly the dual-path inconsistency #1049 removes.
+  //
+  // principalIdentities is a shared mutable array (never reassigned) so console / agent
+  // identity writes can hot-reload it in place (#1514) — OutboundGateway, ExecutionLayer,
+  // and AgentRuntime all hold a reference to this same array.
   let principalContact: Contact | null = null;
-  let principalIdentities: ChannelIdentity[] = [];
+  const principalIdentities: ChannelIdentity[] = [];
   // Empty string when there is no principal or no verified email (fresh setup, Signal-only).
   // Downstream consumers already treat '' as "absent" — the same contract the old unset
   // CEO_PRIMARY_EMAIL had.
   let principalEmail = '';
+
+  async function refreshPrincipalIdentities(): Promise<void> {
+    if (!principalContact) {
+      principalIdentities.length = 0;
+      principalEmail = '';
+      return;
+    }
+    const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
+    const allIdentities = withIdentities?.identities ?? [];
+    const next = allIdentities.filter((id) => id.verified && id.status === 'active');
+    principalIdentities.length = 0;
+    principalIdentities.push(...next);
+    principalEmail = principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
+    logger.info(
+      { contactId: principalContact.id, identityCount: principalIdentities.length, hasEmail: !!principalEmail },
+      'Principal identities refreshed',
+    );
+  }
+
   try {
     principalContact = await contactService.findContactBySystemRole('principal');
     if (principalContact) {
@@ -696,19 +739,7 @@ async function main(): Promise<void> {
       // silently not apply, which is worse than refusing to boot.
       await repairPrincipalMetadata(principalContact.id, pool, logger);
 
-      const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
-      const allIdentities = withIdentities?.identities ?? [];
-      // Only verified + active identities are authoritative for reachability — stale
-      // (defunct/bounced) addresses must not be presented to agents as live.
-      principalIdentities = allIdentities.filter((id) => id.verified && id.status === 'active');
-
-      // principalEmail: the principal's verified + ACTIVE email. Restricted to active only
-      // (#1049 review): a defunct/bounced address may have been reassigned, so routing
-      // operational alerts to it — or seeding the outbound-filter allow-list with it — is a
-      // confidentiality risk. When there is no active email, principalEmail stays '' and the
-      // dependent features degrade with their own warnings (notifiers below; the email-adapter
-      // escalation after adapter construction).
-      principalEmail = principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
+      await refreshPrincipalIdentities();
 
       logger.info(
         { contactId: principalContact.id, kgNodeId: principalContact.kgNodeId, hasEmail: !!principalEmail },
@@ -730,6 +761,10 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
+
+  // Wire hot-reload so post-boot identity mutations update the shared cache (#1514).
+  principalIdentityHotReload.contactId = principalContact?.id ?? null;
+  principalIdentityHotReload.refresh = refreshPrincipalIdentities;
 
   // Email channel — optional. Accounts are managed via the console (email_accounts table,
   // migration 064). Grants live in the vault under channel.email.<name>.nylas_grant_id.
@@ -2417,6 +2452,8 @@ async function main(): Promise<void> {
     secretCaptureService,
     setupRequiredAtBoot,
     bootStartedAt,
+    // Hot-reload principal identities after console link/unlink/verify/merge (#1514).
+    onPrincipalIdentitiesChanged: refreshPrincipalIdentities,
     // Powers POST /api/setup/suggest-name (wizard starter-name suggestion, #799).
     infraLlmService,
     // Powers principal profile endpoints in setup routes (#392). Undefined when
