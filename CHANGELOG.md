@@ -83,6 +83,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **KG trust gates** — knowledge-graph writes (fact extraction, `memory-store`) from `unknown` / `blocked` inbound senders are blocked, so an untrusted party can't seed the graph. (#1290)
 - **Evidence-doc retention** — anchors diff-block boundaries to the metadata envelope so an email-body heading can't dodge the purge. (#1444)
 - **`adm-zip`** — pinned `>=0.6.0`, clearing GHSA-xcpc-8h2w-3j85 (crafted-ZIP 4 GB allocation, HIGH).
+- **`hono`** — pinned ≥4.12.27 to clear JSX cross-request leak + `cx()` XSS CVEs.
+- **`fast-uri`** — pinned ≥4.1.1 to clear GHSA-v2hh-gcrm-f6hx and GHSA-4c8g-83qw-93j6.
+- **`sharp`** — pinned ≥0.35.0 to clear GHSA-f88m-g3jw-g9cj (libvips CVEs).
+- **`find-my-way`** — pinned ≥9.7.0 to clear GHSA-c96f-x56v-gq3h (HTTP/2 DoS).
+- **`shell-quote`** — pinned ≥1.9.0 to clear GHSA-395f-4hp3-45gv (quadratic DoS).
 
 ### Removed
 

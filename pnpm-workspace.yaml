@@ -40,8 +40,8 @@ minimumReleaseAge: 1440
 #     that still ships a CommonJS build, which the CJS Nylas SDK requires; uuid@12+
 #     is ESM-only and would break `require('uuid')`.
 overrides:
-  hono: '>=4.12.25'
-  fast-uri: '>=3.1.2'
+  hono: '>=4.12.27'
+  fast-uri: '>=4.1.1'
   vite: '>=8.0.5'
   qs: '>=6.15.2'
   ip-address: '>=10.1.1'
@@ -55,6 +55,10 @@ overrides:
   '@opentelemetry/core': '>=2.8.0'          # GHSA-8988-4f7v-96qf (unbounded baggage header memory allocation)
   'onnxruntime-web>protobufjs': '>=7.6.3 <8' # GHSA-f38q-mgvj-vph7 (schema name shadowing DoS); targeted to onnxruntime-web only — protobufjs@8.x is patched at 8.6.0; promptfoo already resolves 8.6.1 which is clean
   adm-zip: '>=0.6.0'                        # GHSA-xcpc-8h2w-3j85 (crafted ZIP triggers 4GB allocation, HIGH); only consumer is optional onnxruntime-node; 0.6.0 is latest
+  # HIGH CVEs from Dependabot, 2026-07-24:
+  sharp: '>=0.35.0'                         # GHSA-f88m-g3jw-g9cj (libvips CVEs); allowBuilds stays false (prebuilt binary)
+  find-my-way: '>=9.7.0'                    # GHSA-c96f-x56v-gq3h (HTTP/2 DoS)
+  shell-quote: '>=1.9.0'                    # GHSA-395f-4hp3-45gv (quadratic-complexity DoS)
 
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
