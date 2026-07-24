@@ -19,9 +19,9 @@ import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { OutboundMessageEvent } from '../../bus/events.js';
 import type { SignalEnvelope } from './types.js';
 import { SignalRpcClient } from './signal-rpc-client.js';
-import { convertSignalEnvelope } from './message-converter.js';
+import { convertSignalEnvelope, convertSignalReaction } from './message-converter.js';
 import { checkGroupMemberTrust } from './group-trust.js';
-import { createInboundMessage } from '../../bus/events.js';
+import { createInboundMessage, createInboundReaction } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
 
@@ -112,9 +112,16 @@ export class SignalAdapter implements Channel {
   // ---------------------------------------------------------------------------
 
   private async handleInbound(envelope: SignalEnvelope): Promise<void> {
+    // Reactions normalize to inbound.reaction (emoji→intent is dispatch-side, #1479).
+    const reaction = convertSignalReaction(envelope);
+    if (reaction) {
+      await this.handleReaction(reaction);
+      return;
+    }
+
     const converted = convertSignalEnvelope(envelope);
     if (!converted) {
-      // Reaction, sync, view-once, empty content, group management — silently ignored.
+      // Sync, view-once, empty content, group management — silently ignored.
       // Logged at debug so operators can verify the filter is working without log spam.
       this.log.debug(
         { source: envelope.sourceNumber, hasData: !!envelope.dataMessage },
@@ -217,6 +224,49 @@ export class SignalAdapter implements Channel {
     this.log.info(
       { senderId, sourceName: metadata.sourceName, isGroup: metadata.isGroup, conversationId },
       'Signal message received and published to bus',
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: reactions
+  // ---------------------------------------------------------------------------
+
+  private async handleReaction(
+    converted: NonNullable<ReturnType<typeof convertSignalReaction>>,
+  ): Promise<void> {
+    // Best-effort contact resolve/create so dispatch trust can resolve the reactor.
+    try {
+      await this.config.contactService.ensureChannelContact({
+        channel: 'signal',
+        channelIdentifier: converted.senderId,
+        source: 'signal_participant',
+        displayName: converted.metadata.sourceName || converted.senderId,
+        fallbackDisplayName: converted.senderId,
+        tier: 'unknown',
+      });
+    } catch (err) {
+      this.log.warn({ err, senderId: converted.senderId }, 'Failed to resolve/auto-create Signal contact for reaction');
+    }
+
+    const inbound = createInboundReaction({
+      conversationId: converted.conversationId,
+      channelId: 'signal',
+      senderId: converted.senderId,
+      emoji: converted.emoji,
+      targetMessageId: converted.targetMessageId,
+      metadata: converted.metadata as unknown as Record<string, unknown>,
+    });
+
+    await this.config.bus.publish('channel', inbound);
+
+    this.log.info(
+      {
+        senderId: converted.senderId,
+        emoji: converted.emoji,
+        targetMessageId: converted.targetMessageId,
+        isRemove: converted.metadata.isRemove,
+      },
+      'Signal reaction received and published to bus',
     );
   }
 

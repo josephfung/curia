@@ -53,6 +53,7 @@ import {
   enrichGatewayApprovalPayload,
   resolveNotificationRecipientTier,
 } from '../autonomy/approval-notification.js';
+import { deliverApprovalToChatChannels } from '../autonomy/approval-channel-notify.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
 import { scrubPii } from '../pii/scrubber.js';
@@ -459,7 +460,8 @@ export class OutboundGateway {
         // correct skill on CEO approval. DB failure must NOT cause fail-open — the send
         // stays blocked even if the row can't be written (actionRef will be absent).
         let actionRef: string | undefined;
-        if (this.actionLogRepo && options?.taskEventId && options?.reExecRecipe) {
+        const actionLogRepo = this.actionLogRepo;
+        if (actionLogRepo && options?.taskEventId && options?.reExecRecipe) {
           const recipe = options.reExecRecipe;
 
           // Hoist expiresAt so both the insert row and the notification body use the
@@ -473,7 +475,7 @@ export class OutboundGateway {
           try {
             // Only assign actionRef after insert confirms the DB row exists to
             // prevent phantom refs if insert throws.
-            rowId = await this.actionLogRepo.insert({
+            rowId = await actionLogRepo.insert({
               taskId: options.taskEventId,
               conversationId: options.conversationId ?? undefined,
               toolName: recipe.toolName,
@@ -500,12 +502,7 @@ export class OutboundGateway {
           // setNotificationSentAt is wrapped separately so a DB failure there does not
           // discard the fact that the insert (and the notification delivery) succeeded.
           const principalEmail = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
-          if (rowId !== undefined && principalEmail) {
-            const recipientTier = await resolveNotificationRecipientTier(
-              this.contactService,
-              principalEmail,
-              this.log,
-            );
+          if (rowId !== undefined) {
             const notificationPayload = enrichGatewayApprovalPayload(
               recipe.partialPayload ?? {},
               request.channel === 'email'
@@ -514,45 +511,74 @@ export class OutboundGateway {
                   ? { slackChannelId: request.slackChannelId, message: request.message }
                   : { recipient: request.recipient, message: request.message },
             );
-            const sent = await this.sendNotification({
-              notificationType: 'approval_requested',
-              ceoEmail: principalEmail,
-              subject: `Approval needed — ${recipe.description}`,
-              body: buildApprovalNotificationBody({
-                preamble: recipe.description,
-                shortRef: candidateRef,
-                expiresAt,
-                toolName: recipe.toolName,
-                payload: notificationPayload,
-                recipientTier,
-                logger: this.log,
+            const extraLines = [
+              `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
+            ];
+
+            if (principalEmail) {
+              const recipientTier = await resolveNotificationRecipientTier(
+                this.contactService,
+                principalEmail,
+                this.log,
+              );
+              const sent = await this.sendNotification({
+                notificationType: 'approval_requested',
                 ceoEmail: principalEmail,
-                extraLines: [
-                  `Autonomy score: ${autonomyConfig.score} (threshold: ${sendThreshold})`,
-                ],
-                callToAction:
-                  'Reply with the reference to approve, deny, or dismiss this request.',
-              }),
-            });
-            if (sent) {
-              try {
-                await this.actionLogRepo.setNotificationSentAt(rowId);
-              } catch (err) {
-                // Non-fatal: the pending_approval row exists and gating is correct.
-                // Only notification_sent_at is missing — the CEO still received the alert.
-                this.log.warn(
-                  { err, rowId, taskEventId: options.taskEventId },
-                  'outbound-gateway: setNotificationSentAt failed after successful notification — notification_sent_at will be null',
-                );
+                subject: `Approval needed — ${recipe.description}`,
+                body: buildApprovalNotificationBody({
+                  preamble: recipe.description,
+                  shortRef: candidateRef,
+                  expiresAt,
+                  toolName: recipe.toolName,
+                  payload: notificationPayload,
+                  recipientTier,
+                  logger: this.log,
+                  ceoEmail: principalEmail,
+                  extraLines,
+                  callToAction:
+                    'Reply with the reference to approve, deny, or dismiss this request.',
+                }),
+              });
+              if (sent) {
+                try {
+                  await actionLogRepo.setNotificationSentAt(rowId);
+                } catch (err) {
+                  // Non-fatal: the pending_approval row exists and gating is correct.
+                  // Only notification_sent_at is missing — the CEO still received the alert.
+                  this.log.warn(
+                    { err, rowId, taskEventId: options.taskEventId },
+                    'outbound-gateway: setNotificationSentAt failed after successful notification — notification_sent_at will be null',
+                  );
+                }
               }
+            } else {
+              // Row was written but no principal email identity configured — email skipped.
+              // Slack/Signal DMs below may still deliver. Surface misconfig in alerting.
+              this.log.error(
+                { rowId, taskEventId: options.taskEventId },
+                'outbound-gateway: pending_approval row written but principal email notification skipped — no principal email identity configured',
+              );
             }
-          } else if (rowId !== undefined && !principalEmail) {
-            // Row was written but no principal email identity configured — notification silently skipped.
-            // Surface this as an error so misconfigured deployments are detectable in alerting.
-            this.log.error(
-              { rowId, taskEventId: options.taskEventId },
-              'outbound-gateway: pending_approval row written but principal notification skipped — no principal email identity configured',
-            );
+
+            // Slack/Signal DMs for reaction→approval correlation (#1479).
+            const chatBody = buildApprovalNotificationBody({
+              preamble: recipe.description,
+              shortRef: candidateRef,
+              expiresAt,
+              toolName: recipe.toolName,
+              payload: notificationPayload,
+              recipientTier: 'principal',
+              extraLines,
+              callToAction: 'React 👍 to approve or 👎 to deny this request.',
+            });
+            await deliverApprovalToChatChannels({
+              outboundGateway: this,
+              actionLogRepo,
+              actionLogId: rowId,
+              body: chatBody,
+              principalIdentities: this.principalIdentities,
+              logger: this.log,
+            });
           }
         }
 
@@ -1087,7 +1113,7 @@ export class OutboundGateway {
         await this.promoteOrCreateRecipientContact('signal', request.recipient);
       }
       // Emit the audit event for all successful Signal sends (both 1:1 and group).
-      // messageId is intentionally omitted — signal-cli RPC returns no ID.
+      // messageId is the signal-cli send timestamp — correlates with reaction targetTimestamp (#1479).
       if (result.success) {
         await this.publishDelivered({
           channel: 'signal',
@@ -1096,8 +1122,8 @@ export class OutboundGateway {
           content: redactedBody,
           conversationId: options?.conversationId,
           taskEventId: options?.taskEventId,
+          messageId: result.messageId,
           parentEventId: options?.parentEventId,
-          // messageId intentionally omitted — signal-cli RPC returns no ID
         });
       }
       return result;
@@ -2208,7 +2234,7 @@ export class OutboundGateway {
     }
 
     try {
-      await this.signalClient.send({
+      const messageId = await this.signalClient.send({
         account: this.signalPhoneNumber,
         // signal-cli takes recipient as an array; single-element for 1:1 sends
         recipient: request.recipient ? [request.recipient] : undefined,
@@ -2222,7 +2248,7 @@ export class OutboundGateway {
         'outbound-gateway: Signal message sent successfully',
       );
 
-      return { success: true };
+      return { success: true, messageId };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // Log destination type only — phone numbers and group IDs are PII.

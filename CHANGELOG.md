@@ -15,16 +15,19 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Reaction approvals** — Slack/Signal 👍/👎 (incl. skin tones) resolve pending approvals; unrecognized principal reactions get a hint. (#1479)
 - **Imported Anthropic skills** — drop an unmodified `SKILL.md` + `references/` folder; discover/activate with inert scripts warned. (#1490)
 - **Skills-as-bundles** — `SKILL.md` + nested `tools/`; `pinned_skills` expands a bundle to its member tools + instructions; `skill_registry` table. Native bundles: email, ceo-inbox, contacts, autonomy, diagnostics, scheduler, web, memory, learning, context-bridge, executive-profile, setup. (#1489, #1494)
 - **Runtime skill activation & MCP-as-skill** — `toolSearch` returns `kind:"skill"`; `skill-activate` loads a skill's tools + instructions (Tier 1 persists in `progress.activeSkills`); each connected MCP server projects a pinnable skill. (#1494, #1495)
 - **Slack channel** — Socket Mode DMs, @mentions, in-thread replies; `inbound.reaction` bus event (ADR-033). (#1477)
 - **`OutboundSendRequest`** — new `slack` variant for gateway `chat.postMessage` delivery (public API).
-- **`inbound.reaction`** — channel-agnostic reaction signal for approval UX; emoji→intent mapping follows in #1479.
+- **`inbound.reaction`** — channel-agnostic reaction signal for approval UX; emoji→intent wired in #1479.
 
 ### Changed
 
 - **Outbound recipient projection** — channels own request variants + `extractRecipients`; gateway has no projection switch. (#1513; ADR-035)
+- **Signal outbound** — `outbound.delivered.messageId` records the signal-cli send timestamp for reaction correlation. (#1479)
+- **Signal inbound** — reaction envelopes publish `inbound.reaction` (`isRemove` in metadata). (#1479)
 - **Principal carve-out** — channels contribute Gate C rules via a registry; no central per-channel switch. (#1510)
 - **`ContactService.ensureChannelContact`** — shared resolve-or-create for Signal/Slack; closes 1:1 orphan leak. (#1480)
 - **Tools vs skills vocabulary** — atoms are **tools** (`tool.json`, `ToolRegistry`; audit readers dual-match legacy `skill.*`); collections are **skills**. (#1485, #1489; ADR-031)

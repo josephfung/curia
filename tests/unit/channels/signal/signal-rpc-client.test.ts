@@ -153,7 +153,7 @@ describe('SignalRpcClient', () => {
     expect(req!.method).toBe('send');
     mock.respondSuccess(req!.id, { timestamp: 1700000000000 });
 
-    await expect(sendPromise).resolves.toBeUndefined();
+    await expect(sendPromise).resolves.toBe('1700000000000');
   });
 
   it('rejects a send request when signal-cli returns an error', async () => {

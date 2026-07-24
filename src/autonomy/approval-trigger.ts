@@ -8,12 +8,14 @@ import { randomBytes } from 'node:crypto';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { OutboundGateway } from '../skills/outbound-gateway.js';
 import type { ContactService } from '../contacts/contact-service.js';
+import type { ChannelIdentity } from '../contacts/types.js';
 import type { Logger } from '../logger.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import {
   buildApprovalNotificationBody,
   resolveNotificationRecipientTier,
 } from './approval-notification.js';
+import { deliverApprovalToChatChannels } from './approval-channel-notify.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -108,6 +110,8 @@ export class ApprovalTriggerService {
     private readonly ceoEmail?: string,
     // Optional — used to resolve the notification recipient's tier for detail gating.
     private readonly contactService?: ContactService,
+    /** Verified principal channel identities — used for Slack/Signal approval DMs (#1479). */
+    private readonly principalIdentities: readonly ChannelIdentity[] = [],
   ) {}
 
   /**
@@ -217,17 +221,19 @@ export class ApprovalTriggerService {
     // sendNotification() catches publish errors internally and returns false rather than
     // throwing, so we check the return value to know whether to stamp notification_sent_at.
     let notificationSent = false;
+    const defaultBody =
+      `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
+      `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).`;
+    const preamble = opts.reason ?? defaultBody;
+
     if (this.ceoEmail && this.outboundGateway) {
-      const defaultBody =
-        `Curia wanted to ${description.charAt(0).toLowerCase() + description.slice(1)}, ` +
-        `but the autonomy score (${currentScore}) is below the required threshold (${requiredScore}).`;
       const recipientTier = await resolveNotificationRecipientTier(
         this.contactService,
         this.ceoEmail,
         this.logger,
       );
-      const notificationBody = buildApprovalNotificationBody({
-        preamble: opts.reason ?? defaultBody,
+      const emailBody = buildApprovalNotificationBody({
+        preamble,
         shortRef,
         expiresAt,
         toolName,
@@ -240,7 +246,7 @@ export class ApprovalTriggerService {
         notificationType: 'approval_requested',
         ceoEmail: this.ceoEmail,
         subject: `Approval needed — ${description}`,
-        body: notificationBody,
+        body: emailBody,
       });
       if (sent) {
         await this.actionLogRepo.setNotificationSentAt(rowId);
@@ -252,11 +258,33 @@ export class ApprovalTriggerService {
           'approval-trigger: CEO notification failed — row exists, CEO will see it in digest',
         );
       }
-    } else {
+    } else if (!this.ceoEmail) {
       this.logger.warn(
         { rowId, shortRef },
-        'approval-trigger: ceoEmail not configured — skipping notification',
+        'approval-trigger: ceoEmail not configured — skipping email notification',
       );
+    }
+
+    // Slack/Signal DMs so a reaction can resolve the pending approval (#1479).
+    // Body always includes detail — delivery targets verified principal identities.
+    if (this.outboundGateway) {
+      const chatBody = buildApprovalNotificationBody({
+        preamble,
+        shortRef,
+        expiresAt,
+        toolName,
+        payload: input,
+        recipientTier: 'principal',
+        callToAction: 'React 👍 to approve or 👎 to deny this request.',
+      });
+      await deliverApprovalToChatChannels({
+        outboundGateway: this.outboundGateway,
+        actionLogRepo: this.actionLogRepo,
+        actionLogId: rowId,
+        body: chatBody,
+        principalIdentities: this.principalIdentities,
+        logger: this.logger,
+      });
     }
 
     return { created: true, shortRef, notificationSent };

@@ -2243,6 +2243,9 @@ function makeActionLogRepo() {
     insert: vi.fn().mockResolvedValue(1),
     linkPayload: vi.fn().mockResolvedValue(true),
     setNotificationSentAt: vi.fn().mockResolvedValue(undefined),
+    bindDeliveryMessage: vi.fn().mockResolvedValue(true),
+    findPendingByDeliveryMessage: vi.fn().mockResolvedValue(null),
+    findPendingByShortRef: vi.fn().mockResolvedValue(null),
   } as unknown as ActionLogRepo;
 }
 
@@ -2709,7 +2712,7 @@ describe('outbound.delivered on Signal send', () => {
     const mocks = createMocks();
 
     const signalClient = {
-      send: vi.fn().mockResolvedValue(undefined),
+      send: vi.fn().mockResolvedValue('1700000000123'),
       listGroups: vi.fn().mockResolvedValue([]),
     } as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient;
 
@@ -2739,6 +2742,7 @@ describe('outbound.delivered on Signal send', () => {
     );
 
     expect(result.success).toBe(true);
+    expect(result.messageId).toBe('1700000000123');
 
     const publishCalls = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls;
     const delivered = publishCalls
@@ -2753,16 +2757,15 @@ describe('outbound.delivered on Signal send', () => {
       content: 'pinging you',
       conversationId: 'signal:+15555550123',
       taskEventId: 'task-99',
+      messageId: '1700000000123',
     });
-    // messageId is intentionally omitted — signal-cli RPC returns no ID
-    expect(delivered!.payload.messageId).toBeUndefined();
   });
 
   it('publishes outbound.delivered on a successful Signal group send', async () => {
     const mocks = createMocks();
 
     const signalClient = {
-      send: vi.fn().mockResolvedValue(undefined),
+      send: vi.fn().mockResolvedValue('1700000000456'),
       listGroups: vi.fn().mockResolvedValue([
         {
           id: 'group-base64==',
@@ -2797,6 +2800,7 @@ describe('outbound.delivered on Signal send', () => {
     );
 
     expect(result.success).toBe(true);
+    expect(result.messageId).toBe('1700000000456');
 
     const delivered = (mocks.bus.publish as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => call[1] as BusEvent)
@@ -2808,9 +2812,8 @@ describe('outbound.delivered on Signal send', () => {
       recipientId: 'group-base64==',
       content: 'group ping',
       conversationId: 'signal:group=group-base64==',
+      messageId: '1700000000456',
     });
-    // messageId is intentionally omitted — signal-cli RPC returns no ID
-    expect(delivered!.payload.messageId).toBeUndefined();
   });
 });
 

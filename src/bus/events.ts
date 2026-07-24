@@ -172,8 +172,8 @@ interface OutboundDeliveredPayload {
   conversationId?: string;
   /** Originating agent.task event ID, when available. */
   taskEventId?: string;
-  /** Provider message ID — Nylas message ID for email, absent for
-   *  signal-cli (the RPC call returns no ID). */
+  /** Provider message ID — Nylas message ID for email, Slack `ts`, or
+   *  signal-cli send timestamp (stringified) for Signal. */
   messageId?: string;
   /** Bulk-export audit fields (#201) — populated when attachments leave the system. */
   exportAudit?: {

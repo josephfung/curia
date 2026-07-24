@@ -270,8 +270,9 @@ describe('SignalAdapter', () => {
     await unknownAdapter.stop();
   });
 
-  it('ignores reaction envelopes (no publish)', async () => {
+  it('publishes inbound.reaction for reaction envelopes', async () => {
     const published: unknown[] = [];
+    bus.subscribe('inbound.reaction', 'dispatch', (e) => { published.push(e); });
     bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
 
     rpcClient.simulateMessage(makeEnvelope({
@@ -280,12 +281,51 @@ describe('SignalAdapter', () => {
         message: null,
         expiresInSeconds: 0,
         viewOnce: false,
-        reaction: { emoji: '👍', targetAuthor: '+1', targetTimestamp: 0, isRemove: false },
+        reaction: {
+          emoji: '👍',
+          targetAuthor: '+14155559999',
+          targetTimestamp: 1699999999999,
+          isRemove: false,
+        },
       },
     }));
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(published).toHaveLength(0);
+    expect(published).toHaveLength(1);
+    const event = published[0] as {
+      type: string;
+      payload: { emoji: string; senderId: string; targetMessageId: string; metadata?: { isRemove?: boolean } };
+    };
+    expect(event.type).toBe('inbound.reaction');
+    expect(event.payload.emoji).toBe('👍');
+    expect(event.payload.senderId).toBe('+14155551234');
+    expect(event.payload.targetMessageId).toBe('1699999999999');
+    expect(event.payload.metadata?.isRemove).toBe(false);
+  });
+
+  it('publishes isRemove reactions without mapping intent', async () => {
+    const published: unknown[] = [];
+    bus.subscribe('inbound.reaction', 'dispatch', (e) => { published.push(e); });
+
+    rpcClient.simulateMessage(makeEnvelope({
+      dataMessage: {
+        timestamp: 1700000000000,
+        message: null,
+        expiresInSeconds: 0,
+        viewOnce: false,
+        reaction: {
+          emoji: '👍',
+          targetAuthor: '+14155559999',
+          targetTimestamp: 1699999999999,
+          isRemove: true,
+        },
+      },
+    }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(published).toHaveLength(1);
+    const event = published[0] as { payload: { metadata?: { isRemove?: boolean } } };
+    expect(event.payload.metadata?.isRemove).toBe(true);
   });
 
   // ---------------------------------------------------------------------------

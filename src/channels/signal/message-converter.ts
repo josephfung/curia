@@ -5,7 +5,7 @@
 //
 // Many envelope types arrive that we don't want to process as messages:
 //   - syncMessage: the agent sent this from another device — not inbound
-//   - reaction: emoji reaction to a prior message — ignored per spec (MVP)
+//   - reaction: handled separately via convertSignalReaction → inbound.reaction
 //   - viewOnce: self-destructing message — skip (we don't want LLM context on ephemeral content)
 //   - null/empty message: attachment-only or other non-text envelope
 //   - group management events (UPDATE/QUIT): not displayable content
@@ -14,7 +14,7 @@
 import type { SignalEnvelope, SignalAttachment } from './types.js';
 
 // ---------------------------------------------------------------------------
-// Output type
+// Output types
 // ---------------------------------------------------------------------------
 
 export interface ConvertedSignalMessage {
@@ -37,6 +37,25 @@ export interface ConvertedSignalMessage {
     /** True when the message arrived in a group chat */
     isGroup: boolean;
     attachments?: SignalAttachment[];
+  };
+}
+
+/**
+ * Channel-agnostic reaction shape. Emoji→intent mapping lives in dispatch/approval.
+ * `isRemove` is carried in metadata so the mapper can no-op un-reacts (#1479).
+ */
+export interface ConvertedSignalReaction {
+  conversationId: string;
+  channelId: 'signal';
+  senderId: string;
+  emoji: string;
+  /** Stringified Signal targetTimestamp — correlates to outbound.delivered.messageId. */
+  targetMessageId: string;
+  metadata: {
+    sourceName: string;
+    targetAuthor: string;
+    isRemove: boolean;
+    signalTimestamp: number;
   };
 }
 
@@ -70,9 +89,7 @@ export function convertSignalEnvelope(
   // than storing their content in working memory or the audit log.
   if (data.viewOnce) return null;
 
-  // Reactions don't carry actionable text content — ignored for MVP per spec.
-  // A future version could acknowledge reactions or use them as signals (e.g.,
-  // thumbs-up = approve pending action), but that's out of scope for the first pass.
+  // Reactions are normalized separately via convertSignalReaction → inbound.reaction.
   if (data.reaction) return null;
 
   // Skip group management events (someone added/left the group, group name changed, etc.)
@@ -111,6 +128,44 @@ export function convertSignalEnvelope(
       groupId: groupInfo?.groupId,
       isGroup,
       attachments: data.attachments?.length ? data.attachments : undefined,
+    },
+  };
+}
+
+/**
+ * Normalize a Signal reaction envelope into a channel-agnostic reaction shape.
+ * Returns null for non-reaction envelopes or reactions missing required fields.
+ * Does not map emoji→intent — that belongs in dispatch/approval (#1479).
+ */
+export function convertSignalReaction(
+  envelope: SignalEnvelope,
+): ConvertedSignalReaction | null {
+  if (envelope.syncMessage) return null;
+
+  const data = envelope.dataMessage;
+  const reaction = data?.reaction;
+  if (!reaction) return null;
+
+  const emoji = reaction.emoji?.trim();
+  if (!emoji) return null;
+  if (typeof reaction.targetTimestamp !== 'number' || !Number.isFinite(reaction.targetTimestamp)) {
+    return null;
+  }
+  if (!envelope.sourceNumber) return null;
+
+  // Best-effort conversation key (1:1 with the reactor). Approval correlation
+  // keys on targetMessageId ↔ outbound.delivered.messageId, not conversationId.
+  return {
+    conversationId: `signal:${envelope.sourceNumber}`,
+    channelId: 'signal',
+    senderId: envelope.sourceNumber,
+    emoji,
+    targetMessageId: String(reaction.targetTimestamp),
+    metadata: {
+      sourceName: envelope.sourceName,
+      targetAuthor: reaction.targetAuthor,
+      isRemove: Boolean(reaction.isRemove),
+      signalTimestamp: envelope.timestamp,
     },
   };
 }

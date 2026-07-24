@@ -24,10 +24,9 @@ describe('outbound.delivered emission (#729)', () => {
     bus.subscribe('outbound.delivered', 'system', async (evt) => { captured.push(evt); });
     bus.subscribe('tool.result', 'system', async (evt) => { captured.push(evt); });
 
-    // Mock signal-cli RPC client — send resolves to undefined (success), listGroups
-    // returns empty array (used only for group sends, irrelevant for 1:1).
+    // Mock signal-cli RPC client — send resolves to the Signal timestamp (message id).
     const signalClient = {
-      send: vi.fn().mockResolvedValue(undefined),
+      send: vi.fn().mockResolvedValue('1700000000999'),
       listGroups: vi.fn().mockResolvedValue([]),
     } as unknown as SignalRpcClient;
 
@@ -126,6 +125,7 @@ describe('outbound.delivered emission (#729)', () => {
       content: 'audit emission test body',
       conversationId: 'signal:+15555550199',
       taskEventId: 'task-int-1',
+      messageId: '1700000000999',
     });
   });
 });

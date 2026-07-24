@@ -88,7 +88,11 @@ export interface SignalAttachment {
   size: number;
 }
 
-/** An emoji reaction to a previous message. We ignore these per spec (MVP). */
+/**
+ * An emoji reaction to a previous message.
+ * Normalized to `inbound.reaction` by the Signal adapter; emoji→intent mapping
+ * lives in dispatch/approval (#1479), never in the channel layer.
+ */
 export interface SignalReaction {
   emoji: string;
   /** E.164 number of the message author being reacted to */
