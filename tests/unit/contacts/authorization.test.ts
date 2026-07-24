@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { AuthorizationService } from '../../../src/contacts/authorization.js';
+import {
+  AuthorizationService,
+  summarizeAuthorizationDecision,
+  formatAuthorizationSubjectSummary,
+} from '../../../src/contacts/authorization.js';
 import type { AuthConfig, ContactTier } from '../../../src/contacts/types.js';
 
 const testConfig: AuthConfig = {
@@ -418,5 +422,63 @@ describe('AuthorizationService', () => {
     });
     expect(result.escalate).toContain('schedule_meetings');
     expect(result.trustBlocked).not.toContain('schedule_meetings');
+  });
+});
+
+describe('summarizeAuthorizationDecision', () => {
+  it('returns deny for Gate-1 deny-all', () => {
+    expect(summarizeAuthorizationDecision({
+      allowed: [],
+      denied: ['*'],
+      escalate: [],
+      channelTrust: 'low',
+      trustBlocked: [],
+    })).toBe('deny');
+  });
+
+  it('returns escalate when any permission needs CEO input', () => {
+    expect(summarizeAuthorizationDecision({
+      allowed: ['schedule_meetings'],
+      denied: ['send_on_behalf'],
+      escalate: ['book_travel'],
+      channelTrust: 'low',
+      trustBlocked: [],
+    })).toBe('escalate');
+  });
+
+  it('returns allow when nothing escalates', () => {
+    expect(summarizeAuthorizationDecision({
+      allowed: ['schedule_meetings'],
+      denied: ['send_on_behalf'],
+      escalate: [],
+      channelTrust: 'low',
+      trustBlocked: ['view_financial_reports'],
+    })).toBe('allow');
+  });
+});
+
+describe('formatAuthorizationSubjectSummary', () => {
+  it('formats Gate C and authorization summaries as human-readable strings', () => {
+    expect(formatAuthorizationSubjectSummary({
+      decision: 'escalate',
+      gate: 'gate_c',
+      contactId: 'c-1',
+      tier: 'known',
+      channel: 'email',
+      action: 'email-send',
+    })).toBe('Gate C escalate: skill email-send for contact c-1 tier=known on email');
+
+    expect(formatAuthorizationSubjectSummary({
+      decision: 'deny',
+      gate: 'authorization',
+      contactId: 'c-2',
+      role: 'cfo',
+      tier: 'unknown',
+      channel: 'email',
+      allowedCount: 0,
+      deniedCount: 1,
+      escalateCount: 0,
+      trustBlockedCount: 0,
+    })).toContain('Authorization deny: contact c-2 role=cfo tier=unknown on email');
   });
 });

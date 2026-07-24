@@ -198,6 +198,19 @@ describe('interpretEvent', () => {
     });
   });
 
+  it('maps authorization.decision to badge', () => {
+    const result = interpretEvent(row({
+      eventType: 'authorization.decision',
+      sourceLayer: 'dispatch',
+      payload: { subjectSummary: 'Authorization deny: contact c-1 tier=unknown on email' },
+    }));
+    expect(result).toMatchObject({
+      kind: 'badge',
+      badgeKind: 'authorization.decision',
+      label: 'Authorization deny: contact c-1 tier=unknown on email',
+    });
+  });
+
   it('maps autonomy.*_blocked events to badge', () => {
     for (const eventType of ['autonomy.tool_blocked', 'autonomy.send_blocked'] as const) {
       const result = interpretEvent(row({

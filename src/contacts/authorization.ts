@@ -194,3 +194,49 @@ export class AuthorizationService {
     };
   }
 }
+
+/**
+ * Collapse an AuthorizationResult into the primary audit decision for
+ * `authorization.decision` events (#1379).
+ *
+ * Precedence: Gate-1 / deny-all → deny; any permission needing CEO input →
+ * escalate; otherwise allow (individual denials and trust-blocks remain in the
+ * payload lists for detail).
+ */
+export function summarizeAuthorizationDecision(
+  result: AuthorizationResult,
+): 'allow' | 'deny' | 'escalate' {
+  if (result.denied.includes('*')) return 'deny';
+  if (result.escalate.length > 0) return 'escalate';
+  if (result.allowed.length === 0 && result.denied.length > 0) return 'deny';
+  return 'allow';
+}
+
+/** Human-readable one-liner for authorization.decision subjectSummary. */
+export function formatAuthorizationSubjectSummary(parts: {
+  decision: 'allow' | 'deny' | 'escalate';
+  gate: 'authorization' | 'gate_c';
+  contactId?: string;
+  role?: string | null;
+  tier: string;
+  channel?: string;
+  action?: string;
+  allowedCount?: number;
+  deniedCount?: number;
+  escalateCount?: number;
+  trustBlockedCount?: number;
+}): string {
+  const who = parts.contactId ? `contact ${parts.contactId}` : 'unresolved contact';
+  const role = parts.role ? ` role=${parts.role}` : '';
+  const channel = parts.channel ? ` on ${parts.channel}` : '';
+  if (parts.gate === 'gate_c') {
+    const action = parts.action ? ` skill ${parts.action}` : '';
+    return `Gate C ${parts.decision}:${action} for ${who} tier=${parts.tier}${channel}`;
+  }
+  const counts =
+    parts.allowedCount !== undefined
+      ? ` — ${parts.allowedCount} allowed, ${parts.deniedCount ?? 0} denied, ` +
+        `${parts.escalateCount ?? 0} escalate, ${parts.trustBlockedCount ?? 0} trust-blocked`
+      : '';
+  return `Authorization ${parts.decision}: ${who}${role} tier=${parts.tier}${channel}${counts}`;
+}

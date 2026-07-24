@@ -15,7 +15,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+<<<<<<< HEAD
 - **Operator home** — console `/` shows health, attention and activity cards plus a chat CTA. (#1375)
+=======
+- **`authorization.decision`** — audit-logs Gate-1/authz and Gate C allow/deny/escalate. (#1379)
+>>>>>>> b9651a35 (feat(audit): emit authorization.decision for Gate-1/authz and Gate C)
 - **`slack-send`** — coordinator-pinned skill for 1:1 Slack DMs via OutboundGateway. (#1526)
 - **SMS channel** — Telnyx office DID two-way text; medium-trust webhook inbound. (#1478)
 - **`OutboundSendRequest`** — new `sms` variant for Telnyx Messages API delivery (public API).

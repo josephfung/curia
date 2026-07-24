@@ -1602,6 +1602,43 @@ describe('autonomy gates', () => {
         'execution',
         expect.objectContaining({ type: 'autonomy.tool_blocked' }),
       );
+      // Gate C escalate still emits authorization.decision (#1379).
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({
+            decision: 'escalate',
+            gate: 'gate_c',
+            action: 'email-reply',
+            tier: 'unknown',
+          }),
+        }),
+      );
+    });
+
+    it('emits authorization.decision allow when Gate C permits the action', async () => {
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const { registry, layer } = makeLayerWithScore100(mockBus);
+      const handler = makeHandler('ok');
+      // trusted always allows reversible-external (medium) without consulting the judge.
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke('email-reply', {}, undefined, originatorMeta('trusted'));
+
+      expect(result.success).toBe(true);
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({
+            decision: 'allow',
+            gate: 'gate_c',
+            action: 'email-reply',
+            tier: 'trusted',
+          }),
+        }),
+      );
     });
 
     it('humanApproved bypasses Gate C', async () => {

@@ -1,17 +1,18 @@
-// Authorization check integration — service seam + dispatch audit events (#1382).
+// Authorization check integration — service seam + dispatch audit events (#1382 / #1379).
 //
-// "decision logged" here means dispatch-layer events the dispatcher actually publishes
-// (contact.resolved / contact.unknown / message.rejected). AuthorizationService.evaluate
-// is a pure function with no bus/logger — a dedicated authz-decision audit row is #1379.
+// AuthorizationService.evaluate stays pure; the dispatcher publishes authorization.decision
+// after resolution so every allow/deny/escalate snapshot lands in audit_log.
 
 import { it, expect, beforeAll, afterAll } from 'vitest';
 import { EventBus } from '../../../src/bus/bus.js';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
+import { AuditLogger } from '../../../src/audit/logger.js';
 import {
   createInboundMessage,
   type ContactResolvedEvent,
   type MessageRejectedEvent,
   type AgentTaskEvent,
+  type AuthorizationDecisionEvent,
 } from '../../../src/bus/events.js';
 import { AuthorizationService } from '../../../src/contacts/authorization.js';
 import { loadAuthConfig } from '../../../src/contacts/config-loader.js';
@@ -262,9 +263,7 @@ describeIf('Contact resolution: authorization check integration', () => {
     expect(b.authorization!.denied).toContain('*');
   });
 
-  it('dispatch audit: contact.resolved fires for known sender (authz-decision row is #1379)', async () => {
-    // AuthorizationService.evaluate cannot emit an audit row (#1379). The evidence
-    // we have today is the dispatch-layer contact.resolved event.
+  it('dispatch audit: authorization.decision flows through bus → audit_log (#1379)', async () => {
     const email = `authz-logged-${runId}@example.com`;
     const contact = await stack.contactService.createContact({
       displayName: `Authz Logged ${runId}`,
@@ -280,7 +279,12 @@ describeIf('Contact resolution: authorization check integration', () => {
       source: 'ceo_stated',
     });
 
-    const bus = new EventBus(stack.logger);
+    const auditLogger = new AuditLogger(stack.pool, stack.logger);
+    const bus = new EventBus(
+      stack.logger,
+      (event) => auditLogger.log(event),
+      (eventId) => auditLogger.markAcknowledged(eventId),
+    );
     const dispatcher = new Dispatcher({
       bus,
       logger: stack.logger,
@@ -290,23 +294,110 @@ describeIf('Contact resolution: authorization check integration', () => {
     dispatcher.register();
 
     const resolvedEvents: ContactResolvedEvent[] = [];
+    const authzEvents: AuthorizationDecisionEvent[] = [];
     const rejectedEvents: MessageRejectedEvent[] = [];
     const taskEvents: AgentTaskEvent[] = [];
     bus.subscribe('contact.resolved', 'system', (e) => { resolvedEvents.push(e as ContactResolvedEvent); });
+    bus.subscribe('authorization.decision', 'system', (e) => { authzEvents.push(e as AuthorizationDecisionEvent); });
     bus.subscribe('message.rejected', 'system', (e) => { rejectedEvents.push(e as MessageRejectedEvent); });
     bus.subscribe('agent.task', 'agent', (e) => { taskEvents.push(e as AgentTaskEvent); });
 
-    await bus.publish('channel', createInboundMessage({
+    const inbound = createInboundMessage({
       conversationId: `email:${email}:authz`,
       channelId: 'email',
       senderId: email,
       content: 'Request board pack',
-    }));
+    });
+    await bus.publish('channel', inbound);
 
     expect(resolvedEvents).toHaveLength(1);
     expect(resolvedEvents[0]!.payload.contactId).toBe(contact.id);
     expect(resolvedEvents[0]!.payload.role).toBe('cfo');
     expect(rejectedEvents).toHaveLength(0);
     expect(taskEvents).toHaveLength(1);
+
+    // AuthorizationService path: CFO on email escalates (unlisted perms) and trust-blocks highs.
+    expect(authzEvents).toHaveLength(1);
+    const authz = authzEvents[0]!;
+    expect(authz.type).toBe('authorization.decision');
+    expect(authz.sourceLayer).toBe('dispatch');
+    expect(authz.parentEventId).toBe(inbound.id);
+    expect(authz.payload.gate).toBe('authorization');
+    expect(authz.payload.contactId).toBe(contact.id);
+    expect(authz.payload.tier).toBe('known');
+    expect(authz.payload.channel).toBe('email');
+    expect(authz.payload.decision).toBe('escalate');
+    expect(authz.payload.subjectSummary).toMatch(/Authorization escalate/);
+    expect(authz.payload.allowed).toEqual(
+      expect.arrayContaining(['schedule_meetings', 'request_action_items']),
+    );
+    expect(authz.payload.denied).toEqual(
+      expect.arrayContaining(['send_on_behalf', 'see_personal_calendar']),
+    );
+
+    // Write-ahead audit_log row is queryable and human-readable.
+    const auditRow = await stack.pool.query<{
+      event_type: string;
+      source_layer: string;
+      payload: Record<string, unknown>;
+      acknowledged: boolean;
+    }>(
+      `SELECT event_type, source_layer, payload, acknowledged FROM audit_log WHERE id = $1`,
+      [authz.id],
+    );
+    expect(auditRow.rows).toHaveLength(1);
+    expect(auditRow.rows[0]!.event_type).toBe('authorization.decision');
+    expect(auditRow.rows[0]!.source_layer).toBe('dispatch');
+    expect(auditRow.rows[0]!.acknowledged).toBe(true);
+    expect(auditRow.rows[0]!.payload['decision']).toBe('escalate');
+    expect(auditRow.rows[0]!.payload['subjectSummary']).toEqual(
+      expect.stringContaining('Authorization escalate'),
+    );
+    expect(auditRow.rows[0]!.payload['contactId']).toBe(contact.id);
+  });
+
+  it('dispatch audit: Gate-1 deny publishes authorization.decision deny', async () => {
+    const email = `authz-gate1-audit-${runId}@example.com`;
+    const contact = await stack.contactService.createContact({
+      displayName: `Gate1 Audit ${runId}`,
+      role: 'cfo',
+      source: 'ceo_stated',
+      tier: 'unknown',
+    });
+    stack.trackContact(contact.id, contact.kgNodeId);
+    await stack.contactService.linkIdentity({
+      contactId: contact.id,
+      channel: 'email',
+      channelIdentifier: email,
+      source: 'ceo_stated',
+    });
+
+    const bus = new EventBus(stack.logger);
+    const dispatcher = new Dispatcher({
+      bus,
+      logger: stack.logger,
+      contactResolver: stack.resolver,
+      // allow so the message reaches authz emit before unknown-sender hold/reject.
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
+    });
+    dispatcher.register();
+
+    const authzEvents: AuthorizationDecisionEvent[] = [];
+    bus.subscribe('authorization.decision', 'system', (e) => {
+      authzEvents.push(e as AuthorizationDecisionEvent);
+    });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: `email:${email}:gate1`,
+      channelId: 'email',
+      senderId: email,
+      content: 'hello',
+    }));
+
+    expect(authzEvents).toHaveLength(1);
+    expect(authzEvents[0]!.payload.decision).toBe('deny');
+    expect(authzEvents[0]!.payload.denied).toContain('*');
+    expect(authzEvents[0]!.payload.tier).toBe('unknown');
+    expect(authzEvents[0]!.payload.subjectSummary).toMatch(/Authorization deny/);
   });
 });

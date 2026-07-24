@@ -158,6 +158,14 @@ export function interpretEvent(row: AuditEventRow): SceneDirective | SceneDirect
         label: payloadString(payload, 'subjectSummary') ?? 'Human decision',
       };
 
+    case 'authorization.decision':
+      return {
+        ...base,
+        kind: 'badge',
+        badgeKind: 'authorization.decision',
+        label: payloadString(payload, 'subjectSummary') ?? 'Authorization decision',
+      };
+
     default:
       if (isAutonomyBlockedEvent(row.eventType)) {
         return {

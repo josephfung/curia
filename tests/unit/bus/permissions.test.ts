@@ -150,4 +150,21 @@ describe('Bus Permissions', () => {
     expect(canPublish('system', 'human.decision')).toBe(true);
     expect(canSubscribe('system', 'human.decision')).toBe(true);
   });
+
+  // authorization.decision — #1379, dispatch (AuthorizationService) + execution (Gate C)
+
+  it('dispatch and execution layers can publish authorization.decision', () => {
+    expect(canPublish('dispatch', 'authorization.decision')).toBe(true);
+    expect(canPublish('execution', 'authorization.decision')).toBe(true);
+  });
+
+  it('agent and channel layers cannot publish authorization.decision', () => {
+    expect(canPublish('agent', 'authorization.decision')).toBe(false);
+    expect(canPublish('channel', 'authorization.decision')).toBe(false);
+  });
+
+  it('system layer can publish and subscribe to authorization.decision', () => {
+    expect(canPublish('system', 'authorization.decision')).toBe(true);
+    expect(canSubscribe('system', 'authorization.decision')).toBe(true);
+  });
 });

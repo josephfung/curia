@@ -1,8 +1,12 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
+import {
+  summarizeAuthorizationDecision,
+  formatAuthorizationSubjectSummary,
+} from '../contacts/authorization.js';
 import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator } from '../contacts/types.js';
 import { isAutomatedKind } from '../contacts/types.js';
 import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
@@ -320,6 +324,47 @@ export class Dispatcher {
               channelIdentifier: payload.senderId,
               parentEventId: event.id,
             }));
+
+            // Audit AuthorizationService.evaluate (Gate-1 + three-layer). The service
+            // itself stays pure; the dispatcher owns bus access (#1379).
+            if (senderContext.authorization) {
+              const auth = senderContext.authorization;
+              const decision = summarizeAuthorizationDecision(auth);
+              try {
+                await this.bus.publish('dispatch', createAuthorizationDecision({
+                  decision,
+                  gate: 'authorization',
+                  contactId: senderContext.contactId,
+                  role: senderContext.role,
+                  tier: senderContext.tier,
+                  channel: payload.channelId,
+                  channelTrust: auth.channelTrust,
+                  allowed: auth.allowed,
+                  denied: auth.denied,
+                  escalate: auth.escalate,
+                  trustBlocked: auth.trustBlocked,
+                  subjectSummary: formatAuthorizationSubjectSummary({
+                    decision,
+                    gate: 'authorization',
+                    contactId: senderContext.contactId,
+                    role: senderContext.role,
+                    tier: senderContext.tier,
+                    channel: payload.channelId,
+                    allowedCount: auth.allowed.length,
+                    deniedCount: auth.denied.length,
+                    escalateCount: auth.escalate.length,
+                    trustBlockedCount: auth.trustBlocked.length,
+                  }),
+                  parentEventId: event.id,
+                  sourceLayer: 'dispatch',
+                }));
+              } catch (authzErr) {
+                this.logger.warn(
+                  { err: authzErr, contactId: senderContext.contactId },
+                  'Failed to publish authorization.decision — continuing (non-fatal)',
+                );
+              }
+            }
 
             // Auto-elevation paths 2 and 3 — skip blocked contacts entirely.
             if (senderContext.tier !== 'blocked') {
