@@ -1,7 +1,8 @@
 // ActivityFeed — "what's been happening?": recent events from the interpreted
-// Ant Farm timeline (GET /api/antfarm/timeline). The timeline returns scene
-// directives, not raw audit rows (the only console-facing activity endpoint
-// today); each directive is mapped to a readable line, newest first.
+// Ant Farm timeline (GET /api/antfarm/timeline?from=<now-24h>&limit=20). The
+// timeline returns scene directives, not raw audit rows (the only console-facing
+// activity endpoint today); each directive is mapped to a readable line, newest
+// first. The from= scope is required by assertTimelineScope.
 
 import { fetchActivity } from './dashboard-utils.js';
 import { useAsyncData } from './useAsyncData.js';

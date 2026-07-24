@@ -265,6 +265,24 @@ describe('fetchActivity', () => {
     expect(lines.map(l => l.id)).toEqual(['b', 'a']); // newest (higher logicalTs) first
   });
 
+  it('scopes the request with a from= lookback so assertTimelineScope accepts it', async () => {
+    const fetchMock = mockFetch(200, { directives: [] });
+    vi.stubGlobal('fetch', fetchMock);
+    const before = Date.now() - 24 * 60 * 60 * 1000;
+    await fetchActivity();
+    const after = Date.now() - 24 * 60 * 60 * 1000;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url).toMatch(/^\/api\/antfarm\/timeline\?/);
+    const params = new URL(url, 'http://test').searchParams;
+    expect(params.get('limit')).toBe('20');
+    const fromMs = Date.parse(params.get('from')!);
+    expect(Number.isFinite(fromMs)).toBe(true);
+    // from should be ~now-24h, allowing for the call itself.
+    expect(fromMs).toBeGreaterThanOrEqual(before - 1000);
+    expect(fromMs).toBeLessThanOrEqual(after + 1000);
+  });
+
   it('throws when the 200 body is missing its directives array', async () => {
     vi.stubGlobal('fetch', mockFetch(200, {}));
     await expect(fetchActivity()).rejects.toThrow(/unexpected response/);
