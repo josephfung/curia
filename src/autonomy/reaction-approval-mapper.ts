@@ -195,7 +195,12 @@ export class ReactionApprovalMapper {
     parentEventId: string,
   ): Promise<void> {
     if (!row.payload) {
-      this.log.error({ rowId: row.id }, 'reaction-approval: cannot approve — null payload');
+      // A pending approval with no stored payload can't be re-executed. Rather
+      // than leave the row stuck in pending_approval forever (silent dead end),
+      // fail closed: resolve it as denied. The action never ran, so "denied"
+      // accurately reflects the outcome even though the principal reacted approve.
+      this.log.error({ rowId: row.id }, 'reaction-approval: cannot approve — null payload; failing closed to deny');
+      await this.deny(row, deciderId, channelId, parentEventId);
       return;
     }
 

@@ -211,6 +211,60 @@ describe('ReactionApprovalMapper', () => {
     );
   });
 
+  it('still resolves + publishes when re-execution fails (invoke returns success:false)', async () => {
+    // ExecutionLayer.invoke never throws — it returns { success: false } on
+    // failure. The row must still transition to approved, a child action_log
+    // row must record the failure, and the human.decision must still publish.
+    const row = makeRow();
+    actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(row);
+    executionLayer.invoke.mockResolvedValue({ success: false, error: 'boom' });
+
+    await mapper.handleReaction(createInboundReaction({
+      conversationId: 'slack:D123',
+      channelId: 'slack',
+      senderId: 'U_CEO',
+      emoji: 'thumbsup',
+      targetMessageId: '1710000000.000100',
+    }));
+
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'ceo');
+    expect(actionLogRepo.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'failure', parentActionId: 42 }),
+    );
+    expect(bus.publish).toHaveBeenCalledWith(
+      'dispatch',
+      expect.objectContaining({
+        type: 'human.decision',
+        payload: expect.objectContaining({ decision: 'approve' }),
+      }),
+    );
+  });
+
+  it('fails closed to deny when an approved row has a null payload', async () => {
+    // A pending approval with no stored payload can't be re-executed; approving
+    // must not leave the row stuck in pending_approval. It fails closed to deny.
+    const row = makeRow({ payload: null });
+    actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(row);
+
+    await mapper.handleReaction(createInboundReaction({
+      conversationId: 'slack:D123',
+      channelId: 'slack',
+      senderId: 'U_CEO',
+      emoji: 'thumbsup',
+      targetMessageId: '1710000000.000100',
+    }));
+
+    expect(executionLayer.invoke).not.toHaveBeenCalled();
+    expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'denied', 'ceo');
+    expect(bus.publish).toHaveBeenCalledWith(
+      'dispatch',
+      expect.objectContaining({
+        type: 'human.decision',
+        payload: expect.objectContaining({ decision: 'deny' }),
+      }),
+    );
+  });
+
   it('looks up binding before principal check; ignores non-principal on bound message', async () => {
     actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(makeRow());
 
