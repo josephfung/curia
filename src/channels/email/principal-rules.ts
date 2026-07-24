@@ -40,7 +40,14 @@ function parseEmailSendRecipients(input: Record<string, unknown>): string[] | nu
  */
 function extractEmailRecipients(request: unknown): ProjectedRecipient[] | null {
   if (!isEmailSendRequest(request)) return null;
-  return [request.to, ...(request.cc ?? [])]
+  // `isEmailSendRequest` only guards `to`/`body`; `cc` is unchecked. Reject any
+  // malformed `cc` (non-array throws at the spread; a string spreads into
+  // char-sized "recipients") so projection stays fail-closed (ADR-035).
+  const cc = request.cc;
+  if (cc !== undefined && (!Array.isArray(cc) || cc.some((r) => typeof r !== 'string'))) {
+    return null;
+  }
+  return [request.to, ...(cc ?? [])]
     .filter((e) => e.length > 0)
     .map((identifier) => ({ identifier, principalEligible: true }));
 }
