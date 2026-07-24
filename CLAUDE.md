@@ -145,7 +145,7 @@ third-party integration, a credential-requiring skill bundle, or a major skill
 that changes what a new user would want to configure — check whether the setup
 wizard catalog needs a matching entry:
 
-- The catalog lives in `skills/setup-status/catalog.yaml`. It is the canonical
+- The catalog lives in `skills/setup/tools/setup-status/catalog.yaml`. It is the canonical
   list of "what a new user sets up" and is owned by the setup-wizard agent, not
   core.
 - If your change adds a configurable capability, add a catalog entry with:
