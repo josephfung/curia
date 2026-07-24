@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SmsSendHandler } from '../../../../skills/sms-send/handler.js';
-import type { ToolContext } from '../../../../src/skills/types.js';
+import { SmsSendHandler } from './handler.js';
+import type { ToolContext } from '../../src/skills/types.js';
 import pino from 'pino';
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
@@ -16,9 +16,11 @@ describe('sms-send handler', () => {
   it('validates E.164 recipient and message', async () => {
     const handler = new SmsSendHandler();
     expect((await handler.execute(makeCtx({ input: { message: 'hi' } }))).success).toBe(false);
-    expect((await handler.execute(makeCtx({
+    const bad = await handler.execute(makeCtx({
       input: { recipient: '4155552671', message: 'hi' },
-    }))).error).toMatch(/E\.164/);
+    }));
+    expect(bad.success).toBe(false);
+    if (!bad.success) expect(bad.error).toMatch(/E\.164/);
   });
 
   it('dispatches via outboundGateway', async () => {

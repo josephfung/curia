@@ -162,6 +162,9 @@ describe('applyChannelVaultSecrets', () => {
       'channel.signal.socket_path',
       'channel.slack.app_token',
       'channel.slack.bot_token',
+      'channel.sms.api_key',
+      'channel.sms.from_number',
+      'channel.sms.webhook_public_key',
     ]);
     // No list() method should even be invoked (the fake doesn't have one).
     expect('list' in secrets).toBe(false);
