@@ -715,13 +715,24 @@ async function main(): Promise<void> {
   // CEO_PRIMARY_EMAIL had.
   const principalEmail: PrincipalEmailRef = { current: '' };
 
+  // Monotonic guard against overlapping refreshes (#1514). onIdentitiesChanged is
+  // fire-and-forget, so two mutations in quick succession (e.g. add + verify, or a
+  // merge racing a direct link) can start two refreshes; if their DB reads settle out
+  // of order the stale one would clobber the fresher state. Each refresh claims a
+  // generation and discards its result if a newer refresh has since started.
+  let refreshGeneration = 0;
+
   async function refreshPrincipalIdentities(): Promise<void> {
     if (!principalContact) {
       principalIdentities.length = 0;
       principalEmail.current = '';
       return;
     }
+    const myGeneration = ++refreshGeneration;
     const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
+    // A newer refresh started while this one awaited the DB — its result is fresher,
+    // so drop ours rather than overwrite the shared array/holder with a stale snapshot.
+    if (myGeneration !== refreshGeneration) return;
     const allIdentities = withIdentities?.identities ?? [];
     const next = allIdentities.filter((id) => id.verified && id.status === 'active');
     principalIdentities.length = 0;

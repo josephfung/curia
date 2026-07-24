@@ -961,15 +961,20 @@ export default function ContactsPage() {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
   }, [mobileOpen]);
 
-  const load = useCallback(async () => {
+  // Returns the freshly-fetched contacts (or null on failure) so callers can
+  // reconcile drawer state against the authoritative server response, not a
+  // stale pre-fetch closure.
+  const load = useCallback(async (): Promise<Contact[] | null> => {
     try {
       const res = await apiFetch('/api/kg/contacts');
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { contacts: Contact[] };
       setContacts(data.contacts);
+      return data.contacts;
     } catch (err) {
       console.error('[ContactsPage] failed to load contacts:', err);
       setLoadError(err instanceof Error ? err.message : 'Failed to load contacts');
+      return null;
     }
   }, []);
 
@@ -1053,11 +1058,16 @@ export default function ContactsPage() {
   }
 
   function handleMerged(primaryId: string, secondaryId: string) {
+    // Drop the merged-away secondary immediately for responsiveness.
     setContacts(prev => prev.filter(c => c.id !== secondaryId));
-    const primary = contacts.find(c => c.id === primaryId) ?? null;
-    setSelected(primary);
-    setDrawerMode(primary ? 'view' : null);
-    void load();
+    // The merge recomputes the golden record (displayName/tier/notes) onto the
+    // primary server-side, so the pre-merge `contacts` closure is stale. Reconcile
+    // `selected` against load()'s fresh response instead of the old snapshot.
+    void load().then(fresh => {
+      const primary = fresh?.find(c => c.id === primaryId) ?? null;
+      setSelected(primary);
+      setDrawerMode(primary ? 'view' : null);
+    });
   }
 
   function openView(contact: Contact) {
