@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Contact identity editing** — console + API add/verify/remove channel identities and merge lookalikes; binds principal Slack/Signal for outbound detection. (#1514)
+- **Contact identity editing** — console + API add/update/verify/remove channel identities and merge lookalikes; binds principal Slack/Signal for outbound detection. (#1514)
 - **Reaction approvals** — Slack/Signal 👍/👎 (incl. skin tones) resolve pending approvals; unrecognized principal reactions get a hint. (#1479)
 - **Imported Anthropic skills** — drop an unmodified `SKILL.md` + `references/` folder; discover/activate with inert scripts warned. (#1490)
 - **Skills-as-bundles** — `SKILL.md` + nested `tools/`; `pinned_skills` expands a bundle to its member tools + instructions; `skill_registry` table. Native bundles: email, ceo-inbox, contacts, autonomy, diagnostics, scheduler, web, memory, learning, context-bridge, executive-profile, setup. (#1489, #1494)

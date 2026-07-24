@@ -21,8 +21,17 @@ export default defineConfig({
   },
   server: {
     fs: {
-      // Permit resolving the shared linkable-channels module outside apps/console (#1514).
-      allow: [path.resolve(import.meta.dirname, '../..')],
+      // Serve only what the dev server actually needs from outside apps/console,
+      // instead of the whole monorepo root (which would expose repo-root secrets
+      // like .env via /@fs/) (#1514):
+      //   - the console project root itself (and its symlinked node_modules)
+      //   - the pnpm-hoisted dependency store at repo-root/node_modules
+      //   - the single shared module the console imports: src/contacts/linkable-channels.ts
+      allow: [
+        import.meta.dirname,
+        path.resolve(import.meta.dirname, '../../node_modules'),
+        path.resolve(import.meta.dirname, '../../src/contacts'),
+      ],
     },
     // In dev, proxy backend-served paths to the Fastify server on :3000.
     // This mirrors the production layout where Fastify serves everything from
