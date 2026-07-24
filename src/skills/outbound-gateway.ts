@@ -2351,15 +2351,16 @@ export class OutboundGateway {
     try {
       const { messageId } = await this.smsClient.sendSms({
         to: request.recipient,
-        from: this.smsClient.fromNumber,
         text: request.message,
       });
       this.log.info({ channel: 'sms', destinationType: '1:1' }, 'outbound-gateway: SMS sent successfully');
       return { success: true, messageId };
     } catch (err) {
       if (err instanceof TelnyxSendError && err.code === TELNYX_ERROR_OPTED_OUT) {
+        // No phoneSuffix — this file's convention (see dispatchSignal) keeps
+        // recipient number fragments out of the log stream.
         this.log.info(
-          { channel: 'sms', phoneSuffix: request.recipient.slice(-4) },
+          { channel: 'sms' },
           'outbound-gateway: SMS send blocked — recipient opted out at carrier (STOP)',
         );
         return { success: false, blockedReason: 'recipient opted out at carrier (STOP)' };

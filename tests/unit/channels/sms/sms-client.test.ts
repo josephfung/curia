@@ -22,7 +22,7 @@ describe('SmsClient', () => {
     });
 
     await expect(
-      client.sendSms({ to: '+14155552671', from: '+14155550000', text: 'hi' }),
+      client.sendSms({ to: '+14155552671', text: 'hi' }),
     ).rejects.toMatchObject({
       name: 'TelnyxSendError',
       code: TELNYX_ERROR_OPTED_OUT,
@@ -30,7 +30,7 @@ describe('SmsClient', () => {
     } satisfies Partial<TelnyxSendError>);
   });
 
-  it('returns messageId on success', async () => {
+  it('returns messageId on success and pins From to the configured office DID', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -46,7 +46,15 @@ describe('SmsClient', () => {
     });
 
     await expect(
-      client.sendSms({ to: '+14155552671', from: '+14155550000', text: 'hi' }),
+      client.sendSms({ to: '+14155552671', text: 'hi' }),
     ).resolves.toEqual({ messageId: 'msg_1' });
+
+    // The wire body must carry the configured office DID, not a caller value.
+    const body = JSON.parse((fetchImpl.mock.calls[0]![1] as { body: string }).body) as {
+      from: string;
+      to: string;
+    };
+    expect(body.from).toBe('+14155550000');
+    expect(body.to).toBe('+14155552671');
   });
 });

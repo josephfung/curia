@@ -71,9 +71,12 @@ export async function applyChannelVaultSecrets(
     resolve('channel.signal.socket_path', 'SIGNAL_SOCKET_PATH', config.signalSocketPath),
     resolve('channel.slack.bot_token', 'SLACK_BOT_TOKEN', config.slackBotToken),
     resolve('channel.slack.app_token', 'SLACK_APP_TOKEN', config.slackAppToken),
-    resolve('channel.sms.api_key', 'TELNYX_API_KEY', config.smsApiKey),
-    resolve('channel.sms.from_number', 'TELNYX_FROM_NUMBER', config.smsFromNumber),
-    resolve('channel.sms.webhook_public_key', 'TELNYX_PUBLIC_KEY', config.smsWebhookPublicKey),
+    // SMS is vault-only — no env fallback (unlike the legacy channels above). Telnyx
+    // credentials must come from the encrypted vault. Keeps the gate resolver
+    // (which reads catalog envFallback, absent for sms) in agreement with this overlay.
+    readVaultKey(secrets, 'channel.sms.api_key', logger),
+    readVaultKey(secrets, 'channel.sms.from_number', logger),
+    readVaultKey(secrets, 'channel.sms.webhook_public_key', logger),
   ]);
 
   config.nylasApiKey = nylasApiKey;

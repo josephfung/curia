@@ -91,7 +91,10 @@ export class SmsAdapter implements Channel {
     let envelope: TelnyxWebhookEnvelope;
     try {
       envelope = JSON.parse(rawBody.toString('utf8')) as TelnyxWebhookEnvelope;
-    } catch {
+    } catch (err) {
+      // Signature already verified above, so a malformed body signals a Telnyx
+      // format drift worth a trace — not silent.
+      this.log.warn({ err }, 'Telnyx SMS webhook body was not valid JSON');
       return { status: 400, body: { error: 'Invalid JSON' } };
     }
 
