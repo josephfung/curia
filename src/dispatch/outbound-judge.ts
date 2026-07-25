@@ -211,6 +211,13 @@ export class OutboundLlmJudge implements OutboundJudge {
         promptHash,
         responseHash,
         parentEventId: 'system',
+        archive: {
+          prompt: {
+            system: JUDGE_SYSTEM_PROMPT,
+            user: prompt,
+          },
+          response: { type: 'text', content: responseText },
+        },
       });
       await this.bus.publish('agent', event);
     } catch (err) {

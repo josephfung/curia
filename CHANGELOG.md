@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Audit log Phase 1** — structured columns, `seq`-ordered hash chain, `llm_call_archive` (kill-switch + TTL), `pnpm audit:verify`. (#1383)
 - **DB outage resilience** — `DATABASE_UNAVAILABLE` errors, pool timeouts, skill retry, CEO alert after 5 min. (#1381)
 - **Operator home** — console `/` shows health, attention and activity cards plus a chat CTA. (#1375)
 - **`authorization.decision`** — audit-logs Gate-1/authz and Gate C allow/deny/escalate. (#1379)
@@ -35,6 +36,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Audit hash chain** — order by monotonic `seq`; `timestamp` stays factual; Phase 1 integrity scope documented. (#1383, #1540)
 - **`ToolResult` / `ErrorType`** — optional failure `errorType`; new `DATABASE_UNAVAILABLE` (public API). (#1381)
 - **Spec 05** — documents in-operation DB handling; removes that Known Deficiency (#1381).
 - **Scheduled pin gaps** — unresolved pins log at error so monitoring catches blind runs. (#1501)
@@ -51,6 +53,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Audit migration 080** — empty `audit_log` no longer fails `setval` during migrate. (#1540)
+- **`audit` config schema** — `llmCallArchive` keys allowed in `default-config.schema.json`. (#1540)
+- **Audit hash chain** — `canonicalJson` round-trips Dates so verify matches write-time hashes. (#1540)
 - **Docs** — correct the setup-status catalog path to `skills/setup/tools/setup-status/catalog.yaml` (moved by skills-as-bundles).
 - **Bundling review fixes** — calendar risk/docs, manifest & registry-install correctness, skill-md booleans, tool-input shorthand (`string|null` + polymorphic `string|object|null`/`object[]|object` unions), and manifest output/description contracts synced to handlers. (#1489, #1499)
 - **Smoke harness** — expands `pinned_skills` bundles via `resolvePinnedSkills` like production. (#1489)

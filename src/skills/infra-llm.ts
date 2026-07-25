@@ -206,6 +206,12 @@ export class InfraLlmService {
         promptHash,
         responseHash,
         parentEventId: scope.taskEventId ?? 'system',
+        archive: {
+          prompt: image
+            ? { text: prompt, image: { mediaType: image.mediaType, base64: '[omitted from archive — binary]' } }
+            : { text: prompt },
+          response: { type: 'text', content: responseText },
+        },
       });
 
       await this.bus.publish('agent', event);

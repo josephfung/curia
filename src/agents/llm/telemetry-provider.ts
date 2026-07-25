@@ -108,6 +108,16 @@ export class TelemetryLlmProvider implements LLMProvider {
           promptHash,
           responseHash,
           parentEventId: 'system',
+          archive: {
+            prompt: {
+              messages: params.messages,
+              toolResults: params.toolResults ?? [],
+            },
+            response: response.type === 'text'
+              ? { type: 'text', content: response.content }
+              : { type: 'tool_use', toolCalls: response.toolCalls },
+            toolDefinitions: params.tools ?? [],
+          },
         });
 
         await this.bus.publish('agent', event);

@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { purgeExpiredLlmCallArchive } from '../audit/llm-call-archive.js';
 import type { EventBus } from '../bus/bus.js';
 import { createMemoryDecayWarning } from '../bus/events.js';
 import type { MemoryDecayWarningPayload } from '../bus/events.js';
@@ -68,6 +69,7 @@ export class DreamEngine {
   private scoringPassInFlight = false;
   private workingDocsRepo?: WorkingDocsRepo;
   private scratchTtlDays?: number;
+  private llmCallArchiveRetentionDays?: number;
 
   constructor(
     pool: Pool,
@@ -78,6 +80,8 @@ export class DreamEngine {
     workingMemory?: WorkingMemory,
     workingDocsRepo?: WorkingDocsRepo,
     scratchTtlDays?: number,
+    /** When set, purge llm_call_archive rows older than this many days each decay pass. */
+    llmCallArchiveRetentionDays?: number,
   ) {
     this.pool = pool;
     this.bus = bus;
@@ -87,6 +91,7 @@ export class DreamEngine {
     this.workingMemory = workingMemory;
     this.workingDocsRepo = workingDocsRepo;
     this.scratchTtlDays = scratchTtlDays;
+    this.llmCallArchiveRetentionDays = llmCallArchiveRetentionDays;
   }
 
   /**
@@ -224,6 +229,30 @@ export class DreamEngine {
             { err: purgeErr, scratchTtlDays: this.scratchTtlDays },
             'DreamEngine: scratch document purge failed — will retry on next pass. ' +
             'To check backlog: SELECT COUNT(*) FROM working_documents WHERE path LIKE \'/scratch/%\' AND archived_at IS NULL',
+          );
+        }
+      }
+
+      // Bound the plaintext llm_call_archive store (spec 10). Best-effort: a purge
+      // failure must not roll back committed decay state.
+      if (this.llmCallArchiveRetentionDays != null) {
+        try {
+          const purgedArchiveRows = await purgeExpiredLlmCallArchive(
+            this.pool,
+            this.llmCallArchiveRetentionDays,
+            this.logger,
+          );
+          this.logger.info(
+            {
+              purgedArchiveRows,
+              llmCallArchiveRetentionDays: this.llmCallArchiveRetentionDays,
+            },
+            'DreamEngine: llm_call_archive purge complete',
+          );
+        } catch (purgeErr) {
+          this.logger.error(
+            { err: purgeErr, llmCallArchiveRetentionDays: this.llmCallArchiveRetentionDays },
+            'DreamEngine: llm_call_archive purge failed — will retry on next pass',
           );
         }
       }

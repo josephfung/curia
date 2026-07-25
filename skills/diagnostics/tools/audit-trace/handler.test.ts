@@ -24,8 +24,16 @@ function row(id: string, parentEventId: string | null, tsIso: string, overrides?
     sourceLayer: 'agent',
     sourceId: 'coordinator',
     conversationId: 'conv-1',
+    taskId: null,
     parentEventId,
     payload: {},
+    action: null,
+    outcome: null,
+    targetType: null,
+    targetId: null,
+    initiatorType: null,
+    initiatorId: null,
+    entryHash: null,
     ...overrides,
   };
 }

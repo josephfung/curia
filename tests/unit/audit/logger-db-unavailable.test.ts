@@ -8,8 +8,10 @@ import { isDbUnavailableError } from '../../../src/db/resilience.js';
 describe('AuditLogger — database unavailable (#1381)', () => {
   it('fails fast on log() with classified DB outage (critical path)', async () => {
     const dbErr = Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' });
+    // Phase 1 hash-chain writes go through pool.connect() → transaction, not pool.query.
     const pool = {
-      query: vi.fn().mockRejectedValue(dbErr),
+      query: vi.fn(),
+      connect: vi.fn().mockRejectedValue(dbErr),
     } as unknown as DbPool;
 
     const logger = new AuditLogger(pool, createLogger('error'));
@@ -27,7 +29,8 @@ describe('AuditLogger — database unavailable (#1381)', () => {
       expect((err as { agentError?: { type: string } }).agentError?.type).toBe('DATABASE_UNAVAILABLE');
       return true;
     });
-    expect(pool.query).toHaveBeenCalledTimes(1);
+    expect(pool.connect).toHaveBeenCalledTimes(1);
+    expect(pool.query).not.toHaveBeenCalled();
   });
 
   it('retries markAcknowledged on transient DB blip (non-critical path)', async () => {

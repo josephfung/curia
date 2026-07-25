@@ -28,6 +28,7 @@ function makeAuditRow(overrides?: Partial<AuditLogRow>): AuditLogRow {
     sourceLayer: 'execution',
     sourceId: 'calendar',
     conversationId: 'conv-1',
+    taskId: null,
     parentEventId: null,
     payload: {
       toolName: 'calendar-respond-to-invite',
@@ -40,6 +41,13 @@ function makeAuditRow(overrides?: Partial<AuditLogRow>): AuditLogRow {
         },
       },
     },
+    action: null,
+    outcome: null,
+    targetType: null,
+    targetId: null,
+    initiatorType: null,
+    initiatorId: null,
+    entryHash: null,
     ...overrides,
   };
 }
@@ -103,6 +111,69 @@ describe('ActivityLogHandler', () => {
     expect(auditLogRepo.findToolResults).toHaveBeenCalledWith(expect.objectContaining({
       toolNames: ['calendar-respond-to-invite'],
     }));
+  });
+
+  it('prefers structured columns when present, falls back to payload when NULL', async () => {
+    const auditLogRepo = {
+      findToolResults: vi.fn().mockResolvedValue([
+        makeAuditRow({
+          action: 'execute',
+          outcome: 'success',
+          targetType: 'skill',
+          targetId: 'calendar-respond-to-invite',
+          initiatorType: 'agent',
+          initiatorId: 'calendar',
+          // payload toolName deliberately different — column should win
+          payload: {
+            toolName: 'wrong-from-payload',
+            result: {
+              success: true,
+              data: { response: 'accept', event: { title: 'From Columns' } },
+            },
+          },
+        }),
+        makeAuditRow({
+          id: 'audit-legacy',
+          action: null,
+          outcome: null,
+          targetType: null,
+          targetId: null,
+          initiatorType: null,
+          initiatorId: null,
+          payload: {
+            toolName: 'calendar-respond-to-invite',
+            result: {
+              success: true,
+              data: { response: 'decline', event: { title: 'From Payload' } },
+            },
+          },
+        }),
+      ]),
+    } as unknown as AuditLogRepo;
+
+    const handler = new ActivityLogHandler();
+    const result = await handler.execute(makeCtx({
+      auditLogRepo,
+      input: {
+        since: '2026-06-25T00:00:00.000Z',
+        tool_name: 'calendar-respond-to-invite',
+      },
+    }));
+
+    expect(result.success).toBe(true);
+    const data = (result as { success: true; data: { actions: Array<Record<string, unknown>> } }).data;
+    expect(data.actions).toHaveLength(2);
+    expect(data.actions[0]).toMatchObject({
+      tool: 'calendar-respond-to-invite',
+      target: 'accept — From Columns',
+      outcome: 'completed',
+      agent_id: 'calendar',
+    });
+    expect(data.actions[1]).toMatchObject({
+      tool: 'calendar-respond-to-invite',
+      target: 'decline — From Payload',
+      outcome: 'completed',
+    });
   });
 
   it('excludes non-recap skills by default', async () => {

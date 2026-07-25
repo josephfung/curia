@@ -307,9 +307,13 @@ async function main(): Promise<void> {
   // Uses node-pg-migrate's programmatic runner with the same DATABASE_URL.
   // This is safe for single-process deployments; node-pg-migrate acquires an
   // advisory lock to prevent concurrent migration runs.
+  //
+  // Migrations are mostly plain .sql; rare .js wrappers (e.g. 081) exist when
+  // pgm.noTransaction() is required (CREATE INDEX CONCURRENTLY). The runner
+  // loads every file in the directory — it does not filter by language.
   try {
     // Resolve from the project root (one level up from src/ or dist/) so the
-    // path works both in dev (tsx src/index.ts) and production (node dist/index.js).
+    // path works both in dev (tsx src/index.ts) and production (tsx dist/index.js).
     const migrationsDir = path.resolve(import.meta.dirname, '..', 'src', 'db', 'migrations');
     const applied = await runner({
       databaseUrl: config.databaseUrl,
@@ -359,7 +363,14 @@ async function main(): Promise<void> {
   // 3. Audit logger — must be ready before the bus starts accepting events.
   // The bus's write-ahead hook calls auditLogger.log() synchronously before
   // delivering to any subscriber, so this must exist when the bus is constructed.
-  const auditLogger = new AuditLogger(pool, logger);
+  const llmCallArchiveCfg = yamlConfig.audit?.llmCallArchive;
+  const auditLogger = new AuditLogger(pool, logger, {
+    llmCallArchiveEnabled: llmCallArchiveCfg?.enabled !== false,
+  });
+
+  // 3a. Confirm hash-chain schema + log head (spec 10). Chain state lives in the
+  // DB only — every write re-reads the head under the advisory lock.
+  await auditLogger.seedHashChain();
 
   // 3b. Startup scan — flag any events that were written but never acknowledged.
   // These indicate the process crashed between write-ahead and delivery on a
@@ -1810,6 +1821,7 @@ async function main(): Promise<void> {
   const scoringPass = new AutonomyScoringPass(actionLogRepo, autonomyService, scoringProvider, logger, scoringPassConfig);
   logger.info({ scoringPassConfig }, 'AutonomyScoringPass configured');
 
+  const llmCallArchiveRetentionDays = llmCallArchiveCfg?.hotRetentionDays ?? 90;
   const dreamEngine = new DreamEngine(
     pool,
     bus,
@@ -1819,12 +1831,15 @@ async function main(): Promise<void> {
     memory,
     workingDocsRepo,
     yamlConfig.documentWorkspace?.scratchTtlDays ?? DEFAULT_SCRATCH_DOC_TTL_DAYS,
+    llmCallArchiveRetentionDays,
   );
   logger.info(
     {
       decayConfig,
       scratchTtlDays: yamlConfig.documentWorkspace?.scratchTtlDays ?? DEFAULT_SCRATCH_DOC_TTL_DAYS,
       scratchTtlFromConfig: yamlConfig.documentWorkspace?.scratchTtlDays !== undefined,
+      llmCallArchiveEnabled: llmCallArchiveCfg?.enabled !== false,
+      llmCallArchiveRetentionDays,
     },
     'DreamEngine configured',
   );

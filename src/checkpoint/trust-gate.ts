@@ -29,6 +29,11 @@ export type NoExternalOriginator = 'none';
 /**
  * Load the tier of the first external contact who originated an agent.task in this
  * conversation. Returns 'none' when every task is principal/system/agent-originated.
+ *
+ * Spec 10 maps every `agent.task` row's structured initiator to `system`/`dispatch`
+ * (originator detail stays in `payload.metadata.originator`). So this query always
+ * uses the payload path for Phase 1 + pre-hardening rows — there is no structured
+ * `initiator_type = 'human'` shortcut for agent.task. Uses idx_audit_conversation.
  */
 export async function loadFirstExternalOriginatorTier(
   pool: DbPool,

@@ -1,6 +1,8 @@
 // audit-log-repo.ts — read-only queries against the append-only audit_log table.
 //
 // Skills must not access the pool directly; this repo is the sanctioned read path.
+// Phase 1 (#1383): exposes structured columns and filter dimensions; historical
+// rows have NULL columns and readers must fall back to payload.
 
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
@@ -13,8 +15,18 @@ export interface AuditLogRow {
   sourceLayer: string;
   sourceId: string;
   conversationId: string | null;
+  /** Populated when the writer set the task_id column; null on legacy rows. */
+  taskId: string | null;
   parentEventId: string | null;
   payload: Record<string, unknown>;
+  /** Structured columns — null on pre-hardening rows (migration 078). */
+  action: string | null;
+  outcome: string | null;
+  targetType: string | null;
+  targetId: string | null;
+  initiatorType: string | null;
+  initiatorId: string | null;
+  entryHash: string | null;
 }
 
 export interface ToolResultAuditQuery {
@@ -30,6 +42,11 @@ export interface TimelineAuditQuery {
   to?: Date;
   conversationId?: string;
   taskId?: string;
+  outcome?: string;
+  targetType?: string;
+  targetId?: string;
+  initiatorType?: string;
+  initiatorId?: string;
   limit?: number;
   /**
    * Keyset cursor — fetch rows strictly after this (timestamp, id) pair.
@@ -54,17 +71,30 @@ export interface TimelinePage {
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 
+/** Columns selected by every read path — keep in sync with {@link mapRow}. */
+const SELECT_COLUMNS = `id, timestamp, event_type, source_layer, source_id,
+              conversation_id, task_id, parent_event_id, payload,
+              action, outcome, target_type, target_id,
+              initiator_type, initiator_id, entry_hash`;
+
 function assertTimelineScope(query: TimelineAuditQuery): void {
-  if (!query.from && !query.to && !query.conversationId && !query.taskId) {
+  if (
+    !query.from && !query.to && !query.conversationId && !query.taskId
+    && !query.outcome && !query.targetType && !query.targetId
+    && !query.initiatorType && !query.initiatorId
+  ) {
     throw new Error(
-      'findTimeline requires at least one scope filter: from, to, conversationId, or taskId',
+      'findTimeline requires at least one scope filter: from, to, conversationId, taskId, outcome, targetType/targetId, or initiatorType/initiatorId',
     );
   }
 }
 
-/** Uses idx_audit_log_payload_task_id — expression must match the migration exactly. */
-function payloadTaskIdCondition(paramIndex: number): string {
-  return `payload->>'taskId' = $${paramIndex}`;
+/**
+ * Match task_id column when populated; fall back to payload->>'taskId' for
+ * legacy rows that never got the column filled (index 071 still covers those).
+ */
+function taskIdCondition(paramIndex: number): string {
+  return `(task_id = $${paramIndex} OR (task_id IS NULL AND payload->>'taskId' = $${paramIndex}))`;
 }
 
 function applyTimelineFilters(
@@ -86,7 +116,27 @@ function applyTimelineFilters(
   }
   if (query.taskId) {
     params.push(query.taskId);
-    conditions.push(payloadTaskIdCondition(params.length));
+    conditions.push(taskIdCondition(params.length));
+  }
+  if (query.outcome) {
+    params.push(query.outcome);
+    conditions.push(`outcome = $${params.length}`);
+  }
+  if (query.targetType) {
+    params.push(query.targetType);
+    conditions.push(`target_type = $${params.length}`);
+  }
+  if (query.targetId) {
+    params.push(query.targetId);
+    conditions.push(`target_id = $${params.length}`);
+  }
+  if (query.initiatorType) {
+    params.push(query.initiatorType);
+    conditions.push(`initiator_type = $${params.length}`);
+  }
+  if (query.initiatorId) {
+    params.push(query.initiatorId);
+    conditions.push(`initiator_id = $${params.length}`);
   }
   if (query.after) {
     params.push(query.after.timestamp);
@@ -128,8 +178,11 @@ export class AuditLogRepo {
     let skillFilter = '';
     if (query.toolNames && query.toolNames.length > 0) {
       params.push(query.toolNames);
-      // Historical rows store the atom name as skillName; post-rename as toolName.
-      skillFilter = `AND COALESCE(payload->>'toolName', payload->>'skillName') = ANY($${params.length}::text[])`;
+      // Prefer structured target_id (Phase 1); fall back to payload dual vocabulary.
+      skillFilter = `AND (
+        (target_type = 'skill' AND target_id = ANY($${params.length}::text[]))
+        OR (target_id IS NULL AND COALESCE(payload->>'toolName', payload->>'skillName') = ANY($${params.length}::text[]))
+      )`;
     }
     let agentFilter = '';
     if (query.agentId) {
@@ -139,8 +192,7 @@ export class AuditLogRepo {
     params.push(limit);
 
     const result = await this.pool.query(
-      `SELECT id, timestamp, event_type, source_layer, source_id,
-              conversation_id, parent_event_id, payload
+      `SELECT ${SELECT_COLUMNS}
        FROM audit_log
        WHERE timestamp >= $1
          AND timestamp < $2
@@ -178,8 +230,7 @@ export class AuditLogRepo {
     const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
     const result = await this.pool.query(
-      `SELECT id, timestamp, event_type, source_layer, source_id,
-              conversation_id, parent_event_id, payload
+      `SELECT ${SELECT_COLUMNS}
        FROM audit_log
        ${whereClause}
        ORDER BY timestamp ASC, id ASC
@@ -220,8 +271,7 @@ export class AuditLogRepo {
     params.push(limit + 1);
 
     const result = await this.pool.query(
-      `SELECT id, timestamp, event_type, source_layer, source_id,
-              conversation_id, parent_event_id, payload
+      `SELECT ${SELECT_COLUMNS}
        FROM audit_log
        WHERE ${conditions.join(' AND ')}
        ORDER BY timestamp ASC, id ASC
@@ -244,8 +294,7 @@ export class AuditLogRepo {
    */
   async findById(id: string): Promise<AuditLogRow | null> {
     const result = await this.pool.query(
-      `SELECT id, timestamp, event_type, source_layer, source_id,
-              conversation_id, parent_event_id, payload
+      `SELECT ${SELECT_COLUMNS}
        FROM audit_log
        WHERE id = $1`,
       [id],
@@ -263,8 +312,7 @@ export class AuditLogRepo {
   async findChildren(parentEventId: string, options: { limit?: number } = {}): Promise<AuditLogRow[]> {
     const limit = Math.min(Math.max(options.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
     const result = await this.pool.query(
-      `SELECT id, timestamp, event_type, source_layer, source_id,
-              conversation_id, parent_event_id, payload
+      `SELECT ${SELECT_COLUMNS}
        FROM audit_log
        WHERE parent_event_id = $1
        ORDER BY timestamp ASC, id ASC
@@ -297,8 +345,7 @@ export class AuditLogRepo {
     params.push(limit);
 
     const result = await this.pool.query(
-      `SELECT id, timestamp, event_type, source_layer, source_id,
-              conversation_id, parent_event_id, payload
+      `SELECT ${SELECT_COLUMNS}
        FROM audit_log
        WHERE ${conditions.join(' AND ')}
        ORDER BY timestamp ASC, id ASC
@@ -318,9 +365,17 @@ function mapRow(row: Record<string, unknown>): AuditLogRow {
     sourceLayer: row.source_layer as string,
     sourceId: row.source_id as string,
     conversationId: (row.conversation_id as string | null) ?? null,
+    taskId: (row.task_id as string | null) ?? null,
     parentEventId: (row.parent_event_id as string | null) ?? null,
     payload: typeof payload === 'object' && payload !== null && !Array.isArray(payload)
       ? payload as Record<string, unknown>
       : {},
+    action: (row.action as string | null) ?? null,
+    outcome: (row.outcome as string | null) ?? null,
+    targetType: (row.target_type as string | null) ?? null,
+    targetId: (row.target_id as string | null) ?? null,
+    initiatorType: (row.initiator_type as string | null) ?? null,
+    initiatorId: (row.initiator_id as string | null) ?? null,
+    entryHash: (row.entry_hash as string | null) ?? null,
   };
 }

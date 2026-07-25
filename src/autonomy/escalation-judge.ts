@@ -291,6 +291,13 @@ export class EscalationJudge {
         promptHash: createHash('sha256').update(userPrompt).digest('hex'),
         responseHash: createHash('sha256').update(result.content).digest('hex'),
         parentEventId: 'system',
+        archive: {
+          prompt: {
+            system: kind === 'disclosure' ? DISCLOSURE_SYSTEM_PROMPT : ACTION_SYSTEM_PROMPT,
+            user: userPrompt,
+          },
+          response: { type: 'text', content: result.content },
+        },
       });
       await this.bus.publish('agent', event);
     } catch (err) {

@@ -470,6 +470,18 @@ export interface YamlConfig {
       errorRateThreshold?: number;
     };
   };
+  /**
+   * Audit log hardening (spec 10 / #1383). Controls the llm_call_archive side
+   * table — kill-switch + hot retention TTL for the plaintext prompt store.
+   */
+  audit?: {
+    llmCallArchive?: {
+      /** When false, skip archive writes even if llm.call carries archive content. Default true. */
+      enabled?: boolean;
+      /** Delete archive rows older than this many days (DreamEngine decay pass). Default 90. */
+      hotRetentionDays?: number;
+    };
+  };
   contact_creation_limits?: {
     /** Maximum new contacts created from a single email's participant list. Default: 10. */
     max_per_message?: number;
@@ -988,6 +1000,30 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       }
       if (autonomyScoring.errorRateThreshold !== undefined && (typeof autonomyScoring.errorRateThreshold !== 'number' || autonomyScoring.errorRateThreshold < 0 || autonomyScoring.errorRateThreshold > 1)) {
         throw new Error(`dreaming.autonomy_scoring.errorRateThreshold must be a number between 0 and 1, got: ${autonomyScoring.errorRateThreshold}`);
+      }
+    }
+  }
+
+  const audit = config.audit;
+  if (audit !== undefined) {
+    if (typeof audit !== 'object' || audit === null || Array.isArray(audit)) {
+      throw new Error('audit must be a YAML mapping');
+    }
+    const llmCallArchive = audit.llmCallArchive;
+    if (llmCallArchive !== undefined) {
+      if (typeof llmCallArchive !== 'object' || llmCallArchive === null || Array.isArray(llmCallArchive)) {
+        throw new Error('audit.llmCallArchive must be a YAML mapping');
+      }
+      if (llmCallArchive.enabled !== undefined && typeof llmCallArchive.enabled !== 'boolean') {
+        throw new Error(`audit.llmCallArchive.enabled must be a boolean, got: ${String(llmCallArchive.enabled)}`);
+      }
+      if (
+        llmCallArchive.hotRetentionDays !== undefined &&
+        (!Number.isInteger(llmCallArchive.hotRetentionDays) || llmCallArchive.hotRetentionDays < 1)
+      ) {
+        throw new Error(
+          `audit.llmCallArchive.hotRetentionDays must be a positive integer, got: ${llmCallArchive.hotRetentionDays}`,
+        );
       }
     }
   }
