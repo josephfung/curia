@@ -31,6 +31,25 @@ services:
       timeout: 5s
       retries: 5
 
+  livekit:
+    image: livekit/livekit-server:${LIVEKIT_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # Local/dev default. LiveKit --dev uses known credentials (devkey / secret);
+    # production must use real keys that match Settings -> Channels -> Voice.
+    #
+    # For config-file deploys, edit docker/livekit.yaml and override this command,
+    # for example with LIVEKIT_COMMAND="--config /etc/livekit.yaml" plus a bind
+    # mount of ./docker/livekit.yaml:/etc/livekit.yaml:ro in a local compose
+    # override.
+    command: ${LIVEKIT_COMMAND:---dev --bind 0.0.0.0}
+    ports:
+      # HTTP/WebSocket signaling. Use wss://<host> when served behind TLS.
+      - "${LIVEKIT_HTTP_PORT:-7880}:7880"
+      # WebRTC TCP fallback.
+      - "${LIVEKIT_RTC_TCP_PORT:-7881}:7881"
+      # WebRTC UDP. Open this on the host firewall/NAT.
+      - "${LIVEKIT_RTC_UDP_PORT:-7882}:7882/udp"
+
   curia:
     image: ghcr.io/josephfung/curia:${CURIA_IMAGE_TAG:-latest}
     # No explicit container_name — Docker Compose generates `<project>-curia-1`,

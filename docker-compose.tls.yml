@@ -2,6 +2,7 @@
 # (install.sh does this for you when you choose the public-domain option):
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
 # Requires DOMAIN set and an A record pointing at this host (ports 80/443 open).
+# LiveKit voice ports are not proxied here; expose/proxy 7880/7881/7882 separately.
 services:
   caddy:
     image: caddy:2-alpine
