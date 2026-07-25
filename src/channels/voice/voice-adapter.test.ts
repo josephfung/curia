@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import pino from 'pino';
 import type { EventBus } from '../../bus/bus.js';
 import type { BusEvent, EventType, Layer } from '../../bus/events.js';
@@ -6,8 +6,23 @@ import type { VoiceSessionStore } from './session-store.js';
 import type { VoiceRuntime } from './voice-runtime.js';
 import { VoiceSessionBridge } from './session-bridge.js';
 import { VoiceAdapter } from './voice-adapter.js';
+import { mintVoiceParticipantToken } from './livekit/token.js';
+
+// Mock JWT minting so tests don't need real keys and can simulate a signing
+// failure on the agent token (the second mint) independently of the principal.
+vi.mock('./livekit/token.js', () => ({
+  mintVoiceParticipantToken: vi.fn(async (_creds: unknown, opts: { identity: string }) => `token-${opts.identity}`),
+}));
 
 const logger = pino({ level: 'silent' });
+
+beforeEach(() => {
+  // Reset to the default resolving implementation before every test so a
+  // per-test rejection override does not leak into the next case.
+  vi.mocked(mintVoiceParticipantToken).mockImplementation(
+    async (_creds: unknown, opts: { identity: string }) => `token-${opts.identity}`,
+  );
+});
 
 function fakeBus() {
   const publish = vi.fn<(_layer: Layer, _event: BusEvent) => Promise<void>>().mockResolvedValue(undefined);
@@ -160,5 +175,47 @@ describe('VoiceAdapter', () => {
     if (event.type === 'voice.session.ended') {
       expect(event.payload.durationMs).toBe(5000);
     }
+  });
+
+  it('tears down the session when agent-token minting fails', async () => {
+    const bridge = new VoiceSessionBridge();
+    const { bus } = fakeBus();
+    const { store, create, endSession } = fakeStore();
+    const runtime = fakeRuntime();
+    // Principal mint succeeds; the agent mint (identity 'curia-agent') throws —
+    // by which point the row is persisted and voice.session.started is on the bus.
+    vi.mocked(mintVoiceParticipantToken).mockImplementation(async (_creds, opts) => {
+      if (opts.identity === 'curia-agent') throw new Error('jwt signing failed');
+      return `token-${opts.identity}`;
+    });
+
+    const adapter = new VoiceAdapter({
+      bus,
+      logger,
+      sessionBridge: bridge,
+      sessionStore: store,
+      livekitUrl: 'wss://voice.example.test',
+      livekitApiKey: 'devkey',
+      livekitApiSecret: 'devsecret',
+      voiceRuntime: runtime,
+    });
+
+    await adapter.start();
+    const result = await bridge.getHandler()!.createSession({
+      principalContactId: '11111111-1111-1111-1111-111111111111',
+    });
+
+    // Fail closed with 500; the runtime loop is never started; and the persisted
+    // session is ended (via runtime.endSession) so it can't linger in 'starting'.
+    expect(result.status).toBe(500);
+    expect(create).toHaveBeenCalledOnce();
+    // The session id is a randomUUID minted by the adapter — assert the same id
+    // that was persisted is the one torn down.
+    const createdId = create.mock.calls[0]![0].id;
+    expect(runtime.startSession).not.toHaveBeenCalled();
+    expect(runtime.endSession).toHaveBeenCalledWith(createdId, 'runtime_start_failed');
+    // Teardown is delegated to the runtime (which owns store.endSession + the
+    // ended event), so the adapter does not call the store directly here.
+    expect(endSession).not.toHaveBeenCalled();
   });
 });

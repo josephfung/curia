@@ -32,6 +32,11 @@ type ProviderWebSocketConstructor = new (url: string, protocols?: string[]) => P
 const WEBSOCKET_OPEN = 1;
 const WEBSOCKET_CLOSING = 2;
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen';
+// Bound the socket lifecycle waits so a stalled connect (no onopen) or a silent
+// drop after Finalize/CloseStream (no onclose) can't hang the awaiting caller
+// (VoiceRuntime.startSession / session teardown) forever.
+const CONNECT_TIMEOUT_MS = 10_000;
+const CLOSE_TIMEOUT_MS = 5_000;
 
 function getWebSocketConstructor(): ProviderWebSocketConstructor {
   const ctor = (globalThis as { WebSocket?: ProviderWebSocketConstructor }).WebSocket;
@@ -214,8 +219,18 @@ class DeepgramSttSession implements SttSession {
 
   private waitForClose(): Promise<void> {
     if (this.closed) return Promise.resolve();
+    // Resolve on onclose OR after CLOSE_TIMEOUT_MS, whichever comes first — a
+    // silent socket must not wedge teardown. Resolving (not rejecting) keeps
+    // hangup best-effort; the timer is cleared when the real close arrives.
     return new Promise(resolve => {
-      this.closeWaiters.push(resolve);
+      const timer = setTimeout(() => {
+        this.logger.warn('Deepgram STT socket did not close within timeout; continuing teardown');
+        resolve();
+      }, CLOSE_TIMEOUT_MS);
+      this.closeWaiters.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
     });
   }
 }
@@ -238,8 +253,23 @@ export class DeepgramSttProvider implements SpeechToTextProvider {
     return await new Promise<SttSession>((resolve, reject) => {
       let settled = false;
 
+      // Reject if the socket never reaches onopen (connect stalls) so the caller
+      // fails fast instead of awaiting a promise that never settles.
+      const connectTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try {
+          socket.close();
+        } catch (closeErr) {
+          // Best effort — the socket may already be in a terminal state.
+          this.logger.debug({ err: closeErr }, 'error closing Deepgram STT socket after connect timeout');
+        }
+        reject(new Error('Deepgram STT connection timed out'));
+      }, CONNECT_TIMEOUT_MS);
+
       socket.onopen = () => {
         settled = true;
+        clearTimeout(connectTimer);
         resolve(session);
       };
 
@@ -251,6 +281,7 @@ export class DeepgramSttProvider implements SpeechToTextProvider {
         const err = session.handleError(event);
         if (!settled) {
           settled = true;
+          clearTimeout(connectTimer);
           reject(err);
         }
       };
@@ -259,6 +290,7 @@ export class DeepgramSttProvider implements SpeechToTextProvider {
         session.handleClose(event);
         if (!settled) {
           settled = true;
+          clearTimeout(connectTimer);
           reject(new Error(closeDescription(event)));
         }
       };

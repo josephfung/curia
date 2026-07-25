@@ -22,9 +22,11 @@ export class SentenceChunker {
     this.buffer += delta;
 
     const chunks: string[] = [];
-    // Repeatedly slice off the earliest complete sentence. We match on a
-    // boundary that includes the trailing whitespace so "Mr. Smith" is not
-    // split — the space after the period is what commits the boundary.
+    // Repeatedly slice off the earliest complete sentence. This is a naive
+    // boundary: any terminator followed by whitespace commits a split, so
+    // abbreviations like "Mr. Smith" DO get split ("Mr." then "Smith ...").
+    // Acceptable for Phase 1 TTS chunking (worst case is a tiny extra pause);
+    // there is no abbreviation list.
     for (;;) {
       const match = SENTENCE_BOUNDARY.exec(this.buffer);
       if (!match || match.index === undefined) break;
