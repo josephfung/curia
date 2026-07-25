@@ -6,7 +6,11 @@ import type { Logger } from '../../logger.js';
 import type { Channel } from '../channel.js';
 import type { VoiceSessionBridge, VoiceSessionCreateRequest, VoiceSessionCreateResult } from './session-bridge.js';
 import type { VoiceSessionStore } from './session-store.js';
+import type { VoiceRuntime } from './voice-runtime.js';
 import { mintVoiceParticipantToken } from './livekit/token.js';
+
+/** LiveKit identity for the server-side agent participant that VoiceRuntime joins as. */
+const AGENT_IDENTITY = 'curia-agent';
 
 export interface VoiceAdapterConfig {
   bus: EventBus;
@@ -17,6 +21,10 @@ export interface VoiceAdapterConfig {
   livekitApiKey: string;
   livekitApiSecret: string;
   voiceModel?: string;
+  /** Live duplex runtime. When present, sessions run the STT→LLM→TTS cascade;
+   *  when absent (e.g. missing streaming provider), sessions still mint tokens
+   *  but no server-side turn loop runs. */
+  voiceRuntime?: VoiceRuntime;
 }
 
 export class VoiceAdapter implements Channel {
@@ -48,6 +56,9 @@ export class VoiceAdapter implements Channel {
 
   async stop(): Promise<void> {
     this.config.sessionBridge.setHandler(null);
+    if (this.config.voiceRuntime) {
+      await this.config.voiceRuntime.endAllSessions('adapter_stop');
+    }
     this.log.info('Voice adapter stopped');
   }
 
@@ -81,6 +92,29 @@ export class VoiceAdapter implements Channel {
       livekitRoom: session.livekitRoom,
     }));
 
+    // Kick off the server-side duplex loop. Mint a separate agent token and start
+    // the runtime WITHOUT awaiting its full lifetime — the HTTP response only needs
+    // the principal token so the console can join. Failures are tracked by ending
+    // the session (which publishes voice.session.ended) rather than blocking the caller.
+    if (this.config.voiceRuntime) {
+      const runtime = this.config.voiceRuntime;
+      const agentToken = await mintVoiceParticipantToken(
+        { apiKey: this.config.livekitApiKey, apiSecret: this.config.livekitApiSecret },
+        { roomName, identity: AGENT_IDENTITY, name: 'Curia' },
+      );
+      void runtime
+        .startSession({
+          sessionId: session.id,
+          conversationId: session.conversationId,
+          roomName: session.livekitRoom,
+          agentToken,
+        })
+        .catch(async err => {
+          this.log.error({ err, sessionId: session.id }, 'Voice runtime failed to start session');
+          await runtime.endSession(session.id, 'runtime_start_failed').catch(() => {});
+        });
+    }
+
     return {
       status: 201,
       body: {
@@ -94,6 +128,19 @@ export class VoiceAdapter implements Channel {
   }
 
   private async endSession(sessionId: string): Promise<VoiceSessionCreateResult> {
+    // When the runtime is present it owns teardown (transport/STT/TTS) and
+    // publishes voice.session.ended exactly once (store.endSession dedupes).
+    if (this.config.voiceRuntime) {
+      const ended = await this.config.voiceRuntime.endSession(sessionId, 'console_hangup');
+      if (!ended) {
+        return { status: 404, body: { error: 'Voice session not found' } };
+      }
+      return {
+        status: 200,
+        body: { ok: true, sessionId: ended.id, conversationId: ended.conversationId },
+      };
+    }
+
     const ended = await this.config.sessionStore.endSession(sessionId, 'console_hangup');
     if (!ended) {
       return { status: 404, body: { error: 'Voice session not found' } };

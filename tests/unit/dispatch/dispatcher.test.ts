@@ -365,6 +365,27 @@ describe('Dispatcher — messageTrustScore', () => {
     expect(tasks[0]!.payload.messageTrustScore).toBeCloseTo(0.56);
   });
 
+  it('does not create an agent.task for voice inbound.message (VoiceRuntime owns the turn)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const dispatcher = new Dispatcher({ bus, logger });
+    dispatcher.register();
+
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'voice:abc',
+      channelId: 'voice',
+      senderId: 'ceo-web-user',
+      content: 'What is on my calendar today?',
+    }));
+
+    // The dispatcher must skip agent dispatch so the spoken turn is not duplicated
+    // by a parallel text reply.
+    expect(tasks).toHaveLength(0);
+  });
+
   it('attaches messageTrustScore for unknown sender via email', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);

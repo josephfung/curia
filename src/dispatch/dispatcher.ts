@@ -248,6 +248,20 @@ export class Dispatcher {
   private async handleInbound(event: InboundMessageEvent): Promise<void> {
     const { payload } = event;
 
+    // Voice sessions own their own turn loop (VoiceTurnRunner), so the dispatcher
+    // must NOT convert a voice inbound.message into an agent.task — doing so would
+    // fire a second, parallel LLM reply (the text runtime) alongside the spoken
+    // one. The event still reaches the audit logger and any working-memory
+    // subscribers (which subscribe to inbound.message independently), so voice
+    // conversations remain visible for memory/audit (ADR-037 §6). (#1414)
+    if (payload.channelId === 'voice') {
+      this.logger.debug(
+        { conversationId: payload.conversationId },
+        'Voice inbound.message skipped for agent dispatch; VoiceRuntime owns the turn',
+      );
+      return;
+    }
+
     // Reject oversized messages before any processing — no routing, no contact
     // lookup, no LLM cost. The inbound.message event is already in the audit log
     // (write-ahead); this rejection creates a causal chain via parentEventId.

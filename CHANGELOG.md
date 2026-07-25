@@ -21,6 +21,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`LLMProvider.stream`** — Anthropic and OpenRouter now expose true streaming with tool events. (#1414)
 - **Speech providers** — STT/TTS interfaces with Deepgram and Cartesia adapters. (#1414)
 - **Voice channel (scaffold)** — toggleable catalog, sessions table, console session mint API. (#1414)
+- **VoiceRuntime** — duplex STT→LLM stream→TTS cascade with barge-in over LiveKit. (#1414)
 - **Audit log Phase 1** — structured columns, `seq`-ordered hash chain, `llm_call_archive` (kill-switch + TTL), `pnpm audit:verify`. (#1383)
 - **DB outage resilience** — `DATABASE_UNAVAILABLE` errors, pool timeouts, skill retry, CEO alert after 5 min. (#1381)
 - **Operator home** — console `/` shows health, attention and activity cards plus a chat CTA. (#1375)
