@@ -454,43 +454,65 @@ export class ExecutionLayer {
 
   /**
    * Publish authorization.decision for a Gate C allow/escalate outcome (#1379).
-   * Fire-and-forget — audit failure must not block the skill path.
+   * Awaits the write-ahead audit publish and fail-closes (returns a failed
+   * ToolResult) when it rejects so an allow cannot proceed without a durable
+   * authorization record. When no bus is wired, returns null (unchanged).
    */
-  private publishGateCDecision(
+  private async publishGateCDecision(
     decision: 'allow' | 'escalate',
     toolName: string,
     tier: ContactTier | 'unresolved',
     options: InvokeOptions | undefined,
     skillLogger: Logger,
-  ): void {
-    if (!this.bus) return;
-    const originator = options?.taskMetadata?.['originator'] as
-      | { contactId?: string; channel?: string }
-      | undefined;
-    const contactId = originator?.contactId;
-    const channel = originator?.channel ?? options?.channelId;
-    this.bus.publish('execution', createAuthorizationDecision({
-      decision,
-      gate: 'gate_c',
-      contactId,
-      tier,
-      channel,
-      action: toolName,
-      subjectSummary: formatAuthorizationSubjectSummary({
+  ): Promise<ToolResult | null> {
+    if (!this.bus) return null;
+
+    // Validate originator shape before narrowing (malformed metadata must not
+    // place non-strings into the audit payload). Cast through unknown after the
+    // runtime check per repo policy.
+    const rawOriginator: unknown = options?.taskMetadata?.['originator'];
+    let contactId: string | undefined;
+    let channel: string | undefined = options?.channelId;
+    if (rawOriginator !== null && typeof rawOriginator === 'object') {
+      const originator = rawOriginator as unknown as {
+        contactId?: unknown;
+        channel?: unknown;
+      };
+      if (typeof originator.contactId === 'string') contactId = originator.contactId;
+      if (typeof originator.channel === 'string') channel = originator.channel;
+    }
+
+    try {
+      await this.bus.publish('execution', createAuthorizationDecision({
         decision,
         gate: 'gate_c',
         contactId,
         tier,
         channel,
         action: toolName,
-      }),
-      agentId: options?.agentId,
-      taskEventId: options?.taskEventId,
-      parentEventId: options?.taskEventId ?? options?.parentEventId,
-      sourceLayer: 'execution',
-    })).catch((err) => {
-      skillLogger.warn({ err, toolName }, 'Gate C: failed to publish authorization.decision event');
-    });
+        subjectSummary: formatAuthorizationSubjectSummary({
+          decision,
+          gate: 'gate_c',
+          contactId,
+          tier,
+          channel,
+          action: toolName,
+        }),
+        agentId: options?.agentId,
+        taskEventId: options?.taskEventId,
+        parentEventId: options?.taskEventId ?? options?.parentEventId,
+        sourceLayer: 'execution',
+      }));
+      return null;
+    } catch (err) {
+      skillLogger.warn({ err, toolName }, 'Gate C: failed to publish authorization.decision event — failing closed');
+      return {
+        success: false,
+        error: this.wrapSkillError(
+          `Tool '${toolName}' blocked — failed to audit Gate C authorization.decision (fail-closed).`,
+        ),
+      };
+    }
   }
 
   /**
@@ -961,7 +983,10 @@ export class ExecutionLayer {
                 { toolName, initiatingTier, actionRisk: manifest.action_risk },
                 'autonomy gate: skill blocked — KG write from untrusted external originator (Gate C, #1290)',
               );
-              this.publishGateCDecision('escalate', toolName, initiatingTier, options, skillLogger);
+              const auditFail = await this.publishGateCDecision(
+                'escalate', toolName, initiatingTier, options, skillLogger,
+              );
+              if (auditFail) return auditFail;
               const gateCError = await this.buildTierGateError(
                 toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
               );
@@ -985,7 +1010,10 @@ export class ExecutionLayer {
                 { toolName, initiatingTier, actionClass, actionRisk: manifest.action_risk },
                 'autonomy gate: skill blocked — initiating contact tier below required minimum (Gate C)',
               );
-              this.publishGateCDecision('escalate', toolName, initiatingTier, options, skillLogger);
+              const auditFail = await this.publishGateCDecision(
+                'escalate', toolName, initiatingTier, options, skillLogger,
+              );
+              if (auditFail) return auditFail;
               const gateCError = await this.buildTierGateError(
                 toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
               );
@@ -994,7 +1022,10 @@ export class ExecutionLayer {
                 error: this.wrapSkillError(gateCError),
               };
             }
-            this.publishGateCDecision('allow', toolName, initiatingTier, options, skillLogger);
+            const allowAuditFail = await this.publishGateCDecision(
+              'allow', toolName, initiatingTier, options, skillLogger,
+            );
+            if (allowAuditFail) return allowAuditFail;
           } else if (
             manifest.action_risk !== 'none' &&
             isExternalOriginatorMissingTier(effectiveTaskMetadata)
@@ -1008,21 +1039,28 @@ export class ExecutionLayer {
             // originatorContactId is hoisted out as a flat field (in addition to the full
             // originator object) so operators can aggregate this warn by contact when sizing
             // how often the unstamped-tier gap is hit.
-            const failedOriginator = options?.taskMetadata?.['originator'] as
-              | { contactId?: string }
-              | undefined;
+            const rawFailedOriginator: unknown = options?.taskMetadata?.['originator'];
+            const failedOriginatorContactId =
+              rawFailedOriginator !== null &&
+              typeof rawFailedOriginator === 'object' &&
+              typeof (rawFailedOriginator as { contactId?: unknown }).contactId === 'string'
+                ? (rawFailedOriginator as { contactId: string }).contactId
+                : undefined;
             skillLogger.warn(
               {
                 toolName,
                 actionRisk: manifest.action_risk,
                 originator: options?.taskMetadata?.['originator'],
-                originatorContactId: failedOriginator?.contactId,
+                originatorContactId: failedOriginatorContactId,
                 agentId: options?.agentId,
                 taskEventId: options?.taskEventId,
               },
               'autonomy gate: skill blocked — external originator has no resolved tier, failing closed (Gate C, see #1059)',
             );
-            this.publishGateCDecision('escalate', toolName, 'unresolved', options, skillLogger);
+            const auditFail = await this.publishGateCDecision(
+              'escalate', toolName, 'unresolved', options, skillLogger,
+            );
+            if (auditFail) return auditFail;
             // No tier to feed buildTierGateError — pass an explicit sentinel label so the
             // escalation message and approval request read sensibly (tier 'unresolved').
             const gateCError = await this.buildTierGateError(

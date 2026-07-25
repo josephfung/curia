@@ -364,6 +364,39 @@ export class Dispatcher {
                   'Failed to publish authorization.decision — continuing (non-fatal)',
                 );
               }
+            } else if (senderContext.authorizationEvalFailed) {
+              // Evaluate threw — emit fail-closed deny so the gap is auditable (#1379).
+              try {
+                await this.bus.publish('dispatch', createAuthorizationDecision({
+                  decision: 'deny',
+                  gate: 'authorization',
+                  contactId: senderContext.contactId,
+                  role: senderContext.role,
+                  tier: senderContext.tier,
+                  channel: payload.channelId,
+                  denied: ['*'],
+                  subjectSummary:
+                    formatAuthorizationSubjectSummary({
+                      decision: 'deny',
+                      gate: 'authorization',
+                      contactId: senderContext.contactId,
+                      role: senderContext.role,
+                      tier: senderContext.tier,
+                      channel: payload.channelId,
+                      allowedCount: 0,
+                      deniedCount: 1,
+                      escalateCount: 0,
+                      trustBlockedCount: 0,
+                    }) + ' — evaluation failed (fail-closed)',
+                  parentEventId: event.id,
+                  sourceLayer: 'dispatch',
+                }));
+              } catch (authzErr) {
+                this.logger.warn(
+                  { err: authzErr, contactId: senderContext.contactId },
+                  'Failed to publish authorization.decision for eval failure — continuing (non-fatal)',
+                );
+              }
             }
 
             // Auto-elevation paths 2 and 3 — skip blocked contacts entirely.

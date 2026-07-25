@@ -138,8 +138,10 @@ export class ContactResolver {
     // Evaluate authorization if auth service is available.
     // Isolated in its own try/catch: a DB failure here must not lose the identity
     // resolution above. The coordinator still sees who the sender is — just without
-    // permission context (authorization=null).
+    // permission context (authorization=null). authorizationEvalFailed lets the
+    // dispatcher emit a fail-closed authorization.decision deny for audit (#1379).
     let authorization: AuthorizationResult | null = null;
+    let authorizationEvalFailed = false;
     if (this.authService) {
       try {
         const overrides = await this.contactService.getAuthOverrides(resolved.contactId);
@@ -153,6 +155,7 @@ export class ContactResolver {
         // Authorization eval failure should not lose identity resolution.
         // Log and continue with authorization=null — the coordinator still sees
         // who the sender is, just without permission context.
+        authorizationEvalFailed = true;
         this.logger.error(
           { err, contactId: resolved.contactId, errMessage: err instanceof Error ? err.message : String(err) },
           'Authorization evaluation failed — proceeding without auth context',
@@ -175,6 +178,7 @@ export class ContactResolver {
       kgNodeId: resolved.kgNodeId,
       knowledgeSummary,
       authorization,
+      ...(authorizationEvalFailed ? { authorizationEvalFailed: true as const } : {}),
       contactConfidence: resolved.contactConfidence,
       tier: resolved.tier,
       kind: resolved.kind,
