@@ -85,6 +85,7 @@ import { VoiceRuntime } from './channels/voice/voice-runtime.js';
 import { DeepgramSttProvider } from './channels/voice/speech/deepgram-stt.js';
 import { CartesiaTtsProvider } from './channels/voice/speech/cartesia-tts.js';
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
+import { deleteVoiceRoom } from './channels/voice/livekit/token.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
@@ -1812,8 +1813,19 @@ async function main(): Promise<void> {
         livekitUrl: voiceLivekitUrl,
         createTransport: ({ token, livekitUrl }) =>
           new LiveKitRoomSession({ url: livekitUrl, token, logger }),
-        // Phase 1: tools are late-bound via voiceRuntime.configureTools() after
-        // the coordinator is registered (ExecutionLayer + pinned tools exist then).
+        workingMemory: memory,
+        deleteRoom: async (roomName) => {
+          await deleteVoiceRoom(
+            {
+              livekitUrl: voiceLivekitUrl,
+              apiKey: config.voiceLivekitApiKey!,
+              apiSecret: config.voiceLivekitApiSecret!,
+            },
+            roomName,
+          );
+        },
+        // Tools are late-bound via voiceRuntime.configureTools() after the
+        // coordinator is registered (ExecutionLayer + pinned tools exist then).
       });
       logger.info({ voiceModel }, 'Voice runtime constructed (streaming provider available)');
     } else {
@@ -2467,9 +2479,16 @@ async function main(): Promise<void> {
             conversationId: ctx.conversationId,
             taskEventId: ctx.sessionId,
             liveTurn: true,
+            // Stamp a proper TaskOriginator so elevated skills / Gate C see a
+            // live principal turn (same shape the dispatcher uses for web chat).
             taskMetadata: {
-              originatorContactId: principalContact?.id,
-              originatorRole: 'ceo',
+              originator: {
+                contactId: principalContact?.id ?? 'ceo-web-user',
+                systemRole: 'principal',
+                channel: 'voice',
+                initiatedAt: new Date().toISOString(),
+                tier: principalContact?.tier ?? 'known',
+              },
               voiceSessionId: ctx.sessionId,
             },
           });

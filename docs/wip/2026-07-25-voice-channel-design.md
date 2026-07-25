@@ -207,19 +207,36 @@ for barge-in cancel.
 ### 3.7 VoiceRuntime lifecycle
 
 1. `POST /api/voice/sessions` → create room, DB row, mint tokens (principal +
-   agent identities), return `{ sessionId, livekitUrl, token, conversationId }`.
+   agent identities, **explicit 1h JWT TTL**), return
+   `{ sessionId, livekitUrl, token, conversationId }`.
 2. Console connects with LiveKit client SDK; publishes mic track.
 3. VoiceRuntime joins as agent participant; subscribes to principal audio.
 4. Pipe PCM → STT session; on **final + endpoint**, start `VoiceTurnRunner`.
 5. Runner: inject voice-mode system addendum; `stream()`; sentence-chunk text
    deltas → TTS → publish audio track. On `tool_use`, speak a short filler,
    invoke tool via execution path, continue stream with tool results.
+   Persist user + assistant turns to `WorkingMemory` for console history.
 6. **Barge-in:** interim user speech while TTS/LLM active →
    `tts.cancel` + abort LLM `AbortSignal` + drop uncommitted assistant audio
-   (~300ms stop target). Resume listening; discarded partial assistant text is
-   not published as a final assistant turn.
-7. Hang up / room empty → end session, publish `voice.session.ended`, stop
-   tracks, update DB.
+   (~300ms stop target), gated by `text.length >= 3` and
+   `confidence >= 0.4` (when reported) to reduce speaker-echo false triggers.
+7. Hang up / principal disconnect / room disconnect → end session, delete
+   LiveKit room, publish `voice.session.ended`, stop tracks, update DB.
+   Transport `onClose` covers ungraceful tab close without `DELETE`.
+
+### Phase 1 brain (explicit non-goal)
+
+Spoken turns deliberately do **not** load the coordinator's full system prompt,
+office persona injection, KG/entity-context enrichment, or DB-backed working
+memory into the LLM context. The model sees the voice addendum, last-N
+in-memory turns for this session, and coordinator pinned tools. Closing the
+gap with `AgentRuntime.handleTask` is a tracked follow-up.
+
+### Outbound judge parity
+
+TTS egress bypasses `OutboundGateway` / Stage-2 judge — **same as web chat**
+(principal console text never calls the gateway). External tool sends still
+go through the gateway.
 
 ### 3.8 Latency instrumentation
 

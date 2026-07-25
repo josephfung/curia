@@ -13,21 +13,29 @@
 // publishSampleRate (default 24k — Cartesia's default output). VoiceRuntime
 // reads these two rates and configures STT / TTS to match, so no resampling is
 // needed in this process.
+//
+// Disconnect: ParticipantDisconnected(principal) and Room Disconnected fire
+// onClose so VoiceRuntime can end the session when the console tab closes
+// without DELETE. Local disconnect() does not fire onClose.
 
 import type { Logger } from '../../../logger.js';
-import type { AudioTransport } from '../audio-transport.js';
+import type { AudioTransport, AudioTransportCloseReason } from '../audio-transport.js';
 import type { PcmFrame } from '../speech/types.js';
 // Type-only imports are erased at compile time and never load the native addon.
 import type {
   AudioFrame,
   AudioSource as LkAudioSource,
   LocalAudioTrack as LkLocalAudioTrack,
+  RemoteParticipant,
   RemoteTrack,
   Room as LkRoom,
 } from '@livekit/rtc-node';
 
 /** The LiveKit npm module shape we consume, resolved at runtime via dynamic import. */
 type RtcModule = typeof import('@livekit/rtc-node');
+
+/** Console principal identity minted by VoiceAdapter.createSession. */
+const PRINCIPAL_IDENTITY = 'principal';
 
 export interface LiveKitRoomSessionConfig {
   /** LiveKit WebSocket URL (wss://…). */
@@ -55,8 +63,10 @@ export class LiveKitRoomSession implements AudioTransport {
   private localTrack: LkLocalAudioTrack | null = null;
   private readonly readers = new Set<ReadableStreamDefaultReader<AudioFrame>>();
   private readonly remoteCallbacks: Array<(frame: PcmFrame) => void> = [];
+  private readonly closeCallbacks: Array<(reason: AudioTransportCloseReason) => void> = [];
   private connected = false;
   private disconnecting = false;
+  private closeEmitted = false;
 
   constructor(private readonly config: LiveKitRoomSessionConfig) {
     this.log = config.logger.child({ component: 'livekit-room-session' });
@@ -78,6 +88,20 @@ export class LiveKitRoomSession implements AudioTransport {
     }
   }
 
+  private emitClose(reason: AudioTransportCloseReason): void {
+    // Local disconnect() sets disconnecting first — never notify VoiceRuntime of
+    // our own teardown, or we'd recurse into endSession.
+    if (this.disconnecting || this.closeEmitted) return;
+    this.closeEmitted = true;
+    for (const cb of this.closeCallbacks) {
+      try {
+        cb(reason);
+      } catch (err) {
+        this.log.warn({ err, reason }, 'audio transport onClose callback threw');
+      }
+    }
+  }
+
   async connect(): Promise<void> {
     if (this.connected) return;
     const rtc = await this.loadRtc();
@@ -88,6 +112,19 @@ export class LiveKitRoomSession implements AudioTransport {
     room.on(rtc.RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
       if (track.kind !== rtc.TrackKind.KIND_AUDIO) return;
       this.startConsuming(rtc, track);
+    });
+
+    // Principal closed the console tab / lost WebRTC — tear the Curia session down
+    // so we don't leave STT sockets and an `active` voice_sessions row behind.
+    room.on(rtc.RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+      if (participant.identity === PRINCIPAL_IDENTITY) {
+        this.log.info({ identity: participant.identity }, 'Principal left LiveKit room');
+        this.emitClose('principal_disconnected');
+      }
+    });
+
+    room.on(rtc.RoomEvent.Disconnected, () => {
+      this.emitClose('room_disconnected');
     });
 
     await room.connect(this.config.url, this.config.token, {
@@ -157,6 +194,10 @@ export class LiveKitRoomSession implements AudioTransport {
 
   onRemoteAudio(cb: (frame: PcmFrame) => void): void {
     this.remoteCallbacks.push(cb);
+  }
+
+  onClose(cb: (reason: AudioTransportCloseReason) => void): void {
+    this.closeCallbacks.push(cb);
   }
 
   async publishAudio(frame: PcmFrame): Promise<void> {

@@ -16,6 +16,7 @@ import type { EventBus } from '../../bus/bus.js';
 import { createInboundMessage, createVoiceSessionEnded } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
 import type { LLMProvider, Message, ToolCall, ToolDefinition } from '../../agents/llm/provider.js';
+import type { WorkingMemory } from '../../memory/working-memory.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { AudioTransport } from './audio-transport.js';
 import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from './speech/types.js';
@@ -28,10 +29,21 @@ const DEFAULT_PUBLISH_SAMPLE_RATE = 24000;
 const DEFAULT_SENDER_ID = 'ceo-web-user';
 /** How many messages (user + assistant) of history to keep per session. */
 const MAX_HISTORY_MESSAGES = 8;
+/** Ignore tiny interim blobs (echo / noise) when deciding barge-in. */
+const BARGE_IN_MIN_CHARS = 3;
+/** Ignore low-confidence interims when the provider reports confidence. */
+const BARGE_IN_MIN_CONFIDENCE = 0.4;
+/** Agent id used when writing voice turns into working_memory (chat history). */
+const VOICE_HISTORY_AGENT_ID = 'coordinator';
 
 /**
  * Voice-mode system addendum. Keeps spoken replies short and free of markup that
  * makes no sense read aloud. Prepended as a system message on every turn.
+ *
+ * Phase 1 deliberate non-goal: this is NOT the coordinator's full system prompt /
+ * persona / KG enrichment / working-memory reload. Spoken turns are a slim
+ * Q&A loop (addendum + last N in-memory turns + tools). See ADR-037 Consequences
+ * and docs/wip/2026-07-25-voice-channel-design.md §3.7 / §"Phase 1 brain".
  */
 export const VOICE_SYSTEM_ADDENDUM =
   'You are speaking to the principal in a live voice call. Reply in a natural, ' +
@@ -61,6 +73,17 @@ export interface VoiceRuntimeConfig {
   voiceId?: string;
   /** Synthetic sender id for inbound.message (defaults to the console principal id). */
   senderId?: string;
+  /**
+   * Optional working-memory store so user + assistant transcripts appear in
+   * console chat history (same path as web chat). Spoken egress stays on TTS —
+   * this does not go through OutboundGateway (parity with web chat).
+   */
+  workingMemory?: WorkingMemory;
+  /**
+   * Best-effort LiveKit room delete after session end (invalidates leaked JWTs).
+   * Failures must not throw into hangup.
+   */
+  deleteRoom?: (roomName: string) => Promise<void>;
   /** Optional static tool set for voice turns. Prefer configureTools() post-boot. */
   tools?: ToolDefinition[];
   /** Optional per-turn tool resolver (takes precedence over `tools`). */
@@ -92,6 +115,7 @@ interface StartVoiceSessionParams {
 interface ActiveSession {
   sessionId: string;
   conversationId: string;
+  roomName: string;
   transport: AudioTransport;
   stt: SttSession;
   publishSampleRate: number;
@@ -167,6 +191,7 @@ export class VoiceRuntime {
     const session: ActiveSession = {
       sessionId: params.sessionId,
       conversationId: params.conversationId,
+      roomName: params.roomName,
       transport,
       stt,
       publishSampleRate,
@@ -188,6 +213,13 @@ export class VoiceRuntime {
       session.stt.sendAudio(frame);
     });
 
+    // Principal left / room dropped without DELETE — end the Curia session so
+    // STT sockets and voice_sessions rows are not left active.
+    transport.onClose(reason => {
+      this.log.info({ sessionId: params.sessionId, reason }, 'Audio transport closed; ending voice session');
+      void this.endSession(params.sessionId, reason);
+    });
+
     // Handle transcripts (interim → barge-in; final+endpoint → turn).
     stt.onTranscript(event => {
       this.handleTranscript(session, event);
@@ -203,8 +235,13 @@ export class VoiceRuntime {
     if (session.ending) return;
     const text = event.text.trim();
 
-    // Barge-in: any detected speech while the assistant is talking cancels it.
-    if (text.length > 0 && (session.llmActive || session.ttsActive)) {
+    // Barge-in: speech while the assistant talks cancels it. Gate on length +
+    // confidence so speaker echo / noise doesn't interrupt Curia mid-sentence.
+    if (
+      text.length >= BARGE_IN_MIN_CHARS
+      && (session.llmActive || session.ttsActive)
+      && (event.confidence === undefined || event.confidence >= BARGE_IN_MIN_CONFIDENCE)
+    ) {
       this.bargeIn(session);
     }
 
@@ -251,7 +288,7 @@ export class VoiceRuntime {
   private async runUserTurn(session: ActiveSession, utterance: string): Promise<void> {
     if (session.ending) return;
 
-    // Publish the final user transcript for memory / audit. The dispatcher skips
+    // Publish the final user transcript for bus audit. The dispatcher skips
     // agent.task creation for channelId 'voice' (VoiceRuntime owns the turn).
     try {
       await this.config.bus.publish(
@@ -265,6 +302,18 @@ export class VoiceRuntime {
       );
     } catch (err) {
       this.log.warn({ sessionId: session.sessionId, err }, 'failed to publish voice inbound.message');
+    }
+
+    // Persist user turn to working_memory so console history can show it.
+    if (this.config.workingMemory) {
+      try {
+        await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
+          role: 'user',
+          content: sanitizeOutput(utterance),
+        });
+      } catch (err) {
+        this.log.warn({ sessionId: session.sessionId, err }, 'failed to persist voice user turn to working memory');
+      }
     }
 
     // Flip DB status starting → active on the first real turn.
@@ -360,6 +409,19 @@ export class VoiceRuntime {
         if (session.history.length > MAX_HISTORY_MESSAGES) {
           session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
         }
+        // Persist assistant transcript so console history can show what was spoken.
+        // Spoken egress stays on TTS — we do not publish outbound.message (web chat
+        // also skips OutboundGateway for principal console replies).
+        if (this.config.workingMemory) {
+          try {
+            await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
+              role: 'assistant',
+              content: result.finalText,
+            });
+          } catch (err) {
+            this.log.warn({ sessionId: session.sessionId, err }, 'failed to persist voice assistant turn to working memory');
+          }
+        }
       }
     } catch (err) {
       this.log.warn({ sessionId: session.sessionId, err }, 'voice turn failed');
@@ -392,6 +454,15 @@ export class VoiceRuntime {
         await session.transport.disconnect();
       } catch (err) {
         this.log.warn({ sessionId, err }, 'error disconnecting transport');
+      }
+
+      // Invalidate the LiveKit room so a leaked JWT cannot rejoin after hangup.
+      if (this.config.deleteRoom) {
+        try {
+          await this.config.deleteRoom(session.roomName);
+        } catch (err) {
+          this.log.warn({ sessionId, roomName: session.roomName, err }, 'failed to delete LiveKit room after session end');
+        }
       }
     }
 

@@ -81,17 +81,39 @@ voice reuses that for session minting (and optional LiveKit webhooks).
 ## Consequences
 
 - Operators must run LiveKit with public IP / UDP / ICE correctly documented;
-  first-time WebRTC deploys will fail without that ops guide.
+  first-time WebRTC deploys will fail without that ops guide. **Never expose
+  LiveKit `--dev` (public `devkey`/`secret`) on a reachable interface** — mint
+  production keys and use `docker/livekit.yaml`.
 - Deepgram + Cartesia costs and rate limits become part of voice enablement;
   vault + setup catalog entry are required before the channel can be enabled.
+  **Privacy:** enabling voice means principal audio and transcripts leave the
+  host to Deepgram (STT) and Cartesia (TTS), plus the deploy's LLM provider.
 - Extending `LLMProvider` with `stream()` is a public API surface change
   (CHANGELOG must call it out); wrappers (`LLMProviderRouter`,
   `TelemetryLlmProvider`) must forward it.
 - Voice turns share coordinator tools but not the exact `AgentRuntime.handleTask`
   code path — drift risk is accepted and mitigated by reusing the same
   provider, tool definitions, and bus `tool.invoke` / autonomy checks where
-  practical. A later refactor may fold streaming into `AgentRuntime`.
+  practical. A later refactor may fold streaming into `AgentRuntime`
+  (tracked: #1550).
+- **Phase 1 voice "brain" is deliberately slim:** spoken turns receive the
+  voice-mode addendum + last-N in-memory turns + coordinator tools — **not**
+  the full coordinator system prompt, office persona injection, KG/entity
+  enrichment, or DB-backed working-memory reload. Sufficient for quick spoken
+  Q&A; closing the gap is a follow-up, not an accidental omission.
+- **Outbound judge parity with web chat:** spoken TTS bypasses
+  `OutboundGateway` / Stage-2 judge the same way principal console text does
+  (web chat never calls the gateway). External tool sends still go through
+  the gateway. Do not "fix" this by routing voice through the judge unless
+  web chat changes too.
+- LiveKit participant JWTs use an **explicit 1h TTL** (not the SDK 6h default);
+  rooms are deleted on session end so a leaked token cannot rejoin.
+- Ungraceful hangup (tab close without DELETE) is handled via LiveKit
+  `ParticipantDisconnected` / `Disconnected` → `VoiceRuntime.endSession`.
 - Phase 2 transports plug into `VoiceRuntime` without rewriting console
   WebRTC or the speech provider interfaces.
 - Lifting SMS’s webhook-bridge into a shared helper is optional; copy is fine
   if the session-mint shape differs enough.
+- **Version bump:** deferred until the channel is enabled/GA in a release cut;
+  this PR lands under `[Unreleased]` only (conscious decision — minor bump
+  policy still applies when cutting the release that ships voice).
