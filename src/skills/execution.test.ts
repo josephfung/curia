@@ -1641,6 +1641,57 @@ describe('autonomy gates', () => {
       );
     });
 
+    it('fail-closes when Gate C allow audit publish rejects', async () => {
+      const mockBus = {
+        publish: vi.fn().mockRejectedValue(new Error('audit write failed')),
+      } as unknown as EventBus;
+      const { registry, layer } = makeLayerWithScore100(mockBus);
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke('email-reply', {}, undefined, originatorMeta('trusted'));
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toMatch(/failed to audit Gate C authorization\.decision/);
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('omits non-string originator fields from authorization.decision payload', async () => {
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const { registry, layer } = makeLayerWithScore100(mockBus);
+      registry.register(makeRiskyManifest('email-reply', 'medium'), makeHandler('no'));
+
+      await layer.invoke('email-reply', {}, undefined, {
+        channelId: 'fallback-channel',
+        taskMetadata: {
+          originator: {
+            contactId: 123, // malformed — must not land in audit payload
+            systemRole: null,
+            channel: { nested: true },
+            initiatedAt: new Date().toISOString(),
+            tier: 'unknown',
+          },
+        },
+      });
+
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({
+            decision: 'escalate',
+            // contactId omitted (non-string); channel falls back to options.channelId
+            channel: 'fallback-channel',
+          }),
+        }),
+      );
+      const published = (mockBus.publish as ReturnType<typeof vi.fn>).mock.calls[0]![1] as {
+        payload: { contactId?: unknown };
+      };
+      expect(published.payload.contactId).toBeUndefined();
+    });
+
     it('humanApproved bypasses Gate C', async () => {
       const { registry, layer } = makeLayerWithScore100();
       const handler = makeHandler('ok');

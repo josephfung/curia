@@ -1,7 +1,8 @@
 // tests/unit/contacts/contact-resolver.test.ts
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import { ContactService } from '../../../src/contacts/contact-service.js';
+import type { AuthorizationService } from '../../../src/contacts/authorization.js';
 import { KnowledgeGraphStore } from '../../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../../src/memory/embedding.js';
 import { EntityMemory } from '../../../src/memory/entity-memory.js';
@@ -72,5 +73,38 @@ describe('ContactResolver', () => {
     if (result.resolved) {
       expect(result.knowledgeSummary).toContain('Q3 budget');
     }
+  });
+
+  it('sets authorizationEvalFailed when AuthorizationService.evaluate throws', async () => {
+    const contact = await contactService.createContact({
+      displayName: 'Eval Fail',
+      role: 'cfo',
+      source: 'test',
+      tier: 'known',
+    });
+    await contactService.linkIdentity({
+      contactId: contact.id,
+      channel: 'email',
+      channelIdentifier: 'eval-fail@acme.com',
+      source: 'ceo_stated',
+    });
+
+    const throwingAuth = {
+      evaluate: vi.fn(() => {
+        throw new Error('auth boom');
+      }),
+    } as unknown as AuthorizationService;
+    const withAuth = new ContactResolver(
+      contactService,
+      entityMemory,
+      throwingAuth,
+      createLogger('error'),
+    );
+
+    const result = await withAuth.resolve('email', 'eval-fail@acme.com');
+    expect(result.resolved).toBe(true);
+    if (!result.resolved) return;
+    expect(result.authorization).toBeNull();
+    expect(result.authorizationEvalFailed).toBe(true);
   });
 });

@@ -15,6 +15,7 @@ import {
   type AuthorizationDecisionEvent,
 } from '../../../src/bus/events.js';
 import { AuthorizationService } from '../../../src/contacts/authorization.js';
+import { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import { loadAuthConfig } from '../../../src/contacts/config-loader.js';
 import type { AuthConfig } from '../../../src/contacts/types.js';
 import {
@@ -399,5 +400,61 @@ describeIf('Contact resolution: authorization check integration', () => {
     expect(authzEvents[0]!.payload.denied).toContain('*');
     expect(authzEvents[0]!.payload.tier).toBe('unknown');
     expect(authzEvents[0]!.payload.subjectSummary).toMatch(/Authorization deny/);
+  });
+
+  it('dispatch audit: evaluation failure emits fail-closed authorization.decision deny', async () => {
+    const email = `authz-eval-fail-${runId}@example.com`;
+    const contact = await stack.contactService.createContact({
+      displayName: `Eval Fail ${runId}`,
+      role: 'cfo',
+      source: 'ceo_stated',
+      tier: 'known',
+    });
+    stack.trackContact(contact.id, contact.kgNodeId);
+    await stack.contactService.linkIdentity({
+      contactId: contact.id,
+      channel: 'email',
+      channelIdentifier: email,
+      source: 'ceo_stated',
+    });
+
+    const throwingAuth = {
+      evaluate: () => {
+        throw new Error('forced auth eval failure');
+      },
+    } as unknown as AuthorizationService;
+    const failResolver = new ContactResolver(
+      stack.contactService,
+      stack.entityMemory,
+      throwingAuth,
+      stack.logger,
+    );
+
+    const bus = new EventBus(stack.logger);
+    const dispatcher = new Dispatcher({
+      bus,
+      logger: stack.logger,
+      contactResolver: failResolver,
+      channelPolicies: { email: { trust: 'low', unknownSender: 'allow', threaded: true } },
+    });
+    dispatcher.register();
+
+    const authzEvents: AuthorizationDecisionEvent[] = [];
+    bus.subscribe('authorization.decision', 'system', (e) => {
+      authzEvents.push(e as AuthorizationDecisionEvent);
+    });
+
+    await bus.publish('channel', createInboundMessage({
+      conversationId: `email:${email}:eval-fail`,
+      channelId: 'email',
+      senderId: email,
+      content: 'hello',
+    }));
+
+    expect(authzEvents).toHaveLength(1);
+    expect(authzEvents[0]!.payload.decision).toBe('deny');
+    expect(authzEvents[0]!.payload.denied).toContain('*');
+    expect(authzEvents[0]!.payload.contactId).toBe(contact.id);
+    expect(authzEvents[0]!.payload.subjectSummary).toMatch(/evaluation failed \(fail-closed\)/);
   });
 });

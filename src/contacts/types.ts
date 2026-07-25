@@ -169,6 +169,12 @@ export interface SenderContext {
   /** Facts from the KG about this person, formatted for prompt inclusion */
   knowledgeSummary: string;
   authorization: AuthorizationResult | null;
+  /**
+   * True when AuthorizationService.evaluate threw (or override lookup failed).
+   * authorization is null in that case; the dispatcher emits a fail-closed
+   * authorization.decision deny so the gap is auditable (#1379).
+   */
+  authorizationEvalFailed?: boolean;
   // Trust scoring inputs — available when contact was found in DB. Not propagated to bus events.
   contactConfidence: number;      // 0.0–1.0
   // Capability axis (issue #945). Canonical read path; the legacy status/trust_level
