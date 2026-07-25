@@ -122,6 +122,12 @@ export type LLMResponse =
   | { type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage; provenance: LLMCallProvenance }
   | { type: 'error'; error: AgentError; usage?: LLMUsage };
 
+export type LLMStreamEvent =
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage; provenance: LLMCallProvenance }
+  | { type: 'message_end'; content: string; usage: LLMUsage; provenance: LLMCallProvenance }
+  | { type: 'error'; error: AgentError; usage?: LLMUsage };
+
 export interface LLMProvider {
   // Human-readable identifier used in logs and metrics (e.g. 'anthropic', 'openai').
   id: string;
@@ -138,4 +144,21 @@ export interface LLMProvider {
     model?: string;
     options?: Record<string, unknown>;
   }): Promise<LLMResponse>;
+
+  /**
+   * Stream a conversation turn. Optional — providers that cannot stream omit it.
+   * Voice refuses to start when stream is unavailable. Never silently buffer the
+   * full reply before first yield when the backend supports true streaming.
+   * Honor `options.signal` (AbortSignal) for cancellation (barge-in).
+   * Like chat(), should not throw for API failures — yield `{ type: 'error' }` instead.
+   * May throw only for programmer errors (e.g. missing model) before the iterable starts,
+   * OR yield error events — prefer yielding error events for consistency with chat().
+   */
+  stream?(params: {
+    messages: Message[];
+    tools?: ToolDefinition[];
+    toolResults?: ToolResult[];
+    model?: string;
+    options?: Record<string, unknown>;
+  }): AsyncIterable<LLMStreamEvent>;
 }

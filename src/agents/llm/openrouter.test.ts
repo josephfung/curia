@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { OpenRouterProvider } from './openrouter.js';
 import { ModelRegistry } from './model-registry.js';
 import { createSilentLogger } from '../../logger.js';
+import type { LLMStreamEvent } from './provider.js';
 
 // vi.mock is hoisted above variable declarations, so mockCreate must be
 // declared with vi.hoisted() to be available inside the mock factory.
@@ -43,6 +44,24 @@ const makeTextResponse = () => ({
   object: 'chat.completion' as const,
   created: 1700000000,
 });
+
+function makeStream(chunks: unknown[]) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const chunk of chunks) {
+        yield chunk;
+      }
+    },
+  };
+}
+
+async function collectStream(iterable: AsyncIterable<LLMStreamEvent>): Promise<LLMStreamEvent[]> {
+  const events: LLMStreamEvent[] = [];
+  for await (const event of iterable) {
+    events.push(event);
+  }
+  return events;
+}
 
 describe('OpenRouterProvider', () => {
   beforeEach(() => {
@@ -446,5 +465,147 @@ describe('OpenRouterProvider', () => {
 
     // No warn should fire for a clean stop
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('OpenRouterProvider — stream', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  it('yields content deltas followed by a message_end event with final usage', async () => {
+    mockCreate.mockResolvedValue(makeStream([
+      {
+        id: 'chatcmpl-stream-123',
+        model: 'openai/gpt-4o',
+        choices: [{ index: 0, delta: { content: 'hel' }, finish_reason: null, logprobs: null }],
+        usage: null,
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+      {
+        id: 'chatcmpl-stream-123',
+        model: 'openai/gpt-4o',
+        choices: [{ index: 0, delta: { content: 'lo' }, finish_reason: 'stop', logprobs: null }],
+        usage: null,
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+      {
+        id: 'chatcmpl-stream-123',
+        model: 'openai/gpt-4o',
+        choices: [],
+        usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+    ]));
+
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'openai/gpt-4o',
+    }));
+
+    expect(events).toEqual([
+      { type: 'text_delta', text: 'hel' },
+      { type: 'text_delta', text: 'lo' },
+      {
+        type: 'message_end',
+        content: 'hello',
+        usage: { inputTokens: 12, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-123' },
+      },
+    ]);
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params.stream).toBe(true);
+    expect(params.stream_options).toEqual({ include_usage: true });
+  });
+
+  it('accumulates index-based tool call deltas and yields one tool_use event', async () => {
+    mockCreate.mockResolvedValue(makeStream([
+      {
+        id: 'chatcmpl-stream-tool',
+        model: 'openai/gpt-4o',
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: 'Checking. ',
+              tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'search', arguments: '{"query"' } }],
+            },
+            finish_reason: null,
+            logprobs: null,
+          },
+        ],
+        usage: null,
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+      {
+        id: 'chatcmpl-stream-tool',
+        model: 'openai/gpt-4o',
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: ':"curia"}' } }],
+            },
+            finish_reason: 'tool_calls',
+            logprobs: null,
+          },
+        ],
+        usage: null,
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+      {
+        id: 'chatcmpl-stream-tool',
+        model: 'openai/gpt-4o',
+        choices: [],
+        usage: { prompt_tokens: 22, completion_tokens: 8, total_tokens: 30 },
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+    ]));
+
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Search' }],
+      model: 'openai/gpt-4o',
+      tools: [{ name: 'search', description: 'Search', input_schema: { type: 'object' as const, properties: {} } }],
+    }));
+
+    expect(events[0]).toEqual({ type: 'text_delta', text: 'Checking. ' });
+    expect(events[1]).toEqual({
+      type: 'tool_use',
+      toolCalls: [{ id: 'call_1', name: 'search', input: { query: 'curia' } }],
+      content: 'Checking. ',
+      usage: { inputTokens: 22, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-tool' },
+    });
+  });
+
+  it('passes AbortSignal through to chat.completions.create()', async () => {
+    mockCreate.mockResolvedValue(makeStream([
+      {
+        id: 'chatcmpl-abort',
+        model: 'openai/gpt-4o',
+        choices: [],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+    ]));
+    const controller = new AbortController();
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+
+    await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'openai/gpt-4o',
+      options: { signal: controller.signal },
+    }));
+
+    expect(mockCreate.mock.calls[0]![1]).toEqual({ signal: controller.signal });
   });
 });

@@ -8,16 +8,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AnthropicProvider } from './anthropic.js';
 import { ModelRegistry } from './model-registry.js';
 import { createSilentLogger } from '../../logger.js';
+import type { LLMStreamEvent } from './provider.js';
 
 // vi.mock is hoisted above variable declarations, so mockCreate must be
 // declared with vi.hoisted() to be available inside the mock factory.
 const mockCreate = vi.hoisted(() => vi.fn());
+const mockStream = vi.hoisted(() => vi.fn());
 
 vi.mock('@anthropic-ai/sdk', () => ({
   // Arrow functions are not constructable, so we use a class here.
   // AnthropicProvider calls `new Anthropic({ apiKey })` in its constructor.
   default: class {
-    messages = { create: mockCreate };
+    messages = { create: mockCreate, stream: mockStream };
   },
 }));
 
@@ -31,9 +33,29 @@ const makeTextResponse = () => ({
   stop_reason: 'end_turn',
 });
 
+function makeStream(events: unknown[], finalMessage: unknown) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const event of events) {
+        yield event;
+      }
+    },
+    finalMessage: vi.fn().mockResolvedValue(finalMessage),
+  };
+}
+
+async function collectStream(iterable: AsyncIterable<LLMStreamEvent>): Promise<LLMStreamEvent[]> {
+  const events: LLMStreamEvent[] = [];
+  for await (const event of iterable) {
+    events.push(event);
+  }
+  return events;
+}
+
 describe('AnthropicProvider — provenance and cache tokens', () => {
   beforeEach(() => {
     mockCreate.mockReset();
+    mockStream.mockReset();
     mockCreate.mockResolvedValue(makeTextResponse());
   });
 
@@ -144,6 +166,7 @@ describe('AnthropicProvider — provenance and cache tokens', () => {
 describe('AnthropicProvider — prompt caching', () => {
   beforeEach(() => {
     mockCreate.mockReset();
+    mockStream.mockReset();
     mockCreate.mockResolvedValue(makeTextResponse());
   });
 
@@ -232,5 +255,93 @@ describe('AnthropicProvider — prompt caching', () => {
 
     const params = mockCreate.mock.calls[0]![0];
     expect(params.tools).toBeUndefined();
+  });
+});
+
+describe('AnthropicProvider — stream', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+    mockStream.mockReset();
+  });
+
+  it('yields text deltas followed by a message_end event from finalMessage()', async () => {
+    mockStream.mockReturnValue(makeStream([
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hel' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'lo' } },
+    ], {
+      id: 'msg_stream_123',
+      model: 'claude-sonnet-4-6',
+      content: [{ type: 'text', text: 'hello' }],
+      usage: { input_tokens: 11, output_tokens: 4, cache_creation_input_tokens: null, cache_read_input_tokens: 2 },
+      stop_reason: 'end_turn',
+    }));
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'claude-sonnet-4-6',
+    }));
+
+    expect(events).toEqual([
+      { type: 'text_delta', text: 'hel' },
+      { type: 'text_delta', text: 'lo' },
+      {
+        type: 'message_end',
+        content: 'hello',
+        usage: { inputTokens: 11, outputTokens: 4, cacheCreationInputTokens: 0, cacheReadInputTokens: 2 },
+        provenance: { requestedModel: 'claude-sonnet-4-6', actualModel: 'claude-sonnet-4-6', providerRequestId: 'msg_stream_123' },
+      },
+    ]);
+  });
+
+  it('yields tool_use at the end when finalMessage() contains tool_use blocks', async () => {
+    mockStream.mockReturnValue(makeStream([
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Let me check.' } },
+    ], {
+      id: 'msg_stream_tool',
+      model: 'claude-sonnet-4-6',
+      content: [
+        { type: 'text', text: 'Let me check.' },
+        { type: 'tool_use', id: 'toolu_1', name: 'search', input: { query: 'curia' } },
+      ],
+      usage: { input_tokens: 21, output_tokens: 9, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      stop_reason: 'tool_use',
+    }));
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Search' }],
+      model: 'claude-sonnet-4-6',
+      tools: [{ name: 'search', description: 'Search', input_schema: { type: 'object' as const, properties: {} } }],
+    }));
+
+    expect(events[0]).toEqual({ type: 'text_delta', text: 'Let me check.' });
+    expect(events[1]).toEqual({
+      type: 'tool_use',
+      toolCalls: [{ id: 'toolu_1', name: 'search', input: { query: 'curia' } }],
+      content: 'Let me check.',
+      usage: { inputTokens: 21, outputTokens: 9, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: { requestedModel: 'claude-sonnet-4-6', actualModel: 'claude-sonnet-4-6', providerRequestId: 'msg_stream_tool' },
+    });
+  });
+
+  it('passes AbortSignal through to messages.stream()', async () => {
+    mockStream.mockReturnValue(makeStream([], {
+      id: 'msg_abort',
+      model: 'claude-sonnet-4-6',
+      content: [{ type: 'text', text: 'done' }],
+      usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      stop_reason: 'end_turn',
+    }));
+    const controller = new AbortController();
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+
+    await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'claude-sonnet-4-6',
+      options: { signal: controller.signal },
+    }));
+
+    expect(mockStream.mock.calls[0]![1]).toEqual({ signal: controller.signal });
   });
 });
