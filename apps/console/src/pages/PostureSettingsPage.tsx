@@ -158,60 +158,62 @@ function PostureSection() {
       </div>
 
       <section className="settings-section">
-        <PostureCardGrid
-          value={identity.decisionStyle.externalActions}
-          onChange={(externalActions: DecisionPosture) => setIdentity({
-            ...identity,
-            decisionStyle: { ...identity.decisionStyle, externalActions },
-          })}
-          scopeHint="(for external actions)"
-        />
-
-        <div style={{ marginTop: 20 }}>
+        <div className="settings-section-body">
           <PostureCardGrid
-            value={identity.decisionStyle.internalAnalysis}
-            onChange={(internalAnalysis: DecisionPosture) => setIdentity({
+            value={identity.decisionStyle.externalActions}
+            onChange={(externalActions: DecisionPosture) => setIdentity({
               ...identity,
-              decisionStyle: { ...identity.decisionStyle, internalAnalysis },
+              decisionStyle: { ...identity.decisionStyle, externalActions },
             })}
-            scopeHint="(for internal analysis)"
+            scopeHint="(for external actions)"
           />
-        </div>
 
-        <div style={{ marginTop: 24 }}>
-          <StringListEditor
-            id="standing-prefs"
-            label="Standing preferences"
-            items={identity.behavioralPreferences}
-            onChange={behavioralPreferences => setIdentity({
-              ...identity,
-              behavioralPreferences,
-            })}
-            placeholder="e.g. Always include agenda items in meeting requests"
-            emptyHint="No standing preferences yet."
-          />
-          <p className="settings-muted-hint">
-            Standing preferences are part of the office identity. Edits replace the full
-            list; the setup wizard only appends.
-          </p>
-        </div>
-
-        <div className="autonomy-control" style={{ marginTop: 20 }}>
-          <ChangeNoteField id="posture-note" value={note} onChange={setNote} />
-          <div className="autonomy-save-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={!isDirty || saving}
-              onClick={() => void handleSave()}
-            >
-              Save
-            </button>
-            {saveStatus && <span className="autonomy-save-status">{saveStatus}</span>}
+          <div style={{ marginTop: 20 }}>
+            <PostureCardGrid
+              value={identity.decisionStyle.internalAnalysis}
+              onChange={(internalAnalysis: DecisionPosture) => setIdentity({
+                ...identity,
+                decisionStyle: { ...identity.decisionStyle, internalAnalysis },
+              })}
+              scopeHint="(for internal analysis)"
+            />
           </div>
-        </div>
 
-        <ConfigHistory entries={history} error={historyError} />
+          <div style={{ marginTop: 24 }}>
+            <StringListEditor
+              id="standing-prefs"
+              label="Standing preferences"
+              items={identity.behavioralPreferences}
+              onChange={behavioralPreferences => setIdentity({
+                ...identity,
+                behavioralPreferences,
+              })}
+              placeholder="e.g. Always include agenda items in meeting requests"
+              emptyHint="No standing preferences yet."
+            />
+            <p className="settings-muted-hint">
+              Standing preferences are part of the office identity. Edits replace the full
+              list; the setup wizard only appends.
+            </p>
+          </div>
+
+          <div className="autonomy-control">
+            <ChangeNoteField id="posture-note" value={note} onChange={setNote} />
+            <div className="autonomy-save-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!isDirty || saving}
+                onClick={() => void handleSave()}
+              >
+                Save
+              </button>
+              {saveStatus && <span className="autonomy-save-status">{saveStatus}</span>}
+            </div>
+          </div>
+
+          <ConfigHistory entries={history} error={historyError} />
+        </div>
       </section>
     </>
   );

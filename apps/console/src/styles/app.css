@@ -714,16 +714,33 @@ input:focus, textarea:focus, select:focus {
   margin: 0;
 }
 
-.settings-section {
-  max-width: 720px;
-  margin-bottom: 36px;
+/* The carded .settings-section (§10 above) is reused for the operator
+   config-refinement pages (Assistant / Posture / Memory). It has overflow:hidden
+   and no padding of its own, so section content lives in a padded body region
+   below the .settings-section-head divider — matching the UI-kit
+   Principal/Notifications form layout. (An earlier revision redefined
+   .settings-section here as a flat, chrome-less block; that override is removed so
+   the card treatment applies.) */
+.settings-section-body {
+  padding: 20px;
 }
-.settings-section-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--app-fg);
-  margin: 0 0 12px;
-  letter-spacing: 0.01em;
+/* Field components (.wizard-field, .wizard-label, .string-list-editor, …) carry
+   their own vertical margins; zero the outer edges so the card padding frames
+   them cleanly. Kept as block flow so adjacent sibling margins still collapse. */
+.settings-section-body > :first-child { margin-top: 0; }
+.settings-section-body > :last-child { margin-bottom: 0; }
+
+/* Change-note + Save action block sits flush at the foot of a card body. Strip
+   the standalone-card chrome .autonomy-control carries on the Autonomy page and
+   render it as a divided footer instead. */
+.settings-section-body .autonomy-control {
+  max-width: none;
+  margin: 20px 0 0;
+  padding: 16px 0 0;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--app-border-soft);
+  border-radius: 0;
 }
 .settings-version-meta {
   font-size: 12px;
@@ -826,6 +843,10 @@ input:focus, textarea:focus, select:focus {
   line-height: 1.45;
 }
 .retention-row dd strong { color: var(--app-fg); font-weight: 600; }
+/* Card body already pads top/bottom — drop the first/last row's outer padding
+   and the trailing divider so the dl sits cleanly inside the section card. */
+.retention-row:first-child { padding-top: 0; }
+.retention-row:last-child { border-bottom: none; padding-bottom: 0; }
 
 @media (max-width: 768px) {
   .retention-row {
@@ -848,6 +869,7 @@ input:focus, textarea:focus, select:focus {
   .settings-nav-item { width: auto; }
   .settings-content { padding: 22px 18px 80px; }
   .settings-page-title { font-size: 22px; }
+  .settings-section-body { padding: 16px; }
 }
 
 /* ── Wizard page ─────────────────────────────────────────────────── */

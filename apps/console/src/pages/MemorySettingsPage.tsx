@@ -70,66 +70,78 @@ function MemorySection() {
       </div>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">Conversation &amp; scratch</h3>
-        <dl className="retention-list">
-          <div className="retention-row">
-            <dt>Conversation turns</dt>
-            <dd>
-              Kept for <strong>{policy.workingMemoryTtlDays} days</strong>, then purged by the
-              nightly dream pass.
-            </dd>
-          </div>
-          <div className="retention-row">
-            <dt>Scratch documents</dt>
-            <dd>
-              Ephemeral scratch docs are archived after{' '}
-              <strong>{policy.scratchTtlDays} days</strong> of inactivity.
-            </dd>
-          </div>
-        </dl>
+        <div className="settings-section-head">
+          <h3 className="settings-section-title">Conversation &amp; scratch</h3>
+        </div>
+        <div className="settings-section-body">
+          <dl className="retention-list">
+            <div className="retention-row">
+              <dt>Conversation turns</dt>
+              <dd>
+                Kept for <strong>{policy.workingMemoryTtlDays} days</strong>, then purged by the
+                nightly dream pass.
+              </dd>
+            </div>
+            <div className="retention-row">
+              <dt>Scratch documents</dt>
+              <dd>
+                Ephemeral scratch docs are archived after{' '}
+                <strong>{policy.scratchTtlDays} days</strong> of inactivity.
+              </dd>
+            </div>
+          </dl>
+        </div>
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">Fact decay</h3>
-        <dl className="retention-list">
-          <div className="retention-row">
-            <dt>Slow-decay facts</dt>
-            <dd>
-              Confidence halves every <strong>{policy.halfLifeDays.slowDecay} days</strong>
-              {' '}(employer, residence, and similar long-lived facts).
-            </dd>
-          </div>
-          <div className="retention-row">
-            <dt>Fast-decay facts</dt>
-            <dd>
-              Confidence halves every <strong>{policy.halfLifeDays.fastDecay} days</strong>
-              {' '}(preferences and short-lived context).
-            </dd>
-          </div>
-          <div className="retention-row">
-            <dt>Archive threshold</dt>
-            <dd>
-              Facts at or below <strong>{archivePct}% confidence</strong> are soft-deleted
-              (archived) and drop out of queries.
-            </dd>
-          </div>
-          <div className="retention-row">
-            <dt>Decay warnings</dt>
-            <dd>
-              Important nodes about to archive are held back for{' '}
-              <strong>{policy.warnHoldBackDays} days</strong> so you can re-confirm them.
-            </dd>
-          </div>
-        </dl>
+        <div className="settings-section-head">
+          <h3 className="settings-section-title">Fact decay</h3>
+        </div>
+        <div className="settings-section-body">
+          <dl className="retention-list">
+            <div className="retention-row">
+              <dt>Slow-decay facts</dt>
+              <dd>
+                Confidence halves every <strong>{policy.halfLifeDays.slowDecay} days</strong>
+                {' '}(employer, residence, and similar long-lived facts).
+              </dd>
+            </div>
+            <div className="retention-row">
+              <dt>Fast-decay facts</dt>
+              <dd>
+                Confidence halves every <strong>{policy.halfLifeDays.fastDecay} days</strong>
+                {' '}(preferences and short-lived context).
+              </dd>
+            </div>
+            <div className="retention-row">
+              <dt>Archive threshold</dt>
+              <dd>
+                Facts at or below <strong>{archivePct}% confidence</strong> are soft-deleted
+                (archived) and drop out of queries.
+              </dd>
+            </div>
+            <div className="retention-row">
+              <dt>Decay warnings</dt>
+              <dd>
+                Important nodes about to archive are held back for{' '}
+                <strong>{policy.warnHoldBackDays} days</strong> so you can re-confirm them.
+              </dd>
+            </div>
+          </dl>
+        </div>
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">Review nodes</h3>
-        <p className="settings-page-sub">
-          To review knowledge-graph nodes nearing archival, ask Curia in{' '}
-          <Link to="/chat">Chat</Link>
-          {' '}to run the decay-warnings list (the <code>decay-warnings-list</code> skill).
-        </p>
+        <div className="settings-section-head">
+          <h3 className="settings-section-title">Review nodes</h3>
+        </div>
+        <div className="settings-section-body">
+          <p className="settings-muted-hint" style={{ margin: 0 }}>
+            To review knowledge-graph nodes nearing archival, ask Curia in{' '}
+            <Link to="/chat">Chat</Link>
+            {' '}to run the decay-warnings list (the <code>decay-warnings-list</code> skill).
+          </p>
+        </div>
       </section>
     </>
   );
