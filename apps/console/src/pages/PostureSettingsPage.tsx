@@ -78,14 +78,27 @@ function PostureSection() {
       const freshRes = await apiFetch('/api/identity');
       if (!freshRes.ok) throw new Error(await errorMessage(freshRes));
       const freshData = await freshRes.json() as { identity: LocalIdentity };
+      // Only overwrite the fields the operator actually changed on this page;
+      // keep the freshly-fetched values for the rest. Without this, saving a
+      // posture edit would also clobber behavioralPreferences that a background
+      // skill (e.g. preference-update) appended after this page loaded.
       const payload: LocalIdentity = {
         ...freshData.identity,
         decisionStyle: {
           ...freshData.identity.decisionStyle,
-          externalActions: identity.decisionStyle.externalActions,
-          internalAnalysis: identity.decisionStyle.internalAnalysis,
+          externalActions:
+            identity.decisionStyle.externalActions !== saved.decisionStyle.externalActions
+              ? identity.decisionStyle.externalActions
+              : freshData.identity.decisionStyle.externalActions,
+          internalAnalysis:
+            identity.decisionStyle.internalAnalysis !== saved.decisionStyle.internalAnalysis
+              ? identity.decisionStyle.internalAnalysis
+              : freshData.identity.decisionStyle.internalAnalysis,
         },
-        behavioralPreferences: identity.behavioralPreferences,
+        behavioralPreferences:
+          JSON.stringify(identity.behavioralPreferences) !== JSON.stringify(saved.behavioralPreferences)
+            ? identity.behavioralPreferences
+            : freshData.identity.behavioralPreferences,
       };
       const res = await apiFetch('/api/identity', {
         method: 'PUT',

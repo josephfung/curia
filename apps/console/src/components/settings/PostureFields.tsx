@@ -19,7 +19,11 @@ export function PostureCardGrid({ value, onChange, scopeHint }: PostureCardGridP
           </span>
         )}
       </div>
-      <div className="posture-grid" role="radiogroup" aria-label="Decision posture">
+      <div
+        className="posture-grid"
+        role="radiogroup"
+        aria-label={`Decision posture ${scopeHint ?? ''}`.trim()}
+      >
         {POSTURE_OPTIONS.map(opt => (
           <button
             key={opt.value}

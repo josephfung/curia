@@ -16,6 +16,23 @@ export interface MemoryRetentionPolicy {
   editable: false;
 }
 
+// Runtime guard for the /api/memory/retention payload. The endpoint is our own,
+// but a malformed 200 (e.g. a proxy/SPA fallback returning valid JSON of the
+// wrong shape) must not reach state and crash the render on halfLifeDays.*.
+function isMemoryRetentionPolicy(value: unknown): value is MemoryRetentionPolicy {
+  if (typeof value !== 'object' || value === null) return false;
+  const p = value as Record<string, unknown>;
+  const hl = p['halfLifeDays'];
+  if (typeof hl !== 'object' || hl === null) return false;
+  const half = hl as Record<string, unknown>;
+  return typeof p['workingMemoryTtlDays'] === 'number'
+    && typeof p['scratchTtlDays'] === 'number'
+    && typeof p['archiveThreshold'] === 'number'
+    && typeof p['warnHoldBackDays'] === 'number'
+    && typeof half['slowDecay'] === 'number'
+    && typeof half['fastDecay'] === 'number';
+}
+
 function MemorySection() {
   const [policy, setPolicy] = useState<MemoryRetentionPolicy | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -25,7 +42,10 @@ function MemorySection() {
       try {
         const res = await apiFetch('/api/memory/retention');
         if (!res.ok) throw new Error(await errorMessage(res));
-        const data = await res.json() as { retention: MemoryRetentionPolicy };
+        const data = await res.json() as { retention: unknown };
+        if (!isMemoryRetentionPolicy(data.retention)) {
+          throw new Error('Malformed retention policy response');
+        }
         setPolicy(data.retention);
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : 'Failed to load retention policy');
