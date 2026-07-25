@@ -32,7 +32,8 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
   try {
     const body = (await res.json()) as { error?: string; message?: string };
     return body.error ?? body.message ?? fallback;
-  } catch {
+  } catch (err) {
+    console.error('[useVoiceCall] failed to parse error response body:', err);
     return fallback;
   }
 }
@@ -135,6 +136,9 @@ export function useVoiceCall(): UseVoiceCallResult {
   }, []);
 
   const hangUp = useCallback(async () => {
+    // Abort any in-flight startCall before tearing down local state so a late
+    // connect cannot flip the UI back to `connected` after hang-up.
+    startAbortRef.current?.abort();
     const activeSessionId = sessionIdRef.current;
     resetLocalCall();
     if (mountedRef.current) {
@@ -212,13 +216,17 @@ export function useVoiceCall(): UseVoiceCallResult {
         setCallState('connected');
       }
     } catch (err) {
-      if (controller.signal.aborted) return;
+      // Always disconnect / DELETE even when hangUp aborted startCall — otherwise
+      // a session minted before abort would stay active on the server.
       resetLocalCall(room);
       if (createdSessionId) {
         void apiFetch(`/api/voice/sessions/${encodeURIComponent(createdSessionId)}`, {
           method: 'DELETE',
+        }).catch((cleanupErr) => {
+          console.error('[useVoiceCall] failed to clean up voice session:', cleanupErr);
         });
       }
+      if (controller.signal.aborted) return;
       if (mountedRef.current) {
         setError(voiceErrorMessage(err));
         setCallState('error');

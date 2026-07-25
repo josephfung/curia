@@ -35,6 +35,8 @@ const BARGE_IN_MIN_CHARS = 3;
 const BARGE_IN_MIN_CONFIDENCE = 0.4;
 /** Agent id used when writing voice turns into working_memory (chat history). */
 const VOICE_HISTORY_AGENT_ID = 'coordinator';
+/** Default max utterance size — matches Dispatcher maxMessageBytes. */
+const DEFAULT_MAX_UTTERANCE_BYTES = 102_400;
 
 /**
  * Voice-mode system addendum. Keeps spoken replies short and free of markup that
@@ -80,7 +82,8 @@ export interface VoiceRuntimeConfig {
    */
   workingMemory?: WorkingMemory;
   /**
-   * Best-effort LiveKit room delete after session end (invalidates leaked JWTs).
+   * Best-effort LiveKit room delete after session end (cleanup). Does not revoke
+   * JWTs — a leaked token remains valid until TTL and may auto-recreate the room.
    * Failures must not throw into hangup.
    */
   deleteRoom?: (roomName: string) => Promise<void>;
@@ -93,6 +96,11 @@ export interface VoiceRuntimeConfig {
     call: ToolCall,
     ctx: { conversationId: string; sessionId: string },
   ) => Promise<{ content: string; is_error?: boolean }>;
+  /**
+   * Max UTF-8 bytes for an accumulated STT utterance before it is dropped.
+   * Mirrors the dispatcher `maxMessageBytes` guard (voice bypasses the dispatcher).
+   */
+  maxUtteranceBytes?: number;
 }
 
 /** Late-bound tool wiring — set after coordinator pins + ExecutionLayer exist. */
@@ -180,55 +188,84 @@ export class VoiceRuntime {
 
     await transport.connect();
 
-    const stt = await this.config.stt.startSession({
-      sampleRate: inboundSampleRate,
-      onError: err => {
-        this.log.warn({ sessionId: params.sessionId, err }, 'STT connection error; ending session');
-        void this.endSession(params.sessionId, 'stt_error');
-      },
-    });
+    let stt: SttSession | undefined;
+    try {
+      stt = await this.config.stt.startSession({
+        sampleRate: inboundSampleRate,
+        onError: err => {
+          // Ignore errors that fire before the session is registered — otherwise
+          // endSession would only flip the DB row and leave a zombie in the map.
+          if (!this.sessions.has(params.sessionId)) {
+            this.log.warn(
+              { sessionId: params.sessionId, err },
+              'STT connection error during startup (session not yet registered)',
+            );
+            return;
+          }
+          this.log.warn({ sessionId: params.sessionId, err }, 'STT connection error; ending session');
+          void this.endSession(params.sessionId, 'stt_error');
+        },
+      });
 
-    const session: ActiveSession = {
-      sessionId: params.sessionId,
-      conversationId: params.conversationId,
-      roomName: params.roomName,
-      transport,
-      stt,
-      publishSampleRate,
-      history: [],
-      turnTail: Promise.resolve(),
-      currentController: null,
-      activeTtsStreamIds: new Set(),
-      llmActive: false,
-      ttsActive: false,
-      markedActive: false,
-      pendingFinalText: '',
-      ttsSeq: 0,
-      ending: false,
-    };
-    this.sessions.set(params.sessionId, session);
+      const session: ActiveSession = {
+        sessionId: params.sessionId,
+        conversationId: params.conversationId,
+        roomName: params.roomName,
+        transport,
+        stt,
+        publishSampleRate,
+        history: [],
+        turnTail: Promise.resolve(),
+        currentController: null,
+        activeTtsStreamIds: new Set(),
+        llmActive: false,
+        ttsActive: false,
+        markedActive: false,
+        pendingFinalText: '',
+        ttsSeq: 0,
+        ending: false,
+      };
+      this.sessions.set(params.sessionId, session);
 
-    // Pipe principal audio → STT.
-    transport.onRemoteAudio(frame => {
-      session.stt.sendAudio(frame);
-    });
+      // Pipe principal audio → STT.
+      transport.onRemoteAudio(frame => {
+        session.stt.sendAudio(frame);
+      });
 
-    // Principal left / room dropped without DELETE — end the Curia session so
-    // STT sockets and voice_sessions rows are not left active.
-    transport.onClose(reason => {
-      this.log.info({ sessionId: params.sessionId, reason }, 'Audio transport closed; ending voice session');
-      void this.endSession(params.sessionId, reason);
-    });
+      // Principal left / room dropped without DELETE — end the Curia session so
+      // STT sockets and voice_sessions rows are not left active. Ignore while
+      // endSession is already tearing down (avoids racing hangup → 404).
+      transport.onClose(reason => {
+        if (session.ending) return;
+        this.log.info({ sessionId: params.sessionId, reason }, 'Audio transport closed; ending voice session');
+        void this.endSession(params.sessionId, reason);
+      });
 
-    // Handle transcripts (interim → barge-in; final+endpoint → turn).
-    stt.onTranscript(event => {
-      this.handleTranscript(session, event);
-    });
+      // Handle transcripts (interim → barge-in; final+endpoint → turn).
+      stt.onTranscript(event => {
+        this.handleTranscript(session, event);
+      });
 
-    this.log.info(
-      { sessionId: params.sessionId, conversationId: params.conversationId, inboundSampleRate, publishSampleRate },
-      'Voice session runtime started',
-    );
+      this.log.info(
+        { sessionId: params.sessionId, conversationId: params.conversationId, inboundSampleRate, publishSampleRate },
+        'Voice session runtime started',
+      );
+    } catch (err) {
+      this.sessions.delete(params.sessionId);
+      if (stt) {
+        try {
+          stt.cancel();
+        } catch (cancelErr) {
+          this.log.debug({ sessionId: params.sessionId, err: cancelErr }, 'error cancelling STT after start failure');
+        }
+      }
+      try {
+        await transport.disconnect();
+      } catch (disconnectErr) {
+        this.log.warn({ sessionId: params.sessionId, err: disconnectErr }, 'error disconnecting transport after start failure');
+      }
+      throw err;
+    }
   }
 
   private handleTranscript(session: ActiveSession, event: SttTranscriptEvent): void {
@@ -248,7 +285,22 @@ export class VoiceRuntime {
     if (!event.isFinal) return;
 
     if (text.length > 0) {
-      session.pendingFinalText = session.pendingFinalText ? `${session.pendingFinalText} ${text}` : text;
+      const next = session.pendingFinalText ? `${session.pendingFinalText} ${text}` : text;
+      const maxBytes = this.config.maxUtteranceBytes ?? DEFAULT_MAX_UTTERANCE_BYTES;
+      if (Buffer.byteLength(next, 'utf8') > maxBytes) {
+        this.log.warn(
+          {
+            sessionId: session.sessionId,
+            pendingBytes: Buffer.byteLength(session.pendingFinalText, 'utf8'),
+            nextBytes: Buffer.byteLength(next, 'utf8'),
+            maxBytes,
+          },
+          'voice utterance exceeded maxUtteranceBytes; dropping pending transcript',
+        );
+        session.pendingFinalText = '';
+        return;
+      }
+      session.pendingFinalText = next;
     }
 
     // Endpoint (end-of-turn) — run the accumulated utterance as one user turn.
@@ -279,9 +331,11 @@ export class VoiceRuntime {
 
   private enqueueTurn(session: ActiveSession, utterance: string): void {
     // Serialize turns onto the tail so a barged-in turn fully unwinds before the
-    // next starts. Errors are logged, never allowed to break the chain.
+    // next starts. Log rejections — never silently erase them or break the chain.
     session.turnTail = session.turnTail
-      .catch(() => {})
+      .catch(err => {
+        this.log.warn({ sessionId: session.sessionId, err }, 'previous voice turn rejected; continuing chain');
+      })
       .then(() => this.runUserTurn(session, utterance));
   }
 
@@ -350,10 +404,16 @@ export class VoiceRuntime {
         : undefined;
 
     const userMessage: Message = { role: 'user', content: utterance };
+    // Retain the user request even if barge-in aborts the assistant reply —
+    // otherwise the next turn loses conversational continuity.
+    session.history.push(userMessage);
+    if (session.history.length > MAX_HISTORY_MESSAGES) {
+      session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
+    }
+
     const messages: Message[] = [
       { role: 'system', content: VOICE_SYSTEM_ADDENDUM },
       ...session.history,
-      userMessage,
     ];
 
     const onSpeechText = async (sentence: string, meta: { streamId: string }): Promise<void> => {
@@ -404,8 +464,8 @@ export class VoiceRuntime {
     try {
       const result = await runner.runTurn({ messages, signal: controller.signal });
       if (!result.aborted && result.finalText.length > 0) {
-        // Persist the completed exchange to in-memory history (trimmed).
-        session.history.push(userMessage, { role: 'assistant', content: result.finalText });
+        // Append only the completed assistant reply (user was already pushed).
+        session.history.push({ role: 'assistant', content: result.finalText });
         if (session.history.length > MAX_HISTORY_MESSAGES) {
           session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
         }
@@ -456,7 +516,8 @@ export class VoiceRuntime {
         this.log.warn({ sessionId, err }, 'error disconnecting transport');
       }
 
-      // Invalidate the LiveKit room so a leaked JWT cannot rejoin after hangup.
+      // Cleanup LiveKit room after hangup. Room delete does not revoke JWTs —
+      // a leaked token remains valid until TTL and may auto-create the room.
       if (this.config.deleteRoom) {
         try {
           await this.config.deleteRoom(session.roomName);

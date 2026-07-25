@@ -32,15 +32,17 @@ services:
       retries: 5
 
   livekit:
+    # Opt-in: plain `docker compose up` must not publish LiveKit ports or start
+    # a --dev server. Enable with `docker compose --profile voice up -d livekit`.
+    profiles:
+      - voice
     image: livekit/livekit-server:${LIVEKIT_IMAGE_TAG:-latest}
     restart: unless-stopped
-    # Local/dev default. LiveKit --dev uses known credentials (devkey / secret);
-    # production must use real keys that match Settings -> Channels -> Voice.
-    #
-    # For config-file deploys, edit docker/livekit.yaml and override this command,
-    # for example with LIVEKIT_COMMAND="--config /etc/livekit.yaml" plus a bind
-    # mount of ./docker/livekit.yaml:/etc/livekit.yaml:ro in a local compose
-    # override.
+    # Local/dev default under the voice profile. LiveKit --dev uses known
+    # credentials (devkey / secret) — never expose that on a public interface.
+    # Production must set LIVEKIT_COMMAND to a real config (e.g.
+    # "--config /etc/livekit.yaml") with keys matching Settings → Channels → Voice,
+    # plus a bind mount of ./docker/livekit.yaml:/etc/livekit.yaml:ro.
     command: ${LIVEKIT_COMMAND:---dev --bind 0.0.0.0}
     ports:
       # HTTP/WebSocket signaling. Use wss://<host> when served behind TLS.

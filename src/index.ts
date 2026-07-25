@@ -895,6 +895,14 @@ async function main(): Promise<void> {
   const smsWebhookBridge = new SmsWebhookBridge();
   const voiceSessionBridge = new VoiceSessionBridge();
   const voiceSessionStore = new VoiceSessionStore(pool);
+  // Recover abandoned voice_sessions rows even when voice stays disabled this
+  // boot (lost credentials / toggled off) so starting/active rows do not linger.
+  {
+    const abandoned = await voiceSessionStore.markAbandonedOnRestart();
+    if (abandoned > 0) {
+      logger.warn({ count: abandoned }, 'Marked abandoned voice sessions failed on startup');
+    }
+  }
   let smsClient: SmsClient | undefined;
   let smsAdapter: SmsAdapter | undefined;
   let voiceAdapter: VoiceAdapter | undefined;
@@ -1786,23 +1794,16 @@ async function main(): Promise<void> {
     config.voiceDeepgramApiKey &&
     config.voiceCartesiaApiKey
   ) {
-    const abandoned = await voiceSessionStore.markAbandonedOnRestart();
-    if (abandoned > 0) {
-      logger.warn({ count: abandoned }, 'Marked abandoned voice sessions failed on startup');
-    }
-
     // Voice turns use the 'fast' tier by default (ADR-037 §3), overridable via
     // channels.voice.model. The runtime needs a provider that supports stream();
-    // if the resolved provider cannot stream, we skip the duplex runtime (tokens
-    // can still be minted, but no server-side spoken turns run).
+    // without stream() we do not advertise voice (no silent rooms).
     const voiceModel = config.voiceModel ?? modelRouter.resolve('fast').model;
     const voiceBaseProvider = resolveProviderForModel(voiceModel, 'VoiceRuntime');
-    let voiceRuntime: VoiceRuntime | undefined;
     if (typeof voiceBaseProvider.stream === 'function') {
       // Wrap in telemetry so voice turns emit llm.call cost events like every other path.
       const voiceLlmProvider = new TelemetryLlmProvider(voiceBaseProvider, bus, logger, 'voice-turn', modelRegistry);
       const voiceLivekitUrl = config.voiceLivekitUrl;
-      voiceRuntime = new VoiceRuntime({
+      const voiceRuntime = new VoiceRuntime({
         bus,
         logger,
         sessionStore: voiceSessionStore,
@@ -1814,6 +1815,7 @@ async function main(): Promise<void> {
         createTransport: ({ token, livekitUrl }) =>
           new LiveKitRoomSession({ url: livekitUrl, token, logger }),
         workingMemory: memory,
+        maxUtteranceBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
         deleteRoom: async (roomName) => {
           await deleteVoiceRoom(
             {
@@ -1828,25 +1830,25 @@ async function main(): Promise<void> {
         // coordinator is registered (ExecutionLayer + pinned tools exist then).
       });
       logger.info({ voiceModel }, 'Voice runtime constructed (streaming provider available)');
+
+      voiceAdapter = new VoiceAdapter({
+        bus,
+        logger,
+        sessionBridge: voiceSessionBridge,
+        sessionStore: voiceSessionStore,
+        livekitUrl: config.voiceLivekitUrl,
+        livekitApiKey: config.voiceLivekitApiKey,
+        livekitApiSecret: config.voiceLivekitApiSecret,
+        voiceModel: config.voiceModel,
+        voiceRuntime,
+      });
     } else {
       logger.warn(
         { voiceModel, provider: voiceBaseProvider.id },
         'Voice channel enabled but the resolved LLM provider does not support stream(); '
-        + 'server-side voice turns are disabled. Remap channels.voice.model / the fast tier to a streaming provider.',
+        + 'voice adapter not started. Remap channels.voice.model / the fast tier to a streaming provider.',
       );
     }
-
-    voiceAdapter = new VoiceAdapter({
-      bus,
-      logger,
-      sessionBridge: voiceSessionBridge,
-      sessionStore: voiceSessionStore,
-      livekitUrl: config.voiceLivekitUrl,
-      livekitApiKey: config.voiceLivekitApiKey,
-      livekitApiSecret: config.voiceLivekitApiSecret,
-      voiceModel: config.voiceModel,
-      voiceRuntime,
-    });
   } else if (channelShouldStart.has('voice')) {
     logger.warn('channel voice is enabled + resolvable but runtime credentials are missing (LiveKit, Deepgram, or Cartesia); no Voice adapter constructed — check vault credentials and restart');
   }

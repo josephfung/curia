@@ -21,9 +21,7 @@ export interface VoiceAdapterConfig {
   livekitApiKey: string;
   livekitApiSecret: string;
   voiceModel?: string;
-  /** Live duplex runtime. When present, sessions run the STT→LLM→TTS cascade;
-   *  when absent (e.g. missing streaming provider), sessions still mint tokens
-   *  but no server-side turn loop runs. */
+  /** Live duplex runtime. Required for usable sessions; createSession fails closed without it. */
   voiceRuntime?: VoiceRuntime;
 }
 
@@ -68,6 +66,16 @@ export class VoiceAdapter implements Channel {
   }
 
   private async createSession(req: VoiceSessionCreateRequest): Promise<VoiceSessionCreateResult> {
+    const runtime = this.config.voiceRuntime;
+    if (!runtime) {
+      // Fail closed before persisting a row or minting a principal JWT — without
+      // a streaming runtime the console would join a silent room.
+      return {
+        status: 503,
+        body: { error: 'Voice runtime is unavailable (streaming LLM provider required)' },
+      };
+    }
+
     const sessionId = randomUUID();
     const conversationId = `voice:${sessionId}`;
     const roomName = `voice-${sessionId}`;
@@ -101,24 +109,28 @@ export class VoiceAdapter implements Channel {
     // the runtime WITHOUT awaiting its full lifetime — the HTTP response only needs
     // the principal token so the console can join. Failures are tracked by ending
     // the session (which publishes voice.session.ended) rather than blocking the caller.
-    if (this.config.voiceRuntime) {
-      const runtime = this.config.voiceRuntime;
-      const agentToken = await mintVoiceParticipantToken(
-        { apiKey: this.config.livekitApiKey, apiSecret: this.config.livekitApiSecret },
-        { roomName, identity: AGENT_IDENTITY, name: 'Curia' },
-      );
-      void runtime
-        .startSession({
-          sessionId: session.id,
-          conversationId: session.conversationId,
-          roomName: session.livekitRoom,
-          agentToken,
-        })
-        .catch(async err => {
-          this.log.error({ err, sessionId: session.id }, 'Voice runtime failed to start session');
-          await runtime.endSession(session.id, 'runtime_start_failed').catch(() => {});
-        });
-    }
+    const agentToken = await mintVoiceParticipantToken(
+      { apiKey: this.config.livekitApiKey, apiSecret: this.config.livekitApiSecret },
+      { roomName, identity: AGENT_IDENTITY, name: 'Curia' },
+    );
+    void runtime
+      .startSession({
+        sessionId: session.id,
+        conversationId: session.conversationId,
+        roomName: session.livekitRoom,
+        agentToken,
+      })
+      .catch(async err => {
+        this.log.error({ err, sessionId: session.id }, 'Voice runtime failed to start session');
+        try {
+          await runtime.endSession(session.id, 'runtime_start_failed');
+        } catch (cleanupErr) {
+          this.log.error(
+            { err: cleanupErr, sessionId: session.id },
+            'Voice runtime teardown after start failure also failed',
+          );
+        }
+      });
 
     return {
       status: 201,

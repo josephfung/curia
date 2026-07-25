@@ -3,6 +3,7 @@ import pino from 'pino';
 import type { EventBus } from '../../bus/bus.js';
 import type { BusEvent, EventType, Layer } from '../../bus/events.js';
 import type { VoiceSessionStore } from './session-store.js';
+import type { VoiceRuntime } from './voice-runtime.js';
 import { VoiceSessionBridge } from './session-bridge.js';
 import { VoiceAdapter } from './voice-adapter.js';
 
@@ -56,11 +57,24 @@ function fakeStore() {
   };
 }
 
+function fakeRuntime(): VoiceRuntime {
+  return {
+    startSession: vi.fn(async () => undefined),
+    endSession: vi.fn(async () => null),
+    endAllSessions: vi.fn(async () => undefined),
+    configureTools: vi.fn(),
+    get activeSessionCount() {
+      return 0;
+    },
+  } as unknown as VoiceRuntime;
+}
+
 describe('VoiceAdapter', () => {
   it('installs a handler that creates sessions, mints a token, and publishes started', async () => {
     const bridge = new VoiceSessionBridge();
     const { bus, publish, subscribe } = fakeBus();
     const { store, create } = fakeStore();
+    const runtime = fakeRuntime();
     const adapter = new VoiceAdapter({
       bus,
       logger,
@@ -69,6 +83,7 @@ describe('VoiceAdapter', () => {
       livekitUrl: 'wss://voice.example.test',
       livekitApiKey: 'devkey',
       livekitApiSecret: 'devsecret',
+      voiceRuntime: runtime,
     });
 
     await adapter.start();
@@ -92,8 +107,33 @@ describe('VoiceAdapter', () => {
       principalContactId: '11111111-1111-1111-1111-111111111111',
       metadata: { source: 'test' },
     }));
+    expect(runtime.startSession).toHaveBeenCalledOnce();
     expect(publish.mock.calls[0]![0]).toBe('channel');
     expect(publish.mock.calls[0]![1].type).toBe('voice.session.started');
+  });
+
+  it('rejects session creation when VoiceRuntime is unavailable', async () => {
+    const bridge = new VoiceSessionBridge();
+    const { bus } = fakeBus();
+    const { store, create } = fakeStore();
+    const adapter = new VoiceAdapter({
+      bus,
+      logger,
+      sessionBridge: bridge,
+      sessionStore: store,
+      livekitUrl: 'wss://voice.example.test',
+      livekitApiKey: 'devkey',
+      livekitApiSecret: 'devsecret',
+    });
+
+    await adapter.start();
+    const result = await bridge.getHandler()!.createSession({
+      principalContactId: '11111111-1111-1111-1111-111111111111',
+    });
+
+    expect(result.status).toBe(503);
+    expect(result.body.error).toMatch(/unavailable/i);
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('ends sessions and publishes ended', async () => {

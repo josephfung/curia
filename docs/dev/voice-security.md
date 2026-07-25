@@ -22,7 +22,9 @@ Focused security memo for the duplex voice surface. Complements ADR-037 and
 
 - Grants: `roomJoin` + `canPublish` + `canSubscribe` for one room only.
 - Explicit TTL: **1h** (not the SDK's 6h default).
-- Rooms are deleted on session end so a leaked JWT cannot rejoin an empty room.
+- Room delete / empty timeouts tidy abandoned rooms; they do **not** revoke
+  JWTs. A leaked token can still rejoin (and LiveKit may auto-create the room)
+  until the TTL expires.
 - Never run LiveKit `--dev` (public `devkey`/`secret`) on a reachable interface.
 
 ## Privacy (third-party data flow)
