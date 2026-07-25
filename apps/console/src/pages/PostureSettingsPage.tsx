@@ -191,8 +191,8 @@ function PostureSection() {
             emptyHint="No standing preferences yet."
           />
           <p className="settings-muted-hint">
-            Stored on the office identity (`behavioralPreferences`). Edits replace the
-            full list; the setup wizard only appends.
+            Standing preferences are part of the office identity. Edits replace the full
+            list; the setup wizard only appends.
           </p>
         </div>
 

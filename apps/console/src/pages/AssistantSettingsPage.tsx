@@ -222,11 +222,17 @@ function AssistantSection() {
     setVoiceSaving(true);
     setVoiceStatus('Saving…');
     try {
+      // Re-fetch so the LLM-learned guide (and any other concurrent edits) are preserved.
+      const freshRes = await apiFetch('/api/executive');
+      if (!freshRes.ok) throw new Error(await errorMessage(freshRes));
+      const freshData = await freshRes.json() as { profile: ExecutiveProfile };
       const writingVoice: WritingVoice = {
-        ...profile.writingVoice,
-        // Preserve the LLM-learned guide — operator UI never edits it.
-        guide: savedVoice.guide,
+        tone: profile.writingVoice.tone,
+        formality: profile.writingVoice.formality,
+        patterns: profile.writingVoice.patterns,
+        vocabulary: profile.writingVoice.vocabulary,
         signOff: profile.writingVoice.signOff.trim(),
+        guide: freshData.profile.writingVoice.guide,
       };
       const res = await apiFetch('/api/executive', {
         method: 'PUT',
