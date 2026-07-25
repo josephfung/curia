@@ -8,6 +8,11 @@
 
 import type { PcmFrame } from './speech/types.js';
 
+export type AudioTransportCloseReason =
+  | 'principal_disconnected'
+  | 'room_disconnected'
+  | 'transport_error';
+
 export interface AudioTransport {
   /** Join the room / open the media path. Resolves once connected. */
   connect(): Promise<void>;
@@ -15,6 +20,12 @@ export interface AudioTransport {
   disconnect(): Promise<void>;
   /** Register a callback for inbound (remote / principal) audio frames. */
   onRemoteAudio(cb: (frame: PcmFrame) => void): void;
+  /**
+   * Register a callback when the media path closes unexpectedly (principal left,
+   * room disconnected). Local `disconnect()` must NOT fire this. VoiceRuntime
+   * uses it to end the session when the console tab closes without DELETE.
+   */
+  onClose(cb: (reason: AudioTransportCloseReason) => void): void;
   /** Publish an outbound (assistant / TTS) audio frame to the remote peer. */
   publishAudio(frame: PcmFrame): Promise<void>;
 }

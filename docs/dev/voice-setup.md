@@ -31,9 +31,10 @@ Default ports are:
 | WebRTC UDP media | `7882/udp` | `LIVEKIT_RTC_UDP_PORT` |
 
 For local development the service runs `livekit-server --dev`, which uses known
-credentials (`devkey` / `secret`). That is only acceptable on a private dev
-machine. Production must use real keys and the same values must be stored in the
-Curia vault.
+credentials (`devkey` / `secret`). **Never expose `--dev` on a public interface** —
+anyone who can reach the ports can mint LiveKit JWTs with those credentials
+without Curia auth. Production must use real keys (via `docker/livekit.yaml`)
+and the same values must be stored in the Curia vault.
 
 For a config-file deploy, copy `docker/livekit.yaml`, replace the placeholder
 key/secret, and add a local compose override:
@@ -51,9 +52,22 @@ Then set:
 LIVEKIT_COMMAND="--config /etc/livekit.yaml"
 ```
 
-`docker/livekit.yaml` sets `rtc.use_external_ip: true` and constrains UDP to
-`7882` to match the default compose port. If you widen the UDP range, update
-both the config and firewall.
+`docker/livekit.yaml` sets `rtc.use_external_ip: true`, constrains UDP to
+`7882` (single-port mux — fine for one concurrent console call; widen before
+expecting multiple simultaneous rooms), and sets `room.empty_timeout: 30` so
+abandoned rooms tear down promptly.
+
+## Security & privacy notes
+
+- Session mint (`POST /api/voice/sessions`) requires the console session cookie
+  (or bootstrap header) — anonymous callers cannot mint room JWTs.
+- Participant JWTs use an explicit **1h TTL** and are scoped to one room with
+  join/publish/subscribe only (no admin grant). Rooms are deleted on hangup.
+- Deepgram auth uses the WebSocket subprotocol `['token', apiKey]` (Deepgram's
+  supported pattern); the browser never sees speech-vendor keys.
+- **Privacy:** enabling voice means principal microphone audio and transcripts
+  leave the host to Deepgram (STT) and Cartesia (TTS), plus the deploy's LLM
+  provider. Treat vendor DPAs accordingly.
 
 ## Public IP, ICE, and TLS
 
@@ -86,9 +100,10 @@ channel is enabled and the session API can mint LiveKit tokens. Click **Call**,
 allow microphone access in the browser, speak naturally, and use mute or hang up
 from the active call bar.
 
-Final user transcripts publish as normal `inbound.message` turns for memory and
-audit. Assistant speech is streamed by `VoiceRuntime` through LiveKit rather than
-sent through `OutboundGateway`.
+Final user and assistant transcripts are written to working memory so they can
+appear in console chat history after the call. Spoken audio itself is streamed
+by `VoiceRuntime` through LiveKit rather than `OutboundGateway` (same gateway
+skip as principal web chat).
 
 ## Latency logs
 

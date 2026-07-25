@@ -91,6 +91,7 @@ function makeRuntime(overrides: {
   transport?: FakeAudioTransport;
   store?: VoiceSessionStore;
   invokeTool?: (call: never, ctx?: { conversationId: string; sessionId: string }) => Promise<{ content: string; is_error?: boolean }>;
+  deleteRoom?: (roomName: string) => Promise<void>;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];
@@ -115,6 +116,7 @@ function makeRuntime(overrides: {
     livekitUrl: 'ws://localhost',
     createTransport: () => transport,
     invokeTool: overrides.invokeTool as never,
+    deleteRoom: overrides.deleteRoom,
   });
   return { runtime, bus, events, stt, transport, tts, store };
 }
@@ -186,7 +188,8 @@ describe('VoiceRuntime', () => {
     expect(framesBeforeBarge).toBeGreaterThan(0);
 
     // Principal interrupts (interim transcript while assistant is talking).
-    stt.emit({ text: 'actually wait', isFinal: false });
+    // Must clear the confidence/length gate (min 3 chars).
+    stt.emit({ text: 'actually wait', isFinal: false, confidence: 0.9 });
 
     await runtime.awaitIdle('s2');
     // TTS was cancelled for the in-flight stream.
@@ -196,6 +199,61 @@ describe('VoiceRuntime', () => {
     // Give any (incorrectly) un-cancelled synthesis time to keep publishing.
     await delay(60);
     expect(transport.publishedFrames.length).toBe(framesAfter);
+  });
+
+  it('ignores low-confidence / tiny interim transcripts for barge-in (echo guard)', async () => {
+    const llm = new FakeStreamProvider(
+      [
+        [
+          { type: 'text_delta', text: 'Speaking for a while. ' },
+          { type: 'message_end', content: 'Speaking for a while.', usage, provenance },
+        ],
+      ],
+      2,
+    );
+    const tts = new SlowTtsProvider(40, 8);
+    const { runtime, stt, transport } = makeRuntime({ llm, tts });
+
+    await runtime.startSession({
+      sessionId: 's-echo',
+      conversationId: 'voice:s-echo',
+      roomName: 'voice-s-echo',
+      agentToken: 'tok',
+    });
+    stt.emit({ text: 'say something', isFinal: true, speechFinal: true });
+    await delay(40);
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
+
+    // Tiny + low-confidence interims must NOT cancel the assistant.
+    stt.emit({ text: 'hi', isFinal: false, confidence: 0.9 }); // too short
+    stt.emit({ text: 'hello there', isFinal: false, confidence: 0.1 }); // too low confidence
+    await delay(20);
+    expect(tts.cancelled.size).toBe(0);
+
+    await runtime.awaitIdle('s-echo');
+  });
+
+  it('ends the session when the audio transport closes (ungraceful hangup)', async () => {
+    const llm = new FakeStreamProvider([[{ type: 'message_end', content: 'ok', usage, provenance }]]);
+    const deleteRoom = vi.fn(async () => {});
+    const { runtime, events, transport } = makeRuntime({ llm, deleteRoom });
+
+    await runtime.startSession({
+      sessionId: 's-close',
+      conversationId: 'voice:s-close',
+      roomName: 'voice-s-close',
+      agentToken: 'tok',
+    });
+    expect(runtime.activeSessionCount).toBe(1);
+
+    transport.emitClose('principal_disconnected');
+    // Allow the void endSession to settle.
+    await delay(30);
+
+    expect(runtime.activeSessionCount).toBe(0);
+    expect(transport.disconnectCount).toBe(1);
+    expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(1);
+    expect(deleteRoom).toHaveBeenCalledWith('voice-s-close');
   });
 
   it('endSession disconnects transport and publishes voice.session.ended once', async () => {
