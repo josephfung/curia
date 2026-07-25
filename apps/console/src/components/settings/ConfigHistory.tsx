@@ -8,7 +8,7 @@ export interface ConfigHistoryEntry {
   summary?: string;
 }
 
-function timeAgo(iso: string): string {
+export function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60_000);
   if (mins < 1) return 'just now';
