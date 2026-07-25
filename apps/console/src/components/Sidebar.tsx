@@ -81,6 +81,10 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
     activeView === 'settings' || activeView === 'tools' || activeView === 'agents' || activeView === 'channels' || activeView === 'mcp-skills',
   );
   const [principalName, setPrincipalName] = useState<string | null>(null);
+  // Real Curia release version from GET /api/system. The build-time __APP_VERSION__
+  // is the console package's own 0.0.x and does not track the app release; we only
+  // fall back to it if the fetch fails.
+  const [version, setVersion] = useState<string | null>(null);
   const { setOpen } = useMobileMenu();
   const navigate = useNavigate();
 
@@ -99,6 +103,25 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         // Non-fatal: sidebar degrades to placeholders, but log so the cause is visible.
         console.error('[Sidebar] Failed to load principal contact:', err);
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    apiFetch('/api/system', { signal: controller.signal })
+      .then(r => {
+        if (!r.ok) throw new Error(`/api/system returned ${r.status}`);
+        return r.json();
+      })
+      .then((data: { system?: { version?: string } }) => {
+        if (typeof data.system?.version === 'string') setVersion(data.system.version);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        // Non-fatal: fall back to the build-time console version so the footer isn't blank.
+        console.error('[Sidebar] Failed to load system version:', err);
+        setVersion(__APP_VERSION__);
       });
     return () => controller.abort();
   }, []);
@@ -232,7 +255,7 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
           <span className="sidebar-user-avatar">{getInitials(principalName)}</span>
           <span className="sidebar-user-meta">
             <span className="sidebar-user-name">{principalName ?? 'Setting up…'}</span>
-            <span className="sidebar-user-org">v{__APP_VERSION__}</span>
+            <span className="sidebar-user-org">{version ? `v${version}` : ''}</span>
           </span>
         </button>
       </div>
