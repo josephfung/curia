@@ -15,11 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-<<<<<<< HEAD
 - **Operator home** — console `/` shows health, attention and activity cards plus a chat CTA. (#1375)
-=======
 - **`authorization.decision`** — audit-logs Gate-1/authz and Gate C allow/deny/escalate. (#1379)
->>>>>>> b9651a35 (feat(audit): emit authorization.decision for Gate-1/authz and Gate C)
 - **`slack-send`** — coordinator-pinned skill for 1:1 Slack DMs via OutboundGateway. (#1526)
 - **SMS channel** — Telnyx office DID two-way text; medium-trust webhook inbound. (#1478)
 - **`OutboundSendRequest`** — new `sms` variant for Telnyx Messages API delivery (public API).
@@ -37,6 +34,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Scheduled pin gaps** — unresolved pins log at error so monitoring catches blind runs. (#1501)
 - **Outbound recipient projection** — channels own request variants + `extractRecipients`; gateway has no projection switch. (#1513; ADR-035)
 - **Signal outbound** — `outbound.delivered.messageId` records the signal-cli send timestamp for reaction correlation. (#1479)
 - **Signal inbound** — reaction envelopes publish `inbound.reaction` (`isRemove` in metadata). (#1479)

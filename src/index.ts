@@ -141,7 +141,7 @@ import {
   loadSkillsFromDiscovery,
   registerSyntheticSingletonSkills,
 } from './skills/skill-loader.js';
-import { resolvePinnedSkills, appendSkillInstructions } from './skills/pin-resolution.js';
+import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps } from './skills/pin-resolution.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
@@ -2085,6 +2085,14 @@ async function main(): Promise<void> {
       toolRegistry,
       logger,
       agentConfig.name,
+    );
+    // Scheduled agents with unresolved pins still boot and keep their cron jobs
+    // (#1501) — error-level log only, so monitoring can catch reduced toolsets.
+    reportScheduledPinGaps(
+      agentConfig.name,
+      pinResolution,
+      (agentConfig.schedule?.length ?? 0) > 0,
+      logger,
     );
     // For the coordinator, interpolate runtime context (just the principal contact ID).
     // The specialist roster and the coordinator's own contact ID are no longer resolved

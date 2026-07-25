@@ -7,6 +7,10 @@
 // install/enable unit; the pin is the per-agent runtime-availability unit.
 //
 // Fine-grained "pin skill but exclude tool" is intentionally unsupported (YAGNI).
+//
+// Scheduled agents (#1501): unresolved pins still skip-and-continue (the agent
+// may run with a reduced toolset), but bootstrap logs at error so monitoring
+// can catch blind cron runs.
 
 import type { SkillRegistry } from './skill-registry.js';
 import type { ToolRegistry } from './registry.js';
@@ -14,6 +18,16 @@ import type { Logger } from '../logger.js';
 import { formatActivatedSkillInstructionBlock } from './skill-instruction-format.js';
 
 export type PinReferentKind = 'skill' | 'tool';
+
+export type UnresolvedPinReason = 'not_found' | 'member_tools_missing';
+
+/** A pin that did not fully resolve against the live registries. */
+export interface UnresolvedPin {
+  pin: string;
+  reason: UnresolvedPinReason;
+  /** Present when reason is member_tools_missing — tools absent from ToolRegistry. */
+  missingTools?: string[];
+}
 
 export interface PinResolution {
   /** Deduped tool names to pass to ToolRegistry.toToolDefinitions(). */
@@ -28,6 +42,8 @@ export interface PinResolution {
   resolvedSkills: string[];
   /** Per-pin referent kind for auditability (ADR-032). */
   resolvedPins: Array<{ pin: string; kind: PinReferentKind }>;
+  /** Pins that were skipped or only partially expanded. */
+  unresolvedPins: UnresolvedPin[];
 }
 
 /**
@@ -37,7 +53,7 @@ export interface PinResolution {
  * 1. SkillRegistry hit (bundle or MCP-projected skill, including synthetic
  *    singletons) → expand members + instructions/flags.
  * 2. Else ToolRegistry hit → first-class single-tool pin (ADR-032).
- * 3. Else warn and skip.
+ * 3. Else warn and skip (recorded in unresolvedPins).
  */
 export function resolvePinnedSkills(
   pinnedSkills: string[],
@@ -51,20 +67,22 @@ export function resolvePinnedSkills(
   const instructionBlocks: string[] = [];
   const resolvedSkills: string[] = [];
   const resolvedPins: Array<{ pin: string; kind: PinReferentKind }> = [];
+  const unresolvedPins: UnresolvedPin[] = [];
   let heartbeatEligible = false;
   let documentWorkspaceEnabled = false;
 
-  const pushTool = (name: string, via: string) => {
-    if (seenTools.has(name)) return;
+  const pushTool = (name: string, via: string): boolean => {
+    if (seenTools.has(name)) return true;
     if (!toolRegistry.get(name)) {
       logger?.warn(
         { agent: agentName, tool: name, via },
         'Pinned skill expands to a tool that is not loaded; skipping tool definition',
       );
-      return;
+      return false;
     }
     seenTools.add(name);
     toolNames.push(name);
+    return true;
   };
 
   for (const pin of pinnedSkills) {
@@ -72,7 +90,13 @@ export function resolvePinnedSkills(
     if (skill) {
       resolvedSkills.push(pin);
       resolvedPins.push({ pin, kind: 'skill' });
-      for (const t of skill.manifest.tools) pushTool(t, pin);
+      const missingTools: string[] = [];
+      for (const t of skill.manifest.tools) {
+        if (!pushTool(t, pin)) missingTools.push(t);
+      }
+      if (missingTools.length > 0) {
+        unresolvedPins.push({ pin, reason: 'member_tools_missing', missingTools });
+      }
       // Prefer the shared formatter when the skill has progressive-disclosure
       // files so pinned imports get the references index. Native instruction
       // blocks without references stay as the raw body (no activation wrapper).
@@ -118,6 +142,7 @@ export function resolvePinnedSkills(
       continue;
     }
 
+    unresolvedPins.push({ pin, reason: 'not_found' });
     logger?.warn(
       { agent: agentName, pin },
       'Pinned skill not found in SkillRegistry (and not a loaded tool); skipping',
@@ -131,7 +156,34 @@ export function resolvePinnedSkills(
     documentWorkspaceEnabled,
     resolvedSkills,
     resolvedPins,
+    unresolvedPins,
   };
+}
+
+/**
+ * Emit an error-level monitoring signal when a scheduled agent boots with
+ * unresolved pinned skills. Schedules still load — the agent may try to run —
+ * but the error is visible in logs for ops (#1501 / curia-deploy#181).
+ *
+ * Non-scheduled agents keep the per-pin warn from resolvePinnedSkills only.
+ */
+export function reportScheduledPinGaps(
+  agentName: string,
+  resolution: PinResolution,
+  hasSchedule: boolean,
+  logger: Logger,
+): void {
+  if (!hasSchedule || resolution.unresolvedPins.length === 0) return;
+
+  // Error-level so log-based alerting / monitoring catches the gap — warn alone
+  // is what let deploy agents run blind for hours (#1501 / curia-deploy#181).
+  logger.error(
+    {
+      agent: agentName,
+      unresolvedPins: resolution.unresolvedPins,
+    },
+    'Scheduled agent has unresolved pinned skills — toolset is reduced vs declared pins',
+  );
 }
 
 /** Append instruction blocks to a system prompt (blank-line separated). */
