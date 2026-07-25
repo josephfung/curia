@@ -26,8 +26,7 @@
 | 16 | [Smoke Test Framework](16-smoke-test-framework.md) | Chat-based test cases, LLM-as-judge evaluation, HTML reports |
 | 17 | [Meeting Debrief](17-meeting-debrief.md) | Proactive debrief agent, detection pipeline, follow-up execution via Bullpen-through-coordinator |
 | 18 | [Onboarding](18-onboarding.md) | Single-command host bootstrap, React form wizard at `/setup`, in-chat `setup-wizard` specialist |
-| 19 | [Tasks & Backlog](19-tasks-and-backlog.md) | `tasks` table (promoted from `agent_tasks`), `task-*` tools, `tasks`/`documents` skills, BacklogHeartbeat, digest backlog sections, project decomposition |
-| 20 | [Resumable Tasks & Projects](20-resumable-tasks-and-projects.md) | Resumable-execution contract, checkpoint/pause, `plan` primitive, frontier advancement, throughput telemetry, adaptive re-planning, principal-facing escalation |
+| 19 | [Tasks, Backlog & Resumable Projects](19-tasks-and-backlog.md) | `tasks` table (promoted from `agent_tasks`), `task-*` tools, `tasks`/`documents` skills, BacklogHeartbeat, digest backlog sections, project decomposition; resumable-execution contract (checkpoint/pause), `plan` primitive, frontier advancement, throughput telemetry, adaptive re-planning, principal-facing escalation |
 | 21 | [Agent Document Workspace (OKF)](21-agent-document-workspace.md) | OKF `working_documents` store, `doc-*` skills, backlink index, accumulator spill, `/scratch` TTL sweep, KG distillation |
 | 22 | [Ant Farm Visualization](22-antfarm-visualization.md) | Pixel-art office replay of the audit log, `@curia/antfarm` SPA (Phaser + React), event→directive interpreter, timeline/stream/asset routes, scoped CSP |
 
@@ -110,5 +109,5 @@ All event types are defined as a TypeScript discriminated union — no `any` pay
 - Multi-tenancy
 - Memory decay engine (schema supports it, logic deferred)
 - Voice/telephony beyond Phase 1 console duplex (Signal calling and PSTN remain deferred)
-- Skill marketplace or versioning
+- Skill marketplace (skill/agent *versioning* has since shipped — see the `version` field convention in [CLAUDE.md](../../CLAUDE.md))
 - Automatic event replay on startup (manual query for now)
