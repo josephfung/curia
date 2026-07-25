@@ -1701,6 +1701,45 @@ table.records-table tbody tr.active td { background: transparent; }
   color: var(--app-destructive);
 }
 
+.chat-input-area {
+  flex: none;
+  border-top: 1px solid var(--app-border);
+}
+
+.voice-call-bar {
+  padding: 10px max(20px, calc((100% - 800px) / 2)) 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  font-size: 12px;
+  color: var(--app-fg-muted);
+}
+
+.voice-call-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--app-green);
+  flex: none;
+}
+
+.voice-call-status,
+.voice-call-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-call-error {
+  color: var(--app-destructive);
+}
+
+.voice-call-spacer {
+  flex: 1;
+}
+
 .chat-composer {
   flex: none;
   /* Match the 800px column constraint of .chat-messages so the input aligns. */
@@ -1709,6 +1748,10 @@ table.records-table tbody tr.active td { background: transparent; }
   display: flex;
   gap: 10px;
   align-items: flex-end;
+}
+
+.chat-input-area .chat-composer {
+  border-top: none;
 }
 
 /* Override the global textarea defaults for the composer. */
@@ -1720,6 +1763,16 @@ table.records-table tbody tr.active td { background: transparent; }
   max-height: 160px;
   font-family: inherit;
   font-size: 13px;
+}
+
+@media (max-width: 560px) {
+  .voice-call-bar {
+    flex-wrap: wrap;
+  }
+
+  .voice-call-spacer {
+    display: none;
+  }
 }
 
 /* ── KG page ─────────────────────────────────────────────────── */

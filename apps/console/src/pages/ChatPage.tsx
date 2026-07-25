@@ -6,11 +6,14 @@ import { useTheme } from '../hooks/useTheme.js';
 import { ChatThread } from './chat/ChatThread.js';
 import { ChatComposer } from './chat/ChatComposer.js';
 import { useChatSession } from './chat/useChatSession.js';
+import { useVoiceCall } from './chat/useVoiceCall.js';
+import { VoiceCallBar } from './chat/VoiceCallBar.js';
 
 export default function ChatPage() {
   const [theme, setTheme] = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const { messages, sending, hasMore, loadingHistory, send, loadMore } = useChatSession();
+  const voiceCall = useVoiceCall();
 
   useEffect(() => {
     if (mobileOpen) {
@@ -34,7 +37,10 @@ export default function ChatPage() {
               loadingHistory={loadingHistory}
               loadMore={loadMore}
             />
-            <ChatComposer disabled={sending} onSend={send} />
+            <div className="chat-input-area">
+              <VoiceCallBar {...voiceCall} />
+              <ChatComposer disabled={sending} onSend={send} />
+            </div>
           </div>
         </main>
       </div>
