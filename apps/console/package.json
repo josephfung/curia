@@ -20,6 +20,7 @@
     "vite": "^8.1.4"
   },
   "dependencies": {
-    "cronstrue": "^3.24.0"
+    "cronstrue": "^3.24.0",
+    "livekit-client": "^2.21.0"
   }
 }

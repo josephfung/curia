@@ -22,6 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Speech providers** — STT/TTS interfaces with Deepgram and Cartesia adapters. (#1414)
 - **Voice channel (scaffold)** — toggleable catalog, sessions table, console session mint API. (#1414)
 - **VoiceRuntime** — duplex STT→LLM stream→TTS cascade with barge-in over LiveKit. (#1414)
+- **Console voice call** — join, mute, and hang up duplex LiveKit calls from chat. (#1414)
 - **Voice setup docs** — LiveKit Compose sample and operator guide for duplex calls. (#1414)
 - **ADR-037** — self-hosted LiveKit voice cascade; STT/TTS provider seams. (#1414)
 - **Audit log Phase 1** — structured columns, `seq`-ordered hash chain, `llm_call_archive` (kill-switch + TTL), `pnpm audit:verify`. (#1383)
