@@ -104,15 +104,21 @@ voice reuses that for session minting (and optional LiveKit webhooks).
   Q&A; closing the gap is a follow-up, not an accidental omission.
 - **Outbound judge parity with web chat:** spoken TTS bypasses
   `OutboundGateway` / Stage-2 judge the same way principal console text does
-  (web chat never calls the gateway). External tool sends still go through
-  the gateway. Do not "fix" this by routing voice through the judge unless
-  web chat changes too.
+  (web chat never calls the gateway). Tool calls from a live call still go
+  through `ExecutionLayer` with a stamped principal `TaskOriginator` +
+  `liveTurn: true`; external tool sends hit the gateway. Do not "fix" spoken
+  egress by routing voice TTS through the judge unless web chat changes too.
 - LiveKit participant JWTs use an **explicit 1h TTL** (not the SDK 6h default).
   Room delete / empty timeouts are **cleanup only** — they do not revoke JWTs.
   A leaked token remains valid until TTL; LiveKit may auto-create the room on
   rejoin within that window.
 - Ungraceful hangup (tab close without DELETE) is handled via LiveKit
   `ParticipantDisconnected` / `Disconnected` → `VoiceRuntime.endSession`.
+- **Residual risks / smoke-test focus (Phase 1):**
+  - Speaker echo can still false-trigger barge-in despite confidence/length
+    gates — validate on speakers vs headset.
+  - Full duplex P95 / ICE / NAT must be validated against real LiveKit +
+    Deepgram + Cartesia (unit fakes do not cover this).
 - Phase 2 transports plug into `VoiceRuntime` without rewriting console
   WebRTC or the speech provider interfaces.
 - Lifting SMS’s webhook-bridge into a shared helper is optional; copy is fine
@@ -120,3 +126,6 @@ voice reuses that for session minting (and optional LiveKit webhooks).
 - **Version bump:** deferred until the channel is enabled/GA in a release cut;
   this PR lands under `[Unreleased]` only (conscious decision — minor bump
   policy still applies when cutting the release that ships voice).
+- Operator how-to (ports, vault, mint auth table, privacy checklist) lives in
+  `docs/dev/voice-setup.md` — keep security facts there and here only; do not
+  reintroduce a third security memo.
