@@ -312,228 +312,235 @@ function AssistantSection() {
       </div>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">Persona</h3>
-        <div className="wizard-field">
-          <label htmlFor="asst-name">Assistant name *</label>
-          <input
-            id="asst-name"
-            type="text"
-            value={identity.assistant.name}
-            onChange={e => {
-              setIdentity({ ...identity, assistant: { ...identity.assistant, name: e.target.value } });
-              if (nameError) setNameError('');
-            }}
-          />
-          {nameError && <div className="wizard-step1-error">{nameError}</div>}
+        <div className="settings-section-head">
+          <h3 className="settings-section-title">Persona</h3>
         </div>
-        <div className="wizard-field">
-          <label htmlFor="asst-title">Title</label>
-          <input
-            id="asst-title"
-            type="text"
-            value={identity.assistant.title}
-            onChange={e => setIdentity({
-              ...identity,
-              assistant: { ...identity.assistant, title: e.target.value },
-            })}
-          />
-        </div>
-        <div className="wizard-field">
-          <label htmlFor="asst-signature">Email signature</label>
-          <textarea
-            id="asst-signature"
-            value={identity.assistant.emailSignature}
-            onChange={e => setIdentity({
-              ...identity,
-              assistant: { ...identity.assistant, emailSignature: e.target.value },
-            })}
-          />
-        </div>
-
-        <TonePillGrid
-          selected={identity.tone.baseline}
-          onChange={baseline => setIdentity({
-            ...identity,
-            tone: { ...identity.tone, baseline },
-          })}
-          idPrefix="asst-tone"
-        />
-        <AssistantToneSliders
-          verbosity={identity.tone.verbosity}
-          directness={identity.tone.directness}
-          onVerbosityChange={verbosity => setIdentity({
-            ...identity,
-            tone: { ...identity.tone, verbosity },
-          })}
-          onDirectnessChange={directness => setIdentity({
-            ...identity,
-            tone: { ...identity.tone, directness },
-          })}
-          idPrefix="asst"
-        />
-
-        <div className="autonomy-control" style={{ marginTop: 20 }}>
-          <ChangeNoteField id="asst-identity-note" value={identityNote} onChange={setIdentityNote} />
-          <div className="autonomy-save-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={!identityDirty || identitySaving}
-              onClick={() => void saveIdentity()}
-            >
-              Save persona
-            </button>
-            {identityStatus && <span className="autonomy-save-status">{identityStatus}</span>}
+        <div className="settings-section-body">
+          <div className="wizard-field">
+            <label htmlFor="asst-name">Assistant name *</label>
+            <input
+              id="asst-name"
+              type="text"
+              value={identity.assistant.name}
+              onChange={e => {
+                setIdentity({ ...identity, assistant: { ...identity.assistant, name: e.target.value } });
+                if (nameError) setNameError('');
+              }}
+            />
+            {nameError && <div className="wizard-step1-error">{nameError}</div>}
           </div>
+          <div className="wizard-field">
+            <label htmlFor="asst-title">Title</label>
+            <input
+              id="asst-title"
+              type="text"
+              value={identity.assistant.title}
+              onChange={e => setIdentity({
+                ...identity,
+                assistant: { ...identity.assistant, title: e.target.value },
+              })}
+            />
+          </div>
+          <div className="wizard-field">
+            <label htmlFor="asst-signature">Email signature</label>
+            <textarea
+              id="asst-signature"
+              value={identity.assistant.emailSignature}
+              onChange={e => setIdentity({
+                ...identity,
+                assistant: { ...identity.assistant, emailSignature: e.target.value },
+              })}
+            />
+          </div>
+
+          <TonePillGrid
+            selected={identity.tone.baseline}
+            onChange={baseline => setIdentity({
+              ...identity,
+              tone: { ...identity.tone, baseline },
+            })}
+            idPrefix="asst-tone"
+          />
+          <AssistantToneSliders
+            verbosity={identity.tone.verbosity}
+            directness={identity.tone.directness}
+            onVerbosityChange={verbosity => setIdentity({
+              ...identity,
+              tone: { ...identity.tone, verbosity },
+            })}
+            onDirectnessChange={directness => setIdentity({
+              ...identity,
+              tone: { ...identity.tone, directness },
+            })}
+            idPrefix="asst"
+          />
+
+          <div className="autonomy-control">
+            <ChangeNoteField id="asst-identity-note" value={identityNote} onChange={setIdentityNote} />
+            <div className="autonomy-save-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!identityDirty || identitySaving}
+                onClick={() => void saveIdentity()}
+              >
+                Save persona
+              </button>
+              {identityStatus && <span className="autonomy-save-status">{identityStatus}</span>}
+            </div>
+          </div>
+          <ConfigHistory entries={identityHistory} error={identityHistoryError} />
         </div>
-        <ConfigHistory entries={identityHistory} error={identityHistoryError} />
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">Writing voice</h3>
-        <p className="settings-page-sub" style={{ marginBottom: 16 }}>
-          How Curia drafts when writing as you (emails, messages). Separate from the assistant&apos;s own tone above.
-        </p>
-        {voiceMeta && (
-          <p className="settings-version-meta">
-            Voice v{voiceMeta.version} · last changed by {voiceMeta.changedBy}
+        <div className="settings-section-head">
+          <h3 className="settings-section-title">Writing voice</h3>
+          <p className="settings-section-sub">
+            How Curia drafts when writing as you (emails, messages). Separate from the assistant&apos;s own tone above.
           </p>
-        )}
-
-        <div className="wizard-label">
-          Tone descriptors{' '}
-          <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
-            (up to 3, free-form)
-          </span>
+          {voiceMeta && (
+            <p className="settings-version-meta">
+              Voice v{voiceMeta.version} · last changed by {voiceMeta.changedBy}
+            </p>
+          )}
         </div>
-        <div className="tone-pill-grid" style={{ marginBottom: 8 }}>
-          {profile.writingVoice.tone.map(word => (
-            <button
-              key={word}
-              type="button"
-              className="tone-pill selected"
-              onClick={() => setProfile({
-                ...profile,
-                writingVoice: {
-                  ...profile.writingVoice,
-                  tone: profile.writingVoice.tone.filter(t => t !== word),
-                },
-              })}
-              title="Click to remove"
-            >
-              {word} ×
-            </button>
-          ))}
-        </div>
-        {profile.writingVoice.tone.length < 3 && (
-          <div className="string-list-add-row" style={{ marginBottom: 16 }}>
-            <input
-              type="text"
-              value={toneDraft}
-              placeholder="e.g. crisp, warm"
-              onChange={e => setToneDraft(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  addVoiceTone();
-                }
-              }}
-            />
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={!toneDraft.trim()}
-              onClick={addVoiceTone}
-            >
-              Add
-            </button>
+        <div className="settings-section-body">
+          <div className="wizard-label">
+            Tone descriptors{' '}
+            <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
+              (up to 3, free-form)
+            </span>
           </div>
-        )}
+          <div className="tone-pill-grid" style={{ marginBottom: 8 }}>
+            {profile.writingVoice.tone.map(word => (
+              <button
+                key={word}
+                type="button"
+                className="tone-pill selected"
+                onClick={() => setProfile({
+                  ...profile,
+                  writingVoice: {
+                    ...profile.writingVoice,
+                    tone: profile.writingVoice.tone.filter(t => t !== word),
+                  },
+                })}
+                title="Click to remove"
+              >
+                {word} ×
+              </button>
+            ))}
+          </div>
+          {profile.writingVoice.tone.length < 3 && (
+            <div className="string-list-add-row" style={{ marginBottom: 16 }}>
+              <input
+                type="text"
+                value={toneDraft}
+                placeholder="e.g. crisp, warm"
+                onChange={e => setToneDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addVoiceTone();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={!toneDraft.trim()}
+                onClick={addVoiceTone}
+              >
+                Add
+              </button>
+            </div>
+          )}
 
-        <FormalitySlider
-          value={profile.writingVoice.formality}
-          onChange={formality => setProfile({
-            ...profile,
-            writingVoice: { ...profile.writingVoice, formality },
-          })}
-          id="voice-formality"
-        />
-
-        <StringListEditor
-          id="voice-patterns"
-          label="Style patterns"
-          items={profile.writingVoice.patterns}
-          onChange={patterns => setProfile({
-            ...profile,
-            writingVoice: { ...profile.writingVoice, patterns },
-          })}
-          placeholder="e.g. Concise and to the point"
-          emptyHint="No patterns yet."
-        />
-
-        <StringListEditor
-          id="voice-prefer"
-          label="Prefer these words"
-          items={profile.writingVoice.vocabulary.prefer}
-          onChange={prefer => setProfile({
-            ...profile,
-            writingVoice: {
-              ...profile.writingVoice,
-              vocabulary: { ...profile.writingVoice.vocabulary, prefer },
-            },
-          })}
-          placeholder="Add a preferred word or phrase"
-        />
-
-        <StringListEditor
-          id="voice-avoid"
-          label="Avoid these words"
-          items={profile.writingVoice.vocabulary.avoid}
-          onChange={avoid => setProfile({
-            ...profile,
-            writingVoice: {
-              ...profile.writingVoice,
-              vocabulary: { ...profile.writingVoice.vocabulary, avoid },
-            },
-          })}
-          placeholder="Add a word or phrase to avoid"
-        />
-
-        <div className="wizard-field">
-          <label htmlFor="voice-signoff">Sign-off</label>
-          <input
-            id="voice-signoff"
-            type="text"
-            value={profile.writingVoice.signOff}
-            placeholder="e.g. Best, — Joseph"
-            onChange={e => setProfile({
+          <FormalitySlider
+            value={profile.writingVoice.formality}
+            onChange={formality => setProfile({
               ...profile,
-              writingVoice: { ...profile.writingVoice, signOff: e.target.value },
+              writingVoice: { ...profile.writingVoice, formality },
             })}
+            id="voice-formality"
           />
-        </div>
 
-        {savedVoice.guide && (
-          <p className="settings-muted-hint" style={{ marginTop: 8 }}>
-            A learned voice guide is active (updated by weekly voice-learn). Operator edits here keep it intact.
-          </p>
-        )}
+          <StringListEditor
+            id="voice-patterns"
+            label="Style patterns"
+            items={profile.writingVoice.patterns}
+            onChange={patterns => setProfile({
+              ...profile,
+              writingVoice: { ...profile.writingVoice, patterns },
+            })}
+            placeholder="e.g. Concise and to the point"
+            emptyHint="No patterns yet."
+          />
 
-        <div className="autonomy-control" style={{ marginTop: 20 }}>
-          <ChangeNoteField id="asst-voice-note" value={voiceNote} onChange={setVoiceNote} />
-          <div className="autonomy-save-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={!voiceDirty || voiceSaving}
-              onClick={() => void saveVoice()}
-            >
-              Save writing voice
-            </button>
-            {voiceStatus && <span className="autonomy-save-status">{voiceStatus}</span>}
+          <StringListEditor
+            id="voice-prefer"
+            label="Prefer these words"
+            items={profile.writingVoice.vocabulary.prefer}
+            onChange={prefer => setProfile({
+              ...profile,
+              writingVoice: {
+                ...profile.writingVoice,
+                vocabulary: { ...profile.writingVoice.vocabulary, prefer },
+              },
+            })}
+            placeholder="Add a preferred word or phrase"
+          />
+
+          <StringListEditor
+            id="voice-avoid"
+            label="Avoid these words"
+            items={profile.writingVoice.vocabulary.avoid}
+            onChange={avoid => setProfile({
+              ...profile,
+              writingVoice: {
+                ...profile.writingVoice,
+                vocabulary: { ...profile.writingVoice.vocabulary, avoid },
+              },
+            })}
+            placeholder="Add a word or phrase to avoid"
+          />
+
+          <div className="wizard-field">
+            <label htmlFor="voice-signoff">Sign-off</label>
+            <input
+              id="voice-signoff"
+              type="text"
+              value={profile.writingVoice.signOff}
+              placeholder="e.g. Best, — Joseph"
+              onChange={e => setProfile({
+                ...profile,
+                writingVoice: { ...profile.writingVoice, signOff: e.target.value },
+              })}
+            />
           </div>
+
+          {savedVoice.guide && (
+            <p className="settings-muted-hint" style={{ marginTop: 8 }}>
+              A learned voice guide is active (updated by weekly voice-learn). Operator edits here keep it intact.
+            </p>
+          )}
+
+          <div className="autonomy-control">
+            <ChangeNoteField id="asst-voice-note" value={voiceNote} onChange={setVoiceNote} />
+            <div className="autonomy-save-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!voiceDirty || voiceSaving}
+                onClick={() => void saveVoice()}
+              >
+                Save writing voice
+              </button>
+              {voiceStatus && <span className="autonomy-save-status">{voiceStatus}</span>}
+            </div>
+          </div>
+          <ConfigHistory entries={voiceHistory} error={voiceHistoryError} />
         </div>
-        <ConfigHistory entries={voiceHistory} error={voiceHistoryError} />
       </section>
     </>
   );
