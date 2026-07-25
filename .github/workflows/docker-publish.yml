@@ -21,6 +21,21 @@ on:
 permissions:
   contents: read
 
+# Only the newest run per ref needs to publish. A rapid batch of main merges
+# (e.g. several back-to-back dependency bumps) each retag `edge`, so keeping
+# every superseded ~10min build running is pure waste — cancel the in-flight
+# one when a newer commit for the same ref arrives.
+#
+# Keying on `github.ref` (not just the workflow name) keeps the trigger types
+# independent: `push` to main collapses into one group (refs/heads/main) so
+# older edge builds get cancelled, while each `release` sits in its own
+# per-tag group (refs/tags/vX.Y.Z) and is never cancelled by another release
+# or by a main push. `edge` is a mutable last-write-wins tag, so cancelling a
+# partial push just leaves the previous `edge` in place until the winner lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
 
