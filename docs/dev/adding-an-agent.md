@@ -144,6 +144,8 @@ Browse `skills/*/SKILL.md` (bundles) and flat `skills/<tool>/` (singleton skills
 - Don't pin skills that are rarely needed — use `allow_discovery: true` instead
 - The Coordinator should pin a broad set since it handles all inbound routing
 
+Unresolved pins are skipped at bootstrap (warn). For **scheduled** agents, unresolved pins are also logged at **error** so monitoring can catch a reduced toolset (#1501) — schedules still load and the agent may try to run; the error is the signal to investigate.
+
 **`allowed_callers` and custom tools:** If a custom tool in your deploy repo has `allowed_callers` set and your new agent needs to use it, add your agent's name to that tool's `allowed_callers` list. This only applies to custom tools in the same deploy repo — core tools should never restrict by deployment-specific agent name. See [Adding a Tool — `allowed_callers`](adding-a-tool.md#allowed_callers-optional) for the full pattern.
 
 Current built-in skills/tools include (see `skills/` for the full list):

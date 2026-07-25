@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { parseSkillMd } from '../../../src/skills/skill-md.js';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
-import { resolvePinnedSkills, appendSkillInstructions } from '../../../src/skills/pin-resolution.js';
+import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
 
@@ -184,6 +184,33 @@ describe('resolvePinnedSkills', () => {
 
     const r = resolvePinnedSkills(['calendar'], skills, tools);
     expect(r.toolNames).toEqual(['calendar-list-events']);
+    expect(r.unresolvedPins).toEqual([
+      {
+        pin: 'calendar',
+        reason: 'member_tools_missing',
+        missingTools: ['calendar-create-event'],
+      },
+    ]);
+  });
+
+  it('records not_found for pins absent from both registries', () => {
+    const tools = new ToolRegistry();
+    const skills = new SkillRegistry();
+    const r = resolvePinnedSkills(['google-workspace', 'web-fetch'], skills, tools);
+    expect(r.toolNames).toEqual([]);
+    expect(r.resolvedPins).toEqual([]);
+    expect(r.unresolvedPins).toEqual([
+      { pin: 'google-workspace', reason: 'not_found' },
+      { pin: 'web-fetch', reason: 'not_found' },
+    ]);
+  });
+
+  it('returns empty unresolvedPins when every pin resolves', () => {
+    const tools = new ToolRegistry();
+    tools.register(toolManifest('web-fetch'), noopHandler);
+    const skills = new SkillRegistry();
+    const r = resolvePinnedSkills(['web-fetch'], skills, tools);
+    expect(r.unresolvedPins).toEqual([]);
   });
 
   it('resolves a first-class tool pin when no skill name matches (ADR-032)', () => {
@@ -273,6 +300,84 @@ describe('resolvePinnedSkills', () => {
     resolvePinnedSkills(['contacts'], skills, tools);
     expect(tools.get('contact-lookup')!.manifest.action_risk).toBe('none');
     expect(tools.get('contact-grant-permission')!.manifest.action_risk).toBe('critical');
+  });
+});
+
+describe('reportScheduledPinGaps (#1501)', () => {
+  function emptyResolution(overrides: Partial<ReturnType<typeof resolvePinnedSkills>> = {}) {
+    return {
+      toolNames: [],
+      instructionBlocks: [],
+      heartbeatEligible: false,
+      documentWorkspaceEnabled: false,
+      resolvedSkills: [],
+      resolvedPins: [] as Array<{ pin: string; kind: 'skill' | 'tool' }>,
+      unresolvedPins: [] as Array<{ pin: string; reason: 'not_found' | 'member_tools_missing'; missingTools?: string[] }>,
+      ...overrides,
+    };
+  }
+
+  it('logs error when a scheduled agent has unresolved pins (schedules still allowed)', () => {
+    const errors: Array<{ msg: string; ctx: Record<string, unknown> }> = [];
+    const logger = {
+      error: (ctx: Record<string, unknown>, msg: string) => {
+        errors.push({ msg, ctx });
+      },
+      warn: () => {},
+      info: () => {},
+      debug: () => {},
+    } as unknown as import('../../../src/logger.js').Logger;
+
+    const tools = new ToolRegistry();
+    const skills = new SkillRegistry();
+    const resolution = resolvePinnedSkills(
+      ['google-workspace', 'tasks'],
+      skills,
+      tools,
+      logger,
+      'T2125-expense-tracker',
+    );
+    reportScheduledPinGaps('T2125-expense-tracker', resolution, true, logger);
+
+    expect(resolution.unresolvedPins.map((g) => g.pin)).toEqual([
+      'google-workspace',
+      'tasks',
+    ]);
+    expect(errors.some((e) => e.msg.includes('unresolved pinned skills'))).toBe(true);
+    expect(errors.some((e) => e.msg.includes('Refusing'))).toBe(false);
+  });
+
+  it('does not escalate when the agent has no schedule', () => {
+    const errors: string[] = [];
+    const logger = {
+      error: (_ctx: Record<string, unknown>, msg: string) => {
+        errors.push(msg);
+      },
+      warn: () => {},
+      info: () => {},
+      debug: () => {},
+    } as unknown as import('../../../src/logger.js').Logger;
+
+    const resolution = emptyResolution({
+      unresolvedPins: [{ pin: 'optional-mcp', reason: 'not_found' }],
+    });
+    reportScheduledPinGaps('research-analyst', resolution, false, logger);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('does not escalate when every pin resolved', () => {
+    const errors: string[] = [];
+    const logger = {
+      error: (_ctx: Record<string, unknown>, msg: string) => {
+        errors.push(msg);
+      },
+      warn: () => {},
+      info: () => {},
+      debug: () => {},
+    } as unknown as import('../../../src/logger.js').Logger;
+
+    reportScheduledPinGaps('ceo-inbox', emptyResolution(), true, logger);
+    expect(errors).toHaveLength(0);
   });
 });
 
