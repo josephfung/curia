@@ -714,6 +714,126 @@ input:focus, textarea:focus, select:focus {
   margin: 0;
 }
 
+.settings-section {
+  max-width: 720px;
+  margin-bottom: 36px;
+}
+.settings-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--app-fg);
+  margin: 0 0 12px;
+  letter-spacing: 0.01em;
+}
+.settings-version-meta {
+  font-size: 12px;
+  color: var(--app-fg-muted);
+  margin: 6px 0 0;
+}
+.settings-muted-hint {
+  font-size: 13px;
+  color: var(--app-fg-muted);
+  margin: 0 0 10px;
+}
+.settings-callout {
+  max-width: 720px;
+  margin: 0 0 24px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--app-teal);
+  background: color-mix(in srgb, var(--app-teal) 8%, transparent);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--app-fg);
+}
+.settings-callout p { margin: 0; }
+.settings-callout a { color: var(--app-teal); }
+.settings-callout-readonly {
+  border-left-color: var(--app-fg-muted);
+  background: color-mix(in srgb, var(--app-fg-muted) 10%, transparent);
+}
+.settings-history-summary {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--app-fg-muted);
+  margin-left: 8px;
+}
+
+.string-list-editor { margin-bottom: 16px; }
+.string-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.string-list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-bg);
+}
+.string-list-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--app-fg);
+  word-break: break-word;
+}
+.string-list-remove {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.string-list-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.string-list-add-row input {
+  flex: 1;
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: var(--app-fg);
+}
+
+.retention-list {
+  margin: 0;
+  max-width: 720px;
+}
+.retention-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--app-border);
+}
+.retention-row dt {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-fg);
+  margin: 0;
+}
+.retention-row dd {
+  font-size: 13px;
+  color: var(--app-fg-muted);
+  margin: 0;
+  line-height: 1.45;
+}
+.retention-row dd strong { color: var(--app-fg); font-weight: 600; }
+
+@media (max-width: 768px) {
+  .retention-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
 /* ── 12. Responsive ──────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .settings-shell { flex-direction: column; }

@@ -1,14 +1,11 @@
-import { useState, useEffect, useRef, type JSX, type CSSProperties } from 'react';
+import { useState, useEffect, useRef, type JSX } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { apiFetch } from '../api.js';
+import { TonePillGrid, AssistantToneSliders } from '../components/settings/ToneFields.js';
+import { PostureCardGrid } from '../components/settings/PostureFields.js';
 import {
   DEFAULT_WIZARD_STATE,
   PRINCIPAL_NAME_MAX_LENGTH,
-  TONE_OPTIONS,
-  toggleToneSelection,
-  verbosityBand,
-  directnessBand,
-  tonePreviewText,
   verbosityReviewDesc,
   directnessReviewDesc,
   postureReviewDesc,
@@ -893,64 +890,22 @@ export default function WizardPage() {
 
   // ── Step 4: Tone ───────────────────────────────────────────────────────────
 
-  const atToneMax = state.toneBaseline.length >= 3;
-
   const step4Tone = (
     <div className="wizard-content">
       <div className="wizard-heading">How should your assistant communicate?</div>
       <div className="wizard-subheading">Pick 1–3 words that describe the tone you want.</div>
-      <div className="wizard-label">
-        Tone <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
-          (pick up to 3)
-        </span>
-      </div>
-      <div className="tone-pill-grid">
-        {TONE_OPTIONS.map(word => {
-          const selected = state.toneBaseline.includes(word);
-          const disabled = atToneMax && !selected;
-          return (
-            <button
-              key={word}
-              type="button"
-              className={`tone-pill${selected ? ' selected' : ''}`}
-              disabled={disabled}
-              onClick={() =>
-                setState(s => ({
-                  ...s,
-                  toneBaseline: toggleToneSelection(s.toneBaseline, word),
-                }))
-              }
-            >
-              {word}
-            </button>
-          );
-        })}
-      </div>
-      <div className="wizard-preview">{tonePreviewText(state.toneBaseline)}</div>
-      <label className="wizard-label" htmlFor="w-verbosity">Detail level</label>
-      <input
-        id="w-verbosity"
-        type="range"
-        min={0}
-        max={100}
-        value={state.verbosity}
-        style={{ width: '100%', marginBottom: 6 } as CSSProperties}
-        onChange={e => setState(s => ({ ...s, verbosity: Number(e.target.value) }))}
+      <TonePillGrid
+        selected={state.toneBaseline}
+        onChange={toneBaseline => setState(s => ({ ...s, toneBaseline }))}
+        idPrefix="w-tone"
       />
-      <div className="slider-labels"><span>Brief</span><span>Thorough</span></div>
-      <div className="wizard-sample">{verbosityBand(state.verbosity)}</div>
-      <label className="wizard-label" htmlFor="w-directness">Directness</label>
-      <input
-        id="w-directness"
-        type="range"
-        min={0}
-        max={100}
-        value={state.directness}
-        style={{ width: '100%', marginBottom: 6 } as CSSProperties}
-        onChange={e => setState(s => ({ ...s, directness: Number(e.target.value) }))}
+      <AssistantToneSliders
+        verbosity={state.verbosity}
+        directness={state.directness}
+        onVerbosityChange={verbosity => setState(s => ({ ...s, verbosity }))}
+        onDirectnessChange={directness => setState(s => ({ ...s, directness }))}
+        idPrefix="w"
       />
-      <div className="slider-labels"><span>Measured</span><span>Direct</span></div>
-      <div className="wizard-sample">{directnessBand(state.directness)}</div>
       <div className="wizard-nav">
         <button type="button" className="btn-wizard-back" onClick={handleBack}>
           ← Back
@@ -964,41 +919,18 @@ export default function WizardPage() {
 
   // ── Step 5: Posture & preferences ──────────────────────────────────────────
 
-  const POSTURE_OPTIONS: Array<{
-    value: WizardState['posture'];
-    title: string;
-    desc: string;
-  }> = [
-    { value: 'conservative', title: 'Conservative', desc: 'Verify before acting; flag ambiguity' },
-    { value: 'balanced',     title: 'Balanced',     desc: 'Act when confident, flag when uncertain' },
-    { value: 'proactive',    title: 'Proactive',    desc: 'Bias toward action; less checking in' },
-  ];
-
   const step5Posture = (
     <div className="wizard-content">
       <div className="wizard-heading">How should your assistant decide?</div>
       <div className="wizard-subheading">
-        Choose a default posture for external actions. You can adjust this later via Autonomy settings.
+        Choose a default posture for external actions. You can refine this later under Settings → Posture
+        (separate from the Autonomy score).
       </div>
-      <div className="wizard-label">
-        Decision posture{' '}
-        <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: 'var(--app-fg-muted)' }}>
-          (for external actions)
-        </span>
-      </div>
-      <div className="posture-grid">
-        {POSTURE_OPTIONS.map(opt => (
-          <button
-            key={opt.value}
-            type="button"
-            className={`posture-card${state.posture === opt.value ? ' selected' : ''}`}
-            onClick={() => setState(s => ({ ...s, posture: opt.value }))}
-          >
-            <div className="posture-card-title">{opt.title}</div>
-            <div className="posture-card-desc">{opt.desc}</div>
-          </button>
-        ))}
-      </div>
+      <PostureCardGrid
+        value={state.posture}
+        onChange={posture => setState(s => ({ ...s, posture }))}
+        scopeHint="(for external actions)"
+      />
       <div className="wizard-label" style={{ marginTop: 4 }}>
         Anything else? <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(Optional)</span>
       </div>

@@ -18,7 +18,7 @@ export interface WizardState {
   toneBaseline: string[];
   verbosity: number;   // 0–100
   directness: number;  // 0–100
-  posture: 'conservative' | 'balanced' | 'proactive';
+  posture: DecisionPosture;
   preferences: string;
   // Step 2 — Your details (principal operational profile, #392).
   timezone: string;
@@ -156,13 +156,33 @@ export function directnessReviewDesc(d: number): string {
   return 'States positions plainly; no softening.';
 }
 
-export function postureReviewDesc(posture: WizardState['posture']): string {
-  const map: Record<WizardState['posture'], string> = {
+export type DecisionPosture = 'conservative' | 'balanced' | 'proactive';
+
+export const POSTURE_OPTIONS: ReadonlyArray<{
+  value: DecisionPosture;
+  title: string;
+  desc: string;
+}> = [
+  { value: 'conservative', title: 'Conservative', desc: 'Verify before acting; flag ambiguity' },
+  { value: 'balanced',     title: 'Balanced',     desc: 'Act when confident, flag when uncertain' },
+  { value: 'proactive',    title: 'Proactive',    desc: 'Bias toward action; less checking in' },
+];
+
+export function postureReviewDesc(posture: DecisionPosture): string {
+  const map: Record<DecisionPosture, string> = {
     conservative: 'Verifies before acting on external requests.',
     balanced:     'Acts when confident; flags when uncertain.',
     proactive:    'Biases toward action with less checking in.',
   };
   return map[posture];
+}
+
+/** Live preview sentence under the executive writing-voice formality slider. */
+export function formalityBand(v: number): string {
+  if (v <= 25) return '"Hey — quick note on this."';
+  if (v <= 50) return '"Sharing a brief update on the situation."';
+  if (v <= 75) return '"Please find a concise summary below."';
+  return '"I am writing to formally address the matter."';
 }
 
 // Returns true if a string is non-empty after trimming. Shared validator for

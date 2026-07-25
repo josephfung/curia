@@ -118,6 +118,14 @@ configurable parts of the office identity, over six steps.
 | 5 — Posture | `posture` (Conservative / Balanced / Proactive), `preferences` textarea (appended to existing `behavioralPreferences`, not replaced) | none |
 | 6 — Review | Summary card, Confirm & save button | none |
 
+**Posture / standing preferences storage (confirmed, #1376):** both live on
+`OfficeIdentity` — `decisionStyle.externalActions` (wizard posture) and
+`behavioralPreferences` (standing prefs). They are versioned with the rest of
+office identity via `PUT /api/identity` and are **not** part of
+`ExecutiveProfile`. Post-setup editing is on `/settings/posture` (replaces the
+list; the wizard still appends). Decision posture is distinct from the
+autonomy score on `/settings/autonomy`.
+
 **Tone options.** The 1–3 baseline pills come from `TONE_OPTIONS` in
 [apps/console/src/pages/wizard-utils.ts](../../apps/console/src/pages/wizard-utils.ts).
 The server-side counterpart is `BASELINE_TONE_OPTIONS` in
