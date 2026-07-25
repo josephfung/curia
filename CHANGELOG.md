@@ -24,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Voice setup docs** — LiveKit Compose sample and operator guide for duplex calls. (#1414)
 - **ADR-037** — self-hosted LiveKit voice cascade; STT/TTS provider seams. (#1414)
 - **Voice hangup hardening** — principal disconnect ends session; 1h JWT TTL; room delete. (#1414)
+- **Tool-loop shape helper** — shared `tool_use`/`tool_result` assembly for voice and text. (#1552)
 - **Audit log Phase 1** — structured columns, `seq`-ordered hash chain, `llm_call_archive` (kill-switch + TTL), `pnpm audit:verify`. (#1383)
 - **DB outage resilience** — `DATABASE_UNAVAILABLE` errors, pool timeouts, skill retry, CEO alert after 5 min. (#1381)
 - **Operator home** — console `/` shows health, attention and activity cards plus a chat CTA. (#1375)

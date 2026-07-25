@@ -1,4 +1,5 @@
-import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ContentBlock, ToolUseContent, ToolResultContent, TextContent } from './llm/provider.js';
+import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ContentBlock } from './llm/provider.js';
+import { buildAssistantToolUseMessage, buildToolResultBlock } from './llm/tool-loop-messages.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
 import type { Tier } from './llm/model-router.js';
@@ -1077,6 +1078,15 @@ export class AgentRuntime {
     const delegationGuard = new DelegationGuard();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
 
+    // WHY TWO LOOPS EXIST (#1552, supersedes #1550): this non-streaming tool
+    // loop (provider.chat) is the text-channel path. Voice uses VoiceTurnRunner
+    // over provider.stream() with barge-in abort + sentence-chunk TTS — see
+    // src/channels/voice/turn-runner.ts. Do not fold voice into handleTask until
+    // a shared streaming turn primitive exists (#1552). Until then, keep
+    // tool_use / tool_result ContentBlock shapes in sync via
+    // src/agents/llm/tool-loop-messages.ts. Divergence risks: round caps
+    // (maxTurns vs MAX_TOOL_ROUNDS), autonomy/Gate-C invoke path, assistant
+    // output sanitization. Sibling: #1551 (brain/context + history read model).
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
@@ -1093,20 +1103,9 @@ export class AgentRuntime {
 
       // Build the assistant turn with the actual tool_use content blocks.
       // The Anthropic API requires these to exist so tool_result blocks can
-      // reference their IDs in the next user turn.
-      const assistantBlocks: ContentBlock[] = [];
-      if (response.content) {
-        assistantBlocks.push({ type: 'text', text: response.content } as TextContent);
-      }
-      for (const tc of response.toolCalls) {
-        assistantBlocks.push({
-          type: 'tool_use',
-          id: tc.id,
-          name: tc.name,
-          input: tc.input,
-        } as ToolUseContent);
-      }
-      messages.push({ role: 'assistant', content: assistantBlocks });
+      // reference their IDs in the next user turn. Shape shared with
+      // VoiceTurnRunner via tool-loop-messages.ts (#1552).
+      messages.push(buildAssistantToolUseMessage(response.toolCalls, response.content));
 
       // Execute each tool call through the execution layer.
       // Publish tool.invoke and tool.result bus events for audit coverage.
@@ -1459,11 +1458,7 @@ export class AgentRuntime {
 
           const resultContent = toolResultOverride
             ?? (typeof result.data === 'string' ? result.data : JSON.stringify(result.data));
-          toolResultBlocks.push({
-            type: 'tool_result',
-            tool_use_id: toolCall.id,
-            content: resultContent,
-          } as ToolResultContent);
+          toolResultBlocks.push(buildToolResultBlock(toolCall.id, resultContent));
           if (pendingDelegationEscalation) {
             break;
           }
@@ -1495,12 +1490,7 @@ export class AgentRuntime {
             isDbFailure ? budget.dbFailures : budget.consecutiveErrors,
             isDbFailure ? budget.dbFailures : budget.maxConsecutiveErrors,
           );
-          toolResultBlocks.push({
-            type: 'tool_result',
-            tool_use_id: toolCall.id,
-            content: formattedError,
-            is_error: true,
-          } as ToolResultContent);
+          toolResultBlocks.push(buildToolResultBlock(toolCall.id, formattedError, true));
         }
       }
 

@@ -8,6 +8,17 @@
 // speaks a short filler, invokes the tools, and continues the stream with the
 // tool results appended — looping until message_end, error, or abort.
 //
+// WHY TWO LOOPS EXIST (#1552, supersedes #1550): AgentRuntime.handleTask is a
+// non-streaming while(tool_use) over provider.chat(), entangled with
+// retry/fallback, error budgets, and full-buffer-then-deliver. Voice needs
+// stream() + barge-in abort + sentence-chunk TTS — forcing it through
+// handleTask now would risk every text channel. Both paths MUST keep Anthropic
+// tool_use / tool_result message shapes in sync via
+// src/agents/llm/tool-loop-messages.ts until a shared streaming turn primitive
+// lands (#1552). Do not re-diverge block assembly here.
+// Sibling debt (brain/context parity + history read model): #1551.
+// Cross-link: src/agents/runtime.ts tool_use loop.
+//
 // Barge-in: runTurn honours the caller's AbortSignal. When the signal fires
 // (the principal started speaking over the assistant), the runner stops
 // consuming the stream promptly and returns { aborted: true } without flushing
@@ -17,15 +28,15 @@ import { randomUUID } from 'node:crypto';
 import type { AgentError } from '../../errors/types.js';
 import type { Logger } from '../../logger.js';
 import type {
-  ContentBlock,
   LLMProvider,
   Message,
-  TextContent,
   ToolCall,
   ToolDefinition,
-  ToolResultContent,
-  ToolUseContent,
 } from '../../agents/llm/provider.js';
+import {
+  buildAssistantToolUseMessage,
+  buildUserToolResultMessage,
+} from '../../agents/llm/tool-loop-messages.js';
 import { SentenceChunker } from './sentence-chunker.js';
 
 /** Filler spoken before invoking (potentially slow) tools so the line is not silent. */
@@ -175,32 +186,20 @@ export class VoiceTurnRunner {
 
         // Assistant turn must carry the tool_use blocks so the following
         // tool_result blocks can reference their ids (Anthropic requirement).
-        const assistantBlocks: ContentBlock[] = [];
-        if (toolUse.content) {
-          assistantBlocks.push({ type: 'text', text: toolUse.content } satisfies TextContent);
-        }
-        for (const call of toolUse.toolCalls) {
-          assistantBlocks.push({
-            type: 'tool_use',
-            id: call.id,
-            name: call.name,
-            input: call.input,
-          } satisfies ToolUseContent);
-        }
-        workingMessages.push({ role: 'assistant', content: assistantBlocks });
+        // Shape shared with AgentRuntime via tool-loop-messages.ts (#1552).
+        workingMessages.push(buildAssistantToolUseMessage(toolUse.toolCalls, toolUse.content));
 
-        const toolResultBlocks: ContentBlock[] = [];
+        const toolResults: Array<{ id: string; content: string; isError?: boolean }> = [];
         for (const call of toolUse.toolCalls) {
           if (signal.aborted) break;
           const result = this.config.invokeTool
             ? await this.config.invokeTool(call)
             : { content: 'Tool execution is not wired for voice turns yet.', is_error: true };
-          toolResultBlocks.push({
-            type: 'tool_result',
-            tool_use_id: call.id,
+          toolResults.push({
+            id: call.id,
             content: result.content,
-            ...(result.is_error ? { is_error: true } : {}),
-          } satisfies ToolResultContent);
+            isError: result.is_error,
+          });
         }
 
         if (signal.aborted) {
@@ -208,7 +207,7 @@ export class VoiceTurnRunner {
           return { finalText: '', aborted: true, toolRounds, streamId };
         }
 
-        workingMessages.push({ role: 'user', content: toolResultBlocks });
+        workingMessages.push(buildUserToolResultMessage(toolResults));
         continue;
       }
 
