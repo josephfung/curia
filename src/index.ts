@@ -81,6 +81,10 @@ import { SmsWebhookBridge } from './channels/sms/webhook-bridge.js';
 import { VoiceAdapter } from './channels/voice/voice-adapter.js';
 import { VoiceSessionBridge } from './channels/voice/session-bridge.js';
 import { VoiceSessionStore } from './channels/voice/session-store.js';
+import { VoiceRuntime } from './channels/voice/voice-runtime.js';
+import { DeepgramSttProvider } from './channels/voice/speech/deepgram-stt.js';
+import { CartesiaTtsProvider } from './channels/voice/speech/cartesia-tts.js';
+import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
@@ -1785,6 +1789,42 @@ async function main(): Promise<void> {
     if (abandoned > 0) {
       logger.warn({ count: abandoned }, 'Marked abandoned voice sessions failed on startup');
     }
+
+    // Voice turns use the 'fast' tier by default (ADR-037 §3), overridable via
+    // channels.voice.model. The runtime needs a provider that supports stream();
+    // if the resolved provider cannot stream, we skip the duplex runtime (tokens
+    // can still be minted, but no server-side spoken turns run).
+    const voiceModel = config.voiceModel ?? modelRouter.resolve('fast').model;
+    const voiceBaseProvider = resolveProviderForModel(voiceModel, 'VoiceRuntime');
+    let voiceRuntime: VoiceRuntime | undefined;
+    if (typeof voiceBaseProvider.stream === 'function') {
+      // Wrap in telemetry so voice turns emit llm.call cost events like every other path.
+      const voiceLlmProvider = new TelemetryLlmProvider(voiceBaseProvider, bus, logger, 'voice-turn', modelRegistry);
+      const voiceLivekitUrl = config.voiceLivekitUrl;
+      voiceRuntime = new VoiceRuntime({
+        bus,
+        logger,
+        sessionStore: voiceSessionStore,
+        stt: new DeepgramSttProvider(config.voiceDeepgramApiKey, logger),
+        tts: new CartesiaTtsProvider(config.voiceCartesiaApiKey, logger),
+        llm: voiceLlmProvider,
+        model: voiceModel,
+        livekitUrl: voiceLivekitUrl,
+        createTransport: ({ token, livekitUrl }) =>
+          new LiveKitRoomSession({ url: livekitUrl, token, logger }),
+        // Phase 1: no coordinator tools wired yet. The turn-runner tool loop is
+        // implemented and tested; passing `tools` + `invokeTool` here is all that
+        // a later phase needs (ADR-037 §6).
+      });
+      logger.info({ voiceModel }, 'Voice runtime constructed (streaming provider available)');
+    } else {
+      logger.warn(
+        { voiceModel, provider: voiceBaseProvider.id },
+        'Voice channel enabled but the resolved LLM provider does not support stream(); '
+        + 'server-side voice turns are disabled. Remap channels.voice.model / the fast tier to a streaming provider.',
+      );
+    }
+
     voiceAdapter = new VoiceAdapter({
       bus,
       logger,
@@ -1794,6 +1834,7 @@ async function main(): Promise<void> {
       livekitApiKey: config.voiceLivekitApiKey,
       livekitApiSecret: config.voiceLivekitApiSecret,
       voiceModel: config.voiceModel,
+      voiceRuntime,
     });
   } else if (channelShouldStart.has('voice')) {
     logger.warn('channel voice is enabled + resolvable but runtime credentials are missing (LiveKit, Deepgram, or Cartesia); no Voice adapter constructed — check vault credentials and restart');
