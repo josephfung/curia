@@ -18,7 +18,7 @@
 // LLMResponse { type: 'error' } so callers never need try/catch. This is
 // especially important for AgentRuntime, which calls chat() without a wrapper.
 
-import type { LLMProvider, LLMResponse, Message, ToolDefinition, ToolResult } from './provider.js';
+import type { LLMProvider, LLMResponse, LLMStreamEvent, Message, ToolDefinition, ToolResult } from './provider.js';
 import type { ModelRegistry } from './model-registry.js';
 import { classifyError } from '../../errors/classify.js';
 
@@ -77,5 +77,65 @@ export class LLMProviderRouter implements LLMProvider {
     // fallback path still forward a top-level model to the concrete provider.
     // If params.model was already set, this is a no-op spread.
     return provider.chat({ ...params, model });
+  }
+
+  async *stream(params: {
+    messages: Message[];
+    tools?: ToolDefinition[];
+    toolResults?: ToolResult[];
+    model?: string;
+    options?: Record<string, unknown>;
+  }): AsyncIterable<LLMStreamEvent> {
+    const model = params.model ?? (typeof params.options?.model === 'string' ? params.options.model : undefined);
+
+    if (!model) {
+      yield {
+        type: 'error',
+        error: classifyError(
+          new Error('LLMProviderRouter.stream() requires a model — no model was provided'),
+          'router',
+        ),
+      };
+      return;
+    }
+
+    const providerName = this.modelRegistry.getProvider(model);
+    if (!providerName) {
+      yield {
+        type: 'error',
+        error: classifyError(
+          new Error(`LLMProviderRouter: model '${model}' is not in the model registry — cannot route to a provider`),
+          'router',
+        ),
+      };
+      return;
+    }
+
+    const provider = this.providerRegistry.get(providerName);
+    if (!provider) {
+      yield {
+        type: 'error',
+        error: classifyError(
+          new Error(`LLMProviderRouter: provider '${providerName}' is not registered (required for model '${model}')`),
+          'router',
+        ),
+      };
+      return;
+    }
+
+    if (!provider.stream) {
+      yield {
+        type: 'error',
+        error: classifyError(
+          new Error(`LLMProviderRouter: provider '${providerName}' does not support streaming (required for model '${model}')`),
+          'router',
+        ),
+      };
+      return;
+    }
+
+    for await (const event of provider.stream({ ...params, model })) {
+      yield event;
+    }
   }
 }

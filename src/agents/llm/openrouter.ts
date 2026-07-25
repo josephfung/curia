@@ -12,11 +12,11 @@
 //      prompt caching.
 //   4. Errors are caught and returned as LLMResponse { type: 'error' } so
 //      callers never need try/catch around chat().
-//   5. No streaming — all calls use the non-streaming create endpoint.
+//   5. Streaming uses OpenRouter's OpenAI-compatible chunk protocol.
 
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam, ChatCompletionTool, ChatCompletion } from 'openai/resources/chat/completions/completions.js';
-import type { LLMProvider, LLMResponse, LLMUsage, LLMCallProvenance, Message, ContentBlock, ToolCall, ToolDefinition, ToolResult } from './provider.js';
+import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvenance, Message, ContentBlock, ToolCall, ToolDefinition, ToolResult } from './provider.js';
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
@@ -108,7 +108,7 @@ export class OpenRouterProvider implements LLMProvider {
     this.modelRegistry = modelRegistry;
   }
 
-  async chat({
+  private buildCreateParams({
     messages,
     tools,
     toolResults,
@@ -120,7 +120,11 @@ export class OpenRouterProvider implements LLMProvider {
     toolResults?: ToolResult[];
     model?: string;
     options?: Record<string, unknown>;
-  }): Promise<LLMResponse> {
+  }, operation: 'chat' | 'stream'): {
+    createParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
+    model: string;
+    signal?: AbortSignal;
+  } {
     // Extract and concatenate all system messages into a single system role
     // entry. The OpenAI API accepts system messages inline (unlike Anthropic),
     // but we still merge them for consistency — the runtime injects multiple
@@ -259,45 +263,120 @@ export class OpenRouterProvider implements LLMProvider {
     // Prefer the explicit model param; fall back to options.model for backward compatibility.
     const optionsModel = typeof options?.model === 'string' ? options.model : undefined;
     const model = modelOverride ?? optionsModel;
+    if (!model) {
+      throw new Error(`OpenRouterProvider.${operation}() requires a model — no model was provided and no default is configured`);
+    }
+
+    // Per-model output cap from the registry. Fall back to 4096 for unknown models.
+    const modelMeta = this.modelRegistry.getModel(model);
+    const modelMaxTokens = modelMeta?.maxOutputTokens ?? 4096;
+    if (!modelMeta) {
+      this.logger.warn({ model, fallbackMaxTokens: 4096 }, 'Model not in registry — using fallback maxOutputTokens');
+    }
+    // Honor the caller's max_tokens request, but never exceed the model's cap.
+    const callerMaxTokens = typeof options?.max_tokens === 'number' && Number.isFinite(options.max_tokens)
+      ? Math.max(1, Math.floor(options.max_tokens as number))
+      : undefined;
+
+    const createParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+      model,
+      max_tokens: callerMaxTokens !== undefined ? Math.min(callerMaxTokens, modelMaxTokens) : modelMaxTokens,
+      messages: conversationMessages,
+    };
+
+    // Only attach the tools array when tools are provided — the API rejects
+    // an empty tools array, so we omit the key entirely when there are none.
+    if (tools && tools.length > 0) {
+      createParams.tools = tools.map((t): ChatCompletionTool => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.input_schema as OpenAI.FunctionParameters,
+        },
+      }));
+    }
+
+    // Honor an optional AbortSignal passed via options.signal so callers can
+    // cancel an in-flight request instead of orphaning it.
+    const signal = options?.signal instanceof AbortSignal ? options.signal : undefined;
+    return { createParams, model, signal };
+  }
+
+  private usageFromCompletion(response: ChatCompletion): LLMUsage {
+    return {
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+    };
+  }
+
+  private provenanceFromCompletion(response: ChatCompletion, requestedModel: string): LLMCallProvenance {
+    return {
+      requestedModel,
+      actualModel: response.model,
+      providerRequestId: response.id,
+    };
+  }
+
+  private parseToolCallInput(toolName: string, serializedArguments: string): Record<string, unknown> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(serializedArguments);
+    } catch {
+      throw new Error(
+        `Tool call "${toolName}" has malformed JSON arguments: ${serializedArguments.slice(0, 200)}`,
+      );
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`Tool call "${toolName}" returned non-object arguments: ${serializedArguments}`);
+    }
+    return parsed as Record<string, unknown>;
+  }
+
+  private classifyProviderError(err: unknown) {
+    // Pull OpenRouter's buried upstream-provider detail up into the error
+    // message before classification, so `last_error` (and the LLM-facing
+    // <task_error> block) carry the real cause instead of the opaque
+    // "400 Provider returned error" wrapper.
+    const providerDetail = extractOpenRouterProviderError(err, this.logger);
+    const errorForClassification = providerDetail
+      ? Object.assign(
+          // Lead with the distilled upstream reason so it survives the
+          // downstream 400-char truncation; the opaque wrapper trails.
+          new Error(
+            `${providerDetail.providerName ?? 'upstream provider'}: ${providerDetail.detail} (${extractRawMessage(err)})`,
+          ),
+          // Preserve status/code so classifyError still maps the HTTP status
+          // (400 → VALIDATION_ERROR, 5xx → PROVIDER_ERROR, etc.) correctly.
+          {
+            status: (err as { status?: unknown }).status,
+            code: (err as { code?: unknown }).code,
+          },
+        )
+      : err;
+
+    const classified = classifyError(errorForClassification, 'openrouter');
+    if (providerDetail?.providerName) {
+      classified.context.providerName = providerDetail.providerName;
+    }
+    return classified;
+  }
+
+  async chat(params: {
+    messages: Message[];
+    tools?: ToolDefinition[];
+    toolResults?: ToolResult[];
+    model?: string;
+    options?: Record<string, unknown>;
+  }): Promise<LLMResponse> {
+    let model: string | undefined = params.model ?? (typeof params.options?.model === 'string' ? params.options.model : undefined);
 
     try {
-      if (!model) {
-        throw new Error('OpenRouterProvider.chat() requires a model — no model was provided and no default is configured');
-      }
-
-      // Per-model output cap from the registry. Fall back to 4096 for unknown models.
-      const modelMeta = this.modelRegistry.getModel(model);
-      const modelMaxTokens = modelMeta?.maxOutputTokens ?? 4096;
-      if (!modelMeta) {
-        this.logger.warn({ model, fallbackMaxTokens: 4096 }, 'Model not in registry — using fallback maxOutputTokens');
-      }
-      // Honor the caller's max_tokens request, but never exceed the model's cap.
-      const callerMaxTokens = typeof options?.max_tokens === 'number' && Number.isFinite(options.max_tokens)
-        ? Math.max(1, Math.floor(options.max_tokens as number))
-        : undefined;
-
-      const createParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
-        model,
-        max_tokens: callerMaxTokens !== undefined ? Math.min(callerMaxTokens, modelMaxTokens) : modelMaxTokens,
-        messages: conversationMessages,
-      };
-
-      // Only attach the tools array when tools are provided — the API rejects
-      // an empty tools array, so we omit the key entirely when there are none.
-      if (tools && tools.length > 0) {
-        createParams.tools = tools.map((t): ChatCompletionTool => ({
-          type: 'function',
-          function: {
-            name: t.name,
-            description: t.description,
-            parameters: t.input_schema as OpenAI.FunctionParameters,
-          },
-        }));
-      }
-
-      // Honor an optional AbortSignal passed via options.signal so callers (e.g. the
-      // outbound judge's timeout) can cancel an in-flight request instead of orphaning it.
-      const signal = options?.signal instanceof AbortSignal ? options.signal : undefined;
+      const built = this.buildCreateParams(params, 'chat');
+      model = built.model;
+      const { createParams, signal } = built;
       const response: ChatCompletion = await this.client.chat.completions.create(createParams, signal ? { signal } : undefined);
 
       // Extract the first choice — OpenRouter always returns at least one.
@@ -330,22 +409,8 @@ export class OpenRouterProvider implements LLMProvider {
         );
       }
 
-      // OpenRouter doesn't support Anthropic-style prompt caching.
-      // Cache token fields are always 0.
-      const usage: LLMUsage = {
-        inputTokens: response.usage?.prompt_tokens ?? 0,
-        outputTokens: response.usage?.completion_tokens ?? 0,
-        cacheCreationInputTokens: 0,
-        cacheReadInputTokens: 0,
-      };
-
-      // Provenance captures what model was requested vs. what actually ran.
-      // OpenRouter may route to a different model variant (e.g. adding :free suffix).
-      const provenance: LLMCallProvenance = {
-        requestedModel: model,
-        actualModel: response.model,
-        providerRequestId: response.id,
-      };
+      const usage = this.usageFromCompletion(response);
+      const provenance = this.provenanceFromCompletion(response, model);
 
       // Check for tool calls in the response.
       const toolCalls = choice.message.tool_calls;
@@ -356,29 +421,11 @@ export class OpenRouterProvider implements LLMProvider {
         const functionCalls = toolCalls.filter(
           (tc): tc is Extract<typeof tc, { type: 'function' }> => tc.type === 'function',
         );
-        const mappedToolCalls: ToolCall[] = functionCalls.map((tc) => {
-          // Parse the JSON arguments string into a plain object.
-          // The OpenAI SDK returns arguments as a JSON string. Non-Claude
-          // models (DeepSeek, Gemini) occasionally produce malformed JSON,
-          // so we catch parse errors separately to produce a specific message
-          // rather than the generic "OpenRouter API call failed".
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(tc.function.arguments);
-          } catch {
-            throw new Error(
-              `Tool call "${tc.function.name}" has malformed JSON arguments: ${tc.function.arguments.slice(0, 200)}`,
-            );
-          }
-          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-            throw new Error(`Tool call "${tc.function.name}" returned non-object arguments: ${tc.function.arguments}`);
-          }
-          return {
-            id: tc.id,
-            name: tc.function.name,
-            input: parsed as Record<string, unknown>,
-          };
-        });
+        const mappedToolCalls: ToolCall[] = functionCalls.map((tc) => ({
+          id: tc.id,
+          name: tc.function.name,
+          input: this.parseToolCallInput(tc.function.name, tc.function.arguments),
+        }));
 
         return {
           type: 'tool_use',
@@ -407,35 +454,153 @@ export class OpenRouterProvider implements LLMProvider {
       };
     } catch (err) {
       this.logger.error({ err, model }, 'OpenRouter API call failed');
+      return { type: 'error', error: this.classifyProviderError(err) };
+    }
+  }
 
-      // Pull OpenRouter's buried upstream-provider detail up into the error
-      // message before classification, so `last_error` (and the LLM-facing
-      // <task_error> block) carry the real cause instead of the opaque
-      // "400 Provider returned error" wrapper.
-      const providerDetail = extractOpenRouterProviderError(err, this.logger);
-      const errorForClassification = providerDetail
-        ? Object.assign(
-            // Lead with the distilled upstream reason so it survives the
-            // downstream 400-char truncation; the opaque wrapper trails.
-            new Error(
-              `${providerDetail.providerName ?? 'upstream provider'}: ${providerDetail.detail} (${extractRawMessage(err)})`,
-            ),
-            // Preserve status/code so classifyError still maps the HTTP status
-            // (400 → VALIDATION_ERROR, 5xx → PROVIDER_ERROR, etc.) correctly.
-            {
-              status: (err as { status?: unknown }).status,
-              code: (err as { code?: unknown }).code,
-            },
-          )
-        : err;
+  async *stream(params: {
+    messages: Message[];
+    tools?: ToolDefinition[];
+    toolResults?: ToolResult[];
+    model?: string;
+    options?: Record<string, unknown>;
+  }): AsyncIterable<LLMStreamEvent> {
+    type PendingToolCall = {
+      id?: string;
+      name: string;
+      arguments: string;
+    };
 
-      // Classify the error into a structured AgentError so the runtime
-      // can make informed retry and budget decisions.
-      const classified = classifyError(errorForClassification, 'openrouter');
-      if (providerDetail?.providerName) {
-        classified.context.providerName = providerDetail.providerName;
+    let model: string | undefined = params.model ?? (typeof params.options?.model === 'string' ? params.options.model : undefined);
+
+    try {
+      const built = this.buildCreateParams(params, 'stream');
+      model = built.model;
+      const { createParams, signal } = built;
+      const streamParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
+        ...createParams,
+        stream: true,
+        stream_options: { include_usage: true },
+      };
+      const stream = await this.client.chat.completions.create(streamParams, signal ? { signal } : undefined);
+
+      let content = '';
+      let usage: LLMUsage = {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+      };
+      let providerRequestId = '';
+      let actualModel = model;
+      let seenChunk = false;
+      let finishReason: string | null = null;
+      const toolCallDeltas = new Map<number, PendingToolCall>();
+
+      for await (const chunk of stream) {
+        seenChunk = true;
+        providerRequestId = chunk.id || providerRequestId;
+        actualModel = chunk.model || actualModel;
+
+        if (chunk.usage) {
+          usage = {
+            inputTokens: chunk.usage.prompt_tokens ?? 0,
+            outputTokens: chunk.usage.completion_tokens ?? 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+          };
+        }
+
+        for (const choice of chunk.choices) {
+          finishReason = choice.finish_reason ?? finishReason;
+          const textDelta = choice.delta.content;
+          if (textDelta) {
+            content += textDelta;
+            yield { type: 'text_delta', text: textDelta };
+          }
+
+          for (const toolCallDelta of choice.delta.tool_calls ?? []) {
+            const pending = toolCallDeltas.get(toolCallDelta.index) ?? { name: '', arguments: '' };
+            if (toolCallDelta.id) pending.id = toolCallDelta.id;
+            if (toolCallDelta.function?.name) pending.name += toolCallDelta.function.name;
+            if (toolCallDelta.function?.arguments) pending.arguments += toolCallDelta.function.arguments;
+            toolCallDeltas.set(toolCallDelta.index, pending);
+          }
+        }
       }
-      return { type: 'error', error: classified };
+
+      if (!seenChunk) {
+        throw new Error('OpenRouter stream returned no chunks');
+      }
+
+      this.logger.debug(
+        {
+          model,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          finishReason,
+        },
+        'OpenRouter streaming API call completed',
+      );
+
+      if (finishReason === 'length') {
+        this.logger.warn(
+          {
+            model,
+            outputTokens: usage.outputTokens,
+            finishReason: 'length',
+          },
+          'OpenRouter streamed response truncated by max_tokens cap — output is incomplete. Consider increasing responseReserve or reducing input context.',
+        );
+      }
+
+      const provenance: LLMCallProvenance = {
+        requestedModel: model,
+        actualModel,
+        providerRequestId,
+      };
+      const toolCalls: ToolCall[] = Array.from(toolCallDeltas.entries())
+        .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
+        .map(([index, pending]) => {
+          if (!pending.id) {
+            throw new Error(`Streamed tool call at index ${index} is missing id`);
+          }
+          if (!pending.name) {
+            throw new Error(`Streamed tool call at index ${index} is missing function name`);
+          }
+          return {
+            id: pending.id,
+            name: pending.name,
+            input: this.parseToolCallInput(pending.name, pending.arguments),
+          };
+        });
+
+      if (toolCalls.length > 0) {
+        yield {
+          type: 'tool_use',
+          toolCalls,
+          content: content || undefined,
+          usage,
+          provenance,
+        };
+        return;
+      }
+
+      if (!content) {
+        this.logger.error(
+          { model, finishReason },
+          'LLM returned empty streamed text response',
+        );
+      }
+      yield {
+        type: 'message_end',
+        content,
+        usage,
+        provenance,
+      };
+    } catch (err) {
+      this.logger.error({ err, model }, 'OpenRouter streaming API call failed');
+      yield { type: 'error', error: this.classifyProviderError(err) };
     }
   }
 }

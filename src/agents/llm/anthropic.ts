@@ -13,8 +13,8 @@
 //      can be used with different Claude versions without re-instantiation.
 
 import Anthropic from '@anthropic-ai/sdk';
-import type { MessageParam, ToolUseBlock, TextBlock, TextBlockParam, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
-import type { LLMProvider, LLMResponse, LLMUsage, LLMCallProvenance, Message, ToolCall, ToolDefinition, ToolResult } from './provider.js';
+import type { Message as AnthropicMessage, MessageParam, ToolUseBlock, TextBlock, TextBlockParam, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvenance, Message, ToolCall, ToolDefinition, ToolResult } from './provider.js';
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
@@ -31,7 +31,7 @@ export class AnthropicProvider implements LLMProvider {
     this.modelRegistry = modelRegistry;
   }
 
-  async chat({
+  private buildCreateParams({
     messages,
     tools,
     toolResults,
@@ -43,7 +43,11 @@ export class AnthropicProvider implements LLMProvider {
     toolResults?: ToolResult[];
     model?: string;
     options?: Record<string, unknown>;
-  }): Promise<LLMResponse> {
+  }, operation: 'chat' | 'stream'): {
+    createParams: Anthropic.Messages.MessageCreateParamsNonStreaming;
+    model: string;
+    signal?: AbortSignal;
+  } {
     // Anthropic requires the system prompt as a separate top-level parameter,
     // not as an element in the messages array. We extract it here so agent
     // code can use a uniform Message[] convention without knowing this detail.
@@ -116,58 +120,110 @@ export class AnthropicProvider implements LLMProvider {
     // indicates a bug at the call site. Fail loudly rather than silently using a stale default.
     const optionsModel = typeof options?.model === 'string' ? options.model : undefined;
     const model = modelOverride ?? optionsModel;
+    if (!model) {
+      throw new Error(`AnthropicProvider.${operation}() requires a model — no model was provided and no default is configured`);
+    }
+
+    // Per-model output cap from the registry. Fall back to 4096 for unknown models.
+    const modelMaxTokens = this.modelRegistry.getModel(model)?.maxOutputTokens ?? 4096;
+    // Honor the caller's max_tokens request, but never exceed the model's cap.
+    // Skills use low limits (e.g. 10 for a classifier gate) to stay cheap —
+    // silently ignoring those limits defeats the purpose of passing them.
+    const callerMaxTokens = typeof options?.max_tokens === 'number' && Number.isFinite(options.max_tokens)
+      ? Math.max(1, Math.floor(options.max_tokens as number))
+      : undefined;
+    const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
+      model,
+      max_tokens: callerMaxTokens !== undefined ? Math.min(callerMaxTokens, modelMaxTokens) : modelMaxTokens,
+      // Wrap the concatenated system string in a TextBlockParam array with a
+      // cache_control breakpoint. This tells Anthropic to cache everything up
+      // to this block, saving ~5K tokens of system prompt cost on repeat calls.
+      // Omit the key entirely when there is no system content (same as before).
+      system: systemContent
+        ? [{ type: 'text' as const, text: systemContent, cache_control: { type: 'ephemeral' as const } } satisfies TextBlockParam]
+        : undefined,
+      messages: conversationMessages,
+    };
+
+    // Only attach the tools array when tools are provided — the API rejects
+    // an empty tools array, so we omit the key entirely when there are none.
+    if (tools && tools.length > 0) {
+      // Type explicitly as Tool[] so that spreading cache_control onto the last
+      // element is accepted by TypeScript — the inferred type from .map() is
+      // narrower and doesn't include the optional cache_control field.
+      const mappedTools: Anthropic.Messages.Tool[] = tools.map(t => ({
+        name: t.name,
+        description: t.description,
+        // Cast required because ToolDefinition.input_schema is a narrower shape
+        // than the SDK's polymorphic Tool['input_schema'] union type.
+        input_schema: t.input_schema as Anthropic.Messages.Tool['input_schema'],
+      }));
+      // Mark the last tool with a cache_control breakpoint so the entire tool
+      // list is captured in a single cache slot. The coordinator's tool list is
+      // stable (48 pinned skills), so this achieves near-100% hit rate within
+      // the 5-minute TTL and saves ~10K tokens per call.
+      // Mutate in place rather than spread-reassign — the spread pattern widens
+      // the inferred type and makes required fields optional, breaking assignability.
+      mappedTools[mappedTools.length - 1]!.cache_control = { type: 'ephemeral' as const };
+      createParams.tools = mappedTools;
+    }
+
+    // Honor an optional AbortSignal passed via options.signal so callers can
+    // cancel an in-flight request instead of orphaning it.
+    const signal = options?.signal instanceof AbortSignal ? options.signal : undefined;
+    return { createParams, model, signal };
+  }
+
+  private usageFromResponse(response: AnthropicMessage): LLMUsage {
+    return {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
+      cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
+    };
+  }
+
+  private provenanceFromResponse(response: AnthropicMessage, requestedModel: string): LLMCallProvenance {
+    return {
+      requestedModel,
+      actualModel: response.model,
+      providerRequestId: response.id,
+    };
+  }
+
+  private toolCallsFromResponse(response: AnthropicMessage): ToolCall[] {
+    const toolUseBlocks = response.content.filter(
+      (c): c is ToolUseBlock => c.type === 'tool_use',
+    );
+    return toolUseBlocks.map((block) => ({
+      id: block.id,
+      name: block.name,
+      // block.input is typed as unknown by the SDK; well-formed tool inputs are
+      // plain objects by the time they reach provider-neutral callers.
+      input: block.input as Record<string, unknown>,
+    }));
+  }
+
+  private textFromResponse(response: AnthropicMessage): string {
+    return response.content
+      .filter((c): c is TextBlock => c.type === 'text')
+      .map((block) => block.text)
+      .join('');
+  }
+
+  async chat(params: {
+    messages: Message[];
+    tools?: ToolDefinition[];
+    toolResults?: ToolResult[];
+    model?: string;
+    options?: Record<string, unknown>;
+  }): Promise<LLMResponse> {
+    let model: string | undefined = params.model ?? (typeof params.options?.model === 'string' ? params.options.model : undefined);
 
     try {
-      if (!model) {
-        throw new Error('AnthropicProvider.chat() requires a model — no model was provided and no default is configured');
-      }
-      // Per-model output cap from the registry. Fall back to 4096 for unknown models.
-      const modelMaxTokens = this.modelRegistry.getModel(model)?.maxOutputTokens ?? 4096;
-      // Honor the caller's max_tokens request, but never exceed the model's cap.
-      // Skills use low limits (e.g. 10 for a classifier gate) to stay cheap —
-      // silently ignoring those limits defeats the purpose of passing them.
-      const callerMaxTokens = typeof options?.max_tokens === 'number' && Number.isFinite(options.max_tokens)
-        ? Math.max(1, Math.floor(options.max_tokens as number))
-        : undefined;
-      const createParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
-        model,
-        max_tokens: callerMaxTokens !== undefined ? Math.min(callerMaxTokens, modelMaxTokens) : modelMaxTokens,
-        // Wrap the concatenated system string in a TextBlockParam array with a
-        // cache_control breakpoint. This tells Anthropic to cache everything up
-        // to this block, saving ~5K tokens of system prompt cost on repeat calls.
-        // Omit the key entirely when there is no system content (same as before).
-        system: systemContent
-          ? [{ type: 'text' as const, text: systemContent, cache_control: { type: 'ephemeral' as const } } satisfies TextBlockParam]
-          : undefined,
-        messages: conversationMessages,
-      };
-
-      // Only attach the tools array when tools are provided — the API rejects
-      // an empty tools array, so we omit the key entirely when there are none.
-      if (tools && tools.length > 0) {
-        // Type explicitly as Tool[] so that spreading cache_control onto the last
-        // element is accepted by TypeScript — the inferred type from .map() is
-        // narrower and doesn't include the optional cache_control field.
-        const mappedTools: Anthropic.Messages.Tool[] = tools.map(t => ({
-          name: t.name,
-          description: t.description,
-          // Cast required because ToolDefinition.input_schema is a narrower shape
-          // than the SDK's polymorphic Tool['input_schema'] union type.
-          input_schema: t.input_schema as Anthropic.Messages.Tool['input_schema'],
-        }));
-        // Mark the last tool with a cache_control breakpoint so the entire tool
-        // list is captured in a single cache slot. The coordinator's tool list is
-        // stable (48 pinned skills), so this achieves near-100% hit rate within
-        // the 5-minute TTL and saves ~10K tokens per call.
-        // Mutate in place rather than spread-reassign — the spread pattern widens
-        // the inferred type and makes required fields optional, breaking assignability.
-        mappedTools[mappedTools.length - 1]!.cache_control = { type: 'ephemeral' as const };
-        createParams.tools = mappedTools;
-      }
-
-      // Honor an optional AbortSignal passed via options.signal so callers (e.g. the
-      // outbound judge's timeout) can cancel an in-flight request instead of orphaning it.
-      const signal = options?.signal instanceof AbortSignal ? options.signal : undefined;
+      const built = this.buildCreateParams(params, 'chat');
+      model = built.model;
+      const { createParams, signal } = built;
       const response = await this.client.messages.create(createParams, signal ? { signal } : undefined);
 
       this.logger.debug(
@@ -182,57 +238,30 @@ export class AnthropicProvider implements LLMProvider {
         'Anthropic API call completed',
       );
 
-      const usage: LLMUsage = {
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
-        cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
-        cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
-      };
-
-      // Provenance captures what model was requested vs. what actually ran, plus the
-      // Anthropic response ID for cross-referencing with Anthropic's own audit console.
-      const provenance: LLMCallProvenance = {
-        requestedModel: model,
-        actualModel: response.model,
-        providerRequestId: response.id,
-      };
+      const usage = this.usageFromResponse(response);
+      const provenance = this.provenanceFromResponse(response, model);
 
       // Use type guard functions for narrowing — avoids casting and is safer
       // than checking c.type === 'tool_use' without narrowing to ToolUseBlock.
-      const toolUseBlocks = response.content.filter(
-        (c): c is ToolUseBlock => c.type === 'tool_use',
-      );
-      if (toolUseBlocks.length > 0) {
-        const toolCalls: ToolCall[] = toolUseBlocks.map((block) => ({
-          id: block.id,
-          name: block.name,
-          // block.input is typed as unknown by the SDK; we assert the shape
-          // we expect since all well-formed tool inputs are plain objects.
-          input: block.input as Record<string, unknown>,
-        }));
-
+      const toolCalls = this.toolCallsFromResponse(response);
+      if (toolCalls.length > 0) {
         // The model may emit a text preamble alongside tool calls (e.g.
         // "Let me look that up…"). Preserve it so callers can surface it.
-        const textBlock = response.content.find(
-          (c): c is TextBlock => c.type === 'text',
-        );
+        const textContent = this.textFromResponse(response);
 
         return {
           type: 'tool_use',
           toolCalls,
-          content: textBlock?.text,
+          content: textContent || undefined,
           usage,
           provenance,
         };
       }
 
       // response.content is an array of content blocks (text, tool_use, etc.).
-      // We extract the first text block; if the model returns only tool_use
+      // Text blocks are concatenated; if the model returns only tool_use
       // blocks, content will be an empty string.
-      const textContent = response.content.find(
-        (c): c is TextBlock => c.type === 'text',
-      );
-      const content = textContent?.text ?? '';
+      const content = this.textFromResponse(response);
       if (!content) {
         // Log at error level — an empty text response means the user will receive a blank reply.
         // The runtime catches this and returns a fallback message, but this event indicates
@@ -250,6 +279,71 @@ export class AnthropicProvider implements LLMProvider {
       // Classify the error into a structured AgentError so the runtime
       // can make informed retry and budget decisions.
       return { type: 'error', error: classifyError(err, 'anthropic') };
+    }
+  }
+
+  async *stream(params: {
+    messages: Message[];
+    tools?: ToolDefinition[];
+    toolResults?: ToolResult[];
+    model?: string;
+    options?: Record<string, unknown>;
+  }): AsyncIterable<LLMStreamEvent> {
+    let model: string | undefined = params.model ?? (typeof params.options?.model === 'string' ? params.options.model : undefined);
+
+    try {
+      const built = this.buildCreateParams(params, 'stream');
+      model = built.model;
+      const { createParams, signal } = built;
+      const stream = this.client.messages.stream(createParams, signal ? { signal } : undefined);
+
+      for await (const event of stream) {
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta' && event.delta.text) {
+          yield { type: 'text_delta', text: event.delta.text };
+        }
+      }
+
+      const response = await stream.finalMessage();
+      this.logger.debug(
+        {
+          model,
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          cacheCreationTokens: response.usage.cache_creation_input_tokens ?? 0,
+          cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+          stopReason: response.stop_reason,
+        },
+        'Anthropic streaming API call completed',
+      );
+
+      const usage = this.usageFromResponse(response);
+      const provenance = this.provenanceFromResponse(response, model);
+      const toolCalls = this.toolCallsFromResponse(response);
+      const content = this.textFromResponse(response);
+
+      if (toolCalls.length > 0) {
+        yield {
+          type: 'tool_use',
+          toolCalls,
+          content: content || undefined,
+          usage,
+          provenance,
+        };
+        return;
+      }
+
+      if (!content) {
+        this.logger.error({ model, stopReason: response.stop_reason }, 'LLM returned empty streamed text response');
+      }
+      yield {
+        type: 'message_end',
+        content,
+        usage,
+        provenance,
+      };
+    } catch (err) {
+      this.logger.error({ err, model }, 'Anthropic streaming API call failed');
+      yield { type: 'error', error: classifyError(err, 'anthropic') };
     }
   }
 }

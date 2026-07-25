@@ -1,7 +1,7 @@
 // provider-router.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { LLMProviderRouter } from './provider-router.js';
-import type { LLMProvider, LLMResponse } from './provider.js';
+import type { LLMProvider, LLMResponse, LLMStreamEvent } from './provider.js';
 import type { ModelRegistry } from './model-registry.js';
 
 // Minimal ModelRegistry stub — only getProvider() is needed by the router.
@@ -26,6 +26,26 @@ function makeProvider(id: string): LLMProvider {
     id,
     chat: vi.fn().mockResolvedValue(okResponse),
   };
+}
+
+function makeStreamProvider(id: string, streamEvents: LLMStreamEvent[]): LLMProvider {
+  const provider = makeProvider(id);
+  provider.stream = vi.fn(() => ({
+    async *[Symbol.asyncIterator]() {
+      for (const event of streamEvents) {
+        yield event;
+      }
+    },
+  }));
+  return provider;
+}
+
+async function collectStream(iterable: AsyncIterable<LLMStreamEvent>): Promise<LLMStreamEvent[]> {
+  const events: LLMStreamEvent[] = [];
+  for await (const event of iterable) {
+    events.push(event);
+  }
+  return events;
 }
 
 const MESSAGES = [{ role: 'user' as const, content: 'hello' }];
@@ -154,5 +174,44 @@ describe('LLMProviderRouter', () => {
       tools,
       options,
     });
+  });
+
+  it('routes stream calls to the provider selected by model', async () => {
+    const streamEvents: LLMStreamEvent[] = [
+      { type: 'text_delta', text: 'hi' },
+      {
+        type: 'message_end',
+        content: 'hi',
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'claude-sonnet-4-6', actualModel: 'claude-sonnet-4-6', providerRequestId: 'req-stream' },
+      },
+    ];
+    anthropicProvider = makeStreamProvider('anthropic', streamEvents);
+    providerRegistry.set('anthropic', anthropicProvider);
+    const modelRegistry = makeModelRegistry({ 'claude-sonnet-4-6': 'anthropic' });
+    const router = new LLMProviderRouter(modelRegistry, providerRegistry);
+
+    const events = await collectStream(router.stream({
+      messages: MESSAGES,
+      model: 'claude-sonnet-4-6',
+      options: { max_tokens: 100 },
+    }));
+
+    expect(anthropicProvider.stream).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'claude-sonnet-4-6', options: { max_tokens: 100 } }),
+    );
+    expect(events).toEqual(streamEvents);
+  });
+
+  it('yields an error event when the resolved provider does not support stream', async () => {
+    const modelRegistry = makeModelRegistry({ 'claude-sonnet-4-6': 'anthropic' });
+    const router = new LLMProviderRouter(modelRegistry, providerRegistry);
+
+    const events = await collectStream(router.stream({ messages: MESSAGES, model: 'claude-sonnet-4-6' }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe('error');
+    if (events[0]!.type !== 'error') return;
+    expect(events[0]!.error.message).toMatch(/does not support streaming/);
   });
 });
