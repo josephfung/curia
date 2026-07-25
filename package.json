@@ -46,7 +46,7 @@
     "@fastify/cookie": "^11.1.1",
     "@fastify/cors": "^11.3.0",
     "@fastify/rate-limit": "^11.1.0",
-    "@fastify/static": "^10.1.0",
+    "@fastify/static": "^10.1.2",
     "@ghostery/adblocker-playwright": "^2.18.1",
     "@livekit/rtc-node": "^0.13.31",
     "@modelcontextprotocol/sdk": "^1.29.0",
