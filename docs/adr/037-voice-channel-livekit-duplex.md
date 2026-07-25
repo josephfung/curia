@@ -107,8 +107,10 @@ voice reuses that for session minting (and optional LiveKit webhooks).
   (web chat never calls the gateway). External tool sends still go through
   the gateway. Do not "fix" this by routing voice through the judge unless
   web chat changes too.
-- LiveKit participant JWTs use an **explicit 1h TTL** (not the SDK 6h default);
-  rooms are deleted on session end so a leaked token cannot rejoin.
+- LiveKit participant JWTs use an **explicit 1h TTL** (not the SDK 6h default).
+  Room delete / empty timeouts are **cleanup only** — they do not revoke JWTs.
+  A leaked token remains valid until TTL; LiveKit may auto-create the room on
+  rejoin within that window.
 - Ungraceful hangup (tab close without DELETE) is handled via LiveKit
   `ParticipantDisconnected` / `Disconnected` → `VoiceRuntime.endSession`.
 - Phase 2 transports plug into `VoiceRuntime` without rewriting console

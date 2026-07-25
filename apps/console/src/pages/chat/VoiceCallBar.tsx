@@ -17,7 +17,9 @@ export function VoiceCallBar({
   toggleMute,
   hangUp,
 }: VoiceCallBarProps) {
-  if (!voiceAvailable && callState !== 'error') return null;
+  // Keep mute / hang-up visible while a call is in progress even if a status
+  // refresh briefly reports voice unavailable.
+  if (!voiceAvailable && callState === 'idle') return null;
 
   if (callState === 'idle' || callState === 'error') {
     return (

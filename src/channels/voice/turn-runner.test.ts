@@ -211,6 +211,66 @@ describe('VoiceTurnRunner', () => {
     ).rejects.toBeInstanceOf(VoiceTurnError);
   });
 
+  it('converts a throwing invokeTool into a tool_result error and continues', async () => {
+    const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
+    let capturedResult: { content?: string; is_error?: boolean } | undefined;
+    const provider = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [toolCall], usage, provenance }],
+      [{ type: 'message_end', content: 'recovered', usage, provenance }],
+    ]);
+    const origStream = provider.stream.bind(provider);
+    provider.stream = async function* (params: { messages?: unknown[]; options?: Record<string, unknown> }) {
+      if (provider.streamCalls === 1 && Array.isArray(params.messages)) {
+        const lastMsg = params.messages[params.messages.length - 1] as {
+          content: Array<{ content?: string; is_error?: boolean }>;
+        };
+        capturedResult = lastMsg.content[0];
+      }
+      yield* origStream(params as never);
+    } as never;
+
+    const runner = new VoiceTurnRunner({
+      provider,
+      model: 'fake',
+      logger,
+      invokeTool: async () => {
+        throw new Error('boom');
+      },
+      onSpeechText: async () => {},
+    });
+
+    const result = await runner.runTurn({ messages: [], signal: new AbortController().signal });
+    expect(capturedResult?.content).toContain("Tool 'lookup' failed: boom");
+    expect(capturedResult?.is_error).toBe(true);
+    expect(result.finalText).toBe('recovered');
+    expect(result.toolRounds).toBe(1);
+  });
+
+  it('accumulates spoken text and speaks a fallback when the tool loop exhausts', async () => {
+    const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
+    // Eight tool_use rounds with no message_end → hit MAX_TOOL_ROUNDS.
+    const scripts: LLMStreamEvent[][] = Array.from({ length: 8 }, () => [
+      { type: 'tool_use', toolCalls: [toolCall], usage, provenance },
+    ]);
+    const provider = new FakeStreamProvider(scripts);
+    const spoken: string[] = [];
+    const runner = new VoiceTurnRunner({
+      provider,
+      model: 'fake',
+      logger,
+      invokeTool: async () => ({ content: 'ok' }),
+      onFiller: async () => {},
+      onSpeechText: async text => {
+        spoken.push(text);
+      },
+    });
+
+    const result = await runner.runTurn({ messages: [], signal: new AbortController().signal });
+    expect(result.toolRounds).toBe(8);
+    expect(spoken).toContain('Sorry, I could not finish that — please try again.');
+    expect(result.finalText).toContain('Sorry, I could not finish that — please try again.');
+  });
+
   it('stops cleanly on abort and does not flush the trailing partial sentence', async () => {
     // First a complete sentence (spoken), then a partial that must NOT be flushed
     // once the signal aborts. Delay each yield so the abort lands mid-stream.

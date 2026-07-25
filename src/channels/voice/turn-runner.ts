@@ -42,6 +42,9 @@ import { SentenceChunker } from './sentence-chunker.js';
 /** Filler spoken before invoking (potentially slow) tools so the line is not silent. */
 const DEFAULT_FILLER = 'One moment.';
 
+/** Spoken when the tool loop exhausts without a message_end so the line is not silent. */
+const EXHAUSTION_FALLBACK = 'Sorry, I could not finish that — please try again.';
+
 /** Hard cap on tool-use rounds to guard against a tool loop that never terminates. */
 const MAX_TOOL_ROUNDS = 8;
 
@@ -111,11 +114,18 @@ export class VoiceTurnRunner {
     const turnStartedAt = Date.now();
     let ttftLogged = false;
     let toolRounds = 0;
+    // Everything handed to TTS this turn, so finalText matches what was heard
+    // even when we fall out of the loop without a message_end.
+    let spokenText = '';
+    const speak = async (text: string): Promise<void> => {
+      spokenText = spokenText.length > 0 ? `${spokenText} ${text}` : text;
+      await this.config.onSpeechText(text, { streamId });
+    };
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       if (signal.aborted) {
         chunker.reset();
-        return { finalText: '', aborted: true, toolRounds, streamId };
+        return { finalText: spokenText, aborted: true, toolRounds, streamId };
       }
 
       // stream() is guaranteed present by the constructor guard.
@@ -140,7 +150,7 @@ export class VoiceTurnRunner {
           }
           for (const sentence of chunker.push(event.text)) {
             if (signal.aborted) break;
-            await this.config.onSpeechText(sentence, { streamId });
+            await speak(sentence);
           }
         } else if (event.type === 'tool_use') {
           toolUse = { toolCalls: event.toolCalls, content: event.content };
@@ -158,7 +168,7 @@ export class VoiceTurnRunner {
         // Barge-in: drop any buffered partial sentence — it must not be spoken
         // or recorded as a completed assistant turn.
         chunker.reset();
-        return { finalText: messageEnd?.content ?? '', aborted: true, toolRounds, streamId };
+        return { finalText: spokenText, aborted: true, toolRounds, streamId };
       }
 
       if (streamError) {
@@ -171,9 +181,12 @@ export class VoiceTurnRunner {
         // Speak any trailing partial sentence that never hit a boundary.
         const remainder = chunker.flush();
         if (remainder && !signal.aborted) {
-          await this.config.onSpeechText(remainder, { streamId });
+          await speak(remainder);
         }
-        return { finalText: messageEnd.content, aborted: signal.aborted, toolRounds, streamId };
+        // Prefer the model's terminal content when present; otherwise fall back
+        // to what was actually handed to TTS (covers multi-round tool turns).
+        const finalText = messageEnd.content.length > 0 ? messageEnd.content : spokenText;
+        return { finalText, aborted: signal.aborted, toolRounds, streamId };
       }
 
       if (toolUse) {
@@ -181,8 +194,11 @@ export class VoiceTurnRunner {
         // Speak whatever preceded the tool call, then a short filler so the
         // line is not silent while the tool runs.
         const remainder = chunker.flush();
-        if (remainder) await this.config.onSpeechText(remainder, { streamId });
-        if (this.config.onFiller) await this.config.onFiller(DEFAULT_FILLER);
+        if (remainder) await speak(remainder);
+        if (this.config.onFiller) {
+          await this.config.onFiller(DEFAULT_FILLER);
+          // Filler is heard but is not part of the assistant reply transcript.
+        }
 
         // Assistant turn must carry the tool_use blocks so the following
         // tool_result blocks can reference their ids (Anthropic requirement).
@@ -192,9 +208,20 @@ export class VoiceTurnRunner {
         const toolResults: Array<{ id: string; content: string; isError?: boolean }> = [];
         for (const call of toolUse.toolCalls) {
           if (signal.aborted) break;
-          const result = this.config.invokeTool
-            ? await this.config.invokeTool(call)
-            : { content: 'Tool execution is not wired for voice turns yet.', is_error: true };
+          let result: { content: string; is_error?: boolean };
+          if (this.config.invokeTool) {
+            try {
+              result = await this.config.invokeTool(call);
+            } catch (err) {
+              this.log.warn({ streamId, tool: call.name, err }, 'voice tool invocation threw');
+              result = {
+                content: `Tool '${call.name}' failed: ${err instanceof Error ? err.message : String(err)}`,
+                is_error: true,
+              };
+            }
+          } else {
+            result = { content: 'Tool execution is not wired for voice turns yet.', is_error: true };
+          }
           toolResults.push({
             id: call.id,
             content: result.content,
@@ -204,7 +231,7 @@ export class VoiceTurnRunner {
 
         if (signal.aborted) {
           chunker.reset();
-          return { finalText: '', aborted: true, toolRounds, streamId };
+          return { finalText: spokenText, aborted: true, toolRounds, streamId };
         }
 
         workingMessages.push(buildUserToolResultMessage(toolResults));
@@ -217,11 +244,14 @@ export class VoiceTurnRunner {
     }
 
     // Fell out of the loop (hit MAX_TOOL_ROUNDS or an empty stream). Flush any
-    // buffered text so it is still spoken.
+    // buffered text so it is still spoken, and never leave the principal silent.
     const remainder = chunker.flush();
     if (remainder && !signal.aborted) {
-      await this.config.onSpeechText(remainder, { streamId });
+      await speak(remainder);
     }
-    return { finalText: remainder ?? '', aborted: signal.aborted, toolRounds, streamId };
+    if (spokenText.length === 0 && !signal.aborted) {
+      await speak(EXHAUSTION_FALLBACK);
+    }
+    return { finalText: spokenText, aborted: signal.aborted, toolRounds, streamId };
   }
 }

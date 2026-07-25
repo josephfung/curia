@@ -109,44 +109,56 @@ export class LiveKitRoomSession implements AudioTransport {
     const room = new rtc.Room();
     this.room = room;
 
-    room.on(rtc.RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
-      if (track.kind !== rtc.TrackKind.KIND_AUDIO) return;
-      this.startConsuming(rtc, track);
-    });
+    try {
+      room.on(rtc.RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+        if (track.kind !== rtc.TrackKind.KIND_AUDIO) return;
+        this.startConsuming(rtc, track);
+      });
 
-    // Principal closed the console tab / lost WebRTC — tear the Curia session down
-    // so we don't leave STT sockets and an `active` voice_sessions row behind.
-    room.on(rtc.RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
-      if (participant.identity === PRINCIPAL_IDENTITY) {
-        this.log.info({ identity: participant.identity }, 'Principal left LiveKit room');
-        this.emitClose('principal_disconnected');
+      // Principal closed the console tab / lost WebRTC — tear the Curia session down
+      // so we don't leave STT sockets and an `active` voice_sessions row behind.
+      room.on(rtc.RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+        if (participant.identity === PRINCIPAL_IDENTITY) {
+          this.log.info({ identity: participant.identity }, 'Principal left LiveKit room');
+          this.emitClose('principal_disconnected');
+        }
+      });
+
+      room.on(rtc.RoomEvent.Disconnected, () => {
+        this.emitClose('room_disconnected');
+      });
+
+      await room.connect(this.config.url, this.config.token, {
+        autoSubscribe: true,
+        dynacast: false,
+      });
+
+      // Publish the assistant's audio track from an AudioSource we capture into.
+      const source = new rtc.AudioSource(this.publishSampleRate, 1);
+      this.source = source;
+      const track = rtc.LocalAudioTrack.createAudioTrack('curia-agent-voice', source);
+      this.localTrack = track;
+      await room.localParticipant?.publishTrack(
+        track,
+        new rtc.TrackPublishOptions({ source: rtc.TrackSource.SOURCE_MICROPHONE }),
+      );
+
+      this.connected = true;
+      this.log.info(
+        { inboundSampleRate: this.inboundSampleRate, publishSampleRate: this.publishSampleRate },
+        'LiveKit room connected; agent audio track published',
+      );
+    } catch (err) {
+      // Roll back any partially allocated native resources before surfacing the
+      // failure — otherwise a rejected connect/publish leaves a room/source/track
+      // pinned for the lifetime of this LiveKitRoomSession instance.
+      try {
+        await this.disconnect();
+      } catch (cleanupErr) {
+        this.log.warn({ err: cleanupErr }, 'error rolling back LiveKit connect failure');
       }
-    });
-
-    room.on(rtc.RoomEvent.Disconnected, () => {
-      this.emitClose('room_disconnected');
-    });
-
-    await room.connect(this.config.url, this.config.token, {
-      autoSubscribe: true,
-      dynacast: false,
-    });
-
-    // Publish the assistant's audio track from an AudioSource we capture into.
-    const source = new rtc.AudioSource(this.publishSampleRate, 1);
-    this.source = source;
-    const track = rtc.LocalAudioTrack.createAudioTrack('curia-agent-voice', source);
-    this.localTrack = track;
-    await room.localParticipant?.publishTrack(
-      track,
-      new rtc.TrackPublishOptions({ source: rtc.TrackSource.SOURCE_MICROPHONE }),
-    );
-
-    this.connected = true;
-    this.log.info(
-      { inboundSampleRate: this.inboundSampleRate, publishSampleRate: this.publishSampleRate },
-      'LiveKit room connected; agent audio track published',
-    );
+      throw err;
+    }
   }
 
   private startConsuming(rtc: RtcModule, track: RemoteTrack): void {
@@ -184,8 +196,8 @@ export class LiveKitRoomSession implements AudioTransport {
       } finally {
         try {
           reader.releaseLock();
-        } catch {
-          // Reader already released (e.g. after cancel) — safe to ignore.
+        } catch (err) {
+          this.log.debug({ err }, 'audio stream reader lock was already released');
         }
         this.readers.delete(reader);
       }

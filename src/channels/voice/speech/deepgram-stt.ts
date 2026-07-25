@@ -120,12 +120,19 @@ class DeepgramSttSession implements SttSession {
   private ended = false;
   private cancelled = false;
   private closed = false;
+  private connectionErrorReported = false;
 
   constructor(
     private readonly socket: ProviderWebSocket,
     private readonly logger: Logger,
     private readonly onConnectionError?: (err: Error) => void,
   ) {}
+
+  private reportConnectionError(err: Error): void {
+    if (this.ended || this.cancelled || this.connectionErrorReported) return;
+    this.connectionErrorReported = true;
+    this.onConnectionError?.(err);
+  }
 
   sendAudio(frame: PcmFrame): void {
     if (this.cancelled || this.ended || this.socket.readyState !== WEBSOCKET_OPEN) {
@@ -192,9 +199,7 @@ class DeepgramSttSession implements SttSession {
 
   handleError(event: unknown): Error {
     const err = normalizeSocketError(event);
-    if (!this.ended && !this.cancelled) {
-      this.onConnectionError?.(err);
-    }
+    this.reportConnectionError(err);
     return err;
   }
 
@@ -204,9 +209,7 @@ class DeepgramSttSession implements SttSession {
       resolve();
     }
 
-    if (!this.ended && !this.cancelled) {
-      this.onConnectionError?.(new Error(closeDescription(event)));
-    }
+    this.reportConnectionError(new Error(closeDescription(event)));
   }
 
   private waitForClose(): Promise<void> {
