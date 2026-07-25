@@ -219,7 +219,7 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
                 onClick={() => go('settings')}
               >
                 <IconSettings />
-                Workspace
+                Assistant
               </button>
             </div>
           )}
