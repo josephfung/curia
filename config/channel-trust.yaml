@@ -41,3 +41,7 @@ channels:
     trust: medium
     unknown_sender: allow
     threaded: false
+  voice:
+    trust: high
+    unknown_sender: ignore
+    threaded: false

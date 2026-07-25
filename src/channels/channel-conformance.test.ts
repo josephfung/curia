@@ -11,6 +11,7 @@ import { EmailAdapter } from './email/email-adapter.js';
 import { HttpAdapter } from './http/http-adapter.js';
 import { SlackAdapter } from './slack/slack-adapter.js';
 import { SmsAdapter } from './sms/sms-adapter.js';
+import { VoiceAdapter } from './voice/voice-adapter.js';
 
 // Type-level assertion: each class's instance type must be assignable to Channel.
 // If an adapter is missing a member, this file fails to typecheck.
@@ -23,10 +24,11 @@ export type _Email = AssertChannel<EmailAdapter>;
 export type _Http = AssertChannel<HttpAdapter>;
 export type _Slack = AssertChannel<SlackAdapter>;
 export type _Sms = AssertChannel<SmsAdapter>;
+export type _Voice = AssertChannel<VoiceAdapter>;
 
 describe('channel adapters implement Channel', () => {
   it('expose start and stop on their prototypes', () => {
-    for (const cls of [CliAdapter, SignalAdapter, EmailAdapter, HttpAdapter, SlackAdapter, SmsAdapter]) {
+    for (const cls of [CliAdapter, SignalAdapter, EmailAdapter, HttpAdapter, SlackAdapter, SmsAdapter, VoiceAdapter]) {
       expect(typeof cls.prototype.start).toBe('function');
       expect(typeof cls.prototype.stop).toBe('function');
     }

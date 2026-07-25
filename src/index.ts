@@ -78,6 +78,9 @@ import { SlackAdapter } from './channels/slack/slack-adapter.js';
 import { SmsClient } from './channels/sms/sms-client.js';
 import { SmsAdapter } from './channels/sms/sms-adapter.js';
 import { SmsWebhookBridge } from './channels/sms/webhook-bridge.js';
+import { VoiceAdapter } from './channels/voice/voice-adapter.js';
+import { VoiceSessionBridge } from './channels/voice/session-bridge.js';
+import { VoiceSessionStore } from './channels/voice/session-store.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
@@ -184,6 +187,8 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const configDir = path.resolve(import.meta.dirname, '../config');
   const yamlConfig = loadYamlConfig(configDir);
+  const voiceModel = yamlConfig.channels?.voice?.model?.trim();
+  config.voiceModel = voiceModel ? voiceModel : undefined;
   const logger = createLogger(config.logLevel);
   logger.info('Curia starting...');
 
@@ -883,8 +888,11 @@ async function main(): Promise<void> {
   // Webhook bridge is always created so HttpAdapter can mount the Telnyx route; the
   // adapter installs the handler on start() when the channel is enabled.
   const smsWebhookBridge = new SmsWebhookBridge();
+  const voiceSessionBridge = new VoiceSessionBridge();
+  const voiceSessionStore = new VoiceSessionStore(pool);
   let smsClient: SmsClient | undefined;
   let smsAdapter: SmsAdapter | undefined;
+  let voiceAdapter: VoiceAdapter | undefined;
   if (config.smsApiKey && config.smsFromNumber && config.smsWebhookPublicKey) {
     smsClient = new SmsClient({
       apiKey: config.smsApiKey,
@@ -895,6 +903,18 @@ async function main(): Promise<void> {
     logger.info('SMS client created (Telnyx Messaging)');
   } else {
     logger.warn('SMS Telnyx credentials not fully configured — SMS channel disabled. Set them in the console (Settings → Channels → SMS); Telnyx credentials are vault-only (no env fallback).');
+  }
+
+  if (
+    config.voiceLivekitUrl &&
+    config.voiceLivekitApiKey &&
+    config.voiceLivekitApiSecret &&
+    config.voiceDeepgramApiKey &&
+    config.voiceCartesiaApiKey
+  ) {
+    logger.info({ hasVoiceModelOverride: config.voiceModel !== undefined }, 'Voice credentials configured (LiveKit + STT/TTS)');
+  } else {
+    logger.warn('Voice credentials not fully configured — voice channel disabled. Set LiveKit, Deepgram, and Cartesia credentials in the console (Settings → Channels → Voice); credentials are vault-only (no env fallback).');
   }
 
   // Calendar client — operates as the PRINCIPAL (the CEO), not as Curia's mailbox.
@@ -1752,6 +1772,33 @@ async function main(): Promise<void> {
     logger.warn('channel sms is enabled + resolvable but its runtime client/credentials are missing (api key, from number, or webhook public key); no SMS adapter constructed — check vault/env credentials and restart');
   }
 
+  // Construct the Voice adapter (HTTP session handler installed on start).
+  if (
+    channelShouldStart.has('voice') &&
+    config.voiceLivekitUrl &&
+    config.voiceLivekitApiKey &&
+    config.voiceLivekitApiSecret &&
+    config.voiceDeepgramApiKey &&
+    config.voiceCartesiaApiKey
+  ) {
+    const abandoned = await voiceSessionStore.markAbandonedOnRestart();
+    if (abandoned > 0) {
+      logger.warn({ count: abandoned }, 'Marked abandoned voice sessions failed on startup');
+    }
+    voiceAdapter = new VoiceAdapter({
+      bus,
+      logger,
+      sessionBridge: voiceSessionBridge,
+      sessionStore: voiceSessionStore,
+      livekitUrl: config.voiceLivekitUrl,
+      livekitApiKey: config.voiceLivekitApiKey,
+      livekitApiSecret: config.voiceLivekitApiSecret,
+      voiceModel: config.voiceModel,
+    });
+  } else if (channelShouldStart.has('voice')) {
+    logger.warn('channel voice is enabled + resolvable but runtime credentials are missing (LiveKit, Deepgram, or Cartesia); no Voice adapter constructed — check vault credentials and restart');
+  }
+
   // Scheduler — Postgres-backed job scheduler for cron and one-shot tasks.
   // SchedulerService is the shared service; Scheduler is the polling loop.
   // Constructed early so it can be passed to ExecutionLayer and HttpAdapter.
@@ -2598,6 +2645,7 @@ async function main(): Promise<void> {
     smsWebhookBridge,
     memoryRetention,
     system: systemSnapshot,
+    voiceSessionBridge,
   });
 
   try {
@@ -2640,6 +2688,13 @@ async function main(): Promise<void> {
         await smsAdapter.stop();
       } catch (err) {
         logger.error({ err }, 'Error stopping SMS adapter during shutdown');
+      }
+    }
+    if (voiceAdapter) {
+      try {
+        await voiceAdapter.stop();
+      } catch (err) {
+        logger.error({ err }, 'Error stopping Voice adapter during shutdown');
       }
     }
     try {
@@ -2772,6 +2827,13 @@ async function main(): Promise<void> {
       logger.info('SMS channel adapter started');
     } else if (smsAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping SMS adapter startup — restart after setup to enable');
+    }
+
+    if (voiceAdapter && !setupRequiredAtBoot) {
+      await voiceAdapter.start();
+      logger.info('Voice channel adapter started');
+    } else if (voiceAdapter && setupRequiredAtBoot) {
+      logger.warn('SETUP-REQUIRED mode: skipping Voice adapter startup — restart after setup to enable');
     }
   } catch (err) {
     logger.fatal({ err }, 'Fatal error during channel adapter startup — invoking shutdown');

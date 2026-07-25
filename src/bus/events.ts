@@ -1182,6 +1182,31 @@ export interface TaskResumableThroughputEvent extends BaseEvent {
   payload: TaskResumableThroughputPayload;
 }
 
+interface VoiceSessionStartedPayload {
+  sessionId: string;
+  conversationId: string;
+  livekitRoom: string;
+}
+
+export interface VoiceSessionStartedEvent extends BaseEvent {
+  type: 'voice.session.started';
+  sourceLayer: 'channel';
+  payload: VoiceSessionStartedPayload;
+}
+
+interface VoiceSessionEndedPayload {
+  sessionId: string;
+  conversationId: string;
+  reason: string;
+  durationMs?: number;
+}
+
+export interface VoiceSessionEndedEvent extends BaseEvent {
+  type: 'voice.session.ended';
+  sourceLayer: 'channel';
+  payload: VoiceSessionEndedPayload;
+}
+
 // ChannelPollEvent — emitted by EmailAdapter after each successful Nylas poll cycle.
 // Provides an observable heartbeat: if channel.poll stops appearing in the audit log,
 // the adapter has stalled. One event per poll regardless of whether messages were found.
@@ -1282,6 +1307,8 @@ export type BusEvent =
   | TaskUpdatedEvent           // Tasks v1: task fields updated via task-update skill (#835)
   | TaskCompletedEvent         // Tasks v1: task set to done via task-complete skill (#835)
   | TaskResumableThroughputEvent // #1264: resumable pause throughput telemetry
+  | VoiceSessionStartedEvent    // #1414: voice channel session lifecycle
+  | VoiceSessionEndedEvent      // #1414: voice channel session lifecycle
   | ChannelPollEvent           // #846: email adapter poll heartbeat (one per cycle)
   | ChannelStalledEvent;       // #846: email adapter stall detection (fire-once per lifecycle)
 
@@ -1963,6 +1990,26 @@ export function createTaskResumableThroughput(
     sourceLayer: 'system',
     payload: rest,
     parentEventId,
+  };
+}
+
+export function createVoiceSessionStarted(payload: VoiceSessionStartedPayload): VoiceSessionStartedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'voice.session.started',
+    sourceLayer: 'channel',
+    payload,
+  };
+}
+
+export function createVoiceSessionEnded(payload: VoiceSessionEndedPayload): VoiceSessionEndedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'voice.session.ended',
+    sourceLayer: 'channel',
+    payload,
   };
 }
 

@@ -30,6 +30,12 @@ function baseConfig(): Config {
     smsApiKey: undefined,
     smsFromNumber: undefined,
     smsWebhookPublicKey: undefined,
+    voiceLivekitUrl: undefined,
+    voiceLivekitApiKey: undefined,
+    voiceLivekitApiSecret: undefined,
+    voiceDeepgramApiKey: undefined,
+    voiceCartesiaApiKey: undefined,
+    voiceModel: undefined,
   } as Config;
 }
 
@@ -39,7 +45,7 @@ function fakeSecrets(values: Record<string, string>) {
 }
 
 describe('applyChannelVaultSecrets', () => {
-  it('populates config from vault-only channel.email.* / channel.signal.* / channel.slack.* / channel.sms.* keys', async () => {
+  it('populates config from allowlisted channel credentials including vault-only voice keys', async () => {
     const config = baseConfig();
     const secrets = fakeSecrets({
       'channel.email.nylas_api_key': 'nyk_vault',
@@ -52,6 +58,11 @@ describe('applyChannelVaultSecrets', () => {
       'channel.sms.api_key': 'KEY_vault',
       'channel.sms.from_number': '+15550002222',
       'channel.sms.webhook_public_key': 'pubkey_vault',
+      'channel.voice.livekit_url': 'wss://voice.example.test',
+      'channel.voice.livekit_api_key': 'lk_key',
+      'channel.voice.livekit_api_secret': 'lk_secret',
+      'channel.voice.deepgram_api_key': 'dg_secret',
+      'channel.voice.cartesia_api_key': 'cartesia_secret',
     });
 
     await applyChannelVaultSecrets(config, secrets, {}, logger);
@@ -66,6 +77,11 @@ describe('applyChannelVaultSecrets', () => {
     expect(config.smsApiKey).toBe('KEY_vault');
     expect(config.smsFromNumber).toBe('+15550002222');
     expect(config.smsWebhookPublicKey).toBe('pubkey_vault');
+    expect(config.voiceLivekitUrl).toBe('wss://voice.example.test');
+    expect(config.voiceLivekitApiKey).toBe('lk_key');
+    expect(config.voiceLivekitApiSecret).toBe('lk_secret');
+    expect(config.voiceDeepgramApiKey).toBe('dg_secret');
+    expect(config.voiceCartesiaApiKey).toBe('cartesia_secret');
   });
 
   it('activates Signal from a console-only entry — channel.signal.phone_number alone, no flat bootstrap, no env', async () => {
@@ -165,6 +181,11 @@ describe('applyChannelVaultSecrets', () => {
       'channel.sms.api_key',
       'channel.sms.from_number',
       'channel.sms.webhook_public_key',
+      'channel.voice.cartesia_api_key',
+      'channel.voice.deepgram_api_key',
+      'channel.voice.livekit_api_key',
+      'channel.voice.livekit_api_secret',
+      'channel.voice.livekit_url',
     ]);
     // No list() method should even be invoked (the fake doesn't have one).
     expect('list' in secrets).toBe(false);

@@ -63,6 +63,11 @@ export async function applyChannelVaultSecrets(
     smsApiKey,
     smsFromNumber,
     smsWebhookPublicKey,
+    voiceLivekitUrl,
+    voiceLivekitApiKey,
+    voiceLivekitApiSecret,
+    voiceDeepgramApiKey,
+    voiceCartesiaApiKey,
   ] = await Promise.all([
     resolve('channel.email.nylas_api_key', 'NYLAS_API_KEY', config.nylasApiKey),
     resolve('channel.email.nylas_grant_id', 'NYLAS_GRANT_ID', config.nylasGrantId),
@@ -77,6 +82,12 @@ export async function applyChannelVaultSecrets(
     readVaultKey(secrets, 'channel.sms.api_key', logger),
     readVaultKey(secrets, 'channel.sms.from_number', logger),
     readVaultKey(secrets, 'channel.sms.webhook_public_key', logger),
+    // Voice is vault-only, matching the catalog's lack of envFallback entries.
+    readVaultKey(secrets, 'channel.voice.livekit_url', logger),
+    readVaultKey(secrets, 'channel.voice.livekit_api_key', logger),
+    readVaultKey(secrets, 'channel.voice.livekit_api_secret', logger),
+    readVaultKey(secrets, 'channel.voice.deepgram_api_key', logger),
+    readVaultKey(secrets, 'channel.voice.cartesia_api_key', logger),
   ]);
 
   config.nylasApiKey = nylasApiKey;
@@ -90,6 +101,11 @@ export async function applyChannelVaultSecrets(
   config.smsApiKey = smsApiKey;
   config.smsFromNumber = smsFromNumber;
   config.smsWebhookPublicKey = smsWebhookPublicKey;
+  config.voiceLivekitUrl = voiceLivekitUrl;
+  config.voiceLivekitApiKey = voiceLivekitApiKey;
+  config.voiceLivekitApiSecret = voiceLivekitApiSecret;
+  config.voiceDeepgramApiKey = voiceDeepgramApiKey;
+  config.voiceCartesiaApiKey = voiceCartesiaApiKey;
 
   // Names only — never values. Lets an operator confirm which channel creds the vault/env
   // supplied vs. which are absent (feature-off), the same debuggability win as applyVaultSecrets.
@@ -104,6 +120,11 @@ export async function applyChannelVaultSecrets(
     'channel.sms.api_key': smsApiKey !== undefined,
     'channel.sms.from_number': smsFromNumber !== undefined,
     'channel.sms.webhook_public_key': smsWebhookPublicKey !== undefined,
+    'channel.voice.livekit_url': voiceLivekitUrl !== undefined,
+    'channel.voice.livekit_api_key': voiceLivekitApiKey !== undefined,
+    'channel.voice.livekit_api_secret': voiceLivekitApiSecret !== undefined,
+    'channel.voice.deepgram_api_key': voiceDeepgramApiKey !== undefined,
+    'channel.voice.cartesia_api_key': voiceCartesiaApiKey !== undefined,
   };
   logger.info({ present }, 'Applied channel credentials onto config (vault ▸ env ▸ config)');
 }

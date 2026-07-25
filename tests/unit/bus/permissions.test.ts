@@ -8,6 +8,16 @@ describe('Bus Permissions', () => {
   it('allows channel to publish inbound.reaction', () => {
     expect(canPublish('channel', 'inbound.reaction')).toBe(true);
   });
+  it('allows channel to publish voice session lifecycle events', () => {
+    expect(canPublish('channel', 'voice.session.started')).toBe(true);
+    expect(canPublish('channel', 'voice.session.ended')).toBe(true);
+  });
+  it('allows system layer to publish and subscribe to voice session lifecycle events', () => {
+    expect(canPublish('system', 'voice.session.started')).toBe(true);
+    expect(canPublish('system', 'voice.session.ended')).toBe(true);
+    expect(canSubscribe('system', 'voice.session.started')).toBe(true);
+    expect(canSubscribe('system', 'voice.session.ended')).toBe(true);
+  });
   it('allows dispatch to subscribe to inbound.reaction', () => {
     expect(canSubscribe('dispatch', 'inbound.reaction')).toBe(true);
   });

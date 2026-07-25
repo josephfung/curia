@@ -58,6 +58,8 @@ import { secretCaptureRoutes } from './routes/secret-capture.js';
 import { setupRoutes } from './routes/setup.js';
 import { smsWebhookRoutes } from '../sms/webhook-route.js';
 import { SmsWebhookBridge } from '../sms/webhook-bridge.js';
+import { voiceSessionRoutes } from '../voice/session-routes.js';
+import { VoiceSessionBridge } from '../voice/session-bridge.js';
 import type { OfficeIdentityService } from '../../identity/service.js';
 import type { ExecutiveProfileService } from '../../executive/service.js';
 import type { ContactService } from '../../contacts/contact-service.js';
@@ -159,6 +161,11 @@ export interface HttpAdapterConfig {
    * settings, #1376). Boot-time facts only — version, runtime, timezone, models.
    */
   system?: SystemSnapshot;
+  /**
+   * Voice session bridge — HttpAdapter mounts /api/voice/* and delegates to the
+   * handler installed by VoiceAdapter.start() (ADR-037).
+   */
+  voiceSessionBridge?: import('../voice/session-bridge.js').VoiceSessionBridge;
 }
 
 export class HttpAdapter implements Channel {
@@ -248,6 +255,7 @@ export class HttpAdapter implements Channel {
       if (
         routeUrl === '/api/health' ||
         routeUrl.startsWith('/api/kg') ||
+        routeUrl.startsWith('/api/voice') ||
         routeUrl.startsWith('/api/identity') ||
         routeUrl.startsWith('/api/executive') ||
         routeUrl.startsWith('/api/jobs') ||
@@ -544,6 +552,17 @@ export class HttpAdapter implements Channel {
         sessions,
       });
     }
+
+    // Voice session mint/end routes are always mounted. GET /api/voice/status reports
+    // enabled=false until VoiceAdapter.start() installs the handler; create/end still
+    // require the same console session auth as KG routes.
+    await this.app.register(voiceSessionRoutes, {
+      bridge: this.config.voiceSessionBridge ?? new VoiceSessionBridge(),
+      logger,
+      webAppBootstrapSecret,
+      sessions,
+      contactService: this.config.contactService,
+    });
 
     // Secret-capture routes (#971) — public, token-authed form for agent-initiated secret
     // capture. Independent of the bootstrap secret: the single-use token IS the credential,

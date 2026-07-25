@@ -59,6 +59,14 @@ export interface Config {
   smsApiKey: string | undefined;
   smsFromNumber: string | undefined;
   smsWebhookPublicKey: string | undefined;
+  // Voice channel config (LiveKit + STT/TTS). Vault-only provider credentials.
+  voiceLivekitUrl: string | undefined;
+  voiceLivekitApiKey: string | undefined;
+  voiceLivekitApiSecret: string | undefined;
+  voiceDeepgramApiKey: string | undefined;
+  voiceCartesiaApiKey: string | undefined;
+  /** Optional model override for voice turns; defaults to the fast tier when unset. */
+  voiceModel?: string;
 }
 
 /** Per-resumable-task aggregate ceilings — progress-based circuit breaker (#1176). */
@@ -250,6 +258,10 @@ export interface YamlConfig {
     slack?: {
       /** Slack channel ids (C…) where @mentions are accepted. Empty/absent = all. */
       allowed_channel_ids?: string[];
+    };
+    voice?: {
+      /** Optional concrete model override for voice turns. Empty/absent = fast tier. */
+      model?: string;
     };
   };
   browser?: {
@@ -1264,5 +1276,11 @@ export function loadConfig(): Config {
     smsApiKey: undefined,
     smsFromNumber: undefined,
     smsWebhookPublicKey: undefined,
+    voiceLivekitUrl: undefined,
+    voiceLivekitApiKey: undefined,
+    voiceLivekitApiSecret: undefined,
+    voiceDeepgramApiKey: undefined,
+    voiceCartesiaApiKey: undefined,
+    voiceModel: undefined,
   };
 }
