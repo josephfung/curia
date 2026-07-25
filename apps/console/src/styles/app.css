@@ -855,6 +855,55 @@ input:focus, textarea:focus, select:focus {
   }
 }
 
+/* Generic label/value rows — used by the read-only System settings page. */
+.settings-kv-list { margin: 0; }
+.settings-kv-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--app-border-soft);
+  align-items: baseline;
+}
+.settings-kv-row:first-child { padding-top: 0; }
+.settings-kv-row:last-child { border-bottom: none; padding-bottom: 0; }
+.settings-kv-row dt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-fg);
+}
+.settings-kv-row dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--app-fg);
+}
+.settings-kv-row dd code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--app-fg-muted);
+}
+.settings-kv-tag {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-teal);
+  background: var(--app-teal-soft);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+@media (max-width: 768px) {
+  .settings-kv-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
 /* ── 12. Responsive ──────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .settings-shell { flex-direction: column; }

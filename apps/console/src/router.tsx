@@ -14,9 +14,11 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const AutonomyPage = lazy(() =>
   import('./pages/SettingsPage').then(m => ({ default: m.AutonomyPage })),
 );
-const AssistantPage = lazy(() => import('./pages/AssistantSettingsPage'));
+const PersonalityPage = lazy(() => import('./pages/PersonalitySettingsPage'));
+const GhostwritingPage = lazy(() => import('./pages/GhostwritingSettingsPage'));
 const PosturePage = lazy(() => import('./pages/PostureSettingsPage'));
 const MemoryPage = lazy(() => import('./pages/MemorySettingsPage'));
+const SystemPage = lazy(() => import('./pages/SystemSettingsPage'));
 const ToolsPage = lazy(() =>
   import('./pages/RegistrySettings').then(m => ({ default: m.ToolsPage })),
 );
@@ -92,7 +94,7 @@ const settingsRoute = createRoute({
   path: '/settings',
   beforeLoad: ({ location }) => {
     if (location.pathname === '/settings' || location.pathname === '/settings/') {
-      throw redirect({ to: '/settings/assistant' });
+      throw redirect({ to: '/settings/personality' });
     }
   },
   component: () => (
@@ -102,10 +104,23 @@ const settingsRoute = createRoute({
   ),
 });
 
-const assistantRoute = createRoute({
+const personalityRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/personality',
+  component: PersonalityPage,
+});
+
+const ghostwritingRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/ghostwriting',
+  component: GhostwritingPage,
+});
+
+// Preserve the pre-rename URL introduced earlier in this PR (#1376).
+const assistantRedirect = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/assistant',
-  component: AssistantPage,
+  beforeLoad: () => { throw redirect({ to: '/settings/personality' }); },
 });
 
 const postureRoute = createRoute({
@@ -124,6 +139,12 @@ const memoryRoute = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/memory',
   component: MemoryPage,
+});
+
+const systemRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/system',
+  component: SystemPage,
 });
 
 // Tools and Agents are standalone top-level pages (peer to Contacts/Tasks),
@@ -151,7 +172,7 @@ const agentsSettingsRedirect = createRoute({
 const workspaceRedirect = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/workspace',
-  beforeLoad: () => { throw redirect({ to: '/settings/assistant' }); },
+  beforeLoad: () => { throw redirect({ to: '/settings/personality' }); },
 });
 
 const loginRoute = createRoute({
@@ -245,10 +266,13 @@ const routeTree = rootRoute.addChildren([
     mcpSkillsRoute,
     kgRoute,
     settingsRoute.addChildren([
-      assistantRoute,
+      personalityRoute,
+      ghostwritingRoute,
       postureRoute,
       autonomyRoute,
       memoryRoute,
+      systemRoute,
+      assistantRedirect,
       workspaceRedirect,
       skillsSettingsRedirect,
       agentsSettingsRedirect,
