@@ -37,7 +37,7 @@ const ROUTES: Record<string, string> = {
   agents:   '/agents',
   channels:   '/channels',
   'mcp-skills': '/mcp-skills',
-  settings:   '/settings/workspace',
+  settings:   '/settings',
 };
 
 function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (t: Theme) => void }) {

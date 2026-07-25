@@ -41,6 +41,10 @@ import { knowledgeGraphRoutes } from './routes/kg.js';
 import { identityRoutes } from './routes/identity.js';
 import { executiveRoutes } from './routes/executive.js';
 import { autonomyRoutes } from './routes/autonomy.js';
+import {
+  memoryRetentionRoutes,
+  type MemoryRetentionSnapshot,
+} from './routes/memory-retention.js';
 import { registryRoutes } from './routes/registry.js';
 import { channelRegistryRoutes } from './routes/channel-registry.js';
 import { mcpRegistryRoutes } from './routes/mcp-registry.js';
@@ -141,6 +145,11 @@ export interface HttpAdapterConfig {
    * and delegates to the handler installed by SmsAdapter.start() (ADR-036).
    */
   smsWebhookBridge?: import('../sms/webhook-bridge.js').SmsWebhookBridge;
+  /**
+   * Effective boot-time KG/memory retention knobs for GET /api/memory/retention
+   * (console Memory settings, #1376). Read-only snapshot — not hot-reloaded.
+   */
+  memoryRetention?: MemoryRetentionSnapshot;
 }
 
 export class HttpAdapter implements Channel {
@@ -235,6 +244,7 @@ export class HttpAdapter implements Channel {
         routeUrl.startsWith('/api/jobs') ||
         routeUrl.startsWith('/api/antfarm') ||
         routeUrl.startsWith('/api/autonomy') ||
+        routeUrl.startsWith('/api/memory') ||
         routeUrl.startsWith('/api/registry') ||
         routeUrl.startsWith('/api/vault') ||
         // Secret-capture routes are token-authed (the single-use token in the URL is the
@@ -419,6 +429,15 @@ export class HttpAdapter implements Channel {
     if (webAppBootstrapSecret && this.config.autonomyService) {
       await this.app.register(autonomyRoutes, {
         autonomyService: this.config.autonomyService,
+        webAppBootstrapSecret,
+        sessions,
+      });
+    }
+
+    // Memory retention (read-only) — console Memory settings page (#1376).
+    if (webAppBootstrapSecret && this.config.memoryRetention) {
+      await this.app.register(memoryRetentionRoutes, {
+        retention: this.config.memoryRetention,
         webAppBootstrapSecret,
         sessions,
       });

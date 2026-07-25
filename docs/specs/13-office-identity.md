@@ -259,14 +259,20 @@ system_prompt: |
 
 ## Populating `behavioralPreferences`
 
-The `behavioralPreferences` array is populated through two paths:
+The `behavioralPreferences` array is populated through three paths:
 
-1. **Form wizard at `/setup`** — step 3 ("Posture") includes a free-form
-   textarea. Submitting step 4 calls `PUT /api/identity` with the wizard's
-   compiled identity payload, including any new preferences appended to
+1. **Form wizard at `/setup`** — step 5 ("Posture") includes a free-form
+   textarea. Submitting step 6 calls `PUT /api/identity` with the wizard's
+   compiled identity payload, including any new preferences **appended** to
    the existing array. See [spec 18 — Onboarding](18-onboarding.md#layer-2--form-wizard-at-setup).
 
-2. **`behavioral-preferences-update` skill** — invoked by the `setup-wizard`
+2. **Console Settings → Posture** (`/settings/posture`, #1376) — post-setup
+   editor that replaces the full `behavioralPreferences` list (and
+   `decisionStyle`) via `PUT /api/identity` with `changedBy: 'api'`. Persona
+   fields are preserved via read-modify-write so Assistant and Posture pages
+   do not clobber each other.
+
+3. **`behavioral-preferences-update` skill** — invoked by the `setup-wizard`
    specialist agent during the in-chat onboarding conversation (and any
    later "remember that I…" turn the coordinator delegates to it). The
    skill calls `OfficeIdentityService.update(...)` with `'skill'` as the

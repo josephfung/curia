@@ -314,15 +314,14 @@ function AutonomySection() {
 
 // ── Settings layout ───────────────────────────────────────────────────────────
 
-// The settings nav sections. Only 'autonomy' is functional; 'workspace' is a stub
-// for a future PR. Skills and Agents used to live here but are now standalone
-// top-level pages (see RegistrySettings.tsx) reachable from the sidebar directly.
-// Rendered as <Link> elements so the URL changes on click and back/forward
-// navigation works correctly within the settings shell.
+// In-page settings nav (#1376). Order: Assistant → Posture → Autonomy → Memory.
+// Skills / Agents / Channels live as standalone sidebar pages outside this shell.
 const SETTINGS_SECTIONS = [
-  { id: 'autonomy',  label: 'Autonomy',    href: '/settings/autonomy' },
-  { id: 'workspace', label: 'Workspace',   href: '/settings/workspace' },
-];
+  { id: 'assistant', label: 'Assistant', href: '/settings/assistant' },
+  { id: 'posture',   label: 'Posture',   href: '/settings/posture' },
+  { id: 'autonomy',  label: 'Autonomy',  href: '/settings/autonomy' },
+  { id: 'memory',    label: 'Memory',    href: '/settings/memory' },
+] as const;
 
 interface SettingsLayoutProps {
   activeSection: string;
@@ -337,12 +336,14 @@ export function SettingsLayout({ activeSection, children }: SettingsLayoutProps)
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
   }, [mobileOpen]);
 
+  const activeLabel = SETTINGS_SECTIONS.find(s => s.id === activeSection)?.label ?? 'Settings';
+
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
       <div className="app-root">
         <Sidebar activeView="settings" theme={theme} onThemeChange={setTheme} />
         <main className="main">
-          <Topbar crumb="Settings" title="Workspace" />
+          <Topbar crumb="Settings" title={activeLabel} />
           <div className="settings-shell">
             <nav className="settings-nav">
               <div className="settings-nav-title">Settings</div>
@@ -372,17 +373,6 @@ export function AutonomyPage() {
   return (
     <SettingsLayout activeSection="autonomy">
       <AutonomySection />
-    </SettingsLayout>
-  );
-}
-
-export function WorkspacePage() {
-  return (
-    <SettingsLayout activeSection="workspace">
-      <div className="settings-page-header">
-        <h2 className="settings-page-title">Workspace</h2>
-        <p className="settings-page-sub">Workspace settings — coming soon.</p>
-      </div>
     </SettingsLayout>
   );
 }

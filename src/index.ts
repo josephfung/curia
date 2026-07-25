@@ -22,6 +22,7 @@ import { runner } from 'node-pg-migrate';
 import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
+import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
 import { createPool } from './db/connection.js';
 import { DbAvailabilityMonitor } from './db/availability-monitor.js';
 import { EventBus } from './bus/bus.js';
@@ -2544,6 +2545,10 @@ async function main(): Promise<void> {
   // the health check fired during a multi-minute catch-up and marked the container
   // unhealthy before the API was even bound. All HTTP adapter dependencies (bus,
   // pool, services, registries) are fully initialized by this point.
+  // Resolve retention snapshot once at boot for the read-only Memory settings API (#1376).
+  // Editing these values still requires a config change + restart.
+  const memoryRetention = resolveMemoryRetentionSnapshot(yamlConfig);
+
   const httpAdapter = new HttpAdapter({
     bus,
     logger,
@@ -2577,6 +2582,7 @@ async function main(): Promise<void> {
     healthService,
     auditLogRepo,
     smsWebhookBridge,
+    memoryRetention,
   });
 
   try {

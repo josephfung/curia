@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Settings refinement** — Assistant, Posture, and Memory pages replace the Workspace stub. (#1376)
+- **`GET /api/memory/retention`** — read-only boot-time KG/memory retention policy. (#1376)
 - **Audit log Phase 1** — structured columns, `seq`-ordered hash chain, `llm_call_archive` (kill-switch + TTL), `pnpm audit:verify`. (#1383)
 - **DB outage resilience** — `DATABASE_UNAVAILABLE` errors, pool timeouts, skill retry, CEO alert after 5 min. (#1381)
 - **Operator home** — console `/` shows health, attention and activity cards plus a chat CTA. (#1375)

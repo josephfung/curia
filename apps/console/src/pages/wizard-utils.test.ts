@@ -7,6 +7,8 @@ import {
   verbosityReviewDesc,
   directnessReviewDesc,
   postureReviewDesc,
+  formalityBand,
+  POSTURE_OPTIONS,
   validateNonEmptyName,
   validatePrincipalName,
   PRINCIPAL_NAME_MAX_LENGTH,
@@ -152,6 +154,25 @@ describe('postureReviewDesc', () => {
   });
   it('maps proactive', () => {
     expect(postureReviewDesc('proactive')).toBe('Biases toward action with less checking in.');
+  });
+});
+
+describe('formalityBand', () => {
+  it('returns a casual sample at low formality', () => {
+    expect(formalityBand(10)).toContain('Hey');
+  });
+  it('returns a formal sample at high formality', () => {
+    expect(formalityBand(90)).toContain('formally');
+  });
+});
+
+describe('POSTURE_OPTIONS', () => {
+  it('exposes the three decision postures', () => {
+    expect(POSTURE_OPTIONS.map(o => o.value)).toEqual([
+      'conservative',
+      'balanced',
+      'proactive',
+    ]);
   });
 });
 

@@ -14,9 +14,9 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const AutonomyPage = lazy(() =>
   import('./pages/SettingsPage').then(m => ({ default: m.AutonomyPage })),
 );
-const WorkspacePage = lazy(() =>
-  import('./pages/SettingsPage').then(m => ({ default: m.WorkspacePage })),
-);
+const AssistantPage = lazy(() => import('./pages/AssistantSettingsPage'));
+const PosturePage = lazy(() => import('./pages/PostureSettingsPage'));
+const MemoryPage = lazy(() => import('./pages/MemorySettingsPage'));
 const ToolsPage = lazy(() =>
   import('./pages/RegistrySettings').then(m => ({ default: m.ToolsPage })),
 );
@@ -92,7 +92,7 @@ const settingsRoute = createRoute({
   path: '/settings',
   beforeLoad: ({ location }) => {
     if (location.pathname === '/settings' || location.pathname === '/settings/') {
-      throw redirect({ to: '/settings/autonomy' });
+      throw redirect({ to: '/settings/assistant' });
     }
   },
   component: () => (
@@ -102,16 +102,28 @@ const settingsRoute = createRoute({
   ),
 });
 
+const assistantRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/assistant',
+  component: AssistantPage,
+});
+
+const postureRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/posture',
+  component: PosturePage,
+});
+
 const autonomyRoute = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/autonomy',
   component: AutonomyPage,
 });
 
-const workspaceRoute = createRoute({
+const memoryRoute = createRoute({
   getParentRoute: () => settingsRoute,
-  path: '/workspace',
-  component: WorkspacePage,
+  path: '/memory',
+  component: MemoryPage,
 });
 
 // Tools and Agents are standalone top-level pages (peer to Contacts/Tasks),
@@ -133,6 +145,13 @@ const agentsSettingsRedirect = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/agents',
   beforeLoad: () => { throw redirect({ to: '/agents' }); },
+});
+
+// Legacy stub — Workspace was removed in #1376; send bookmarks to the new default.
+const workspaceRedirect = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/workspace',
+  beforeLoad: () => { throw redirect({ to: '/settings/assistant' }); },
 });
 
 const loginRoute = createRoute({
@@ -225,7 +244,15 @@ const routeTree = rootRoute.addChildren([
     channelsRoute,
     mcpSkillsRoute,
     kgRoute,
-    settingsRoute.addChildren([autonomyRoute, workspaceRoute, skillsSettingsRedirect, agentsSettingsRedirect]),
+    settingsRoute.addChildren([
+      assistantRoute,
+      postureRoute,
+      autonomyRoute,
+      memoryRoute,
+      workspaceRedirect,
+      skillsSettingsRedirect,
+      agentsSettingsRedirect,
+    ]),
   ]),
   loginRoute,
   secretCaptureRoute,
