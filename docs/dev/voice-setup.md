@@ -62,16 +62,41 @@ revoke JWTs; a leaked token remains valid until its TTL.
 
 ## Security & privacy notes
 
-- Session mint (`POST /api/voice/sessions`) requires the console session cookie
-  (or bootstrap header) — anonymous callers cannot mint room JWTs.
-- Participant JWTs use an explicit **1h TTL** and are scoped to one room with
-  join/publish/subscribe only (no admin grant). Room delete on hangup is
-  cleanup; it does not revoke a leaked JWT within its TTL.
-- Deepgram auth uses the WebSocket subprotocol `['token', apiKey]` (Deepgram's
-  supported pattern); the browser never sees speech-vendor keys.
-- **Privacy:** enabling voice means principal microphone audio and transcripts
-  leave the host to Deepgram (STT) and Cartesia (TTS), plus the deploy's LLM
-  provider. Treat vendor DPAs accordingly.
+Canonical operator checklist. Decision rationale and residual risks live in
+[ADR-037](../adr/037-voice-channel-livekit-duplex.md).
+
+### HTTP auth / mint
+
+| Route | Auth | Mints JWT? |
+|---|---|---|
+| `GET /api/voice/status` | None | No — `{ enabled }` only |
+| `POST /api/voice/sessions` | `assertSecret` (console cookie / bootstrap header) | Yes |
+| `DELETE /api/voice/sessions/:id` | `assertSecret` | No |
+
+`/api/voice/*` is bearer-exempt so console session auth can run (same pattern as
+`/api/kg`). **Anonymous mint is not possible.**
+
+### LiveKit JWTs and `--dev`
+
+- Grants: `roomJoin` + `canPublish` + `canSubscribe` for one room only (no admin).
+- Explicit TTL: **1h** (not the SDK's 6h default).
+- Room delete / empty timeouts tidy abandoned rooms; they do **not** revoke
+  JWTs. A leaked token can still rejoin (and LiveKit may auto-create the room)
+  until the TTL expires.
+- Never run LiveKit `--dev` (public `devkey`/`secret`) on a reachable interface.
+
+### Third-party privacy
+
+Enabling voice means principal **audio and transcripts leave the host** to:
+
+- Deepgram (streaming STT) — WebSocket subprotocol auth `['token', apiKey]`
+- Cartesia (streaming TTS) — HTTPS bearer
+- The deploy's LLM provider (streaming chat)
+
+Speech-vendor keys never reach the browser. Treat vendor DPAs accordingly.
+Channel trust is **high** (console session = principal), matching `web`. Spoken
+TTS bypasses `OutboundGateway` (parity with web chat); tool calls still go
+through `ExecutionLayer` and external sends still hit the gateway.
 
 ## Public IP, ICE, and TLS
 
