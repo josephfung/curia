@@ -50,6 +50,9 @@ importers:
       '@ghostery/adblocker-playwright':
         specifier: ^2.18.1
         version: 2.18.1(playwright@1.61.1)
+      '@livekit/rtc-node':
+        specifier: ^0.13.31
+        version: 0.13.31
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -578,6 +581,9 @@ packages:
 
   '@dabh/diagnostics@2.0.8':
     resolution: {integrity: sha512-R4MSXTVnuMzGD7bzHdW2ZhhdPC/igELENcq5IjEverBvq5hn1SXCWcsi6eSsdWP0/Ur+SItRRjAktmdoX/8R/Q==}
+
+  '@datastructures-js/deque@1.0.8':
+    resolution: {integrity: sha512-PSBhJ2/SmeRPRHuBv7i/fHWIdSC3JTyq56qb+Rq0wjOagi0/fdV5/B/3Md5zFZus/W6OkSPMaxMKKMNMrSmubg==}
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -1233,8 +1239,54 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@livekit/mutex@1.1.1':
+    resolution: {integrity: sha512-EsshAucklmpuUAfkABPxJNhzj9v2sG7JuzFDL4ML1oJQSV14sqrpTYnsaOudMAw9yOaW53NU3QQTlUQoRs4czw==}
+
   '@livekit/protocol@1.50.4':
     resolution: {integrity: sha512-L1uggNQAqyY21smQY8AllyOYbcv9Me9TaxwuLytL1R8ck9nbYPmQLNwEDi3pOFGAMa5F8I2nUi2Jc59W5awxlA==}
+
+  '@livekit/rtc-ffi-bindings-darwin-arm64@0.12.60':
+    resolution: {integrity: sha512-YHXqybkYfaTc3txJXXWoVogiSP3yKJdkaZlIlZ6IDMGnN9elUoHDYU+ZSn/rbdGu0pp4HUOzffXkbkItN735Bw==}
+    engines: {node: '>= 18'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@livekit/rtc-ffi-bindings-darwin-x64@0.12.60':
+    resolution: {integrity: sha512-SkPPWE2/nb2BAXrCWP6+vaR2I4EeyG3Vv+csUaa1EvDVMbFqBHWqNVTQcx/ChgecbYB9dIFZHVYpfjbFkVd84g==}
+    engines: {node: '>= 18'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.12.60':
+    resolution: {integrity: sha512-8umeMn9p/VZ41EGty1qX9zPV5mfGxCioYKeUnALpf8AKqT/yXDjnog1VkS5f8gFX/zY7HDaeE+s60nZXaOZJbw==}
+    engines: {node: '>= 18'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.12.60':
+    resolution: {integrity: sha512-ttWrR/e8Ghaa9I+LaStxK8lh+aA9QBz6Dge6eXyKwTrAMHwHEtL2Rnf1rHQTiwadeH7AoytpfWf5FZl/OelLaQ==}
+    engines: {node: '>= 18'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.12.60':
+    resolution: {integrity: sha512-HfOBEf3rmpsG7hU3/BM9x2jnkVwKFve2v3cyjxlk41d6OkCthYb+g/ULEPFBKPafYyepDwcd2c8MDo5fMM+4Zw==}
+    engines: {node: '>= 18'}
+    cpu: [x64]
+    os: [win32]
+
+  '@livekit/rtc-ffi-bindings@0.12.60':
+    resolution: {integrity: sha512-ZJD2DNoHfR8PzKeyDMH6i1zKpk7S4LlrQDIZvisxj6HPaJnKofzSssNMF8fpGFvVCZ844kbcOFogRPgHFno82w==}
+    engines: {node: '>= 18'}
+
+  '@livekit/rtc-node@0.13.31':
+    resolution: {integrity: sha512-uCpyUUOoph+sDsjW6mSmDe6ox1vSfgaWR5VFgP7u4KGf1clyJooX7d6Fe94ZruDjLTsGxxV97IOmVU5+cBiBgg==}
+    engines: {node: '>= 18'}
+
+  '@livekit/typed-emitter@3.0.0':
+    resolution: {integrity: sha512-9bl0k4MgBPZu3Qu3R3xy12rmbW17e3bE9yf4YY85gJIQ3ezLEj/uzpKHWBsLaDoL5Mozz8QCgggwIBudYQWeQg==}
 
   '@lukeed/ms@2.0.2':
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
@@ -4438,6 +4490,9 @@ packages:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
 
+  pino-abstract-transport@2.0.0:
+    resolution: {integrity: sha512-F63x5tizV6WCh4R6RHyi2Ml+M70DNRXt/+HANowMflpgGFMAym/VKm6G7ZOQRjqN7XbGxK1Lg9t6ZrtzOaivMw==}
+
   pino-abstract-transport@3.0.0:
     resolution: {integrity: sha512-wlfUczU+n7Hy/Ha5j9a/gZNy7We5+cXp8YL+X+PG8S0KXxw7n/JXA3c46Y0zQznIJ83URJiwy7Lh56WLokNuxg==}
 
@@ -4450,6 +4505,10 @@ packages:
 
   pino@10.3.1:
     resolution: {integrity: sha512-r34yH/GlQpKZbU1BvFFqOjhISRo1MNx1tWYsYvmj6KIRHSPMT2+yHOEb1SG6NMvRoHRF0a07kCOox/9yakl1vg==}
+    hasBin: true
+
+  pino@9.14.0:
+    resolution: {integrity: sha512-8OEwKp5juEvb/MjpIc4hjqfgCNysrS94RIOMXYvpYCdm/jglrKEiAYmiumbmGhCvs+IcInsphYDFwqrjr7398w==}
     hasBin: true
 
   pirates@4.0.7:
@@ -5015,6 +5074,9 @@ packages:
 
   thenify@3.3.1:
     resolution: {integrity: sha512-RVZSIV5IG10Hk3enotrhvz0T9em6cyHBLkH/YAZuKqd8hRkKhSfCGIcP2KUY0EPxndzANBmNllzWPwak+bheSw==}
+
+  thread-stream@3.2.0:
+    resolution: {integrity: sha512-zLBvqpwr4Esa0kRjcrzGU6zL25lePWaCLMx0RQFrmteozIfeNdaMLpG5U7PeHzvlFkAWaRKA9/KVW4F60iB+qw==}
 
   thread-stream@4.2.0:
     resolution: {integrity: sha512-e2zZ96wSChazBsbENf/Pcm/4swHt2cEKQ92rhUjkL9GCKiTDJIaTBenjE/m9DXi0QBmTMDkFDdOomUy20A1tDQ==}
@@ -6060,6 +6122,8 @@ snapshots:
       enabled: 2.0.0
       kuler: 2.0.0
 
+  '@datastructures-js/deque@1.0.8': {}
+
   '@emnapi/core@1.11.1':
     dependencies:
       '@emnapi/wasi-threads': 1.2.2
@@ -6625,9 +6689,47 @@ snapshots:
   '@libsql/win32-x64-msvc@0.5.29':
     optional: true
 
+  '@livekit/mutex@1.1.1': {}
+
   '@livekit/protocol@1.50.4':
     dependencies:
       '@bufbuild/protobuf': 1.10.1
+
+  '@livekit/rtc-ffi-bindings-darwin-arm64@0.12.60':
+    optional: true
+
+  '@livekit/rtc-ffi-bindings-darwin-x64@0.12.60':
+    optional: true
+
+  '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.12.60':
+    optional: true
+
+  '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.12.60':
+    optional: true
+
+  '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.12.60':
+    optional: true
+
+  '@livekit/rtc-ffi-bindings@0.12.60':
+    dependencies:
+      '@bufbuild/protobuf': 1.10.1
+    optionalDependencies:
+      '@livekit/rtc-ffi-bindings-darwin-arm64': 0.12.60
+      '@livekit/rtc-ffi-bindings-darwin-x64': 0.12.60
+      '@livekit/rtc-ffi-bindings-linux-arm64-gnu': 0.12.60
+      '@livekit/rtc-ffi-bindings-linux-x64-gnu': 0.12.60
+      '@livekit/rtc-ffi-bindings-win32-x64-msvc': 0.12.60
+
+  '@livekit/rtc-node@0.13.31':
+    dependencies:
+      '@datastructures-js/deque': 1.0.8
+      '@livekit/mutex': 1.1.1
+      '@livekit/rtc-ffi-bindings': 0.12.60
+      '@livekit/typed-emitter': 3.0.0
+      pino: 9.14.0
+      pino-pretty: 13.1.3
+
+  '@livekit/typed-emitter@3.0.0': {}
 
   '@lukeed/ms@2.0.2': {}
 
@@ -9904,6 +10006,10 @@ snapshots:
 
   picomatch@4.0.5: {}
 
+  pino-abstract-transport@2.0.0:
+    dependencies:
+      split2: 4.2.0
+
   pino-abstract-transport@3.0.0:
     dependencies:
       split2: 4.2.0
@@ -9939,6 +10045,20 @@ snapshots:
       safe-stable-stringify: 2.5.0
       sonic-boom: 4.2.1
       thread-stream: 4.2.0
+
+  pino@9.14.0:
+    dependencies:
+      '@pinojs/redact': 0.4.0
+      atomic-sleep: 1.0.0
+      on-exit-leak-free: 2.1.2
+      pino-abstract-transport: 2.0.0
+      pino-std-serializers: 7.1.0
+      process-warning: 5.0.0
+      quick-format-unescaped: 4.0.4
+      real-require: 0.2.0
+      safe-stable-stringify: 2.5.0
+      sonic-boom: 4.2.1
+      thread-stream: 3.2.0
 
   pirates@4.0.7: {}
 
@@ -10787,6 +10907,10 @@ snapshots:
   thenify@3.3.1:
     dependencies:
       any-promise: 1.3.0
+
+  thread-stream@3.2.0:
+    dependencies:
+      real-require: 0.2.0
 
   thread-stream@4.2.0:
     dependencies:
