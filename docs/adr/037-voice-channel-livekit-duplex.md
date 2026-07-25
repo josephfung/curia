@@ -94,8 +94,9 @@ voice reuses that for session minting (and optional LiveKit webhooks).
 - Voice turns share coordinator tools but not the exact `AgentRuntime.handleTask`
   code path — drift risk is accepted and mitigated by reusing the same
   provider, tool definitions, and bus `tool.invoke` / autonomy checks where
-  practical. A later refactor may fold streaming into `AgentRuntime`
-  (tracked: #1550).
+  practical. A later refactor extracts a shared streaming turn primitive that
+  both paths delegate to — **not** a literal fold into `handleTask`
+  (tracked: #1552; brain/context + history read model: #1551).
 - **Phase 1 voice "brain" is deliberately slim:** spoken turns receive the
   voice-mode addendum + last-N in-memory turns + coordinator tools — **not**
   the full coordinator system prompt, office persona injection, KG/entity
