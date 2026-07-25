@@ -75,7 +75,7 @@ Two principles shaped the resumable model:
 [2026-06-04-meeting-debrief-tasks-migration-design.md](../wip/2026-06-04-meeting-debrief-tasks-migration-design.md),
 [2026-06-04-task-execution-heartbeat-design.md](../wip/2026-06-04-task-execution-heartbeat-design.md).
 
-**Companion spec & ADR:** [spec 21 — Agent Document Workspace (OKF)](21-agent-document-workspace.md),
+**Companion spec & ADR:** [spec 20 — Agent Document Workspace (OKF)](20-agent-document-workspace.md),
 [ADR-024 — `plan` writes rows directly](../adr/024-plan-rows-direct.md). Resumable-execution
 tracking epic: #1150.
 
@@ -458,7 +458,7 @@ migration), defined and bounded in `src/db/resumable-progress.ts`:
 - `cursor` (opaque, LLM-authored), `done` / `total`, `lastSliceUnits`, a one-line `next`,
   `checkpointedAt`, and an `accumulator`.
 - The accumulator is **bounded**: an inline cap (4 KB) and an overall block cap (8 KB). On
-  overflow it spills to the document workspace (`working_documents`, [spec 21](21-agent-document-workspace.md))
+  overflow it spills to the document workspace (`working_documents`, [spec 20](20-agent-document-workspace.md))
   and the block stores a `{ kind: 'document', path, section? }` pointer instead.
 
 `TaskRepo.getResumableBlock` / `setResumableBlock` are the only read/write path; writes
