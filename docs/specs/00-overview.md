@@ -27,8 +27,8 @@
 | 17 | [Meeting Debrief](17-meeting-debrief.md) | Proactive debrief agent, detection pipeline, follow-up execution via Bullpen-through-coordinator |
 | 18 | [Onboarding](18-onboarding.md) | Single-command host bootstrap, React form wizard at `/setup`, in-chat `setup-wizard` specialist |
 | 19 | [Tasks, Backlog & Resumable Projects](19-tasks-and-backlog.md) | `tasks` table (promoted from `agent_tasks`), `task-*` tools, `tasks`/`documents` skills, BacklogHeartbeat, digest backlog sections, project decomposition; resumable-execution contract (checkpoint/pause), `plan` primitive, frontier advancement, throughput telemetry, adaptive re-planning, principal-facing escalation |
-| 21 | [Agent Document Workspace (OKF)](21-agent-document-workspace.md) | OKF `working_documents` store, `doc-*` skills, backlink index, accumulator spill, `/scratch` TTL sweep, KG distillation |
-| 22 | [Ant Farm Visualization](22-antfarm-visualization.md) | Pixel-art office replay of the audit log, `@curia/antfarm` SPA (Phaser + React), event→directive interpreter, timeline/stream/asset routes, scoped CSP |
+| 20 | [Agent Document Workspace (OKF)](20-agent-document-workspace.md) | OKF `working_documents` store, `doc-*` skills, backlink index, accumulator spill, `/scratch` TTL sweep, KG distillation |
+| 21 | [Ant Farm Visualization](21-antfarm-visualization.md) | Pixel-art office replay of the audit log, `@curia/antfarm` SPA (Phaser + React), event→directive interpreter, timeline/stream/asset routes, scoped CSP |
 
 ---
 

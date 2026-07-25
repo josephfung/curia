@@ -70,6 +70,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`approve-grant-recommendation`** — `action_risk` raised low→critical, matching direct permission grants. (#1499)
 - **KG relationship tools** — `query-relationships`/`delete-relationship` moved from the `contacts` skill to `memory`. (#1502)
 - **Ant Farm art** — LimeZu sheets committed to core (redistribution approved); open-core images render the real office, not placeholders. (#1504)
+- **Architecture specs cleanup** — merged spec 20 into 19, renumbered specs 21–22 to 20–21, removed stale checklists. (#1554)
 
 ### Fixed
 
@@ -207,9 +208,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Resumable tasks & projects (spec 20)** — long work checkpoints and resumes across bursts instead of failing when it runs out of budget: a paused task saves progress and schedules its own continuation, a progress-based circuit breaker escalates genuinely stuck work, and complex goals decompose into a `plan` of child steps that advance as dependencies clear and auto-complete into a deliverable. Adds the `checkpoint` and `plan` skills, throughput telemetry with advisory slice-sizing, and adaptive re-planning on divergence. (#1150, #691)
+- **Resumable tasks & projects (spec 19)** — long work checkpoints and resumes across bursts instead of failing when it runs out of budget: a paused task saves progress and schedules its own continuation, a progress-based circuit breaker escalates genuinely stuck work, and complex goals decompose into a `plan` of child steps that advance as dependencies clear and auto-complete into a deliverable. Adds the `checkpoint` and `plan` skills, throughput telemetry with advisory slice-sizing, and adaptive re-planning on divergence. (#1150, #691)
 - **Principal-facing escalation** — stuck tasks surface in the daily digest with the reason (stalled / hit-a-limit / blocked-on-a-person / couldn't-finish), progress, throughput/ETA, and suggested next actions, instead of a bare backlog row. (#1267)
-- **Agent document workspace (spec 21)** — a new OKF working-document store (`working_documents` + backlink index) with `doc-read` / `doc-list` / `doc-write` / `doc-search`, auto-pinned into task-management agents; resumable accumulators spill into it, completed deliverables distil into the knowledge graph, and expired `/scratch` docs are swept nightly. (#1207)
+- **Agent document workspace (spec 20)** — a new OKF working-document store (`working_documents` + backlink index) with `doc-read` / `doc-list` / `doc-write` / `doc-search`, auto-pinned into task-management agents; resumable accumulators spill into it, completed deliverables distil into the knowledge graph, and expired `/scratch` docs are swept nightly. (#1207)
 - **Calendar scheduling rules** — the calendar agent loads the CEO's scheduling rules from `config-store` at task start, so preferences are reliably applied. (#1223)
 
 ### Changed
@@ -233,7 +234,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Documentation
 
-- **Specs synced to shipped code** — new spec 21 (document workspace), spec 20 refreshed for Phase 3, specs 15/04 reconciled, `documentWorkspace` documented; shipped design memos pruned from `docs/wip/`. (#1285)
+- **Specs synced to shipped code** — new spec 20 (document workspace), spec 19 refreshed for Phase 3, specs 15/04 reconciled, `documentWorkspace` documented; shipped design memos pruned from `docs/wip/`. (#1285)
 
 ## [0.38.0] — 2026-06-26 — "Deckard"
 

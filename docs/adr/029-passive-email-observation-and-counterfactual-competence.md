@@ -41,7 +41,7 @@ Concrete mapping:
 
 | Concern | Store |
 |---|---|
-| Draft snapshots + `(draft, sent)` diffs | OKF `/scratch/voice-learning/…` (spec 21) |
+| Draft snapshots + `(draft, sent)` diffs | OKF `/scratch/voice-learning/…` (spec 20) |
 | Learned voice | free-form `WritingVoice.guide`, maintained by a weekly batched LLM pass and approved via the digest |
 | Todo completion | `tasks` + `task-complete` / digest confirm |
 | Capability evidence | Pre-scored rows in `autonomy_action_log` |
@@ -50,7 +50,7 @@ Concrete mapping:
 
 Machine-state keys use whole-object last-write-wins (no per-doc version check); acceptable because each key has effectively a single writer per cron tick and the queue key is keyed by task id so a held-watermark retry re-adds idempotently. Prose evidence (`pending-diffs.md`), snapshots, and shadow docs remain OKF.
 
-Rationale for rejecting new stores (options 1 and 3): the destinations already exist and are versioned/auditable; a parallel schema would duplicate versioning, digest surfacing, and autonomy gating. The KG is the wrong home for raw draft prose and edit diffs (spec 21: "the workspace is the scratchpad, the KG is the record").
+Rationale for rejecting new stores (options 1 and 3): the destinations already exist and are versioned/auditable; a parallel schema would duplicate versioning, digest surfacing, and autonomy gating. The KG is the wrong home for raw draft prose and edit diffs (spec 20: "the workspace is the scratchpad, the KG is the record").
 
 ### Counterfactual competence
 

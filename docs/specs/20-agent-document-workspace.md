@@ -1,4 +1,4 @@
-# 21 — Agent Document Workspace (OKF)
+# 20 — Agent Document Workspace (OKF)
 
 **Date:** 2026-07-01
 **Status:** Shipped (v0.39)
