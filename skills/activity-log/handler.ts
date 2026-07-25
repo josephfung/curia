@@ -95,18 +95,36 @@ function summarizeToolResult(
   detail: string | null;
   autonomy: 'autonomous' | 'approved' | 'unknown';
 } | null {
-  const toolName = readAuditToolName(row.payload) ?? null;
+  const toolName = readAuditToolName(row.payload, {
+    action: row.action,
+    targetType: row.targetType,
+    targetId: row.targetId,
+  }) ?? null;
   if (!toolName) return null;
 
   const result = row.payload.result as { success?: boolean; data?: unknown; error?: string } | undefined;
-  const success = result?.success === true;
+  // Prefer structured outcome column; fall back to payload for pre-hardening rows.
+  const success = row.outcome === 'success'
+    ? true
+    : row.outcome === 'failure' || row.outcome === 'error' || row.outcome === 'denied'
+      ? false
+      : result?.success === true;
   const autonomy = matchAutonomyOutcome(toolName, row.timestamp, row.conversationId, autonomyRows);
+
+  // Human-readable target still comes from result data when available; fall back
+  // to structured target_id (tool name) for rows where payload detail is thin.
+  const targetFromPayload = extractTarget(toolName, result);
+  const target = targetFromPayload !== toolName
+    ? targetFromPayload
+    : (row.targetId && row.targetId !== '[EXTRACTION_FAILED]' ? row.targetId : targetFromPayload);
 
   return {
     timestamp: toLocalIso(Math.floor(row.timestamp.getTime() / 1000), tz) ?? row.timestamp.toISOString(),
     tool: toolName,
-    agent_id: row.sourceId,
-    target: extractTarget(toolName, result),
+    agent_id: row.initiatorId && row.initiatorType === 'agent'
+      ? row.initiatorId
+      : row.sourceId,
+    target,
     outcome: success ? 'completed' : 'failed',
     detail: success ? extractSuccessDetail(toolName, result?.data) : (result?.error ?? null),
     autonomy,

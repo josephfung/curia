@@ -53,7 +53,11 @@ export function interpretEvent(row: AuditEventRow): SceneDirective | SceneDirect
     case 'tool.invoke':
     case 'skill.invoke': {
       const toolName = readAuditToolName(payload) ?? '';
-      const agentId = payloadString(payload, 'agentId') ?? row.sourceId;
+      const agentId = payloadString(payload, 'agentId')
+        ?? (typeof row.initiatorId === 'string' && row.initiatorId.length > 0
+          ? row.initiatorId
+          : undefined)
+        ?? row.sourceId;
       if (toolName === 'delegate') {
         const input = payload.input;
         const targetAgentId =
@@ -96,7 +100,11 @@ export function interpretEvent(row: AuditEventRow): SceneDirective | SceneDirect
       return {
         ...base,
         kind: 'agent.think',
-        agentId: payloadString(payload, 'agentId') ?? row.sourceId,
+        agentId: payloadString(payload, 'agentId')
+          ?? (typeof row.initiatorId === 'string' && row.initiatorId.length > 0
+            ? row.initiatorId
+            : undefined)
+          ?? row.sourceId,
         phase: 'stop',
         toolName: readAuditToolName(payload),
       };

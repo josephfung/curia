@@ -1,7 +1,7 @@
 {
   "name": "audit-query",
-  "description": "Read the audit_log for forensic investigation. Anchor on an event ID, a blocked-message ID (block_…), a conversation ID, a task ID, one or more event types, and/or a time window. Returns bounded, PII-scrubbed event records (id, type, source, parent_event_id, payload summary). Read-only; principal-facing diagnostics only.",
-  "version": "0.1.0",
+  "description": "Read the audit_log for forensic investigation. Anchor on an event ID, a blocked-message ID (block_…), a conversation ID, a task ID, one or more event types, structured dimensions (outcome, target_type/target_id, initiator_type/initiator_id), and/or a time window. Returns bounded, PII-scrubbed event records with first-class action/outcome/target/initiator fields. Read-only; principal-facing diagnostics only.",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -10,6 +10,11 @@
     "conversation_id": "string?",
     "task_id": "string?",
     "event_types": "string[]?",
+    "outcome": "string?",
+    "target_type": "string?",
+    "target_id": "string?",
+    "initiator_type": "string?",
+    "initiator_id": "string?",
     "since": "timestamp?",
     "until": "timestamp?",
     "limit": "number?"

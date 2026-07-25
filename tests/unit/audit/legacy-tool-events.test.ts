@@ -62,4 +62,18 @@ describe('readAuditToolName', () => {
   it('returns undefined when neither is present', () => {
     expect(readAuditToolName({})).toBeUndefined();
   });
+
+  it('prefers structured target_id when target_type is skill', () => {
+    expect(readAuditToolName(
+      { toolName: 'payload-name' },
+      { targetType: 'skill', targetId: 'column-name' },
+    )).toBe('column-name');
+  });
+
+  it('ignores EXTRACTION_FAILED sentinel and falls back to payload', () => {
+    expect(readAuditToolName(
+      { toolName: 'email-send' },
+      { targetType: 'skill', targetId: '[EXTRACTION_FAILED]' },
+    )).toBe('email-send');
+  });
 });

@@ -17,6 +17,11 @@ interface AuditQueryInput {
   conversation_id?: string;
   task_id?: string;
   event_types?: string[] | string;
+  outcome?: string;
+  target_type?: string;
+  target_id?: string;
+  initiator_type?: string;
+  initiator_id?: string;
   since?: string;
   until?: string;
   limit?: number;
@@ -41,6 +46,11 @@ export class AuditQueryHandler implements ToolHandler {
     const blockId = typeof input.block_id === 'string' ? input.block_id.trim() : undefined;
     const conversationId = typeof input.conversation_id === 'string' ? input.conversation_id.trim() : undefined;
     const taskId = typeof input.task_id === 'string' ? input.task_id.trim() : undefined;
+    const outcome = typeof input.outcome === 'string' ? input.outcome.trim() : undefined;
+    const targetType = typeof input.target_type === 'string' ? input.target_type.trim() : undefined;
+    const targetId = typeof input.target_id === 'string' ? input.target_id.trim() : undefined;
+    const initiatorType = typeof input.initiator_type === 'string' ? input.initiator_type.trim() : undefined;
+    const initiatorId = typeof input.initiator_id === 'string' ? input.initiator_id.trim() : undefined;
     const eventTypes = Array.isArray(input.event_types)
       ? input.event_types.filter((t): t is string => typeof t === 'string' && t.trim().length > 0).map((t) => t.trim())
       : typeof input.event_types === 'string' && input.event_types.trim().length > 0
@@ -74,16 +84,29 @@ export class AuditQueryHandler implements ToolHandler {
           to: until.date,
           conversationId,
           taskId,
+          outcome,
+          targetType,
+          targetId,
+          initiatorType,
+          initiatorId,
           limit,
         });
         rows = page.rows;
         hasMore = page.hasMore;
-      } else if (since.date || until.date || conversationId || taskId) {
+      } else if (
+        since.date || until.date || conversationId || taskId
+        || outcome || targetType || targetId || initiatorType || initiatorId
+      ) {
         const page = await ctx.auditLogRepo.findTimeline({
           from: since.date,
           to: until.date,
           conversationId,
           taskId,
+          outcome,
+          targetType,
+          targetId,
+          initiatorType,
+          initiatorId,
           limit,
         });
         rows = page.rows;
@@ -91,7 +114,7 @@ export class AuditQueryHandler implements ToolHandler {
       } else {
         return {
           success: false,
-          error: 'audit-query needs at least one anchor: event_id, block_id, conversation_id, task_id, event_types, or a since/until window',
+          error: 'audit-query needs at least one anchor: event_id, block_id, conversation_id, task_id, event_types, outcome, target_type/target_id, initiator_type/initiator_id, or a since/until window',
         };
       }
 

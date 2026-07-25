@@ -97,6 +97,10 @@ export interface AuditEventRow {
   conversationId: string | null;
   parentEventId: string | null;
   payload: Record<string, unknown>;
+  /** Structured action (Phase 1) — optional; null/absent on pre-hardening rows. */
+  action?: string | null;
+  /** Structured initiator id (Phase 1) — optional; null/absent on pre-hardening rows. */
+  initiatorId?: string | null;
 }
 
 /** SSE envelope for live Ant Farm directive streaming. */

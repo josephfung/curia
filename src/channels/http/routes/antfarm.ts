@@ -33,6 +33,8 @@ function auditLogRowToEventRow(row: {
   conversationId: string | null;
   parentEventId: string | null;
   payload: Record<string, unknown>;
+  action?: string | null;
+  initiatorId?: string | null;
 }): AuditEventRow {
   return {
     id: row.id,
@@ -43,6 +45,8 @@ function auditLogRowToEventRow(row: {
     conversationId: row.conversationId,
     parentEventId: row.parentEventId,
     payload: row.payload,
+    action: row.action ?? null,
+    initiatorId: row.initiatorId ?? null,
   };
 }
 

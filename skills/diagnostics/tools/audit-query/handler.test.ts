@@ -24,8 +24,16 @@ function auditRow(overrides?: Partial<AuditLogRow>): AuditLogRow {
     sourceLayer: 'execution',
     sourceId: 'coordinator',
     conversationId: 'conv-1',
+    taskId: null,
     parentEventId: 'evt-0',
     payload: { toolName: 'email-send' },
+    action: null,
+    outcome: null,
+    targetType: null,
+    targetId: null,
+    initiatorType: null,
+    initiatorId: null,
+    entryHash: null,
     ...overrides,
   };
 }

@@ -268,6 +268,17 @@ escalation:
     model: claude-haiku-4-5
     timeout_ms: 5000
 
+# Audit log hardening (spec 10 / #1383).
+# llm_call_archive stores redacted full prompts/responses keyed to llm.call rows.
+# Kill-switch (`enabled: false`) stops new archive writes immediately; hot
+# retention TTL is enforced by DreamEngine's nightly decay pass (DELETE older rows).
+# Encryption-at-rest for this table is a tracked follow-up — treat the store as
+# plaintext JSONB with best-effort redaction until then.
+audit:
+  llmCallArchive:
+    enabled: true
+    hotRetentionDays: 90
+
 # Dream engine — background knowledge graph maintenance (issue #27).
 # The decay pass runs on a configurable interval and reduces the confidence of
 # slow_decay and fast_decay nodes/edges using an exponential half-life model.

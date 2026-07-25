@@ -224,6 +224,20 @@
         }
       }
     },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "llmCallArchive": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "hotRetentionDays": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
     "dreaming": {
       "type": "object",
       "additionalProperties": false,

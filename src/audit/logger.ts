@@ -1,11 +1,20 @@
-import type { DbPool } from '../db/connection.js';
-import type { BusEvent } from '../bus/events.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { Pool, PoolClient } from 'pg';
+import type { BusEvent, LlmCallArchiveContent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import {
   createDbUnavailableAgentError,
   isDbUnavailableError,
   withDbRetry,
 } from '../db/resilience.js';
+import { extractStructuredFields } from './field-extraction.js';
+import {
+  GENESIS_HASH,
+  computeEntryHash,
+  toHashTimestamp,
+  type HashChainFields,
+} from './hash-chain.js';
+import { writeLlmCallArchive } from './llm-call-archive.js';
 
 /**
  * Recursively strip null bytes (U+0000) from all string values in an object.
@@ -42,19 +51,85 @@ function stripNullBytes(value: unknown): unknown {
 }
 
 /**
+ * True while {@link AuditLogger} holds the hash-chain write transaction.
+ * Nested `log()` (e.g. publishing a bus event from inside the write path)
+ * would deadlock on the advisory lock — fail loudly instead.
+ */
+const auditWriteDepth = new AsyncLocalStorage<true>();
+
+export interface AuditLoggerOptions {
+  /** When false, skip llm_call_archive writes even if the event carries archive content. Default true. */
+  llmCallArchiveEnabled?: boolean;
+}
+
+/**
  * Write-ahead audit logger. Persists every bus event to the audit_log table
  * BEFORE the event is delivered to other subscribers. This ensures audit
  * completeness even if the process crashes mid-delivery.
+ *
+ * Phase 1 hardening (#1383 / spec 10): also extracts structured columns,
+ * maintains a SHA-256 hash chain (entry_hash), and atomically writes
+ * llm_call_archive rows for llm.call events.
+ *
+ * Hash-chain writes are serialized with a transaction-scoped advisory lock
+ * and ordered by the monotonic `seq` column (not wall-clock timestamp).
+ * Chain head is always re-read under the lock — there is no in-memory
+ * previous-hash cache (single source of truth in the DB).
+ *
+ * INVARIANT: never publish a bus event from inside the audit write
+ * transaction. Doing so re-enters `log()` on another pooled client and
+ * deadlocks on {@link AuditLogger.HASH_CHAIN_LOCK_KEY}.
  *
  * The audit log is append-only — no UPDATE or DELETE operations, with the
  * single exception of flipping `acknowledged` from false to true after
  * delivery has been attempted for all subscribers.
  */
 export class AuditLogger {
+  /**
+   * Advisory-lock key for the global audit hash chain.
+   * Stable across processes; chosen to avoid colliding with other Curia locks.
+   */
+  static readonly HASH_CHAIN_LOCK_KEY = 0x43555249; // 'CURI'
+
+  private readonly llmCallArchiveEnabled: boolean;
+
   constructor(
-    private pool: DbPool,
+    /** Real pg Pool — `.connect()` is required for the hash-chain transaction. */
+    private pool: Pool,
     private logger: Logger,
-  ) {}
+    options: AuditLoggerOptions = {},
+  ) {
+    this.llmCallArchiveEnabled = options.llmCallArchiveEnabled !== false;
+  }
+
+  /**
+   * Startup readiness check: confirm the hash-chain schema is present and log
+   * the current head. Does not cache chain state — every write re-reads under
+   * the advisory lock.
+   */
+  async seedHashChain(): Promise<void> {
+    try {
+      const result = await this.pool.query<{ entry_hash: string | null; seq: string }>(
+        `SELECT entry_hash, seq::text AS seq FROM audit_log
+         WHERE entry_hash IS NOT NULL
+         ORDER BY seq DESC
+         LIMIT 1`,
+      );
+      const latest = result.rows[0];
+      this.logger.debug(
+        {
+          seededFrom: latest?.entry_hash ? 'latest_row' : 'genesis',
+          headSeq: latest?.seq ?? null,
+          hashPrefix: (latest?.entry_hash ?? GENESIS_HASH).slice(0, 12),
+        },
+        'Audit hash chain ready',
+      );
+    } catch (err) {
+      // Fail closed — missing seq/entry_hash columns mean migrations have not run.
+      this.logger.error({ err }, 'Audit hash chain seed failed');
+      throw err;
+    }
+  }
 
   /**
    * Log a bus event to the audit_log table.
@@ -92,40 +167,107 @@ export class AuditLogger {
           ? payload.agentTaskId
           : null;
 
+    const parentEventId = event.parentEventId ?? null;
+
+    // Structured columns — extraction failures become '[EXTRACTION_FAILED]'.
+    const structured = extractStructuredFields(event.type, payload, event.id, this.logger);
+
     // Sanitize before the DB write in a separate try/catch so a sanitization
     // failure is logged with its own distinct message — not conflated with a
     // DB connectivity or schema error from the INSERT below.
     // TODO: JSON.stringify can also throw on circular references (pre-existing,
     // not introduced here). If that becomes a live issue, wrap it separately too.
+    let sanitizedPayload: unknown;
     let serializedPayload: string;
     try {
-      serializedPayload = JSON.stringify(stripNullBytes(event.payload));
+      sanitizedPayload = stripNullBytes(event.payload);
+      serializedPayload = JSON.stringify(sanitizedPayload);
     } catch (err) {
       this.logger.error({ err, eventId: event.id, eventType: event.type }, 'Audit log payload sanitization failed — event not written');
       throw err;
     }
 
+    // Typed, non-persisted archive on llm.call — never part of payload / hash.
+    const archiveContent: LlmCallArchiveContent | undefined =
+      event.type === 'llm.call' && this.llmCallArchiveEnabled
+        ? event.archive
+        : undefined;
+
     try {
       // Critical path: fail fast on DB unavailability (no long retry loop).
       // Spec 05 / #1381 — audit is write-ahead; an outage must surface as a
       // classified error to publishers rather than hang or swallow.
-      await this.pool.query(
-        // All columns are explicitly listed so schema additions don't silently
-        // shift positional parameters.
-        `INSERT INTO audit_log (id, timestamp, event_type, source_layer, source_id, payload, conversation_id, task_id, parent_event_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          event.id,
-          event.timestamp,
-          event.type,
-          event.sourceLayer,
-          sourceId,
-          serializedPayload,
-          conversationId,
-          taskId,
-          event.parentEventId ?? null,
-        ],
-      );
+      await this.withTransaction(async (client) => {
+        // Serialize hash-chain appends across processes / parallel test workers.
+        await client.query('SELECT pg_advisory_xact_lock($1)', [AuditLogger.HASH_CHAIN_LOCK_KEY]);
+
+        const head = await client.query<{ entry_hash: string | null }>(
+          `SELECT entry_hash FROM audit_log
+           WHERE entry_hash IS NOT NULL
+           ORDER BY seq DESC
+           LIMIT 1`,
+        );
+        const previousHash = typeof head.rows[0]?.entry_hash === 'string' && head.rows[0].entry_hash.length > 0
+          ? head.rows[0].entry_hash
+          : GENESIS_HASH;
+
+        // timestamp is the factual event time — never mutated for chain ordering.
+        // Chain/verify order is the BIGSERIAL `seq` column (migration 080).
+        const hashFields: HashChainFields = {
+          id: event.id,
+          timestamp: toHashTimestamp(event.timestamp),
+          event_type: event.type,
+          source_layer: event.sourceLayer,
+          source_id: sourceId,
+          payload: sanitizedPayload,
+          conversation_id: conversationId,
+          task_id: taskId,
+          parent_event_id: parentEventId,
+          action: structured.action,
+          outcome: structured.outcome,
+          target_type: structured.target_type,
+          target_id: structured.target_id,
+          initiator_type: structured.initiator_type,
+          initiator_id: structured.initiator_id,
+        };
+        const entryHash = computeEntryHash(hashFields, previousHash);
+
+        await client.query(
+          `INSERT INTO audit_log (
+             id, timestamp, event_type, source_layer, source_id, payload,
+             conversation_id, task_id, parent_event_id,
+             action, outcome, target_type, target_id,
+             initiator_type, initiator_id, entry_hash
+           ) VALUES (
+             $1, $2, $3, $4, $5, $6,
+             $7, $8, $9,
+             $10, $11, $12, $13,
+             $14, $15, $16
+           )`,
+          [
+            event.id,
+            event.timestamp,
+            event.type,
+            event.sourceLayer,
+            sourceId,
+            serializedPayload,
+            conversationId,
+            taskId,
+            parentEventId,
+            structured.action,
+            structured.outcome,
+            structured.target_type,
+            structured.target_id,
+            structured.initiator_type,
+            structured.initiator_id,
+            entryHash,
+          ],
+        );
+
+        if (archiveContent !== undefined) {
+          await writeLlmCallArchive(client, event.id, archiveContent, this.logger);
+        }
+      });
     } catch (err) {
       // Audit failures must not be silent — log and re-throw so the bus can
       // decide whether to halt delivery or enter a degraded mode.
@@ -146,9 +288,41 @@ export class AuditLogger {
   }
 
   /**
+   * Run `fn` inside BEGIN/COMMIT with the audit-write depth flag set.
+   * Nested entry (bus publish → log → withTransaction) throws instead of
+   * deadlocking on the advisory lock.
+   */
+  private async withTransaction(fn: (client: PoolClient) => Promise<void>): Promise<void> {
+    if (auditWriteDepth.getStore()) {
+      throw new Error(
+        'BUG: nested AuditLogger.log() inside the audit write transaction — ' +
+          'never publish a bus event from within the hash-chain write path',
+      );
+    }
+
+    await auditWriteDepth.run(true, async () => {
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+        await fn(client);
+        await client.query('COMMIT');
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackErr) {
+          this.logger.error({ err: rollbackErr }, 'Audit log transaction rollback failed');
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
+    });
+  }
+
+  /**
    * Mark an audit_log row as acknowledged after delivery has been attempted.
    * This is the ONLY permitted UPDATE on audit_log — enforced by a database
-   * trigger (migration 021) that rejects all other mutations.
+   * trigger (migration 021, extended in 078/080) that rejects all other mutations.
    *
    * Called as the onDelivered hook in EventBus after all subscribers have been
    * attempted. Delivery is "attempted", not "succeeded" — per-subscriber errors

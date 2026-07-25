@@ -940,12 +940,28 @@ export interface ConfigChangeEvent extends BaseEvent {
   payload: ConfigChangePayload;
 }
 
+/**
+ * Full redacted LLM I/O for the `llm_call_archive` table. Carried on
+ * `llm.call` as a non-persisted top-level field — AuditLogger omits it from
+ * `audit_log.payload` while still writing the side table (spec 10).
+ */
+export interface LlmCallArchiveContent {
+  prompt: unknown;
+  response: unknown;
+  toolDefinitions?: unknown;
+}
+
 // LlmCallEvent — published by the agent layer after every LLM API call.
 // parentEventId references the agent.task that triggered it.
 export interface LlmCallEvent extends BaseEvent {
   type: 'llm.call';
   sourceLayer: 'agent';
   payload: LlmCallPayload;
+  /**
+   * Non-persisted archive payload. Not part of `payload` so AuditLogger can
+   * omit it from the bus/`audit_log` JSON while still writing the side table.
+   */
+  archive?: LlmCallArchiveContent;
 }
 
 // LlmErrorEvent — published by TelemetryLlmProvider and AgentRuntime on every
@@ -1745,9 +1761,10 @@ export function createCheckpointExtractionSkipped(
 
 export function createLlmCall(
   // parentEventId is required — every LLM call must trace back to the agent.task that triggered it.
-  payload: LlmCallPayload & { parentEventId: string },
+  // archive is optional and never persists into audit_log.payload.
+  payload: LlmCallPayload & { parentEventId: string; archive?: LlmCallArchiveContent },
 ): LlmCallEvent {
-  const { parentEventId, ...rest } = payload;
+  const { parentEventId, archive, ...rest } = payload;
   return {
     id: randomUUID(),
     timestamp: new Date(),
@@ -1755,6 +1772,7 @@ export function createLlmCall(
     sourceLayer: 'agent',
     payload: rest,
     parentEventId,
+    ...(archive !== undefined ? { archive } : {}),
   };
 }
 

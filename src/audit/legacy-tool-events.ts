@@ -49,10 +49,28 @@ export function isToolInvokeEventType(eventType: string): boolean {
 }
 
 /**
- * Read the atom name from an audit payload that may use either field name.
- * Prefers the current `toolName` when both are present.
+ * Read the atom name from an audit row that may use structured columns (Phase 1)
+ * or either payload field name (pre-ADR-031 dual vocabulary).
+ *
+ * Prefer `target_id` when `target_type === 'skill'` — the structured `action`
+ * column is the taxonomy verb (`execute`), not the tool name.
  */
-export function readAuditToolName(payload: Record<string, unknown>): string | undefined {
+export function readAuditToolName(
+  payload: Record<string, unknown>,
+  structured?: {
+    action?: string | null;
+    targetType?: string | null;
+    targetId?: string | null;
+  },
+): string | undefined {
+  if (
+    structured?.targetType === 'skill'
+    && typeof structured.targetId === 'string'
+    && structured.targetId.length > 0
+    && structured.targetId !== '[EXTRACTION_FAILED]'
+  ) {
+    return structured.targetId;
+  }
   if (typeof payload['toolName'] === 'string') return payload['toolName'];
   if (typeof payload['skillName'] === 'string') return payload['skillName'];
   return undefined;

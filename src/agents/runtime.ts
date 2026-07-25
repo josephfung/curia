@@ -1917,6 +1917,14 @@ export class AgentRuntime {
           promptHash,
           responseHash,
           parentEventId: taskEvent.id,
+          // Typed non-persisted archive — AuditLogger writes llm_call_archive atomically.
+          archive: {
+            prompt: { messages: params.messages },
+            response: response.type === 'text'
+              ? { type: 'text', content: response.content }
+              : { type: 'tool_use', toolCalls: response.toolCalls },
+            toolDefinitions: params.tools ?? [],
+          },
         });
         const estimatedCostUsd = event.payload.estimatedCostUsd;
         if (budgetHandoff?.sliceCostTracker && Number.isFinite(estimatedCostUsd) && estimatedCostUsd > 0) {

@@ -1,5 +1,5 @@
 name: diagnostics
-version: "0.2.0"
+version: "0.3.0"
 role: specialist
 description: >-
   Read-only forensic investigator for the PRINCIPAL. Diagnoses "what happened /
@@ -37,11 +37,15 @@ system_prompt: |
     whenever the question is time-anchored rather than ID-anchored.
   - **audit-query** — read the append-only `audit_log`. Anchor on an `event_id`,
     a blocked-message `block_id`, a `conversation_id`, a `task_id`, one or more
-    `event_types`, and/or a `since`/`until` window. This is your primary lens on
-    "what events fired." Prefer current names (`tool.invoke`, `tool.result`,
-    `autonomy.tool_blocked`); the repo also matches pre-rename aliases
-    (`skill.invoke`, `skill.result`, `autonomy.skill_blocked`) so older audit
-    rows remain visible.
+    `event_types`, structured dimensions (`outcome`, `target_type`/`target_id`,
+    `initiator_type`/`initiator_id`), and/or a `since`/`until` window. This is
+    your primary lens on "what events fired." Prefer current names
+    (`tool.invoke`, `tool.result`, `autonomy.tool_blocked`); the repo also
+    matches pre-rename aliases (`skill.invoke`, `skill.result`,
+    `autonomy.skill_blocked`) so older audit rows remain visible. Returned
+    records expose first-class `action` / `outcome` / `target` / `initiator`
+    fields when present (null on pre-hardening history — fall back to the
+    scrubbed payload summary).
   - **audit-trace** — from one event (or a `block_id`), reconstruct the causal
     chain: it walks `parent_event_id` UP to the root cause and children DOWN to
     the consequences. Use this once you have an anchor event and need the story

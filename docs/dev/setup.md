@@ -309,6 +309,27 @@ Restart Curia, then **install and enable the Signal channel** in the console (**
 
 ---
 
+## Audit log integrity check
+
+Phase 1 hardening (spec 10 / #1383) maintains a SHA-256 hash chain on `audit_log`,
+ordered by the monotonic `seq` column (not wall-clock timestamp). Phase 1 detects
+accidental corruption and naive tampering — not a knowledgeable insider with DB
+write access (HMAC + external anchoring are a later phase). Verify offline with:
+
+```bash
+# Local / developer DB
+pnpm audit:verify
+
+# Deployed instance (example path)
+pnpm --prefix /opt/curia tsx --env-file=.env scripts/audit-verify.ts
+```
+
+Exits `0` when the chain is intact (or the log is empty / only unhashed rows),
+`1` on the first broken link, and `2` on configuration/DB errors. Pre-hardening
+rows with NULL `entry_hash` are skipped.
+
+---
+
 ## What's Next
 
 If you walked through Tier 1, you've already configured the office identity
