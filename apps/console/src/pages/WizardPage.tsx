@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type JSX } from 'react';
+import { useState, useEffect, useRef, type JSX, type CSSProperties } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { apiFetch } from '../api.js';
 import { TonePillGrid, AssistantToneSliders } from '../components/settings/ToneFields.js';
