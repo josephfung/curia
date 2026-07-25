@@ -8,10 +8,9 @@
 // Barge-in: while the assistant is talking (TTS or LLM active), any detected
 // principal speech cancels the in-flight TTS streams and aborts the turn.
 //
-// Skills note (Phase 1): tools default to empty. The VoiceTurnRunner tool loop
-// is fully implemented and tested with fakes, so wiring coordinator tools later
-// only requires passing `tools` + `invokeTool` through this config — no runtime
-// changes. See ADR-037 §6 and the design doc §3.7.
+// Skills: tools default to empty at construction (bootstrap order — ExecutionLayer
+// and coordinator pins land later). Call `configureTools()` once the coordinator
+// tool set + ExecutionLayer.invoke are available. See ADR-037 §6.
 
 import type { EventBus } from '../../bus/bus.js';
 import { createInboundMessage, createVoiceSessionEnded } from '../../bus/events.js';
@@ -62,12 +61,24 @@ export interface VoiceRuntimeConfig {
   voiceId?: string;
   /** Synthetic sender id for inbound.message (defaults to the console principal id). */
   senderId?: string;
-  /** Optional static tool set for voice turns (Phase 1: usually empty). */
+  /** Optional static tool set for voice turns. Prefer configureTools() post-boot. */
   tools?: ToolDefinition[];
   /** Optional per-turn tool resolver (takes precedence over `tools`). */
   resolveVoiceTools?: () => ToolDefinition[];
   /** Optional tool invoker; when absent the runner returns a not-wired placeholder. */
-  invokeTool?: (call: ToolCall) => Promise<{ content: string; is_error?: boolean }>;
+  invokeTool?: (
+    call: ToolCall,
+    ctx: { conversationId: string; sessionId: string },
+  ) => Promise<{ content: string; is_error?: boolean }>;
+}
+
+/** Late-bound tool wiring — set after coordinator pins + ExecutionLayer exist. */
+export interface VoiceToolBridge {
+  resolveVoiceTools: () => ToolDefinition[];
+  invokeTool: (
+    call: ToolCall,
+    ctx: { conversationId: string; sessionId: string },
+  ) => Promise<{ content: string; is_error?: boolean }>;
 }
 
 interface StartVoiceSessionParams {
@@ -101,6 +112,7 @@ interface ActiveSession {
 export class VoiceRuntime {
   private readonly log: Logger;
   private readonly sessions = new Map<string, ActiveSession>();
+  private toolBridge: VoiceToolBridge | null = null;
 
   constructor(private readonly config: VoiceRuntimeConfig) {
     this.log = config.logger.child({ component: 'voice-runtime' });
@@ -109,6 +121,18 @@ export class VoiceRuntime {
         `VoiceRuntime requires a streaming LLM provider; '${config.llm.id}' does not implement stream()`,
       );
     }
+  }
+
+  /**
+   * Bind coordinator tools + ExecutionLayer invoke after bootstrap. Safe to call
+   * once agents are registered; subsequent calls replace the bridge.
+   */
+  configureTools(bridge: VoiceToolBridge): void {
+    this.toolBridge = bridge;
+    this.log.info(
+      { toolCount: bridge.resolveVoiceTools().length },
+      'VoiceRuntime tools configured',
+    );
   }
 
   get activeSessionCount(): number {
@@ -260,7 +284,21 @@ export class VoiceRuntime {
     const userTurnEndAt = Date.now();
     let ttfaRecorded = false;
 
-    const tools = this.config.resolveVoiceTools ? this.config.resolveVoiceTools() : this.config.tools;
+    const tools = this.toolBridge
+      ? this.toolBridge.resolveVoiceTools()
+      : (this.config.resolveVoiceTools ? this.config.resolveVoiceTools() : this.config.tools);
+
+    const invokeTool = this.toolBridge
+      ? (call: ToolCall) => this.toolBridge!.invokeTool(call, {
+        conversationId: session.conversationId,
+        sessionId: session.sessionId,
+      })
+      : this.config.invokeTool
+        ? (call: ToolCall) => this.config.invokeTool!(call, {
+          conversationId: session.conversationId,
+          sessionId: session.sessionId,
+        })
+        : undefined;
 
     const userMessage: Message = { role: 'user', content: utterance };
     const messages: Message[] = [
@@ -307,7 +345,7 @@ export class VoiceRuntime {
       model: this.config.model,
       logger: this.log,
       tools,
-      invokeTool: this.config.invokeTool,
+      invokeTool,
       onFiller: async filler => {
         await onSpeechText(filler, { streamId: `${session.sessionId}-filler` });
       },
