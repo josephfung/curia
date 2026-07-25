@@ -21,7 +21,7 @@ interface Channel {
 
 Each channel:
 - Publishes `inbound.message` (normalized) when a platform message arrives
-- Has its outbound responses delivered via the `OutboundGateway` (channels are no longer responsible for `send()`)
+- Has its outbound text responses delivered via the `OutboundGateway` (channels are no longer responsible for `send()`); Phase 1 voice is the exception because `VoiceRuntime` streams TTS audio through LiveKit
 - Handles its own connection lifecycle, authentication, and reconnection
 
 ### Channel Catalog & Registry
@@ -46,7 +46,7 @@ interface ChannelCredentialField {
 ```
 
 - **Registry table** (`channel_registry`, migration `052_create_channel_registry.sql`): `name` (PK), `enabled`, `is_toggleable`, `installed_at`/`installed_by`, `enabled_at`/`enabled_by`, `updated_at`.
-- **Always-on safeguard:** the `http` and `cli` channels have `isToggleable: false` — they always start and cannot be disabled (operator-lockout protection). `email`, `signal`, `slack`, and `sms` are toggleable.
+- **Always-on safeguard:** the `http` and `cli` channels have `isToggleable: false` — they always start and cannot be disabled (operator-lockout protection). `email`, `signal`, `slack`, `sms`, and `voice` are toggleable.
 - **Vault key convention:** channel credentials are stored under structured vault keys of the form `channel.<name>.<field>` — e.g. the email channel's Nylas API key lives at `channel.email.nylas_api_key`. A `ChannelCredentialField` may also declare an `envFallback` env var used at bootstrap.
 
 ---
@@ -80,7 +80,7 @@ interface OutboundMessage {
 
 ## Launch Channels
 
-Channels are not started merely by being configured — like skills and agents, they are tracked in the `channel_registry` with an install/enable lifecycle (restart-based). The `http` and `cli` channels are non-toggleable and always start; `email`, `signal`, `slack`, and `sms` must be installed and enabled in the registry (via **Settings → Channels**). Seeding channel credentials alone does not enroll a toggleable channel. Inbound adapters and outbound egress both derive from the same registry gate.
+Channels are not started merely by being configured — like skills and agents, they are tracked in the `channel_registry` with an install/enable lifecycle (restart-based). The `http` and `cli` channels are non-toggleable and always start; `email`, `signal`, `slack`, `sms`, and `voice` must be installed and enabled in the registry (via **Settings → Channels**). Seeding channel credentials alone does not enroll a toggleable channel. Inbound adapters and outbound egress both derive from the same registry gate.
 
 ### CLI
 Interactive terminal for local dev and testing. Reads from stdin, writes to stdout. Simplest adapter — useful for testing agent logic without external services. **Non-toggleable** (`isToggleable: false`): always starts, cannot be disabled.
@@ -124,6 +124,14 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - **Trust:** `medium`, `unknown_sender: allow`, `threaded: false` (`config/channel-trust.yaml`).
 - **Voice:** orthogonal to #1414 Phase 1 LiveKit path; prefer the same Telnyx account/DID as Phase 2 PSTN SIP trunk.
 
+### Voice (console WebRTC via LiveKit)
+- Toggleable channel: operator runs self-hosted LiveKit, vaults `channel.voice.livekit_url` + `channel.voice.livekit_api_key` + `channel.voice.livekit_api_secret` + `channel.voice.deepgram_api_key` + `channel.voice.cartesia_api_key`, enables Voice in **Settings → Channels**, then restarts Curia. `channels.voice.model` may override the default fast-tier spoken-turn model.
+- **Transport:** the console creates a voice session through `POST /api/voice/sessions`, receives a LiveKit room token, and joins over WebRTC. Curia's `VoiceRuntime` joins the same room as the agent participant.
+- **Inbound:** Deepgram STT final transcripts publish ordinary `inbound.message` events with `channel_id: "voice"` and conversation id `voice:<sessionId>`. Session lifecycle publishes `voice.session.started` / `voice.session.ended` for audit and operations.
+- **Spoken replies:** `VoiceTurnRunner` uses `LLMProvider.stream()` and coordinator tool definitions, chunks assistant text into sentences, and sends audio through Cartesia TTS back to LiveKit. `VoiceRuntime` owns TTS egress; Phase 1 intentionally does **not** use `OutboundGateway`, `outbound-request.ts`, or `principal-rules.ts` for voice audio. If dispatch emits `outbound.message` for `voice`, delivery no-ops.
+- **Trust:** `high`, `unknown_sender: ignore`, `threaded: false` (`config/channel-trust.yaml`) because Phase 1 calls are console-authenticated as the principal.
+- **Scope:** Phase 1 is web-console duplex only. Signal RingRTC and PSTN/SIP are deferred Phase 2 transports that should reuse `VoiceRuntime`.
+
 ### HTTP API
 - REST endpoints for programmatic access
 - SSE (Server-Sent Events) for real-time response streaming
@@ -163,6 +171,7 @@ Each channel is assigned a trust level that the dispatch layer tags on every inb
 | **HTTP API** | `medium` | Token-authenticated, but tokens can be leaked |
 | **Slack** | `medium` | Workspace OAuth / bot token — weaker than Signal (ADR-033) |
 | **SMS** | `medium` | Telnyx office DID — spoofable From, not E2E (ADR-036) |
+| **Voice** | `high` | Console-authenticated principal session; LiveKit media stays off the bus (ADR-037) |
 | **Email** | `low` | From headers are trivially spoofable; relies on SPF/DKIM/DMARC |
 
 Trust levels gate which actions the Coordinator can take based on the originating channel. See [06-audit-and-security.md](06-audit-and-security.md#trust-gated-actions) for policy configuration.
@@ -188,7 +197,7 @@ Each adapter implements reconnection with exponential backoff:
 - On restart: all configured adapters attempt to connect
 - Health endpoint reports adapter status (connected/disconnected/disabled)
 
-**Future note:** Voice/telephony adapters will need a `streaming: true` flag on `OutboundMessage` for real-time TTS. Not included at launch — trivial to add when needed.
+**Streaming note:** Voice Phase 1 does not add `streaming: true` to `OutboundMessage`; real-time TTS is owned by `VoiceRuntime` and LiveKit media stays off the bus. Future Signal/PSTN transports should plug into the same runtime instead of routing PCM through `OutboundGateway`.
 
 ---
 

@@ -209,6 +209,10 @@ volumes:
 The optional `docker-compose.tls.yml` overlay adds a `caddy` service for automatic HTTPS
 (see *Self-Host* above), selected durably via `COMPOSE_FILE` in `.env`.
 
+The base compose also includes an independent `livekit` service for the Voice channel.
+Curia does not depend on it at container startup; operators start it alongside Curia only
+when Voice is configured and enabled.
+
 ---
 
 ## Health & Monitoring
