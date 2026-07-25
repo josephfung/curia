@@ -653,25 +653,6 @@ The migration depends on `kg_nodes` existing (for the foreign key), so it must r
 
 ---
 
-## Implementation Checklist
-
-- [ ] Migration: `contacts`, `contact_channel_identities`, `contact_auth_overrides` tables
-- [ ] Contact resolver in dispatch layer (sender lookup + message enrichment)
-- [ ] Participant extraction from email headers (To/CC → metadata.participants)
-- [ ] Contact management skills (`contact.create`, `contact.link-identity`, etc.)
-- [ ] Bus event types: `contact.resolved`, `contact.unknown`
-- [ ] Role defaults config (`config/role-defaults.yaml`)
-- [ ] Permissions registry config (`config/permissions.yaml`)
-- [ ] Unknown sender policy config and enforcement
-- [ ] Authorization check in Coordinator context assembly (role → overrides → trust)
-- [x] Audit logging for all identity resolution and authorization decisions (#1379)
-- [x] Integration tests: proactive identity establishment — covered by `tests/integration/contacts/` (#1382)
-- [x] Integration tests: reactive identity establishment (unknown sender flow) — covered by `tests/integration/contacts/` (#1382)
-- [x] Integration tests: external source enrichment (CRM/calendar → contact) — covered by `tests/integration/contacts/` (#1382)
-- [x] Integration tests: authorization check (role defaults + overrides + trust) — covered by `tests/integration/contacts/` (#1382)
-
----
-
 ## Known Deficiencies
 
 _(none currently — authorization decision audit logging shipped in #1379)_

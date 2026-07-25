@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-01
 **Status:** Shipped (v0.39)
-**Builds on:** [spec 01 — Memory System](01-memory-system.md), [spec 19 — Tasks & Backlog](19-tasks-and-backlog.md), [spec 20 — Resumable Tasks & Projects](20-resumable-tasks-and-projects.md)
+**Builds on:** [spec 01 — Memory System](01-memory-system.md), [spec 19 — Tasks, Backlog & Resumable Projects](19-tasks-and-backlog.md)
 
 ## Overview
 
@@ -37,7 +37,7 @@ Each existing tier fails a different requirement of a growing working document:
   freeform prose has nowhere to land and would be rejected.
 - **`config-store`** is a small key/value store (bounded values, no delete) — wrong shape
   and wrong lifecycle for documents.
-- **`tasks.progress`** is read on every wake and must stay bounded (spec 20 §2), so it
+- **`tasks.progress`** is read on every wake and must stay bounded (spec 19 §10), so it
   cannot carry the body of the work — only a pointer to it.
 
 The workspace fills exactly this gap, and only this gap. It is not a general datastore and
@@ -131,7 +131,7 @@ tools/system prefix so prefix caching survives across providers (the same discip
 
 ## 8. Accumulator spill (#1210)
 
-The resumable accumulator (spec 20 §2) is bounded — a 4 KB inline cap
+The resumable accumulator (spec 19 §10) is bounded — a 4 KB inline cap
 (`RESUMABLE_INLINE_ACCUMULATOR_MAX_BYTES = 4096`) and an 8 KB block cap
 (`RESUMABLE_BLOCK_MAX_BYTES = 8192`). On overflow it spills into the workspace at
 `/projects/<root-task-id>/accumulator.md` (`type: resumable-accumulator`), and
@@ -155,7 +155,7 @@ Defaults and bounds live in `document-workspace.ts` (`DEFAULT_SCRATCH_DOC_TTL_DA
 ## 10. Distillation to the knowledge graph (#1211)
 
 Curated conclusions graduate from the workspace into the KG on a planned parent's
-completion, owned by spec 20 §7 (`DeliverableKgPromotionSubscriber`): the **curated
+completion, owned by spec 19 §15 (`DeliverableKgPromotionSubscriber`): the **curated
 deliverable** — never the per-item worklog — is distilled through the existing
 `extract-facts` / `extract-relationships` gates, capped per project, best-effort and
 non-fatal, after which the project's workspace documents are archived (`archived_at`). The

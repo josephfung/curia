@@ -556,7 +556,7 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 
 - **Entity context is read-only.** The assembly pipeline queries the KG, contacts, and connected accounts but never writes. All mutations go through their respective services (ContactService, EntityMemory).
 - **No cross-entity leakage.** The entity-context payload includes only the requested entities. A skill asking for Jenna's context does not receive the CEO's connected accounts.
-- **Cached context respects mutations.** The TTL cache is invalidated on contact/KG writes. Stale context is a convenience issue (slightly outdated preferences), not a security issue (wrong person's data).
+- **Cached context is TTL-bounded.** A 5-minute TTL caps staleness. Per-mutation invalidation (`clearCacheForEntity`) exists but is not yet wired to the contact/KG write paths (see Known Deficiencies). Either way, stale context is a convenience issue (slightly outdated preferences), not a security issue (wrong person's data).
 - **Agent self-identity is seeded, not self-created.** Curia's contact record is created during bootstrap by the orchestrator, not by the agent itself. The agent cannot modify its own identity.
 - **LLM sees entity IDs, not raw KG internals.** The payload exposes curated facts with labels, not raw JSONB properties or internal node IDs beyond what's needed for skill invocation.
 
@@ -576,37 +576,10 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 
 ---
 
-## Implementation Checklist
-
-### Phase 1: Foundation
-- [ ] Agent self-identity: KG node + contact record for Curia, bootstrap seeding
-- [ ] Agent contactId injection into coordinator system prompt
-- [ ] Entity-context assembly module (`src/entity-context/`)
-- [ ] Proactive account discovery in the assembly pipeline
-- [ ] `entity-context` skill (manifest + handler)
-- [ ] `ctx.entityContext` field on `ToolContext`
-- [ ] `entity_enrichment` manifest declaration support in execution layer
-- [ ] TTL cache for entity context payloads
-- [ ] Cache invalidation on contact/KG mutations
-- [ ] Unit tests: entity-context assembly for person, org, event entities
-- [ ] Unit tests: execution layer pre-enrichment
-- [ ] Unit tests: cache behavior (hit, miss, invalidation)
-
-### Phase 2: Calendar adoption
-- [ ] Calendar skills adoption (list-events, create-event, find-free-time, check-conflicts)
-- [ ] Remove `calendarId` from LLM-visible tool definitions
-- [ ] Integration test: end-to-end "What's on Jenna's calendar?" flow
-
-### Phase 3: Broader adoption
-- [ ] `entity-lookup` skill for broad KG entity search (orgs, events, places)
-- [ ] Knowledge skills adoption (travel-preferences, loyalty-programs, etc.)
-- [ ] Email skills adoption (when email connected accounts are added)
-
----
-
 ## Known Deficiencies
 
 - **Proactive account discovery** — the `discoveredAccounts` field in the entity-context assembly pipeline is not yet implemented.
+- **Cache invalidation on mutations is not wired** — `EntityContextAssembler.clearCacheForEntity()` exists and is unit-tested, but no contact/KG write path (`ContactService`, `EntityMemory`) actually calls it. Cached entity context is bounded only by the 5-minute TTL, so a mutation may not be reflected until the entry expires. Low severity — staleness is a convenience issue, not a correctness/security one (see Security Considerations) — but the "invalidated on contact/KG writes" behaviour those sections describe is not yet true.
 - **Calendar `entity_enrichment` manifests** — calendar skills do not yet declare `entity_enrichment` in their manifests. (#544)
 - **Remove `calendarId` from tool definitions** — `calendarId` has not yet been removed from LLM-visible tool definitions; pending cleanup.
 - **Calendar integration test** — the end-to-end "What's on Jenna's calendar?" integration test is not yet implemented. (#544)

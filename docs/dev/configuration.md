@@ -107,7 +107,7 @@ documentWorkspace:
 ```
 
 - **`scratchTtlDays`** — days of inactivity (measured from a document's `updated_at`) before the nightly DreamEngine pass purges a `/scratch/<conversation-id>/…` document. `/projects/…` documents are durable and never auto-purged. A per-document `ttl_days` in frontmatter overrides this (`0` opts out; `1`–`36500` sets an explicit window). Validated at startup as a positive integer ≤ 36500.
-- **`kgPromotion.enabled`** — when a planned parent completes, distil its curated deliverable into the knowledge graph through the `extract-*` gates (spec §20-resumable-tasks-and-projects.md). Set `false` to disable globally. `maxFacts` / `maxRelationships` cap how much a single project can promote (non-negative integers).
+- **`kgPromotion.enabled`** — when a planned parent completes, distil its curated deliverable into the knowledge graph through the `extract-*` gates ([spec 19 — Tasks, Backlog & Resumable Projects](../specs/19-tasks-and-backlog.md) §15). Set `false` to disable globally. `maxFacts` / `maxRelationships` cap how much a single project can promote (non-negative integers).
 
 ---
 
