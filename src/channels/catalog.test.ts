@@ -3,9 +3,9 @@ import { describe, it, expect } from 'vitest';
 import { CHANNEL_CATALOG, getChannelDescriptor } from './catalog.js';
 
 describe('CHANNEL_CATALOG', () => {
-  it('contains exactly the six known channels', () => {
+  it('contains exactly the seven known channels', () => {
     expect(CHANNEL_CATALOG.map(c => c.name).sort()).toEqual([
-      'cli', 'email', 'http', 'signal', 'slack', 'sms',
+      'cli', 'email', 'http', 'signal', 'slack', 'sms', 'voice',
     ]);
   });
 
@@ -18,7 +18,7 @@ describe('CHANNEL_CATALOG', () => {
     }
   });
 
-  it('marks email, signal, slack, and sms as toggleable with required credential fields', () => {
+  it('marks email, signal, slack, sms, and voice as toggleable with required credential fields', () => {
     const email = getChannelDescriptor('email')!;
     expect(email.isToggleable).toBe(true);
     expect(email.requiredSecretKeys).toEqual(['nylas_api_key', 'nylas_grant_id', 'nylas_self_email']);
@@ -34,6 +34,17 @@ describe('CHANNEL_CATALOG', () => {
     const sms = getChannelDescriptor('sms')!;
     expect(sms.isToggleable).toBe(true);
     expect(sms.requiredSecretKeys).toEqual(['api_key', 'from_number', 'webhook_public_key']);
+
+    const voice = getChannelDescriptor('voice')!;
+    expect(voice.isToggleable).toBe(true);
+    expect(voice.requiredSecretKeys).toEqual([
+      'livekit_url',
+      'livekit_api_key',
+      'livekit_api_secret',
+      'deepgram_api_key',
+      'cartesia_api_key',
+    ]);
+    expect(voice.credentialFields.every(f => f.envFallback === undefined)).toBe(true);
   });
 
   it('every requiredSecretKey corresponds to a declared field', () => {

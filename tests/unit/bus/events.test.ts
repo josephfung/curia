@@ -7,6 +7,8 @@ import {
   createToolInvoke,
   createToolResult,
   createConversationCheckpoint,
+  createVoiceSessionStarted,
+  createVoiceSessionEnded,
   type BusEvent,
 } from '../../../src/bus/events.js';
 
@@ -115,6 +117,27 @@ describe('Event Types', () => {
     expect(event.payload.turns).toHaveLength(2);
     expect(event.id).toBeTruthy();
     expect(event.timestamp).toBeInstanceOf(Date);
+  });
+
+  it('creates voice session lifecycle events', () => {
+    const started = createVoiceSessionStarted({
+      sessionId: 'session-1',
+      conversationId: 'voice:session-1',
+      livekitRoom: 'voice-session-1',
+    });
+    expect(started.type).toBe('voice.session.started');
+    expect(started.sourceLayer).toBe('channel');
+    expect(started.payload.livekitRoom).toBe('voice-session-1');
+
+    const ended = createVoiceSessionEnded({
+      sessionId: 'session-1',
+      conversationId: 'voice:session-1',
+      reason: 'console_hangup',
+      durationMs: 1234,
+    });
+    expect(ended.type).toBe('voice.session.ended');
+    expect(ended.sourceLayer).toBe('channel');
+    expect(ended.payload.durationMs).toBe(1234);
   });
 
   it('type narrows via discriminated union', () => {

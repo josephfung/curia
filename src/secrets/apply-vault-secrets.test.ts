@@ -31,6 +31,12 @@ function baseConfig(): Config {
     smsApiKey: undefined,
     smsFromNumber: undefined,
     smsWebhookPublicKey: undefined,
+    voiceLivekitUrl: undefined,
+    voiceLivekitApiKey: undefined,
+    voiceLivekitApiSecret: undefined,
+    voiceDeepgramApiKey: undefined,
+    voiceCartesiaApiKey: undefined,
+    voiceModel: undefined,
   };
 }
 

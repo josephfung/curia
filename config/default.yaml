@@ -22,6 +22,9 @@ channels:
     # Optional allowlist of Slack channel ids (C…) for @mentions. Empty = all channels
     # the bot is a member of. DMs are never filtered by this list.
     allowed_channel_ids: []
+  voice:
+    # Optional concrete model for voice turns. Empty = existing fast tier.
+    model: ""
 
 # Rate limits for automatic contact creation from email participants.
 # Prevents spam campaigns from flooding the contacts table.

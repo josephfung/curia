@@ -74,6 +74,27 @@ export const CHANNEL_CATALOG: ChannelDescriptor[] = [
     requiredSecretKeys: ['api_key', 'from_number', 'webhook_public_key'],
   },
   {
+    name: 'voice',
+    description: 'Duplex voice via console WebRTC (LiveKit + STT/TTS).',
+    isToggleable: true,
+    // Vault-only (no envFallback): voice provider credentials must live in the
+    // encrypted vault, not .env.
+    credentialFields: [
+      { key: 'livekit_url', label: 'LiveKit WebSocket URL', secret: false },
+      { key: 'livekit_api_key', label: 'LiveKit API key', secret: true },
+      { key: 'livekit_api_secret', label: 'LiveKit API secret', secret: true },
+      { key: 'deepgram_api_key', label: 'Deepgram API key', secret: true },
+      { key: 'cartesia_api_key', label: 'Cartesia API key', secret: true },
+    ],
+    requiredSecretKeys: [
+      'livekit_url',
+      'livekit_api_key',
+      'livekit_api_secret',
+      'deepgram_api_key',
+      'cartesia_api_key',
+    ],
+  },
+  {
     name: 'http',
     description: 'HTTP API channel. Always on — serves the web console and API.',
     isToggleable: false,

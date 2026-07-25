@@ -46,6 +46,13 @@
             }
           }
         },
+        "voice": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string" }
+          }
+        },
         "max_message_bytes": { "type": "integer", "minimum": 1 }
       }
     },
