@@ -5,6 +5,9 @@ import { Sidebar } from '../components/Sidebar';
 import { Topbar } from '../components/Topbar';
 import { apiFetch } from '../api';
 import { useTheme } from '../hooks/useTheme';
+// Shared with the operator config-settings pages — single source of truth for
+// the relative-time and HTTP-error-body helpers (they were duplicated here).
+import { errorMessage, timeAgo } from '../components/settings/ConfigHistory';
 
 // ── Band metadata ─────────────────────────────────────────────────────────────
 
@@ -43,17 +46,6 @@ function BandBadge({ band }: { band: AutonomyBand }) {
   );
 }
 
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
-}
-
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface AutonomyConfig {
@@ -72,20 +64,6 @@ interface HistoryEntry {
   changedBy: string;
   reason: string | null;
   changedAt: string;
-}
-
-// Safe error message extraction — guards against non-JSON error bodies (e.g. rate-limiter HTML).
-async function errorMessage(res: Response): Promise<string> {
-  const ct = res.headers.get('content-type') ?? '';
-  if (ct.includes('application/json')) {
-    try {
-      const d = await res.json() as { error?: string };
-      if (d.error) return d.error;
-    } catch (err) {
-      console.error('[errorMessage] failed to read JSON error body:', err);
-    }
-  }
-  return `HTTP ${res.status}`;
 }
 
 // ── Autonomy section ──────────────────────────────────────────────────────────
