@@ -45,6 +45,10 @@ import {
   memoryRetentionRoutes,
   type MemoryRetentionSnapshot,
 } from './routes/memory-retention.js';
+import {
+  systemRoutes,
+  type SystemSnapshot,
+} from './routes/system.js';
 import { registryRoutes } from './routes/registry.js';
 import { channelRegistryRoutes } from './routes/channel-registry.js';
 import { mcpRegistryRoutes } from './routes/mcp-registry.js';
@@ -150,6 +154,11 @@ export interface HttpAdapterConfig {
    * (console Memory settings, #1376). Read-only snapshot — not hot-reloaded.
    */
   memoryRetention?: MemoryRetentionSnapshot;
+  /**
+   * Read-only system/environment snapshot for GET /api/system (console System
+   * settings, #1376). Boot-time facts only — version, runtime, timezone, models.
+   */
+  system?: SystemSnapshot;
 }
 
 export class HttpAdapter implements Channel {
@@ -245,6 +254,7 @@ export class HttpAdapter implements Channel {
         routeUrl.startsWith('/api/antfarm') ||
         routeUrl.startsWith('/api/autonomy') ||
         routeUrl.startsWith('/api/memory') ||
+        routeUrl.startsWith('/api/system') ||
         routeUrl.startsWith('/api/registry') ||
         routeUrl.startsWith('/api/vault') ||
         // Secret-capture routes are token-authed (the single-use token in the URL is the
@@ -438,6 +448,15 @@ export class HttpAdapter implements Channel {
     if (webAppBootstrapSecret && this.config.memoryRetention) {
       await this.app.register(memoryRetentionRoutes, {
         retention: this.config.memoryRetention,
+        webAppBootstrapSecret,
+        sessions,
+      });
+    }
+
+    // System snapshot (read-only) — console System settings page (#1376).
+    if (webAppBootstrapSecret && this.config.system) {
+      await this.app.register(systemRoutes, {
+        system: this.config.system,
         webAppBootstrapSecret,
         sessions,
       });

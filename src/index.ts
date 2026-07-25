@@ -18,11 +18,13 @@
  */
 
 import * as path from 'node:path';
+import { createRequire } from 'node:module';
 import { runner } from 'node-pg-migrate';
 import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
+import { resolveSystemSnapshot } from './channels/http/routes/system.js';
 import { createPool } from './db/connection.js';
 import { DbAvailabilityMonitor } from './db/availability-monitor.js';
 import { EventBus } from './bus/bus.js';
@@ -2549,6 +2551,18 @@ async function main(): Promise<void> {
   // Editing these values still requires a config change + restart.
   const memoryRetention = resolveMemoryRetentionSnapshot(yamlConfig);
 
+  // Read-only system snapshot for the console System settings page (#1376).
+  // Version comes from the root package.json (resolved at runtime relative to the
+  // built module — same createRequire pattern the console's vite config uses).
+  const appPackage = createRequire(import.meta.url)('../package.json') as { version: string };
+  const systemSnapshot = resolveSystemSnapshot({
+    version: appPackage.version,
+    nodeVersion: process.version,
+    timezone: config.timezone,
+    bootedAt: bootStartedAt,
+    modelRouting: modelRoutingConfig,
+  });
+
   const httpAdapter = new HttpAdapter({
     bus,
     logger,
@@ -2583,6 +2597,7 @@ async function main(): Promise<void> {
     auditLogRepo,
     smsWebhookBridge,
     memoryRetention,
+    system: systemSnapshot,
   });
 
   try {
