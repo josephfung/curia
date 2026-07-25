@@ -166,8 +166,8 @@ describe('VoiceTurnRunner', () => {
     const origStream = provider.stream.bind(provider);
     provider.stream = async function* (params: { messages?: unknown[]; options?: Record<string, unknown> }) {
       if (provider.streamCalls === 1 && Array.isArray(params.messages)) {
-        const lastMsg = params.messages[params.messages.length - 1] as { content: Array<{ content?: string }> };
-        capturedResultContent = lastMsg.content[0]?.content;
+        const lastMsg = params.messages[params.messages.length - 1]! as { content: Array<{ content?: string }> };
+        capturedResultContent = lastMsg.content[0]!.content;
       }
       yield* origStream(params as never);
     } as never;
@@ -221,10 +221,10 @@ describe('VoiceTurnRunner', () => {
     const origStream = provider.stream.bind(provider);
     provider.stream = async function* (params: { messages?: unknown[]; options?: Record<string, unknown> }) {
       if (provider.streamCalls === 1 && Array.isArray(params.messages)) {
-        const lastMsg = params.messages[params.messages.length - 1] as {
+        const lastMsg = params.messages[params.messages.length - 1]! as {
           content: Array<{ content?: string; is_error?: boolean }>;
         };
-        capturedResult = lastMsg.content[0];
+        capturedResult = lastMsg.content[0]!;
       }
       yield* origStream(params as never);
     } as never;

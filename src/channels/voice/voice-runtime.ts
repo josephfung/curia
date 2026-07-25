@@ -529,7 +529,15 @@ export class VoiceRuntime {
 
     // store.endSession returns null when the row is already 'ended', so the ended
     // event is published at most once even if the adapter and runtime both call in.
-    const ended = await this.config.sessionStore.endSession(sessionId, reason);
+    // Wrapped like every other side-effect here: endSession is fire-and-forgotten
+    // (`void this.endSession(...)`) from stt.onError / transport.onClose, so a DB
+    // hiccup would otherwise become an unhandled rejection and crash the process.
+    let ended: VoiceSessionRecord | null = null;
+    try {
+      ended = await this.config.sessionStore.endSession(sessionId, reason);
+    } catch (err) {
+      this.log.error({ sessionId, err }, 'failed to persist voice session end');
+    }
     if (ended) {
       try {
         await this.config.bus.publish(

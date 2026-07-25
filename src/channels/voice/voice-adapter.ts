@@ -109,10 +109,30 @@ export class VoiceAdapter implements Channel {
     // the runtime WITHOUT awaiting its full lifetime — the HTTP response only needs
     // the principal token so the console can join. Failures are tracked by ending
     // the session (which publishes voice.session.ended) rather than blocking the caller.
-    const agentToken = await mintVoiceParticipantToken(
-      { apiKey: this.config.livekitApiKey, apiSecret: this.config.livekitApiSecret },
-      { roomName, identity: AGENT_IDENTITY, name: 'Curia' },
-    );
+    //
+    // The row is already persisted and voice.session.started is on the bus, so a
+    // throw here (e.g. JWT signing failure) must be matched with an end — otherwise
+    // the session sits in 'starting' with no closing event. Reuse runtime.endSession
+    // (same teardown path as the startSession failure below); with the session not
+    // yet in the runtime map it just transitions the row and publishes ended.
+    let agentToken: string;
+    try {
+      agentToken = await mintVoiceParticipantToken(
+        { apiKey: this.config.livekitApiKey, apiSecret: this.config.livekitApiSecret },
+        { roomName, identity: AGENT_IDENTITY, name: 'Curia' },
+      );
+    } catch (err) {
+      this.log.error({ err, sessionId: session.id }, 'Failed to mint agent token; ending voice session');
+      try {
+        await runtime.endSession(session.id, 'runtime_start_failed');
+      } catch (cleanupErr) {
+        this.log.error(
+          { err: cleanupErr, sessionId: session.id },
+          'Voice session teardown after agent-token failure also failed',
+        );
+      }
+      return { status: 500, body: { error: 'Failed to start voice session' } };
+    }
     void runtime
       .startSession({
         sessionId: session.id,

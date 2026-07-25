@@ -280,6 +280,31 @@ describe('VoiceRuntime', () => {
     expect(events.filter(e => e.type === 'voice.session.ended').length).toBe(1);
   });
 
+  it('endSession resolves (not rejects) when the store write fails', async () => {
+    const llm = new FakeStreamProvider([[{ type: 'message_end', content: 'ok', usage, provenance }]]);
+    // endSession() is fired-and-forgotten (`void this.endSession(...)`) from
+    // stt.onError / transport.onClose, so a throwing store write would surface as
+    // an unhandled rejection and crash the process. It must be swallowed + logged.
+    const store = {
+      async endSession() {
+        throw new Error('db down');
+      },
+    } as unknown as VoiceSessionStore;
+    const { runtime, transport } = makeRuntime({ llm, store });
+
+    await runtime.startSession({
+      sessionId: 's5',
+      conversationId: 'voice:s5',
+      roomName: 'voice-s5',
+      agentToken: 'tok',
+    });
+
+    await expect(runtime.endSession('s5', 'stt_error')).resolves.toBeNull();
+    // Transport teardown still ran before the failing store write.
+    expect(transport.disconnectCount).toBe(1);
+    expect(runtime.activeSessionCount).toBe(0);
+  });
+
   it('invokes tools during a voice turn via the runner tool loop', async () => {
     const llm = new FakeStreamProvider([
       [{ type: 'tool_use', toolCalls: [{ id: 'c1', name: 'lookup', input: {} }], usage, provenance }],
