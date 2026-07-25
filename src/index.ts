@@ -1812,9 +1812,8 @@ async function main(): Promise<void> {
         livekitUrl: voiceLivekitUrl,
         createTransport: ({ token, livekitUrl }) =>
           new LiveKitRoomSession({ url: livekitUrl, token, logger }),
-        // Phase 1: no coordinator tools wired yet. The turn-runner tool loop is
-        // implemented and tested; passing `tools` + `invokeTool` here is all that
-        // a later phase needs (ADR-037 §6).
+        // Phase 1: tools are late-bound via voiceRuntime.configureTools() after
+        // the coordinator is registered (ExecutionLayer + pinned tools exist then).
       });
       logger.info({ voiceModel }, 'Voice runtime constructed (streaming provider available)');
     } else {
@@ -2429,6 +2428,65 @@ async function main(): Promise<void> {
   if (!agentRegistry.has('coordinator')) {
     logger.fatal('No coordinator agent found in agents/ directory');
     process.exit(1);
+  }
+
+  // Wire coordinator tools into VoiceRuntime so spoken turns can invoke skills
+  // (#1414 AC6). ExecutionLayer still enforces autonomy / outbound gates.
+  {
+    const runtime = voiceAdapter?.getRuntime();
+    if (runtime) {
+      const coordinatorEntry = agentConfigs.find(a => a.role === 'coordinator' || a.name === 'coordinator');
+      const pinResolution = coordinatorEntry
+        ? resolvePinnedSkills(
+          coordinatorEntry.pinned_skills ?? [],
+          skillRegistry,
+          toolRegistry,
+          logger,
+          coordinatorEntry.name,
+        )
+        : null;
+      const voiceToolNames = pinResolution?.toolNames ?? [];
+      // Keep discovery tools available when the coordinator allows discovery.
+      if (coordinatorEntry?.allow_discovery) {
+        for (const discoveryTool of ['tool-registry', 'skill-activate'] as const) {
+          if (!voiceToolNames.includes(discoveryTool)) voiceToolNames.push(discoveryTool);
+        }
+      }
+      const voiceToolDefs = toolRegistry.toToolDefinitions(voiceToolNames);
+      runtime.configureTools({
+        resolveVoiceTools: () => voiceToolDefs,
+        invokeTool: async (call, ctx) => {
+          const caller = {
+            contactId: principalContact?.id ?? 'ceo-web-user',
+            role: 'ceo',
+            channel: 'voice',
+          };
+          const result = await executionLayer.invoke(call.name, call.input, caller, {
+            agentId: 'coordinator',
+            channelId: 'voice',
+            conversationId: ctx.conversationId,
+            taskEventId: ctx.sessionId,
+            liveTurn: true,
+            taskMetadata: {
+              originatorContactId: principalContact?.id,
+              originatorRole: 'ceo',
+              voiceSessionId: ctx.sessionId,
+            },
+          });
+          if (result.success) {
+            const data = result.data;
+            const content = typeof data === 'string'
+              ? data
+              : JSON.stringify(data ?? { ok: true });
+            return { content };
+          }
+          return {
+            content: result.error ?? `Tool '${call.name}' failed`,
+            is_error: true,
+          };
+        },
+      });
+    }
   }
 
   // Load declarative schedules from agent YAML configs and start the scheduler loop.

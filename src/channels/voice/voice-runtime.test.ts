@@ -90,7 +90,7 @@ function makeRuntime(overrides: {
   tts?: TextToSpeechProvider;
   transport?: FakeAudioTransport;
   store?: VoiceSessionStore;
-  invokeTool?: (call: never) => Promise<{ content: string; is_error?: boolean }>;
+  invokeTool?: (call: never, ctx?: { conversationId: string; sessionId: string }) => Promise<{ content: string; is_error?: boolean }>;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];

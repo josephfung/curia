@@ -62,6 +62,11 @@ export class VoiceAdapter implements Channel {
     this.log.info('Voice adapter stopped');
   }
 
+  /** Exposed so bootstrap can late-bind coordinator tools after agent registration. */
+  getRuntime(): VoiceRuntime | undefined {
+    return this.config.voiceRuntime;
+  }
+
   private async createSession(req: VoiceSessionCreateRequest): Promise<VoiceSessionCreateResult> {
     const sessionId = randomUUID();
     const conversationId = `voice:${sessionId}`;
