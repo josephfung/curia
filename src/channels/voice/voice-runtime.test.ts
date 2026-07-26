@@ -107,7 +107,6 @@ class FailingTtsProvider implements TextToSpeechProvider {
   readonly id = 'failing-tts';
   readonly failures: string[] = [];
   constructor(private readonly message = 'Cartesia TTS request failed with HTTP 500') {}
-  // eslint-disable-next-line require-yield -- always throws before yielding
   async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
     this.failures.push(opts.text);
     throw new Error(this.message);
