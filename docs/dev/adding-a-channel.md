@@ -32,7 +32,7 @@ Every adapter implements the interface in `src/channels/channel.ts`:
 
 ```typescript
 export interface Channel {
-  /** Stable identifier: 'email' | 'signal' | 'slack' | 'http' | 'cli'. Matches the catalog + registry row. */
+  /** Stable identifier: 'email' | 'signal' | 'slack' | 'sms' | 'http' | 'cli'. Matches the catalog + registry row. */
   readonly name: string;
   /** False for http and cli — they always start and cannot be disabled/uninstalled. */
   readonly isToggleable: boolean;

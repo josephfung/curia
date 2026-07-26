@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Tools** are the framework's extension atoms — how agents interact with the outside world (invocation + authorization). The execution layer handles tool invocation, permission validation, and MCP protocol. Per ADR-031 / #1485, the former "skill" atom name is **tool**; a future *skill* layer is the collection/bundle unit (Phase 2).
+**Tools** are the framework's extension atoms — how agents interact with the outside world (invocation + authorization). The execution layer handles tool invocation, permission validation, and MCP protocol. Per ADR-031 / #1485, the former "skill" atom name is **tool**; the *skill* layer is the collection/bundle unit (shipped in Phase 2 — #1489), which the Skill Discovery & Activation section below describes.
 
 The execution layer handles tool invocation, permission validation, and MCP protocol.
 
@@ -187,18 +187,23 @@ self-discovery.
 
 ---
 
-## Skill & Agent Registry
+## Tool, Skill & Agent Registry
 
-Skills (and agents) are not enabled merely by existing on disk — they are tracked in registry tables with an explicit install/enable lifecycle. The skill and agent registries share one migration (`051_create_skill_agent_registry.sql`) and the same column shape: `name` (PK), `enabled` (bool), `installed_at`, `installed_by`, `enabled_at`, `enabled_by`, `updated_at`.
+Tools, skills, and agents are not enabled merely by existing on disk — they are tracked in registry tables with an explicit install/enable lifecycle. There are now **three** tables, all the same column shape (`name` PK, `enabled`, `installed_at`, `installed_by`, `enabled_at`, `enabled_by`, `updated_at`):
 
-- **Disabled by default.** A newly added skill or agent is registered at startup but starts **disabled**.
+- **`tool_registry`** — the invocation atoms. Renamed from the original `skill_registry` in migration `075_rename_skill_registry_to_tool_registry.sql` as part of the tools/skills rework (#1485).
+- **`skill_registry`** — the collection/bundle layer (calendar, task-management, imported Anthropic skills). Created fresh in migration `076_create_skill_registry.sql` (#1489); bundle rows are cross-referenced against on-disk `SKILL.md` discovery.
+- **`agent_registry`** — agents.
+
+- **Disabled by default.** A newly added tool, skill, or agent is registered at startup but starts **disabled**.
 - **Restart-based enforcement.** Enabled items are loaded/registered at startup; disabled items are skipped. Changing enable state takes effect on the next restart — there is no live reload.
 - **Secret gating.** `RegistryService` enforces `install.requires_secrets`: install/enable is rejected until every declared vault secret key exists in the vault. `web-search` is the first consumer (`requires_secrets: ["tavily_api_key"]`).
 
-Lifecycle is driven via the registry HTTP routes (`src/channels/http/routes/registry.ts`):
+Lifecycle is driven via the registry HTTP routes (`src/channels/http/routes/registry.ts`), where `:kind` ∈ `{tools, skills, agents}`:
 
 ```
 GET    /api/registry/tools
+GET    /api/registry/skills
 GET    /api/registry/agents
 POST   /api/registry/:kind/:name/install
 POST   /api/registry/:kind/:name/enable
@@ -285,7 +290,8 @@ The framework ships with these skills (in `skills/` as part of core):
 - `web-search` — web search via Tavily API
 - `scheduler-create` / `scheduler-list` / `scheduler-cancel` — create and manage scheduled jobs
 - `email-send` / `email-reply` — outbound email via Nylas (multi-account aware)
-- `held-messages-list` / `held-messages-process` — review and act on held/deferred messages
+- `slack-send` — proactive outbound Slack DM/message with Gate C carve-out (#1526)
+- `sms-send` — outbound SMS via the Telnyx office DID
 - Calendar skills (`calendar-list-calendars`, `calendar-list-events`, `calendar-create-event`, etc.) — Nylas calendar CRUD
 - Contact skills (`contact-create`, `contact-lookup`, `contact-merge`, etc.) — contact management and KG linking
 - `config-store` — generic namespaced key-value store for persistent agent configuration; backs `company`, `meeting_links`, `travel_preferences`, `loyalty_programs`, `writing_config`, and any future per-agent config needs

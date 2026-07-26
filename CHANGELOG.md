@@ -29,11 +29,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-<<<<<<< HEAD
 - **Voice TTS failures** — repeated or hard synthesis errors end the call with `tts_error`. (#1556)
-=======
 - **Voice LiveKit DeleteRoom** — management client uses internal `livekit:7880`, not public signaling. (#1555)
->>>>>>> 27a5fc56 (fix(voice): use internal LiveKit URL for RoomService DeleteRoom)
 - **Dashboard Recent Activity** — timeline fetch sends a 24h `from=` scope so the card loads. (#1548)
 - **Voice channel** — CodeRabbit review: hangup race, silent rooms, LiveKit opt-in, turn integrity. (#1414)
 - **Voice lifecycle hardening** — bounded STT socket waits, session cleanup on token failure, safe session end. (#1414)
@@ -81,6 +78,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **KG relationship tools** — `query-relationships`/`delete-relationship` moved from the `contacts` skill to `memory`. (#1502)
 - **Ant Farm art** — LimeZu sheets committed to core (redistribution approved); open-core images render the real office, not placeholders. (#1504)
 - **Tasks & resumable-projects specs merged** — spec 20 folded into spec 19; specs 21–22 renumbered to 20–21. (#1554)
+- **v0.42 doc sync** — specs and dev guides aligned to shipped channels and tools/skills; stale wip pruned.
 - **Stale spec checklists removed** — vestigial implementation checklists dropped from specs 09 and 11. (#1554)
 - **Launch scope refreshed** — overview out-of-scope list updated for shipped voice and skill/agent versioning. (#1554)
 

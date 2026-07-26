@@ -12,7 +12,7 @@ Every channel implements the formal `Channel` contract in `src/channels/channel.
 
 ```typescript
 interface Channel {
-  readonly name: string;          // 'email' | 'signal' | 'http' | 'cli' — matches catalog + registry row
+  readonly name: string;          // 'email' | 'signal' | 'slack' | 'sms' | 'http' | 'cli' — matches catalog + registry row
   readonly isToggleable: boolean; // false for http and cli (always-on safeguard channels)
   start(): Promise<void>;         // connect/listen
   stop(): Promise<void>;          // graceful, idempotent teardown (process shutdown)
