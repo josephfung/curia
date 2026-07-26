@@ -36,6 +36,7 @@ function baseConfig(): Config {
     voiceLivekitApiSecret: undefined,
     voiceDeepgramApiKey: undefined,
     voiceCartesiaApiKey: undefined,
+    voiceCartesiaVoiceId: undefined,
     voiceModel: undefined,
   };
 }

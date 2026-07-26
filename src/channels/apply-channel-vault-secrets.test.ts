@@ -35,6 +35,7 @@ function baseConfig(): Config {
     voiceLivekitApiSecret: undefined,
     voiceDeepgramApiKey: undefined,
     voiceCartesiaApiKey: undefined,
+    voiceCartesiaVoiceId: undefined,
     voiceModel: undefined,
   } as Config;
 }
@@ -63,6 +64,7 @@ describe('applyChannelVaultSecrets', () => {
       'channel.voice.livekit_api_secret': 'lk_secret',
       'channel.voice.deepgram_api_key': 'dg_secret',
       'channel.voice.cartesia_api_key': 'cartesia_secret',
+      'channel.voice.cartesia_voice_id': 'voice_abc123',
     });
 
     await applyChannelVaultSecrets(config, secrets, {}, logger);
@@ -82,6 +84,7 @@ describe('applyChannelVaultSecrets', () => {
     expect(config.voiceLivekitApiSecret).toBe('lk_secret');
     expect(config.voiceDeepgramApiKey).toBe('dg_secret');
     expect(config.voiceCartesiaApiKey).toBe('cartesia_secret');
+    expect(config.voiceCartesiaVoiceId).toBe('voice_abc123');
   });
 
   it('activates Signal from a console-only entry — channel.signal.phone_number alone, no flat bootstrap, no env', async () => {
@@ -182,6 +185,7 @@ describe('applyChannelVaultSecrets', () => {
       'channel.sms.from_number',
       'channel.sms.webhook_public_key',
       'channel.voice.cartesia_api_key',
+      'channel.voice.cartesia_voice_id',
       'channel.voice.deepgram_api_key',
       'channel.voice.livekit_api_key',
       'channel.voice.livekit_api_secret',
