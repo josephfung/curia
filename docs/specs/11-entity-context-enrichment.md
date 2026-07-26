@@ -566,7 +566,7 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 
 1. **Fact categorization: freeform with convention.** The `category` field is a plain string, not an enum. Common values (`preference`, `identifier`, `location`, `scheduling`, `faith`, etc.) emerge by convention. No schema enforcement — new categories appear naturally as the KG grows.
 
-2. **Connected account discovery: proactive.** When the pipeline finds an entity with no connected accounts, it checks available providers (e.g., Nylas) and surfaces discoverable accounts in the payload. These are not auto-linked — the LLM prompts the user to confirm.
+2. **Connected account discovery: proactive.** The resolved design has the pipeline, on finding an entity with no connected accounts, check available providers (e.g., Nylas) and surface discoverable accounts in the payload — not auto-linked; the LLM prompts the user to confirm. This is the decided approach, not yet the implemented one: the `discoveredAccounts` field is still pending (see [Known Deficiencies](#known-deficiencies)).
 
 3. **Entity search: separate `entity-lookup` skill.** `contact-lookup` stays focused on people — identity resolution is high-stakes and mistakes have real consequences. A new `entity-lookup` skill handles broad KG search (orgs, events, places, projects) where fuzzy matching is acceptable.
 

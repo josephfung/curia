@@ -70,7 +70,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`approve-grant-recommendation`** — `action_risk` raised low→critical, matching direct permission grants. (#1499)
 - **KG relationship tools** — `query-relationships`/`delete-relationship` moved from the `contacts` skill to `memory`. (#1502)
 - **Ant Farm art** — LimeZu sheets committed to core (redistribution approved); open-core images render the real office, not placeholders. (#1504)
-- **Architecture specs cleanup** — merged spec 20 into 19, renumbered specs 21–22 to 20–21, removed stale checklists. (#1554)
+- **Tasks & resumable-projects specs merged** — spec 20 folded into spec 19; specs 21–22 renumbered to 20–21. (#1554)
+- **Stale spec checklists removed** — vestigial implementation checklists dropped from specs 09 and 11. (#1554)
+- **Launch scope refreshed** — overview out-of-scope list updated for shipped voice and skill/agent versioning. (#1554)
 
 ### Fixed
 
