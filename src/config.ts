@@ -63,6 +63,12 @@ export interface Config {
   voiceLivekitUrl: string | undefined;
   voiceLivekitApiKey: string | undefined;
   voiceLivekitApiSecret: string | undefined;
+  /**
+   * HTTP(S) base for LiveKit RoomService admin calls (DeleteRoom, etc.). Distinct from
+   * `voiceLivekitUrl` (browser WebSocket signaling). Compose default: `http://livekit:7880`.
+   * Plain YAML config (`channels.voice.livekit_management_url`), not vault.
+   */
+  voiceLivekitManagementUrl: string;
   voiceDeepgramApiKey: string | undefined;
   voiceCartesiaApiKey: string | undefined;
   /** Cartesia voice to synthesize with (a voice id from the Cartesia library). Not a
@@ -89,6 +95,13 @@ export interface ResumableCeilingsConfig {
   /** Measured units/slice below this fraction of implied pace triggers divergence (#1266). */
   throughputDivergenceRatio: number;
 }
+
+/**
+ * Default LiveKit RoomService base URL for the self-hosted compose topology
+ * (`livekit` service on the internal Docker network). Browser signaling uses a
+ * separate public `wss://` URL from the vault (`channel.voice.livekit_url`).
+ */
+export const DEFAULT_VOICE_LIVEKIT_MANAGEMENT_URL = 'http://livekit:7880';
 
 export const DEFAULT_RESUMABLE_CEILINGS: ResumableCeilingsConfig = {
   maxStalls: 3,
@@ -266,6 +279,12 @@ export interface YamlConfig {
     voice?: {
       /** Optional concrete model override for voice turns. Empty/absent = fast tier. */
       model?: string;
+      /**
+       * HTTP(S) base URL for LiveKit RoomService (DeleteRoom, etc.). Server→LiveKit
+       * only — not the browser signaling URL. Empty/absent → compose default
+       * `http://livekit:7880`.
+       */
+      livekit_management_url?: string;
     };
   };
   browser?: {
@@ -1283,6 +1302,8 @@ export function loadConfig(): Config {
     voiceLivekitUrl: undefined,
     voiceLivekitApiKey: undefined,
     voiceLivekitApiSecret: undefined,
+    // Overwritten from channels.voice.livekit_management_url after loadYamlConfig.
+    voiceLivekitManagementUrl: DEFAULT_VOICE_LIVEKIT_MANAGEMENT_URL,
     voiceDeepgramApiKey: undefined,
     voiceCartesiaApiKey: undefined,
     voiceCartesiaVoiceId: undefined,

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import type { Config } from '../config.js';
+import { DEFAULT_VOICE_LIVEKIT_MANAGEMENT_URL } from '../config.js';
 import { applyChannelVaultSecrets } from './apply-channel-vault-secrets.js';
 
 const logger = pino({ level: 'silent' });
@@ -33,11 +34,12 @@ function baseConfig(): Config {
     voiceLivekitUrl: undefined,
     voiceLivekitApiKey: undefined,
     voiceLivekitApiSecret: undefined,
+    voiceLivekitManagementUrl: DEFAULT_VOICE_LIVEKIT_MANAGEMENT_URL,
     voiceDeepgramApiKey: undefined,
     voiceCartesiaApiKey: undefined,
     voiceCartesiaVoiceId: undefined,
     voiceModel: undefined,
-  } as Config;
+  };
 }
 
 // A vault fake whose get() is a spy, so tests can assert exactly which keys were read.

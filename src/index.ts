@@ -194,6 +194,8 @@ async function main(): Promise<void> {
   const yamlConfig = loadYamlConfig(configDir);
   const voiceModel = yamlConfig.channels?.voice?.model?.trim();
   config.voiceModel = voiceModel ? voiceModel : undefined;
+  const voiceMgmtUrl = yamlConfig.channels?.voice?.livekit_management_url?.trim();
+  config.voiceLivekitManagementUrl = voiceMgmtUrl || config.voiceLivekitManagementUrl;
   const logger = createLogger(config.logLevel);
   logger.info('Curia starting...');
 
@@ -1824,7 +1826,9 @@ async function main(): Promise<void> {
         deleteRoom: async (roomName) => {
           await deleteVoiceRoom(
             {
-              livekitUrl: voiceLivekitUrl,
+              // RoomService must hit LiveKit on the internal network — not the
+              // browser-facing signaling URL (ADR-037 / #1555).
+              livekitManagementUrl: config.voiceLivekitManagementUrl,
               apiKey: config.voiceLivekitApiKey!,
               apiSecret: config.voiceLivekitApiSecret!,
             },

@@ -80,7 +80,7 @@ export const CHANNEL_CATALOG: ChannelDescriptor[] = [
     // Vault-only (no envFallback): voice provider credentials must live in the
     // encrypted vault, not .env.
     credentialFields: [
-      { key: 'livekit_url', label: 'LiveKit WebSocket URL', secret: false },
+      { key: 'livekit_url', label: 'LiveKit signaling URL (browser wss://)', secret: false },
       { key: 'livekit_api_key', label: 'LiveKit API key', secret: true },
       { key: 'livekit_api_secret', label: 'LiveKit API secret', secret: true },
       { key: 'deepgram_api_key', label: 'Deepgram API key', secret: true },

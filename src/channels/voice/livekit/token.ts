@@ -40,14 +40,19 @@ export async function mintVoiceParticipantToken(
 /**
  * Best-effort room teardown after a session ends so a leaked JWT cannot rejoin
  * an empty room. Failures are logged by the caller — never throw into hangup.
+ *
+ * `livekitManagementUrl` must be the server→LiveKit HTTP(S) base (e.g.
+ * `http://livekit:7880` on the compose network), **not** the browser signaling
+ * URL (`wss://…`). Caddy often routes only `/rtc*` to LiveKit; `/twirp` RoomService
+ * calls against the public domain 404 on the Curia app (#1555).
  */
 export async function deleteVoiceRoom(
-  config: LiveKitTokenConfig & { livekitUrl: string },
+  config: LiveKitTokenConfig & { livekitManagementUrl: string },
   roomName: string,
 ): Promise<void> {
-  // RoomServiceClient expects an HTTP(S) host, not the WebSocket URL the
-  // browser uses. Map ws(s) → http(s).
-  const httpUrl = config.livekitUrl
+  // RoomServiceClient expects an HTTP(S) host. Defensively map ws(s) → http(s)
+  // if an operator pastes a WebSocket URL by mistake.
+  const httpUrl = config.livekitManagementUrl
     .replace(/^wss:/i, 'https:')
     .replace(/^ws:/i, 'http:');
   const client = new RoomServiceClient(httpUrl, config.apiKey, config.apiSecret);

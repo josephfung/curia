@@ -105,7 +105,7 @@ tasks:
         - channel.voice.deepgram_api_key
         - channel.voice.cartesia_api_key
         - channel.voice.cartesia_voice_id
-    credential_how_to: "Run a self-hosted LiveKit server (see docs/dev/voice-setup.md), create Deepgram and Cartesia API keys, and pick a Cartesia voice id from play.cartesia.ai, then enter LiveKit URL/API key/secret, Deepgram and Cartesia keys, and the Cartesia voice ID in Settings → Channels → Voice. Enable the channel and restart."
+    credential_how_to: "Run a self-hosted LiveKit server (see docs/dev/voice-setup.md), create Deepgram and Cartesia API keys, and pick a Cartesia voice id from play.cartesia.ai, then enter the browser LiveKit signaling URL (wss://…) plus API key/secret, Deepgram and Cartesia keys, and the Cartesia voice ID in Settings → Channels → Voice. Server-side room admin uses channels.voice.livekit_management_url in YAML (compose default http://livekit:7880) — not the public signaling URL. Enable the channel and restart."
     docs_url: /channels/voice-setup
 
   - id: web_research

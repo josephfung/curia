@@ -1,5 +1,26 @@
-import { describe, it, expect, vi } from 'vitest';
-import { mintVoiceParticipantToken, DEFAULT_VOICE_TOKEN_TTL } from './token.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mintVoiceParticipantToken, deleteVoiceRoom, DEFAULT_VOICE_TOKEN_TTL } from './token.js';
+
+const { deleteRoomMock, roomServiceCtor } = vi.hoisted(() => {
+  const deleteRoomMock = vi.fn(async () => {});
+  const roomServiceCtor = vi.fn(function RoomServiceClient(
+    this: unknown,
+    host: string,
+    apiKey: string,
+    apiSecret: string,
+  ) {
+    return { deleteRoom: deleteRoomMock, host, apiKey, apiSecret };
+  });
+  return { deleteRoomMock, roomServiceCtor };
+});
+
+vi.mock('livekit-server-sdk', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('livekit-server-sdk')>();
+  return {
+    ...actual,
+    RoomServiceClient: roomServiceCtor,
+  };
+});
 
 describe('mintVoiceParticipantToken', () => {
   it('sets an explicit TTL (default 1h) so leaked JWTs expire promptly', async () => {
@@ -39,5 +60,42 @@ describe('mintVoiceParticipantToken', () => {
   });
 });
 
-// Silence unused vi import if needed — keep for future mocks.
-void vi;
+describe('deleteVoiceRoom', () => {
+  beforeEach(() => {
+    deleteRoomMock.mockClear();
+    roomServiceCtor.mockClear();
+  });
+
+  it('builds RoomServiceClient against the management HTTP URL, not signaling', async () => {
+    await deleteVoiceRoom(
+      {
+        livekitManagementUrl: 'http://livekit:7880',
+        apiKey: 'devkey',
+        apiSecret: 'secret'.padEnd(32, 'x'),
+      },
+      'voice-room-1',
+    );
+    expect(roomServiceCtor).toHaveBeenCalledWith(
+      'http://livekit:7880',
+      'devkey',
+      'secret'.padEnd(32, 'x'),
+    );
+    expect(deleteRoomMock).toHaveBeenCalledWith('voice-room-1');
+  });
+
+  it('maps accidental ws(s) management URLs to http(s)', async () => {
+    await deleteVoiceRoom(
+      {
+        livekitManagementUrl: 'wss://livekit.internal:7880',
+        apiKey: 'devkey',
+        apiSecret: 'secret'.padEnd(32, 'x'),
+      },
+      'voice-room-2',
+    );
+    expect(roomServiceCtor).toHaveBeenCalledWith(
+      'https://livekit.internal:7880',
+      'devkey',
+      'secret'.padEnd(32, 'x'),
+    );
+  });
+});

@@ -110,6 +110,16 @@ through `ExecutionLayer` and external sends still hit the gateway.
 - Set the Voice channel LiveKit URL to the browser-reachable signaling endpoint:
   `ws://<host>:7880` for private local testing, or `wss://<voice-host>` when you
   terminate TLS for LiveKit through a separate proxy.
+- **Signaling vs management:** the vault `channel.voice.livekit_url` is for the
+  **browser** (`wss://…` / `ws://…`). Curia's server-side RoomService calls
+  (`DeleteRoom` on hangup, and any future admin ops) use a **separate** HTTP
+  base from plain YAML — `channels.voice.livekit_management_url` — which must
+  reach LiveKit directly on the compose network (default `http://livekit:7880`).
+  Do not point management at the public signaling domain: if Caddy (or similar)
+  only proxies `/rtc*` to LiveKit, `/twirp` RoomService calls hit Curia and 404
+  (`Route POST:/twirp/.../DeleteRoom not found`). Host-side `pnpm dev` with
+  published LiveKit ports should override management to `http://localhost:7880`
+  in `config/local.yaml`.
 
 ## Vault keys and channel enablement
 
@@ -160,6 +170,10 @@ changing `channels.voice.model`.
 - **Token/session creation fails:** verify `channel.voice.livekit_url`,
   `channel.voice.livekit_api_key`, and `channel.voice.livekit_api_secret` match
   the LiveKit server exactly. `--dev` expects `devkey` / `secret`.
+- **Hangup logs `DeleteRoom not found` (404):** management is still aimed at the
+  public signaling URL. Set `channels.voice.livekit_management_url` to the
+  internal LiveKit HTTP base (`http://livekit:7880` in compose;
+  `http://localhost:7880` for host-side `pnpm dev`).
 - **Browser connects but no audio:** check UDP `7882` first, then TCP `7881`.
   Cloud firewalls often allow TCP while silently dropping UDP.
 - **Works on localhost, fails remotely:** use `rtc.use_external_ip: true`, set a
