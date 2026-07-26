@@ -923,11 +923,12 @@ async function main(): Promise<void> {
     config.voiceLivekitApiKey &&
     config.voiceLivekitApiSecret &&
     config.voiceDeepgramApiKey &&
-    config.voiceCartesiaApiKey
+    config.voiceCartesiaApiKey &&
+    config.voiceCartesiaVoiceId
   ) {
     logger.info({ hasVoiceModelOverride: config.voiceModel !== undefined }, 'Voice credentials configured (LiveKit + STT/TTS)');
   } else {
-    logger.warn('Voice credentials not fully configured — voice channel disabled. Set LiveKit, Deepgram, and Cartesia credentials in the console (Settings → Channels → Voice); credentials are vault-only (no env fallback).');
+    logger.warn('Voice credentials not fully configured — voice channel disabled. Set the LiveKit, Deepgram, and Cartesia values (including the Cartesia voice ID) in the console (Settings → Channels → Voice); credentials are vault-only (no env fallback).');
   }
 
   // Calendar client — operates as the PRINCIPAL (the CEO), not as Curia's mailbox.
@@ -1792,7 +1793,8 @@ async function main(): Promise<void> {
     config.voiceLivekitApiKey &&
     config.voiceLivekitApiSecret &&
     config.voiceDeepgramApiKey &&
-    config.voiceCartesiaApiKey
+    config.voiceCartesiaApiKey &&
+    config.voiceCartesiaVoiceId
   ) {
     // Voice turns use the 'fast' tier by default (ADR-037 §3), overridable via
     // channels.voice.model. The runtime needs a provider that supports stream();
@@ -1808,7 +1810,7 @@ async function main(): Promise<void> {
         logger,
         sessionStore: voiceSessionStore,
         stt: new DeepgramSttProvider(config.voiceDeepgramApiKey, logger),
-        tts: new CartesiaTtsProvider(config.voiceCartesiaApiKey, logger),
+        tts: new CartesiaTtsProvider(config.voiceCartesiaApiKey, logger, config.voiceCartesiaVoiceId),
         llm: voiceLlmProvider,
         model: voiceModel,
         livekitUrl: voiceLivekitUrl,
@@ -1850,7 +1852,7 @@ async function main(): Promise<void> {
       );
     }
   } else if (channelShouldStart.has('voice')) {
-    logger.warn('channel voice is enabled + resolvable but runtime credentials are missing (LiveKit, Deepgram, or Cartesia); no Voice adapter constructed — check vault credentials and restart');
+    logger.warn('channel voice is enabled + resolvable but runtime credentials are missing (LiveKit, Deepgram, Cartesia, or the Cartesia voice ID); no Voice adapter constructed — check vault credentials and restart');
   }
 
   // Scheduler — Postgres-backed job scheduler for cron and one-shot tasks.

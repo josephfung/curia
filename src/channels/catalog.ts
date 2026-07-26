@@ -85,6 +85,9 @@ export const CHANNEL_CATALOG: ChannelDescriptor[] = [
       { key: 'livekit_api_secret', label: 'LiveKit API secret', secret: true },
       { key: 'deepgram_api_key', label: 'Deepgram API key', secret: true },
       { key: 'cartesia_api_key', label: 'Cartesia API key', secret: true },
+      // Not a secret — a voice id from the Cartesia library (play.cartesia.ai).
+      // Required: Cartesia TTS cannot synthesize a reply without it.
+      { key: 'cartesia_voice_id', label: 'Cartesia voice ID', secret: false },
     ],
     requiredSecretKeys: [
       'livekit_url',
@@ -92,6 +95,7 @@ export const CHANNEL_CATALOG: ChannelDescriptor[] = [
       'livekit_api_secret',
       'deepgram_api_key',
       'cartesia_api_key',
+      'cartesia_voice_id',
     ],
   },
   {

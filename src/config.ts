@@ -65,6 +65,10 @@ export interface Config {
   voiceLivekitApiSecret: string | undefined;
   voiceDeepgramApiKey: string | undefined;
   voiceCartesiaApiKey: string | undefined;
+  /** Cartesia voice to synthesize with (a voice id from the Cartesia library). Not a
+   * secret, but lives alongside the other voice credentials so it is console-settable.
+   * TTS cannot synthesize without it, so the voice channel treats it as required. */
+  voiceCartesiaVoiceId: string | undefined;
   /** Optional model override for voice turns; defaults to the fast tier when unset. */
   voiceModel?: string;
 }
@@ -1281,6 +1285,7 @@ export function loadConfig(): Config {
     voiceLivekitApiSecret: undefined,
     voiceDeepgramApiKey: undefined,
     voiceCartesiaApiKey: undefined,
+    voiceCartesiaVoiceId: undefined,
     voiceModel: undefined,
   };
 }

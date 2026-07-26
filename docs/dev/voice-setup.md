@@ -120,6 +120,10 @@ Enter these in **Settings → Channels → Voice**:
 - `channel.voice.livekit_api_secret`
 - `channel.voice.deepgram_api_key`
 - `channel.voice.cartesia_api_key`
+- `channel.voice.cartesia_voice_id` — the voice to speak in. Pick one from
+  [play.cartesia.ai](https://play.cartesia.ai) and copy its voice id (a UUID).
+  Required: Cartesia cannot synthesize a reply without it, so the channel stays
+  disabled until it is set.
 
 Then install/enable the Voice channel and restart Curia. The runtime reads the
 vault values on startup; changing a key does not affect already-running calls.

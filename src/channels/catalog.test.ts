@@ -43,6 +43,7 @@ describe('CHANNEL_CATALOG', () => {
       'livekit_api_secret',
       'deepgram_api_key',
       'cartesia_api_key',
+      'cartesia_voice_id',
     ]);
     expect(voice.credentialFields.every(f => f.envFallback === undefined)).toBe(true);
   });

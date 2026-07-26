@@ -30,6 +30,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Voice channel** — CodeRabbit review: hangup race, silent rooms, LiveKit opt-in, turn integrity. (#1414)
 - **Voice lifecycle hardening** — bounded STT socket waits, session cleanup on token failure, safe session end. (#1414)
+- **Voice TTS was unusable** — Cartesia voice id is now a required, console-set voice credential. (#1414)
 
 ### Changed
 

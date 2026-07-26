@@ -68,6 +68,7 @@ export async function applyChannelVaultSecrets(
     voiceLivekitApiSecret,
     voiceDeepgramApiKey,
     voiceCartesiaApiKey,
+    voiceCartesiaVoiceId,
   ] = await Promise.all([
     resolve('channel.email.nylas_api_key', 'NYLAS_API_KEY', config.nylasApiKey),
     resolve('channel.email.nylas_grant_id', 'NYLAS_GRANT_ID', config.nylasGrantId),
@@ -88,6 +89,9 @@ export async function applyChannelVaultSecrets(
     readVaultKey(secrets, 'channel.voice.livekit_api_secret', logger),
     readVaultKey(secrets, 'channel.voice.deepgram_api_key', logger),
     readVaultKey(secrets, 'channel.voice.cartesia_api_key', logger),
+    // Not a secret (a Cartesia voice id), but sits with the voice creds so the
+    // console can set it; TTS cannot synthesize without it.
+    readVaultKey(secrets, 'channel.voice.cartesia_voice_id', logger),
   ]);
 
   config.nylasApiKey = nylasApiKey;
@@ -106,6 +110,7 @@ export async function applyChannelVaultSecrets(
   config.voiceLivekitApiSecret = voiceLivekitApiSecret;
   config.voiceDeepgramApiKey = voiceDeepgramApiKey;
   config.voiceCartesiaApiKey = voiceCartesiaApiKey;
+  config.voiceCartesiaVoiceId = voiceCartesiaVoiceId;
 
   // Names only — never values. Lets an operator confirm which channel creds the vault/env
   // supplied vs. which are absent (feature-off), the same debuggability win as applyVaultSecrets.
@@ -125,6 +130,7 @@ export async function applyChannelVaultSecrets(
     'channel.voice.livekit_api_secret': voiceLivekitApiSecret !== undefined,
     'channel.voice.deepgram_api_key': voiceDeepgramApiKey !== undefined,
     'channel.voice.cartesia_api_key': voiceCartesiaApiKey !== undefined,
+    'channel.voice.cartesia_voice_id': voiceCartesiaVoiceId !== undefined,
   };
   logger.info({ present }, 'Applied channel credentials onto config (vault ▸ env ▸ config)');
 }
