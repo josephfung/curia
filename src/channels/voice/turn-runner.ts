@@ -1,14 +1,14 @@
 // turn-runner.ts — VoiceTurnRunner drives a single spoken assistant turn.
 //
-// Thin voice wrapper over the shared streaming turn primitive
+// Thin voice wrapper over the streaming turn primitive
 // (src/agents/llm/streaming-turn.ts, #1552). This file owns only voice UX:
 // sentence-chunk TTS, filler speech, barge-in AbortSignal semantics, and the
 // audible exhaustion fallback. Tool-loop / message assembly / round-cap /
 // stream+abort live in the shared primitive.
 //
-// Text AgentRuntime.handleTask stays on non-streaming provider.chat() unless
-// explicitly opted into the streaming primitive later — do not fold voice into
-// handleTask. Cross-link: src/agents/runtime.ts tool_use loop.
+// Text AgentRuntime.handleTask stays on non-streaming provider.chat() — opt-in
+// is tracked as #1563 (requires a "text goes streaming" decision). Do not fold
+// voice into handleTask. Cross-link: src/agents/runtime.ts tool_use loop.
 // Sibling: #1551 (brain/context + history read model).
 
 import { randomUUID } from 'node:crypto';
@@ -164,8 +164,10 @@ export class VoiceTurnRunner {
       if (remainder && !signal.aborted) {
         await speak(remainder);
       }
-      // Prefer the model's terminal content when present; otherwise fall back
-      // to what was actually handed to TTS (covers multi-round tool turns).
+      // Prefer the model's terminal content when non-empty; otherwise fall back
+      // to what was actually handed to TTS (sentence-chunked spokenText) — NOT
+      // the primitive's streamedText. Empty message_end.content must not silently
+      // persist raw delta concat (#1562 review §3).
       const finalText = result.finalText.length > 0 ? result.finalText : spokenText;
       return { finalText, aborted: signal.aborted, toolRounds: result.toolRounds, streamId };
     }

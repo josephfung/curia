@@ -113,7 +113,7 @@ with incremental commits. Each phase below should leave `pnpm run typecheck` and
 
 | Risk | Mitigation |
 |---|---|
-| AgentRuntime drift | VoiceTurnRunner is a thin TTS wrapper over `streaming-turn.ts` (#1552); text stays on chat() |
+| AgentRuntime drift | Voice uses `streaming-turn.ts` (#1552); text `handleTask` opt-in is #1563 |
 | OpenRouter TTFT | Measure `voice.ttfa_ms`; optional model override; refuse non-streaming |
 | WebRTC NAT | Ops doc first-class; Compose comments for UDP ports |
 | Scope creep | No Phase 2 Signal/PSTN; no S2S; no OutboundGateway |

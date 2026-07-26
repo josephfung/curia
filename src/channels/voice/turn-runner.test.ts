@@ -317,4 +317,44 @@ describe('VoiceTurnRunner', () => {
     expect(provider.streamCalls).toBe(0);
     expect(spoken).toEqual([]);
   });
+
+  it('falls back to spokenText when message_end.content is empty', async () => {
+    // Multi-round: deltas are spoken via sentence chunker; terminal content is
+    // empty. finalText must be the TTS-delivered spokenText, not raw streamedText
+    // (#1562 review §3).
+    const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
+    const provider = new FakeStreamProvider([
+      [
+        textDelta('Let me check. '),
+        { type: 'tool_use', toolCalls: [toolCall], content: 'Let me check.', usage, provenance },
+      ],
+      [
+        textDelta('It is sunny. '),
+        { type: 'message_end', content: '', usage, provenance },
+      ],
+    ]);
+    const spoken: string[] = [];
+    const runner = new VoiceTurnRunner({
+      provider,
+      model: 'fake',
+      logger,
+      invokeTool: async () => ({ content: 'ok' }),
+      onFiller: async () => {},
+      onSpeechText: async text => {
+        spoken.push(text);
+      },
+    });
+
+    const result = await runner.runTurn({
+      messages: [],
+      signal: new AbortController().signal,
+    });
+
+    expect(spoken).toContain('Let me check.');
+    expect(spoken).toContain('It is sunny.');
+    expect(result.aborted).toBe(false);
+    // speak() joins with single spaces — not raw delta concat.
+    expect(result.finalText).toBe('Let me check. It is sunny.');
+    expect(result.finalText).not.toBe('Let me check. It is sunny. ');
+  });
 });

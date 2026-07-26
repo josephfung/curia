@@ -117,7 +117,8 @@ describe('runStreamingToolLoop (#1552)', () => {
       options?: Record<string, unknown>;
     }) {
       if (provider.streamCalls === 1) {
-        secondCallMessages = params.messages;
+        // Snapshot — workingMessages is mutated after this round completes.
+        secondCallMessages = [...(params.messages ?? [])];
       }
       yield* origStream(params as never);
     } as never;
@@ -134,11 +135,17 @@ describe('runStreamingToolLoop (#1552)', () => {
     });
 
     expect(beforeTools).toHaveBeenCalledOnce();
+    expect(beforeTools).toHaveBeenCalledWith({
+      toolCalls: [toolCall],
+      content: 'Checking.',
+    });
     expect(invokeTool).toHaveBeenCalledWith(toolCall);
     expect(result.toolRounds).toBe(1);
     expect(result.stopReason).toBe('message_end');
     expect(result.finalText).toBe('Sunny.');
     expect(provider.streamCalls).toBe(2);
+    // Terminal assistant reply is appended so messages is a complete transcript.
+    expect(result.messages.at(-1)).toEqual({ role: 'assistant', content: 'Sunny.' });
 
     // Shape contract: second stream call must carry assistant tool_use + user tool_result.
     expect(secondCallMessages).toEqual([
@@ -146,6 +153,95 @@ describe('runStreamingToolLoop (#1552)', () => {
       buildAssistantToolUseMessage([toolCall], 'Checking.'),
       buildUserToolResultMessage([{ id: 'call_1', content: 'sunny, 25C' }]),
     ]);
+  });
+
+  it('uses missingInvokeToolResult when invokeTool is absent', async () => {
+    const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
+    let captured: { content?: string; is_error?: boolean } | undefined;
+    const provider = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [toolCall], usage, provenance }],
+      [{ type: 'message_end', content: 'ok', usage, provenance }],
+    ]);
+    const origStream = provider.stream.bind(provider);
+    provider.stream = async function* (params: {
+      messages?: unknown[];
+      options?: Record<string, unknown>;
+    }) {
+      if (provider.streamCalls === 1 && Array.isArray(params.messages)) {
+        const lastMsg = params.messages[params.messages.length - 1]! as {
+          content: Array<{ content?: string; is_error?: boolean }>;
+        };
+        captured = lastMsg.content[0]!;
+      }
+      yield* origStream(params as never);
+    } as never;
+
+    const result = await runStreamingToolLoop([], {
+      provider,
+      model: 'fake',
+      maxRounds: DEFAULT_STREAMING_MAX_ROUNDS,
+      signal: new AbortController().signal,
+      missingInvokeToolResult: 'Tool execution is not wired for this streaming turn.',
+    });
+
+    expect(captured?.content).toContain('not wired');
+    expect(captured?.is_error).toBe(true);
+    expect(result.finalText).toBe('ok');
+    expect(result.toolRounds).toBe(1);
+  });
+
+  it('returns empty_stream when the iterable ends with no terminal event', async () => {
+    const provider = new FakeStreamProvider([[textDelta('orphan text')]]);
+    const result = await runStreamingToolLoop([], {
+      provider,
+      model: 'fake',
+      maxRounds: 2,
+      signal: new AbortController().signal,
+      logger,
+    });
+
+    expect(result.stopReason).toBe('empty_stream');
+    expect(result.streamedText).toBe('orphan text');
+    expect(result.finalText).toBe('orphan text');
+    expect(result.exhausted).toBe(false);
+    expect(result.aborted).toBe(false);
+  });
+
+  it('preserves empty message_end content on finalText (no streamedText fallback)', async () => {
+    const provider = new FakeStreamProvider([
+      [
+        textDelta('Pre-tool. '),
+        {
+          type: 'tool_use',
+          toolCalls: [{ id: 'call_1', name: 'lookup', input: {} }],
+          content: 'Pre-tool.',
+          usage,
+          provenance,
+        },
+      ],
+      [
+        textDelta('Post-tool spoken. '),
+        { type: 'message_end', content: '', usage, provenance },
+      ],
+    ]);
+
+    const result = await runStreamingToolLoop([], {
+      provider,
+      model: 'fake',
+      maxRounds: DEFAULT_STREAMING_MAX_ROUNDS,
+      signal: new AbortController().signal,
+      invokeTool: async () => ({ content: 'ok' }),
+    });
+
+    expect(result.stopReason).toBe('message_end');
+    // Callers (voice) must fall back to their own delivered text — not streamedText.
+    expect(result.finalText).toBe('');
+    expect(result.streamedText).toBe('Pre-tool. Post-tool spoken. ');
+    // Transcript still gets a usable assistant turn via streamedText fallback.
+    expect(result.messages.at(-1)).toEqual({
+      role: 'assistant',
+      content: 'Pre-tool. Post-tool spoken. ',
+    });
   });
 
   it('stops cleanly on abort mid-stream', async () => {

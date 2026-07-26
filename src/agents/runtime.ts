@@ -1078,16 +1078,17 @@ export class AgentRuntime {
     const delegationGuard = new DelegationGuard();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
 
-    // TWO PATHS, ONE PRIMITIVE FAMILY (#1552): this non-streaming tool loop
-    // (provider.chat) is the text-channel path — keep it here unless a caller
-    // explicitly opts into streaming. Voice delegates stream()+tool assembly to
-    // src/agents/llm/streaming-turn.ts via a thin VoiceTurnRunner wrapper
-    // (sentence-chunk TTS / filler / barge-in only). Both paths share
-    // tool-loop-messages.ts block shapes. Round caps stay parameterized:
-    // text uses per-agent errorBudget.maxTurns; voice uses
-    // DEFAULT_STREAMING_MAX_ROUNDS (8) — intentional (spoken fail-fast).
-    // Autonomy/Gate-C: both call executionLayer.invoke. Assistant text is not
-    // sanitizeOutput'd on either path (skill results are, inside invoke).
+    // TWO TOOL LOOPS (#1552 / #1563): this non-streaming chat() loop is still
+    // the text-channel path. Voice uses streaming-turn.ts via a thin
+    // VoiceTurnRunner wrapper — they share tool-loop-messages.ts shapes, but
+    // handleTask does NOT yet delegate here. Opting text into the streaming
+    // primitive requires an explicit "text goes streaming" decision (#1563):
+    // this loop also owns retry/fallback, error budgets, DelegationGuard,
+    // clarification, tool bus events, and delegate timeout injection.
+    // Round caps stay parameterized (errorBudget.maxTurns vs voice's
+    // DEFAULT_STREAMING_MAX_ROUNDS=8). Autonomy/Gate-C: both call
+    // executionLayer.invoke. Assistant text is not sanitizeOutput'd on either
+    // path (skill results are, inside invoke).
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
