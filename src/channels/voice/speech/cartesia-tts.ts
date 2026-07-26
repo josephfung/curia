@@ -1,5 +1,5 @@
 import type { Logger } from '../../../logger.js';
-import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from './types.js';
+import { TtsHttpError, type PcmFrame, type TextToSpeechProvider, type TtsSynthesizeOptions } from './types.js';
 
 const CARTESIA_TTS_BYTES_URL = 'https://api.cartesia.ai/tts/bytes';
 const CARTESIA_VERSION = '2026-03-01';
@@ -40,8 +40,8 @@ function pcmFrameFromBytes(bytes: Uint8Array, sampleRate: number): PcmFrame {
   return { pcm, sampleRate, channels: 1 };
 }
 
-function responseErrorMessage(response: Response): string {
-  return `Cartesia TTS request failed with HTTP ${response.status}`;
+function responseError(response: Response): TtsHttpError {
+  return new TtsHttpError(response.status, `Cartesia TTS request failed with HTTP ${response.status}`);
 }
 
 function isAbortError(err: unknown): boolean {
@@ -112,7 +112,7 @@ export class CartesiaTtsProvider implements TextToSpeechProvider {
       });
 
       if (!response.ok) {
-        throw new Error(responseErrorMessage(response));
+        throw responseError(response);
       }
 
       const body = asByteReadableStream(response.body);

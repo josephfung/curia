@@ -27,6 +27,7 @@ import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
 import type { AudioTransport } from './audio-transport.js';
 import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from './speech/types.js';
+import { TtsHttpError } from './speech/types.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
 import { VoiceTurnRunner } from './turn-runner.js';
 
@@ -68,11 +69,11 @@ const DEFAULT_MAX_UTTERANCE_BYTES = 102_400;
  */
 const TTS_CONSECUTIVE_FAILURE_LIMIT = 3;
 
+const HARD_TTS_STATUS_CODES = new Set([401, 403, 404]);
+
 /** Auth / missing-voice hard failures should not wait for the soft threshold. */
 function isHardTtsFailure(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  // Cartesia (and similar HTTP TTS providers) include the status in the message.
-  return /\bHTTP (401|403|404)\b/.test(err.message);
+  return err instanceof TtsHttpError && HARD_TTS_STATUS_CODES.has(err.statusCode);
 }
 
 /**
@@ -662,7 +663,17 @@ export class VoiceRuntime {
               'voice time-to-first-audio',
             );
           }
-          await session.transport.publishAudio(frame);
+          // Publish is outside the TTS failure streak — a LiveKit blip must not
+          // be recorded as tts_error (#1556 review).
+          try {
+            await session.transport.publishAudio(frame);
+          } catch (publishErr) {
+            this.log.warn(
+              { sessionId: session.sessionId, err: publishErr },
+              'failed to publish TTS audio frame; not counted as a TTS synthesis failure',
+            );
+            break;
+          }
         }
         // Healthy synthesis (including barge-in abort mid-stream) clears the streak.
         if (!session.ending) session.consecutiveTtsFailures = 0;

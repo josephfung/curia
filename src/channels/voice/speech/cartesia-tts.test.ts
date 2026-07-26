@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSilentLogger } from '../../../logger.js';
 import { CartesiaTtsProvider } from './cartesia-tts.js';
-import type { PcmFrame } from './types.js';
+import { TtsHttpError, type PcmFrame } from './types.js';
 
 function bytesFromSamples(samples: number[]): Uint8Array {
   const bytes = new Uint8Array(samples.length * 2);
@@ -98,8 +98,14 @@ describe('CartesiaTtsProvider', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('bad', { status: 401 })));
     const provider = new CartesiaTtsProvider('cartesia-key', createSilentLogger(), 'voice-1');
 
-    await expect(collect(provider.synthesize({ text: 'hello', streamId: 's1' })))
-      .rejects.toThrow('Cartesia TTS request failed with HTTP 401');
+    try {
+      await collect(provider.synthesize({ text: 'hello', streamId: 's1' }));
+      expect.unreachable('expected TtsHttpError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TtsHttpError);
+      expect((err as TtsHttpError).statusCode).toBe(401);
+      expect((err as TtsHttpError).message).toBe('Cartesia TTS request failed with HTTP 401');
+    }
   });
 
   it('cancel stops further frames', async () => {

@@ -45,3 +45,17 @@ export interface TextToSpeechProvider {
   synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame>;
   cancel(streamId: string): void;
 }
+
+/**
+ * Structured HTTP failure from a TTS provider. Prefer this over embedding the
+ * status in `Error.message` so callers can classify without string matching.
+ */
+export class TtsHttpError extends Error {
+  readonly statusCode: number;
+
+  constructor(statusCode: number, message?: string) {
+    super(message ?? `TTS request failed with HTTP ${statusCode}`);
+    this.name = 'TtsHttpError';
+    this.statusCode = statusCode;
+  }
+}
