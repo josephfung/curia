@@ -92,11 +92,12 @@ voice reuses that for session minting (and optional LiveKit webhooks).
   (CHANGELOG must call it out); wrappers (`LLMProviderRouter`,
   `TelemetryLlmProvider`) must forward it.
 - Voice turns share coordinator tools but not the exact `AgentRuntime.handleTask`
-  code path — drift risk is accepted and mitigated by reusing the same
-  provider, tool definitions, and bus `tool.invoke` / autonomy checks where
-  practical. A later refactor extracts a shared streaming turn primitive that
-  both paths delegate to — **not** a literal fold into `handleTask`
-  (tracked: #1552; brain/context + history read model landed via #1551).
+  code path. Tool-loop mechanism is shared via `src/agents/llm/streaming-turn.ts`
+  (#1552): `VoiceTurnRunner` is a thin TTS/barge-in wrapper over that primitive;
+  text channels stay on non-streaming `chat()` unless explicitly opted in.
+  Round caps stay parameterized (voice `DEFAULT_STREAMING_MAX_ROUNDS=8` vs
+  per-agent `maxTurns`). Autonomy/Gate-C remains `executionLayer.invoke` on both
+  paths. Brain/context + history read model landed via #1551.
 - **Voice "brain" is a curated subset of the coordinator's context (#1551):**
   spoken turns assemble the office identity/persona block, the voice-mode
   addendum (spoken brevity), an honest-negative tool-result policy (a failed
