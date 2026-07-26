@@ -212,7 +212,9 @@ for barge-in cancel.
 2. Console connects with LiveKit client SDK; publishes mic track.
 3. VoiceRuntime joins as agent participant; subscribes to principal audio.
 4. Pipe PCM → STT session; on **final + endpoint**, start `VoiceTurnRunner`.
-5. Runner: inject voice-mode system addendum; `stream()`; sentence-chunk text
+5. Runner: assemble the voice system prompt (persona + addendum + honest-negative
+   policy + delegation guidance/roster + date/time — see §"Phase 1 brain" below)
+   and reload history from `working_memory`; `stream()`; sentence-chunk text
    deltas → TTS → publish audio track. On `tool_use`, speak a short filler,
    invoke tool via execution path, continue stream with tool results.
    Persist user + assistant turns to `WorkingMemory` for console history.
@@ -224,13 +226,36 @@ for barge-in cancel.
    LiveKit room, publish `voice.session.ended`, stop tracks, update DB.
    Transport `onClose` covers ungraceful tab close without `DELETE`.
 
-### Phase 1 brain (explicit non-goal)
+### Phase 1 brain (updated by #1551)
 
-Spoken turns deliberately do **not** load the coordinator's full system prompt,
-office persona injection, KG/entity-context enrichment, or DB-backed working
-memory into the LLM context. The model sees the voice addendum, last-N
-in-memory turns for this session, and coordinator pinned tools. Closing the
-gap with `AgentRuntime.handleTask` is a tracked follow-up.
+Spoken turns load a curated subset of the coordinator's context, assembled per
+turn by `buildVoiceSystemPrompt()` in `voice-runtime.ts` (static sections
+first, the dynamic time block last, so the prompt prefix stays
+provider-cacheable):
+
+1. Office identity/persona block (`OfficeIdentityService.compileSystemPromptBlock`,
+   per-turn so hot-reloads apply — same as the coordinator preamble)
+2. Voice-mode addendum (spoken brevity — unchanged)
+3. Honest-negative tool-result policy: a failed or errored check is spoken as
+   "couldn't check", never narrated as an authoritative empty result
+4. Delegation guidance + `## Available Specialists` roster, so specialist
+   domains (calendar, contacts, research, the principal's inbox) are reachable
+   from voice via the `delegate` tool
+5. `## Current Date & Time` block (`formatTimeContextBlock`) so "tomorrow /
+   next week" is anchored for every voice tool call
+
+History is single-sourced: each turn reloads the `voice:<sessionId>`
+conversation from `working_memory` (agent id `coordinator` — the same rows the
+console history endpoint reads); the in-process last-N window is only a
+fallback when the store is absent or a read fails.
+
+Still deliberately excluded (documented trade-off, not an omission): the
+coordinator's full YAML system prompt (text-channel mechanics — email/CC/
+scheduler — that hurt the spoken latency budget without helping spoken Q&A),
+KG/sender enrichment (precomputed on the dispatcher path voice bypasses;
+contacts delegation covers it), and the autonomy/security blocks (enforced by
+`ExecutionLayer` on every tool call regardless). The shared streaming turn
+primitive remains #1552.
 
 ### Outbound judge parity
 

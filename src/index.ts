@@ -1818,6 +1818,9 @@ async function main(): Promise<void> {
           new LiveKitRoomSession({ url: livekitUrl, token, logger }),
         workingMemory: memory,
         maxUtteranceBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
+        // Same per-turn date/timezone grounding the coordinator gets — without it
+        // "tomorrow / next week" is un-anchored for every voice tool call (#1551).
+        timezone: config.timezone,
         deleteRoom: async (roomName) => {
           await deleteVoiceRoom(
             {
@@ -1828,8 +1831,9 @@ async function main(): Promise<void> {
             roomName,
           );
         },
-        // Tools are late-bound via voiceRuntime.configureTools() after the
-        // coordinator is registered (ExecutionLayer + pinned tools exist then).
+        // Tools + coordinator context providers are late-bound via
+        // voiceRuntime.configureTools() after the coordinator is registered
+        // (ExecutionLayer + pinned tools + agent registry exist then).
       });
       logger.info({ voiceModel }, 'Voice runtime constructed (streaming provider available)');
 
@@ -2471,6 +2475,14 @@ async function main(): Promise<void> {
       const voiceToolDefs = toolRegistry.toToolDefinitions(voiceToolNames);
       runtime.configureTools({
         resolveVoiceTools: () => voiceToolDefs,
+        // Coordinator context providers for spoken-turn brain parity (#1551).
+        // Per-turn closures so identity hot-reloads take effect on the next
+        // spoken turn, same as AgentRuntime's preamble injection.
+        identityBlock: () => officeIdentityService.compileSystemPromptBlock(),
+        // Roster gated on actual specialists so the delegation guidance never
+        // ships alongside a "No specialist agents..." placeholder.
+        specialistRoster: () =>
+          agentRegistry.listSpecialists().length > 0 ? agentRegistry.specialistSummary() : null,
         invokeTool: async (call, ctx) => {
           const caller = {
             contactId: principalContact?.id ?? 'ceo-web-user',

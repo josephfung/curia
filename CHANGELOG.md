@@ -35,6 +35,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Voice brain** — spoken turns gain persona, specialist delegation guidance, and date/timezone context. (#1551)
+- **Voice history** — spoken-turn context reloads from `working_memory`; in-process history is now only a fallback. (#1551)
+- **Voice honesty** — failed tool checks are spoken as "couldn't check," never as empty results. (#1551)
 - **Voice docs** — folded security memo into ADR-037 + `voice-setup.md`; deleted duplicate. (#1414)
 - **Audit log Phase 1** — structured columns, `seq`-ordered hash chain, `llm_call_archive` (kill-switch + TTL), `pnpm audit:verify`. (#1383)
 - **DB outage resilience** — `DATABASE_UNAVAILABLE` errors, pool timeouts, skill retry, CEO alert after 5 min. (#1381)

@@ -2,8 +2,15 @@ import { describe, it, expect, vi } from 'vitest';
 import { EventBus } from '../../bus/bus.js';
 import type { BusEvent } from '../../bus/events.js';
 import { createSilentLogger } from '../../logger.js';
-import type { LLMProvider, LLMResponse, LLMStreamEvent } from '../../agents/llm/provider.js';
-import { VoiceRuntime } from './voice-runtime.js';
+import type { LLMProvider, LLMResponse, LLMStreamEvent, Message } from '../../agents/llm/provider.js';
+import { WorkingMemory } from '../../memory/working-memory.js';
+import {
+  VoiceRuntime,
+  VOICE_SYSTEM_ADDENDUM,
+  VOICE_TOOL_RESULT_POLICY,
+  VOICE_DELEGATION_GUIDANCE,
+} from './voice-runtime.js';
+import type { VoiceToolBridge } from './voice-runtime.js';
 import { FakeAudioTransport } from './fake-audio-transport.js';
 import { FakeSttProvider } from './speech/fake-stt.js';
 import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from './speech/types.js';
@@ -17,6 +24,8 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 /** Fake streaming LLM provider driven by scripted event sequences. */
 class FakeStreamProvider implements LLMProvider {
   readonly id = 'fake-stream';
+  /** Messages passed to each stream() call, for context-assembly assertions. */
+  readonly seenMessages: Message[][] = [];
   constructor(
     private readonly scripts: LLMStreamEvent[][],
     private readonly delayMs = 0,
@@ -25,7 +34,8 @@ class FakeStreamProvider implements LLMProvider {
   async chat(): Promise<LLMResponse> {
     return { type: 'text', content: '', usage, provenance };
   }
-  async *stream(params: { options?: Record<string, unknown> }): AsyncIterable<LLMStreamEvent> {
+  async *stream(params: { messages?: Message[]; options?: Record<string, unknown> }): AsyncIterable<LLMStreamEvent> {
+    this.seenMessages.push(params.messages ?? []);
     const script = this.scripts[this.call] ?? [];
     this.call += 1;
     const signal = params.options?.signal as AbortSignal | undefined;
@@ -92,6 +102,10 @@ function makeRuntime(overrides: {
   store?: VoiceSessionStore;
   invokeTool?: (call: never, ctx?: { conversationId: string; sessionId: string }) => Promise<{ content: string; is_error?: boolean }>;
   deleteRoom?: (roomName: string) => Promise<void>;
+  workingMemory?: WorkingMemory;
+  timezone?: string;
+  /** Late-bound coordinator bridge (tools + context providers), applied via configureTools(). */
+  bridge?: VoiceToolBridge;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];
@@ -117,7 +131,10 @@ function makeRuntime(overrides: {
     createTransport: () => transport,
     invokeTool: overrides.invokeTool as never,
     deleteRoom: overrides.deleteRoom,
+    workingMemory: overrides.workingMemory,
+    timezone: overrides.timezone,
   });
+  if (overrides.bridge) runtime.configureTools(overrides.bridge);
   return { runtime, bus, events, stt, transport, tts, store };
 }
 
@@ -323,5 +340,239 @@ describe('VoiceRuntime', () => {
     await runtime.awaitIdle('s4');
 
     expect(invokeTool).toHaveBeenCalledOnce();
+  });
+});
+
+describe('VoiceRuntime brain/context parity (#1551)', () => {
+  const reply = (text: string): LLMStreamEvent[] => [
+    { type: 'text_delta', text: `${text} ` },
+    { type: 'message_end', content: text, usage, provenance },
+  ];
+
+  /** Plain-string contents of a message list (voice turns never build block-array content here). */
+  const textContents = (msgs: Message[]): string[] =>
+    msgs.map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)));
+
+  async function start(runtime: VoiceRuntime, id: string): Promise<void> {
+    await runtime.startSession({
+      sessionId: id,
+      conversationId: `voice:${id}`,
+      roomName: `voice-${id}`,
+      agentToken: 'tok',
+    });
+  }
+
+  it('assembles the spoken-turn system prompt: identity, brevity, honesty, delegation + roster, time', async () => {
+    const llm = new FakeStreamProvider([reply('Hello.')]);
+    const bridge: VoiceToolBridge = {
+      resolveVoiceTools: () => [],
+      invokeTool: async () => ({ content: 'ok' }),
+      identityBlock: () => '## Identity & Communication Contract\nYou are Vera, Chief of Staff.',
+      specialistRoster: () => '- @calendar: Manages the calendar\n- @contacts: Contact intelligence',
+    };
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      timezone: 'America/Toronto',
+      bridge,
+    });
+    await start(runtime, 'sp1');
+    stt.emit({ text: 'what is on my calendar tomorrow', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('sp1');
+
+    const messages = llm.seenMessages[0]!;
+    const system = messages[0]!;
+    expect(system.role).toBe('system');
+    const systemText = typeof system.content === 'string' ? system.content : '';
+    // Persona/identity parity with the coordinator preamble.
+    expect(systemText).toContain('You are Vera, Chief of Staff.');
+    // Spoken brevity policy still applies with fuller context enabled.
+    expect(systemText).toContain(VOICE_SYSTEM_ADDENDUM);
+    // Honest-negative policy: failed checks are never narrated as empty results.
+    expect(systemText).toContain(VOICE_TOOL_RESULT_POLICY);
+    // Delegation guidance + roster so specialist domains are reachable from voice.
+    expect(systemText).toContain(VOICE_DELEGATION_GUIDANCE);
+    expect(systemText).toContain('## Available Specialists');
+    expect(systemText).toContain('- @calendar: Manages the calendar');
+    // Same date/timezone grounding the coordinator gets; dynamic block last so
+    // the static prefix stays provider-cacheable.
+    expect(systemText).toContain('## Current Date & Time');
+    expect(systemText).toContain('Timezone: America/Toronto');
+    expect(systemText.indexOf('## Current Date & Time'))
+      .toBeGreaterThan(systemText.indexOf('## Available Specialists'));
+    // The utterance is the final message, exactly once.
+    expect(messages[messages.length - 1]).toEqual({ role: 'user', content: 'what is on my calendar tomorrow' });
+    expect(messages.filter(m => m.content === 'what is on my calendar tomorrow')).toHaveLength(1);
+  });
+
+  it('degrades to the slim prompt when no bridge context or timezone is configured', async () => {
+    const llm = new FakeStreamProvider([reply('Hi.')]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1) });
+    await start(runtime, 'sp2');
+    stt.emit({ text: 'hello', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('sp2');
+
+    const system = llm.seenMessages[0]![0]!;
+    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}`);
+  });
+
+  it('omits a throwing identity block and still runs the turn', async () => {
+    const llm = new FakeStreamProvider([reply('Still here.')]);
+    const bridge: VoiceToolBridge = {
+      resolveVoiceTools: () => [],
+      invokeTool: async () => ({ content: 'ok' }),
+      identityBlock: () => {
+        throw new Error('identity compile failed');
+      },
+      specialistRoster: () => '- @calendar: Manages the calendar',
+    };
+    const { runtime, stt, transport } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), bridge });
+    await start(runtime, 'sp3');
+    stt.emit({ text: 'are you there', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('sp3');
+
+    const system = llm.seenMessages[0]![0]!;
+    expect(system.content).toContain(VOICE_SYSTEM_ADDENDUM);
+    expect(system.content).toContain('## Available Specialists');
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
+  });
+
+  it('sources spoken-turn context from working_memory, including turns persisted before this process', async () => {
+    const wm = WorkingMemory.createInMemory();
+    // Turns persisted mid-call by a previous process — must not be silently dropped.
+    await wm.addTurn('voice:wm1', 'coordinator', { role: 'user', content: 'remember the budget is 50k' });
+    await wm.addTurn('voice:wm1', 'coordinator', { role: 'assistant', content: 'Noted: the budget is 50k.' });
+
+    const llm = new FakeStreamProvider([reply('It is 50k.')]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    await start(runtime, 'wm1');
+    stt.emit({ text: 'what was the budget again', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('wm1');
+
+    const messages = llm.seenMessages[0]!;
+    const contents = textContents(messages);
+    expect(contents).toContain('remember the budget is 50k');
+    expect(contents).toContain('Noted: the budget is 50k.');
+    // Current utterance appended exactly once, as the last message.
+    expect(messages[messages.length - 1]!.content).toBe('what was the budget again');
+    expect(contents.filter(c => c === 'what was the budget again')).toHaveLength(1);
+  });
+
+  it('keeps console history and spoken-turn context single-sourced across turns', async () => {
+    const wm = WorkingMemory.createInMemory();
+    const llm = new FakeStreamProvider([reply('Hi there.'), reply('Yes, still here.')]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    await start(runtime, 'wm2');
+
+    stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('wm2');
+    stt.emit({ text: 'still with me', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('wm2');
+
+    // Turn 2's LLM context contains turn 1 as reloaded from the store.
+    const second = llm.seenMessages[1]!;
+    const contents = textContents(second);
+    expect(contents).toContain('hello curia');
+    expect(contents).toContain('Hi there.');
+    expect(second[second.length - 1]!.content).toBe('still with me');
+
+    // The store holds exactly what the console history endpoint would read.
+    const history = await wm.getHistory('voice:wm2', 'coordinator');
+    expect(history).toEqual([
+      { role: 'user', content: 'hello curia' },
+      { role: 'assistant', content: 'Hi there.' },
+      { role: 'user', content: 'still with me' },
+      { role: 'assistant', content: 'Yes, still here.' },
+    ]);
+  });
+
+  it('falls back to in-process history when the working_memory read fails', async () => {
+    const failing = {
+      addTurn: vi.fn(async () => {}),
+      getHistory: vi.fn(async () => {
+        throw new Error('db down');
+      }),
+      purgeExpired: vi.fn(async () => 0),
+    } as unknown as WorkingMemory;
+
+    const llm = new FakeStreamProvider([reply('First answer.'), reply('Second answer.')]);
+    const { runtime, stt, events } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: failing });
+    await start(runtime, 'wm3');
+
+    stt.emit({ text: 'first question', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('wm3');
+    stt.emit({ text: 'second question', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('wm3');
+
+    // Both turns completed despite the failing store...
+    expect(events.filter(e => e.type === 'inbound.message')).toHaveLength(2);
+    // ...and turn 2 still carried turn 1 via the in-process fallback.
+    const second = llm.seenMessages[1]!;
+    const contents = textContents(second);
+    expect(contents).toContain('first question');
+    expect(contents).toContain('First answer.');
+    expect(second[second.length - 1]!.content).toBe('second question');
+  });
+
+  it('reaches specialist-delegated domains: calendar-tomorrow flows through the delegate tool', async () => {
+    const calendarEvents = JSON.stringify({
+      events: [
+        { title: 'Board meeting', start: '2026-07-27T09:00:00-04:00' },
+        { title: 'Lunch with Dana', start: '2026-07-27T12:00:00-04:00' },
+      ],
+    });
+    const spoken = 'You have the board meeting at nine and lunch with Dana at noon.';
+    const llm = new FakeStreamProvider([
+      [{
+        type: 'tool_use',
+        toolCalls: [{
+          id: 'c1',
+          name: 'delegate',
+          input: { agent: 'calendar', task: "What is on the principal's calendar tomorrow?" },
+        }],
+        usage,
+        provenance,
+      }],
+      reply(spoken),
+    ]);
+    const invokeTool = vi.fn(async () => ({ content: calendarEvents }));
+    const wm = WorkingMemory.createInMemory();
+    const bridge: VoiceToolBridge = {
+      resolveVoiceTools: () => [{
+        name: 'delegate',
+        description: 'Delegate a task to a specialist agent',
+        input_schema: { type: 'object', properties: {} },
+      }],
+      invokeTool,
+      specialistRoster: () => "- @calendar: Manages the principal's calendar",
+    };
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      timezone: 'America/Toronto',
+      workingMemory: wm,
+      bridge,
+    });
+    await start(runtime, 'cal1');
+    stt.emit({ text: 'what is on my calendar tomorrow', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('cal1');
+
+    // The turn had time grounding for "tomorrow" and the roster to know delegation exists.
+    const system = llm.seenMessages[0]![0]!;
+    expect(system.content).toContain('## Current Date & Time');
+    expect(system.content).toContain("- @calendar: Manages the principal's calendar");
+
+    // The delegate tool was invoked against the calendar specialist.
+    expect(invokeTool).toHaveBeenCalledOnce();
+    const [delegateCall] = invokeTool.mock.calls[0]! as unknown as [
+      { name: string; input: { agent: string } },
+      { conversationId: string; sessionId: string },
+    ];
+    expect(delegateCall.name).toBe('delegate');
+    expect(delegateCall.input.agent).toBe('calendar');
+
+    // The spoken answer reflects the delegated result and lands in the shared history.
+    const history = await wm.getHistory('voice:cal1', 'coordinator');
+    expect(history[history.length - 1]).toEqual({ role: 'assistant', content: spoken });
   });
 });
