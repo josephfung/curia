@@ -62,6 +62,18 @@ const BARGE_IN_MIN_CONFIDENCE = 0.4;
 const VOICE_HISTORY_AGENT_ID = 'coordinator';
 /** Default max utterance size — matches Dispatcher maxMessageBytes. */
 const DEFAULT_MAX_UTTERANCE_BYTES = 102_400;
+/**
+ * Consecutive TTS synthesis failures before ending the session. A single
+ * transient blip must not tear down an otherwise-healthy call (#1556).
+ */
+const TTS_CONSECUTIVE_FAILURE_LIMIT = 3;
+
+/** Auth / missing-voice hard failures should not wait for the soft threshold. */
+function isHardTtsFailure(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // Cartesia (and similar HTTP TTS providers) include the status in the message.
+  return /\bHTTP (401|403|404)\b/.test(err.message);
+}
 
 /**
  * Voice-mode system addendum. Keeps spoken replies short and free of markup that
@@ -247,6 +259,8 @@ interface ActiveSession {
   pendingFinalText: string;
   ttsSeq: number;
   ending: boolean;
+  /** Consecutive synthesize() failures; reset on a successful synthesis (#1556). */
+  consecutiveTtsFailures: number;
 }
 
 export class VoiceRuntime {
@@ -332,6 +346,7 @@ export class VoiceRuntime {
         pendingFinalText: '',
         ttsSeq: 0,
         ending: false,
+        consecutiveTtsFailures: 0,
       };
       this.sessions.set(params.sessionId, session);
 
@@ -649,9 +664,34 @@ export class VoiceRuntime {
           }
           await session.transport.publishAudio(frame);
         }
+        // Healthy synthesis (including barge-in abort mid-stream) clears the streak.
+        if (!session.ending) session.consecutiveTtsFailures = 0;
       } catch (err) {
-        if (!controller.signal.aborted) {
-          this.log.warn({ sessionId: session.sessionId, err }, 'TTS synthesis failed');
+        if (controller.signal.aborted || session.ending) return;
+        session.consecutiveTtsFailures += 1;
+        const hard = isHardTtsFailure(err);
+        this.log.warn(
+          {
+            sessionId: session.sessionId,
+            err,
+            consecutiveFailures: session.consecutiveTtsFailures,
+            hard,
+          },
+          'TTS synthesis failed',
+        );
+        // Soft: tolerate a blip. Hard (auth / bad voice id) or repeated soft → end
+        // with tts_error so the console reflects it (mirrors stt_error).
+        if (hard || session.consecutiveTtsFailures >= TTS_CONSECUTIVE_FAILURE_LIMIT) {
+          this.log.error(
+            {
+              sessionId: session.sessionId,
+              err,
+              consecutiveFailures: session.consecutiveTtsFailures,
+              hard,
+            },
+            'TTS synthesis failures exceeded threshold; ending session',
+          );
+          void this.endSession(session.sessionId, 'tts_error');
         }
       } finally {
         session.activeTtsStreamIds.delete(ttsStreamId);
