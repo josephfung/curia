@@ -12,6 +12,18 @@ packages:
 # pnpm default changes.
 blockExoticSubdeps: true
 
+# Fail install if a package's trust evidence is weaker than an earlier publish
+# (e.g. previously trusted-publisher, now unsigned). Blocks compromised republishes
+# that drop provenance. Requires pnpm >=10.21.0. Ref: https://pnpm.io/settings#trustpolicy
+#
+# trustPolicyIgnoreAfter: skip the check for packages published >7 days ago — older
+# releases often predate trusted-publishing / provenance, and a prior trusted
+# prerelease/provenance publish would otherwise false-positive on the stable line
+# (chokidar@4.0.3 and pino@9.14.0 hit this on first enable). New publishes still
+# get the full no-downgrade gate within the first week.
+trustPolicy: no-downgrade
+trustPolicyIgnoreAfter: 10080
+
 # Supply-chain hardening: quarantine newly-published package versions. pnpm refuses
 # to resolve/verify any version published less than this many minutes ago, blunting
 # the "publish a malicious patch, install it within minutes" attack class.
@@ -31,6 +43,10 @@ blockExoticSubdeps: true
 # current lockfile. With the 7-day Dependabot cooldown upstream, lockfile entries are
 # effectively always far older than 24h by the time they're merged, so this rarely
 # bites in practice. Requires pnpm >=10.16.0. Ref: https://pnpm.io/settings#minimumreleaseage
+#
+# Semgrep's pnpm-minimum-release-age rule wants 10080 here; we keep 1440 deliberately
+# (see above). The Dependabot cooldown is the 7-day gate.
+# nosemgrep: package_managers.pnpm.pnpm-missing-minimum-release-age.pnpm-minimum-release-age
 minimumReleaseAge: 1440
 
 # Dependency version overrides. pnpm v10+ reads `overrides` ONLY from this file —
@@ -62,7 +78,13 @@ overrides:
   # MED/LOW CVEs from Dependabot, 2026-07-24 (#1518):
   body-parser: '>=2.3.0'                    # GHSA-v422-hmwv-36x6 (invalid limit disables size enforcement DoS)
   '@hono/node-server': '>=2.0.5'            # GHSA-frvp-7c67-39w9 (Windows serve-static path traversal via %5C); consumer is @modelcontextprotocol/sdk (^1.19.9)
-  'promptfoo>js-yaml': '>=5.2.1'            # GHSA-724g-mxrg-4qvm (!!omap quadratic DoS); targeted — js-yaml@4.x via @apidevtools/json-schema-ref-parser stays on 4.x
+  'promptfoo>js-yaml': '>=5.2.2'            # GHSA-724g-mxrg-4qvm (!!omap) + GHSA-pm4m-ph32-ghv5 (nested flow DoS); targeted — js-yaml@4.x via @apidevtools/json-schema-ref-parser stays on 4.x
+  # HIGH/MED CVEs from Scorecard + Dependabot, 2026-07-26:
+  brace-expansion: '>=5.0.8'                # GHSA-mh99-v99m-4gvg (unbounded expansion length OOM DoS); no 2.x patch exists
+  # Drop the only brace-expansion@2.x path (promptfoo→gaxios→rimraf@5→glob@10→minimatch@9).
+  # rimraf@6 uses glob@11+/minimatch@10 which consume brace-expansion@5; gaxios only needs
+  # rimraf for temp cleanup and the v6 API is compatible for that call site.
+  'gaxios>rimraf': '>=6.1.2'
 
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
