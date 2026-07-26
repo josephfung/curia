@@ -95,7 +95,7 @@ workingMemory:
 
 ### `documentWorkspace`
 
-Controls the agent document workspace — the OKF-serialized working-document store injected into task-management agents (spec §20-agent-document-workspace.md). Two independent knobs: how long ephemeral scratch documents live, and whether completed project deliverables are distilled into the knowledge graph.
+Controls the agent document workspace — the OKF-serialized working-document store injected into task-management agents ([spec 20 — Agent Document Workspace](../specs/20-agent-document-workspace.md)). Two independent knobs: how long ephemeral scratch documents live, and whether completed project deliverables are distilled into the knowledge graph.
 
 ```yaml
 documentWorkspace:
