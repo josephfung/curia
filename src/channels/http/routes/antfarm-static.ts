@@ -6,15 +6,9 @@
 
 import type { FastifyPluginAsync } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { join, resolve, relative, isAbsolute } from 'node:path';
+import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { stat } from 'node:fs/promises';
-
-/** True when resolvedAbs is outside rootDir (path-traversal / absolute escape). */
-function escapesRoot(rootDir: string, resolvedAbs: string): boolean {
-  const rel = relative(rootDir, resolvedAbs);
-  return rel === '' ? false : rel.startsWith('..') || isAbsolute(rel);
-}
+import { containedStaticFile } from './static-path-guard.js';
 
 export const antfarmStaticRoutes: FastifyPluginAsync = async (app) => {
   const antfarmDist = join(process.cwd(), 'apps', 'antfarm', 'dist');
@@ -42,20 +36,11 @@ export const antfarmStaticRoutes: FastifyPluginAsync = async (app) => {
     const urlPath = req.params['*'] ?? '';
 
     if (urlPath) {
-      const absPath = resolve(antfarmDist, urlPath);
-      if (escapesRoot(antfarmDist, absPath)) {
-        return reply.sendFile('index.html', antfarmDist);
-      }
-      try {
-        const s = await stat(absPath);
-        if (s.isFile()) {
-          // Serve via the containment-checked relative path + explicit root — never the
-          // raw URL param — so sendFile cannot be pointed outside antfarmDist.
-          const safeRel = relative(antfarmDist, absPath);
-          return reply.sendFile(safeRel, antfarmDist);
-        }
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      // Lexical + realpath containment (rejects .. and symlink escapes). Null means
+      // missing / not a file / escape — all become SPA fallback rather than probing.
+      const contained = await containedStaticFile(antfarmDist, urlPath);
+      if (contained) {
+        return reply.sendFile(contained.safeRel, contained.rootReal);
       }
     }
 
