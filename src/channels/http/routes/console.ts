@@ -11,9 +11,15 @@
 
 import type { FastifyPluginAsync } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { join, resolve, relative } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
+
+/** True when resolvedAbs is outside rootDir (path-traversal / absolute escape). */
+function escapesRoot(rootDir: string, resolvedAbs: string): boolean {
+  const rel = relative(rootDir, resolvedAbs);
+  return rel === '' ? false : rel.startsWith('..') || isAbsolute(rel);
+}
 
 export const consoleRoutes: FastifyPluginAsync = async (app) => {
   const consoleDist = join(process.cwd(), 'apps', 'console', 'dist');
@@ -48,15 +54,20 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
     // Try to serve a real file (assets, favicon, manifest, etc.).
     if (urlPath) {
       // Normalize the path and reject anything that escapes consoleDist (e.g. "../../etc").
-      // path.resolve collapses ".." segments; path.relative confirms containment.
+      // path.resolve collapses ".." segments; path.relative + isAbsolute confirm containment.
       const absPath = resolve(consoleDist, urlPath);
-      if (relative(consoleDist, absPath).startsWith('..')) {
+      if (escapesRoot(consoleDist, absPath)) {
         // Path traversal attempt — treat as a SPA route rather than probing the filesystem.
-        return reply.sendFile('index.html');
+        return reply.sendFile('index.html', consoleDist);
       }
       try {
         const s = await stat(absPath);
-        if (s.isFile()) return reply.sendFile(urlPath);
+        if (s.isFile()) {
+          // Serve via the containment-checked relative path + explicit root — never the
+          // raw URL param — so sendFile cannot be pointed outside consoleDist.
+          const safeRel = relative(consoleDist, absPath);
+          return reply.sendFile(safeRel, consoleDist);
+        }
       } catch (err) {
         // ENOENT = path doesn't exist in dist/ — expected, fall through to SPA fallback.
         // Any other error (EACCES, EMFILE, etc.) is a real filesystem problem; re-throw
@@ -66,6 +77,6 @@ export const consoleRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // Serve index.html for root and all client-side routes.
-    return reply.sendFile('index.html');
+    return reply.sendFile('index.html', consoleDist);
   });
 };

@@ -6,9 +6,15 @@
 
 import type { FastifyPluginAsync } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { join, resolve, relative } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
+
+/** True when resolvedAbs is outside rootDir (path-traversal / absolute escape). */
+function escapesRoot(rootDir: string, resolvedAbs: string): boolean {
+  const rel = relative(rootDir, resolvedAbs);
+  return rel === '' ? false : rel.startsWith('..') || isAbsolute(rel);
+}
 
 export const antfarmStaticRoutes: FastifyPluginAsync = async (app) => {
   const antfarmDist = join(process.cwd(), 'apps', 'antfarm', 'dist');
@@ -37,12 +43,17 @@ export const antfarmStaticRoutes: FastifyPluginAsync = async (app) => {
 
     if (urlPath) {
       const absPath = resolve(antfarmDist, urlPath);
-      if (relative(antfarmDist, absPath).startsWith('..')) {
+      if (escapesRoot(antfarmDist, absPath)) {
         return reply.sendFile('index.html', antfarmDist);
       }
       try {
         const s = await stat(absPath);
-        if (s.isFile()) return reply.sendFile(urlPath, antfarmDist);
+        if (s.isFile()) {
+          // Serve via the containment-checked relative path + explicit root — never the
+          // raw URL param — so sendFile cannot be pointed outside antfarmDist.
+          const safeRel = relative(antfarmDist, absPath);
+          return reply.sendFile(safeRel, antfarmDist);
+        }
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
       }
