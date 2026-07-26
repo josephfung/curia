@@ -201,7 +201,7 @@ Tools, skills, and agents are not enabled merely by existing on disk — they ar
 
 Lifecycle is driven via the registry HTTP routes (`src/channels/http/routes/registry.ts`), where `:kind` ∈ `{tools, skills, agents}`:
 
-```
+```text
 GET    /api/registry/tools
 GET    /api/registry/skills
 GET    /api/registry/agents
