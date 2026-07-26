@@ -104,6 +104,7 @@ function makeRuntime(overrides: {
   deleteRoom?: (roomName: string) => Promise<void>;
   workingMemory?: WorkingMemory;
   timezone?: string;
+  historyReadTimeoutMs?: number;
   /** Late-bound coordinator bridge (tools + context providers), applied via configureTools(). */
   bridge?: VoiceToolBridge;
 }) {
@@ -133,6 +134,7 @@ function makeRuntime(overrides: {
     deleteRoom: overrides.deleteRoom,
     workingMemory: overrides.workingMemory,
     timezone: overrides.timezone,
+    historyReadTimeoutMs: overrides.historyReadTimeoutMs,
   });
   if (overrides.bridge) runtime.configureTools(overrides.bridge);
   return { runtime, bus, events, stt, transport, tts, store };
@@ -484,6 +486,95 @@ describe('VoiceRuntime brain/context parity (#1551)', () => {
       { role: 'user', content: 'still with me' },
       { role: 'assistant', content: 'Yes, still here.' },
     ]);
+  });
+
+  it('survives a throwing roster provider and an invalid timezone (slimmer prompt, turn completes)', async () => {
+    const llm = new FakeStreamProvider([reply('Still speaking.')]);
+    const bridge: VoiceToolBridge = {
+      resolveVoiceTools: () => [],
+      invokeTool: async () => ({ content: 'ok' }),
+      identityBlock: () => '## Identity & Communication Contract\nYou are Vera, Chief of Staff.',
+      specialistRoster: () => {
+        throw new Error('registry down');
+      },
+    };
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      timezone: 'Not/AZone',
+      bridge,
+    });
+    await start(runtime, 'sp4');
+    stt.emit({ text: 'are you still there', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('sp4');
+
+    const system = llm.seenMessages[0]![0]!;
+    const systemText = typeof system.content === 'string' ? system.content : '';
+    // Healthy blocks still apply; the failing ones are omitted, not fatal.
+    expect(systemText).toContain(VOICE_SYSTEM_ADDENDUM);
+    expect(systemText).toContain('You are Vera, Chief of Staff.');
+    expect(systemText).not.toContain('## Available Specialists');
+    expect(systemText).not.toContain('## Current Date & Time');
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
+  });
+
+  it('prefers in-process history when the store reads back empty after failed writes', async () => {
+    // addTurn fails warn-only, so a clean read returns [] while session.history
+    // still holds the conversation — the turn must not go amnesiac.
+    const failingWrites = {
+      addTurn: vi.fn(async () => {
+        throw new Error('insert failed');
+      }),
+      getHistory: vi.fn(async () => []),
+      purgeExpired: vi.fn(async () => 0),
+    } as unknown as WorkingMemory;
+
+    const llm = new FakeStreamProvider([reply('First answer.'), reply('Second answer.')]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: failingWrites });
+    await start(runtime, 'wm4');
+
+    stt.emit({ text: 'first question', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('wm4');
+    stt.emit({ text: 'second question', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('wm4');
+
+    const second = llm.seenMessages[1]!;
+    const contents = textContents(second);
+    expect(contents).toContain('first question');
+    expect(contents).toContain('First answer.');
+    expect(second[second.length - 1]!.content).toBe('second question');
+  });
+
+  it('falls back to in-process history when the working_memory read exceeds the voice deadline', async () => {
+    const stalled = {
+      addTurn: vi.fn(async () => {}),
+      // Never settles — only the deadline can unblock the turn.
+      getHistory: vi.fn(() => new Promise(() => {})),
+      purgeExpired: vi.fn(async () => 0),
+    } as unknown as WorkingMemory;
+
+    const llm = new FakeStreamProvider([reply('First answer.'), reply('Second answer.')]);
+    const { runtime, stt, events } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory: stalled,
+      historyReadTimeoutMs: 40,
+    });
+    await start(runtime, 'wm5');
+
+    stt.emit({ text: 'first question', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('wm5');
+    stt.emit({ text: 'second question', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('wm5');
+
+    // Both turns completed despite the stalled store...
+    expect(events.filter(e => e.type === 'inbound.message')).toHaveLength(2);
+    // ...and turn 2 still carried turn 1 via the in-process fallback.
+    const second = llm.seenMessages[1]!;
+    const contents = textContents(second);
+    expect(contents).toContain('first question');
+    expect(contents).toContain('First answer.');
+    expect(second[second.length - 1]!.content).toBe('second question');
   });
 
   it('falls back to in-process history when the working_memory read fails', async () => {
