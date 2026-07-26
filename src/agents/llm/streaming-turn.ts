@@ -1,10 +1,9 @@
-// streaming-turn.ts — shared streaming tool-loop primitive (#1552).
+// streaming-turn.ts — streaming tool-loop primitive (#1552).
 //
-// Target end state (issue #1552): a provider-agnostic streaming turn that *both*
-// VoiceTurnRunner and (optionally later) AgentRuntime.handleTask delegate to —
-// **not** voice calling handleTask. Text channels stay on non-streaming chat()
-// until explicitly opted in; this module is the stream() + tool_use / tool_result
-// assembly path.
+// What shipped: VoiceTurnRunner delegates stream()+tool assembly here. Text
+// AgentRuntime.handleTask still owns its own non-streaming chat() tool loop —
+// convergence requires an explicit "text goes streaming" decision (#1563), not
+// just finishing this extraction. Do **not** fold voice into handleTask.
 //
 // Owns: provider.stream() consume, AbortSignal cancel, tool_use / tool_result
 // message assembly (via tool-loop-messages.ts), round cap, invokeTool sequencing.
@@ -27,7 +26,7 @@
 // through sanitizeOutput on either path. sanitizeOutput is for untrusted skill
 // output before it re-enters the model context — ExecutionLayer.invoke already
 // applies it. User inbound is sanitized at channel boundaries where applicable.
-// Cross-link: src/channels/voice/turn-runner.ts, src/agents/runtime.ts.
+// Cross-link: src/channels/voice/turn-runner.ts, src/agents/runtime.ts, #1563.
 
 import type { AgentError } from '../../errors/types.js';
 import type { Logger } from '../../logger.js';
@@ -93,13 +92,21 @@ export type StreamingTurnStopReason =
 
 export interface StreamingTurnResult {
   /**
-   * Preferred assistant text for this turn: message_end.content when present,
-   * otherwise accumulated text_delta content.
+   * On `message_end`: the model's terminal `content` **as-is** (may be empty).
+   * Callers that transform deltas (e.g. voice sentence-chunking / whitespace
+   * join) MUST fall back to their own delivered text when this is empty — do
+   * not assume `streamedText` matches what was spoken or persisted.
+   * On other stop reasons: accumulated `streamedText`.
    */
   finalText: string;
   /** Concatenation of text_delta chunks observed this turn (may be empty). */
   streamedText: string;
-  /** Working transcript including any tool_use / tool_result pairs appended. */
+  /**
+   * Working transcript including tool_use / tool_result pairs.
+   * On `message_end`, also includes a final assistant text turn when there is
+   * non-empty terminal content, otherwise `streamedText` when non-empty — so
+   * consumers can treat `messages` as a complete conversation transcript.
+   */
   messages: Message[];
   toolRounds: number;
   aborted: boolean;
@@ -229,10 +236,18 @@ export async function runStreamingToolLoop(
     }
 
     if (messageEnd) {
-      const finalText =
+      // Append the terminal assistant reply so `messages` is a complete
+      // transcript for future consumers (voice rebuilds history from finalText
+      // / spokenText and ignores this field today).
+      const transcriptReply =
         messageEnd.content.length > 0 ? messageEnd.content : streamedText;
+      if (transcriptReply.length > 0) {
+        workingMessages.push({ role: 'assistant', content: transcriptReply });
+      }
       return {
-        finalText,
+        // Preserve empty terminal content — callers decide their own fallback
+        // (voice uses spokenText, not streamedText).
+        finalText: messageEnd.content,
         streamedText,
         messages: workingMessages,
         toolRounds,
