@@ -48,6 +48,12 @@ const MAX_HISTORY_MESSAGES = 8;
  * configured on the shared store) condenses older turns before this cap bites.
  */
 const VOICE_HISTORY_MAX_TURNS = 20;
+/**
+ * Deadline for the per-turn working_memory history read. Pool checkout timeouts
+ * do not bound the query itself — a stalled read must not stall the spoken turn,
+ * so on expiry the turn falls back to in-process history.
+ */
+const DEFAULT_HISTORY_READ_TIMEOUT_MS = 1_000;
 /** Ignore tiny interim blobs (echo / noise) when deciding barge-in. */
 const BARGE_IN_MIN_CHARS = 3;
 /** Ignore low-confidence interims when the provider reports confidence. */
@@ -186,6 +192,11 @@ export interface VoiceRuntimeConfig {
    * un-anchored for every voice tool call (#1551). Omitted → no time block.
    */
   timezone?: string;
+  /**
+   * Deadline (ms) for the per-turn working_memory history read; on expiry the
+   * turn falls back to in-process history. Default 1000ms.
+   */
+  historyReadTimeoutMs?: number;
 }
 
 /**
@@ -477,26 +488,56 @@ export class VoiceRuntime {
   /**
    * Load spoken-turn context from working_memory — the same rows console chat
    * history reads — so persistence and LLM context are single-sourced (#1551).
-   * Falls back to the in-process session history when no store is configured or
-   * the read fails: a degraded slim turn beats failing the call. Callers invoke
+   * Falls back to the in-process session history when no store is configured,
+   * the read fails or exceeds its deadline, or the store reads back empty while
+   * the in-process copy is not (a prior addTurn write failed warn-only): a
+   * degraded slim turn beats failing — or stalling — the call. Callers invoke
    * this BEFORE persisting the current utterance, so the returned turns are
    * strictly prior history.
    */
   private async loadTurnHistory(session: ActiveSession): Promise<Message[]> {
     if (!this.config.workingMemory) return [...session.history];
-    try {
-      const turns = await this.config.workingMemory.getHistory(
-        session.conversationId,
-        VOICE_HISTORY_AGENT_ID,
-        { maxTurns: VOICE_HISTORY_MAX_TURNS },
+    const timeoutMs = this.config.historyReadTimeoutMs ?? DEFAULT_HISTORY_READ_TIMEOUT_MS;
+    const read = this.config.workingMemory.getHistory(
+      session.conversationId,
+      VOICE_HISTORY_AGENT_ID,
+      { maxTurns: VOICE_HISTORY_MAX_TURNS },
+    );
+    // A read that loses the deadline race settles later with no awaiter —
+    // absorb its eventual rejection so it cannot become an unhandled rejection.
+    read.catch(err => {
+      this.log.debug(
+        { sessionId: session.sessionId, err },
+        'late working-memory history read failure (turn already proceeded)',
       );
-      return turns.map(t => ({ role: t.role, content: t.content }));
+    });
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const outcome = await Promise.race([
+        read,
+        new Promise<'timeout'>(resolve => {
+          timer = setTimeout(() => resolve('timeout'), timeoutMs);
+        }),
+      ]);
+      if (outcome === 'timeout') {
+        this.log.warn(
+          { sessionId: session.sessionId, timeoutMs },
+          'working-memory history read exceeded the voice deadline; falling back to in-process history',
+        );
+        return [...session.history];
+      }
+      // A prior addTurn may have failed (warn-only), leaving the store behind
+      // the in-process copy. Prefer the fallback over starting the turn amnesiac.
+      if (outcome.length === 0 && session.history.length > 0) return [...session.history];
+      return outcome.map(t => ({ role: t.role, content: t.content }));
     } catch (err) {
       this.log.warn(
         { sessionId: session.sessionId, err },
         'failed to load voice history from working memory; falling back to in-process history',
       );
       return [...session.history];
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 
