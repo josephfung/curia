@@ -96,12 +96,25 @@ voice reuses that for session minting (and optional LiveKit webhooks).
   provider, tool definitions, and bus `tool.invoke` / autonomy checks where
   practical. A later refactor extracts a shared streaming turn primitive that
   both paths delegate to — **not** a literal fold into `handleTask`
-  (tracked: #1552; brain/context + history read model: #1551).
-- **Phase 1 voice "brain" is deliberately slim:** spoken turns receive the
-  voice-mode addendum + last-N in-memory turns + coordinator tools — **not**
-  the full coordinator system prompt, office persona injection, KG/entity
-  enrichment, or DB-backed working-memory reload. Sufficient for quick spoken
-  Q&A; closing the gap is a follow-up, not an accidental omission.
+  (tracked: #1552; brain/context + history read model landed via #1551).
+- **Voice "brain" is a curated subset of the coordinator's context (#1551):**
+  spoken turns assemble the office identity/persona block, the voice-mode
+  addendum (spoken brevity), an honest-negative tool-result policy (a failed
+  check is spoken as "couldn't check", never narrated as an empty result),
+  delegation guidance + the specialist roster (so calendar / contacts /
+  research stay reachable from voice), and a per-turn date/timezone block —
+  plus coordinator tools. Deliberately still **not** the coordinator's full
+  YAML system prompt (text-channel mechanics that hurt the spoken latency
+  budget without helping spoken Q&A) or KG/sender enrichment (precomputed on
+  the dispatcher path voice bypasses; contacts delegation covers it).
+- **Voice history is single-sourced from `working_memory` (#1551):** each
+  spoken turn reloads the `voice:<sessionId>` conversation (agent id
+  `coordinator` — the same rows console chat history reads) before the LLM
+  call; the in-process last-N window is only a fallback when the store is
+  absent or a read fails. Turns persisted mid-call therefore survive a process
+  restart in console history; a restart still ends the live call (rooms are
+  ephemeral, no auto-rejoin) and a reconnect starts a new `voice:<id>`
+  conversation by design.
 - **Outbound judge parity with web chat:** spoken TTS bypasses
   `OutboundGateway` / Stage-2 judge the same way principal console text does
   (web chat never calls the gateway). Tool calls from a live call still go

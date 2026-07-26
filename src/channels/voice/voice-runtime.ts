@@ -10,7 +10,13 @@
 //
 // Skills: tools default to empty at construction (bootstrap order — ExecutionLayer
 // and coordinator pins land later). Call `configureTools()` once the coordinator
-// tool set + ExecutionLayer.invoke are available. See ADR-037 §6.
+// tool set + ExecutionLayer.invoke are available; the same bridge carries the
+// coordinator context providers (identity block, specialist roster) for spoken-
+// turn brain parity (#1551). See ADR-037 §6.
+//
+// History: spoken-turn context reloads from working_memory (the same rows the
+// console chat history endpoint reads) each turn; the in-process session history
+// is only a fallback when the store is absent or the read fails (#1551).
 
 import type { EventBus } from '../../bus/bus.js';
 import { createInboundMessage, createVoiceSessionEnded } from '../../bus/events.js';
@@ -18,6 +24,7 @@ import type { Logger } from '../../logger.js';
 import type { LLMProvider, Message, ToolCall, ToolDefinition } from '../../agents/llm/provider.js';
 import type { WorkingMemory } from '../../memory/working-memory.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
+import { formatTimeContextBlock } from '../../time/time-context.js';
 import type { AudioTransport } from './audio-transport.js';
 import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from './speech/types.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
@@ -27,8 +34,20 @@ const DEFAULT_INBOUND_SAMPLE_RATE = 16000;
 const DEFAULT_PUBLISH_SAMPLE_RATE = 24000;
 /** Console chat and voice share the same synthetic principal sender id. */
 const DEFAULT_SENDER_ID = 'ceo-web-user';
-/** How many messages (user + assistant) of history to keep per session. */
+/**
+ * How many messages (user + assistant) of in-process history to keep per session.
+ * This is the FALLBACK context source only — spoken turns load history from
+ * working_memory when it is configured (#1551); the in-process copy covers
+ * store-less deployments/tests and mid-call DB read failures.
+ */
 const MAX_HISTORY_MESSAGES = 8;
+/**
+ * Max working_memory turns reloaded into a spoken turn's context. Spoken turns
+ * are short (1-3 sentences), so this stays well inside the latency budget while
+ * giving far more continuity than the in-process window. Summarization (when
+ * configured on the shared store) condenses older turns before this cap bites.
+ */
+const VOICE_HISTORY_MAX_TURNS = 20;
 /** Ignore tiny interim blobs (echo / noise) when deciding barge-in. */
 const BARGE_IN_MIN_CHARS = 3;
 /** Ignore low-confidence interims when the provider reports confidence. */
@@ -40,18 +59,78 @@ const DEFAULT_MAX_UTTERANCE_BYTES = 102_400;
 
 /**
  * Voice-mode system addendum. Keeps spoken replies short and free of markup that
- * makes no sense read aloud. Prepended as a system message on every turn.
+ * makes no sense read aloud. Always part of the spoken-turn system prompt.
  *
- * Phase 1 deliberate non-goal: this is NOT the coordinator's full system prompt /
- * persona / KG enrichment / working-memory reload. Spoken turns are a slim
- * Q&A loop (addendum + last N in-memory turns + tools). See ADR-037 Consequences
- * and docs/wip/2026-07-25-voice-channel-design.md §3.7 / §"Phase 1 brain".
+ * Brain stance (#1551): spoken turns get a curated subset of the coordinator's
+ * context — office identity/persona block, specialist roster + delegation
+ * guidance, and a fresh date/time block — assembled by buildVoiceSystemPrompt().
+ * They deliberately do NOT get the coordinator's full YAML system prompt or
+ * KG/sender enrichment (latency + text-channel content that makes no sense
+ * spoken). See ADR-037 Consequences and
+ * docs/wip/2026-07-25-voice-channel-design.md §"Phase 1 brain".
  */
 export const VOICE_SYSTEM_ADDENDUM =
   'You are speaking to the principal in a live voice call. Reply in a natural, ' +
   'conversational spoken style: 1-3 short sentences, no markdown, no bullet lists, ' +
   'no tables, no code blocks, and no emoji. Spell out anything that must be heard ' +
   'clearly. Keep it brief — the user can always ask for more.';
+
+/**
+ * Honest-negative policy for spoken tool results. A failed or errored check must
+ * be narrated as "couldn't check", never as a confident empty result — "your
+ * calendar is clear" after a failed lookup is a trust hazard the principal may
+ * act on (#1551).
+ */
+export const VOICE_TOOL_RESULT_POLICY =
+  'When a tool call or delegation fails, errors out, or cannot complete, say plainly ' +
+  'that you could not check — for example "I couldn\'t reach your calendar just now" — ' +
+  'and offer to try again. Never present a failed or incomplete lookup as a definitive ' +
+  'answer. Only report an empty result ("nothing on your calendar tomorrow") when the ' +
+  'check succeeded and genuinely returned no items.';
+
+/**
+ * Delegation guidance for spoken turns. The slim Phase 1 prompt never told the
+ * voice model that specialist-delegated domains (calendar, contacts, research,
+ * the principal's inbox) are reached via the delegate tool, so those domains
+ * were effectively unreachable from voice (#1551). Included only when a
+ * specialist roster is available from the bridge.
+ */
+export const VOICE_DELEGATION_GUIDANCE =
+  'Many requests are handled by delegating to a specialist with the delegate tool: ' +
+  'calendar and scheduling, contacts and people lookups, research, and the ' +
+  'principal\'s inbox all belong to the specialists listed below. When a request ' +
+  'falls in a specialist\'s domain, delegate rather than answering from memory or ' +
+  'guessing. Resolve pronouns before delegating: "my calendar" spoken by the ' +
+  'principal means the principal\'s calendar. Fold the specialist\'s result into ' +
+  'your own short spoken answer — never mention specialists, delegation, or tools ' +
+  'out loud.';
+
+/**
+ * Assemble the per-turn system prompt for a spoken turn. Static sections come
+ * first and the (per-minute changing) time block last, so provider prompt
+ * caching keeps a stable prefix across turns. Pure — callers resolve/guard the
+ * dynamic parts (identity compile, roster lookup, time formatting) themselves.
+ */
+export function buildVoiceSystemPrompt(parts: {
+  /** Compiled office identity/persona block; omitted when null/empty. */
+  identityBlock?: string | null;
+  /** Specialist roster body ("- @name: description" lines); enables delegation guidance. */
+  specialistRoster?: string | null;
+  /** Pre-formatted "## Current Date & Time" block; omitted when null/empty. */
+  timeContextBlock?: string | null;
+}): string {
+  const sections: string[] = [];
+  if (parts.identityBlock) sections.push(parts.identityBlock);
+  sections.push(VOICE_SYSTEM_ADDENDUM);
+  sections.push(VOICE_TOOL_RESULT_POLICY);
+  if (parts.specialistRoster) {
+    sections.push(
+      VOICE_DELEGATION_GUIDANCE + '\n\n## Available Specialists\n' + parts.specialistRoster,
+    );
+  }
+  if (parts.timeContextBlock) sections.push(parts.timeContextBlock);
+  return sections.join('\n\n');
+}
 
 /** Transport optionally advertises its negotiated sample rates for STT/TTS. */
 type RateAwareTransport = AudioTransport & {
@@ -101,15 +180,33 @@ export interface VoiceRuntimeConfig {
    * Mirrors the dispatcher `maxMessageBytes` guard (voice bypasses the dispatcher).
    */
   maxUtteranceBytes?: number;
+  /**
+   * IANA timezone for the per-turn date/time block (same block the coordinator
+   * gets — formatTimeContextBlock). Without it, "tomorrow / next week" is
+   * un-anchored for every voice tool call (#1551). Omitted → no time block.
+   */
+  timezone?: string;
 }
 
-/** Late-bound tool wiring — set after coordinator pins + ExecutionLayer exist. */
+/**
+ * Late-bound coordinator wiring — set after coordinator pins + ExecutionLayer
+ * exist. Besides tools, the bridge carries the coordinator context providers
+ * for spoken-turn brain parity (#1551); all are optional so partial wiring
+ * (and older tests) degrade to the slim prompt rather than failing.
+ */
 export interface VoiceToolBridge {
   resolveVoiceTools: () => ToolDefinition[];
   invokeTool: (
     call: ToolCall,
     ctx: { conversationId: string; sessionId: string },
   ) => Promise<{ content: string; is_error?: boolean }>;
+  /**
+   * Per-turn compiled office identity/persona block (hot-reloadable, same as
+   * AgentRuntime's preamble). May throw — the runtime guards and omits.
+   */
+  identityBlock?: () => string | null;
+  /** Specialist roster body for the "## Available Specialists" block; null → no delegation guidance. */
+  specialistRoster?: () => string | null;
 }
 
 interface StartVoiceSessionParams {
@@ -339,6 +436,70 @@ export class VoiceRuntime {
       .then(() => this.runUserTurn(session, utterance));
   }
 
+  /**
+   * Resolve the dynamic prompt parts (guarding each — a compile failure or bad
+   * timezone must degrade to a slimmer prompt, never abort the spoken turn) and
+   * assemble the per-turn system prompt. Mirrors AgentRuntime.processTask's
+   * guard-and-omit pattern for the same blocks.
+   */
+  private buildTurnSystemPrompt(): string {
+    let identityBlock: string | null = null;
+    if (this.toolBridge?.identityBlock) {
+      try {
+        identityBlock = this.toolBridge.identityBlock();
+      } catch (err) {
+        this.log.error({ err }, 'Failed to compile identity block for voice turn — identity omitted this turn');
+      }
+    }
+
+    let specialistRoster: string | null = null;
+    if (this.toolBridge?.specialistRoster) {
+      try {
+        specialistRoster = this.toolBridge.specialistRoster();
+      } catch (err) {
+        this.log.error({ err }, 'Failed to resolve specialist roster for voice turn — delegation guidance omitted this turn');
+      }
+    }
+
+    let timeContextBlock: string | null = null;
+    const timezone = this.config.timezone?.trim();
+    if (timezone) {
+      try {
+        timeContextBlock = formatTimeContextBlock(timezone, new Date());
+      } catch (err) {
+        this.log.error({ err, timezone }, 'formatTimeContextBlock failed — time context not injected into voice turn; check TIMEZONE config');
+      }
+    }
+
+    return buildVoiceSystemPrompt({ identityBlock, specialistRoster, timeContextBlock });
+  }
+
+  /**
+   * Load spoken-turn context from working_memory — the same rows console chat
+   * history reads — so persistence and LLM context are single-sourced (#1551).
+   * Falls back to the in-process session history when no store is configured or
+   * the read fails: a degraded slim turn beats failing the call. Callers invoke
+   * this BEFORE persisting the current utterance, so the returned turns are
+   * strictly prior history.
+   */
+  private async loadTurnHistory(session: ActiveSession): Promise<Message[]> {
+    if (!this.config.workingMemory) return [...session.history];
+    try {
+      const turns = await this.config.workingMemory.getHistory(
+        session.conversationId,
+        VOICE_HISTORY_AGENT_ID,
+        { maxTurns: VOICE_HISTORY_MAX_TURNS },
+      );
+      return turns.map(t => ({ role: t.role, content: t.content }));
+    } catch (err) {
+      this.log.warn(
+        { sessionId: session.sessionId, err },
+        'failed to load voice history from working memory; falling back to in-process history',
+      );
+      return [...session.history];
+    }
+  }
+
   private async runUserTurn(session: ActiveSession, utterance: string): Promise<void> {
     if (session.ending) return;
 
@@ -357,6 +518,12 @@ export class VoiceRuntime {
     } catch (err) {
       this.log.warn({ sessionId: session.sessionId, err }, 'failed to publish voice inbound.message');
     }
+
+    // Single authoritative history (#1551): reload prior turns from working_memory
+    // BEFORE persisting this utterance, so the current user message is appended
+    // to the LLM context exactly once (turns are serialized per session, so the
+    // read cannot race the write below).
+    const priorHistory = await this.loadTurnHistory(session);
 
     // Persist user turn to working_memory so console history can show it.
     if (this.config.workingMemory) {
@@ -405,15 +572,17 @@ export class VoiceRuntime {
 
     const userMessage: Message = { role: 'user', content: utterance };
     // Retain the user request even if barge-in aborts the assistant reply —
-    // otherwise the next turn loses conversational continuity.
+    // otherwise the next turn loses conversational continuity. The in-process
+    // copy is only the fallback context source (see loadTurnHistory).
     session.history.push(userMessage);
     if (session.history.length > MAX_HISTORY_MESSAGES) {
       session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
     }
 
     const messages: Message[] = [
-      { role: 'system', content: VOICE_SYSTEM_ADDENDUM },
-      ...session.history,
+      { role: 'system', content: this.buildTurnSystemPrompt() },
+      ...priorHistory,
+      userMessage,
     ];
 
     const onSpeechText = async (sentence: string, meta: { streamId: string }): Promise<void> => {
