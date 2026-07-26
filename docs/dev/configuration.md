@@ -18,10 +18,18 @@ Controls which channel adapters activate at startup.
 ```yaml
 channels:
   cli:
-    enabled: true   # Set to false to disable the terminal CLI entirely
+    enabled: true             # Set to false to disable the terminal CLI entirely
+  max_message_bytes: 102400   # 100KB — inbound messages larger than this are rejected before routing
+  slack:
+    allowed_channel_ids: []   # Optional allowlist of Slack channel ids (C…) for @mentions.
+                              # Empty = all channels the bot is in. DMs are never filtered by this list.
+  voice:
+    model: ""                 # Optional concrete model for voice turns. Empty = the fast tier.
+    livekit_management_url: "http://livekit:7880"  # server→LiveKit RoomService (DeleteRoom / admin).
+                              # Distinct from the browser signaling URL (wss://…) set in Settings → Channels → Voice.
 ```
 
-Signal and email are **not** controlled here — they are governed by the channel registry (install/enable lifecycle). Enable them via **Settings → Channels** in the console once their credentials are in the vault. See [setup.md](setup.md) for details.
+The credential-bearing channels — **email, Signal, Slack, SMS, and Voice** — are **not** activated here. They are governed by the channel registry (install/enable lifecycle): enable them via **Settings → Channels** in the console once their credentials are in the vault. The keys above are only *tuning* knobs for channels that are already enabled. Per-channel **trust, unknown-sender policy, and threading** live in `config/channel-trust.yaml` (see [Channel trust and policy](#channel-trust-and-policy)). See [setup.md](setup.md) for enablement details.
 
 ---
 
@@ -217,10 +225,10 @@ Changes take effect on restart.
 
 Skills, agents, and channels are not enabled simply by existing on disk — they are tracked in three registry tables (`tool_registry`, `agent_registry`, `channel_registry`) with an explicit **install → enable** lifecycle.
 
-- **Disabled by default.** A newly added skill or agent is registered at startup but starts **disabled**. It must be enabled before it can be loaded. Toggleable channels (`email`, `signal`) follow the same rule: seeding credentials does **not** install or enable them — use **Settings → Channels** (install, then enable, then restart).
+- **Disabled by default.** A newly added skill or agent is registered at startup but starts **disabled**. It must be enabled before it can be loaded. Toggleable channels (`email`, `signal`, `slack`, `sms`, `voice`) follow the same rule: seeding credentials does **not** install or enable them — use **Settings → Channels** (install, then enable, then restart).
 - **Restart-based enforcement.** Enabled items are loaded/registered at startup; disabled items are skipped. Changing enable state takes effect on the next restart.
 - **Secret gating (`install.requires_secrets`).** A skill manifest may declare `install: { requires_secrets: [...] }` — vault secret keys that must already exist before the registry will install or enable the skill. `RegistryService` rejects install/enable until every declared key is present in the vault. (`web-search` declares `["tavily_api_key"]`.)
-- **Always-on channels.** The `http` and `cli` channels have `isToggleable: false` — they always start and cannot be disabled, an operator-lockout safeguard. `email` and `signal` are toggleable and require explicit install→enable; outbound egress is gated on the same registry state as inbound adapters.
+- **Always-on channels.** The `http` and `cli` channels have `isToggleable: false` — they always start and cannot be disabled, an operator-lockout safeguard. `email`, `signal`, `slack`, `sms`, and `voice` are toggleable and require explicit install→enable; outbound egress is gated on the same registry state as inbound adapters.
 
 Lifecycle is driven via the registry HTTP API (or the admin UI):
 
@@ -243,6 +251,28 @@ channel.<name>.<field>
 ```
 
 For example, the email channel's Nylas API key is stored under `channel.email.nylas_api_key`. The catalog (`src/channels/catalog.ts`) declares each channel's `credentialFields` and `requiredSecretKeys`; a `ChannelCredentialField` may also name an `envFallback` for bootstrap. See [Channels spec](../specs/04-channels.md) for the full catalog/registry model.
+
+---
+
+## Channel trust and policy
+
+`config/channel-trust.yaml` sets each channel's **security posture** — separate from the vault (credentials) and the registry (enablement). Every channel gets a block with three keys:
+
+```yaml
+channels:
+  slack:
+    trust: medium          # high | medium | low — caps the sensitivity of actions this channel can drive
+    unknown_sender: allow  # allow | ignore — what to do with messages from unrecognized senders
+    threaded: true         # true = native threads; false = enable context bridging
+```
+
+| Key | Values | Meaning |
+|---|---|---|
+| `trust` | `high`, `medium`, `low` | Caps the max sensitivity of actions a message on this channel can drive. Combined with the sender's contact tier and injection-risk score into the message trust score. Defaults to `low` when unset. |
+| `unknown_sender` | `allow`, `ignore` | `allow` routes messages from unrecognized senders to the coordinator in low-trust mode (auto-created as a `tier=unknown` contact); `ignore` silently drops them. |
+| `threaded` | `true`, `false` | `true` when the platform has native threads (email, Slack). `false` enables context bridging for channels without a thread reference (Signal, SMS, CLI, HTTP). Voice is a live call, so bridging does not apply. |
+
+Current defaults: CLI, Signal, and Voice are `high`; HTTP, Slack, and SMS are `medium`; email is `low`. HTTP and Voice use `unknown_sender: ignore`; the rest `allow`. (`web` — the authenticated console — is `high`.)
 
 ---
 
@@ -297,7 +327,7 @@ configured. Create it when you add the first server.
 ```yaml
 servers:
   - name: gdrive
-    transport: stdio          # "stdio" spawns a local process; "http" connects to a StreamableHTTP endpoint
+    transport: stdio          # "stdio" spawns a local process; "sse" connects to a remote SSE endpoint
     command: npx
     args: ["-y", "@modelcontextprotocol/server-gdrive"]
     action_risk: low          # required — none | low | medium | high | critical

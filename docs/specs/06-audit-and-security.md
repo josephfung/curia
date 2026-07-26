@@ -45,6 +45,7 @@ written to the audit log:
 | `outbound.suppressed_duplicate` | system | A duplicate agent-response→outbound was suppressed because a human-facing reply already shipped for the routing task (reason `'human_reply_already_sent'`). See [spec 05](05-error-recovery.md). |
 | `channel.poll` | channel | Emitted once per email poll cycle for operator visibility. See [spec 04](04-channels.md). |
 | `channel.stalled` | channel | Watchdog event when no successful poll completes within `5 × pollingIntervalMs` (at most once per adapter lifecycle). See [spec 04](04-channels.md). |
+| `authorization.decision` | dispatch, execution | Records an allow/deny/escalate authorization outcome — at Gate-1/authz (dispatch) and Gate C (execution). Payload carries the decision, gate, and subject. See [spec 09](09-contacts-and-identity.md). (#1379) |
 
 ### Redaction
 
@@ -172,7 +173,10 @@ For launch, this is data collection (audit log captures everything). Active bloc
 |---|---|---|---|
 | **CLI** | Local terminal / SSH access | `high` | Very low |
 | **Signal** | Phone number + Signal protocol | `high` | Very low |
+| **Voice** | Console-authenticated principal session (WebRTC) | `high` | Very low (ADR-037) |
 | **HTTP API** | Token-based auth | `medium` | Low (if tokens secured) |
+| **Slack** | Workspace OAuth / bot token | `medium` | Low (ADR-033) |
+| **SMS** | Telnyx office DID (carrier SMS) | `medium` | **High** (From spoofable, not end-to-end; ADR-036) |
 | **Email** | Nylas provider-level validation (SPF/DKIM/DMARC handled by email provider) | `low` | **High** (headers spoofable) |
 
 `trustLevel` is a structural property of the channel's authentication mechanism. It reflects what the protocol guarantees about sender identity at the transport layer — not how trusted any individual contact is. It is fixed per channel and does not vary per message.

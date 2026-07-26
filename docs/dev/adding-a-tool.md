@@ -560,11 +560,12 @@ For capabilities that already exist as MCP servers (GitHub, filesystem, Brave Se
 
 ```yaml
 # config/skills.yaml
-mcp_servers:
+servers:
   - name: github
     transport: sse
     url: https://mcp-github.example.com/sse
-    permissions: ["network:github"]
+    action_risk: low          # required — none | low | medium | high | critical
+    sensitivity: normal        # optional — "normal" (default) or "elevated" (CEO-only)
 ```
 
 At startup, Curia connects to each MCP server, discovers its tools via `tools/list`, and registers them in the skill registry alongside local skills. Agents don't know or care whether a tool is local or MCP.
