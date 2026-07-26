@@ -255,7 +255,8 @@ scheduler — that hurt the spoken latency budget without helping spoken Q&A),
 KG/sender enrichment (precomputed on the dispatcher path voice bypasses;
 contacts delegation covers it), and the autonomy/security blocks (enforced by
 `ExecutionLayer` on every tool call regardless). The shared streaming turn
-primitive remains #1552.
+primitive landed in #1552 (`src/agents/llm/streaming-turn.ts`); VoiceTurnRunner
+is a thin TTS/barge-in wrapper over it. Text channels stay on `chat()`.
 
 ### Outbound judge parity
 

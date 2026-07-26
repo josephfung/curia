@@ -1078,15 +1078,16 @@ export class AgentRuntime {
     const delegationGuard = new DelegationGuard();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
 
-    // WHY TWO LOOPS EXIST (#1552, supersedes #1550): this non-streaming tool
-    // loop (provider.chat) is the text-channel path. Voice uses VoiceTurnRunner
-    // over provider.stream() with barge-in abort + sentence-chunk TTS — see
-    // src/channels/voice/turn-runner.ts. Do not fold voice into handleTask until
-    // a shared streaming turn primitive exists (#1552). Until then, keep
-    // tool_use / tool_result ContentBlock shapes in sync via
-    // src/agents/llm/tool-loop-messages.ts. Divergence risks: round caps
-    // (maxTurns vs MAX_TOOL_ROUNDS), autonomy/Gate-C invoke path, assistant
-    // output sanitization. Sibling: #1551 (brain/context + history read model).
+    // TWO PATHS, ONE PRIMITIVE FAMILY (#1552): this non-streaming tool loop
+    // (provider.chat) is the text-channel path — keep it here unless a caller
+    // explicitly opts into streaming. Voice delegates stream()+tool assembly to
+    // src/agents/llm/streaming-turn.ts via a thin VoiceTurnRunner wrapper
+    // (sentence-chunk TTS / filler / barge-in only). Both paths share
+    // tool-loop-messages.ts block shapes. Round caps stay parameterized:
+    // text uses per-agent errorBudget.maxTurns; voice uses
+    // DEFAULT_STREAMING_MAX_ROUNDS (8) — intentional (spoken fail-fast).
+    // Autonomy/Gate-C: both call executionLayer.invoke. Assistant text is not
+    // sanitizeOutput'd on either path (skill results are, inside invoke).
     while (response.type === 'tool_use' && executionLayer) {
       // Check turn budget before processing this round of tool calls
       budget.turnsUsed++;
@@ -1103,8 +1104,8 @@ export class AgentRuntime {
 
       // Build the assistant turn with the actual tool_use content blocks.
       // The Anthropic API requires these to exist so tool_result blocks can
-      // reference their IDs in the next user turn. Shape shared with
-      // VoiceTurnRunner via tool-loop-messages.ts (#1552).
+      // reference their IDs in the next user turn. Shape shared with the
+      // streaming turn primitive via tool-loop-messages.ts (#1552).
       messages.push(buildAssistantToolUseMessage(response.toolCalls, response.content));
 
       // Execute each tool call through the execution layer.

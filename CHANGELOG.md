@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **ADR-037** — self-hosted LiveKit voice cascade; STT/TTS provider seams. (#1414)
 - **Voice hangup hardening** — principal disconnect ends session; 1h JWT TTL; room delete. (#1414)
 - **Tool-loop shape helper** — shared `tool_use`/`tool_result` assembly for voice and text. (#1552)
+- **Streaming turn primitive** — shared `stream()` tool-loop; voice is a thin TTS wrapper. (#1552)
 
 ### Fixed
 
