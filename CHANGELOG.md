@@ -13,104 +13,43 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+## [0.42.0] — 2026-07-26 — "KITT"
+
+> **KITT** *(Knight Rider, 1982, Glen A. Larson)* — the Knight Industries Two Thousand, a car-bound AI you simply talk to: it holds a conversation by voice and deploys a deep bag of specialized functions on command. This release gives Curia the same — a voice you speak with, new channels to reach it through, and a real toolkit of skills it draws on when asked.
+
 ### Added
 
-- **Settings refinement** — Personality, Ghostwriting, Posture, Autonomy, Memory, and System pages replace the Workspace stub. (#1376)
-- **`GET /api/memory/retention`** — read-only boot-time KG/memory retention policy. (#1376)
-- **`GET /api/system`** — read-only version, runtime, timezone, and tier→model config for the System page. (#1376)
-- **`LLMProvider.stream`** — Anthropic and OpenRouter now expose true streaming with tool events. (#1414)
-- **Voice channel** — console duplex WebRTC via LiveKit, Deepgram STT, Cartesia TTS, barge-in. (#1414)
-- **Console voice call** — join, mute, and hang up duplex LiveKit calls from chat. (#1414)
-- **Voice setup docs** — LiveKit Compose sample and operator security/privacy guide. (#1414)
-- **ADR-037** — self-hosted LiveKit voice cascade; STT/TTS provider seams. (#1414)
-- **Voice hangup hardening** — principal disconnect ends session; 1h JWT TTL; room delete. (#1414)
-- **Tool-loop shape helper** — shared `tool_use`/`tool_result` assembly for voice and text. (#1544)
-- **Streaming turn primitive** — voice tool-loop extracted; text `handleTask` still separate (#1552, #1563).
-
-### Fixed
-
-- **Voice TTS failures** — repeated or hard synthesis errors end the call with `tts_error`. (#1556)
-- **Voice LiveKit DeleteRoom** — management client uses internal `livekit:7880`, not public signaling. (#1555)
-- **Dashboard Recent Activity** — timeline fetch sends a 24h `from=` scope so the card loads. (#1548)
-- **Voice channel** — CodeRabbit review: hangup race, silent rooms, LiveKit opt-in, turn integrity. (#1414)
-- **Voice lifecycle hardening** — bounded STT socket waits, session cleanup on token failure, safe session end. (#1414)
-- **Voice TTS was unusable** — Cartesia voice id is now a required, console-set voice credential. (#1414)
+- **Voice channel** — talk to Curia by voice from the console: duplex WebRTC over self-hosted LiveKit, Deepgram speech-to-text, Cartesia text-to-speech, and barge-in. Join, mute, and hang up from chat; a principal hangup ends the session (1-hour call tokens, room teardown). Ships with a LiveKit Compose sample and an operator security/privacy guide (ADR-037). (#1414)
+- **True LLM streaming** — Anthropic and OpenRouter now stream tokens and tool events, the primitive the voice tool-loop runs on. (#1414, #1544, #1552, #1563)
+- **Console settings & system pages** — Personality, Ghostwriting, Posture, Autonomy, Memory, and System pages replace the Workspace stub, backed by read-only `GET /api/system` and `GET /api/memory/retention`. (#1376)
 
 ### Changed
 
-- **Voice brain** — spoken turns gain persona, specialist delegation guidance, and date/timezone context. (#1551)
-- **Voice history** — spoken-turn context reloads from `working_memory`; in-process history is now only a fallback. (#1551)
-- **Voice honesty** — failed tool checks are spoken as "couldn't check," never as empty results. (#1551)
-- **Voice docs** — folded security memo into ADR-037 + `voice-setup.md`; deleted duplicate. (#1414)
-- **Audit log Phase 1** — structured columns, `seq`-ordered hash chain, `llm_call_archive` (kill-switch + TTL), `pnpm audit:verify`. (#1383)
-- **DB outage resilience** — `DATABASE_UNAVAILABLE` errors, pool timeouts, skill retry, CEO alert after 5 min. (#1381)
-- **Operator home** — console `/` shows health, attention and activity cards plus a chat CTA. (#1375)
-- **`authorization.decision`** — audit-logs Gate-1/authz and Gate C allow/deny/escalate. (#1379)
-- **`slack-send`** — coordinator-pinned skill for 1:1 Slack DMs via OutboundGateway. (#1526)
-- **SMS channel** — Telnyx office DID two-way text; medium-trust webhook inbound. (#1478)
-- **`OutboundSendRequest`** — new `sms` variant for Telnyx Messages API delivery (public API).
-- **`sms-send`** — coordinator-pinned skill for 1:1 SMS via OutboundGateway.
-- **ADR-036** — Telnyx SMS vendor choice, new-DID-only, 10DLC, voice Phase 2 note.
-- **Contact identity editing** — console + API add/update/verify/remove channel identities and merge lookalikes; binds principal Slack/Signal for outbound detection. (#1514)
-- **Reaction approvals** — Slack/Signal 👍/👎 (incl. skin tones) resolve pending approvals; unrecognized principal reactions get a hint. (#1479)
-- **Imported Anthropic skills** — drop an unmodified `SKILL.md` + `references/` folder; discover/activate with inert scripts warned. (#1490)
-- **Skills-as-bundles** — `SKILL.md` + nested `tools/`; `pinned_skills` expands a bundle to its member tools + instructions; `skill_registry` table. Native bundles: email, ceo-inbox, contacts, autonomy, diagnostics, scheduler, web, memory, learning, context-bridge, executive-profile, setup. (#1489, #1494)
-- **Runtime skill activation & MCP-as-skill** — `toolSearch` returns `kind:"skill"`; `skill-activate` loads a skill's tools + instructions (Tier 1 persists in `progress.activeSkills`); each connected MCP server projects a pinnable skill. (#1494, #1495)
-- **Slack channel** — Socket Mode DMs, @mentions, in-thread replies; `inbound.reaction` bus event (ADR-033). (#1477)
-- **`OutboundSendRequest`** — new `slack` variant for gateway `chat.postMessage` delivery (public API).
-- **`inbound.reaction`** — channel-agnostic reaction signal for approval UX; emoji→intent wired in #1479.
-- **Adding-a-channel dev guide** — `docs/dev/` how-to for building a channel end-to-end (adapter, principal rules, gateway wiring, trust config).
-
-### Changed
-
-- **Audit hash chain** — order by monotonic `seq`; `timestamp` stays factual; Phase 1 integrity scope documented. (#1383, #1540)
-- **`ToolResult` / `ErrorType`** — optional failure `errorType`; new `DATABASE_UNAVAILABLE` (public API). (#1381)
-- **Spec 05** — documents in-operation DB handling; removes that Known Deficiency (#1381).
-- **Scheduled pin gaps** — unresolved pins log at error so monitoring catches blind runs. (#1501)
-- **Outbound recipient projection** — channels own request variants + `extractRecipients`; gateway has no projection switch. (#1513; ADR-035)
-- **Signal outbound** — `outbound.delivered.messageId` records the signal-cli send timestamp for reaction correlation. (#1479)
-- **Signal inbound** — reaction envelopes publish `inbound.reaction` (`isRemove` in metadata). (#1479)
-- **Principal carve-out** — channels contribute Gate C rules via a registry; no central per-channel switch. (#1510)
-- **`ContactService.ensureChannelContact`** — shared resolve-or-create for Signal/Slack; closes 1:1 orphan leak. (#1480)
-- **Tools vs skills vocabulary** — atoms are **tools** (`tool.json`, `ToolRegistry`; audit readers dual-match legacy `skill.*`); collections are **skills**. (#1485, #1489; ADR-031)
-- **Polymorphic pins** — a pin resolves a skill, a single tool, or an MCP-projected skill (per-tool `action_risk` preserved); `enable_task_management` retired for pinning `tasks` + `documents`; `tasks` gains `plan`/`checkpoint`, `memory` gains `decay-warnings-list`. (#1489, #1494; ADR-032)
-- **`approve-grant-recommendation`** — `action_risk` raised low→critical, matching direct permission grants. (#1499)
-- **KG relationship tools** — `query-relationships`/`delete-relationship` moved from the `contacts` skill to `memory`. (#1502)
-- **Ant Farm art** — LimeZu sheets committed to core (redistribution approved); open-core images render the real office, not placeholders. (#1504)
-- **Tasks & resumable-projects specs merged** — spec 20 folded into spec 19; specs 21–22 renumbered to 20–21. (#1554)
-- **v0.42 doc sync** — specs and dev guides aligned to shipped channels and tools/skills; stale wip pruned.
-- **Stale spec checklists removed** — vestigial implementation checklists dropped from specs 09 and 11. (#1554)
-- **Launch scope refreshed** — overview out-of-scope list updated for shipped voice and skill/agent versioning. (#1554)
+- **Slack channel** — Socket Mode DMs, @mentions, and in-thread replies, with a `slack-send` skill and a channel-agnostic `inbound.reaction` bus event (ADR-033). (#1477, #1526)
+- **SMS channel** — two-way texting over a Telnyx office DID with medium-trust webhook inbound and an `sms-send` skill (ADR-036). (#1478)
+- **Tools & skills system** — invocation atoms are now **tools** (`tool.json`, `ToolRegistry`) and bundles are **skills**; pin a whole bundle, a single tool, or an MCP server projected as a skill, and activate a skill's tools + instructions at runtime. Unmodified Anthropic `SKILL.md` folders can be dropped in and activated (ADR-031, ADR-032). (#1485, #1489, #1490, #1494, #1495)
+- **Contact identity editing** — add, verify, retire, remove, and merge a contact's channel identities from the console or API; verifying the principal's Slack/Signal binds outbound detection. (#1514)
+- **Reaction approvals** — 👍/👎 reactions (including skin tones) on Slack and Signal resolve pending approvals. (#1479)
+- **Audit hardening (Phase 1)** — structured columns, a `seq`-ordered hash chain, an archivable `llm_call_archive` (kill-switch + TTL), `authorization.decision` logging for Gate-1/Gate-C outcomes, and `pnpm audit:verify`. (#1383, #1379)
+- **Database-outage resilience** — `DATABASE_UNAVAILABLE` errors, pool timeouts, skill retry, and a CEO alert after 5 minutes down; new `errorType` on `ToolResult` (public API). (#1381)
+- **Operator home** — the console root shows health, attention, and activity cards plus a chat call-to-action. (#1375)
+- **Channel plumbing** — each channel owns its outbound request variant and recipient projection and contributes its principal carve-out rules via a registry, so the gateway has no central per-channel switch (ADR-035); shared contact resolve-or-create closes a 1:1 orphan leak. `OutboundSendRequest` gains `slack` and `sms` variants (public API); a new dev guide walks through building a channel end-to-end. (#1480, #1510, #1513)
+- **Smaller refinements** — `approve-grant-recommendation` risk raised to critical (#1499); KG relationship tools moved to the `memory` skill (#1502); unresolved scheduled pins now log at error (#1501); Ant Farm renders the real office art (#1504); specs consolidated and dev docs re-synced to what shipped (#1554).
 
 ### Fixed
 
-- **Audit migration 080** — empty `audit_log` no longer fails `setval` during migrate. (#1540)
-- **`audit` config schema** — `llmCallArchive` keys allowed in `default-config.schema.json`. (#1540)
-- **Audit hash chain** — `canonicalJson` round-trips Dates so verify matches write-time hashes. (#1540)
-- **Docs** — correct the setup-status catalog path to `skills/setup/tools/setup-status/catalog.yaml` (moved by skills-as-bundles).
-- **Bundling review fixes** — calendar risk/docs, manifest & registry-install correctness, skill-md booleans, tool-input shorthand (`string|null` + polymorphic `string|object|null`/`object[]|object` unions), and manifest output/description contracts synced to handlers. (#1489, #1499)
-- **Smoke harness** — expands `pinned_skills` bundles via `resolvePinnedSkills` like production. (#1489)
-- **Email poll tests** — interval ticks after `mockResolvedValueOnce` no longer reject the suite. (#1489)
-- **`scheduler-list`** — bound and trim results so a large jobs table no longer overflows the model context. (#1487)
-- **`scheduler-list`** — return timestamps in the user's timezone instead of raw UTC. (#1487)
-- **Tool outputs** — cap total object-output size, not just per-leaf, matching the string-output path. (#1487)
-- **OpenRouter errors** — `last_error` now carries the upstream provider name and reason, not the opaque wrapper.
+- **Voice reliability** — hard or repeated TTS errors end the call cleanly (`tts_error`); LiveKit room deletion uses the internal address; bounded STT waits and safe session cleanup on token failure; the Cartesia voice ID is now a required, console-set credential. (#1414, #1555, #1556)
+- **Audit** — empty `audit_log` no longer breaks migration 080, `llmCallArchive` config validates, and `canonicalJson` round-trips Dates so verification matches write-time hashes. (#1540)
+- **Scheduler & tool output** — `scheduler-list` bounds and trims results and returns timestamps in your timezone; tool outputs cap total object size, not just per-leaf. (#1487)
+- **Dashboard Recent Activity** — the timeline card loads with a 24-hour scope. (#1548)
+- **OpenRouter errors** — `last_error` now names the upstream provider and reason, not the opaque wrapper.
+- **Skills bundling** — calendar risk/docs, manifest and registry-install correctness, and test-harness expansion of `pinned_skills` bundles. (#1489, #1499)
 
 ### Security
 
-- **`@fastify/static`** — bumped ≥10.1.2 to clear path-traversal and non-canonical URL bypass GHSAs.
-- **`js-yaml`** — bumped ≥5.2.2 (direct + `promptfoo>js-yaml`) to clear nested-flow DoS.
-- **`brace-expansion`** — pinned ≥5.0.8; `gaxios>rimraf` ≥6.1.2 drops the unpatched 2.x path.
-- **pnpm `trustPolicy`** — `no-downgrade` with 7-day `trustPolicyIgnoreAfter` for older publishes.
-- **SPA `sendFile`** — console/antfarm serve only containment-checked relative paths + explicit root.
-- **`hono`** — pinned ≥4.12.27 to clear JSX cross-request leak + `cx()` XSS CVEs.
-- **`fast-uri`** — pinned ≥4.1.1 to clear GHSA-v2hh-gcrm-f6hx and GHSA-4c8g-83qw-93j6.
-- **`sharp`** — pinned ≥0.35.0 to clear GHSA-f88m-g3jw-g9cj (libvips CVEs).
-- **`find-my-way`** — pinned ≥9.7.0 to clear GHSA-c96f-x56v-gq3h (HTTP/2 DoS).
-- **`shell-quote`** — pinned ≥1.9.0 to clear GHSA-395f-4hp3-45gv (quadratic DoS).
-- **`body-parser`** — pinned ≥2.3.0 to clear GHSA-v422-hmwv-36x6 (limit DoS). (#1518)
-- **`@hono/node-server`** — pinned ≥2.0.5 to clear GHSA-frvp-7c67-39w9 (Windows path traversal). (#1518)
-- **Baked npm** — bumped 11.17.0→11.18.0 (tar 7.5.19, brace-expansion 5.0.7); refreshed node:24-slim digest. (#1521)
+- **Dependency hardening** — pinned or upgraded `@fastify/static`, `hono`, `@hono/node-server`, `body-parser`, `fast-uri`, `find-my-way`, `sharp`, `shell-quote`, `js-yaml`, and `brace-expansion` to clear known path-traversal, XSS, and DoS CVEs. (#1518)
+- **SPA file serving** — console and Ant Farm serve only containment-checked paths under an explicit root.
+- **Supply chain** — pnpm `trustPolicy: no-downgrade` (7-day grace) and baked npm bumped 11.17.0→11.18.0 with a refreshed `node:24-slim` digest. (#1521)
 
 ## [0.41.0] — 2026-07-21 — "Data"
 
