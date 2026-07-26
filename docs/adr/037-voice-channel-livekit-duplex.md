@@ -49,10 +49,15 @@ voice reuses that for session minting (and optional LiveKit webhooks).
    existing **`fast` tier** (optional `channels.voice.model` override); do not
    invent a separate `voice` tier in Phase 1.
 4. **Channel shape:** toggleable catalog entry `voice` with vault secrets
-   `channel.voice.{livekit_url,livekit_api_key,livekit_api_secret,deepgram_api_key,cartesia_api_key}`.
+   `channel.voice.{livekit_url,livekit_api_key,livekit_api_secret,deepgram_api_key,cartesia_api_key,cartesia_voice_id}`.
    Trust: **high** (console session = principal, same as `web`).
    `conversation_id`: `voice:<sessionId>`. Follow
    `docs/dev/adding-a-channel.md` for catalog / trust / registry gating only.
+   **`livekit_url` is browser signaling only** (`wss://` / `ws://`). Server-side
+   LiveKit RoomService (e.g. `DeleteRoom` on hangup) uses plain YAML
+   `channels.voice.livekit_management_url` (compose default `http://livekit:7880`)
+   so `/twirp` stays on the internal network and is never routed through a public
+   reverse proxy that only forwards `/rtc*` to LiveKit.
 5. **Atypical scaffolding (intentional):** media never rides
    `inbound.message` / `outbound.message`. TTS egress is owned by
    `VoiceRuntime`, **not** `OutboundGateway`. No `outbound-request.ts`, no
@@ -126,7 +131,9 @@ voice reuses that for session minting (and optional LiveKit webhooks).
 - LiveKit participant JWTs use an **explicit 1h TTL** (not the SDK 6h default).
   Room delete / empty timeouts are **cleanup only** — they do not revoke JWTs.
   A leaked token remains valid until TTL; LiveKit may auto-create the room on
-  rejoin within that window.
+  rejoin within that window. Room delete must call LiveKit RoomService over the
+  **internal** management URL (`channels.voice.livekit_management_url`), not the
+  public signaling URL — otherwise hangup cleanup 404s on `/twirp` (#1555).
 - Ungraceful hangup (tab close without DELETE) is handled via LiveKit
   `ParticipantDisconnected` / `Disconnected` → `VoiceRuntime.endSession`.
 - **Residual risks / smoke-test focus (Phase 1):**

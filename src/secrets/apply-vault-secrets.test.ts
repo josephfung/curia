@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import type { Config } from '../config.js';
+import { DEFAULT_VOICE_LIVEKIT_MANAGEMENT_URL } from '../config.js';
 import type { SecretsService } from './secrets-service.js';
 import { applyVaultSecrets } from './apply-vault-secrets.js';
 
@@ -34,6 +35,7 @@ function baseConfig(): Config {
     voiceLivekitUrl: undefined,
     voiceLivekitApiKey: undefined,
     voiceLivekitApiSecret: undefined,
+    voiceLivekitManagementUrl: DEFAULT_VOICE_LIVEKIT_MANAGEMENT_URL,
     voiceDeepgramApiKey: undefined,
     voiceCartesiaApiKey: undefined,
     voiceCartesiaVoiceId: undefined,

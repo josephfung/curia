@@ -25,6 +25,11 @@ channels:
   voice:
     # Optional concrete model for voice turns. Empty = existing fast tier.
     model: ""
+    # LiveKit RoomService base URL (server→LiveKit DeleteRoom / admin). Distinct from
+    # the browser signaling URL in Settings → Channels → Voice (wss://…). Compose
+    # default reaches the `livekit` service on the internal network. Host-side
+    # `pnpm dev` with published ports: override to http://localhost:7880 in local.yaml.
+    livekit_management_url: "http://livekit:7880"
 
 # Rate limits for automatic contact creation from email participants.
 # Prevents spam campaigns from flooding the contacts table.
