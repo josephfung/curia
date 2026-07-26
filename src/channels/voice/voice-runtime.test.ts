@@ -14,6 +14,7 @@ import type { VoiceToolBridge } from './voice-runtime.js';
 import { FakeAudioTransport } from './fake-audio-transport.js';
 import { FakeSttProvider } from './speech/fake-stt.js';
 import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from './speech/types.js';
+import { TtsHttpError } from './speech/types.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
 
 const logger = createSilentLogger();
@@ -106,10 +107,10 @@ function fakeStore(): { store: VoiceSessionStore; statuses: string[]; ended: str
 class FailingTtsProvider implements TextToSpeechProvider {
   readonly id = 'failing-tts';
   readonly failures: string[] = [];
-  constructor(private readonly message = 'Cartesia TTS request failed with HTTP 500') {}
+  constructor(private readonly err: Error = new TtsHttpError(500, 'Cartesia TTS request failed with HTTP 500')) {}
   async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
     this.failures.push(opts.text);
-    throw new Error(this.message);
+    throw this.err;
   }
   cancel(): void {}
 }
@@ -123,7 +124,7 @@ class FlakyThenOkTtsProvider implements TextToSpeechProvider {
   async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
     if (this.failures < this.failCount) {
       this.failures += 1;
-      throw new Error('Cartesia TTS request failed with HTTP 503');
+      throw new TtsHttpError(503, 'Cartesia TTS request failed with HTTP 503');
     }
     this.successes += 1;
     yield { pcm: new Int16Array(160), sampleRate: opts.sampleRate ?? 24000, channels: 1 };
@@ -431,7 +432,7 @@ describe('VoiceRuntime', () => {
 
   it('ends immediately on a hard TTS auth/voice-id failure (#1556)', async () => {
     const llm = new FakeStreamProvider([replyScript('Hello.')]);
-    const tts = new FailingTtsProvider('Cartesia TTS request failed with HTTP 401');
+    const tts = new FailingTtsProvider(new TtsHttpError(401, 'Cartesia TTS request failed with HTTP 401'));
     const { store, endReasons } = fakeStore();
     const { runtime, events, stt } = makeRuntime({ llm, tts, store });
 
@@ -450,6 +451,46 @@ describe('VoiceRuntime', () => {
     expect(runtime.activeSessionCount).toBe(0);
     expect(endReasons).toEqual(['tts_error']);
     expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(1);
+  });
+
+  it('does not count transport publish failures as TTS synthesis failures (#1556)', async () => {
+    const llm = new FakeStreamProvider([
+      replyScript('First reply.'),
+      replyScript('Second reply.'),
+      replyScript('Third reply.'),
+    ]);
+    // Healthy TTS — every synthesize succeeds. Transport publish throws every time.
+    class ThrowingPublishTransport extends FakeAudioTransport {
+      override async publishAudio(): Promise<void> {
+        throw new Error('livekit publish failed');
+      }
+    }
+    const transport = new ThrowingPublishTransport();
+    const { store, endReasons } = fakeStore();
+    const { runtime, events, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      transport,
+      store,
+    });
+
+    await runtime.startSession({
+      sessionId: 's-pub-fail',
+      conversationId: 'voice:s-pub-fail',
+      roomName: 'voice-s-pub-fail',
+      agentToken: 'tok',
+    });
+
+    for (const utter of ['one', 'two', 'three'] as const) {
+      stt.emit({ text: utter, isFinal: true, speechFinal: true });
+      await runtime.awaitIdle('s-pub-fail');
+    }
+    await delay(30);
+
+    // Three publish-failed turns must not escalate to tts_error.
+    expect(runtime.activeSessionCount).toBe(1);
+    expect(endReasons).toEqual([]);
+    expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(0);
   });
 
   it('invokes tools during a voice turn via the runner tool loop', async () => {
