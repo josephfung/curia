@@ -61,6 +61,17 @@ describe('Ant Farm static routes', () => {
     expect(res.body).toContain('Ant Farm');
   });
 
+  it('rejects path traversal under /antfarm/ with SPA fallback (not filesystem escape)', async () => {
+    // Encoded ".." so Fastify does not collapse the URL before routing (see antfarm-assets.test.ts).
+    const res = await app.inject({
+      method: 'GET',
+      url: '/antfarm/..%2f..%2f..%2f..%2fpackage.json',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('Ant Farm');
+    expect(res.body).not.toContain('"name": "curia"');
+  });
+
   it('does not let console wildcard swallow /api/antfarm/timeline', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/antfarm/timeline' });
     expect(res.statusCode).toBe(401);
