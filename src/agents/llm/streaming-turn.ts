@@ -174,9 +174,10 @@ export async function runStreamingToolLoop(
       };
     }
 
-    // stream() is guaranteed present by assertStreamingProvider.
+    // Snapshot for the provider — never hand out the live workingMessages array
+    // (providers/tests often retain the reference; we mutate after tool rounds).
     const stream = config.provider.stream!({
-      messages: workingMessages,
+      messages: [...workingMessages],
       tools: config.tools,
       model: config.model,
       options: { signal },
@@ -236,20 +237,22 @@ export async function runStreamingToolLoop(
     }
 
     if (messageEnd) {
-      // Append the terminal assistant reply so `messages` is a complete
-      // transcript for future consumers (voice rebuilds history from finalText
-      // / spokenText and ignores this field today).
+      // Build the returned transcript with the terminal assistant reply so
+      // consumers get a complete conversation — but do not mutate
+      // workingMessages after the last stream() call (callers/tests often hold
+      // a reference to the messages array that was passed into stream).
       const transcriptReply =
         messageEnd.content.length > 0 ? messageEnd.content : streamedText;
-      if (transcriptReply.length > 0) {
-        workingMessages.push({ role: 'assistant', content: transcriptReply });
-      }
+      const messages =
+        transcriptReply.length > 0
+          ? [...workingMessages, { role: 'assistant' as const, content: transcriptReply }]
+          : workingMessages;
       return {
         // Preserve empty terminal content — callers decide their own fallback
         // (voice uses spokenText, not streamedText).
         finalText: messageEnd.content,
         streamedText,
-        messages: workingMessages,
+        messages,
         toolRounds,
         aborted: false,
         exhausted: false,
