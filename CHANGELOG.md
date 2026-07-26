@@ -91,6 +91,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`@fastify/static`** — bumped ≥10.1.2 to clear path-traversal and non-canonical URL bypass GHSAs.
+- **`js-yaml`** — bumped ≥5.2.2 (direct + `promptfoo>js-yaml`) to clear nested-flow DoS.
+- **`brace-expansion`** — pinned ≥5.0.8; `gaxios>rimraf` ≥6.1.2 drops the unpatched 2.x path.
+- **pnpm `trustPolicy`** — `no-downgrade` with 7-day `trustPolicyIgnoreAfter` for older publishes.
+- **SPA `sendFile`** — console/antfarm serve only containment-checked relative paths + explicit root.
 - **`hono`** — pinned ≥4.12.27 to clear JSX cross-request leak + `cx()` XSS CVEs.
 - **`fast-uri`** — pinned ≥4.1.1 to clear GHSA-v2hh-gcrm-f6hx and GHSA-4c8g-83qw-93j6.
 - **`sharp`** — pinned ≥0.35.0 to clear GHSA-f88m-g3jw-g9cj (libvips CVEs).
@@ -98,7 +103,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`shell-quote`** — pinned ≥1.9.0 to clear GHSA-395f-4hp3-45gv (quadratic DoS).
 - **`body-parser`** — pinned ≥2.3.0 to clear GHSA-v422-hmwv-36x6 (limit DoS). (#1518)
 - **`@hono/node-server`** — pinned ≥2.0.5 to clear GHSA-frvp-7c67-39w9 (Windows path traversal). (#1518)
-- **`js-yaml`** — targeted `promptfoo>js-yaml` ≥5.2.1 clears GHSA-724g-mxrg-4qvm. (#1518)
 - **Baked npm** — bumped 11.17.0→11.18.0 (tar 7.5.19, brace-expansion 5.0.7); refreshed node:24-slim digest. (#1521)
 
 ## [0.41.0] — 2026-07-21 — "Data"
