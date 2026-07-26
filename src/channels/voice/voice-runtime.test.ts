@@ -21,6 +21,11 @@ const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, ca
 const provenance = { requestedModel: 'fake', actualModel: 'fake', providerRequestId: 'req_1' };
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+const replyScript = (text: string): LLMStreamEvent[] => [
+  { type: 'text_delta', text: `${text} ` },
+  { type: 'message_end', content: text, usage, provenance },
+];
+
 /** Fake streaming LLM provider driven by scripted event sequences. */
 class FakeStreamProvider implements LLMProvider {
   readonly id = 'fake-stream';
@@ -67,10 +72,11 @@ class SlowTtsProvider implements TextToSpeechProvider {
 }
 
 /** In-memory VoiceSessionStore stand-in. */
-function fakeStore(): { store: VoiceSessionStore; statuses: string[]; ended: string[] } {
+function fakeStore(): { store: VoiceSessionStore; statuses: string[]; ended: string[]; endReasons: string[] } {
   const statuses: string[] = [];
   const ended: string[] = [];
-  const rec = (id: string, status: string): VoiceSessionRecord => ({
+  const endReasons: string[] = [];
+  const rec = (id: string, status: string, endReason: string | null = null): VoiceSessionRecord => ({
     id,
     conversationId: `voice:${id}`,
     livekitRoom: `voice-${id}`,
@@ -78,7 +84,7 @@ function fakeStore(): { store: VoiceSessionStore; statuses: string[]; ended: str
     status: status as VoiceSessionRecord['status'],
     startedAt: new Date(Date.now() - 1000),
     endedAt: status === 'ended' ? new Date() : null,
-    endReason: status === 'ended' ? 'test' : null,
+    endReason: status === 'ended' ? (endReason ?? 'test') : null,
     metadata: {},
   });
   const store = {
@@ -86,13 +92,44 @@ function fakeStore(): { store: VoiceSessionStore; statuses: string[]; ended: str
       statuses.push(status);
       return rec(id, status);
     },
-    async endSession(id: string) {
+    async endSession(id: string, reason: string) {
       if (ended.includes(id)) return null;
       ended.push(id);
-      return rec(id, 'ended');
+      endReasons.push(reason);
+      return rec(id, 'ended', reason);
     },
   } as unknown as VoiceSessionStore;
-  return { store, statuses, ended };
+  return { store, statuses, ended, endReasons };
+}
+
+/** TTS that throws on every synthesize() call (persistent provider failure). */
+class FailingTtsProvider implements TextToSpeechProvider {
+  readonly id = 'failing-tts';
+  readonly failures: string[] = [];
+  constructor(private readonly message = 'Cartesia TTS request failed with HTTP 500') {}
+  // eslint-disable-next-line require-yield -- always throws before yielding
+  async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
+    this.failures.push(opts.text);
+    throw new Error(this.message);
+  }
+  cancel(): void {}
+}
+
+/** TTS that fails a fixed number of times, then synthesizes normally. */
+class FlakyThenOkTtsProvider implements TextToSpeechProvider {
+  readonly id = 'flaky-tts';
+  failures = 0;
+  successes = 0;
+  constructor(private readonly failCount: number) {}
+  async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
+    if (this.failures < this.failCount) {
+      this.failures += 1;
+      throw new Error('Cartesia TTS request failed with HTTP 503');
+    }
+    this.successes += 1;
+    yield { pcm: new Int16Array(160), sampleRate: opts.sampleRate ?? 24000, channels: 1 };
+  }
+  cancel(): void {}
 }
 
 function makeRuntime(overrides: {
@@ -322,6 +359,98 @@ describe('VoiceRuntime', () => {
     // Transport teardown still ran before the failing store write.
     expect(transport.disconnectCount).toBe(1);
     expect(runtime.activeSessionCount).toBe(0);
+  });
+
+  it('ends the session with tts_error after repeated TTS synthesis failures (#1556)', async () => {
+    const llm = new FakeStreamProvider([
+      replyScript('First reply.'),
+      replyScript('Second reply.'),
+      replyScript('Third reply.'),
+    ]);
+    const tts = new FailingTtsProvider();
+    const { store, endReasons } = fakeStore();
+    const deleteRoom = vi.fn(async () => {});
+    const { runtime, events, stt, transport } = makeRuntime({ llm, tts, store, deleteRoom });
+
+    await runtime.startSession({
+      sessionId: 's-tts-fail',
+      conversationId: 'voice:s-tts-fail',
+      roomName: 'voice-s-tts-fail',
+      agentToken: 'tok',
+    });
+
+    stt.emit({ text: 'one', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-tts-fail');
+    expect(runtime.activeSessionCount).toBe(1);
+
+    stt.emit({ text: 'two', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-tts-fail');
+    expect(runtime.activeSessionCount).toBe(1);
+
+    stt.emit({ text: 'three', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-tts-fail');
+    // void endSession from the third failure — let it settle.
+    await delay(30);
+
+    expect(tts.failures.length).toBeGreaterThanOrEqual(3);
+    expect(runtime.activeSessionCount).toBe(0);
+    expect(transport.disconnectCount).toBe(1);
+    expect(endReasons).toEqual(['tts_error']);
+    const ended = events.filter(e => e.type === 'voice.session.ended');
+    expect(ended).toHaveLength(1);
+    expect((ended[0] as { payload: { reason: string } }).payload.reason).toBe('tts_error');
+    expect(deleteRoom).toHaveBeenCalledWith('voice-s-tts-fail');
+  });
+
+  it('does not tear down on a single transient TTS failure (#1556)', async () => {
+    const llm = new FakeStreamProvider([
+      replyScript('First reply.'),
+      replyScript('Second reply.'),
+    ]);
+    const tts = new FlakyThenOkTtsProvider(1);
+    const { runtime, events, stt, transport } = makeRuntime({ llm, tts });
+
+    await runtime.startSession({
+      sessionId: 's-tts-blip',
+      conversationId: 'voice:s-tts-blip',
+      roomName: 'voice-s-tts-blip',
+      agentToken: 'tok',
+    });
+
+    stt.emit({ text: 'one', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-tts-blip');
+    stt.emit({ text: 'two', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-tts-blip');
+    await delay(20);
+
+    expect(tts.failures).toBe(1);
+    expect(tts.successes).toBe(1);
+    expect(runtime.activeSessionCount).toBe(1);
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
+    expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(0);
+  });
+
+  it('ends immediately on a hard TTS auth/voice-id failure (#1556)', async () => {
+    const llm = new FakeStreamProvider([replyScript('Hello.')]);
+    const tts = new FailingTtsProvider('Cartesia TTS request failed with HTTP 401');
+    const { store, endReasons } = fakeStore();
+    const { runtime, events, stt } = makeRuntime({ llm, tts, store });
+
+    await runtime.startSession({
+      sessionId: 's-tts-hard',
+      conversationId: 'voice:s-tts-hard',
+      roomName: 'voice-s-tts-hard',
+      agentToken: 'tok',
+    });
+
+    stt.emit({ text: 'hello', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('s-tts-hard');
+    await delay(30);
+
+    expect(tts.failures).toHaveLength(1);
+    expect(runtime.activeSessionCount).toBe(0);
+    expect(endReasons).toEqual(['tts_error']);
+    expect(events.filter(e => e.type === 'voice.session.ended')).toHaveLength(1);
   });
 
   it('invokes tools during a voice turn via the runner tool loop', async () => {
