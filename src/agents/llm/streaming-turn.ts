@@ -101,11 +101,13 @@ export interface StreamingTurnResult {
   finalText: string;
   /** Concatenation of text_delta chunks observed this turn (may be empty). */
   streamedText: string;
-  /**
+    /**
    * Working transcript including tool_use / tool_result pairs.
    * On `message_end`, also includes a final assistant text turn when there is
-   * non-empty terminal content, otherwise `streamedText` when non-empty — so
-   * consumers can treat `messages` as a complete conversation transcript.
+   * non-empty terminal content, otherwise this round's streamed deltas when
+   * non-empty (not whole-turn streamedText — that would duplicate pre-tool
+   * narration already on a prior tool_use turn). On abort mid-tool-round,
+   * unanswered tool_use ids are closed with cancelled placeholder results.
    */
   messages: Message[];
   toolRounds: number;
@@ -157,10 +159,6 @@ export async function runStreamingToolLoop(
   let streamedText = '';
   let toolRounds = 0;
 
-  const appendStreamed = (text: string): void => {
-    streamedText = streamedText.length > 0 ? `${streamedText}${text}` : text;
-  };
-
   for (let round = 0; round < config.maxRounds; round += 1) {
     if (signal.aborted) {
       return {
@@ -173,6 +171,12 @@ export async function runStreamingToolLoop(
         stopReason: 'aborted',
       };
     }
+
+    // Per-round delta accumulator — used for empty message_end transcript
+    // fallback so we do not re-append pre-tool narration already present in a
+    // prior assistant tool_use turn (whole-turn streamedText still tracks all
+    // deltas for callers that need the full spoken/streamed string).
+    let roundStreamedText = '';
 
     // Snapshot for the provider — never hand out the live workingMessages array
     // (providers/tests often retain the reference; we mutate after tool rounds).
@@ -191,7 +195,9 @@ export async function runStreamingToolLoop(
       if (signal.aborted) break;
 
       if (event.type === 'text_delta') {
-        appendStreamed(event.text);
+        streamedText = streamedText.length > 0 ? `${streamedText}${event.text}` : event.text;
+        roundStreamedText =
+          roundStreamedText.length > 0 ? `${roundStreamedText}${event.text}` : event.text;
         if (config.hooks?.onTextDelta) {
           await config.hooks.onTextDelta(event.text);
         }
@@ -241,8 +247,11 @@ export async function runStreamingToolLoop(
       // consumers get a complete conversation — but do not mutate
       // workingMessages after the last stream() call (callers/tests often hold
       // a reference to the messages array that was passed into stream).
+      // Empty terminal content falls back to THIS ROUND's deltas only — not
+      // whole-turn streamedText, which would duplicate pre-tool narration
+      // already carried on a prior assistant tool_use turn.
       const transcriptReply =
-        messageEnd.content.length > 0 ? messageEnd.content : streamedText;
+        messageEnd.content.length > 0 ? messageEnd.content : roundStreamedText;
       const messages =
         transcriptReply.length > 0
           ? [...workingMessages, { role: 'assistant' as const, content: transcriptReply }]
@@ -297,6 +306,20 @@ export async function runStreamingToolLoop(
       }
 
       if (signal.aborted) {
+        // Every tool_use id must be answered, even on barge-in — otherwise the
+        // returned transcript ends in an unanswered assistant tool_use turn
+        // and any later replay against Anthropic is rejected.
+        const answered = new Set(toolResults.map((r) => r.id));
+        for (const call of toolUse.toolCalls) {
+          if (!answered.has(call.id)) {
+            toolResults.push({
+              id: call.id,
+              content: 'Tool execution cancelled (turn aborted).',
+              isError: true,
+            });
+          }
+        }
+        workingMessages.push(buildUserToolResultMessage(toolResults));
         return {
           finalText: streamedText,
           streamedText,

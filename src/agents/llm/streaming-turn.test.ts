@@ -237,11 +237,53 @@ describe('runStreamingToolLoop (#1552)', () => {
     // Callers (voice) must fall back to their own delivered text — not streamedText.
     expect(result.finalText).toBe('');
     expect(result.streamedText).toBe('Pre-tool. Post-tool spoken. ');
-    // Transcript still gets a usable assistant turn via streamedText fallback.
+    // Terminal assistant uses THIS ROUND's deltas only — pre-tool narration is
+    // already on the prior tool_use assistant turn and must not be duplicated.
     expect(result.messages.at(-1)).toEqual({
       role: 'assistant',
-      content: 'Pre-tool. Post-tool spoken. ',
+      content: 'Post-tool spoken. ',
     });
+  });
+
+  it('closes unanswered tool_use ids with cancelled results on abort mid-invoke', async () => {
+    const toolCalls: ToolCall[] = [
+      { id: 'call_1', name: 'lookup', input: { q: 'a' } },
+      { id: 'call_2', name: 'lookup', input: { q: 'b' } },
+    ];
+    const provider = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls, usage, provenance }],
+    ]);
+    const controller = new AbortController();
+    let invokeCount = 0;
+
+    const result = await runStreamingToolLoop([], {
+      provider,
+      model: 'fake',
+      maxRounds: DEFAULT_STREAMING_MAX_ROUNDS,
+      signal: controller.signal,
+      invokeTool: async () => {
+        invokeCount += 1;
+        if (invokeCount === 1) {
+          controller.abort();
+          return { content: 'first-ok' };
+        }
+        return { content: 'should-not-run' };
+      },
+      logger,
+    });
+
+    expect(result.aborted).toBe(true);
+    expect(result.stopReason).toBe('aborted');
+    expect(invokeCount).toBe(1);
+    // Assistant tool_use + user tool_result pairing must both be present.
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]!.role).toBe('assistant');
+    expect(result.messages[1]).toEqual(
+      buildUserToolResultMessage([
+        { id: 'call_1', content: 'first-ok' },
+        { id: 'call_2', content: 'Tool execution cancelled (turn aborted).', isError: true },
+      ]),
+    );
   });
 
   it('stops cleanly on abort mid-stream', async () => {
