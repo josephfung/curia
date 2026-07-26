@@ -50,7 +50,11 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "model": { "type": "string" }
+            "model": { "type": "string" },
+            "livekit_management_url": {
+              "type": "string",
+              "description": "HTTP(S) base for LiveKit RoomService (DeleteRoom, etc.). Distinct from browser signaling URL. Compose default: http://livekit:7880."
+            }
           }
         },
         "max_message_bytes": { "type": "integer", "minimum": 1 }
