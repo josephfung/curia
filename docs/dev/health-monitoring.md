@@ -19,6 +19,7 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
     "email":     "ok | fail | skipped",
     "browser":   "ok | fail | skipped",
     "mcp":       { "google_workspace": "ok | fail | skipped" },
+    "nylas_calendar": "ok | fail | skipped",
     "scheduler": "ok | fail"
   }
 }
@@ -29,7 +30,7 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
 | `status` | HTTP | Meaning |
 |---|---|---|
 | `ok` | 200 | All enabled checks pass |
-| `degraded` | 200 | A non-critical service is down (signal, email, browser, MCP, scheduler) |
+| `degraded` | 200 | A non-critical service is down (signal, email, browser, MCP, calendar, scheduler) |
 | `down` | 503 | A critical service is unreachable (db or bus) — Curia cannot function |
 
 `skipped` means a check's underlying service is not configured (e.g. Signal is disabled). Skipped checks never affect the overall status.
@@ -37,7 +38,7 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
 ### Which checks are critical vs. non-critical
 
 **Critical (down → 503):** `db`, `bus`
-**Non-critical (degraded → 200):** `signal`, `email`, `browser`, `mcp.*`, `scheduler`
+**Non-critical (degraded → 200):** `signal`, `email`, `browser`, `mcp.*`, `nylas_calendar`, `scheduler`
 
 Rationale: a dead Signal socket should not page as a full outage when email still works.
 
@@ -78,6 +79,7 @@ The heartbeat key identifies the capability tier, not the vendor. If you remap `
 | `embeddings` | Last recorded embedding call outcome | No `OPENAI_API_KEY` |
 | `image_gen` | Last `image-generate` skill outcome | No `OPENAI_API_KEY` |
 | `nylas` | `listMessages(limit=1)` via the injected Nylas client | Email not configured (no `NylasClient` provided) |
+| `nylas_calendar` | `listCalendars()` via the principal calendar client (`ceo_nylas_grant_id`) | Calendar not configured (no `NylasCalendarClient`) |
 | `signal` | Signal-cli socket ping | Signal not configured |
 | `google_workspace` | Credential file readable + refresh token not expired | MCP server not registered |
 | `tavily` | `TAVILY_API_KEY` present in environment | Key not injected into `HealthService` (not yet wired from vault; always skipped in current build) |

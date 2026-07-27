@@ -214,3 +214,74 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
     expect((result as { error: string }).error).toContain('Failed to list events');
   });
 });
+
+describe('CalendarListEventsHandler — auth-class all-fail (#1561)', () => {
+  it('returns AUTH_FAILURE when every calendar fails with statusCode 401/403', async () => {
+    const handler = new CalendarListEventsHandler();
+    const authErr = Object.assign(new Error('Request failed with status code 401'), { statusCode: 401 });
+    const listEvents = vi.fn().mockRejectedValue(authErr);
+    const result = await handler.execute(makeCtx({
+      input: {
+        calendarId: 'cal-primary',
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorType).toBe('AUTH_FAILURE');
+      expect(result.error).toMatch(/authorization|grant|Reconnect/i);
+      expect(result.error).toContain('cal-primary');
+    }
+  });
+
+  it('keeps a generic error for non-auth total failures', async () => {
+    const handler = new CalendarListEventsHandler();
+    const listEvents = vi.fn().mockRejectedValue(new Error('timeout'));
+    const result = await handler.execute(makeCtx({
+      input: {
+        calendarId: 'cal-primary',
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorType).toBeUndefined();
+      expect(result.error).toContain('Failed to list events from any calendar');
+    }
+  });
+
+  it('returns success with warnings on partial calendar failure', async () => {
+    const handler = new CalendarListEventsHandler();
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([
+        { nylasCalendarId: 'cal-ok' },
+        { nylasCalendarId: 'cal-bad' },
+      ]),
+    } as unknown as ToolContext['contactService'];
+    const listEvents = vi.fn()
+      .mockResolvedValueOnce([{
+        id: 'e1', title: 'Standup', description: '', startTime: 1_700_000_000, endTime: 1_700_003_600,
+        startDate: null, endDate: null, attendees: [], location: null, htmlLink: null, status: 'confirmed',
+      }])
+      .mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { statusCode: 403 }));
+
+    const result = await handler.execute(makeCtx({
+      caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'signal' },
+      contactService,
+      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+    }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { count: number; warnings?: string[] };
+      expect(data.count).toBe(1);
+      expect(data.warnings?.[0]).toContain('cal-bad');
+    }
+  });
+});

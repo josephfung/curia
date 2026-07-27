@@ -178,6 +178,8 @@ export interface HealthHeartbeats {
   embeddings: string | null;
   image_gen: string | null;
   nylas: string | null;
+  /** Principal calendar grant (`ceo_nylas_grant_id`), distinct from email `nylas`. */
+  nylas_calendar: string | null;
   signal: string | null;
   google_workspace: string | null;
   tavily: string | null;
@@ -202,6 +204,7 @@ export const DEFAULT_HEALTH_CONFIG: HealthConfig = {
     embeddings: null,
     image_gen: null,
     nylas: null,
+    nylas_calendar: null,
     signal: null,
     google_workspace: null,
     tavily: null,
@@ -249,6 +252,7 @@ export function resolveHealthConfig(
       embeddings: validateHeartbeatUrl(hb?.embeddings, 'embeddings'),
       image_gen: validateHeartbeatUrl(hb?.image_gen, 'image_gen'),
       nylas: validateHeartbeatUrl(hb?.nylas, 'nylas'),
+      nylas_calendar: validateHeartbeatUrl(hb?.nylas_calendar, 'nylas_calendar'),
       signal: validateHeartbeatUrl(hb?.signal, 'signal'),
       google_workspace: validateHeartbeatUrl(hb?.google_workspace, 'google_workspace'),
       tavily: validateHeartbeatUrl(hb?.tavily, 'tavily'),
@@ -608,6 +612,7 @@ export interface YamlConfig {
       embeddings?: string;
       image_gen?: string;
       nylas?: string;
+      nylas_calendar?: string;
       signal?: string;
       google_workspace?: string;
       tavily?: string;

@@ -57,6 +57,10 @@ export function mcpHealthKey(serverName: string): string {
   return serverName.replace(/-/g, '_');
 }
 
+export interface NylasCalendarClientHealth {
+  listCalendars(): Promise<unknown[]>;
+}
+
 // ---------------------------------------------------------------------------
 // Probe implementations
 // ---------------------------------------------------------------------------
@@ -244,6 +248,44 @@ export async function checkMcpGoogleWorkspace(
   } catch (err) {
     logger.warn({ err }, 'checkMcpGoogleWorkspace: MCP probe failed');
     return 'fail';
+  }
+}
+
+/** Outcome of the principal calendar grant probe, distinguishing auth failures. */
+export interface NylasCalendarProbe {
+  status: CheckResult;
+  /** True only for a Nylas auth failure (401/403) — the sole case a grant reconnect resolves. */
+  authFailure: boolean;
+}
+
+/**
+ * Probe the principal calendar grant (`ceo_nylas_grant_id`) via listCalendars (#1561).
+ * Distinct from the email/messaging `nylas` canary. Skipped when no calendar client.
+ * Hard 5-second timeout. Classifies auth failures (401/403) so callers can offer
+ * grant-reconnect guidance only when it would actually help — a timeout or 5xx is not
+ * a grant problem.
+ */
+export async function checkNylasCalendar(
+  calendarClient: NylasCalendarClientHealth | undefined,
+  logger: Logger,
+): Promise<NylasCalendarProbe> {
+  if (!calendarClient) return { status: 'skipped', authFailure: false };
+  try {
+    await Promise.race([
+      calendarClient.listCalendars(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 5_000),
+      ),
+    ]);
+    return { status: 'ok', authFailure: false };
+  } catch (err) {
+    logger.warn({ err }, 'checkNylasCalendar: calendar grant probe failed');
+    // Nylas SDK surfaces HTTP status on `statusCode` (see isNylasAuthFailure in the
+    // calendar-list-events handler); 401/403 mean the grant itself is bad.
+    const code = typeof err === 'object' && err !== null
+      ? (err as { statusCode?: unknown }).statusCode
+      : undefined;
+    return { status: 'fail', authFailure: code === 401 || code === 403 };
   }
 }
 

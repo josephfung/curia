@@ -15,6 +15,8 @@ export interface HealthResponse {
     browser: CheckResult;
     /** Per enabled MCP server (hyphens → underscores). Empty when none enabled. */
     mcp: Record<string, CheckResult>;
+    /** Principal calendar grant (`ceo_nylas_grant_id`); skipped when calendar client absent. */
+    nylas_calendar: CheckResult;
     scheduler: CheckResult;
   };
 }
