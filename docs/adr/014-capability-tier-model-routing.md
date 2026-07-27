@@ -79,6 +79,8 @@ model_routing:
 | `coding` | Code generation and analysis optimized | claude-sonnet-4-6, gpt-4o, deepseek-coder |
 | `audio` | Audio input/output modality | gpt-4o-audio-preview, gemini-1.5-pro |
 | `image_generation` | Image synthesis output | dall-e-3, imagen-3, stable-diffusion |
+| `streaming` | Token streaming via `LLMProvider.stream()` (not buffered chat) | chat models in `MODEL_REGISTRY`; not embeddings |
+| `tools` | Tool / function calling during generation | chat models in `MODEL_REGISTRY`; not embeddings |
 
 **Migration:** Existing `model.provider` + `model.model` fields are deprecated but remain valid during a transition period. At startup, the runtime emits a deprecation warning for any agent still using the old schema. A migration guide documents the mapping.
 
@@ -93,7 +95,7 @@ model_routing:
 
 **Trade-offs:**
 - Agents lose direct control over which model executes their prompts. Agents that have been carefully tuned for a specific model's behavior may need re-evaluation when the operator changes the tier mapping.
-- The `needs` system covers the main modality and capability classes (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`), but agents with requirements outside this set (e.g., a specific fine-tune) must use a named alias approach rather than declaring a raw model ID.
+- The `needs` system covers the main modality and capability classes (`vision`, `large_context`, `reasoning`, `coding`, `audio`, `image_generation`, `streaming`, `tools`), but agents with requirements outside this set (e.g., a specific fine-tune) must use a named alias approach rather than declaring a raw model ID.
 - The transition period (supporting both old and new schema) adds short-term complexity to the validation layer.
 
 ## Amendment (2026-05-20)
@@ -112,3 +114,7 @@ model_routing:
 ```
 
 Additionally, the OpenRouter provider (#379) was added, enabling routing to non-Anthropic models (Gemini Flash, DeepSeek V3, GPT-4o) via `OPENROUTER_API_KEY`. This fulfills the multi-provider aspiration described in the original decision without requiring per-tier `provider` declarations.
+
+## Amendment (2026-07-27) — streaming / tools (#1553)
+
+`ModelRegistry` entries now declare `streaming` and `tools` on every chat model (embeddings stay `embedding`-only). Provider-level `typeof stream === 'function'` is insufficient for voice: OpenRouter implements `stream()` for every routed model, including ones that do not truly stream or tool-call. The voice channel boot guard therefore also requires the **resolved** model (`channels.voice.model` or the `fast` tier) to advertise both capabilities, and only wires coordinator tools when `tools` is present.

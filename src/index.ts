@@ -82,6 +82,7 @@ import { VoiceAdapter } from './channels/voice/voice-adapter.js';
 import { VoiceSessionBridge } from './channels/voice/session-bridge.js';
 import { VoiceSessionStore } from './channels/voice/session-store.js';
 import { VoiceRuntime } from './channels/voice/voice-runtime.js';
+import { evaluateVoiceModelCapabilities } from './channels/voice/voice-model-capabilities.js';
 import { DeepgramSttProvider } from './channels/voice/speech/deepgram-stt.js';
 import { CartesiaTtsProvider } from './channels/voice/speech/cartesia-tts.js';
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
@@ -1814,11 +1815,33 @@ async function main(): Promise<void> {
     config.voiceCartesiaVoiceId
   ) {
     // Voice turns use the 'fast' tier by default (ADR-037 §3), overridable via
-    // channels.voice.model. The runtime needs a provider that supports stream();
-    // without stream() we do not advertise voice (no silent rooms).
+    // channels.voice.model. Need both a provider that exposes stream() and a
+    // registry entry advertising streaming+tools (#1553) — OpenRouter's
+    // stream() alone does not prove the resolved model can duplex or tool-call.
     const voiceModel = config.voiceModel ?? modelRouter.resolve('fast').model;
     const voiceBaseProvider = resolveProviderForModel(voiceModel, 'VoiceRuntime');
-    if (typeof voiceBaseProvider.stream === 'function') {
+    const voiceCaps = evaluateVoiceModelCapabilities(
+      voiceModel,
+      modelRegistry.getModel(voiceModel)?.capabilities,
+    );
+    if (typeof voiceBaseProvider.stream !== 'function') {
+      logger.warn(
+        { voiceModel, provider: voiceBaseProvider.id },
+        'Voice channel enabled but the resolved LLM provider does not support stream(); '
+        + 'voice adapter not started. Remap channels.voice.model / the fast tier to a streaming provider.',
+      );
+    } else if (!voiceCaps.ok) {
+      logger.warn(
+        {
+          voiceModel,
+          missingCapabilities: voiceCaps.missing,
+          unknownModel: voiceCaps.unknownModel,
+        },
+        'Voice channel enabled but the resolved model lacks required capabilities '
+        + `(${voiceCaps.missing.join(', ')}); voice adapter not started. `
+        + 'Remap channels.voice.model / the fast tier to a model with streaming and tools.',
+      );
+    } else {
       // Wrap in telemetry so voice turns emit llm.call cost events like every other path.
       const voiceLlmProvider = new TelemetryLlmProvider(voiceBaseProvider, bus, logger, 'voice-turn', modelRegistry);
       const voiceLivekitUrl = config.voiceLivekitUrl;
@@ -1854,7 +1877,7 @@ async function main(): Promise<void> {
         // voiceRuntime.configureTools() after the coordinator is registered
         // (ExecutionLayer + pinned tools + agent registry exist then).
       });
-      logger.info({ voiceModel }, 'Voice runtime constructed (streaming provider available)');
+      logger.info({ voiceModel }, 'Voice runtime constructed (streaming provider + model capabilities ok)');
 
       voiceAdapter = new VoiceAdapter({
         bus,
@@ -1867,12 +1890,6 @@ async function main(): Promise<void> {
         voiceModel: config.voiceModel,
         voiceRuntime,
       });
-    } else {
-      logger.warn(
-        { voiceModel, provider: voiceBaseProvider.id },
-        'Voice channel enabled but the resolved LLM provider does not support stream(); '
-        + 'voice adapter not started. Remap channels.voice.model / the fast tier to a streaming provider.',
-      );
     }
   } else if (channelShouldStart.has('voice')) {
     logger.warn('channel voice is enabled + resolvable but runtime credentials are missing (LiveKit, Deepgram, Cartesia, or the Cartesia voice ID); no Voice adapter constructed — check vault credentials and restart');
@@ -2488,9 +2505,18 @@ async function main(): Promise<void> {
 
   // Wire coordinator tools into VoiceRuntime so spoken turns can invoke skills
   // (#1414 AC6). ExecutionLayer still enforces autonomy / outbound gates.
+  // Only advertise tools when the resolved voice model declares `tools` (#1553).
   {
     const runtime = voiceAdapter?.getRuntime();
     if (runtime) {
+      const resolvedVoiceModel = config.voiceModel ?? modelRouter.resolve('fast').model;
+      const voiceModelCaps = modelRegistry.getModel(resolvedVoiceModel)?.capabilities ?? [];
+      if (!voiceModelCaps.includes('tools')) {
+        logger.warn(
+          { voiceModel: resolvedVoiceModel },
+          'Voice runtime started without tool wiring — resolved model lacks tools capability',
+        );
+      } else {
       const coordinatorEntry = agentConfigs.find(a => a.role === 'coordinator' || a.name === 'coordinator');
       const pinResolution = coordinatorEntry
         ? resolvePinnedSkills(
@@ -2557,6 +2583,7 @@ async function main(): Promise<void> {
           };
         },
       });
+      }
     }
   }
 

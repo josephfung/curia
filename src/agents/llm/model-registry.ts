@@ -47,7 +47,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheCreationPerMToken: 18.75,
       cacheReadPerMToken: 1.50,
     },
-    capabilities: ['vision', 'reasoning', 'coding', 'large_context'],
+    capabilities: ['vision', 'reasoning', 'coding', 'large_context', 'streaming', 'tools'],
   },
   'claude-sonnet-4-6': {
     provider: 'anthropic',
@@ -58,7 +58,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheCreationPerMToken: 3.75,
       cacheReadPerMToken: 0.30,
     },
-    capabilities: ['vision', 'reasoning', 'coding'],
+    capabilities: ['vision', 'reasoning', 'coding', 'streaming', 'tools'],
   },
   'claude-haiku-4-5': {
     provider: 'anthropic',
@@ -69,7 +69,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       cacheCreationPerMToken: 1.00,
       cacheReadPerMToken: 0.08,
     },
-    capabilities: ['vision', 'coding'],
+    capabilities: ['vision', 'coding', 'streaming', 'tools'],
   },
 
   // OpenRouter models — non-Claude models routed via OpenRouter's OpenAI-compatible API.
@@ -82,7 +82,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       inputPerMToken: 0.25,
       outputPerMToken: 1.50,
     },
-    capabilities: ['vision', 'coding'],
+    capabilities: ['vision', 'coding', 'streaming', 'tools'],
     maxOutputTokens: 8_192,
   },
   // Removed from OpenRouter ~2026-05-31. Entry retained for audit log provenance.
@@ -93,7 +93,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       inputPerMToken: 0.10,
       outputPerMToken: 0.40,
     },
-    capabilities: ['vision', 'coding'],
+    capabilities: ['vision', 'coding', 'streaming', 'tools'],
     maxOutputTokens: 8_192,
   },
   'deepseek/deepseek-chat-v3-0324': {
@@ -103,7 +103,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       inputPerMToken: 0.27,
       outputPerMToken: 1.10,
     },
-    capabilities: ['coding'],
+    capabilities: ['coding', 'streaming', 'tools'],
     maxOutputTokens: 8_192,
   },
   'deepseek/deepseek-v4-pro': {
@@ -113,7 +113,7 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       inputPerMToken: 0.435,
       outputPerMToken: 0.87,
     },
-    capabilities: ['coding', 'reasoning'],
+    capabilities: ['coding', 'reasoning', 'streaming', 'tools'],
     // 8_192 was too low — long-form writing tasks (e.g. import_to_google_doc with
     // a full essay body) exceeded it, producing truncated JSON tool call arguments.
     // DeepSeek V4 Pro on OpenRouter supports up to 64k output tokens (#934).
@@ -126,13 +126,14 @@ const MODEL_REGISTRY: Record<string, ModelMetadata> = {
       inputPerMToken: 2.50,
       outputPerMToken: 10.00,
     },
-    capabilities: ['vision', 'coding', 'reasoning'],
+    capabilities: ['vision', 'coding', 'reasoning', 'streaming', 'tools'],
     maxOutputTokens: 16_384,
   },
 
   // OpenAI embedding model — used by EmbeddingService for semantic search and entity resolution.
   // inputPerMToken matches current OpenAI pricing for text-embedding-3-small.
   // outputPerMToken is 0: embeddings produce no billed output tokens.
+  // No streaming/tools — embeddings are not chat models (#1553).
   'text-embedding-3-small': {
     provider: 'openai',
     contextWindow: 8191,
