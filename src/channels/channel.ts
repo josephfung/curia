@@ -17,8 +17,8 @@ export interface Channel {
    * transport is unavailable and flush them on `channel.reconnect` (#1380).
    *
    * Opt in for messaging transports that can recover (Signal socket, Slack Socket
-   * Mode, SMS HTTP with transient outages). Leave unset for realtime (voice) and
-   * always-local (http, cli) channels — delayed delivery is not meaningful there.
+ * Mode, SMS/email HTTP with transient outages). Leave unset for realtime (voice) and
+ * always-local (http, cli) channels — delayed delivery is not meaningful there.
    *
    * Adapters that set this must:
    *   1. Implement `isOutboundReady()`

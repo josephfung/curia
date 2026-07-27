@@ -1760,6 +1760,12 @@ async function main(): Promise<void> {
     // loudly instead of booting a dead channel, rather than letting the gate and runtime disagree.
     if (emailAdapters.length === emailAdaptersBefore) {
       logger.warn('channel email is enabled + resolvable but no Nylas client is configured at runtime; no email adapter constructed — check vault/env credentials and restart');
+    } else {
+      // Any started email account keeps the channel ready for queue flush (#1380).
+      outboundGateway.setOutboundQueueReadiness(
+        'email',
+        () => emailAdapters.some((a) => a.isOutboundReady()),
+      );
     }
   }
 

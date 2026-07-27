@@ -256,7 +256,7 @@ export interface OutboundGatewayConfig {
   outboundQueue?: OutboundQueueRepo;
   /**
    * Readiness probes for queueable channels, keyed by channel name (`signal`,
-   * `slack`, `sms`, …). Built at bootstrap from each adapter's `isOutboundReady`
+   * `slack`, `sms`, `email`, …). Built at bootstrap from each adapter's `isOutboundReady`
    * (or the underlying client). Absent channels are never auto-queued.
    */
   outboundQueueReadiness?: ReadonlyMap<string, () => boolean>;
@@ -1135,8 +1135,9 @@ export class OutboundGateway {
     // they receive — if we pass the original `request`, the unredacted content
     // reaches Nylas / signal-cli even though redactedBody was computed above.
     if (request.channel === 'email') {
-      const result = await this.dispatchEmail({ ...request, body: redactedBody, subject: redactedSubject });
-      if (result.success) {
+      const toSend = { ...request, body: redactedBody, subject: redactedSubject };
+      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchEmail(toSend));
+      if (result.success && !result.queued) {
         await this.promoteOrCreateRecipientContact('email', recipientId);
         await this.publishDelivered({
           channel: 'email',
@@ -2452,7 +2453,10 @@ export class OutboundGateway {
         { err, channel: 'email', to: request.to },
         'outbound-gateway: Nylas send failed',
       );
-      return { success: false, blockedReason: `Send failed: ${message}` };
+      // Transient network / 5xx → queueable. Auth/grant/validation stay permanent.
+      const queueable = /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|network|HTTP 5\d\d|temporarily|socket|ECONNRESET/i.test(message)
+        && !/401|403|invalid.?grant|unauthorized|forbidden|invalid.?token/i.test(message);
+      return { success: false, blockedReason: `Send failed: ${message}`, queueable };
     }
   }
 
