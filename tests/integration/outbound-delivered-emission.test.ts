@@ -28,6 +28,7 @@ describe('outbound.delivered emission (#729)', () => {
     const signalClient = {
       send: vi.fn().mockResolvedValue('1700000000999'),
       listGroups: vi.fn().mockResolvedValue([]),
+      isConnected: vi.fn().mockReturnValue(true),
     } as unknown as SignalRpcClient;
 
     // Mock ContactService — resolveByChannelIdentity is called twice:

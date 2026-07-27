@@ -2715,6 +2715,7 @@ describe('outbound.delivered on Signal send', () => {
     const signalClient = {
       send: vi.fn().mockResolvedValue('1700000000123'),
       listGroups: vi.fn().mockResolvedValue([]),
+      isConnected: vi.fn().mockReturnValue(true),
     } as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient;
 
     (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -2779,6 +2780,7 @@ describe('outbound.delivered on Signal send', () => {
           isMember: true,
         },
       ]),
+      isConnected: vi.fn().mockReturnValue(true),
     } as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient;
 
     // contactService returns null for the group ID lookup — groups have no individual contact record.
@@ -2867,6 +2869,7 @@ describe('CEO recipient bypass on send()', () => {
     const mocks = createMocks();
     const signalClient = {
       send: vi.fn().mockResolvedValue(undefined),
+      isConnected: vi.fn().mockReturnValue(true),
     };
     const gateway = new OutboundGateway({
       signalClient: signalClient as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient,
