@@ -108,7 +108,15 @@ body {
 }
 
 #root { height: 100%; }
-.app-root { height: 100vh; width: 100%; display: flex; flex-direction: row; overflow: hidden; }
+.app-root {
+  /* Prefer dynamic viewport so iOS Safari chrome doesn't push chat below the fold (#1571). */
+  height: 100%;
+  height: 100dvh;
+  width: 100%;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
 
 /* ── 3. Sidebar ──────────────────────────────────────────────────────── */
 .sidebar {
@@ -333,7 +341,9 @@ input:focus, textarea:focus, select:focus {
 
 /* ── 8. Login page ───────────────────────────────────────────────────── */
 .login-root {
-  height: 100vh; width: 100%;
+  height: 100%;
+  height: 100dvh;
+  width: 100%;
   display: flex; align-items: center; justify-content: center;
   background: var(--app-bg);
 }
@@ -374,10 +384,21 @@ input:focus, textarea:focus, select:focus {
 }
 
 /* ── 9b. Operator home (dashboard) ───────────────────────────────────── */
-.dash-scroll { flex: 1; overflow-y: auto; padding: 24px 20px 48px; }
+.dash-scroll {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 24px 20px 48px;
+}
 .dash-inner {
-  max-width: 1180px; margin: 0 auto;
+  width: 100%;
+  max-width: min(1180px, 100%);
+  min-width: 0;
+  margin: 0 auto;
   display: flex; flex-direction: column; gap: 20px;
+  box-sizing: border-box;
 }
 
 .dash-greeting {
@@ -483,6 +504,7 @@ input:focus, textarea:focus, select:focus {
 }
 .dash-activity-text {
   flex: 1; min-width: 0; font-size: 13px; line-height: 1.45; color: var(--app-fg-muted);
+  overflow-wrap: anywhere;
 }
 .dash-activity-text strong { color: var(--app-fg); font-weight: 600; }
 
@@ -545,6 +567,16 @@ input:focus, textarea:focus, select:focus {
 
 @media (max-width: 900px) {
   .dash-scroll { padding: 18px 14px 40px; }
+}
+
+@media (max-width: 768px) {
+  .dash-scroll { padding: 16px 12px 32px; }
+  .dash-promo-media,
+  .dash-promo-body {
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 100%;
+  }
 }
 
 /* ── 10. Settings shell ──────────────────────────────────────────────── */
@@ -1583,15 +1615,17 @@ table.records-table tbody tr.active td { background: transparent; }
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-height: 0; /* match .kg-layout / .records-layout — contain scroll (#1571) */
   overflow: hidden;
 }
 
 .chat-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  /* Reserve scrollbar gutter symmetrically so the content column stays
-     centered even on platforms with classic (non-overlay) scrollbars. */
-  scrollbar-gutter: stable both-edges;
+  /* Reserve scrollbar gutter so the content column stays centered on desktop.
+     On narrow screens both-edges steals width and clips the composer (#1571). */
+  scrollbar-gutter: stable;
   /* On wide screens, keep content in an 800px column centered in the pane.
      max(20px, …) ensures at least 20px side padding on narrow viewports.
      Must match the composer's minimum so both clamp at the same container width. */
@@ -1704,6 +1738,9 @@ table.records-table tbody tr.active td { background: transparent; }
 .chat-input-area {
   flex: none;
   border-top: 1px solid var(--app-border);
+  background: var(--app-bg);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  min-width: 0;
 }
 
 .voice-call-bar {
@@ -1712,8 +1749,25 @@ table.records-table tbody tr.active td { background: transparent; }
   align-items: center;
   gap: 8px;
   min-height: 32px;
+  min-width: 0;
   font-size: 12px;
   color: var(--app-fg-muted);
+  box-sizing: border-box;
+}
+
+.voice-call-start {
+  border-color: color-mix(in srgb, var(--app-teal) 45%, var(--app-input-bd));
+  color: var(--app-teal);
+  background: color-mix(in srgb, var(--app-teal) 8%, var(--app-card));
+}
+.voice-call-start:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--app-teal) 14%, var(--app-card));
+  border-color: var(--app-teal);
+  color: var(--app-teal);
+}
+.voice-call-start:disabled {
+  opacity: 0.7;
+  cursor: wait;
 }
 
 .voice-call-live-dot {
@@ -1742,6 +1796,9 @@ table.records-table tbody tr.active td { background: transparent; }
 
 .chat-composer {
   flex: none;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
   /* Match the 800px column constraint of .chat-messages so the input aligns. */
   padding: 12px max(20px, calc((100% - 800px) / 2));
   border-top: 1px solid var(--app-border);
@@ -1754,15 +1811,37 @@ table.records-table tbody tr.active td { background: transparent; }
   border-top: none;
 }
 
+.chat-input-area:has(.voice-call-bar) .chat-composer {
+  padding-top: 8px;
+}
+
 /* Override the global textarea defaults for the composer. */
 .chat-composer textarea {
   flex: 1;
+  min-width: 0; /* prevent flex min-content from clipping Send (#1571) */
   width: auto;
   resize: none;
   min-height: 42px;
   max-height: 160px;
   font-family: inherit;
   font-size: 13px;
+}
+
+.chat-composer .btn {
+  flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+  .chat-messages,
+  .voice-call-bar,
+  .chat-composer {
+    padding-left: max(14px, env(safe-area-inset-left, 0px));
+    padding-right: max(14px, env(safe-area-inset-right, 0px));
+  }
+
+  .chat-messages {
+    scrollbar-gutter: auto;
+  }
 }
 
 @media (max-width: 560px) {

@@ -1,5 +1,6 @@
 // apps/console/src/pages/chat/ChatComposer.tsx
 import { useState, useRef } from 'react';
+import { IconSend } from '../../components/Icons.js';
 
 interface ChatComposerProps {
   disabled: boolean;
@@ -62,7 +63,9 @@ export function ChatComposer({ disabled, onSend }: ChatComposerProps) {
         type="submit"
         className="btn btn-primary"
         disabled={disabled || value.trim().length === 0}
+        aria-label="Send message"
       >
+        <IconSend size={14} aria-hidden="true" />
         Send
       </button>
     </form>
