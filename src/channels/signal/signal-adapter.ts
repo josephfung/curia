@@ -21,7 +21,7 @@ import type { SignalEnvelope } from './types.js';
 import { SignalRpcClient } from './signal-rpc-client.js';
 import { convertSignalEnvelope, convertSignalReaction } from './message-converter.js';
 import { checkGroupMemberTrust } from './group-trust.js';
-import { createInboundMessage, createInboundReaction } from '../../bus/events.js';
+import { createInboundMessage, createInboundReaction, createChannelDisconnected, createChannelReconnect } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
 
@@ -92,6 +92,21 @@ export class SignalAdapter implements Channel {
     // Register inbound message handler before connecting so no messages are
     // missed during the connect window.
     rpcClient.on('message', this.boundHandleInbound);
+
+    // Publish channel lifecycle for outbound-queue flush (#1380).
+    rpcClient.on('connected', () => {
+      void bus.publish('channel', createChannelReconnect({ channel: 'signal' })).catch((err) => {
+        this.log.error({ err }, 'Failed to publish channel.reconnect');
+      });
+    });
+    rpcClient.on('disconnected', () => {
+      void bus.publish(
+        'channel',
+        createChannelDisconnected({ channel: 'signal', reason: 'signal-cli socket closed' }),
+      ).catch((err) => {
+        this.log.error({ err }, 'Failed to publish channel.disconnected');
+      });
+    });
 
     // connect() is synchronous — it starts the connection attempt in the background
     // and returns immediately. If signal-cli is not yet available (Docker startup race),

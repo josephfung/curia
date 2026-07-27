@@ -1249,6 +1249,7 @@ function makeSignalClient(groups: import('../../../src/channels/signal/types.js'
     send: vi.fn().mockResolvedValue(undefined),
     sendReadReceipt: vi.fn().mockResolvedValue(undefined),
     listGroups: vi.fn().mockResolvedValue(groups),
+    isConnected: vi.fn().mockReturnValue(true),
   };
 }
 

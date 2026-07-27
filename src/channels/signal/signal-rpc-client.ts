@@ -83,11 +83,21 @@ export class SignalRpcClient extends EventEmitter {
   private backoffMs = BACKOFF_INITIAL_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private stopping = false;
+  /** True while the Unix socket is open (#1380 outbound queue). */
+  private connected = false;
 
   constructor(config: SignalRpcClientConfig) {
     super();
     this.config = config;
     this.log = config.logger.child({ component: 'signal-rpc-client' });
+  }
+
+  /**
+   * Whether the signal-cli Unix socket is currently open.
+   * Used by OutboundGateway to enqueue instead of dropping when down (#1380).
+   */
+  isConnected(): boolean {
+    return this.connected;
   }
 
   // ---------------------------------------------------------------------------
@@ -137,6 +147,7 @@ export class SignalRpcClient extends EventEmitter {
       this.socket = null;
     }
 
+    this.connected = false;
     this.log.info('Signal RPC client disconnected');
   }
 
@@ -195,6 +206,7 @@ export class SignalRpcClient extends EventEmitter {
 
       socket.connect(this.config.socketPath, () => {
         settled = true;
+        this.connected = true;
         this.log.info({ socketPath: this.config.socketPath }, 'Signal RPC client connected');
         // Reset backoff on successful connect so the next disconnect starts fresh.
         this.backoffMs = BACKOFF_INITIAL_MS;
@@ -210,6 +222,7 @@ export class SignalRpcClient extends EventEmitter {
         // first message received after reconnect.
         this.buffer = '';
         this.socket = null;
+        this.connected = false;
         // Reject any requests that were waiting for a response — they will never
         // arrive now that the socket is gone.
         this.rejectAllPending(new Error('Signal RPC socket closed unexpectedly'));

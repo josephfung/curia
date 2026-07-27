@@ -1258,6 +1258,32 @@ export interface ChannelStalledEvent extends BaseEvent {
   payload: ChannelStalledPayload;
 }
 
+// ChannelDisconnectedEvent — adapter lost its transport and cannot deliver (#1380).
+interface ChannelDisconnectedPayload {
+  /** Channel name (e.g. 'signal'). */
+  channel: string;
+  /** Optional human-readable reason for operators. */
+  reason?: string;
+}
+
+export interface ChannelDisconnectedEvent extends BaseEvent {
+  type: 'channel.disconnected';
+  sourceLayer: 'channel';
+  payload: ChannelDisconnectedPayload;
+}
+
+// ChannelReconnectEvent — adapter transport is live again; flush outbound_queue (#1380).
+interface ChannelReconnectPayload {
+  /** Channel name (e.g. 'signal'). */
+  channel: string;
+}
+
+export interface ChannelReconnectEvent extends BaseEvent {
+  type: 'channel.reconnect';
+  sourceLayer: 'channel';
+  payload: ChannelReconnectPayload;
+}
+
 export type BusEvent =
   | InboundMessageEvent
   | InboundReactionEvent
@@ -1310,7 +1336,9 @@ export type BusEvent =
   | VoiceSessionStartedEvent    // #1414: voice channel session lifecycle
   | VoiceSessionEndedEvent      // #1414: voice channel session lifecycle
   | ChannelPollEvent           // #846: email adapter poll heartbeat (one per cycle)
-  | ChannelStalledEvent;       // #846: email adapter stall detection (fire-once per lifecycle)
+  | ChannelStalledEvent        // #846: email adapter stall detection (fire-once per lifecycle)
+  | ChannelDisconnectedEvent   // #1380: channel transport lost
+  | ChannelReconnectEvent;     // #1380: channel transport restored — flush outbound queue
 
 // Convenience alias for use in handler maps / switch statements.
 export type EventType = BusEvent['type'];
@@ -2028,6 +2056,28 @@ export function createChannelStalled(payload: ChannelStalledPayload): ChannelSta
     id: randomUUID(),
     timestamp: new Date(),
     type: 'channel.stalled',
+    sourceLayer: 'channel',
+    payload,
+  };
+}
+
+export function createChannelDisconnected(
+  payload: ChannelDisconnectedPayload,
+): ChannelDisconnectedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'channel.disconnected',
+    sourceLayer: 'channel',
+    payload,
+  };
+}
+
+export function createChannelReconnect(payload: ChannelReconnectPayload): ChannelReconnectEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'channel.reconnect',
     sourceLayer: 'channel',
     payload,
   };

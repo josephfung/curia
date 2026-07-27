@@ -97,6 +97,7 @@ import type { JudgeConfig } from './dispatch/outbound-judge.js';
 import { EscalationJudge } from './autonomy/escalation-judge.js';
 import type { EscalationJudgeConfig } from './autonomy/escalation-judge.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
+import { OutboundQueueRepo } from './skills/outbound-queue-repo.js';
 import { ExportControlService, resolveExportControls } from './security/export-controls.js';
 import { InboundScanner } from './dispatch/inbound-scanner.js';
 import { RateLimiter } from './dispatch/rate-limiter.js';
@@ -1663,6 +1664,7 @@ async function main(): Promise<void> {
   const exportControlService = new ExportControlService(pool, exportControlsConfig, logger);
 
   if (hasAnyOutboundClient && outboundFilter && !setupRequiredAtBoot) {
+    const outboundQueue = new OutboundQueueRepo(pool);
     outboundGateway = new OutboundGateway({
       nylasClients: registryGatedOutbound.nylasClients,
       signalClient: registryGatedOutbound.signalClient,
@@ -1683,7 +1685,9 @@ async function main(): Promise<void> {
       actionLogRepo,
       confidencePipeline,
       exportControlService,
+      outboundQueue,
     });
+    outboundGateway.start();
     logger.info({
       emailAccounts: registryGatedOutbound.nylasClients ? [...registryGatedOutbound.nylasClients.keys()] : [],
       hasSignal: !!registryGatedOutbound.signalClient,
