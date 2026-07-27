@@ -51,7 +51,45 @@ describe('HealthService.getStatus()', () => {
     expect(result.checks.signal).toBe('skipped');
     expect(result.checks.email).toBe('skipped');
     expect(result.checks.browser).toBe('skipped');
-    expect(result.checks.mcp.google_workspace).toBe('skipped');
+    expect(result.checks.mcp).toEqual({});
+  });
+
+  it('returns degraded when an enabled MCP server booted with 0 tools (#1500)', async () => {
+    const svc = new HealthService(makeDeps({
+      mcpServerStatuses: new Map([
+        ['google-workspace', { status: 'zero_tools' }],
+      ]),
+      mcpSessions: [{
+        serverId: 'google-workspace',
+        client: { listTools: vi.fn() },
+      }],
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.status).toBe('degraded');
+    expect(result.checks.mcp.google_workspace).toBe('fail');
+  });
+
+  it('returns degraded when an enabled MCP server failed to connect (#1500)', async () => {
+    const svc = new HealthService(makeDeps({
+      mcpServerStatuses: new Map([
+        ['google-workspace', { status: 'unavailable', reason: 'connect failed' }],
+      ]),
+      mcpSessions: [],
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.status).toBe('degraded');
+    expect(result.checks.mcp.google_workspace).toBe('fail');
+  });
+
+  it('does not fail health for MCP servers that were not enabled', async () => {
+    // Disabled servers are absent from mcpServerStatuses (loader skips them).
+    const svc = new HealthService(makeDeps({
+      mcpServerStatuses: new Map(),
+      mcpSessions: [],
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.status).toBe('ok');
+    expect(result.checks.mcp).toEqual({});
   });
 
   it('returns degraded when a non-critical check fails', async () => {

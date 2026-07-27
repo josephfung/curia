@@ -17,7 +17,7 @@ describe('GET /api/health', () => {
       checks: {
         db: 'ok', bus: 'ok', signal: 'skipped',
         email: 'skipped', browser: 'skipped',
-        mcp: { google_workspace: 'skipped' },
+        mcp: {},
         scheduler: 'ok',
       },
     }),
@@ -55,7 +55,7 @@ describe('GET /api/health', () => {
         checks: {
           db: 'fail', bus: 'ok', signal: 'skipped',
           email: 'skipped', browser: 'skipped',
-          mcp: { google_workspace: 'skipped' },
+          mcp: {},
           scheduler: 'ok',
         },
       }),

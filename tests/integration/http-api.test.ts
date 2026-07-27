@@ -27,7 +27,7 @@ function makeHealthServiceStub(): HealthService {
       checks: {
         db: 'ok', bus: 'ok', signal: 'skipped',
         email: 'skipped', browser: 'skipped',
-        mcp: { google_workspace: 'skipped' },
+        mcp: {},
         scheduler: 'ok',
       },
     }),

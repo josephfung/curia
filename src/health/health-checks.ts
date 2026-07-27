@@ -42,8 +42,19 @@ export interface McpSessionHealth {
   serverId: string;
   client: {
     /** MCP SDK Client.listTools() — a lightweight round-trip that proves the subprocess is alive. */
-    listTools(): Promise<unknown>;
+    listTools(): Promise<{ tools?: unknown[] }>;
   };
+}
+
+/** Boot-time MCP load outcome (mirrors McpServerLoadStatus in mcp-loader). */
+export type McpServerBootStatus =
+  | { status: 'ok'; toolCount: number }
+  | { status: 'zero_tools' }
+  | { status: 'unavailable'; reason: string };
+
+/** Health check key for an MCP server name (`google-workspace` → `google_workspace`). */
+export function mcpHealthKey(serverName: string): string {
+  return serverName.replace(/-/g, '_');
 }
 
 // ---------------------------------------------------------------------------
@@ -163,9 +174,58 @@ export function checkBrowser(service: BrowserServiceHealth | undefined): CheckRe
 }
 
 /**
- * Check the google-workspace MCP subprocess via a tools/list call.
- * Non-critical. Skipped when the server is not in the active mcpSessions list.
- * Hard 3-second timeout.
+ * Check every **enabled** MCP server that was attempted at boot (#1500).
+ *
+ * - Boot `zero_tools` / `unavailable` → fail (no live probe needed)
+ * - Boot `ok` → live tools/list; fail if the call errors or returns 0 tools
+ * - Disabled servers are absent from `serverStatuses` and never appear here
+ *
+ * Hard 3-second timeout per live probe.
+ */
+export async function checkMcpServers(
+  serverStatuses: ReadonlyMap<string, McpServerBootStatus>,
+  mcpSessions: McpSessionHealth[],
+  logger: Logger,
+): Promise<Record<string, CheckResult>> {
+  // Probe every server concurrently: a liveness endpoint must stay bounded, not
+  // scale at ~3s × server count when several servers stall (each probe already has
+  // its own 3s cap, so the whole check is ~3s regardless of how many stall). Assemble
+  // the record from the resolved outcomes, preserving serverStatuses order.
+  const entries = await Promise.all(
+    [...serverStatuses].map(async ([serverName, boot]): Promise<[string, CheckResult]> => {
+      const key = mcpHealthKey(serverName);
+      if (boot.status === 'zero_tools' || boot.status === 'unavailable') {
+        return [key, 'fail'];
+      }
+
+      const session = mcpSessions.find((s) => s.serverId === serverName);
+      if (!session) {
+        // Boot said ok but session is gone — treat as fail.
+        return [key, 'fail'];
+      }
+
+      try {
+        const toolList = await Promise.race([
+          session.client.listTools(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), 3_000),
+          ),
+        ]);
+        const count = toolList.tools?.length ?? 0;
+        return [key, count > 0 ? 'ok' : 'fail'];
+      } catch (err) {
+        logger.warn({ err, server: serverName }, 'checkMcpServers: MCP probe failed');
+        return [key, 'fail'];
+      }
+    }),
+  );
+
+  return Object.fromEntries(entries);
+}
+
+/**
+ * @deprecated Prefer checkMcpServers. Kept as a thin wrapper for callers that
+ * only care about google-workspace until they migrate.
  */
 export async function checkMcpGoogleWorkspace(
   mcpSessions: McpSessionHealth[],
@@ -174,13 +234,13 @@ export async function checkMcpGoogleWorkspace(
   const session = mcpSessions.find(s => s.serverId === 'google-workspace');
   if (!session) return 'skipped';
   try {
-    await Promise.race([
+    const toolList = await Promise.race([
       session.client.listTools(),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('timeout')), 3_000),
       ),
     ]);
-    return 'ok';
+    return (toolList.tools?.length ?? 0) > 0 ? 'ok' : 'fail';
   } catch (err) {
     logger.warn({ err }, 'checkMcpGoogleWorkspace: MCP probe failed');
     return 'fail';

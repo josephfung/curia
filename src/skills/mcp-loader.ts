@@ -6,8 +6,9 @@
 // orchestrator can close sessions and register MCP-as-skill projections
 // (ADR-032).
 //
-// Connection failures are warn-only — a missing MCP server should not take
-// down the whole system. The failed server's tools are simply not registered.
+// Connection failures are error-logged and tracked in serverStatuses for
+// /api/health (#1500) — a missing MCP server should not take down the whole
+// system, but it must not be silent either.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -27,6 +28,11 @@ import type {
 } from './mcp-config-types.js';
 
 /** Result of loading MCP servers: live sessions + tools registered per server. */
+export type McpServerLoadStatus =
+  | { status: 'ok'; toolCount: number }
+  | { status: 'zero_tools' }
+  | { status: 'unavailable'; reason: string };
+
 export interface McpLoadResult {
   sessions: McpSession[];
   /**
@@ -34,6 +40,12 @@ export interface McpLoadResult {
    * Used to project each MCP server as a skill into SkillRegistry (ADR-032).
    */
   projectedTools: Map<string, string[]>;
+  /**
+   * Boot outcome for every **enabled** server that was attempted (not skipped
+   * by the registry filter). Consumed by HealthService so a silent 0-tool or
+   * connect failure surfaces on `/api/health` (#1500).
+   */
+  serverStatuses: Map<string, McpServerLoadStatus>;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,13 +318,23 @@ export async function loadMcpServers(
 
   if (servers.length === 0) {
     logger.debug('No MCP servers configured in config/skills.yaml');
-    return { sessions: [], projectedTools: new Map() };
+    return { sessions: [], projectedTools: new Map(), serverStatuses: new Map() };
   }
 
   const sessions: McpSession[] = [];
   const projectedTools = new Map<string, string[]>();
+  const serverStatuses = new Map<string, McpServerLoadStatus>();
 
   for (const serverEntry of servers) {
+    // Registry filter first: disabled servers must not affect health (#1500).
+    if (enabledServerNames !== undefined && !enabledServerNames.has(serverEntry.name)) {
+      logger.debug(
+        { server: serverEntry.name },
+        'MCP server not in enabled registry set — skipping',
+      );
+      continue;
+    }
+
     // Validate required transport-specific fields here rather than in the JSON Schema
     // so that the error messages are human-readable and include the server name.
     if (serverEntry.transport === 'stdio' && !serverEntry.command) {
@@ -320,6 +342,10 @@ export async function loadMcpServers(
         { server: serverEntry.name },
         'MCP server config missing required "command" for stdio transport — skipping',
       );
+      serverStatuses.set(serverEntry.name, {
+        status: 'unavailable',
+        reason: 'missing stdio command',
+      });
       continue;
     }
     if (serverEntry.transport === 'sse' && !serverEntry.url) {
@@ -327,15 +353,10 @@ export async function loadMcpServers(
         { server: serverEntry.name },
         'MCP server config missing required "url" for sse transport — skipping',
       );
-      continue;
-    }
-
-    // Registry filter: skip servers not in the enabled set.
-    if (enabledServerNames !== undefined && !enabledServerNames.has(serverEntry.name)) {
-      logger.debug(
-        { server: serverEntry.name },
-        'MCP server not in enabled registry set — skipping',
-      );
+      serverStatuses.set(serverEntry.name, {
+        status: 'unavailable',
+        reason: 'missing sse url',
+      });
       continue;
     }
 
@@ -368,6 +389,10 @@ export async function loadMcpServers(
           { err, server: serverEntry.name },
           'secrets block resolution failed — skipping this MCP server',
         );
+        serverStatuses.set(serverEntry.name, {
+          status: 'unavailable',
+          reason: 'secrets resolution failed',
+        });
         continue;
       }
       // Non-secret literals in env: pass through; secrets block env values overlay them.
@@ -387,6 +412,10 @@ export async function loadMcpServers(
           "MCP server has secrets: block but fixed_inputs still contains 'env:VAR' sentinels — " +
           'migrate them to the secrets: block and remove from fixed_inputs; skipping this server',
         );
+        serverStatuses.set(serverEntry.name, {
+          status: 'unavailable',
+          reason: 'fixed_inputs env sentinels with secrets block',
+        });
         continue;
       }
       Object.assign(resolvedFixedInputs, literalFixed, secretsResult.fixedInputs);
@@ -415,7 +444,13 @@ export async function loadMcpServers(
             break;
           }
         }
-        if (resolutionFailed) continue;
+        if (resolutionFailed) {
+          serverStatuses.set(serverEntry.name, {
+            status: 'unavailable',
+            reason: 'fixed_inputs resolution failed',
+          });
+          continue;
+        }
         logger.info(
           { server: serverEntry.name, keys: Object.keys(resolvedFixedInputs) },
           'MCP server fixed_inputs resolved',
@@ -434,6 +469,10 @@ export async function loadMcpServers(
             { err, server: serverEntry.name },
             'env secret resolution from vault failed — skipping this MCP server',
           );
+          serverStatuses.set(serverEntry.name, {
+            status: 'unavailable',
+            reason: 'env secret resolution failed',
+          });
           continue;
         }
       }
@@ -452,6 +491,10 @@ export async function loadMcpServers(
         { err, server: serverEntry.name },
         'Failed to connect to MCP server — tools from this server will be unavailable until restart',
       );
+      serverStatuses.set(serverEntry.name, {
+        status: 'unavailable',
+        reason: 'connect failed',
+      });
       continue;
     }
 
@@ -468,20 +511,27 @@ export async function loadMcpServers(
       await session.close().catch((closeErr: unknown) => {
         logger.error({ err: closeErr, server: serverEntry.name }, 'Error closing MCP session after tools/list failure');
       });
+      serverStatuses.set(serverEntry.name, {
+        status: 'unavailable',
+        reason: 'tools/list failed',
+      });
       continue;
     }
 
     const tools = toolList.tools ?? [];
     if (tools.length === 0) {
-      // Zero tools most commonly means the OAuth flow hasn't been completed yet.
-      // The server starts and handshakes successfully but won't expose tools until
-      // the user authenticates. Check docs/dev/google-drive.md Step 5 if this is
-      // the google-workspace server. Token cache: ~/.workspace-mcp/cli-tokens/
-      logger.warn({ server: serverEntry.name }, 'MCP server advertises no tools — nothing to register. If this is the google-workspace server, the OAuth flow may not have been completed (see docs/dev/google-drive.md Step 5).');
+      // Zero tools most commonly means the OAuth flow hasn't been completed yet,
+      // or the server crashed mid-boot before advertising tools (curia-deploy#181).
+      // This is a loud health failure (#1500) — not a silent warn-and-continue.
+      logger.error(
+        { server: serverEntry.name },
+        'MCP server advertises no tools — tools from this server will be unavailable until restart. If this is google-workspace, the OAuth flow may not have been completed (see docs/dev/google-drive.md Step 5).',
+      );
       // Keep the session open — the server might add tools in a future protocol version.
       // Still project an empty skill so the server name is pinnable/discoverable.
       projectedTools.set(serverEntry.name, []);
       sessions.push(session);
+      serverStatuses.set(serverEntry.name, { status: 'zero_tools' });
       continue;
     }
 
@@ -594,9 +644,10 @@ export async function loadMcpServers(
       'MCP server tools registered',
     );
     sessions.push(session);
+    serverStatuses.set(serverEntry.name, { status: 'ok', toolCount: registeredNames.length });
   }
 
-  return { sessions, projectedTools };
+  return { sessions, projectedTools, serverStatuses };
 }
 
 /**

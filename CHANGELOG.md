@@ -16,11 +16,13 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`resolve-learning-digest`** — accepts a unique task-id prefix for digest resolve. (#1545)
+- **`/api/health` mcp checks** — dynamic per enabled MCP server; 0 tools → degraded. (#1500)
 
 ### Fixed
 
 - **Slack decode** — unescape `&amp;` last so `&amp;lt;` stays literal `&lt;`. (#1569)
 - **Ant Farm** — desk roster updates during scene boot are no longer dropped. (#1549)
+- **MCP bootstrap** — enabled servers with 0 tools now error-log and fail health. (#1500)
 
 ### Security
 
