@@ -351,15 +351,21 @@ export class EmailAdapter implements Channel {
       this.pollTimer = undefined;
     }
     this.startedAt = null;
-    void this.config.bus.publish(
-      'channel',
-      createChannelDisconnected({
-        channel: 'email',
-        reason: `Email adapter stopped (account=${this.config.accountId})`,
-      }),
-    ).catch((err) => {
+    // Await the disconnect publication before returning so a graceful stop() does
+    // not resolve (or lose the event during immediate shutdown) while the readiness
+    // transition is still in flight — the publish is a shutdown side effect, not
+    // fire-and-forget (#1380 review).
+    try {
+      await this.config.bus.publish(
+        'channel',
+        createChannelDisconnected({
+          channel: 'email',
+          reason: `Email adapter stopped (account=${this.config.accountId})`,
+        }),
+      );
+    } catch (err) {
       this.config.logger.error({ err }, 'Failed to publish channel.disconnected');
-    });
+    }
     this.config.logger.info('Email adapter stopped');
   }
 
