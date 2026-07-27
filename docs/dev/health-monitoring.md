@@ -20,6 +20,9 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
     "browser":   "ok | fail | skipped",
     "mcp":       { "google_workspace": "ok | fail | skipped" },
     "nylas_calendar": "ok | fail | skipped",
+    "slack":     "ok | fail | skipped",
+    "sms":       "ok | fail | skipped",
+    "voice":     "ok | fail | skipped",
     "scheduler": "ok | fail"
   }
 }
@@ -30,15 +33,25 @@ Curia exposes a three-state health endpoint and a daily credential canary that f
 | `status` | HTTP | Meaning |
 |---|---|---|
 | `ok` | 200 | All enabled checks pass |
-| `degraded` | 200 | A non-critical service is down (signal, email, browser, MCP, calendar, scheduler) |
+| `degraded` | 200 | A non-critical service is down (signal, email, browser, MCP, calendar, slack, sms, voice, scheduler) |
 | `down` | 503 | A critical service is unreachable (db or bus) — Curia cannot function |
 
 `skipped` means a check's underlying service is not configured (e.g. Signal is disabled). Skipped checks never affect the overall status.
 
+### Channel liveness probes
+
+| Check | Probe | Skipped when |
+|---|---|---|
+| `signal` | Signal-cli RPC `listGroups()` | Signal client not configured |
+| `email` | Last successful Nylas poll within stall window | Email adapter not constructed |
+| `slack` | Socket Mode `connected` (with short boot grace) | Slack adapter not constructed (disabled / no tokens) |
+| `sms` | Telnyx webhook handler installed | SMS adapter not constructed (disabled / no credentials) |
+| `voice` | LiveKit RoomService `listRooms()` on the **management** URL | Voice adapter not constructed (disabled / incomplete credentials) |
+
 ### Which checks are critical vs. non-critical
 
 **Critical (down → 503):** `db`, `bus`
-**Non-critical (degraded → 200):** `signal`, `email`, `browser`, `mcp.*`, `nylas_calendar`, `scheduler`
+**Non-critical (degraded → 200):** `signal`, `email`, `browser`, `mcp.*`, `nylas_calendar`, `slack`, `sms`, `voice`, `scheduler`
 
 Rationale: a dead Signal socket should not page as a full outage when email still works.
 

@@ -42,6 +42,9 @@ export async function healthRoutes(
           browser: 'skipped' as const,
           mcp: {},
           nylas_calendar: 'skipped' as const,
+          slack: 'skipped' as const,
+          sms: 'skipped' as const,
+          voice: 'skipped' as const,
           scheduler: 'fail' as const,
         },
       });

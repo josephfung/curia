@@ -61,6 +61,28 @@ export interface NylasCalendarClientHealth {
   listCalendars(): Promise<unknown[]>;
 }
 
+/** Slack Socket Mode surface for /api/health (#1567). */
+export interface SlackClientHealth {
+  isStarted(): boolean;
+  isSocketConnected(): boolean;
+}
+
+/**
+ * SMS channel surface for /api/health (#1567).
+ * Credentials are implied by adapter construction; liveness = webhook installed.
+ */
+export interface SmsChannelHealth {
+  isWebhookInstalled(): boolean;
+}
+
+/** LiveKit management reachability for the voice channel (#1567). */
+export interface VoiceLiveKitHealth {
+  listRooms(): Promise<unknown[]>;
+}
+
+/** Boot grace before Slack Socket Mode's first `connected` event (#1567). */
+export const SLACK_CONNECT_GRACE_MS = 60_000;
+
 // ---------------------------------------------------------------------------
 // Probe implementations
 // ---------------------------------------------------------------------------
@@ -286,6 +308,57 @@ export async function checkNylasCalendar(
       ? (err as { statusCode?: unknown }).statusCode
       : undefined;
     return { status: 'fail', authFailure: code === 401 || code === 403 };
+  }
+}
+
+/**
+ * Slack Socket Mode connection state (#1567). Non-critical.
+ * Skipped when the Slack adapter was not constructed (disabled / no credentials).
+ * Allows a short boot grace before the first `connected` event; after that,
+ * a disconnected socket is `fail` (Socket Mode reconnects are visible as degraded).
+ */
+export function checkSlack(
+  client: SlackClientHealth | undefined,
+  startedAt: Date,
+  graceMs: number = SLACK_CONNECT_GRACE_MS,
+): CheckResult {
+  if (!client) return 'skipped';
+  if (!client.isStarted()) return 'fail';
+  if (client.isSocketConnected()) return 'ok';
+  return Date.now() - startedAt.getTime() < graceMs ? 'ok' : 'fail';
+}
+
+/**
+ * SMS (Telnyx) adapter readiness (#1567). Non-critical.
+ * Skipped when the SMS adapter was not constructed. Healthy when the webhook
+ * handler is installed (adapter started) — no outbound send.
+ */
+export function checkSms(health: SmsChannelHealth | undefined): CheckResult {
+  if (!health) return 'skipped';
+  return health.isWebhookInstalled() ? 'ok' : 'fail';
+}
+
+/**
+ * Voice / LiveKit management reachability (#1567). Non-critical.
+ * Skipped when the voice adapter was not constructed. Probes listRooms() against
+ * the internal management URL (not the browser signaling URL). Hard 5s timeout.
+ */
+export async function checkVoice(
+  livekit: VoiceLiveKitHealth | undefined,
+  logger: Logger,
+): Promise<CheckResult> {
+  if (!livekit) return 'skipped';
+  try {
+    await Promise.race([
+      livekit.listRooms(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 5_000),
+      ),
+    ]);
+    return 'ok';
+  } catch (err) {
+    logger.warn({ err }, 'checkVoice: LiveKit management probe failed');
+    return 'fail';
   }
 }
 

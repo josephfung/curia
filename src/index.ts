@@ -85,7 +85,7 @@ import { VoiceRuntime } from './channels/voice/voice-runtime.js';
 import { DeepgramSttProvider } from './channels/voice/speech/deepgram-stt.js';
 import { CartesiaTtsProvider } from './channels/voice/speech/cartesia-tts.js';
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
-import { deleteVoiceRoom } from './channels/voice/livekit/token.js';
+import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
@@ -2078,6 +2078,21 @@ async function main(): Promise<void> {
     nylasCalendarClient,
     signalRpcClient,
     browserService,
+    // Pass channel health deps only when the adapter was constructed (enabled +
+    // credentials) so disabled channels stay `skipped`, never `fail` (#1567).
+    slackClient: slackAdapter ? slackClient : undefined,
+    smsHealth: smsAdapter
+      ? { isWebhookInstalled: () => smsWebhookBridge.getHandler() !== null }
+      : undefined,
+    voiceLiveKit: voiceAdapter
+      ? {
+          listRooms: () => listVoiceRooms({
+            livekitManagementUrl: config.voiceLivekitManagementUrl,
+            apiKey: config.voiceLivekitApiKey!,
+            apiSecret: config.voiceLivekitApiSecret!,
+          }),
+        }
+      : undefined,
     mcpSessions,
     mcpServerStatuses,
     modelRoutingConfig,

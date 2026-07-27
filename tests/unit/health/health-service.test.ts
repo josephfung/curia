@@ -45,7 +45,7 @@ describe('HealthService.getStatus()', () => {
     expect(result.checks.db).toBe('fail');
   });
 
-  it('skips signal/email/browser when not configured', async () => {
+  it('skips signal/email/browser/slack/sms/voice when not configured', async () => {
     const svc = new HealthService(makeDeps() as never);
     const result = await svc.getStatus();
     expect(result.checks.signal).toBe('skipped');
@@ -53,6 +53,57 @@ describe('HealthService.getStatus()', () => {
     expect(result.checks.browser).toBe('skipped');
     expect(result.checks.mcp).toEqual({});
     expect(result.checks.nylas_calendar).toBe('skipped');
+    expect(result.checks.slack).toBe('skipped');
+    expect(result.checks.sms).toBe('skipped');
+    expect(result.checks.voice).toBe('skipped');
+  });
+
+  it('returns degraded when Slack client never started (#1567)', async () => {
+    // Enabled adapter that failed start → fail (not skipped). Disconnect-past-grace
+    // is covered in checkSlack unit tests.
+    const svc = new HealthService(makeDeps({
+      slackClient: {
+        isStarted: () => false,
+        isSocketConnected: () => false,
+      },
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.status).toBe('degraded');
+    expect(result.checks.slack).toBe('fail');
+  });
+
+  it('returns degraded when SMS webhook is not installed (#1567)', async () => {
+    const svc = new HealthService(makeDeps({
+      smsHealth: { isWebhookInstalled: () => false },
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.status).toBe('degraded');
+    expect(result.checks.sms).toBe('fail');
+  });
+
+  it('returns degraded when LiveKit management probe fails (#1567)', async () => {
+    const svc = new HealthService(makeDeps({
+      voiceLiveKit: { listRooms: vi.fn().mockRejectedValue(new Error('timeout')) },
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.status).toBe('degraded');
+    expect(result.checks.voice).toBe('fail');
+  });
+
+  it('reports ok for healthy Slack/SMS/Voice probes (#1567)', async () => {
+    const svc = new HealthService(makeDeps({
+      slackClient: {
+        isStarted: () => true,
+        isSocketConnected: () => true,
+      },
+      smsHealth: { isWebhookInstalled: () => true },
+      voiceLiveKit: { listRooms: vi.fn().mockResolvedValue([]) },
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.status).toBe('ok');
+    expect(result.checks.slack).toBe('ok');
+    expect(result.checks.sms).toBe('ok');
+    expect(result.checks.voice).toBe('ok');
   });
 
   it('returns degraded when an enabled MCP server booted with 0 tools (#1500)', async () => {

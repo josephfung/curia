@@ -37,6 +37,31 @@ export async function mintVoiceParticipantToken(
   return token.toJwt();
 }
 
+/** Map a LiveKit URL to the HTTP(S) host RoomServiceClient expects. */
+export function toLiveKitHttpUrl(livekitManagementUrl: string): string {
+  return livekitManagementUrl
+    .replace(/^wss:/i, 'https:')
+    .replace(/^ws:/i, 'http:');
+}
+
+/**
+ * Lightweight LiveKit management reachability probe for /api/health (#1567).
+ *
+ * `livekitManagementUrl` must be the server→LiveKit HTTP(S) base (e.g.
+ * `http://livekit:7880` on the compose network), **not** the browser signaling
+ * URL (`wss://…`) — same constraint as deleteVoiceRoom (#1555 / ADR-037).
+ */
+export async function listVoiceRooms(
+  config: LiveKitTokenConfig & { livekitManagementUrl: string },
+): Promise<unknown[]> {
+  const client = new RoomServiceClient(
+    toLiveKitHttpUrl(config.livekitManagementUrl),
+    config.apiKey,
+    config.apiSecret,
+  );
+  return client.listRooms();
+}
+
 /**
  * Best-effort room teardown after a session ends so a leaked JWT cannot rejoin
  * an empty room. Failures are logged by the caller — never throw into hangup.
@@ -50,11 +75,10 @@ export async function deleteVoiceRoom(
   config: LiveKitTokenConfig & { livekitManagementUrl: string },
   roomName: string,
 ): Promise<void> {
-  // RoomServiceClient expects an HTTP(S) host. Defensively map ws(s) → http(s)
-  // if an operator pastes a WebSocket URL by mistake.
-  const httpUrl = config.livekitManagementUrl
-    .replace(/^wss:/i, 'https:')
-    .replace(/^ws:/i, 'http:');
-  const client = new RoomServiceClient(httpUrl, config.apiKey, config.apiSecret);
+  const client = new RoomServiceClient(
+    toLiveKitHttpUrl(config.livekitManagementUrl),
+    config.apiKey,
+    config.apiSecret,
+  );
   await client.deleteRoom(roomName);
 }
