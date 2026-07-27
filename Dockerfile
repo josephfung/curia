@@ -74,21 +74,30 @@ WORKDIR /app
 
 RUN corepack enable
 
-# Upgrade npm to 11.18.0 to clear CVEs in npm's own bundled packages:
-#   - CVE-2026-59873: node-tar <= 7.5.18 (decompression/parse DoS via unlimited input)
-#   - CVE-2026-59874: node-tar <= 7.5.17 (infinite loop on negative-size entry in replace)
-#   - CVE-2026-59871: node-tar <= 7.5.17 (crash via PAX numeric path type confusion)
-#   - CVE-2026-59875: node-tar <= 7.5.16 (uncaught exception on NUL byte in PAX records)
-#   - CVE-2026-13149: brace-expansion < 5.0.7 (exponential-time expansion DoS)
-# 11.17.0's bundled tar@7.5.16 / brace-expansion@5.0.6 predate these fixes.
-# 11.18.0 is the lowest npm release whose bundled deps clear all five above:
-# it bundles tar@7.5.19 (>= the 7.5.19 floor CVE-2026-59873 requires) and
-# brace-expansion@5.0.7, and still ships ip-address@10.2.0 (clears the earlier
-# CVE-2026-42338 that motivated the previous bump). Staying on the npm 11 major avoids
-# npm 12's breaking changes for a build/CLI-only tool not on the runtime request path.
-# TODO: Dependabot does not track RUN-instruction version pins — bump this
-# manually when npm publishes a patch that addresses new bundled CVEs.
-RUN npm install -g npm@11.18.0
+# Remove the base image's global npm/npx. They are unused at runtime (installs
+# go through corepack→pnpm; CMD invokes tsx) and their bundled deps keep
+# accumulating Trivy HIGH/MEDIUM findings that no npm 11.x/12.x pin clears:
+#   - CVE-2026-14257 / GHSA-mh99-v99m-4gvg: brace-expansion < 5.0.8 (unbounded
+#     expansion length OOM DoS) — code-scanning alert #233
+#   - GHSA-r292-9mhp-454m: tar < 7.5.21 — code-scanning alert #235
+# node:24-slim ships npm@11.16.0 (brace-expansion@5.0.6, tar@7.5.15). The prior
+# bump to npm@11.18.0 cleared an earlier brace-expansion/tar batch but still
+# left 5.0.7 / 7.5.19. npm@12.0.1 (latest) bundles the same 5.0.7 / 7.5.19 —
+# verified 2026-07-27 — so the "bump npm to clear bundled CVEs" pattern is
+# exhausted. Stripping npm removes the recurring scan surface entirely;
+# corepack is bundled with Node and does not depend on the global npm package.
+# Fail closed: assert the global npm/npx are present before removal and
+# unreachable afterward. `rm -rf` alone exits 0 even when its targets are
+# already gone, so a future Node base image that relocates npm would leave the
+# vulnerable bundled deps (brace-expansion, tar) in place while the build stayed
+# green. These assertions turn that silent regression into a hard build failure.
+RUN set -e; \
+    test -e /usr/local/lib/node_modules/npm; \
+    command -v npm >/dev/null; \
+    command -v npx >/dev/null; \
+    rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx; \
+    if command -v npm >/dev/null 2>&1; then echo 'npm still resolvable after removal' >&2; exit 1; fi; \
+    if command -v npx >/dev/null 2>&1; then echo 'npx still resolvable after removal' >&2; exit 1; fi
 
 # Copy manifest and lockfile, then install production deps only
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
