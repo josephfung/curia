@@ -66,27 +66,50 @@ export class OutboundQueueRepo {
   /**
    * Enqueue a post-policy send request. Fails when the per-channel cap is reached
    * (fail closed — never silently drop). Prunes expired rows first.
+   * Uses a per-channel advisory lock so concurrent enqueues cannot breach the cap.
    */
   async enqueue(request: OutboundSendRequest): Promise<{ id: string }> {
     const channel = request.channel;
-    await this.deleteExpired(channel);
-
-    const pending = await this.countPending(channel);
-    if (pending >= this.maxPerChannel) {
-      throw new OutboundQueueFullError(channel, this.maxPerChannel);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Serializes concurrent enqueue() calls for the same channel (TOCTOU fix).
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [channel]);
+      await client.query(
+        `DELETE FROM outbound_queue WHERE channel = $1 AND expires_at < now()`,
+        [channel],
+      );
+      const countResult = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM outbound_queue
+         WHERE channel = $1 AND expires_at >= now()`,
+        [channel],
+      );
+      const pending = Number(countResult.rows[0]?.count ?? 0);
+      if (pending >= this.maxPerChannel) {
+        throw new OutboundQueueFullError(channel, this.maxPerChannel);
+      }
+      const recipient = recipientLabel(request);
+      const expiresAt = new Date(Date.now() + this.ttlHours * 3_600_000);
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO outbound_queue (channel, recipient, payload, expires_at)
+         VALUES ($1, $2, $3::jsonb, $4)
+         RETURNING id`,
+        [channel, recipient, JSON.stringify(request), expiresAt],
+      );
+      const id = result.rows[0]?.id;
+      if (!id) throw new Error('outbound_queue insert returned no id');
+      await client.query('COMMIT');
+      return { id };
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Ignore rollback errors — original err is what callers need.
+      }
+      throw err;
+    } finally {
+      client.release();
     }
-
-    const recipient = recipientLabel(request);
-    const expiresAt = new Date(Date.now() + this.ttlHours * 3_600_000);
-    const result = await this.pool.query<{ id: string }>(
-      `INSERT INTO outbound_queue (channel, recipient, payload, expires_at)
-       VALUES ($1, $2, $3::jsonb, $4)
-       RETURNING id`,
-      [channel, recipient, JSON.stringify(request), expiresAt],
-    );
-    const id = result.rows[0]?.id;
-    if (!id) throw new Error('outbound_queue insert returned no id');
-    return { id };
   }
 
   /**
