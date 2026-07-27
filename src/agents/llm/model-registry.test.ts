@@ -202,5 +202,28 @@ describe('ModelRegistry', () => {
       expect(pricing!.cacheCreationPerMToken).toBeUndefined();
       expect(pricing!.cacheReadPerMToken).toBeUndefined();
     });
+
+    it('text-embedding-3-small does not declare streaming or tools', () => {
+      const meta = registry.getModel('text-embedding-3-small');
+      expect(meta!.capabilities).not.toContain('streaming');
+      expect(meta!.capabilities).not.toContain('tools');
+    });
+  });
+
+  describe('streaming and tools capabilities (#1553)', () => {
+    it.each([
+      'claude-opus-4-6',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5',
+      'google/gemini-3.1-flash-lite',
+      'deepseek/deepseek-chat-v3-0324',
+      'deepseek/deepseek-v4-pro',
+      'openai/gpt-4o',
+    ])('%s declares streaming and tools', (model) => {
+      const meta = registry.getModel(model);
+      expect(meta).toBeDefined();
+      expect(meta!.capabilities).toContain('streaming');
+      expect(meta!.capabilities).toContain('tools');
+    });
   });
 });

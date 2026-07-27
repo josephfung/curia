@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`nylas_calendar` health check** — probes the principal calendar grant separately from email. (#1561)
 - **Slack/SMS/Voice health probes** — `/api/health` reports each when enabled. (#1567)
+- **Model registry** — `streaming`/`tools` capabilities; voice boot gates on them. (#1553)
 
 ### Changed
 
