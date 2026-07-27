@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ToolRegistry } from '../../../src/skills/registry.js';
+import { ToolRegistry, expandTypeArraysToAnyOf, assertNoUnionTypeArrays } from '../../../src/skills/registry.js';
 import type { ToolManifest, ToolHandler } from '../../../src/skills/types.js';
 
 const stubHandler: ToolHandler = {
@@ -158,7 +158,7 @@ describe('ToolRegistry', () => {
     expect(tools[0].input_schema.required).toEqual(['ids']);
   });
 
-  it('converts string|null? inputs to JSON Schema string|null union', () => {
+  it('converts string|null? inputs to JSON Schema anyOf (Gemini-safe, #1508)', () => {
     registry.register(makeManifest({
       name: 'null-union-skill',
       description: 'Accepts explicit null',
@@ -170,20 +170,19 @@ describe('ToolRegistry', () => {
     const tools = registry.toToolDefinitions(['null-union-skill']);
     const props = tools[0]!.input_schema.properties;
     expect(props.blocked_by_task_id).toEqual({
-      type: ['string', 'null'],
+      anyOf: [{ type: 'string' }, { type: 'null' }],
       description: 'UUID, or null to clear',
     });
     expect(props.required_note).toEqual({
-      type: ['string', 'null'],
+      anyOf: [{ type: 'string' }, { type: 'null' }],
       description: 'always present, may be null',
     });
     expect(tools[0]!.input_schema.required).toEqual(['required_note']);
   });
 
-  it('converts multi-type unions (string|object|null) to a JSON Schema type array', () => {
+  it('converts multi-type unions (string|object|null) to anyOf, not type-arrays (#1508)', () => {
     // Polymorphic inputs: the checkpoint tool's `cursor` is string | object | null
-    // (ResumableCursor), which the shorthand must express so the LLM isn't told the
-    // value must be a string. Generalizes the string|null union to arbitrary members.
+    // (ResumableCursor). Type-arrays break Gemini via OpenRouter.
     registry.register(makeManifest({
       name: 'union-skill',
       description: 'Accepts a polymorphic cursor',
@@ -194,16 +193,16 @@ describe('ToolRegistry', () => {
     const tools = registry.toToolDefinitions(['union-skill']);
     const props = tools[0]!.input_schema.properties;
     expect(props.cursor).toEqual({
-      type: ['string', 'object', 'null'],
+      anyOf: [{ type: 'string' }, { type: 'object' }, { type: 'null' }],
       description: 'opaque resume position',
     });
     // Optional → not required
     expect(tools[0]!.input_schema.required).toEqual([]);
   });
 
-  it('converts an array|object union (object[]|object) to a type array with items', () => {
+  it('converts an array|object union (object[]|object) to anyOf with array items (#1508)', () => {
     // The checkpoint tool's `accumulator` is either an inline object array or a single
-    // spilled document-pointer object. The array member contributes `items`.
+    // spilled document-pointer object.
     registry.register(makeManifest({
       name: 'array-union-skill',
       description: 'Accepts an inline array or a single pointer object',
@@ -214,10 +213,94 @@ describe('ToolRegistry', () => {
     const tools = registry.toToolDefinitions(['array-union-skill']);
     const props = tools[0]!.input_schema.properties;
     expect(props.accumulator).toEqual({
-      type: ['array', 'object'],
-      items: { type: 'object' },
+      anyOf: [
+        { type: 'array', items: { type: 'object' } },
+        { type: 'object' },
+      ],
       description: 'inline results, or a spilled pointer',
     });
+  });
+
+  it('assembled schemas pass a Gemini-style strict validator (no type-arrays) (#1508)', () => {
+    registry.register(makeManifest({
+      name: 'checkpoint-shaped',
+      description: 'Mirrors checkpoint polymorphic inputs',
+      inputs: {
+        cursor: 'string|object|null?',
+        accumulator: 'object[]|object?',
+        note: 'string|null?',
+      },
+    }), stubHandler);
+    const tools = registry.toToolDefinitions(['checkpoint-shaped']);
+    expect(() => assertNoUnionTypeArrays(tools[0]!.input_schema)).not.toThrow();
+  });
+
+  it('expands MCP type-arrays to anyOf so pass-through schemas stay Gemini-safe (#1508)', () => {
+    const expanded = expandTypeArraysToAnyOf({
+      type: 'object',
+      properties: {
+        cursor: { type: ['string', 'object', 'null'] },
+      },
+      required: ['cursor'],
+    });
+    expect(expanded).toEqual({
+      type: 'object',
+      properties: {
+        cursor: { anyOf: [{ type: 'string' }, { type: 'object' }, { type: 'null' }] },
+      },
+      required: ['cursor'],
+    });
+    expect(() => assertNoUnionTypeArrays(expanded)).not.toThrow();
+  });
+
+  it('preserves type-arrays inside instance-valued keywords (default/const/examples/enum) (#1508)', () => {
+    // A `type` array under default/const/examples/enum is literal data, not a schema —
+    // it must survive verbatim and must not be flagged by the strict validator.
+    const schema = {
+      type: 'object',
+      properties: {
+        mode: {
+          type: 'string',
+          default: { type: ['a', 'b'] },
+          const: { type: ['c1', 'c2'] },
+          examples: [{ type: ['e1', 'e2'] }],
+          enum: [{ type: ['x', 'y'] }, 'plain'],
+        },
+      },
+    };
+    const expanded = expandTypeArraysToAnyOf(schema) as {
+      properties: { mode: Record<string, unknown> };
+    };
+    const mode = expanded.properties.mode;
+    expect(mode.default).toEqual({ type: ['a', 'b'] });
+    expect(mode.const).toEqual({ type: ['c1', 'c2'] });
+    expect(mode.examples).toEqual([{ type: ['e1', 'e2'] }]);
+    expect(mode.enum).toEqual([{ type: ['x', 'y'] }, 'plain']);
+    expect(() => assertNoUnionTypeArrays(expanded)).not.toThrow();
+  });
+
+  it('still transforms a property literally named "default" (context-aware, not name-based) (#1508)', () => {
+    // Here `default` is a property NAME whose value is a real schema — unlike a
+    // `default` keyword holding instance data, it must be transformed.
+    const expanded = expandTypeArraysToAnyOf({
+      type: 'object',
+      properties: { default: { type: ['string', 'null'] } },
+    }) as { properties: { default: unknown } };
+    expect(expanded.properties.default).toEqual({ anyOf: [{ type: 'string' }, { type: 'null' }] });
+  });
+
+  it('composes a generated union with an existing anyOf via allOf, not overwrite (#1508)', () => {
+    const expanded = expandTypeArraysToAnyOf({
+      type: ['string', 'number'],
+      anyOf: [{ minLength: 1 }],
+    });
+    expect(expanded).toEqual({
+      allOf: [
+        { anyOf: [{ type: 'string' }, { type: 'number' }] },
+        { anyOf: [{ minLength: 1 }] },
+      ],
+    });
+    expect(() => assertNoUnionTypeArrays(expanded)).not.toThrow();
   });
 
   it('throws on a union member with an invalid primitive type', () => {

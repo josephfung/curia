@@ -14,6 +14,114 @@ import { describeTimestampInput } from '../time/timestamp.js';
 // are loaded from JSON via a bare cast and TypeScript cannot enforce this at runtime.
 const ACTION_RISK_LABELS = new Set(['none', 'low', 'medium', 'high', 'critical']);
 
+// JSON Schema keyword classification. Schema transforms must recurse only into
+// positions that actually hold subschemas — never into instance-valued keywords,
+// whose literal contents may legitimately contain a `type` array that is real data,
+// not a union to expand (#1508 review). Names are matched only as keywords of a
+// schema object; a property *named* `default` inside `properties` is still a schema.
+const SUBSCHEMA_KEYWORDS = new Set([
+  'items', 'additionalItems', 'additionalProperties', 'contains', 'propertyNames',
+  'not', 'if', 'then', 'else', 'unevaluatedItems', 'unevaluatedProperties',
+]);
+const SUBSCHEMA_LIST_KEYWORDS = new Set(['allOf', 'anyOf', 'oneOf', 'prefixItems']);
+const SUBSCHEMA_MAP_KEYWORDS = new Set([
+  'properties', 'patternProperties', 'definitions', '$defs', 'dependentSchemas',
+]);
+const INSTANCE_KEYWORDS = new Set(['default', 'const', 'examples', 'enum']);
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * Recursively rewrite JSON Schema `type: [...]` arrays to `anyOf` branches.
+ * Gemini's function-calling API rejects type-arrays (#1508); Anthropic/OpenAI
+ * accept either form. Used for MCP-sourced schemas that may still emit arrays.
+ *
+ * Recurses only into schema-bearing keywords (properties, items, anyOf, $defs, …),
+ * never into instance-valued keywords (default/const/examples/enum) — a `type`
+ * array inside those is literal data and must be preserved verbatim.
+ */
+export function expandTypeArraysToAnyOf(schema: unknown): unknown {
+  if (!isPlainObject(schema)) return schema;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    out[key] = expandKeyword(key, value);
+  }
+  if (!Array.isArray(out['type'])) return out;
+
+  const types = out['type'] as unknown[];
+  const items = out['items'];
+  const existingAnyOf = out['anyOf'];
+  delete out['type'];
+  delete out['items'];
+  delete out['anyOf'];
+  const anyOf = types.map((t) =>
+    t === 'array'
+      ? (items !== undefined ? { type: 'array', items } : { type: 'array' })
+      : { type: t },
+  );
+  // Compose with any pre-existing anyOf via allOf rather than clobbering it —
+  // overwriting would drop the original constraint and widen accepted inputs (#1508 review).
+  return existingAnyOf === undefined
+    ? { ...out, anyOf }
+    : { ...out, allOf: [{ anyOf }, { anyOf: existingAnyOf }] };
+}
+
+/** Transform one keyword's value, recursing only where the value holds subschema(s). */
+function expandKeyword(key: string, value: unknown): unknown {
+  if (INSTANCE_KEYWORDS.has(key)) return value;
+  if (SUBSCHEMA_LIST_KEYWORDS.has(key) && Array.isArray(value)) {
+    return value.map((s) => expandTypeArraysToAnyOf(s));
+  }
+  if (SUBSCHEMA_MAP_KEYWORDS.has(key) && isPlainObject(value)) {
+    const mapped: Record<string, unknown> = {};
+    for (const [name, sub] of Object.entries(value)) mapped[name] = expandTypeArraysToAnyOf(sub);
+    return mapped;
+  }
+  if (SUBSCHEMA_KEYWORDS.has(key)) {
+    if (Array.isArray(value)) return value.map((s) => expandTypeArraysToAnyOf(s)); // `items` tuple form
+    if (isPlainObject(value)) return expandTypeArraysToAnyOf(value);
+    return value; // boolean (e.g. additionalProperties: false) or absent
+  }
+  return value; // type/required/description/format/numeric bounds — scalars or string[]
+}
+
+/**
+ * Gemini-style strictness check: reject any schema position whose `type` is an array.
+ * Mirrors expandTypeArraysToAnyOf's traversal — only schema-bearing keywords are
+ * inspected, so a `type` array living inside instance data (default/const/examples/
+ * enum) is not a false violation. Used by regression tests (#1508).
+ */
+export function assertNoUnionTypeArrays(schema: unknown, path = '$'): void {
+  if (!isPlainObject(schema)) return;
+  if (Array.isArray(schema['type'])) {
+    throw new Error(
+      `Strict provider schema violation at ${path}: type-array ${JSON.stringify(schema['type'])} ` +
+      '(Gemini rejects these; use anyOf)',
+    );
+  }
+  for (const [key, value] of Object.entries(schema)) {
+    assertKeyword(key, value, path);
+  }
+}
+
+function assertKeyword(key: string, value: unknown, path: string): void {
+  if (INSTANCE_KEYWORDS.has(key)) return;
+  if (SUBSCHEMA_LIST_KEYWORDS.has(key) && Array.isArray(value)) {
+    value.forEach((s, i) => assertNoUnionTypeArrays(s, `${path}.${key}[${i}]`));
+    return;
+  }
+  if (SUBSCHEMA_MAP_KEYWORDS.has(key) && isPlainObject(value)) {
+    for (const [name, sub] of Object.entries(value)) assertNoUnionTypeArrays(sub, `${path}.${key}.${name}`);
+    return;
+  }
+  if (SUBSCHEMA_KEYWORDS.has(key)) {
+    if (Array.isArray(value)) value.forEach((s, i) => assertNoUnionTypeArrays(s, `${path}.${key}[${i}]`));
+    else if (isPlainObject(value)) assertNoUnionTypeArrays(value, `${path}.${key}`);
+  }
+}
+
 export class ToolRegistry {
   private tools = new Map<string, RegisteredTool>();
   /** IANA timezone name used to populate timestamp input descriptions in tool schemas. */
@@ -124,7 +232,8 @@ export class ToolRegistry {
         tools.push({
           name,
           description: skill.manifest.description,
-          input_schema: skill.mcpInputSchema,
+          // Normalize type-arrays → anyOf so MCP schemas are Gemini-safe too (#1508).
+          input_schema: expandTypeArraysToAnyOf(skill.mcpInputSchema) as ToolDefinition['input_schema'],
         });
         continue;
       }
@@ -165,17 +274,17 @@ export class ToolRegistry {
 
         const VALID_PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'null']);
 
-        // Pipe unions → JSON Schema type-array. Covers both the common
-        // "string|null" (optional field that accepts explicit null, e.g. clear a
-        // FK) and genuinely polymorphic inputs like the checkpoint tool's
-        // `cursor` (string | object | null) or `accumulator` (an inline
-        // "object[]" OR a single spilled pointer "object"). Each member is a
-        // primitive or an array type ("object[]"); an array member contributes
-        // "array" to the type list and its item type to a shared `items`.
+        // Pipe unions → JSON Schema `anyOf` (NOT `type: [...]` arrays).
+        // Anthropic/OpenAI/DeepSeek accept type-arrays; Google Gemini's
+        // function-calling API does not — OpenRouter drops those properties
+        // but leaves them in `required`, and Gemini then 400s (#1508 /
+        // contacts outage 2026-07-23). `anyOf` is accepted by both families.
+        // Covers "string|null" and polymorphic inputs like checkpoint's
+        // `cursor` (string|object|null) or `accumulator` (object[]|object).
         if (baseType.includes('|')) {
           const members = baseType.split('|').map((m) => m.trim());
-          const types: string[] = [];
-          let arrayItemType: string | undefined;
+          const anyOf: Array<Record<string, unknown>> = [];
+          const seen = new Set<string>();
           for (const member of members) {
             if (member.endsWith('[]')) {
               const itemType = member.slice(0, -2);
@@ -185,15 +294,10 @@ export class ToolRegistry {
                   `Expected one of: ${[...VALID_PRIMITIVE_TYPES].join(', ')}.`,
                 );
               }
-              // JSON Schema `items` is shared across the type-array; two array
-              // members with different item types can't be represented — fail loudly.
-              if (arrayItemType && arrayItemType !== itemType) {
-                throw new Error(
-                  `Tool '${name}' input '${key}': conflicting array item types in union '${typeStr}'.`,
-                );
-              }
-              arrayItemType = itemType;
-              if (!types.includes('array')) types.push('array');
+              const branchKey = `array:${itemType}`;
+              if (seen.has(branchKey)) continue;
+              seen.add(branchKey);
+              anyOf.push({ type: 'array', items: { type: itemType } });
             } else {
               if (!VALID_PRIMITIVE_TYPES.has(member)) {
                 throw new Error(
@@ -201,12 +305,13 @@ export class ToolRegistry {
                   `Expected one of: ${[...VALID_PRIMITIVE_TYPES].join(', ')}, or an array type (e.g. object[]).`,
                 );
               }
-              if (!types.includes(member)) types.push(member);
+              if (seen.has(member)) continue;
+              seen.add(member);
+              anyOf.push({ type: member });
             }
           }
           properties[key] = {
-            type: types,
-            ...(arrayItemType ? { items: { type: arrayItemType } } : {}),
+            anyOf,
             ...(description ? { description } : {}),
           };
           if (!isOptional) {
