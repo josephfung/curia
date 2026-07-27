@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
+import { OutboundGateway, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -2980,5 +2980,30 @@ describe('CEO recipient bypass on send()', () => {
 
     expect(result.success).toBe(false);
     expect(result.gated).toBe(true);
+  });
+});
+
+describe('hasTransientErrorSignal (#1380)', () => {
+  it('flags HTTP 408/429/5xx via statusCode or status', () => {
+    expect(hasTransientErrorSignal({ statusCode: 429 })).toBe(true);
+    expect(hasTransientErrorSignal({ statusCode: 408 })).toBe(true);
+    expect(hasTransientErrorSignal({ statusCode: 503 })).toBe(true);
+    expect(hasTransientErrorSignal({ status: 502 })).toBe(true);
+  });
+
+  it('flags Node network-error codes', () => {
+    for (const code of ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'EAI_AGAIN']) {
+      expect(hasTransientErrorSignal(Object.assign(new Error('boom'), { code }))).toBe(true);
+    }
+  });
+
+  it('does NOT flag auth/validation 4xx or unknown shapes', () => {
+    expect(hasTransientErrorSignal({ statusCode: 401 })).toBe(false);
+    expect(hasTransientErrorSignal({ statusCode: 403 })).toBe(false);
+    expect(hasTransientErrorSignal({ statusCode: 422 })).toBe(false);
+    expect(hasTransientErrorSignal(new Error('just a message'))).toBe(false);
+    expect(hasTransientErrorSignal({ code: 40300 })).toBe(false); // Telnyx numeric code, not a Node code
+    expect(hasTransientErrorSignal(null)).toBe(false);
+    expect(hasTransientErrorSignal('a string')).toBe(false);
   });
 });

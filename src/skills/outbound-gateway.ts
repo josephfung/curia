@@ -316,6 +316,28 @@ function buildBlockReasonSummary(findings: Array<{ rule: string; detail: string 
     .join('\n');
 }
 
+/** Node.js network-error `code` values that indicate a transient, retryable failure. */
+const TRANSIENT_ERROR_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH',
+]);
+
+/**
+ * True when an error carries a **structured** signal that it is transient/retryable —
+ * an HTTP status of 408/429/5xx (`statusCode`/`status`) or a Node network-error `code` —
+ * independent of its message text. Callers OR this with a message-regex fallback so a
+ * retryable failure is not misclassified as permanent just because the provider only
+ * stringified it (#1380 review). Auth/validation (4xx other than 408/429) is not matched.
+ */
+export function hasTransientErrorSignal(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { statusCode?: unknown; status?: unknown; code?: unknown };
+  const status = typeof e.statusCode === 'number' ? e.statusCode
+    : typeof e.status === 'number' ? e.status
+      : undefined;
+  if (status !== undefined && (status === 408 || status === 429 || status >= 500)) return true;
+  return typeof e.code === 'string' && TRANSIENT_ERROR_CODES.has(e.code);
+}
+
 // ---------------------------------------------------------------------------
 // OutboundGateway
 // ---------------------------------------------------------------------------
@@ -2453,9 +2475,12 @@ export class OutboundGateway {
         { err, channel: 'email', to: request.to },
         'outbound-gateway: Nylas send failed',
       );
-      // Transient network / 5xx → queueable. Auth/grant/validation stay permanent.
-      const queueable = /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|network|HTTP 5\d\d|temporarily|socket|ECONNRESET/i.test(message)
-        && !/401|403|invalid.?grant|unauthorized|forbidden|invalid.?token/i.test(message);
+      // Transient network / 408 / 429 / 5xx → queueable; classify on structured
+      // status/code first, then message text. Auth/grant/validation stay permanent.
+      const authPermanent = /401|403|invalid.?grant|unauthorized|forbidden|invalid.?token/i.test(message);
+      const queueable = !authPermanent
+        && (hasTransientErrorSignal(err)
+          || /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|network|HTTP 5\d\d|temporarily|socket|ECONNRESET/i.test(message));
       return { success: false, blockedReason: `Send failed: ${message}`, queueable };
     }
   }
@@ -2525,7 +2550,7 @@ export class OutboundGateway {
         { err, channel: 'signal', destinationType: request.groupId ? 'group' : '1:1' },
         'outbound-gateway: signal-cli send failed',
       );
-      const queueable = /not connected|ECONNREFUSED|EPIPE|socket/i.test(message);
+      const queueable = hasTransientErrorSignal(err) || /not connected|ECONNREFUSED|EPIPE|socket/i.test(message);
       return { success: false, blockedReason: `Send failed: ${message}`, queueable };
     }
   }
@@ -2565,7 +2590,9 @@ export class OutboundGateway {
         'outbound-gateway: Slack chat.postMessage failed',
       );
       const err = result.error ?? 'unknown_error';
-      const queueable = /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket|network|temporarily/i.test(err);
+      // `err` is Slack's structured error code — recognize its retryable codes
+      // (rate limits, 5xx-class) alongside the network strings (#1380 review).
+      const queueable = /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket|network|temporarily|rate.?limited|too_many_requests|service_unavailable|internal_error|request_timeout/i.test(err);
       return { success: false, blockedReason: `Send failed: ${err}`, queueable };
     }
 
@@ -2610,9 +2637,11 @@ export class OutboundGateway {
       }
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err, channel: 'sms' }, 'outbound-gateway: Telnyx SMS send failed');
-      // Opt-out and validation stay non-queueable; network / 5xx-class failures retry.
+      // Opt-out and validation stay non-queueable; network / 408 / 429 / 5xx-class
+      // failures retry — structured status/code first, then message text.
       const queueable = !(err instanceof TelnyxSendError && err.code === TELNYX_ERROR_OPTED_OUT)
-        && /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|network|HTTP 5\d\d|non-JSON|temporarily/i.test(message);
+        && (hasTransientErrorSignal(err)
+          || /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|network|HTTP 5\d\d|non-JSON|temporarily/i.test(message));
       return { success: false, blockedReason: `Send failed: ${message}`, queueable };
     }
   }
