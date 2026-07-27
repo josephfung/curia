@@ -3482,6 +3482,106 @@ describe('AgentRuntime Bullpen context refresh', () => {
     expect(secondSystemMsgs[0]!.content).toContain('Follow-up reply');
   });
 
+  // ---------------------------------------------------------------------------
+  // Scheduler scoping (#1609). A prod leak: an unread bullpen @mention bled into
+  // an unrelated scheduled job (the coordinator's hourly approval-expiry-sweep),
+  // the coordinator "replied" to it with a pinned human-channel tool, and internal
+  // agent chatter ("@meeting-debrief Noted…") landed on the principal's Signal.
+  // Ambient bullpen threads must NOT be surfaced inside autonomous scheduler runs;
+  // bullpen mentions are already handled in-thread by the dedicated Bullpen dispatch
+  // path. Interactive channel conversations and bullpen-origin tasks keep the tier.
+  // ---------------------------------------------------------------------------
+
+  // Builds a bullpenService that always reports one unread thread mentioning the agent.
+  function makeUnreadMentionBullpen() {
+    return {
+      getPendingThreadsForAgent: vi.fn(async () => [{
+        threadId: 'thread-leak',
+        topic: 'Scheduled detection run complete — no candidates',
+        totalMessages: 1,
+        recentMessages: [{
+          senderAgentId: 'meeting-debrief',
+          content: '4:00 p.m. detection run: zero debrief candidates.',
+          mentionedAgentIds: ['coordinator'],
+          createdAt: new Date('2026-07-27T20:00:50Z'),
+        }],
+      }]),
+    };
+  }
+
+  // Runs one coordinator task on the given channel and returns the captured
+  // messages array plus the bullpen mock, so each test can assert injection.
+  async function runOnChannel(channelId: string, conversationId: string) {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const captured: Array<Array<{ role: string; content: unknown }>> = [];
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async ({ messages }) => {
+        captured.push(messages.map((m: { role: string; content: unknown }) => ({ role: m.role, content: m.content })));
+        return {
+          type: 'text' as const,
+          content: 'done',
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+    const mockBullpenService = makeUnreadMentionBullpen();
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      bullpenService: mockBullpenService as unknown as import('../../../src/memory/bullpen.js').BullpenService,
+    });
+    agent.register();
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId,
+      channelId,
+      senderId: channelId === 'scheduler' ? 'scheduler' : 'user',
+      content: 'Do the task.',
+      // Interactive channels resolve a confirmed sender; system channels have none.
+      ...(channelId === 'scheduler' || channelId === 'bullpen'
+        ? {}
+        : { senderContext: CONFIRMED_SENDER_CONTEXT }),
+      parentEventId: `parent-${channelId}`,
+    });
+    await bus.publish('dispatch', task);
+    const bullpenMsgs = captured.flat().filter(
+      m => m.role === 'system' && typeof m.content === 'string' && (m.content as string).includes('[Bullpen'),
+    );
+    return { mockBullpenService, captured, bullpenMsgs };
+  }
+
+  it('does NOT inject ambient bullpen context into scheduler-dispatched tasks (#1609)', async () => {
+    const { mockBullpenService, captured, bullpenMsgs } = await runOnChannel(
+      'scheduler',
+      'scheduler:16fd5a5b-a35e-430c-b4a0-6632a27d144c:2d6b2709',
+    );
+    // The tier is skipped entirely: pending threads are never even queried, so
+    // there is no unread @mention for the model to act on out-of-band.
+    expect(mockBullpenService.getPendingThreadsForAgent).not.toHaveBeenCalled();
+    expect(captured.length).toBeGreaterThan(0);
+    expect(bullpenMsgs).toHaveLength(0);
+  });
+
+  it('still injects ambient bullpen context into interactive channel tasks (#1609 regression guard)', async () => {
+    const { mockBullpenService, bullpenMsgs } = await runOnChannel('signal', 'conv-signal-1');
+    expect(mockBullpenService.getPendingThreadsForAgent).toHaveBeenCalled();
+    expect(bullpenMsgs.length).toBeGreaterThan(0);
+  });
+
+  it('still injects ambient bullpen context into bullpen-origin tasks (#1609 regression guard)', async () => {
+    const { mockBullpenService, bullpenMsgs } = await runOnChannel('bullpen', 'thread-leak');
+    expect(mockBullpenService.getPendingThreadsForAgent).toHaveBeenCalled();
+    expect(bullpenMsgs.length).toBeGreaterThan(0);
+  });
+
   it('removes stale Bullpen message when no pending threads remain', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
