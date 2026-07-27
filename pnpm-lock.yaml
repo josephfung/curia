@@ -116,8 +116,8 @@ importers:
         specifier: ^8.4.0
         version: 8.4.0
       openai:
-        specifier: ^6.46.0
-        version: 6.46.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.0)(zod@4.4.3)
+        specifier: ^6.48.0
+        version: 6.48.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
       openredaction:
         specifier: ^1.1.2
         version: 1.1.2(pdf-parse@2.4.5)(react@19.2.7)
@@ -4284,8 +4284,8 @@ packages:
     resolution: {integrity: sha512-YgBpdJHPyQ2UE5x+hlSXcnejzAvD0b22U2OuAP+8OnlJT+PjWPxtgmGqKKc+RgTM63U9gN0YzrYc71R2WT/hTA==}
     engines: {node: '>=18'}
 
-  openai@6.46.0:
-    resolution: {integrity: sha512-DFg6jEPT2RO+oAyXtddeUJU8zkGy1OQ1AjGzNIJUMQG03TTqvCpy9tBpQ+2VVVnvrl3E56F8GEin2JYtWpITtA==}
+  openai@6.48.0:
+    resolution: {integrity: sha512-KhVp+FyV50QrXNextvL9hIU5l6ox5HYuKQjGVk7lIqprgJol90+dQXWONV6S1lRWsKA1bXjrow8RsUT14M1hNA==}
     peerDependencies:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
       '@smithy/hash-node': '>=4.3.0 <5'
@@ -5996,7 +5996,7 @@ snapshots:
       '@azure/logger': 1.4.0
       '@azure/storage-blob': 12.33.0
       '@opentelemetry/api': 1.9.1
-      openai: 6.46.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
+      openai: 6.48.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
       tslib: 2.8.1
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -6899,7 +6899,7 @@ snapshots:
   '@openai/agents-core@0.11.8(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)':
     dependencies:
       debug: 4.4.3
-      openai: 6.46.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
+      openai: 6.48.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       zod: 4.4.3
@@ -6916,7 +6916,7 @@ snapshots:
     dependencies:
       '@openai/agents-core': 0.11.8(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
       debug: 4.4.3
-      openai: 6.46.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
+      openai: 6.48.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -6950,7 +6950,7 @@ snapshots:
       '@openai/agents-openai': 0.11.8(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
       '@openai/agents-realtime': 0.11.8(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(zod@4.4.3)
       debug: 4.4.3
-      openai: 6.46.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
+      openai: 6.48.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -9870,14 +9870,7 @@ snapshots:
       wsl-utils: 0.1.0
     optional: true
 
-  openai@6.46.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.0)(zod@4.4.3):
-    optionalDependencies:
-      '@aws-sdk/credential-provider-node': 3.972.70
-      '@smithy/signature-v4': 5.6.10
-      ws: 8.21.0
-      zod: 4.4.3
-
-  openai@6.46.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3):
+  openai@6.48.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.70
       '@smithy/signature-v4': 5.6.10
@@ -10281,7 +10274,7 @@ snapshots:
       mathjs: 15.2.0
       minimatch: 10.2.5
       nunjucks: 3.2.4(chokidar@5.0.0)
-      openai: 6.46.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
+      openai: 6.48.0(@aws-sdk/credential-provider-node@3.972.70)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
       opener: 1.5.2
       ora: 9.4.1
       parse5: 8.0.1
