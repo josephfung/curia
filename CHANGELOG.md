@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Slack decode** — unescape `&amp;` last so `&amp;lt;` stays literal `&lt;`. (#1569)
+
 ## [0.42.0] — 2026-07-26 — "KITT"
 
 > **KITT** *(Knight Rider, 1982, Glen A. Larson)* — the Knight Industries Two Thousand, a car-bound AI you simply talk to: it holds a conversation by voice and deploys a deep bag of specialized functions on command. This release gives Curia the same — a voice you speak with, new channels to reach it through, and a real toolkit of skills it draws on when asked.
