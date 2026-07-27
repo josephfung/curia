@@ -1,0 +1,1065 @@
+{
+  "generatedAt": "2026-07-27T21:01:43.784Z",
+  "model": "claude-haiku-4-5",
+  "fixturesPath": "scripts/spikes/voice-brain-parity/fixtures.json",
+  "summary": {
+    "baseline": {
+      "cases": 8,
+      "checksPassed": 19,
+      "checksFailed": 2,
+      "avgTtftMs": 1878,
+      "avgFullTurnMs": 2460,
+      "p50FullTurnMs": 2465,
+      "promptTokensEst": 488
+    },
+    "shared-hardening": {
+      "cases": 8,
+      "checksPassed": 20,
+      "checksFailed": 1,
+      "avgTtftMs": 1018,
+      "avgFullTurnMs": 2661,
+      "p50FullTurnMs": 2501,
+      "promptTokensEst": 1080
+    },
+    "full-consolidation": {
+      "cases": 8,
+      "checksPassed": 20,
+      "checksFailed": 1,
+      "avgTtftMs": 819,
+      "avgFullTurnMs": 2616,
+      "p50FullTurnMs": 2463,
+      "promptTokensEst": 12120
+    }
+  },
+  "results": [
+    {
+      "arm": "baseline",
+      "caseId": "date-next-tuesday",
+      "category": "day-of-week-arithmetic",
+      "promptTokensEst": 488,
+      "ttftMs": 1853,
+      "fullTurnMs": 4535,
+      "toolRounds": 3,
+      "toolsCalled": [
+        "date-resolve",
+        "date-resolve",
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "date-resolve",
+          "input": {
+            "date": "next Tuesday",
+            "relative": "next Tuesday"
+          }
+        },
+        {
+          "name": "date-resolve",
+          "input": {
+            "date": "Tuesday",
+            "relative": "in one week"
+          }
+        },
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "What's on my calendar for Tuesday, August 4, 2026?"
+          }
+        }
+      ],
+      "finalText": "You have a one-on-one with Jordan at three o'clock PM next Tuesday.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 4,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-date-resolve",
+            "ok": true,
+            "detail": "called date-resolve"
+          },
+          {
+            "id": "should-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=what's on my calendar for tuesday, august 4, 2026?"
+          },
+          {
+            "id": "no-invented-schedule-without-date",
+            "ok": true,
+            "detail": "ok"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "baseline",
+      "caseId": "date-verify-pairing",
+      "category": "day-of-week-arithmetic",
+      "promptTokensEst": 488,
+      "ttftMs": 1673,
+      "fullTurnMs": 1841,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "date-resolve"
+      ],
+      "toolTrace": [
+        {
+          "name": "date-resolve",
+          "input": {
+            "date": "May 19, 2026",
+            "expected_day": "Monday"
+          }
+        }
+      ],
+      "finalText": "No, May nineteenth is actually a Tuesday this year, not a Monday.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 2,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-date-resolve",
+            "ok": true,
+            "detail": "called date-resolve"
+          },
+          {
+            "id": "date-correction",
+            "ok": true,
+            "detail": "spoken=No, May nineteenth is actually a Tuesday this year, not a Monday."
+          }
+        ]
+      }
+    },
+    {
+      "arm": "baseline",
+      "caseId": "calendar-move-3pm",
+      "category": "calendar-delegation",
+      "promptTokensEst": 488,
+      "ttftMs": 2674,
+      "fullTurnMs": 3030,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Move the principal's three PM event today (Monday, July 27, 2026) to four thirty PM instead."
+          }
+        }
+      ],
+      "finalText": "Done — I've moved your one-on-one with Jordan from three to four thirty PM today.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 3,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=move the principal's three pm event today (monday, july 27, 2026) to four thirty"
+          },
+          {
+            "id": "no-claim-done-without-delegate",
+            "ok": true,
+            "detail": "ok"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "baseline",
+      "caseId": "calendar-whats-tomorrow",
+      "category": "calendar-delegation",
+      "promptTokensEst": 488,
+      "ttftMs": 2588,
+      "fullTurnMs": 2910,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Check what's on the principal's calendar tomorrow morning, Tuesday July 28th. Report any events scheduled before noon."
+          }
+        }
+      ],
+      "finalText": "Nothing on your calendar tomorrow morning — your first thing is the one-on-one with Jordan at three in the afternoon.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 2,
+        "failed": 1,
+        "checks": [
+          {
+            "id": "should-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "should-call-date-resolve",
+            "ok": false,
+            "detail": "preferred date-resolve not called; got [delegate]"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=check what's on the principal's calendar tomorrow morning, tuesday july 28th. re"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "baseline",
+      "caseId": "honest-negative-calendar",
+      "category": "honest-negative",
+      "promptTokensEst": 488,
+      "ttftMs": 2165,
+      "fullTurnMs": 2465,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "What events are on the principal's calendar for Friday, July 31, 2026?"
+          }
+        }
+      ],
+      "finalText": "I couldn't reach your calendar just now — the system's giving me trouble. Would you like me to try again in a moment?",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 3,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "honest-negative",
+            "ok": true,
+            "detail": "spoken honest-negative phrasing"
+          },
+          {
+            "id": "no-false-empty",
+            "ok": true,
+            "detail": "did not claim empty calendar"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "baseline",
+      "caseId": "pronoun-my-calendar",
+      "category": "pronoun-resolution",
+      "promptTokensEst": 488,
+      "ttftMs": 1696,
+      "fullTurnMs": 2040,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Show the principal's calendar for this week (July 27 - August 2, 2026)"
+          }
+        }
+      ],
+      "finalText": "You've got one event on your calendar this week — a one on one with Jordan tomorrow at three p.m.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 3,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=show the principal's calendar for this week (july 27 - august 2, 2026)"
+          },
+          {
+            "id": "pronoun-principal",
+            "ok": true,
+            "detail": "brief=show the principal's calendar for this week (july 27 - august 2, 2026)"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "baseline",
+      "caseId": "pronoun-your-calendar",
+      "category": "pronoun-resolution",
+      "promptTokensEst": 488,
+      "ttftMs": 1705,
+      "fullTurnMs": 2068,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Check what's on the principal's calendar for tomorrow, Tuesday July 28, 2026."
+          }
+        }
+      ],
+      "finalText": "You've got a one-on-one with Jordan at three o'clock tomorrow afternoon. That's the only thing on your calendar for Tuesday.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 1,
+        "failed": 1,
+        "checks": [
+          {
+            "id": "should-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "pronoun-not-principal",
+            "ok": false,
+            "detail": "brief=check what's on the principal's calendar for tomorrow, tuesday july 28, 2026."
+          }
+        ]
+      }
+    },
+    {
+      "arm": "baseline",
+      "caseId": "simple-ack",
+      "category": "latency-baseline",
+      "promptTokensEst": 488,
+      "ttftMs": 666,
+      "fullTurnMs": 791,
+      "toolRounds": 0,
+      "toolsCalled": [],
+      "toolTrace": [],
+      "finalText": "You're welcome! I'm here whenever you need me. Have a good rest of your day.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 1,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "no-tools",
+            "ok": true,
+            "detail": "no tools called"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "shared-hardening",
+      "caseId": "date-next-tuesday",
+      "category": "day-of-week-arithmetic",
+      "promptTokensEst": 1080,
+      "ttftMs": 976,
+      "fullTurnMs": 3695,
+      "toolRounds": 2,
+      "toolsCalled": [
+        "date-resolve",
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "date-resolve",
+          "input": {
+            "date": "next Tuesday",
+            "relative": "next Tuesday"
+          }
+        },
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Show me what's on the principal's calendar for Tuesday, July 28, 2026"
+          }
+        }
+      ],
+      "finalText": "You've got a one-on-one with Jordan at three PM on Tuesday, July 28th. That's the only thing on your calendar that day.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 4,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-date-resolve",
+            "ok": true,
+            "detail": "called date-resolve"
+          },
+          {
+            "id": "should-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=show me what's on the principal's calendar for tuesday, july 28, 2026"
+          },
+          {
+            "id": "no-invented-schedule-without-date",
+            "ok": true,
+            "detail": "ok"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "shared-hardening",
+      "caseId": "date-verify-pairing",
+      "category": "day-of-week-arithmetic",
+      "promptTokensEst": 1080,
+      "ttftMs": 1939,
+      "fullTurnMs": 2092,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "date-resolve"
+      ],
+      "toolTrace": [
+        {
+          "name": "date-resolve",
+          "input": {
+            "date": "May 19, 2026",
+            "expected_day": "Monday"
+          }
+        }
+      ],
+      "finalText": "No, May nineteenth is actually a Tuesday this year, not a Monday.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 2,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-date-resolve",
+            "ok": true,
+            "detail": "called date-resolve"
+          },
+          {
+            "id": "date-correction",
+            "ok": true,
+            "detail": "spoken=No, May nineteenth is actually a Tuesday this year, not a Monday."
+          }
+        ]
+      }
+    },
+    {
+      "arm": "shared-hardening",
+      "caseId": "calendar-move-3pm",
+      "category": "calendar-delegation",
+      "promptTokensEst": 1080,
+      "ttftMs": 2332,
+      "fullTurnMs": 2663,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Move the principal's three PM event today (Monday, July 27, 2026) to four thirty PM."
+          }
+        }
+      ],
+      "finalText": "Done — I've moved your one-on-one with Jordan from three to four thirty.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 3,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=move the principal's three pm event today (monday, july 27, 2026) to four thirty"
+          },
+          {
+            "id": "no-claim-done-without-delegate",
+            "ok": true,
+            "detail": "ok"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "shared-hardening",
+      "caseId": "calendar-whats-tomorrow",
+      "category": "calendar-delegation",
+      "promptTokensEst": 1080,
+      "ttftMs": 583,
+      "fullTurnMs": 2494,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Check the principal's calendar for tomorrow morning, Tuesday July 28, 2026, from early morning through mid-morning."
+          }
+        }
+      ],
+      "finalText": "You're clear tomorrow morning — nothing scheduled until your one-on-one with Jordan at three o'clock in the afternoon.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 2,
+        "failed": 1,
+        "checks": [
+          {
+            "id": "should-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "should-call-date-resolve",
+            "ok": false,
+            "detail": "preferred date-resolve not called; got [delegate]"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=check the principal's calendar for tomorrow morning, tuesday july 28, 2026, from"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "shared-hardening",
+      "caseId": "honest-negative-calendar",
+      "category": "honest-negative",
+      "promptTokensEst": 1080,
+      "ttftMs": 538,
+      "fullTurnMs": 4759,
+      "toolRounds": 3,
+      "toolsCalled": [
+        "date-resolve",
+        "date-resolve",
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "date-resolve",
+          "input": {
+            "date": "Friday",
+            "relative": "this week"
+          }
+        },
+        {
+          "name": "date-resolve",
+          "input": {
+            "date": "August 1, 2026",
+            "expected_day": "Friday"
+          }
+        },
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Show me what's on the principal's calendar for Friday, August 1st, 2026."
+          }
+        }
+      ],
+      "finalText": "I couldn't reach your calendar right now — the system's being temperamental. Want me to try again in a moment?",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 3,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "honest-negative",
+            "ok": true,
+            "detail": "spoken honest-negative phrasing"
+          },
+          {
+            "id": "no-false-empty",
+            "ok": true,
+            "detail": "did not claim empty calendar"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "shared-hardening",
+      "caseId": "pronoun-my-calendar",
+      "category": "pronoun-resolution",
+      "promptTokensEst": 1080,
+      "ttftMs": 553,
+      "fullTurnMs": 2501,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Show the principal's calendar for this week, starting Monday July 27 through Sunday August 2, 2026."
+          }
+        }
+      ],
+      "finalText": "You've got just one thing on the calendar this week: a one-on-one with Jordan tomorrow at three PM. Otherwise you're pretty clear.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 3,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=show the principal's calendar for this week, starting monday july 27 through sun"
+          },
+          {
+            "id": "pronoun-principal",
+            "ok": true,
+            "detail": "brief=show the principal's calendar for this week, starting monday july 27 through sunday august 2, 2026."
+          }
+        ]
+      }
+    },
+    {
+      "arm": "shared-hardening",
+      "caseId": "pronoun-your-calendar",
+      "category": "pronoun-resolution",
+      "promptTokensEst": 1080,
+      "ttftMs": 503,
+      "fullTurnMs": 2135,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "What's on Avery's calendar for Tuesday, July 28, 2026?"
+          }
+        }
+      ],
+      "finalText": "I've got a one-on-one with Jordan tomorrow at three o'clock.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 2,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "should-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "pronoun-not-principal",
+            "ok": true,
+            "detail": "brief=what's on avery's calendar for tuesday, july 28, 2026?"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "shared-hardening",
+      "caseId": "simple-ack",
+      "category": "latency-baseline",
+      "promptTokensEst": 1080,
+      "ttftMs": 717,
+      "fullTurnMs": 951,
+      "toolRounds": 0,
+      "toolsCalled": [],
+      "toolTrace": [],
+      "finalText": "You're all set. Just reach out whenever you need me.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 1,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "no-tools",
+            "ok": true,
+            "detail": "no tools called"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "full-consolidation",
+      "caseId": "date-next-tuesday",
+      "category": "day-of-week-arithmetic",
+      "promptTokensEst": 12120,
+      "ttftMs": 759,
+      "fullTurnMs": 4357,
+      "toolRounds": 2,
+      "toolsCalled": [
+        "date-resolve",
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "date-resolve",
+          "input": {
+            "date": "next Tuesday",
+            "relative": "Tuesday"
+          }
+        },
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "What events are on the principal's calendar for Tuesday, July 28, 2026?"
+          }
+        }
+      ],
+      "finalText": "You've got one thing on Tuesday the 28th: a one-on-one with Jordan at 3 PM for half an hour. That's it for that day.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 4,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-date-resolve",
+            "ok": true,
+            "detail": "called date-resolve"
+          },
+          {
+            "id": "should-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=what events are on the principal's calendar for tuesday, july 28, 2026?"
+          },
+          {
+            "id": "no-invented-schedule-without-date",
+            "ok": true,
+            "detail": "ok"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "full-consolidation",
+      "caseId": "date-verify-pairing",
+      "category": "day-of-week-arithmetic",
+      "promptTokensEst": 12120,
+      "ttftMs": 658,
+      "fullTurnMs": 2112,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "date-resolve"
+      ],
+      "toolTrace": [
+        {
+          "name": "date-resolve",
+          "input": {
+            "date": "May 19, 2026",
+            "expected_day": "Monday"
+          }
+        }
+      ],
+      "finalText": "No, May nineteenth is a Tuesday this year, not a Monday.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 2,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-date-resolve",
+            "ok": true,
+            "detail": "called date-resolve"
+          },
+          {
+            "id": "date-correction",
+            "ok": true,
+            "detail": "spoken=No, May nineteenth is a Tuesday this year, not a Monday."
+          }
+        ]
+      }
+    },
+    {
+      "arm": "full-consolidation",
+      "caseId": "calendar-move-3pm",
+      "category": "calendar-delegation",
+      "promptTokensEst": 12120,
+      "ttftMs": 609,
+      "fullTurnMs": 2463,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Move the principal's 3 PM meeting today (Monday, July 27) to 4:30 PM."
+          }
+        }
+      ],
+      "finalText": "Got it — I moved your one-on-one with Jordan from three to four thirty. It's now four thirty to five.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 3,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=move the principal's 3 pm meeting today (monday, july 27) to 4:30 pm."
+          },
+          {
+            "id": "no-claim-done-without-delegate",
+            "ok": true,
+            "detail": "ok"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "full-consolidation",
+      "caseId": "calendar-whats-tomorrow",
+      "category": "calendar-delegation",
+      "promptTokensEst": 12120,
+      "ttftMs": 1193,
+      "fullTurnMs": 2976,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "What's on the principal's calendar tomorrow morning? Today is Monday July 27, 2026, so tomorrow is Tuesday July 28. Focus on the morning hours."
+          }
+        }
+      ],
+      "finalText": "No, nothing tomorrow morning. You've got a one-on-one with Jordan at three o'clock in the afternoon, but your morning is clear.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 2,
+        "failed": 1,
+        "checks": [
+          {
+            "id": "should-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "should-call-date-resolve",
+            "ok": false,
+            "detail": "preferred date-resolve not called; got [delegate]"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=what's on the principal's calendar tomorrow morning? today is monday july 27, 20"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "full-consolidation",
+      "caseId": "honest-negative-calendar",
+      "category": "honest-negative",
+      "promptTokensEst": 12120,
+      "ttftMs": 628,
+      "fullTurnMs": 2368,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "What's on the principal's calendar for Friday, July 31st?"
+          }
+        }
+      ],
+      "finalText": "I couldn't reach your calendar just now — the service is having trouble. Want me to try again in a moment?",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 3,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "honest-negative",
+            "ok": true,
+            "detail": "spoken honest-negative phrasing"
+          },
+          {
+            "id": "no-false-empty",
+            "ok": true,
+            "detail": "did not claim empty calendar"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "full-consolidation",
+      "caseId": "pronoun-my-calendar",
+      "category": "pronoun-resolution",
+      "promptTokensEst": 12120,
+      "ttftMs": 695,
+      "fullTurnMs": 2845,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "Show me the principal's calendar for this week — Monday July 28 through Friday August 1, 2026."
+          }
+        }
+      ],
+      "finalText": "You've got one meeting on the calendar this week — a one-on-one with Jordan tomorrow at three o'clock.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 3,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "must-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "delegate-target",
+            "ok": true,
+            "detail": "delegate target=calendar brief=show me the principal's calendar for this week — monday july 28 through friday a"
+          },
+          {
+            "id": "pronoun-principal",
+            "ok": true,
+            "detail": "brief=show me the principal's calendar for this week — monday july 28 through friday august 1, 2026."
+          }
+        ]
+      }
+    },
+    {
+      "arm": "full-consolidation",
+      "caseId": "pronoun-your-calendar",
+      "category": "pronoun-resolution",
+      "promptTokensEst": 12120,
+      "ttftMs": 655,
+      "fullTurnMs": 2276,
+      "toolRounds": 1,
+      "toolsCalled": [
+        "delegate"
+      ],
+      "toolTrace": [
+        {
+          "name": "delegate",
+          "input": {
+            "target": "calendar",
+            "brief": "What's on my calendar tomorrow, Tuesday July 28th?"
+          }
+        }
+      ],
+      "finalText": "You've got one meeting: a one-on-one with Jordan at three o'clock tomorrow afternoon for half an hour. That's all you have on the calendar.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 2,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "should-call-delegate",
+            "ok": true,
+            "detail": "called delegate"
+          },
+          {
+            "id": "pronoun-not-principal",
+            "ok": true,
+            "detail": "brief=what's on my calendar tomorrow, tuesday july 28th?"
+          }
+        ]
+      }
+    },
+    {
+      "arm": "full-consolidation",
+      "caseId": "simple-ack",
+      "category": "latency-baseline",
+      "promptTokensEst": 12120,
+      "ttftMs": 1357,
+      "fullTurnMs": 1534,
+      "toolRounds": 0,
+      "toolsCalled": [],
+      "toolTrace": [],
+      "finalText": "You're welcome. I'll be here whenever you need me.",
+      "stopReason": "message_end",
+      "score": {
+        "passed": 1,
+        "failed": 0,
+        "checks": [
+          {
+            "id": "no-tools",
+            "ok": true,
+            "detail": "no tools called"
+          }
+        ]
+      }
+    }
+  ]
+}

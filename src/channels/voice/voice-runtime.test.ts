@@ -5,6 +5,7 @@ import type { OutboundContextRow } from '../../dispatch/outbound-context.js';
 import { OutboundContextService } from '../../dispatch/outbound-context.js';
 import { createSilentLogger } from '../../logger.js';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, Message } from '../../agents/llm/provider.js';
+import { DATE_RESOLVE_GUARDRAIL } from '../../agents/prompts/date-resolve-guardrail.js';
 import { WorkingMemory } from '../../memory/working-memory.js';
 import {
   VoiceRuntime,
@@ -589,7 +590,7 @@ describe('VoiceRuntime brain/context parity (#1551)', () => {
     await runtime.awaitIdle('sp2');
 
     const system = llm.seenMessages[0]![0]!;
-    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}`);
+    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`);
   });
 
   it('omits a throwing identity block and still runs the turn', async () => {
@@ -904,10 +905,19 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     expect(prompt).toContain('Google security alert: new sign-in on your account.');
     expect(prompt.indexOf('[ACTIVE OUTBOUND CONTEXT'))
       .toBeLessThan(prompt.indexOf('## Current Date & Time'));
-    // Empty outbound → identical to the slim path without that section.
+    // Empty outbound → identical to the slim path without that section (still
+    // includes the shared date-resolve guardrail — ADR-038).
     expect(buildVoiceSystemPrompt({})).toBe(
-      `${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}`,
+      `${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`,
     );
+  });
+
+  it('buildVoiceSystemPrompt composes the shared date-resolve guardrail', () => {
+    const prompt = buildVoiceSystemPrompt({});
+    expect(prompt).toContain('date-resolve to verify');
+    expect(prompt).toContain('### Date & time');
+    expect(prompt.indexOf(VOICE_TOOL_RESULT_POLICY))
+      .toBeLessThan(prompt.indexOf(DATE_RESOLVE_GUARDRAIL));
   });
 
   it('injects an active Signal outbound-context entry into the spoken-turn system prompt', async () => {
@@ -963,7 +973,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
 
     expect(getActive).toHaveBeenCalledOnce();
     const system = llm.seenMessages[0]![0]!;
-    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}`);
+    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`);
     expect(system.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
   });
 
@@ -990,7 +1000,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     await runtime.awaitIdle('oc3');
 
     const system = llm.seenMessages[0]![0]!;
-    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}`);
+    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`);
     expect(transport.publishedFrames.length).toBeGreaterThan(0);
   });
 
@@ -1017,7 +1027,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     await runtime.awaitIdle('oc4');
 
     const system = llm.seenMessages[0]![0]!;
-    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}`);
+    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`);
     expect(system.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
     expect(transport.publishedFrames.length).toBeGreaterThan(0);
   });

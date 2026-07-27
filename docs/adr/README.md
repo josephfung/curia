@@ -58,6 +58,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [035](035-channel-owned-outbound-recipient-projection.md) | Channel-owned outbound recipient projection — request variants + `extractRecipients` so the gateway needs no per-channel projection edit | Accepted |
 | [036](036-telnyx-sms-channel.md) | Telnyx SMS on a dedicated office DID — medium trust, new-DID-only, carrier STOP (no app ledger), voice Phase 2 SIP note | Accepted |
 | [037](037-voice-channel-livekit-duplex.md) | Duplex voice via self-hosted LiveKit cascade (console WebRTC); STT/TTS provider seams; Phase 2 Signal/PSTN deferred | Accepted |
+| [038](038-voice-brain-shared-hardening.md) | Voice brain parity via shared-hardening prompt modules — reject full coordinator consolidation; text may use `stream()` (#1563) | Accepted |
 
 ## Adding new ADRs
 

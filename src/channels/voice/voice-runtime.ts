@@ -23,6 +23,7 @@ import { createInboundMessage, createVoiceSessionEnded } from '../../bus/events.
 import type { OutboundContextService } from '../../dispatch/outbound-context.js';
 import type { Logger } from '../../logger.js';
 import type { LLMProvider, Message, ToolCall, ToolDefinition } from '../../agents/llm/provider.js';
+import { DATE_RESOLVE_GUARDRAIL } from '../../agents/prompts/date-resolve-guardrail.js';
 import type { WorkingMemory } from '../../memory/working-memory.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
@@ -81,14 +82,15 @@ function isHardTtsFailure(err: unknown): boolean {
  * Voice-mode system addendum. Keeps spoken replies short and free of markup that
  * makes no sense read aloud. Always part of the spoken-turn system prompt.
  *
- * Brain stance (#1551): spoken turns get a curated subset of the coordinator's
- * context — office identity/persona block, specialist roster + delegation
- * guidance, and a fresh date/time block — assembled by buildVoiceSystemPrompt().
- * They deliberately do NOT get the coordinator's full YAML system prompt or
- * KG/sender enrichment (latency + text-channel content that makes no sense
- * spoken). Active outbound-context entries are included (#1594) so voice can
- * acknowledge recent proactive sends on other channels. See ADR-037
- * Consequences and docs/wip/2026-07-25-voice-channel-design.md §"Phase 1 brain".
+ * Brain stance (#1551, revised by ADR-038): spoken turns get a curated subset
+ * of the coordinator's context — office identity/persona block, specialist
+ * roster + delegation guidance, shared channel-agnostic guardrails (starting
+ * with date-resolve, #1595), and a fresh date/time block — assembled by
+ * buildVoiceSystemPrompt(). They deliberately do NOT get the coordinator's
+ * full YAML system prompt or KG/sender enrichment (latency + text-channel
+ * content that makes no sense spoken). Active outbound-context entries are
+ * included (#1594) so voice can acknowledge recent proactive sends on other
+ * channels. See ADR-037 Consequences and ADR-038.
  */
 export const VOICE_SYSTEM_ADDENDUM =
   'You are speaking to the principal in a live voice call. Reply in a natural, ' +
@@ -132,6 +134,9 @@ export const VOICE_DELEGATION_GUIDANCE =
  * caching keeps a stable prefix across turns. Pure — callers resolve/guard the
  * dynamic parts (identity compile, roster lookup, outbound context, time
  * formatting) themselves.
+ *
+ * Shared guardrails (ADR-038) are composed from `src/agents/prompts/` — do not
+ * copy-paste coordinator YAML lines here.
  */
 export function buildVoiceSystemPrompt(parts: {
   /** Compiled office identity/persona block; omitted when null/empty. */
@@ -151,6 +156,10 @@ export function buildVoiceSystemPrompt(parts: {
   if (parts.identityBlock) sections.push(parts.identityBlock);
   sections.push(VOICE_SYSTEM_ADDENDUM);
   sections.push(VOICE_TOOL_RESULT_POLICY);
+  // Channel-agnostic date-arithmetic rule — same module the coordinator composes
+  // (ADR-038 / #1595). Always present: voice already pins date-resolve via
+  // coordinator tools; the failure mode was missing instruction, not missing tool.
+  sections.push(DATE_RESOLVE_GUARDRAIL);
   if (parts.specialistRoster) {
     sections.push(
       VOICE_DELEGATION_GUIDANCE + '\n\n## Available Specialists\n' + parts.specialistRoster,

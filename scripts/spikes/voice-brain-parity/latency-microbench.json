@@ -1,0 +1,134 @@
+{
+  "model": "claude-haiku-4-5",
+  "reps": 5,
+  "summary": {
+    "baseline": {
+      "n": 5,
+      "avgTtft": 645,
+      "p50Ttft": 526,
+      "avgFull": 841,
+      "tokens": 488
+    },
+    "shared-hardening": {
+      "n": 5,
+      "avgTtft": 750,
+      "p50Ttft": 657,
+      "avgFull": 1012,
+      "tokens": 1080
+    },
+    "full-consolidation": {
+      "n": 5,
+      "avgTtft": 813,
+      "p50Ttft": 782,
+      "avgFull": 1013,
+      "tokens": 12120
+    }
+  },
+  "rows": [
+    {
+      "arm": "baseline",
+      "rep": 0,
+      "ttftMs": 1073,
+      "fullMs": 1219,
+      "tokens": 488
+    },
+    {
+      "arm": "shared-hardening",
+      "rep": 0,
+      "ttftMs": 1061,
+      "fullMs": 1310,
+      "tokens": 1080
+    },
+    {
+      "arm": "full-consolidation",
+      "rep": 0,
+      "ttftMs": 782,
+      "fullMs": 980,
+      "tokens": 12120
+    },
+    {
+      "arm": "baseline",
+      "rep": 1,
+      "ttftMs": 643,
+      "fullMs": 875,
+      "tokens": 488
+    },
+    {
+      "arm": "shared-hardening",
+      "rep": 1,
+      "ttftMs": 1037,
+      "fullMs": 1352,
+      "tokens": 1080
+    },
+    {
+      "arm": "full-consolidation",
+      "rep": 1,
+      "ttftMs": 621,
+      "fullMs": 837,
+      "tokens": 12120
+    },
+    {
+      "arm": "baseline",
+      "rep": 2,
+      "ttftMs": 507,
+      "fullMs": 656,
+      "tokens": 488
+    },
+    {
+      "arm": "shared-hardening",
+      "rep": 2,
+      "ttftMs": 507,
+      "fullMs": 677,
+      "tokens": 1080
+    },
+    {
+      "arm": "full-consolidation",
+      "rep": 2,
+      "ttftMs": 885,
+      "fullMs": 1098,
+      "tokens": 12120
+    },
+    {
+      "arm": "baseline",
+      "rep": 3,
+      "ttftMs": 526,
+      "fullMs": 801,
+      "tokens": 488
+    },
+    {
+      "arm": "shared-hardening",
+      "rep": 3,
+      "ttftMs": 488,
+      "fullMs": 771,
+      "tokens": 1080
+    },
+    {
+      "arm": "full-consolidation",
+      "rep": 3,
+      "ttftMs": 1230,
+      "fullMs": 1383,
+      "tokens": 12120
+    },
+    {
+      "arm": "baseline",
+      "rep": 4,
+      "ttftMs": 477,
+      "fullMs": 654,
+      "tokens": 488
+    },
+    {
+      "arm": "shared-hardening",
+      "rep": 4,
+      "ttftMs": 657,
+      "fullMs": 951,
+      "tokens": 1080
+    },
+    {
+      "arm": "full-consolidation",
+      "rep": 4,
+      "ttftMs": 549,
+      "fullMs": 769,
+      "tokens": 12120
+    }
+  ]
+}
