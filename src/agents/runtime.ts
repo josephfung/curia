@@ -19,7 +19,11 @@ import {
   looksLikeUnacknowledgedSuccess,
   buildUnresolvedFailureReply,
   fingerprintToolInvocation,
-  type UnresolvedToolFailure,
+  recordUnresolvedFailure,
+  clearOneUnresolvedFailure,
+  listUnresolvedFailures,
+  unresolvedFailureCount,
+  type UnresolvedFailureBag,
 } from './tool-failure-honesty.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
@@ -1079,9 +1083,11 @@ export class AgentRuntime {
     if (!response) return; // chatWithRetry already published error events
 
     // Unresolved tool failures for the honesty guard (#1546). Cleared only when
-    // a later success matches the same tool+input fingerprint (retry worked);
-    // success for a different input must not clear an unrelated failure.
-    const unresolvedFailures = new Map<string, UnresolvedToolFailure>();
+    // a later *semantic* success matches the same tool+input fingerprint (retry
+    // worked); success for a different input must not clear an unrelated failure,
+    // and duplicate identical invocations keep separate entries so one success
+    // cannot erase another attempt's failure.
+    const unresolvedFailures: UnresolvedFailureBag = new Map();
 
     // Extract caller context once — it doesn't change between tool-use rounds.
     // Primary source: senderContext from the inbound message (set by the dispatcher).
@@ -1328,7 +1334,23 @@ export class AgentRuntime {
         if (result.success) {
           // Success: reset consecutive error counter
           budget.consecutiveErrors = 0;
-          unresolvedFailures.delete(fingerprintToolInvocation(toolCall.name, toolCall.input));
+          const successFp = fingerprintToolInvocation(toolCall.name, toolCall.input);
+          // Delegate can return transport success with data.failed / blocked (#1171).
+          // Only clear an unresolved fingerprint after a true action success; otherwise
+          // record the semantic failure so the honesty guard still fires (#1579 review).
+          if (toolCall.name === 'delegate') {
+            const delegateFailure = parseDelegateFailureData(result.data, logger);
+            if (delegateFailure || delegateBlocked) {
+              recordUnresolvedFailure(unresolvedFailures, successFp, {
+                toolName: toolCall.name,
+                message: delegateFailure?.message ?? 'delegation failed',
+              });
+            } else {
+              clearOneUnresolvedFailure(unresolvedFailures, successFp);
+            }
+          } else {
+            clearOneUnresolvedFailure(unresolvedFailures, successFp);
+          }
 
           // When a tool result is (partly) re-emitted into the turn by the runtime
           // — e.g. skill-activate, whose instructions/reference bodies are spliced
@@ -1530,10 +1552,11 @@ export class AgentRuntime {
             budget.consecutiveErrors++;
           }
           // Track for the final-reply honesty guard (#1546).
-          unresolvedFailures.set(fingerprintToolInvocation(toolCall.name, toolCall.input), {
-            toolName: toolCall.name,
-            message: result.error,
-          });
+          recordUnresolvedFailure(
+            unresolvedFailures,
+            fingerprintToolInvocation(toolCall.name, toolCall.input),
+            { toolName: toolCall.name, message: result.error },
+          );
           const agentErr = isDbFailure
             ? {
                 type: 'DATABASE_UNAVAILABLE' as const,
@@ -1804,10 +1827,10 @@ export class AgentRuntime {
     // "Got it — I've noted the dismissal."
     if (
       !isResponseError
-      && unresolvedFailures.size > 0
+      && unresolvedFailureCount(unresolvedFailures) > 0
       && looksLikeUnacknowledgedSuccess(responseContent)
     ) {
-      const failures = [...unresolvedFailures.values()];
+      const failures = listUnresolvedFailures(unresolvedFailures);
       const honest = buildUnresolvedFailureReply(failures);
       logger.warn(
         {

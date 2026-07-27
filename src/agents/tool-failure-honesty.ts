@@ -14,12 +14,56 @@ export interface UnresolvedToolFailure {
   message: string;
 }
 
+/**
+ * Multiset of unresolved failures keyed by invocation fingerprint.
+ * Identical tool+input attempts are kept as separate entries so one success
+ * only clears one matching failure (#1546 / #1579 review).
+ */
+export type UnresolvedFailureBag = Map<string, UnresolvedToolFailure[]>;
+
 /** Stable fingerprint so success for input B does not clear a failure for input A. */
 export function fingerprintToolInvocation(
   toolName: string,
   input: Record<string, unknown>,
 ): string {
   return `${toolName}:${stableJson(input)}`;
+}
+
+/** Record one unresolved attempt (duplicates of the same fingerprint stay distinct). */
+export function recordUnresolvedFailure(
+  bag: UnresolvedFailureBag,
+  fingerprint: string,
+  failure: UnresolvedToolFailure,
+): void {
+  const list = bag.get(fingerprint);
+  if (list) {
+    list.push(failure);
+  } else {
+    bag.set(fingerprint, [failure]);
+  }
+}
+
+/** Clear a single matching attempt after a semantic success (retry worked). */
+export function clearOneUnresolvedFailure(
+  bag: UnresolvedFailureBag,
+  fingerprint: string,
+): void {
+  const list = bag.get(fingerprint);
+  if (!list || list.length === 0) return;
+  list.pop();
+  if (list.length === 0) {
+    bag.delete(fingerprint);
+  }
+}
+
+export function listUnresolvedFailures(bag: UnresolvedFailureBag): UnresolvedToolFailure[] {
+  return [...bag.values()].flat();
+}
+
+export function unresolvedFailureCount(bag: UnresolvedFailureBag): number {
+  let n = 0;
+  for (const list of bag.values()) n += list.length;
+  return n;
 }
 
 function stableJson(value: unknown): string {

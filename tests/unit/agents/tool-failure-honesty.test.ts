@@ -5,6 +5,11 @@ import {
   buildUnresolvedFailureReply,
   humanizeToolFailureMessage,
   fingerprintToolInvocation,
+  recordUnresolvedFailure,
+  clearOneUnresolvedFailure,
+  listUnresolvedFailures,
+  unresolvedFailureCount,
+  type UnresolvedFailureBag,
 } from '../../../src/agents/tool-failure-honesty.js';
 
 describe('tool-failure-honesty (#1546)', () => {
@@ -39,6 +44,19 @@ describe('tool-failure-honesty (#1546)', () => {
     const aAgain = fingerprintToolInvocation('resolve-learning-digest', { task_id: 'aaa' });
     expect(a).not.toBe(b);
     expect(a).toBe(aAgain);
+  });
+
+  it('keeps duplicate fingerprints as separate unresolved attempts', () => {
+    const bag: UnresolvedFailureBag = new Map();
+    const fp = fingerprintToolInvocation('resolve-learning-digest', { task_id: 'aaa' });
+    recordUnresolvedFailure(bag, fp, { toolName: 'resolve-learning-digest', message: 'fail-1' });
+    recordUnresolvedFailure(bag, fp, { toolName: 'resolve-learning-digest', message: 'fail-2' });
+    expect(unresolvedFailureCount(bag)).toBe(2);
+    clearOneUnresolvedFailure(bag, fp);
+    expect(unresolvedFailureCount(bag)).toBe(1);
+    expect(listUnresolvedFailures(bag).map((f) => f.message)).toEqual(['fail-1']);
+    clearOneUnresolvedFailure(bag, fp);
+    expect(unresolvedFailureCount(bag)).toBe(0);
   });
 
   it('does not flag a neutral informational reply', () => {
