@@ -28,6 +28,7 @@ function makeHealthServiceStub(): HealthService {
         db: 'ok', bus: 'ok', signal: 'skipped',
         email: 'skipped', browser: 'skipped',
         mcp: {},
+        nylas_calendar: 'skipped',
         scheduler: 'ok',
       },
     }),

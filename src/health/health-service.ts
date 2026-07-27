@@ -22,10 +22,11 @@ import type { CheckResult, HealthResponse, HealthStatus, TrackerKey, CanaryResul
 import { LlmOutcomeTracker } from './llm-outcome-tracker.js';
 import {
   checkDb, checkBus, checkEmail, checkSignal, checkBrowser,
-  checkMcpServers, checkScheduler,
+  checkMcpServers, checkNylasCalendar, checkScheduler,
   type EmailAdapterHealth, type SignalRpcClientHealth, type BrowserServiceHealth,
 } from './health-checks.js';
 import type { NylasClient } from '../channels/email/nylas-client.js';
+import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
 
 export interface HealthServiceDeps {
   db: Pool;
@@ -36,8 +37,13 @@ export interface HealthServiceDeps {
   /** Optional — only needed for canary job registration. Absent in test environments. */
   schedulerService?: SchedulerService;
   emailAdapter?: EmailAdapterHealth;
-  /** Optional Nylas client for the daily Nylas grant canary. */
+  /** Optional Nylas client for the daily Nylas email-grant canary. */
   nylasClient?: NylasClient;
+  /**
+   * Optional Nylas calendar client bound to `ceo_nylas_grant_id` (#1561).
+   * Distinct from `nylasClient` (email/messaging grant).
+   */
+  nylasCalendarClient?: Pick<NylasCalendarClient, 'listCalendars'>;
   signalRpcClient?: SignalRpcClientHealth;
   browserService?: BrowserServiceHealth;
   mcpSessions: McpSession[];
@@ -181,16 +187,17 @@ export class HealthService {
   async getStatus(): Promise<HealthResponse> {
     const {
       db, bus, emailAdapter, signalRpcClient, browserService,
-      mcpSessions, scheduler, config,
+      mcpSessions, scheduler, config, nylasCalendarClient,
     } = this.deps;
     const { liveness } = config;
     const mcpServerStatuses = this.deps.mcpServerStatuses ?? new Map();
 
     // Run all async probes concurrently to keep p99 latency low.
-    const [db_check, signal_check, mcp_checks] = await Promise.all([
+    const [db_check, signal_check, mcp_checks, nylas_cal] = await Promise.all([
       checkDb(db, this.deps.logger),
       checkSignal(signalRpcClient, this.deps.logger),
       checkMcpServers(mcpServerStatuses, mcpSessions, this.deps.logger),
+      checkNylasCalendar(nylasCalendarClient, this.deps.logger),
     ]);
 
     // Synchronous probes — no need to await.
@@ -206,6 +213,7 @@ export class HealthService {
       email: email_check,
       browser: browser_check,
       mcp: mcp_checks,
+      nylas_calendar: nylas_cal.status,
       scheduler: scheduler_check,
     };
 
@@ -222,7 +230,7 @@ export class HealthService {
   async runCanaries(): Promise<CanaryResult[]> {
     const {
       logger, config, openaiApiKey, tavilyApiKey,
-      nylasClient, signalRpcClient, googleWorkspaceConfigPath,
+      nylasClient, nylasCalendarClient, signalRpcClient, googleWorkspaceConfigPath,
       mcpSessions, modelRoutingConfig,
     } = this.deps;
     const results: CanaryResult[] = [];
@@ -265,7 +273,7 @@ export class HealthService {
       return this.canaryOutcome('image_gen', 'image_gen');
     });
 
-    // Nylas canary — list one message to validate the grant credential. 5-second timeout.
+    // Nylas email/messaging grant canary — list one message. 5-second timeout.
     await run('nylas', async () => {
       if (!nylasClient) return { name: 'nylas', status: 'skipped' };
       try {
@@ -279,6 +287,24 @@ export class HealthService {
       } catch (err) {
         return { name: 'nylas', status: 'fail', detail: String(err) };
       }
+    });
+
+    // Principal calendar grant canary (`ceo_nylas_grant_id`) — distinct from email (#1561).
+    await run('nylas_calendar', async () => {
+      if (!nylasCalendarClient) return { name: 'nylas_calendar', status: 'skipped' };
+      const result = await checkNylasCalendar(nylasCalendarClient, logger);
+      if (result.status === 'ok') return { name: 'nylas_calendar', status: 'ok' };
+      if (result.status === 'skipped') return { name: 'nylas_calendar', status: 'skipped' };
+      // Reconnecting the grant only fixes auth failures (401/403). For timeouts,
+      // network errors, or 5xx, surface a neutral probe-failure detail so the
+      // dashboard doesn't prescribe a reconnect that won't help (#1561 review).
+      return {
+        name: 'nylas_calendar',
+        status: 'fail',
+        detail: result.authFailure
+          ? 'Principal calendar grant auth failed (401/403) — reconnect ceo_nylas_grant_id in Nylas'
+          : 'Principal calendar grant probe failed (listCalendars) — check Nylas connectivity',
+      };
     });
 
     // Signal canary — reuse the same RPC ping as the liveness check.
@@ -333,6 +359,7 @@ export class HealthService {
       checks.email,
       checks.browser,
       ...Object.values(checks.mcp),
+      checks.nylas_calendar,
       checks.scheduler,
     ];
     if (nonCritical.some(c => c === 'fail')) return 'degraded';

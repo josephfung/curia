@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **`nylas_calendar` health check** — probes the principal calendar grant separately from email. (#1561)
+
 ### Changed
 
 - **`resolve-learning-digest`** — accepts a unique task-id prefix for digest resolve. (#1545)
@@ -20,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`calendar-list-events`** — all-calendar 401/403 failures name grant reconnect action. (#1561)
 - **Slack decode** — unescape `&amp;` last so `&amp;lt;` stays literal `&lt;`. (#1569)
 - **Ant Farm** — desk roster updates during scene boot are no longer dropped. (#1549)
 - **MCP bootstrap** — enabled servers with 0 tools now error-log and fail health. (#1500)

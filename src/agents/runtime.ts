@@ -1469,7 +1469,10 @@ export class AgentRuntime {
           // so the LLM gets machine-readable error context instead of raw strings.
           // Transient DB outages (#1381) are tracked on budget.dbFailures and do NOT
           // burn the consecutive error budget — temporary infra must not abort the task.
+          // Auth-class skill failures (#1561) preserve AUTH_FAILURE so the LLM sees
+          // the reconnect action rather than a generic SKILL_ERROR.
           const isDbFailure = result.errorType === 'DATABASE_UNAVAILABLE';
+          const isAuthFailure = result.errorType === 'AUTH_FAILURE';
           if (isDbFailure) {
             budget.dbFailures++;
           } else {
@@ -1484,6 +1487,15 @@ export class AgentRuntime {
                 context: { toolName: toolCall.name },
                 timestamp: new Date(),
               }
+            : isAuthFailure
+              ? {
+                  type: 'AUTH_FAILURE' as const,
+                  source: `skill:${toolCall.name}`,
+                  message: result.error,
+                  retryable: false,
+                  context: { toolName: toolCall.name },
+                  timestamp: new Date(),
+                }
             : classifySkillError(toolCall.name, result.error);
           const formattedError = formatTaskError(
             toolCall.name,

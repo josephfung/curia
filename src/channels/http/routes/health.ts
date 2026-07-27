@@ -41,6 +41,7 @@ export async function healthRoutes(
           email: 'skipped' as const,
           browser: 'skipped' as const,
           mcp: {},
+          nylas_calendar: 'skipped' as const,
           scheduler: 'fail' as const,
         },
       });

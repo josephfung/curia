@@ -28,4 +28,9 @@ failure_modes:
   - Produces a generic response without attempting to reference calendar data
   - Returns an unstructured wall of text
   - Makes up a schedule instead of acknowledging missing calendar access
+  - Says only "Google returned an error" without naming authorization/reconnect when calendar auth failed
   - Ignores the briefing format entirely and just asks what the user wants
+
+# When calendar-list-events returns AUTH_FAILURE (revoked ceo_nylas_grant_id),
+# the agent must tell the principal to reconnect the calendar grant — not invent
+# a schedule or flatten the failure to a vague Google error (#1561).

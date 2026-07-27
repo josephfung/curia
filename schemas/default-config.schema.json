@@ -480,6 +480,7 @@
             "embeddings":       { "type": "string" },
             "image_gen":        { "type": "string" },
             "nylas":            { "type": "string" },
+            "nylas_calendar":   { "type": "string" },
             "signal":           { "type": "string" },
             "google_workspace": { "type": "string" },
             "tavily":           { "type": "string" }

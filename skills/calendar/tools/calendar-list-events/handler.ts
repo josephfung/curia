@@ -121,6 +121,7 @@ export class CalendarListEventsHandler implements ToolHandler {
       );
 
       const failedCalendarIds: string[] = [];
+      const rejectionReasons: unknown[] = [];
       const successfulEvents: NylasCalendarEvent[][] = [];
       for (let i = 0; i < settled.length; i++) {
         // settled is mapped 1:1 from calendarIds and i is bounded by settled.length, so
@@ -133,15 +134,34 @@ export class CalendarListEventsHandler implements ToolHandler {
           successfulEvents.push(result.value);
         } else {
           failedCalendarIds.push(calendarId);
+          rejectionReasons.push(result.reason);
           ctx.log.error({ err: result.reason, calendarId }, 'Failed to fetch events for calendar');
         }
       }
 
       if (successfulEvents.length === 0) {
-        const message = failedCalendarIds.length > 0
-          ? `Failed to list events from any calendar (${failedCalendarIds.length} failed: ${failedCalendarIds.join(', ')})`
-          : 'No events found';
-        return { success: false, error: message };
+        if (failedCalendarIds.length === 0) {
+          return { success: false, error: 'No events found' };
+        }
+        // When every calendar fails with an auth-class error (Nylas statusCode
+        // 401/403), name the grant/reconnect action so the briefing can tell the
+        // principal what to do (#1561). Mixed/non-auth failures keep the generic message.
+        const allAuth = rejectionReasons.length > 0
+          && rejectionReasons.every(isNylasAuthFailure);
+        if (allAuth) {
+          return {
+            success: false,
+            errorType: 'AUTH_FAILURE',
+            error:
+              `Calendar authorization failed for all calendars (${failedCalendarIds.join(', ')}): ` +
+              'the principal calendar grant (ceo_nylas_grant_id) was rejected by Google/Nylas ' +
+              '(401/403). Reconnect the grant in the Nylas dashboard, then retry.',
+          };
+        }
+        return {
+          success: false,
+          error: `Failed to list events from any calendar (${failedCalendarIds.length} failed: ${failedCalendarIds.join(', ')})`,
+        };
       }
 
       let events = successfulEvents.flat();
@@ -207,4 +227,11 @@ export class CalendarListEventsHandler implements ToolHandler {
       return { success: false, error: `Failed to list events: ${message}` };
     }
   }
+}
+
+/** Nylas SDK uses `statusCode` (not `status`) on NylasApiError. */
+export function isNylasAuthFailure(reason: unknown): boolean {
+  if (!reason || typeof reason !== 'object') return false;
+  const code = (reason as { statusCode?: unknown }).statusCode;
+  return code === 401 || code === 403;
 }

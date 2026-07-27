@@ -1,7 +1,7 @@
 {
   "name": "calendar-list-events",
   "description": "Fetch events within a date range. Pass contactId to look up all calendars registered to that contact (use ${principal_contact_id} in scheduled agents). Pass calendarId only when targeting a specific calendar by Nylas ID. Supports filtering by text query (title/description) and attendee email.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

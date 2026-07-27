@@ -52,6 +52,7 @@ describe('HealthService.getStatus()', () => {
     expect(result.checks.email).toBe('skipped');
     expect(result.checks.browser).toBe('skipped');
     expect(result.checks.mcp).toEqual({});
+    expect(result.checks.nylas_calendar).toBe('skipped');
   });
 
   it('returns degraded when an enabled MCP server booted with 0 tools (#1500)', async () => {
@@ -90,6 +91,46 @@ describe('HealthService.getStatus()', () => {
     const result = await svc.getStatus();
     expect(result.status).toBe('ok');
     expect(result.checks.mcp).toEqual({});
+  });
+
+  it('returns degraded when the principal calendar grant probe fails (#1561)', async () => {
+    const svc = new HealthService(makeDeps({
+      nylasCalendarClient: {
+        listCalendars: vi.fn().mockRejectedValue(Object.assign(new Error('Unauthorized'), { statusCode: 401 })),
+      },
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.status).toBe('degraded');
+    expect(result.checks.nylas_calendar).toBe('fail');
+  });
+
+  it('nylas_calendar canary fails independently of the email nylas canary (#1561)', async () => {
+    const listMessages = vi.fn().mockResolvedValue([]);
+    const listCalendars = vi.fn().mockRejectedValue(Object.assign(new Error('Forbidden'), { statusCode: 403 }));
+    const svc = new HealthService(makeDeps({
+      nylasClient: { listMessages },
+      nylasCalendarClient: { listCalendars },
+    }) as never);
+
+    const results = await svc.runCanaries();
+    const email = results.find((r) => r.name === 'nylas');
+    const calendar = results.find((r) => r.name === 'nylas_calendar');
+    expect(email?.status).toBe('ok');
+    expect(calendar?.status).toBe('fail');
+    expect(calendar?.detail).toMatch(/reconnect|grant/i);
+  });
+
+  it('nylas_calendar canary omits reconnect guidance for non-auth failures (#1561)', async () => {
+    // A 500 is a connectivity/server problem, not a bad grant — reconnect won't help.
+    const listCalendars = vi.fn().mockRejectedValue(Object.assign(new Error('Server Error'), { statusCode: 500 }));
+    const svc = new HealthService(makeDeps({
+      nylasCalendarClient: { listCalendars },
+    }) as never);
+
+    const calendar = (await svc.runCanaries()).find((r) => r.name === 'nylas_calendar');
+    expect(calendar?.status).toBe('fail');
+    expect(calendar?.detail).not.toMatch(/reconnect/i);
+    expect(calendar?.detail).toMatch(/connectivity/i);
   });
 
   it('returns degraded when a non-critical check fails', async () => {

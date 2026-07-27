@@ -2075,6 +2075,7 @@ async function main(): Promise<void> {
     schedulerService,
     emailAdapter: emailAdapters[0],
     nylasClient: primaryNylasClient,
+    nylasCalendarClient,
     signalRpcClient,
     browserService,
     mcpSessions,
