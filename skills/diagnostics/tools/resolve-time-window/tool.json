@@ -1,0 +1,22 @@
+{
+  "name": "resolve-time-window",
+  "description": "Resolve a natural-language time reference into a concrete ISO time window for audit-query. Use this for any time-anchored diagnostics question ('around 11:44am', '8-9am yesterday', 'yesterday', 'last 2 hours') instead of hand-formatting timestamps. Returns since/until as strict zone-bearing ISO 8601 strings that audit-query accepts, plus a human-readable interpretation so wrong windows are visible.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "expression": "string (natural-language time reference, e.g. 'around 11:44am', '8-9am yesterday', 'yesterday', 'last 2 hours')",
+    "default_window_minutes": "number? (half-width for point-in-time expressions; default 30)"
+  },
+  "outputs": {
+    "since": "string (ISO 8601 datetime with seconds and timezone offset)",
+    "until": "string (ISO 8601 datetime with seconds and timezone offset)",
+    "interpretation": "string (human-readable window echo, e.g. '11:14 AM to 12:14 PM EDT, Jul 27')",
+    "displayTimezone": "string? (human-readable timezone label, e.g. 'EDT (UTC-04:00)')"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 5000,
+  "capabilities": [],
+  "allowed_callers": ["diagnostics"]
+}
