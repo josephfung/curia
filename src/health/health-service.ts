@@ -22,8 +22,10 @@ import type { CheckResult, HealthResponse, HealthStatus, TrackerKey, CanaryResul
 import { LlmOutcomeTracker } from './llm-outcome-tracker.js';
 import {
   checkDb, checkBus, checkEmail, checkSignal, checkBrowser,
-  checkMcpServers, checkNylasCalendar, checkScheduler,
+  checkMcpServers, checkNylasCalendar, checkSlack, checkSms, checkVoice,
+  checkScheduler,
   type EmailAdapterHealth, type SignalRpcClientHealth, type BrowserServiceHealth,
+  type SlackClientHealth, type SmsChannelHealth, type VoiceLiveKitHealth,
 } from './health-checks.js';
 import type { NylasClient } from '../channels/email/nylas-client.js';
 import type { NylasCalendarClient } from '../channels/calendar/nylas-calendar-client.js';
@@ -46,6 +48,21 @@ export interface HealthServiceDeps {
   nylasCalendarClient?: Pick<NylasCalendarClient, 'listCalendars'>;
   signalRpcClient?: SignalRpcClientHealth;
   browserService?: BrowserServiceHealth;
+  /**
+   * Slack Socket Mode client when the Slack adapter was constructed (#1567).
+   * Omit (don't pass a credential-only client) when the channel is disabled.
+   */
+  slackClient?: SlackClientHealth;
+  /**
+   * SMS readiness surface when the SMS adapter was constructed (#1567).
+   * Omit when the channel is disabled / uninstalled.
+   */
+  smsHealth?: SmsChannelHealth;
+  /**
+   * LiveKit management probe when the voice adapter was constructed (#1567).
+   * Must target the internal management URL, not browser signaling.
+   */
+  voiceLiveKit?: VoiceLiveKitHealth;
   mcpSessions: McpSession[];
   /**
    * Boot outcomes for enabled MCP servers (#1500). Absent/empty → no mcp.*
@@ -188,22 +205,26 @@ export class HealthService {
     const {
       db, bus, emailAdapter, signalRpcClient, browserService,
       mcpSessions, scheduler, config, nylasCalendarClient,
+      slackClient, smsHealth, voiceLiveKit,
     } = this.deps;
     const { liveness } = config;
     const mcpServerStatuses = this.deps.mcpServerStatuses ?? new Map();
 
     // Run all async probes concurrently to keep p99 latency low.
-    const [db_check, signal_check, mcp_checks, nylas_cal] = await Promise.all([
+    const [db_check, signal_check, mcp_checks, nylas_cal, voice_check] = await Promise.all([
       checkDb(db, this.deps.logger),
       checkSignal(signalRpcClient, this.deps.logger),
       checkMcpServers(mcpServerStatuses, mcpSessions, this.deps.logger),
       checkNylasCalendar(nylasCalendarClient, this.deps.logger),
+      checkVoice(voiceLiveKit, this.deps.logger),
     ]);
 
     // Synchronous probes — no need to await.
     const bus_check = checkBus(bus);
     const browser_check = checkBrowser(browserService);
     const email_check = checkEmail(emailAdapter, liveness.emailStallFactor, this.startedAt);
+    const slack_check = checkSlack(slackClient, this.startedAt);
+    const sms_check = checkSms(smsHealth);
     const scheduler_check = checkScheduler(scheduler, liveness.schedulerMaxTickS, this.startedAt);
 
     const checks: HealthResponse['checks'] = {
@@ -214,6 +235,9 @@ export class HealthService {
       browser: browser_check,
       mcp: mcp_checks,
       nylas_calendar: nylas_cal.status,
+      slack: slack_check,
+      sms: sms_check,
+      voice: voice_check,
       scheduler: scheduler_check,
     };
 
@@ -360,6 +384,9 @@ export class HealthService {
       checks.browser,
       ...Object.values(checks.mcp),
       checks.nylas_calendar,
+      checks.slack,
+      checks.sms,
+      checks.voice,
       checks.scheduler,
     ];
     if (nonCritical.some(c => c === 'fail')) return 'degraded';

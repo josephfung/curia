@@ -5,6 +5,9 @@ import {
   checkBrowser,
   checkEmail,
   checkScheduler,
+  checkSlack,
+  checkSms,
+  checkVoice,
 } from '../../../src/health/health-checks.js';
 import type { Logger } from '../../../src/logger.js';
 
@@ -109,5 +112,73 @@ describe('checkScheduler', () => {
   it('returns fail when last tick is stale', () => {
     const scheduler = { lastTickAt: new Date(Date.now() - 300_000) } as never;
     expect(checkScheduler(scheduler, 120, new Date(0))).toBe('fail');
+  });
+});
+
+describe('checkSlack (#1567)', () => {
+  it('returns skipped when Slack is not configured', () => {
+    expect(checkSlack(undefined, new Date())).toBe('skipped');
+  });
+
+  it('returns ok when Socket Mode is connected', () => {
+    const client = {
+      isStarted: () => true,
+      isSocketConnected: () => true,
+    };
+    expect(checkSlack(client, new Date(0))).toBe('ok');
+  });
+
+  it('returns ok within boot grace when started but not yet connected', () => {
+    const client = {
+      isStarted: () => true,
+      isSocketConnected: () => false,
+    };
+    expect(checkSlack(client, new Date(Date.now() - 5_000), 60_000)).toBe('ok');
+  });
+
+  it('returns fail past boot grace when Socket Mode is disconnected', () => {
+    const client = {
+      isStarted: () => true,
+      isSocketConnected: () => false,
+    };
+    expect(checkSlack(client, new Date(Date.now() - 120_000), 60_000)).toBe('fail');
+  });
+
+  it('returns fail when client was never started', () => {
+    const client = {
+      isStarted: () => false,
+      isSocketConnected: () => false,
+    };
+    expect(checkSlack(client, new Date())).toBe('fail');
+  });
+});
+
+describe('checkSms (#1567)', () => {
+  it('returns skipped when SMS is not configured', () => {
+    expect(checkSms(undefined)).toBe('skipped');
+  });
+
+  it('returns ok when the Telnyx webhook handler is installed', () => {
+    expect(checkSms({ isWebhookInstalled: () => true })).toBe('ok');
+  });
+
+  it('returns fail when the webhook handler is missing', () => {
+    expect(checkSms({ isWebhookInstalled: () => false })).toBe('fail');
+  });
+});
+
+describe('checkVoice (#1567)', () => {
+  it('returns skipped when voice is not configured', async () => {
+    expect(await checkVoice(undefined, stubLogger)).toBe('skipped');
+  });
+
+  it('returns ok when listRooms succeeds', async () => {
+    const livekit = { listRooms: vi.fn().mockResolvedValue([]) };
+    expect(await checkVoice(livekit, stubLogger)).toBe('ok');
+  });
+
+  it('returns fail when listRooms throws', async () => {
+    const livekit = { listRooms: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) };
+    expect(await checkVoice(livekit, stubLogger)).toBe('fail');
   });
 });

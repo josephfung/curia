@@ -38,6 +38,8 @@ export class SlackClient extends EventEmitter {
   private stopping = false;
   private identity: SlackAuthIdentity | undefined;
   private started = false;
+  /** True while Socket Mode reports an active connection (#1567 health). */
+  private socketConnected = false;
 
   constructor(config: SlackClientConfig) {
     super();
@@ -55,10 +57,12 @@ export class SlackClient extends EventEmitter {
   /** Attach the Socket Mode event handlers. Called once from the constructor. */
   private registerSocketHandlers(): void {
     this.socket.on('connected', () => {
+      this.socketConnected = true;
       this.log.info('Slack Socket Mode connected');
       this.emit('connected');
     });
     this.socket.on('disconnected', () => {
+      this.socketConnected = false;
       if (this.stopping) return;
       this.log.warn('Slack Socket Mode disconnected — client will reconnect');
       this.emit('disconnected');
@@ -116,6 +120,16 @@ export class SlackClient extends EventEmitter {
     return this.identity;
   }
 
+  /** True after connect() until disconnect() — used by health probes (#1567). */
+  isStarted(): boolean {
+    return this.started;
+  }
+
+  /** True while Socket Mode is connected — used by health probes (#1567). */
+  isSocketConnected(): boolean {
+    return this.socketConnected;
+  }
+
   /**
    * Start Socket Mode. Resolves after auth.test + socket start attempt begins.
    * Does not block boot on a live Slack connection — Socket Mode reconnects
@@ -162,6 +176,7 @@ export class SlackClient extends EventEmitter {
       this.log.warn({ err }, 'Slack Socket Mode disconnect error');
     }
     this.started = false;
+    this.socketConnected = false;
     this.log.info('Slack client disconnected');
   }
 

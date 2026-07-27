@@ -17,6 +17,12 @@ export interface HealthResponse {
     mcp: Record<string, CheckResult>;
     /** Principal calendar grant (`ceo_nylas_grant_id`); skipped when calendar client absent. */
     nylas_calendar: CheckResult;
+    /** Slack Socket Mode; skipped when Slack adapter not constructed (#1567). */
+    slack: CheckResult;
+    /** SMS/Telnyx webhook readiness; skipped when SMS adapter not constructed (#1567). */
+    sms: CheckResult;
+    /** Voice/LiveKit management reachability; skipped when voice adapter absent (#1567). */
+    voice: CheckResult;
     scheduler: CheckResult;
   };
 }
