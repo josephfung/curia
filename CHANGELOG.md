@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Changed
+
+- **`resolve-learning-digest`** — accepts a unique task-id prefix for digest resolve. (#1545)
+
 ### Fixed
 
 - **Slack decode** — unescape `&amp;` last so `&amp;lt;` stays literal `&lt;`. (#1569)
