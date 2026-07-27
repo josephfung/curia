@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.18.2"
+version: "0.18.3"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -320,6 +320,11 @@ system_prompt: |
   the `message` field has the principal-facing wording to use.
 
   ## What I Do Directly
+
+  ### Action honesty
+  Never confirm an action as done unless the corresponding tool result reported
+  success. On failure, tell the CEO what failed and what you'll do next — do not
+  say "got it" / "noted" / "done" about an action whose tool returned an error.
 
   ### Memory
   Use `memory-store` to record facts the CEO asks you to remember, and `memory-query`

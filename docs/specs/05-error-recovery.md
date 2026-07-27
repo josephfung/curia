@@ -50,6 +50,21 @@ When an error occurs during agent execution:
         alternative to XML for this structured block. See #55. -->
 3. **Resume, don't restart** — the LLM sees the full history including the error, and can make an informed decision: retry with different parameters, try an alternative skill, or report to the user.
 
+### Tool-failure honesty guard (#1546)
+
+Tool failures are already injected as `<task_error>` with `is_error: true`. That is
+not always enough: the model can still write a success confirmation ("Got it —
+I've noted the dismissal") after a failed skill. The outbound Stage-2 LLM judge
+**skips principal-only recipients**, so CEO replies are never checked there.
+
+**Mechanism (runtime, before `agent.response`):** track unresolved tool failures
+for the turn; if the final text looks like an unacknowledged success confirmation,
+replace it with a deterministic honest reply listing the failure(s). Same family
+as empty-text recovery and the #1171 delegation short-circuit. Prompt guidance
+in `coordinator.yaml` is belt-and-suspenders, not the primary control.
+
+Prod forensic: conversation `email:19f843bdadc2eb85`, `2026-07-21T13:11Z`.
+
 ### Progress Extraction
 
 *Lesson from Zora: when a long-running task fails mid-way, don't lose what was accomplished.*
