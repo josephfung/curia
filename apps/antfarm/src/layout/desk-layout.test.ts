@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { SceneDirective } from '@curia/shared-types';
-import { agentIdsFromDirectives, agentRosterKey, buildDeskLayout, deskLayoutKey, ensureAgentDesk } from './desk-layout.js';
+import { agentIdsFromDirectives, agentRosterKey, buildDeskLayout, deskLayoutKey, ensureAgentDesk, parseRegistryAgents } from './desk-layout.js';
 
 describe('desk layout', () => {
   it('places coordinator in the boss row and others on the floor', () => {
@@ -69,5 +69,48 @@ describe('desk layout', () => {
       { agentId: 'calendar', row: 'floor' as const, column: 0 },
     ];
     expect(deskLayoutKey(desks)).toBe(deskLayoutKey([...desks]));
+  });
+});
+
+describe('parseRegistryAgents', () => {
+  it('returns well-formed agents unchanged', () => {
+    const onWarn = vi.fn();
+    const agents = parseRegistryAgents(
+      { agents: [{ name: 'coordinator', metadata: { role: 'coordinator' } }, { name: 'research' }] },
+      onWarn,
+    );
+    expect(agents).toEqual([
+      { name: 'coordinator', metadata: { role: 'coordinator' } },
+      { name: 'research' },
+    ]);
+    expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it('accepts null or absent metadata', () => {
+    expect(parseRegistryAgents({ agents: [{ name: 'a', metadata: null }, { name: 'b' }] })).toHaveLength(2);
+  });
+
+  it('degrades to an empty roster and warns when "agents" is not an array', () => {
+    const onWarn = vi.fn();
+    expect(parseRegistryAgents({ agents: 'nope' }, onWarn)).toEqual([]);
+    expect(parseRegistryAgents(null, onWarn)).toEqual([]);
+    expect(parseRegistryAgents('garbage', onWarn)).toEqual([]);
+    expect(onWarn).toHaveBeenCalledTimes(3);
+  });
+
+  it('drops malformed entries, keeps valid ones, and warns about the drop', () => {
+    const onWarn = vi.fn();
+    const agents = parseRegistryAgents(
+      { agents: [{ name: 'ok' }, { name: 42 }, null, { role: 'no-name' }, { name: 'ok2' }] },
+      onWarn,
+    );
+    expect(agents).toEqual([{ name: 'ok' }, { name: 'ok2' }]);
+    expect(onWarn).toHaveBeenCalledTimes(1);
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('dropped 3'));
+  });
+
+  it('does not throw when fed to buildDeskLayout after parsing junk', () => {
+    const agents = parseRegistryAgents({ agents: [{ bogus: true }, 7, 'x'] });
+    expect(() => buildDeskLayout(agents, [])).not.toThrow();
   });
 });

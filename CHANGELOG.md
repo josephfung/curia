@@ -20,6 +20,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Slack decode** — unescape `&amp;` last so `&amp;lt;` stays literal `&lt;`. (#1569)
+- **Ant Farm** — desk roster updates during scene boot are no longer dropped. (#1549)
 
 ### Security
 
