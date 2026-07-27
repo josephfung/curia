@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`calendar-list-events`** — all-calendar 401/403 failures name grant reconnect action. (#1561)
+- **Tool schemas** — emit union inputs as `anyOf` so Gemini/OpenRouter accept them. (#1508)
 - **Slack decode** — unescape `&amp;` last so `&amp;lt;` stays literal `&lt;`. (#1569)
 - **Ant Farm** — desk roster updates during scene boot are no longer dropped. (#1549)
 - **MCP bootstrap** — enabled servers with 0 tools now error-log and fail health. (#1500)
