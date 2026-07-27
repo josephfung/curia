@@ -1,12 +1,12 @@
 {
   "name": "resolve-learning-digest",
   "description": "Resolve a learning-digest item: approve/dismiss a voice proposal, undo an auto-completed task, or confirm/dismiss a task-completion candidate.",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
     "action": "string (approve_voice | dismiss_voice | undo_completion | confirm_completion | dismiss_completion)",
-    "task_id": "string? (required for completion actions)"
+    "task_id": "string? (required for completion actions; full UUID or unique prefix of a digest item's task id)"
   },
   "outputs": {
     "resolved": "boolean",

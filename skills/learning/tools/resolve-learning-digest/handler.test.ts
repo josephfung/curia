@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ResolveLearningDigestHandler } from './handler.js';
+import { ResolveLearningDigestHandler, resolveDigestTaskId } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import { CONFIG_NAMESPACE, DISMISSED_KEY } from '../voice-learn/handler.js';
 import {
@@ -524,5 +524,147 @@ describe('ResolveLearningDigestHandler', () => {
     // The actioned item is removed from the config map so resolved items don't accumulate.
     const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
     expect(updated.t1).toBeUndefined();
+  });
+
+  describe('task_id prefix resolution (#1545)', () => {
+    const FULL_A = '3502c6bb-8a37-4783-8140-ec6f1730a70e';
+    const FULL_B = '3502c6bb-aaaa-bbbb-cccc-dddddddddddd';
+    const FULL_C = 'aaaaaaaa-1111-2222-3333-444444444444';
+
+    it('resolveDigestTaskId: exact, unique prefix, ambiguous, and miss', () => {
+      const map: CompletionDigestMap = {
+        [FULL_A]: { kind: 'confirm', taskId: FULL_A, taskTitle: 'Follow up', note: 'n' },
+        [FULL_B]: { kind: 'confirm', taskId: FULL_B, taskTitle: 'Other', note: 'n' },
+        [FULL_C]: { kind: 'undo', taskId: FULL_C, taskTitle: 'Undo me', note: 'n' },
+      };
+      expect(resolveDigestTaskId(map, FULL_A)).toEqual({ ok: true, taskId: FULL_A });
+      expect(resolveDigestTaskId(map, 'aaaaaaaa')).toEqual({ ok: true, taskId: FULL_C });
+      const amb = resolveDigestTaskId(map, '3502c6bb');
+      expect(amb.ok).toBe(false);
+      if (!amb.ok) {
+        expect(amb.error).toContain('Ambiguous');
+        expect(amb.error).toContain(FULL_A);
+        expect(amb.error).toContain('Follow up');
+        expect(amb.error).toContain(FULL_B);
+      }
+      // Miss keeps the caller id so the existing "No actionable …" path fires.
+      expect(resolveDigestTaskId(map, 'deadbeef')).toEqual({ ok: true, taskId: 'deadbeef' });
+    });
+
+    it('dismiss_completion succeeds with a unique task-id prefix', async () => {
+      const mem = makeMem();
+      const digestMap: CompletionDigestMap = {
+        [FULL_A]: {
+          kind: 'confirm',
+          taskId: FULL_A,
+          taskTitle: 'Follow up',
+          note: 'Did emailing them complete it?',
+        },
+      };
+      mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+      const ctx = {
+        input: { action: 'dismiss_completion', task_id: '3502c6bb' },
+        entityMemory: mem,
+        executiveProfileService: { get: vi.fn(), update: vi.fn() },
+        taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
+        agentId: 'coordinator',
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      } as unknown as ToolContext;
+
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect(result.success).toBe(true);
+      const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+      expect(updated[FULL_A]).toBeUndefined();
+    });
+
+    it('confirm_completion succeeds with a unique prefix and uses the full id for taskRepo', async () => {
+      const mem = makeMem();
+      const digestMap: CompletionDigestMap = {
+        [FULL_A]: {
+          kind: 'confirm',
+          taskId: FULL_A,
+          taskTitle: 'Follow up',
+          note: 'Did emailing them complete it?',
+        },
+      };
+      mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+      const getTask = vi.fn(async () => ({ id: FULL_A, status: 'open' }));
+      const completeTask = vi.fn(async () => undefined);
+      const ctx = {
+        input: { action: 'confirm_completion', task_id: '3502c6bb' },
+        entityMemory: mem,
+        executiveProfileService: { get: vi.fn(), update: vi.fn() },
+        taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
+        agentId: 'coordinator',
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      } as unknown as ToolContext;
+
+      const result = await new ResolveLearningDigestHandler().execute(ctx);
+      expect(result.success).toBe(true);
+      expect(getTask).toHaveBeenCalledWith(FULL_A);
+      expect(completeTask).toHaveBeenCalledWith(FULL_A, expect.any(String), 'coordinator');
+      const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+      expect(updated[FULL_A]).toBeUndefined();
+    });
+
+    it('dismiss_completion and confirm_completion reject an ambiguous prefix without mutating', async () => {
+      const mem = makeMem();
+      const digestMap: CompletionDigestMap = {
+        [FULL_A]: { kind: 'confirm', taskId: FULL_A, taskTitle: 'Follow up', note: 'n' },
+        [FULL_B]: { kind: 'confirm', taskId: FULL_B, taskTitle: 'Other', note: 'n' },
+      };
+      mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+      const completeTask = vi.fn();
+      const getTask = vi.fn();
+
+      for (const action of ['dismiss_completion', 'confirm_completion'] as const) {
+        mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+        const ctx = {
+          input: { action, task_id: '3502c6bb' },
+          entityMemory: mem,
+          executiveProfileService: { get: vi.fn(), update: vi.fn() },
+          taskRepo: { reopenTask: vi.fn(), completeTask, getTask },
+          agentId: 'coordinator',
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        } as unknown as ToolContext;
+
+        const result = await new ResolveLearningDigestHandler().execute(ctx);
+        expect(result.success).toBe(false);
+        expect((result as { error: string }).error).toMatch(/Ambiguous task_id prefix/);
+        expect((result as { error: string }).error).toContain('Follow up');
+        expect(completeTask).not.toHaveBeenCalled();
+        expect(getTask).not.toHaveBeenCalled();
+        const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+        expect(updated[FULL_A]).toEqual(digestMap[FULL_A]);
+        expect(updated[FULL_B]).toEqual(digestMap[FULL_B]);
+      }
+    });
+
+    it('dismiss_completion and confirm_completion miss on unknown id as before', async () => {
+      const mem = makeMem();
+      const digestMap: CompletionDigestMap = {
+        [FULL_A]: { kind: 'confirm', taskId: FULL_A, taskTitle: 'Follow up', note: 'n' },
+      };
+      mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+
+      for (const action of ['dismiss_completion', 'confirm_completion'] as const) {
+        const ctx = {
+          input: { action, task_id: 'deadbeef' },
+          entityMemory: mem,
+          executiveProfileService: { get: vi.fn(), update: vi.fn() },
+          taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
+          agentId: 'coordinator',
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        } as unknown as ToolContext;
+
+        const result = await new ResolveLearningDigestHandler().execute(ctx);
+        expect(result.success).toBe(false);
+        expect((result as { error: string }).error).toBe(
+          'No actionable confirm item for task deadbeef',
+        );
+        const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+        expect(updated[FULL_A]).toEqual(digestMap[FULL_A]);
+      }
+    });
   });
 });

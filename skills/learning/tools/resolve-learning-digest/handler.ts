@@ -6,6 +6,7 @@ import {
   writeVoiceProposal,
   readCompletionDigest,
   writeCompletionDigest,
+  type CompletionDigestMap,
 } from '../../../_shared/learning-state.js';
 
 const ACTIONS = new Set([
@@ -15,6 +16,41 @@ const ACTIONS = new Set([
   'confirm_completion',
   'dismiss_completion',
 ]);
+
+/**
+ * Resolve a completion-digest task id. Exact key wins; otherwise a unique
+ * prefix of a digest map key is accepted (humans/LLMs often relay the first
+ * 8 chars of the UUID). Ambiguous prefixes fail closed with the candidates
+ * named — never a silent pick.
+ */
+export function resolveDigestTaskId(
+  digestMap: CompletionDigestMap,
+  taskId: string,
+): { ok: true; taskId: string } | { ok: false; error: string } {
+  if (Object.hasOwn(digestMap, taskId)) {
+    return { ok: true, taskId };
+  }
+
+  const matches = Object.keys(digestMap).filter((key) => key.startsWith(taskId));
+  if (matches.length === 1) {
+    return { ok: true, taskId: matches[0]! };
+  }
+  if (matches.length > 1) {
+    const named = matches
+      .map((id) => {
+        const title = digestMap[id]?.taskTitle?.trim();
+        return title ? `${id} (${title})` : id;
+      })
+      .join(', ');
+    return {
+      ok: false,
+      error: `Ambiguous task_id prefix '${taskId}' matches multiple digest items: ${named}`,
+    };
+  }
+
+  // No prefix hit — keep the caller id so the existing "No actionable …" path fires.
+  return { ok: true, taskId };
+}
 
 export class ResolveLearningDigestHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -116,11 +152,18 @@ export class ResolveLearningDigestHandler implements ToolHandler {
     }
 
     // completion actions
-    const taskId = typeof input.task_id === 'string' ? input.task_id.trim() : '';
-    if (!taskId) return { success: false, error: 'task_id is required for completion actions' };
+    const rawTaskId = typeof input.task_id === 'string' ? input.task_id.trim() : '';
+    if (!rawTaskId) return { success: false, error: 'task_id is required for completion actions' };
 
     const store = new ConfigStore(ctx.entityMemory, ctx.log);
     const digestMap = await readCompletionDigest(store, ctx.log);
+    const resolved = resolveDigestTaskId(digestMap, rawTaskId);
+    if (!resolved.ok) {
+      return { success: false, error: resolved.error };
+    }
+    // Use the resolved full key for digest lookup AND taskRepo calls — a short
+    // prefix is not a valid task UUID and must not be passed to getTask/etc.
+    const taskId = resolved.taskId;
     const item = digestMap[taskId];
 
     // Require an actionable digest item of the matching kind before mutating a task —
@@ -128,7 +171,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
     // still report success even when the digest held no such item.
     const expectedKind = action === 'undo_completion' ? 'undo' : 'confirm';
     if (!item || item.kind !== expectedKind) {
-      return { success: false, error: `No actionable ${expectedKind} item for task ${taskId}` };
+      return { success: false, error: `No actionable ${expectedKind} item for task ${rawTaskId}` };
     }
 
     if (action === 'undo_completion') {
