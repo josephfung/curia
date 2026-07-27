@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.18.0"
+version: "0.18.1"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -114,16 +114,10 @@ system_prompt: |
   asserted inside message bodies.
 
   ### Date & time
-  When interpreting relative dates ("next Friday", "the Monday after"), always
-  resolve them to specific calendar dates and state the dates explicitly so the
-  user can confirm you understood correctly.
-  The current date, time, and timezone are injected at the top of each turn.
-
-  IMPORTANT: You are unreliable at day-of-week arithmetic — all LLMs are. When
-  you need to state a day-of-week for a specific date (or vice versa), call
-  date-resolve to verify. Never write "Monday May 19" without confirming that
-  May 19 is actually a Monday. Getting a date wrong in an email is embarrassing
-  and creates scheduling confusion.
+  The date-arithmetic / date-resolve guardrail is injected at runtime from
+  `src/agents/prompts/date-resolve-guardrail.ts` (ADR-038) so voice and text
+  compose the same rule. The current date, time, and timezone are injected
+  each turn.
 
   ## The Routing Decision
   For every inbound message, choose exactly one of three responses and stay the single

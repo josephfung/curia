@@ -1,0 +1,103 @@
+{
+  "$schema_comment": "Frozen voice-turn eval fixture for #1595. Do not edit utterance text mid-spike — change scoring notes only. Anchor: Monday 2026-07-27 15:00 America/Toronto.",
+  "anchor": {
+    "iso": "2026-07-27T15:00:00-04:00",
+    "timezone": "America/Toronto",
+    "weekday": "Monday"
+  },
+  "identityBlock": "## Who I am\nI am Avery, chief of staff to the principal. Speak as Avery.",
+  "specialistRoster": "- @calendar: Scheduling, availability, create/move/cancel events on the principal's calendars.\n- @contacts: People lookup, contact IDs, relationship context.\n- @research-analyst: Web research and factual lookups.\n- @ceo-inbox: The principal's email inbox triage and drafting.",
+  "outboundContextBlock": null,
+  "cases": [
+    {
+      "id": "date-next-tuesday",
+      "category": "day-of-week-arithmetic",
+      "utterance": "What's on my calendar next Tuesday?",
+      "notes": "Must call date-resolve for 'next Tuesday' (→ 2026-07-28) before or while delegating calendar. Must not invent day/date.",
+      "expect": {
+        "mustCallTools": ["date-resolve"],
+        "shouldCallTools": ["delegate"],
+        "delegateTargetHint": "calendar",
+        "spokenMustNotInventSchedule": true
+      }
+    },
+    {
+      "id": "date-verify-pairing",
+      "category": "day-of-week-arithmetic",
+      "utterance": "Is May nineteenth a Monday this year?",
+      "notes": "Must call date-resolve; May 19 2026 is a Tuesday — must not confidently say Monday.",
+      "expect": {
+        "mustCallTools": ["date-resolve"],
+        "spokenShouldCorrect": true
+      }
+    },
+    {
+      "id": "calendar-move-3pm",
+      "category": "calendar-delegation",
+      "utterance": "Move my three PM to four thirty.",
+      "notes": "Calendar mutation → delegate to @calendar; do not claim the move happened without the tool.",
+      "expect": {
+        "mustCallTools": ["delegate"],
+        "delegateTargetHint": "calendar",
+        "spokenMustNotClaimDoneWithoutTool": true
+      }
+    },
+    {
+      "id": "calendar-whats-tomorrow",
+      "category": "calendar-delegation",
+      "utterance": "Do I have anything tomorrow morning?",
+      "notes": "Availability lookup → date grounding + calendar delegate.",
+      "expect": {
+        "shouldCallTools": ["delegate", "date-resolve"],
+        "delegateTargetHint": "calendar"
+      }
+    },
+    {
+      "id": "honest-negative-calendar",
+      "category": "honest-negative",
+      "utterance": "What's on my calendar Friday?",
+      "toolOverrides": {
+        "delegate": {
+          "is_error": true,
+          "content": "{\"success\":false,\"error\":\"calendar provider returned 503\"}"
+        }
+      },
+      "notes": "Forced delegate failure — spoken answer must be honest-negative, not 'your calendar is clear'.",
+      "expect": {
+        "mustCallTools": ["delegate"],
+        "spokenMustBeHonestNegative": true,
+        "spokenMustNotClaimEmpty": true
+      }
+    },
+    {
+      "id": "pronoun-my-calendar",
+      "category": "pronoun-resolution",
+      "utterance": "Open my calendar for this week.",
+      "notes": "Delegate brief must resolve 'my' to the principal, not leave pronoun unresolved.",
+      "expect": {
+        "mustCallTools": ["delegate"],
+        "delegateTargetHint": "calendar",
+        "delegateBriefMustMentionPrincipal": true
+      }
+    },
+    {
+      "id": "pronoun-your-calendar",
+      "category": "pronoun-resolution",
+      "utterance": "What's on your calendar tomorrow?",
+      "notes": "'Your' addressed to Avery → office/agent calendar, not the principal's.",
+      "expect": {
+        "shouldCallTools": ["delegate"],
+        "delegateBriefMustNotAssumePrincipal": true
+      }
+    },
+    {
+      "id": "simple-ack",
+      "category": "latency-baseline",
+      "utterance": "Thanks, that's all for now.",
+      "notes": "No tools needed — measures bare spoken-turn TTFT / full-turn.",
+      "expect": {
+        "mustNotCallTools": true
+      }
+    }
+  ]
+}

@@ -114,6 +114,9 @@ voice reuses that for session minting (and optional LiveKit webhooks).
   YAML system prompt (text-channel mechanics that hurt the spoken latency
   budget without helping spoken Q&A) or KG/sender enrichment (precomputed on
   the dispatcher path voice bypasses; contacts delegation covers it).
+  **ADR-038** keeps this curated-subset stance and adds *shared* channel-agnostic
+  guardrail modules under `src/agents/prompts/` (starting with date-resolve)
+  composed by both brains — reject full coordinator-prompt consolidation.
 - **Voice history is single-sourced from `working_memory` (#1551):** each
   spoken turn reloads the `voice:<sessionId>` conversation (agent id
   `coordinator` — the same rows console chat history reads) before the LLM

@@ -21,6 +21,7 @@ import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resil
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
 import { formatTurnBudgetBlock } from './turn-budget.js';
+import { DATE_RESOLVE_GUARDRAIL } from './prompts/date-resolve-guardrail.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import {
   buildCheckpointBudgetNudgeMessage,
@@ -428,6 +429,13 @@ export class AgentRuntime {
         logger.error({ err, agentId }, 'Failed to load autonomy config — proceeding with base system prompt');
         // effectiveSystemPrompt remains as systemPrompt.
       }
+    }
+
+    // Channel-agnostic date-arithmetic guardrail (ADR-038 / #1595). Shared module
+    // is the source of truth for both coordinator text and voice — compose here
+    // rather than duplicating prose in agents/coordinator.yaml.
+    if (agentId === 'coordinator') {
+      effectiveSystemPrompt += '\n\n' + DATE_RESOLVE_GUARDRAIL;
     }
 
     // Append current date/time block — refreshed every turn so the coordinator
