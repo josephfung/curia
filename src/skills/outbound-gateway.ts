@@ -48,6 +48,7 @@ import type { PiiRedactor } from '../dispatch/pii-redactor.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import { createOutboundBlocked, createOutboundDelivered, createOutboundNotification, createAutonomySendBlocked } from '../bus/events.js';
+import type { ChannelReconnectEvent } from '../bus/events.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { markdownToMrkdwn } from '../format/markdown-to-mrkdwn.js';
 import type { ActionLogRepo } from '../autonomy/action-log-repo.js';
@@ -67,6 +68,7 @@ import {
   extractDestinationFromEmailRequest,
   formatDestination,
 } from '../security/export-controls.js';
+import { OutboundQueueFullError, type OutboundQueueRepo } from './outbound-queue-repo.js';
 import type { ExportItem } from '../security/export-controls.js';
 
 // ---------------------------------------------------------------------------
@@ -127,6 +129,11 @@ export interface OutboundSendResult {
   gated?: boolean;
   /** Short reference for the action_log row (e.g. 'a3f7c12b'). Present when gated is true. */
   actionRef?: string;
+  /**
+   * True when the send was durably queued because the channel transport was down (#1380).
+   * `success` is still true — the message was accepted for later delivery, not dropped.
+   */
+  queued?: boolean;
 }
 
 /** Result from createEmailDraft() — extends send result with the Nylas draft ID. */
@@ -233,6 +240,13 @@ export interface OutboundGatewayConfig {
    * allowlisting, and restricted sensitivity ceiling on email attachments.
    */
   exportControlService?: ExportControlService;
+
+  /**
+   * Durable outbound queue for disconnected channels (#1380). When Signal (or
+   * another connection-backed channel) is down, post-policy sends are persisted
+   * and flushed atomically on `channel.reconnect`.
+   */
+  outboundQueue?: OutboundQueueRepo;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +329,8 @@ export class OutboundGateway {
   private readonly actionLogRepo?: ActionLogRepo;
   private readonly confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private readonly exportControlService?: ExportControlService;
+  private readonly outboundQueue?: OutboundQueueRepo;
+  private flushInFlight = new Set<string>();
 
   constructor(config: OutboundGatewayConfig) {
     this.nylasClients = config.nylasClients ?? new Map();
@@ -333,6 +349,22 @@ export class OutboundGateway {
     this.actionLogRepo = config.actionLogRepo;
     this.confidencePipeline = config.confidencePipeline;
     this.exportControlService = config.exportControlService;
+    this.outboundQueue = config.outboundQueue;
+  }
+
+  /**
+   * Subscribe to `channel.reconnect` so queued messages flush when a transport
+   * comes back (#1380). Call once after construction.
+   */
+  start(): void {
+    if (!this.outboundQueue) return;
+    this.bus.subscribe('channel.reconnect', 'system', (event) => {
+      const e = event as ChannelReconnectEvent;
+      void this.flushChannel(e.payload.channel).catch((err) => {
+        this.log.error({ err, channel: e.payload.channel }, 'outbound-gateway: queue flush failed');
+      });
+    });
+    this.log.info('Outbound gateway queue flush subscriber registered');
   }
 
   /**
@@ -1142,7 +1174,20 @@ export class OutboundGateway {
     }
 
     {
-      const result = await this.dispatchSignal({ ...request, message: redactedBody });
+      const toSend: SignalOutboundRequest = { ...request, message: redactedBody };
+      // Queue instead of dropping when signal-cli is disconnected (#1380).
+      if (this.outboundQueue && this.signalClient && !this.signalClient.isConnected()) {
+        return this.enqueueInsteadOfDrop(toSend);
+      }
+      const result = await this.dispatchSignal(toSend);
+      // Race: socket dropped between isConnected() and dispatch — queue the send.
+      if (
+        !result.success
+        && this.outboundQueue
+        && result.blockedReason?.includes('not connected')
+      ) {
+        return this.enqueueInsteadOfDrop(toSend);
+      }
       // Only promote for 1:1 Signal sends — group sends use a groupId, not an individual
       // phone number. Creating a contact for a group token would pollute the contacts table
       // and would not help with inbound replies (which come from member numbers, not the group ID).
@@ -1164,6 +1209,85 @@ export class OutboundGateway {
         });
       }
       return result;
+    }
+  }
+
+  /**
+   * Persist a post-policy send for later delivery (#1380).
+   * Returns success+queued so callers do not treat a durable queue as a drop.
+   */
+  private async enqueueInsteadOfDrop(request: OutboundSendRequest): Promise<OutboundSendResult> {
+    if (!this.outboundQueue) {
+      return { success: false, blockedReason: 'Outbound queue not configured' };
+    }
+    try {
+      const { id } = await this.outboundQueue.enqueue(request);
+      this.log.info(
+        { channel: request.channel, queueId: id },
+        'outbound-gateway: channel disconnected — message queued for reconnect flush',
+      );
+      return { success: true, queued: true, messageId: id };
+    } catch (err) {
+      if (err instanceof OutboundQueueFullError) {
+        this.log.warn({ channel: request.channel }, err.message);
+        return { success: false, blockedReason: err.message };
+      }
+      this.log.error({ err, channel: request.channel }, 'outbound-gateway: failed to enqueue message');
+      return { success: false, blockedReason: 'Failed to queue message while channel disconnected' };
+    }
+  }
+
+  /**
+   * Flush pending queue rows for a channel after reconnect (#1380).
+   * All-or-nothing: if any dispatch fails, no rows are deleted.
+   */
+  async flushChannel(channel: string): Promise<{ flushed: number; skipped: boolean }> {
+    if (!this.outboundQueue) return { flushed: 0, skipped: true };
+    if (this.flushInFlight.has(channel)) {
+      return { flushed: 0, skipped: true };
+    }
+    this.flushInFlight.add(channel);
+    try {
+      if (channel === 'signal' && this.signalClient && !this.signalClient.isConnected()) {
+        this.log.debug({ channel }, 'outbound-gateway: flush skipped — still disconnected');
+        return { flushed: 0, skipped: true };
+      }
+
+      const pending = await this.outboundQueue.listPending(channel);
+      if (pending.length === 0) return { flushed: 0, skipped: false };
+
+      const results: OutboundSendResult[] = [];
+      for (const row of pending) {
+        if (row.payload.channel === 'signal') {
+          results.push(await this.dispatchSignal(row.payload));
+        } else if (row.payload.channel === 'slack') {
+          results.push(await this.dispatchSlack(row.payload));
+        } else if (row.payload.channel === 'sms') {
+          results.push(await this.dispatchSms(row.payload));
+        } else if (row.payload.channel === 'email') {
+          results.push(await this.dispatchEmail(row.payload));
+        } else {
+          results.push({ success: false, blockedReason: `Unknown channel in queue: ${row.channel}` });
+        }
+      }
+
+      if (results.some((r) => !r.success)) {
+        this.log.warn(
+          {
+            channel,
+            pending: pending.length,
+            failed: results.filter((r) => !r.success).length,
+          },
+          'outbound-gateway: flush aborted — keeping all queued rows (all-or-nothing)',
+        );
+        return { flushed: 0, skipped: false };
+      }
+
+      await this.outboundQueue.deleteByIds(pending.map((r) => r.id));
+      this.log.info({ channel, flushed: pending.length }, 'outbound-gateway: queue flushed');
+      return { flushed: pending.length, skipped: false };
+    } finally {
+      this.flushInFlight.delete(channel);
     }
   }
 

@@ -205,6 +205,7 @@ Each adapter implements reconnection with exponential backoff:
 
 - **Reply-To vs From header consistency check** — not yet implemented.
 - **Reconnection with exponential backoff** — partial; Signal has full backoff, email uses polling (no reconnect path needed), HTTP/CLI not applicable.
-- **`channel.disconnected` event emission** — not yet implemented; event type not emitted, Signal adapter stops but does not publish this event.
-- **Health endpoint adapter status** — not yet implemented; health endpoint only reports DB, agents, and skills.
-- **Outbound message queue for disconnected channels** — not yet implemented (max 100, delivered on reconnect). (#1380)
+- **`channel.disconnected` event emission** — Signal publishes on socket close (#1380); other adapters may still omit it.
+- **Health endpoint adapter status** — not yet implemented for all adapters (Slack/SMS/Voice probes landed separately; Signal connect state not yet a health check field).
+
+Outbound messages to a disconnected Signal channel are queued in Postgres (max 100/channel, 24h TTL) and flushed on `channel.reconnect` (#1380).

@@ -247,5 +247,6 @@ This is enforced by code review convention. A lint rule (`no-empty-catch` + cust
 - **Progress extraction before aborting** — summary stored in task record is not yet implemented.
 - **Per-task error pattern detection** — sliding window of last 10 tool invocations is not yet implemented.
 - **Cross-task `known_failures` table** — data collection for future warnings is not yet implemented.
-- **Outbound message queue** — max 100 queue for disconnected channels is not yet implemented. (#1380)
 - **`no-empty-catch` ESLint rule** — the "Never Swallow" rule is enforced by convention only; the rule is absent from `eslint.config.js`.
+
+Outbound messages to a disconnected channel are queued in Postgres (max 100 per channel, 24h TTL) and delivered in order on `channel.reconnect` (#1380).
