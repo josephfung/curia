@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventBus } from '../../bus/bus.js';
 import type { BusEvent } from '../../bus/events.js';
+import type { OutboundContextRow, OutboundContextService } from '../../dispatch/outbound-context.js';
 import { createSilentLogger } from '../../logger.js';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, Message } from '../../agents/llm/provider.js';
 import { WorkingMemory } from '../../memory/working-memory.js';
 import {
   VoiceRuntime,
+  buildVoiceSystemPrompt,
   VOICE_SYSTEM_ADDENDUM,
   VOICE_TOOL_RESULT_POLICY,
   VOICE_DELEGATION_GUIDANCE,
@@ -142,6 +144,7 @@ function makeRuntime(overrides: {
   workingMemory?: WorkingMemory;
   timezone?: string;
   historyReadTimeoutMs?: number;
+  outboundContextService?: OutboundContextService;
   /** Late-bound coordinator bridge (tools + context providers), applied via configureTools(). */
   bridge?: VoiceToolBridge;
 }) {
@@ -172,6 +175,7 @@ function makeRuntime(overrides: {
     workingMemory: overrides.workingMemory,
     timezone: overrides.timezone,
     historyReadTimeoutMs: overrides.historyReadTimeoutMs,
+    outboundContextService: overrides.outboundContextService,
   });
   if (overrides.bridge) runtime.configureTools(overrides.bridge);
   return { runtime, bus, events, stt, transport, tts, store };
@@ -834,5 +838,156 @@ describe('VoiceRuntime brain/context parity (#1551)', () => {
     // The spoken answer reflects the delegated result and lands in the shared history.
     const history = await wm.getHistory('voice:cal1', 'coordinator');
     expect(history[history.length - 1]).toEqual({ role: 'assistant', content: spoken });
+  });
+});
+
+describe('VoiceRuntime outbound-context bridge (#1594)', () => {
+  const reply = (text: string): LLMStreamEvent[] => [
+    { type: 'text_delta', text: `${text} ` },
+    { type: 'message_end', content: text, usage, provenance },
+  ];
+
+  const signalAlertEntry: OutboundContextRow = {
+    id: 'entry-signal-alert',
+    conversationId: 'signal:ceo',
+    channelId: 'signal',
+    agentId: 'coordinator',
+    contentPreview: 'Google security alert: new sign-in on your account.',
+    expectedReply: null,
+    delegationHint: null,
+    metadata: { subject: 'security-alert' },
+    createdAt: new Date(Date.now() - 2 * 60 * 1000),
+    expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000),
+    released: false,
+  };
+
+  /** Minimal OutboundContextService stand-in that formats like the real service. */
+  function fakeOutboundContext(opts: {
+    entries?: OutboundContextRow[];
+    getActive?: () => Promise<OutboundContextRow[]>;
+  }): OutboundContextService {
+    const entries = opts.entries ?? [];
+    return {
+      getActive: opts.getActive ?? (async () => entries),
+      formatInjectionBlock(active: OutboundContextRow[], originalContent: string): string | null {
+        if (active.length === 0) return null;
+        const blocks = active.map(e =>
+          [
+            '---',
+            `entry_id: ${e.id}`,
+            `[sent just now via ${e.channelId}, on behalf of ${e.agentId}, expires in 6h]`,
+            `preview: "${e.contentPreview}"`,
+            '---',
+          ].join('\n'),
+        );
+        return [
+          '[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]',
+          ...blocks,
+          '',
+          originalContent,
+        ].join('\n');
+      },
+    } as unknown as OutboundContextService;
+  }
+
+  it('buildVoiceSystemPrompt appends the outbound-context block before the time block', () => {
+    const prompt = buildVoiceSystemPrompt({
+      identityBlock: '## Identity\nYou are Vera.',
+      outboundContextBlock:
+        '[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]\n---\nentry_id: e1\n---',
+      timeContextBlock: '## Current Date & Time\nTimezone: America/Toronto',
+    });
+    expect(prompt).toContain('[ACTIVE OUTBOUND CONTEXT');
+    expect(prompt).toContain('entry_id: e1');
+    expect(prompt.indexOf('[ACTIVE OUTBOUND CONTEXT'))
+      .toBeLessThan(prompt.indexOf('## Current Date & Time'));
+    // Empty outbound → identical to the slim path without that section.
+    expect(buildVoiceSystemPrompt({})).toBe(
+      `${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}`,
+    );
+  });
+
+  it('injects an active Signal outbound-context entry into the spoken-turn system prompt', async () => {
+    const llm = new FakeStreamProvider([reply('Yes, I messaged you on Signal about the Google alert.')]);
+    const outbound = fakeOutboundContext({ entries: [signalAlertEntry] });
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      outboundContextService: outbound,
+    });
+
+    await runtime.startSession({
+      sessionId: 'oc1',
+      conversationId: 'voice:oc1',
+      roomName: 'voice-oc1',
+      agentToken: 'tok',
+    });
+    stt.emit({ text: 'did you message me', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('oc1');
+
+    const system = llm.seenMessages[0]![0]!;
+    const systemText = typeof system.content === 'string' ? system.content : '';
+    expect(systemText).toContain('[ACTIVE OUTBOUND CONTEXT');
+    expect(systemText).toContain('entry_id: entry-signal-alert');
+    expect(systemText).toContain('via signal');
+    expect(systemText).toContain('Google security alert: new sign-in on your account.');
+    // Utterance stays a separate user message — not wrapped into the system block.
+    expect(llm.seenMessages[0]![llm.seenMessages[0]!.length - 1]).toEqual({
+      role: 'user',
+      content: 'did you message me',
+    });
+    expect(systemText).not.toContain('did you message me');
+  });
+
+  it('leaves the system prompt unchanged when getActive returns no entries', async () => {
+    const llm = new FakeStreamProvider([reply('Hi.')]);
+    const getActive = vi.fn(async () => [] as OutboundContextRow[]);
+    const outbound = fakeOutboundContext({ getActive });
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      outboundContextService: outbound,
+    });
+
+    await runtime.startSession({
+      sessionId: 'oc2',
+      conversationId: 'voice:oc2',
+      roomName: 'voice-oc2',
+      agentToken: 'tok',
+    });
+    stt.emit({ text: 'hello', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('oc2');
+
+    expect(getActive).toHaveBeenCalledOnce();
+    const system = llm.seenMessages[0]![0]!;
+    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}`);
+    expect(system.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
+  });
+
+  it('still completes the turn when getActive throws', async () => {
+    const llm = new FakeStreamProvider([reply('Still here.')]);
+    const outbound = fakeOutboundContext({
+      getActive: async () => {
+        throw new Error('db down');
+      },
+    });
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      outboundContextService: outbound,
+    });
+
+    await runtime.startSession({
+      sessionId: 'oc3',
+      conversationId: 'voice:oc3',
+      roomName: 'voice-oc3',
+      agentToken: 'tok',
+    });
+    stt.emit({ text: 'are you there', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('oc3');
+
+    const system = llm.seenMessages[0]![0]!;
+    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}`);
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
   });
 });
