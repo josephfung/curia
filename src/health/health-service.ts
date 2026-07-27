@@ -15,13 +15,14 @@ import type { Scheduler } from '../scheduler/scheduler.js';
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { ModelRoutingConfig } from '../agents/llm/model-router.js';
 import type { McpSession } from '../skills/mcp-client.js';
+import type { McpServerLoadStatus } from '../skills/mcp-loader.js';
 import type { HealthConfig } from '../config.js';
 import type { LlmCallEvent, LlmErrorEvent, ToolResultEvent } from '../bus/events.js';
 import type { CheckResult, HealthResponse, HealthStatus, TrackerKey, CanaryResult } from './types.js';
 import { LlmOutcomeTracker } from './llm-outcome-tracker.js';
 import {
   checkDb, checkBus, checkEmail, checkSignal, checkBrowser,
-  checkMcpGoogleWorkspace, checkScheduler,
+  checkMcpServers, checkScheduler,
   type EmailAdapterHealth, type SignalRpcClientHealth, type BrowserServiceHealth,
 } from './health-checks.js';
 import type { NylasClient } from '../channels/email/nylas-client.js';
@@ -40,6 +41,11 @@ export interface HealthServiceDeps {
   signalRpcClient?: SignalRpcClientHealth;
   browserService?: BrowserServiceHealth;
   mcpSessions: McpSession[];
+  /**
+   * Boot outcomes for enabled MCP servers (#1500). Absent/empty → no mcp.*
+   * checks (equivalent to all skipped).
+   */
+  mcpServerStatuses?: ReadonlyMap<string, McpServerLoadStatus>;
   modelRoutingConfig: ModelRoutingConfig;
   config: HealthConfig;
   openaiApiKey?: string;
@@ -178,12 +184,13 @@ export class HealthService {
       mcpSessions, scheduler, config,
     } = this.deps;
     const { liveness } = config;
+    const mcpServerStatuses = this.deps.mcpServerStatuses ?? new Map();
 
     // Run all async probes concurrently to keep p99 latency low.
-    const [db_check, signal_check, mcp_gw] = await Promise.all([
+    const [db_check, signal_check, mcp_checks] = await Promise.all([
       checkDb(db, this.deps.logger),
       checkSignal(signalRpcClient, this.deps.logger),
-      checkMcpGoogleWorkspace(mcpSessions, this.deps.logger),
+      checkMcpServers(mcpServerStatuses, mcpSessions, this.deps.logger),
     ]);
 
     // Synchronous probes — no need to await.
@@ -198,7 +205,7 @@ export class HealthService {
       signal: signal_check,
       email: email_check,
       browser: browser_check,
-      mcp: { google_workspace: mcp_gw },
+      mcp: mcp_checks,
       scheduler: scheduler_check,
     };
 
@@ -282,7 +289,16 @@ export class HealthService {
     });
 
     // Google Workspace canary — credential file readable and refresh token not expired.
+    // Also fail when the enabled MCP session is missing or advertises 0 tools (#1500),
+    // so Better Stack heartbeats stop pinging instead of staying green.
     await run('google_workspace', async () => {
+      const boot = this.deps.mcpServerStatuses?.get('google-workspace');
+      if (boot?.status === 'zero_tools') {
+        return { name: 'google_workspace', status: 'fail', detail: 'MCP server advertises 0 tools' };
+      }
+      if (boot?.status === 'unavailable') {
+        return { name: 'google_workspace', status: 'fail', detail: boot.reason };
+      }
       const session = mcpSessions.find(s => s.serverId === 'google-workspace');
       if (!session || !googleWorkspaceConfigPath) return { name: 'google_workspace', status: 'skipped' };
       return this.canaryGoogleWorkspace(googleWorkspaceConfigPath);
@@ -316,7 +332,7 @@ export class HealthService {
       checks.signal,
       checks.email,
       checks.browser,
-      checks.mcp.google_workspace,
+      ...Object.values(checks.mcp),
       checks.scheduler,
     ];
     if (nonCritical.some(c => c === 'fail')) return 'degraded';

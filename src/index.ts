@@ -57,7 +57,7 @@ import { ExecutionLayer } from './skills/execution.js';
 import { resolveBypassLadder } from './autonomy/effective-standing.js';
 import { loadToolsFromDirectory, discoverToolManifests, validateAllowedCallers } from './skills/loader.js';
 import type { ToolDiscovery } from './skills/loader.js';
-import { loadMcpServers, loadSkillsConfig, registerMcpProjectedSkills } from './skills/mcp-loader.js';
+import { loadMcpServers, loadSkillsConfig, registerMcpProjectedSkills, type McpServerLoadStatus } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
 import type { ChannelIdentity, Contact, PrincipalEmailRef } from './contacts/types.js';
@@ -1176,10 +1176,12 @@ async function main(): Promise<void> {
   // until the next restart.
   let mcpSessions: McpSession[] = [];
   let mcpProjectedTools = new Map<string, string[]>();
+  let mcpServerStatuses = new Map<string, McpServerLoadStatus>();
   try {
     const mcpLoad = await loadMcpServers(configDir, toolRegistry, logger, secretsService, enabledMcpServers);
     mcpSessions = mcpLoad.sessions;
     mcpProjectedTools = mcpLoad.projectedTools;
+    mcpServerStatuses = mcpLoad.serverStatuses;
   } catch (err) {
     // Malformed skills.yaml or unexpected loader error — degrade gracefully rather
     // than crashing. The startup validator catches schema violations, but a YAML
@@ -1190,6 +1192,19 @@ async function main(): Promise<void> {
   }
   if (mcpSessions.length > 0) {
     logger.info({ mcpServers: mcpSessions.map(s => s.serverId) }, 'MCP servers connected');
+  }
+  const mcpUnhealthy = [...mcpServerStatuses.entries()].filter(([, s]) => s.status !== 'ok');
+  if (mcpUnhealthy.length > 0) {
+    logger.error(
+      {
+        servers: mcpUnhealthy.map(([name, s]) => ({
+          name,
+          status: s.status,
+          reason: s.status === 'unavailable' ? s.reason : undefined,
+        })),
+      },
+      'One or more enabled MCP servers failed to load tools — /api/health will report degraded',
+    );
   }
 
   // ADR-032: each connected MCP server projects a skill into SkillRegistry so
@@ -2063,6 +2078,7 @@ async function main(): Promise<void> {
     signalRpcClient,
     browserService,
     mcpSessions,
+    mcpServerStatuses,
     modelRoutingConfig,
     config: healthConfig,
     openaiApiKey: config.openaiApiKey,

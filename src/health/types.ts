@@ -13,7 +13,8 @@ export interface HealthResponse {
     signal: CheckResult;
     email: CheckResult;
     browser: CheckResult;
-    mcp: { google_workspace: CheckResult };
+    /** Per enabled MCP server (hyphens → underscores). Empty when none enabled. */
+    mcp: Record<string, CheckResult>;
     scheduler: CheckResult;
   };
 }

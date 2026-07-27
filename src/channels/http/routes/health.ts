@@ -40,7 +40,7 @@ export async function healthRoutes(
           signal: 'skipped' as const,
           email: 'skipped' as const,
           browser: 'skipped' as const,
-          mcp: { google_workspace: 'skipped' as const },
+          mcp: {},
           scheduler: 'fail' as const,
         },
       });
