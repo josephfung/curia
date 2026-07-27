@@ -49,6 +49,8 @@ export interface SignalAdapterConfig {
 export class SignalAdapter implements Channel {
   readonly name = 'signal';
   readonly isToggleable = true;
+  /** Signal-cli Unix socket can drop; queue outbound until reconnect (#1380). */
+  readonly supportsOutboundQueue = true;
   private readonly config: SignalAdapterConfig;
   private readonly log: Logger;
   // Bound handler so we can remove it in stop() without losing the reference.
@@ -68,6 +70,10 @@ export class SignalAdapter implements Channel {
         this.log.error({ err }, 'Signal adapter: unexpected error in inbound handler');
       });
     };
+  }
+
+  isOutboundReady(): boolean {
+    return this.config.rpcClient.isConnected();
   }
 
   async start(): Promise<void> {

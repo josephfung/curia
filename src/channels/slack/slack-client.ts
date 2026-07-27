@@ -38,7 +38,7 @@ export class SlackClient extends EventEmitter {
   private stopping = false;
   private identity: SlackAuthIdentity | undefined;
   private started = false;
-  /** True while Socket Mode reports an active connection (#1567 health). */
+  /** Socket Mode link state — health probes (#1567) and outbound queue readiness (#1380). */
   private socketConnected = false;
 
   constructor(config: SlackClientConfig) {
@@ -118,6 +118,16 @@ export class SlackClient extends EventEmitter {
   /** Resolved after successful auth.test during start. */
   getBotIdentity(): SlackAuthIdentity | undefined {
     return this.identity;
+  }
+
+  /**
+   * Whether Socket Mode is currently connected.
+   * Outbound uses the Web API, but Socket Mode down is the channel-health signal
+   * we use for durable queueing (#1380) — the same network partition typically
+   * affects both paths, and it matches Signal's reconnect lifecycle.
+   */
+  isConnected(): boolean {
+    return this.socketConnected;
   }
 
   /** True after connect() until disconnect() — used by health probes (#1567). */

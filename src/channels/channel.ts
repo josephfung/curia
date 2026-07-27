@@ -11,4 +11,27 @@ export interface Channel {
   start(): Promise<void>;
   /** Graceful teardown (used on process shutdown). Idempotent. */
   stop(): Promise<void>;
+
+  /**
+   * When true, OutboundGateway may durably queue post-policy sends while the
+   * transport is unavailable and flush them on `channel.reconnect` (#1380).
+   *
+   * Opt in for messaging transports that can recover (Signal socket, Slack Socket
+   * Mode, SMS HTTP with transient outages). Leave unset for realtime (voice) and
+   * always-local (http, cli) channels — delayed delivery is not meaningful there.
+   *
+   * Adapters that set this must:
+   *   1. Implement `isOutboundReady()`
+   *   2. Publish `channel.disconnected` / `channel.reconnect` on the bus when
+   *      readiness flips (so the gateway flushes without polling)
+   *   3. Be registered in the gateway's `outboundQueueReadiness` map at bootstrap
+   */
+  readonly supportsOutboundQueue?: boolean;
+
+  /**
+   * Whether outbound wire dispatch should proceed now. Required when
+   * `supportsOutboundQueue` is true. Gateway enqueues instead of calling the
+   * platform when this returns false.
+   */
+  isOutboundReady?(): boolean;
 }

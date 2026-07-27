@@ -205,7 +205,7 @@ Each adapter implements reconnection with exponential backoff:
 
 - **Reply-To vs From header consistency check** — not yet implemented.
 - **Reconnection with exponential backoff** — partial; Signal has full backoff, email uses polling (no reconnect path needed), HTTP/CLI not applicable.
-- **`channel.disconnected` event emission** — Signal publishes on socket close (#1380); other adapters may still omit it.
+- **`channel.disconnected` event emission** — Signal and Slack publish on socket close; SMS publishes on adapter stop (#1380). Voice / http / cli omit it (not queueable).
 - **Health endpoint adapter status** — not yet implemented for all adapters (Slack/SMS/Voice probes landed separately; Signal connect state not yet a health check field).
 
-Outbound messages to a disconnected Signal channel are queued in Postgres (max 100/channel, 24h TTL) and flushed on `channel.reconnect` (#1380).
+Outbound messages for channels that opt into `Channel.supportsOutboundQueue` (Signal, Slack, SMS) are queued in Postgres while the transport is unavailable (max 100/channel, 24h TTL) and flushed on `channel.reconnect` (#1380). Voice does not opt in — delayed delivery is not meaningful for duplex audio.

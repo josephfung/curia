@@ -134,6 +134,12 @@ export interface OutboundSendResult {
    * `success` is still true — the message was accepted for later delivery, not dropped.
    */
   queued?: boolean;
+  /**
+   * When success is false, hints that the failure is transport/availability related
+   * and the gateway may enqueue for later retry on queueable channels (#1380).
+   * Permanent failures (opt-out, validation) must leave this unset/false.
+   */
+  queueable?: boolean;
 }
 
 /** Result from createEmailDraft() — extends send result with the Nylas draft ID. */
@@ -242,11 +248,18 @@ export interface OutboundGatewayConfig {
   exportControlService?: ExportControlService;
 
   /**
-   * Durable outbound queue for disconnected channels (#1380). When Signal (or
-   * another connection-backed channel) is down, post-policy sends are persisted
-   * and flushed atomically on `channel.reconnect`.
+   * Durable outbound queue for disconnected / unavailable channels (#1380).
+   * Channels that opt in via `Channel.supportsOutboundQueue` are registered in
+   * `outboundQueueReadiness`; post-policy sends are persisted while not ready
+   * (or when dispatch returns `queueable: true`) and flushed on `channel.reconnect`.
    */
   outboundQueue?: OutboundQueueRepo;
+  /**
+   * Readiness probes for queueable channels, keyed by channel name (`signal`,
+   * `slack`, `sms`, …). Built at bootstrap from each adapter's `isOutboundReady`
+   * (or the underlying client). Absent channels are never auto-queued.
+   */
+  outboundQueueReadiness?: ReadonlyMap<string, () => boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +343,10 @@ export class OutboundGateway {
   private readonly confidencePipeline?: import('../contacts/confidence-pipeline.js').ConfidencePipeline;
   private readonly exportControlService?: ExportControlService;
   private readonly outboundQueue?: OutboundQueueRepo;
+  private readonly outboundQueueReadiness: Map<string, () => boolean>;
   private flushInFlight = new Set<string>();
+  /** Backoff timers for HTTP channels that queued on a transient failure (#1380). */
+  private flushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(config: OutboundGatewayConfig) {
     this.nylasClients = config.nylasClients ?? new Map();
@@ -350,6 +366,16 @@ export class OutboundGateway {
     this.confidencePipeline = config.confidencePipeline;
     this.exportControlService = config.exportControlService;
     this.outboundQueue = config.outboundQueue;
+    this.outboundQueueReadiness = new Map(config.outboundQueueReadiness ?? []);
+  }
+
+  /**
+   * Register or replace a channel's outbound-queue readiness probe (#1380).
+   * Called when an adapter that sets `supportsOutboundQueue` is constructed —
+   * SMS readiness depends on adapter start/stop, which happens after gateway boot.
+   */
+  setOutboundQueueReadiness(channel: string, isReady: () => boolean): void {
+    this.outboundQueueReadiness.set(channel, isReady);
   }
 
   /**
@@ -1137,10 +1163,11 @@ export class OutboundGateway {
     }
 
     if (request.channel === 'slack') {
-      const result = await this.dispatchSlack({ ...request, message: redactedBody });
+      const toSend = { ...request, message: redactedBody };
+      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchSlack(toSend));
       // Contact resolution uses slackUserId (U…) when provided; inbound auto-creates
       // contacts from Slack user ids. Skip promoteOrCreate on conversation ids.
-      if (result.success) {
+      if (result.success && !result.queued) {
         await this.publishDelivered({
           channel: 'slack',
           recipientId,
@@ -1156,8 +1183,9 @@ export class OutboundGateway {
     }
 
     if (request.channel === 'sms') {
-      const result = await this.dispatchSms({ ...request, message: redactedBody });
-      if (result.success) {
+      const toSend = { ...request, message: redactedBody };
+      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchSms(toSend));
+      if (result.success && !result.queued) {
         await this.promoteOrCreateRecipientContact('sms', request.recipient);
         await this.publishDelivered({
           channel: 'sms',
@@ -1175,28 +1203,16 @@ export class OutboundGateway {
 
     {
       const toSend: SignalOutboundRequest = { ...request, message: redactedBody };
-      // Queue instead of dropping when signal-cli is disconnected (#1380).
-      if (this.outboundQueue && this.signalClient && !this.signalClient.isConnected()) {
-        return this.enqueueInsteadOfDrop(toSend);
-      }
-      const result = await this.dispatchSignal(toSend);
-      // Race: socket dropped between isConnected() and dispatch — queue the send.
-      if (
-        !result.success
-        && this.outboundQueue
-        && result.blockedReason?.includes('not connected')
-      ) {
-        return this.enqueueInsteadOfDrop(toSend);
-      }
+      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchSignal(toSend));
       // Only promote for 1:1 Signal sends — group sends use a groupId, not an individual
       // phone number. Creating a contact for a group token would pollute the contacts table
       // and would not help with inbound replies (which come from member numbers, not the group ID).
-      if (result.success && request.recipient) {
+      if (result.success && !result.queued && request.recipient) {
         await this.promoteOrCreateRecipientContact('signal', request.recipient);
       }
       // Emit the audit event for all successful Signal sends (both 1:1 and group).
       // messageId is the signal-cli send timestamp — correlates with reaction targetTimestamp (#1479).
-      if (result.success) {
+      if (result.success && !result.queued) {
         await this.publishDelivered({
           channel: 'signal',
           recipientId,
@@ -1210,6 +1226,59 @@ export class OutboundGateway {
       }
       return result;
     }
+  }
+
+  /** Whether this channel is registered for durable queueing (#1380). */
+  private isQueueableChannel(channel: string): boolean {
+    return !!this.outboundQueue && this.outboundQueueReadiness.has(channel);
+  }
+
+  /** Transport ready for wire dispatch; unknown channels are treated as ready. */
+  private isChannelOutboundReady(channel: string): boolean {
+    const probe = this.outboundQueueReadiness.get(channel);
+    return probe ? probe() : true;
+  }
+
+  /**
+   * Dispatch immediately, or enqueue when the channel opted into outbound
+   * queueing and is currently unavailable (#1380).
+   */
+  private async dispatchOrEnqueue(
+    request: OutboundSendRequest,
+    dispatch: () => Promise<OutboundSendResult>,
+  ): Promise<OutboundSendResult> {
+    if (this.isQueueableChannel(request.channel) && !this.isChannelOutboundReady(request.channel)) {
+      return this.enqueueInsteadOfDrop(request);
+    }
+    const result = await dispatch();
+    if (
+      !result.success
+      && result.queueable
+      && this.isQueueableChannel(request.channel)
+    ) {
+      const queued = await this.enqueueInsteadOfDrop(request);
+      // HTTP channels (SMS) may stay "ready" while the provider is briefly down —
+      // schedule a flush retry since no socket reconnect event will fire.
+      if (queued.queued && this.isChannelOutboundReady(request.channel)) {
+        this.scheduleFlushRetry(request.channel);
+      }
+      return queued;
+    }
+    return result;
+  }
+
+  /** Retry flush after a transient queueable failure with no disconnect event. */
+  private scheduleFlushRetry(channel: string, delayMs = 30_000): void {
+    if (this.flushRetryTimers.has(channel)) return;
+    const timer = setTimeout(() => {
+      this.flushRetryTimers.delete(channel);
+      void this.flushChannel(channel).catch((err) => {
+        this.log.error({ err, channel }, 'outbound-gateway: scheduled queue flush failed');
+      });
+    }, delayMs);
+    // Don't keep the process alive solely for a flush retry.
+    if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+    this.flushRetryTimers.set(channel, timer);
   }
 
   /**
@@ -1250,8 +1319,8 @@ export class OutboundGateway {
     }
     this.flushInFlight.add(channel);
     try {
-      if (channel === 'signal' && this.signalClient && !this.signalClient.isConnected()) {
-        this.log.debug({ channel }, 'outbound-gateway: flush skipped — still disconnected');
+      if (!this.isChannelOutboundReady(channel)) {
+        this.log.debug({ channel }, 'outbound-gateway: flush skipped — still unavailable');
         return { flushed: 0, skipped: true };
       }
 
@@ -1278,6 +1347,10 @@ export class OutboundGateway {
             { channel, queueId: row.id, blockedReason: result.blockedReason },
             'outbound-gateway: flush stopped — remaining rows stay queued for next reconnect',
           );
+          // Transient provider outage — try again later without waiting for a socket event.
+          if (result.queueable) {
+            this.scheduleFlushRetry(channel);
+          }
           break;
         }
 
@@ -2417,6 +2490,14 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'Signal send must specify exactly one of recipient or groupId, not both' };
     }
 
+    if (!this.signalClient.isConnected()) {
+      return {
+        success: false,
+        blockedReason: 'Signal RPC client not connected',
+        queueable: true,
+      };
+    }
+
     try {
       const messageId = await this.signalClient.send({
         account: this.signalPhoneNumber,
@@ -2440,7 +2521,8 @@ export class OutboundGateway {
         { err, channel: 'signal', destinationType: request.groupId ? 'group' : '1:1' },
         'outbound-gateway: signal-cli send failed',
       );
-      return { success: false, blockedReason: `Send failed: ${message}` };
+      const queueable = /not connected|ECONNREFUSED|EPIPE|socket/i.test(message);
+      return { success: false, blockedReason: `Send failed: ${message}`, queueable };
     }
   }
 
@@ -2458,6 +2540,14 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'Slack send requires slackChannelId' };
     }
 
+    if (!this.slackClient.isConnected()) {
+      return {
+        success: false,
+        blockedReason: 'Slack Socket Mode not connected',
+        queueable: true,
+      };
+    }
+
     const mrkdwn = markdownToMrkdwn(request.message);
     const result = await this.slackClient.postMessage({
       channel: request.slackChannelId,
@@ -2470,7 +2560,9 @@ export class OutboundGateway {
         { channel: 'slack', error: result.error },
         'outbound-gateway: Slack chat.postMessage failed',
       );
-      return { success: false, blockedReason: `Send failed: ${result.error ?? 'unknown_error'}` };
+      const err = result.error ?? 'unknown_error';
+      const queueable = /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket|network|temporarily/i.test(err);
+      return { success: false, blockedReason: `Send failed: ${err}`, queueable };
     }
 
     this.log.info(
@@ -2514,7 +2606,10 @@ export class OutboundGateway {
       }
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err, channel: 'sms' }, 'outbound-gateway: Telnyx SMS send failed');
-      return { success: false, blockedReason: `Send failed: ${message}` };
+      // Opt-out and validation stay non-queueable; network / 5xx-class failures retry.
+      const queueable = !(err instanceof TelnyxSendError && err.code === TELNYX_ERROR_OPTED_OUT)
+        && /fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|network|HTTP 5\d\d|non-JSON|temporarily/i.test(message);
+      return { success: false, blockedReason: `Send failed: ${message}`, queueable };
     }
   }
 }

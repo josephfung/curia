@@ -102,6 +102,7 @@ describe('OutboundGateway queue (#1380)', () => {
       bus: mocks.bus,
       logger: mocks.logger,
       outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['signal', () => signalClient.isConnected()]]),
     });
 
     const result = await gateway.send({
@@ -115,6 +116,116 @@ describe('OutboundGateway queue (#1380)', () => {
     expect(result.messageId).toBe('q-1');
     expect(signalClient.send).not.toHaveBeenCalled();
     expect(outboundQueue.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('queues a Slack send when Socket Mode is disconnected', async () => {
+    const slackClient = {
+      postMessage: vi.fn(),
+      isConnected: vi.fn().mockReturnValue(false),
+    };
+    const outboundQueue = {
+      enqueue: vi.fn().mockResolvedValue({ id: 'q-slack' }),
+      listPending: vi.fn(),
+      deleteByIds: vi.fn(),
+      deleteExpired: vi.fn(),
+      countPending: vi.fn(),
+    };
+
+    const gateway = new OutboundGateway({
+      slackClient: slackClient as never,
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['slack', () => slackClient.isConnected()]]),
+    });
+
+    const result = await gateway.send({
+      channel: 'slack',
+      slackChannelId: 'D123',
+      message: 'hello while slack down',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.queued).toBe(true);
+    expect(slackClient.postMessage).not.toHaveBeenCalled();
+    expect(outboundQueue.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('queues an SMS send on a transient Telnyx failure and schedules retry', async () => {
+    vi.useFakeTimers();
+    const smsClient = {
+      sendSms: vi.fn().mockRejectedValue(new Error('fetch failed')),
+    };
+    const outboundQueue = {
+      enqueue: vi.fn().mockResolvedValue({ id: 'q-sms' }),
+      listPending: vi.fn().mockResolvedValue([]),
+      deleteByIds: vi.fn(),
+      deleteExpired: vi.fn(),
+      countPending: vi.fn(),
+    };
+
+    const gateway = new OutboundGateway({
+      smsClient: smsClient as never,
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['sms', () => true]]),
+    });
+
+    const result = await gateway.send({
+      channel: 'sms',
+      recipient: '+15555550100',
+      message: 'hello while telnyx flaky',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.queued).toBe(true);
+    expect(outboundQueue.enqueue).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(outboundQueue.listPending).toHaveBeenCalledWith('sms');
+    vi.useRealTimers();
+  });
+
+  it('does not queue SMS when the recipient opted out', async () => {
+    const { TelnyxSendError } = await import('../../../src/channels/sms/sms-client.js');
+    const { TELNYX_ERROR_OPTED_OUT } = await import('../../../src/channels/sms/types.js');
+    const smsClient = {
+      sendSms: vi.fn().mockRejectedValue(
+        new TelnyxSendError('recipient opted out at carrier (STOP)', TELNYX_ERROR_OPTED_OUT),
+      ),
+    };
+    const outboundQueue = {
+      enqueue: vi.fn(),
+      listPending: vi.fn(),
+      deleteByIds: vi.fn(),
+      deleteExpired: vi.fn(),
+      countPending: vi.fn(),
+    };
+
+    const gateway = new OutboundGateway({
+      smsClient: smsClient as never,
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['sms', () => true]]),
+    });
+
+    const result = await gateway.send({
+      channel: 'sms',
+      recipient: '+15555550100',
+      message: 'should not queue',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.queued).toBeUndefined();
+    expect(outboundQueue.enqueue).not.toHaveBeenCalled();
   });
 
   it('flushes queued Signal messages incrementally (delete after each success)', async () => {
@@ -156,6 +267,7 @@ describe('OutboundGateway queue (#1380)', () => {
       bus: mocks.bus,
       logger: mocks.logger,
       outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['signal', () => signalClient.isConnected()]]),
     });
 
     const flushed = await gateway.flushChannel('signal');
@@ -206,6 +318,7 @@ describe('OutboundGateway queue (#1380)', () => {
       bus: mocks.bus,
       logger: mocks.logger,
       outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['signal', () => signalClient.isConnected()]]),
     });
 
     const flushed = await gateway.flushChannel('signal');
@@ -242,6 +355,7 @@ describe('OutboundGateway queue (#1380)', () => {
       bus,
       logger: mocks.logger,
       outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['signal', () => signalClient.isConnected()]]),
     });
     gateway.start();
 

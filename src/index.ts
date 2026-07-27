@@ -1665,6 +1665,18 @@ async function main(): Promise<void> {
 
   if (hasAnyOutboundClient && outboundFilter && !setupRequiredAtBoot) {
     const outboundQueue = new OutboundQueueRepo(pool);
+    // Channels that implement Channel.supportsOutboundQueue register readiness
+    // probes here (client-backed) or via setOutboundQueueReadiness after the
+    // adapter exists (SMS start/stop). Voice / http / cli intentionally omit.
+    const outboundQueueReadiness = new Map<string, () => boolean>();
+    if (registryGatedOutbound.signalClient) {
+      const signal = registryGatedOutbound.signalClient;
+      outboundQueueReadiness.set('signal', () => signal.isConnected());
+    }
+    if (registryGatedOutbound.slackClient) {
+      const slack = registryGatedOutbound.slackClient;
+      outboundQueueReadiness.set('slack', () => slack.isConnected());
+    }
     outboundGateway = new OutboundGateway({
       nylasClients: registryGatedOutbound.nylasClients,
       signalClient: registryGatedOutbound.signalClient,
@@ -1686,6 +1698,7 @@ async function main(): Promise<void> {
       confidencePipeline,
       exportControlService,
       outboundQueue,
+      outboundQueueReadiness,
     });
     outboundGateway.start();
     logger.info({
@@ -1693,6 +1706,7 @@ async function main(): Promise<void> {
       hasSignal: !!registryGatedOutbound.signalClient,
       hasSlack: !!registryGatedOutbound.slackClient,
       hasSms: !!registryGatedOutbound.smsClient,
+      queueableChannels: [...outboundQueueReadiness.keys()],
       channelShouldStart: [...channelShouldStart],
     }, 'Outbound gateway initialized');
   } else if (nylasClientMap.size > 0 && !outboundFilter) {
@@ -1804,6 +1818,8 @@ async function main(): Promise<void> {
       contactService,
       webhookBridge: smsWebhookBridge,
     });
+    // SMS readiness tracks adapter start/stop (no persistent socket) (#1380).
+    outboundGateway.setOutboundQueueReadiness('sms', () => smsAdapter!.isOutboundReady());
   } else if (outboundGateway && channelShouldStart.has('sms') && !smsClient) {
     logger.warn('channel sms is enabled + resolvable but its runtime client/credentials are missing (api key, from number, or webhook public key); no SMS adapter constructed — check vault/env credentials and restart');
   }

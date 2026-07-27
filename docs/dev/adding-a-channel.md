@@ -38,10 +38,20 @@ export interface Channel {
   readonly isToggleable: boolean;
   start(): Promise<void>;   // connect, begin listening, subscribe to outbound.message
   stop(): Promise<void>;    // graceful, idempotent teardown (called on shutdown)
+  /**
+   * Optional outbound-queue capability (#1380). When true, OutboundGateway may
+   * durably queue sends while `isOutboundReady()` is false and flush on
+   * `channel.reconnect`. Opt in for reconnectable transports (Signal, Slack,
+   * SMS); leave unset for voice / http / cli.
+   */
+  readonly supportsOutboundQueue?: boolean;
+  isOutboundReady?(): boolean;
 }
 ```
 
 There is **no `send()` method**. Outbound delivery happens inside `start()`: the adapter subscribes to `outbound.message` and either routes the send through the shared `OutboundGateway` (email, Signal, Slack) or writes directly (CLI). Keep `stop()` idempotent — it is called on process shutdown and may run after a partial `start()`.
+
+**Outbound queue (#1380).** If your channel can be temporarily unavailable (socket drop, adapter stopped, transient provider outage), set `supportsOutboundQueue = true`, implement `isOutboundReady()`, publish `channel.disconnected` / `channel.reconnect` when readiness flips, and register the probe on the gateway (`outboundQueueReadiness` at boot or `setOutboundQueueReadiness` after the adapter exists). Do **not** opt in for realtime surfaces where delayed delivery is wrong (voice).
 
 ```
 src/channels/<name>/
