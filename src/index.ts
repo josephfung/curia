@@ -1830,6 +1830,17 @@ async function main(): Promise<void> {
     logger.warn('channel sms is enabled + resolvable but its runtime client/credentials are missing (api key, from number, or webhook public key); no SMS adapter constructed — check vault/env credentials and restart');
   }
 
+  // Outbound context bridge — delegation-aware context registry for
+  // specialist-initiated outbound. Requires pool (Postgres).
+  // Constructed before VoiceRuntime (so voice turns can inject active entries —
+  // #1594) and before Scheduler (startup + daily cleanup).
+  const outboundContextService = pool
+    ? new OutboundContextService(pool, logger, {
+        defaultExpiryHours: yamlConfig.contextBridge?.defaultExpiryHours,
+        explicitExpiryHours: yamlConfig.contextBridge?.explicitExpiryHours,
+      })
+    : undefined;
+
   // Construct the Voice adapter (HTTP session handler installed on start).
   if (
     channelShouldStart.has('voice') &&
@@ -1890,6 +1901,9 @@ async function main(): Promise<void> {
         // Same per-turn date/timezone grounding the coordinator gets — without it
         // "tomorrow / next week" is un-anchored for every voice tool call (#1551).
         timezone: config.timezone,
+        // Cross-channel outbound-context bridge — voice bypasses the dispatcher,
+        // so VoiceRuntime reads getActive() itself (#1594).
+        outboundContextService,
         deleteRoom: async (roomName) => {
           await deleteVoiceRoom(
             {
@@ -2019,16 +2033,6 @@ async function main(): Promise<void> {
     },
     'DreamEngine configured',
   );
-
-  // Outbound context bridge — delegation-aware context registry for
-  // specialist-initiated outbound. Requires pool (Postgres).
-  // Constructed here (before Scheduler) so the scheduler can run startup + daily cleanup.
-  const outboundContextService = pool
-    ? new OutboundContextService(pool, logger, {
-        defaultExpiryHours: yamlConfig.contextBridge?.defaultExpiryHours,
-        explicitExpiryHours: yamlConfig.contextBridge?.explicitExpiryHours,
-      })
-    : undefined;
 
   const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine, outboundContextService, defaultExpectedDurationSeconds: yamlConfig.scheduler?.defaultExpectedDurationSeconds });
 

@@ -20,6 +20,7 @@
 
 import type { EventBus } from '../../bus/bus.js';
 import { createInboundMessage, createVoiceSessionEnded } from '../../bus/events.js';
+import type { OutboundContextService } from '../../dispatch/outbound-context.js';
 import type { Logger } from '../../logger.js';
 import type { LLMProvider, Message, ToolCall, ToolDefinition } from '../../agents/llm/provider.js';
 import type { WorkingMemory } from '../../memory/working-memory.js';
@@ -85,8 +86,9 @@ function isHardTtsFailure(err: unknown): boolean {
  * guidance, and a fresh date/time block — assembled by buildVoiceSystemPrompt().
  * They deliberately do NOT get the coordinator's full YAML system prompt or
  * KG/sender enrichment (latency + text-channel content that makes no sense
- * spoken). See ADR-037 Consequences and
- * docs/wip/2026-07-25-voice-channel-design.md §"Phase 1 brain".
+ * spoken). Active outbound-context entries are included (#1594) so voice can
+ * acknowledge recent proactive sends on other channels. See ADR-037
+ * Consequences and docs/wip/2026-07-25-voice-channel-design.md §"Phase 1 brain".
  */
 export const VOICE_SYSTEM_ADDENDUM =
   'You are speaking to the principal in a live voice call. Reply in a natural, ' +
@@ -128,13 +130,20 @@ export const VOICE_DELEGATION_GUIDANCE =
  * Assemble the per-turn system prompt for a spoken turn. Static sections come
  * first and the (per-minute changing) time block last, so provider prompt
  * caching keeps a stable prefix across turns. Pure — callers resolve/guard the
- * dynamic parts (identity compile, roster lookup, time formatting) themselves.
+ * dynamic parts (identity compile, roster lookup, outbound context, time
+ * formatting) themselves.
  */
 export function buildVoiceSystemPrompt(parts: {
   /** Compiled office identity/persona block; omitted when null/empty. */
   identityBlock?: string | null;
   /** Specialist roster body ("- @name: description" lines); enables delegation guidance. */
   specialistRoster?: string | null;
+  /**
+   * Pre-formatted [ACTIVE OUTBOUND CONTEXT] block from
+   * OutboundContextService.formatInjectionBlock (cross-channel proactive sends).
+   * Omitted when null/empty — same bridge text channels get via the dispatcher (#1594).
+   */
+  outboundContextBlock?: string | null;
   /** Pre-formatted "## Current Date & Time" block; omitted when null/empty. */
   timeContextBlock?: string | null;
 }): string {
@@ -147,6 +156,9 @@ export function buildVoiceSystemPrompt(parts: {
       VOICE_DELEGATION_GUIDANCE + '\n\n## Available Specialists\n' + parts.specialistRoster,
     );
   }
+  // Dynamic suffix: outbound context then time. Time stays last so the static
+  // prefix (+ identity/roster) remains provider-cacheable across turns.
+  if (parts.outboundContextBlock) sections.push(parts.outboundContextBlock);
   if (parts.timeContextBlock) sections.push(parts.timeContextBlock);
   return sections.join('\n\n');
 }
@@ -210,6 +222,13 @@ export interface VoiceRuntimeConfig {
    * turn falls back to in-process history. Default 1000ms.
    */
   historyReadTimeoutMs?: number;
+  /**
+   * Cross-channel outbound-context bridge — the same service the dispatcher
+   * injects into text-channel task content. Voice bypasses the dispatcher, so
+   * VoiceRuntime must read getActive() itself (#1594). Optional: absent → no
+   * injection (tests / pool-less boots).
+   */
+  outboundContextService?: OutboundContextService;
 }
 
 /**
@@ -464,12 +483,12 @@ export class VoiceRuntime {
   }
 
   /**
-   * Resolve the dynamic prompt parts (guarding each — a compile failure or bad
-   * timezone must degrade to a slimmer prompt, never abort the spoken turn) and
-   * assemble the per-turn system prompt. Mirrors AgentRuntime.processTask's
-   * guard-and-omit pattern for the same blocks.
+   * Resolve the dynamic prompt parts (guarding each — a compile failure, bad
+   * timezone, or outbound-context read failure must degrade to a slimmer prompt,
+   * never abort the spoken turn) and assemble the per-turn system prompt.
+   * Mirrors AgentRuntime.processTask's guard-and-omit pattern for the same blocks.
    */
-  private buildTurnSystemPrompt(): string {
+  private async buildTurnSystemPrompt(): Promise<string> {
     let identityBlock: string | null = null;
     if (this.toolBridge?.identityBlock) {
       try {
@@ -488,6 +507,35 @@ export class VoiceRuntime {
       }
     }
 
+    // Same getActive() + formatInjectionBlock() path the dispatcher uses for
+    // text channels (#1594). Empty result → null → prompt unchanged. Failure is
+    // best-effort: log and continue without the bridge (parity with dispatcher).
+    let outboundContextBlock: string | null = null;
+    if (this.config.outboundContextService) {
+      try {
+        const activeEntries = await this.config.outboundContextService.getActive();
+        // Pass '' for originalContent — the utterance stays a separate user
+        // message; only the [ACTIVE OUTBOUND CONTEXT] preamble goes into the
+        // system prompt.
+        const preamble = this.config.outboundContextService.formatInjectionBlock(
+          activeEntries,
+          '',
+        );
+        if (preamble !== null) {
+          outboundContextBlock = preamble.trimEnd();
+          this.log.debug(
+            { entryCount: activeEntries.length },
+            'Injected active outbound context into voice system prompt',
+          );
+        }
+      } catch (err) {
+        this.log.error(
+          { err },
+          'Failed to read outbound context entries — proceeding without context injection',
+        );
+      }
+    }
+
     let timeContextBlock: string | null = null;
     const timezone = this.config.timezone?.trim();
     if (timezone) {
@@ -498,7 +546,12 @@ export class VoiceRuntime {
       }
     }
 
-    return buildVoiceSystemPrompt({ identityBlock, specialistRoster, timeContextBlock });
+    return buildVoiceSystemPrompt({
+      identityBlock,
+      specialistRoster,
+      outboundContextBlock,
+      timeContextBlock,
+    });
   }
 
   /**
@@ -637,7 +690,7 @@ export class VoiceRuntime {
     }
 
     const messages: Message[] = [
-      { role: 'system', content: this.buildTurnSystemPrompt() },
+      { role: 'system', content: await this.buildTurnSystemPrompt() },
       ...priorHistory,
       userMessage,
     ];
