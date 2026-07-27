@@ -18,6 +18,7 @@ import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import {
   looksLikeUnacknowledgedSuccess,
   buildUnresolvedFailureReply,
+  fingerprintToolInvocation,
   type UnresolvedToolFailure,
 } from './tool-failure-honesty.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
@@ -1077,9 +1078,9 @@ export class AgentRuntime {
     let response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent, budgetHandoff);
     if (!response) return; // chatWithRetry already published error events
 
-    // Unresolved tool failures for the honesty guard (#1546). Cleared on a later
-    // success for the same tool name (retry worked); otherwise checked against the
-    // final natural-language reply before agent.response is published.
+    // Unresolved tool failures for the honesty guard (#1546). Cleared only when
+    // a later success matches the same tool+input fingerprint (retry worked);
+    // success for a different input must not clear an unrelated failure.
     const unresolvedFailures = new Map<string, UnresolvedToolFailure>();
 
     // Extract caller context once — it doesn't change between tool-use rounds.
@@ -1327,7 +1328,7 @@ export class AgentRuntime {
         if (result.success) {
           // Success: reset consecutive error counter
           budget.consecutiveErrors = 0;
-          unresolvedFailures.delete(toolCall.name);
+          unresolvedFailures.delete(fingerprintToolInvocation(toolCall.name, toolCall.input));
 
           // When a tool result is (partly) re-emitted into the turn by the runtime
           // — e.g. skill-activate, whose instructions/reference bodies are spliced
@@ -1529,7 +1530,7 @@ export class AgentRuntime {
             budget.consecutiveErrors++;
           }
           // Track for the final-reply honesty guard (#1546).
-          unresolvedFailures.set(toolCall.name, {
+          unresolvedFailures.set(fingerprintToolInvocation(toolCall.name, toolCall.input), {
             toolName: toolCall.name,
             message: result.error,
           });

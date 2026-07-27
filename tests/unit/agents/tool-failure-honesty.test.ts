@@ -3,6 +3,7 @@ import {
   looksLikeUnacknowledgedSuccess,
   buildUnresolvedFailureReply,
   humanizeToolFailureMessage,
+  fingerprintToolInvocation,
 } from '../../../src/agents/tool-failure-honesty.js';
 
 describe('tool-failure-honesty (#1546)', () => {
@@ -21,6 +22,22 @@ describe('tool-failure-honesty (#1546)', () => {
         "I couldn't dismiss that — no actionable confirm item for task 3502c6bb. Want me to try with the full id?",
       ),
     ).toBe(false);
+  });
+
+  it('still flags mixed failure+success claims (#1546 review)', () => {
+    expect(
+      looksLikeUnacknowledgedSuccess(
+        "I couldn't dismiss it, but I've noted the dismissal",
+      ),
+    ).toBe(true);
+  });
+
+  it('fingerprints tool invocations by name and input', () => {
+    const a = fingerprintToolInvocation('resolve-learning-digest', { task_id: 'aaa' });
+    const b = fingerprintToolInvocation('resolve-learning-digest', { task_id: 'bbb' });
+    const aAgain = fingerprintToolInvocation('resolve-learning-digest', { task_id: 'aaa' });
+    expect(a).not.toBe(b);
+    expect(a).toBe(aAgain);
   });
 
   it('does not flag a neutral informational reply', () => {
