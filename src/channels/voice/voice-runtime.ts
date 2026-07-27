@@ -218,8 +218,10 @@ export interface VoiceRuntimeConfig {
    */
   timezone?: string;
   /**
-   * Deadline (ms) for the per-turn working_memory history read; on expiry the
-   * turn falls back to in-process history. Default 1000ms.
+   * Deadline (ms) for per-turn Postgres reads on the spoken critical path
+   * (working_memory history and outbound-context getActive). On expiry the
+   * turn degrades — in-process history / no context injection — rather than
+   * stalling. Default 1000ms.
    */
   historyReadTimeoutMs?: number;
   /**
@@ -227,6 +229,11 @@ export interface VoiceRuntimeConfig {
    * injects into text-channel task content. Voice bypasses the dispatcher, so
    * VoiceRuntime must read getActive() itself (#1594). Optional: absent → no
    * injection (tests / pool-less boots).
+   *
+   * TODO(#1599 / E-series non-principal callers): voice is principal-only
+   * today, so injecting "messages you've sent" is safe. Gate this to principal
+   * calls before any non-principal voice participant is admitted, or it
+   * becomes a cross-channel audience leak.
    */
   outboundContextService?: OutboundContextService;
 }
@@ -508,31 +515,57 @@ export class VoiceRuntime {
     }
 
     // Same getActive() + formatInjectionBlock() path the dispatcher uses for
-    // text channels (#1594). Empty result → null → prompt unchanged. Failure is
-    // best-effort: log and continue without the bridge (parity with dispatcher).
+    // text channels (#1594). Empty result → null → prompt unchanged. Failure
+    // and deadline expiry are best-effort: log and continue without the bridge
+    // (parity with dispatcher failure mode + loadTurnHistory latency contract).
     let outboundContextBlock: string | null = null;
     if (this.config.outboundContextService) {
-      try {
-        const activeEntries = await this.config.outboundContextService.getActive();
-        // Pass '' for originalContent — the utterance stays a separate user
-        // message; only the [ACTIVE OUTBOUND CONTEXT] preamble goes into the
-        // system prompt.
-        const preamble = this.config.outboundContextService.formatInjectionBlock(
-          activeEntries,
-          '',
+      const timeoutMs = this.config.historyReadTimeoutMs ?? DEFAULT_HISTORY_READ_TIMEOUT_MS;
+      const read = this.config.outboundContextService.getActive();
+      // A read that loses the deadline race settles later with no awaiter —
+      // absorb its eventual rejection so it cannot become an unhandled rejection.
+      read.catch(err => {
+        this.log.debug(
+          { err },
+          'late outbound-context getActive failure (turn already proceeded)',
         );
-        if (preamble !== null) {
-          outboundContextBlock = preamble.trimEnd();
-          this.log.debug(
-            { entryCount: activeEntries.length },
-            'Injected active outbound context into voice system prompt',
+      });
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        const outcome = await Promise.race([
+          read,
+          new Promise<'timeout'>(resolve => {
+            timer = setTimeout(() => resolve('timeout'), timeoutMs);
+          }),
+        ]);
+        if (outcome === 'timeout') {
+          this.log.warn(
+            { timeoutMs },
+            'outbound-context getActive exceeded the voice deadline; proceeding without context injection',
           );
+        } else {
+          // Pass '' for originalContent — the utterance stays a separate user
+          // message; only the [ACTIVE OUTBOUND CONTEXT] preamble goes into the
+          // system prompt.
+          const preamble = this.config.outboundContextService.formatInjectionBlock(
+            outcome,
+            '',
+          );
+          if (preamble !== null) {
+            outboundContextBlock = preamble.trimEnd();
+            this.log.debug(
+              { entryCount: outcome.length },
+              'Injected active outbound context into voice system prompt',
+            );
+          }
         }
       } catch (err) {
         this.log.error(
           { err },
           'Failed to read outbound context entries — proceeding without context injection',
         );
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
       }
     }
 
