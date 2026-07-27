@@ -91,11 +91,17 @@ RUN corepack enable
 # already gone, so a future Node base image that relocates npm would leave the
 # vulnerable bundled deps (brace-expansion, tar) in place while the build stayed
 # green. These assertions turn that silent regression into a hard build failure.
+# `hash -r` after the rm is load-bearing, not cosmetic: the `command -v npm/npx`
+# pre-checks populate the shell's command-location hash table, and dash (this
+# image's /bin/sh) answers a later `command -v` from that cache without re-stat'ing
+# the filesystem. Without the flush, the post-removal checks report the now-deleted
+# npm/npx as "still resolvable" and fail the build on every run (a false positive).
 RUN set -e; \
     test -e /usr/local/lib/node_modules/npm; \
     command -v npm >/dev/null; \
     command -v npx >/dev/null; \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx; \
+    hash -r; \
     if command -v npm >/dev/null 2>&1; then echo 'npm still resolvable after removal' >&2; exit 1; fi; \
     if command -v npx >/dev/null 2>&1; then echo 'npx still resolvable after removal' >&2; exit 1; fi
 

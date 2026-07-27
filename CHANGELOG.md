@@ -35,6 +35,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Slack decode** — unescape `&amp;` last so `&amp;lt;` stays literal `&lt;`. (#1569)
 - **Ant Farm** — desk roster updates during scene boot are no longer dropped. (#1549)
 - **MCP bootstrap** — enabled servers with 0 tools now error-log and fail health. (#1500)
+- **Docker build** — flush shell hash after npm strip so the removal assertion stops false-failing publish. (#1568)
 
 ### Security
 
