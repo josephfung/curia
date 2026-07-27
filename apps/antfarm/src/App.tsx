@@ -15,6 +15,7 @@ import {
   agentRosterKey,
   buildDeskLayout,
   ensureAgentDesk,
+  parseRegistryAgents,
   type RegistryAgent,
 } from './layout/desk-layout.js';
 import { totalAnimationDurationMs } from './conductor/schedule.js';
@@ -70,8 +71,18 @@ export function App() {
         setAuthed(false);
       });
     void apiFetch('/api/registry/agents')
-      .then((res) => res.ok ? res.json() : { agents: [] })
-      .then((data: { agents?: RegistryAgent[] }) => setRegistryAgents(data.agents ?? []))
+      .then(async (res): Promise<RegistryAgent[]> => {
+        if (!res.ok) {
+          // Do not silently degrade to [] — same visible symptom as the
+          // scene-boot race (coordinator-only roster) with no signal (#1549).
+          clientWarn(`failed to load registry agents: HTTP ${res.status}`);
+          return [];
+        }
+        // Validate before narrowing: a malformed `agents` field must not reach
+        // the roster/layout code, which assumes an array of well-formed agents.
+        return parseRegistryAgents(await res.json(), clientWarn);
+      })
+      .then((agents: RegistryAgent[]) => setRegistryAgents(agents))
       .catch((err) => {
         clientWarn('failed to load registry agents', err);
         setRegistryAgents([]);

@@ -3,6 +3,7 @@ import Phaser from 'phaser';
 import type { SceneDirective } from '@curia/shared-types';
 import type { DeskSlot } from '../layout/desk-layout.js';
 import { deskLayoutKey } from '../layout/desk-layout.js';
+import { applyDeskLayoutSync, type DeskSyncState } from '../layout/desk-layout-sync.js';
 import type { ScheduledDirective } from '../conductor/types.js';
 import { OfficeScene, type OfficeSceneCallbacks } from './OfficeScene.js';
 import { STAGE_HEIGHT, STAGE_WIDTH } from './world-layout.js';
@@ -25,7 +26,7 @@ export function PhaserOffice({
   const containerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
   const lastFiredRef = useRef(-1);
-  const lastDeskKeyRef = useRef('');
+  const deskSyncRef = useRef<DeskSyncState>({ lastKey: '' });
   const callbacksRef = useRef<OfficeSceneCallbacks>({ onAgentClick, onDirectiveClick });
   const desksRef = useRef(desks);
 
@@ -63,24 +64,67 @@ export function PhaserOffice({
     game.registry.set('callbacks', callbacks);
 
     game.events.once('ready', () => {
-      game.scene.start('OfficeScene', { desks: desksRef.current, callbacks });
+      const bootDesks = desksRef.current;
+      game.scene.start('OfficeScene', { desks: bootDesks, callbacks });
+      // Record the boot roster as already applied so a flush of the same key
+      // does not call updateLayout → scene.restart() for no reason.
+      deskSyncRef.current.lastKey = deskLayoutKey(bootDesks);
     });
 
     return () => {
       game.destroy(true);
       gameRef.current = null;
       lastFiredRef.current = -1;
+      deskSyncRef.current = { lastKey: '' };
     };
   }, []);
 
   useEffect(() => {
     const game = gameRef.current;
-    if (!game?.scene.isActive('OfficeScene')) return;
-    const key = deskLayoutKey(desks);
-    if (key === lastDeskKeyRef.current) return;
-    lastDeskKeyRef.current = key;
-    const scene = game.scene.getScene('OfficeScene') as OfficeScene;
-    scene.updateLayout(desks);
+    if (!game) return;
+
+    let cancelled = false;
+
+    const trySync = (): boolean => {
+      if (cancelled) return true;
+      const result = applyDeskLayoutSync(
+        deskSyncRef.current,
+        desks,
+        game.scene.isActive('OfficeScene'),
+        (next) => {
+          const scene = game.scene.getScene('OfficeScene') as OfficeScene;
+          scene.updateLayout(next);
+        },
+      );
+      return result !== 'waiting';
+    };
+
+    if (trySync()) return;
+
+    // Roster arrived mid-boot: retry on scene wake + rAF until active so the
+    // update is not dropped when React's effect does not re-fire (#1549).
+    const scene = game.scene.getScene('OfficeScene') as OfficeScene | undefined;
+    const onAwake = () => {
+      trySync();
+    };
+    scene?.events.on('start', onAwake);
+    scene?.events.on('ready', onAwake);
+    scene?.events.on('wake', onAwake);
+
+    let raf = 0;
+    const poll = () => {
+      if (trySync()) return;
+      raf = requestAnimationFrame(poll);
+    };
+    raf = requestAnimationFrame(poll);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      scene?.events.off('start', onAwake);
+      scene?.events.off('ready', onAwake);
+      scene?.events.off('wake', onAwake);
+    };
   }, [desks]);
 
   useEffect(() => {
