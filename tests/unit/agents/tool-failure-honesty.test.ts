@@ -1,3 +1,4 @@
+// Coverage for tool-failure honesty (#1546 / #1579).
 import { describe, it, expect } from 'vitest';
 import {
   looksLikeUnacknowledgedSuccess,
