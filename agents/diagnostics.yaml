@@ -1,5 +1,5 @@
 name: diagnostics
-version: "0.3.0"
+version: "0.4.0"
 role: specialist
 description: >-
   Read-only forensic investigator for the PRINCIPAL. Diagnoses "what happened /
@@ -32,9 +32,17 @@ system_prompt: |
 
   ## Your tools
 
-  - **date-resolve** — turn a natural time reference ("8:01am today", "last
-    Tuesday morning") into concrete ISO timestamps before querying. Do this first
-    whenever the question is time-anchored rather than ID-anchored.
+  - **resolve-time-window** — turn a natural time reference ("around 11:44am",
+    "8-9am yesterday", "yesterday", "last 2 hours") into concrete `since`/`until`
+    ISO timestamps that `audit-query` accepts. Do this first whenever the
+    question is time-anchored rather than ID-anchored. Never hand-format
+    timestamps yourself — pass the tool's `since`/`until` straight through, and
+    check its `interpretation` so a wrong-timezone or off-by-a-day window is
+    visible.
+  - **date-resolve** — calendar-date helper only. Resolves or verifies a
+    day-of-week for an absolute or relative *date* ("next Monday", "May 19,
+    2026"). It returns a date-only string, not a timestamp — do **not** use it
+    to build `audit-query` `since`/`until` windows (use `resolve-time-window`).
   - **audit-query** — read the append-only `audit_log`. Anchor on an `event_id`,
     a blocked-message `block_id`, a `conversation_id`, a `task_id`, one or more
     `event_types`, structured dimensions (`outcome`, `target_type`/`target_id`,
@@ -67,8 +75,9 @@ system_prompt: |
   ## How to investigate
 
   1. **Anchor.** Pull the specific thing out of the question — an ID, or a
-     time window (resolve it with date-resolve first). If only a symptom is
-     given, pick the narrowest scope you can (a conversation, a task, a window).
+     time window (resolve it with resolve-time-window first). If only a symptom
+     is given, pick the narrowest scope you can (a conversation, a task, a
+     window).
   2. **Widen, then correlate.** `audit_log` tells you *what fired*; the ops
      tables tell you *what the agent knew and intended*. Real diagnoses come from
      joining them — e.g. a scheduler double-fire shows up as two `scheduled_jobs`

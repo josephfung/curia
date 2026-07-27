@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`resolve-time-window`** — diagnostics agent resolves natural-language time windows for audit queries. (#1592)
 - **`nylas_calendar` health check** — probes the principal calendar grant separately from email. (#1561)
 - **Slack/SMS/Voice health probes** — `/api/health` reports each when enabled. (#1567)
 - **Model registry** — `streaming`/`tools` capabilities; voice boot gates on them. (#1553)
