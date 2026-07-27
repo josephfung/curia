@@ -2494,7 +2494,7 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'Signal send must specify exactly one of recipient or groupId, not both' };
     }
 
-    if (!this.signalClient.isConnected()) {
+    if (typeof this.signalClient.isConnected === 'function' && !this.signalClient.isConnected()) {
       return {
         success: false,
         blockedReason: 'Signal RPC client not connected',
@@ -2544,7 +2544,7 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'Slack send requires slackChannelId' };
     }
 
-    if (!this.slackClient.isConnected()) {
+    if (typeof this.slackClient.isConnected === 'function' && !this.slackClient.isConnected()) {
       return {
         success: false,
         blockedReason: 'Slack Socket Mode not connected',
