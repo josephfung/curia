@@ -26,16 +26,21 @@ export function ChatThread({ messages, hasMore, loadingHistory, loadMore }: Chat
     const prev = prevCount.current;
     prevCount.current = messages.length;
     const currentLastId = messages[messages.length - 1]?.id;
+    const container = scrollRef.current;
 
     if (messages.length === 0) {
       // Nothing to scroll — thread is empty.
     } else if (prev === 0) {
       // Initial history load: jump instantly so the user lands on the newest message
       // rather than the top of the thread (where the oldest loaded message sits).
-      bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+      // Scroll the messages pane only — scrollIntoView can yank the page chrome on
+      // mobile when the flex column isn't height-bounded (#1571).
+      if (container) container.scrollTop = container.scrollHeight;
     } else if (currentLastId !== lastMessageId.current) {
-      // New user/agent message appended: smooth scroll to bottom.
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      // New user/agent message appended: smooth scroll to bottom within the pane.
+      if (container) {
+        container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      }
     }
     // If prev > 0 and lastId is unchanged, history was prepended — don't scroll.
     lastMessageId.current = currentLastId;

@@ -22,6 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Console mobile** — dashboard/chat fit phone viewports; voice Call control polished. (#1571)
 - **`resolve-learning-digest`** — accepts a unique task-id prefix for digest resolve. (#1545)
 - **`/api/health` mcp checks** — dynamic per enabled MCP server; 0 tools → degraded. (#1500)
 
