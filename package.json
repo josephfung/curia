@@ -67,7 +67,7 @@
     "luxon": "^3.7.2",
     "markdown-it": "^14.3.0",
     "node-html-parser": "^9.0.0",
-    "node-pg-migrate": "^8.0.4",
+    "node-pg-migrate": "^9.0.0",
     "nylas": "^8.4.0",
     "openai": "^6.48.0",
     "openredaction": "^1.1.2",
