@@ -37,10 +37,12 @@ export function decodeSlackText(raw: string, options?: { botUserId?: string }): 
   text = text.replace(/<mailto:([^|>]+)(?:\|[^>]*)?>/gi, '$1');
 
   // Unescape HTML entities Slack applies to message text.
+  // `&amp;` must come last so an already-decoded `&` is not re-consumed
+  // by a later rule (e.g. `&amp;lt;` must stay the literal `&lt;`, not `<`).
   text = text
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 
   return text.trim();
 }
