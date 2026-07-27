@@ -2658,6 +2658,86 @@ describe('AgentRuntime structured error injection', () => {
   });
 });
 
+describe('AgentRuntime tool-failure honesty guard (#1546)', () => {
+  // Prod forensic: conversation email:19f843bdadc2eb85 @ 2026-07-21T13:11Z —
+  // resolve-learning-digest failed on truncated task id; coordinator replied
+  // "Got it — I've noted the dismissal."
+  it('replaces a success-confirming reply after an unresolved tool failure', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{
+              id: 'call-digest-1',
+              name: 'resolve-learning-digest',
+              input: { action: 'dismiss_completion', task_id: '3502c6bb' },
+            }],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: "Got it — I've noted the dismissal.",
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({
+        success: false,
+        error: '<skill_error>No actionable confirm item for task 3502c6bb</skill_error>',
+      }),
+    } as unknown as ExecutionLayer;
+
+    const responses: Array<{ content: string }> = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push({ content: (event as { payload: { content: string } }).payload.content });
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{
+        name: 'resolve-learning-digest',
+        description: 'Resolve a learning digest item',
+        input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+      }],
+      errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-honesty-1546',
+      channelId: 'email',
+      senderId: 'ceo',
+      content: 'dismiss completion 3502c6bb',
+      parentEventId: 'parent-honesty',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(responses).toHaveLength(1);
+    expect(responses[0]!.content).not.toMatch(/noted the dismissal/i);
+    expect(responses[0]!.content).toMatch(/wasn't able to complete/i);
+    expect(responses[0]!.content).toContain('No actionable confirm item for task 3502c6bb');
+  });
+});
+
 // -- Retry logic tests --
 
 function makeRetryableError(): AgentError {

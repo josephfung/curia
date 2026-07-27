@@ -37,6 +37,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`delegate`** — calendar briefs must match same-turn date-resolve output. (#1612)
 - **Coordinator** — ambient bullpen mentions no longer bleed into scheduler jobs and leak to the principal. (#1609)
 - **Voice** — injects active outbound-context so spoken turns see recent cross-channel sends. (#1594)
+- **Tool-failure honesty** — success-claim replies after failed tools are rewritten honestly. (#1546)
 - **`calendar-list-events`** — all-calendar 401/403 failures name grant reconnect action. (#1561)
 - **Tool schemas** — emit union inputs as `anyOf` so Gemini/OpenRouter accept them. (#1508)
 - **Slack decode** — unescape `&amp;` last so `&amp;lt;` stays literal `&lt;`. (#1569)

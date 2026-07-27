@@ -15,6 +15,11 @@ import type { CallerContext } from '../skills/types.js';
 import type { ChannelIdentity, TaskOriginator } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
+import {
+  looksLikeUnacknowledgedSuccess,
+  buildUnresolvedFailureReply,
+  type UnresolvedToolFailure,
+} from './tool-failure-honesty.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
 // Value import (not type-only) — we call AutonomyService.formatPromptBlock() as a static method.
@@ -1072,6 +1077,11 @@ export class AgentRuntime {
     let response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent, budgetHandoff);
     if (!response) return; // chatWithRetry already published error events
 
+    // Unresolved tool failures for the honesty guard (#1546). Cleared on a later
+    // success for the same tool name (retry worked); otherwise checked against the
+    // final natural-language reply before agent.response is published.
+    const unresolvedFailures = new Map<string, UnresolvedToolFailure>();
+
     // Extract caller context once — it doesn't change between tool-use rounds.
     // Primary source: senderContext from the inbound message (set by the dispatcher).
     // Fallback: taskMetadata.originator, which the delegate skill forwards when it creates
@@ -1317,6 +1327,7 @@ export class AgentRuntime {
         if (result.success) {
           // Success: reset consecutive error counter
           budget.consecutiveErrors = 0;
+          unresolvedFailures.delete(toolCall.name);
 
           // When a tool result is (partly) re-emitted into the turn by the runtime
           // — e.g. skill-activate, whose instructions/reference bodies are spliced
@@ -1517,6 +1528,11 @@ export class AgentRuntime {
           } else {
             budget.consecutiveErrors++;
           }
+          // Track for the final-reply honesty guard (#1546).
+          unresolvedFailures.set(toolCall.name, {
+            toolName: toolCall.name,
+            message: result.error,
+          });
           const agentErr = isDbFailure
             ? {
                 type: 'DATABASE_UNAVAILABLE' as const,
@@ -1777,6 +1793,31 @@ export class AgentRuntime {
       logger.error({ agentId, error: response.error }, 'LLM call failed after retries');
       isResponseError = true;
       responseContent = "I'm sorry, I was unable to process that request. Please try again.";
+    }
+
+    // Tool-failure honesty guard (#1546): if this turn had unresolved tool
+    // failures and the model still wrote a success-confirmation, replace with
+    // a deterministic honest reply. Outbound Stage-2 judge skips principal-only
+    // recipients, so this must live here. Prod forensic: email:19f843bdadc2eb85
+    // @ 2026-07-21T13:11Z — resolve-learning-digest failed; coordinator replied
+    // "Got it — I've noted the dismissal."
+    if (
+      !isResponseError
+      && unresolvedFailures.size > 0
+      && looksLikeUnacknowledgedSuccess(responseContent)
+    ) {
+      const failures = [...unresolvedFailures.values()];
+      const honest = buildUnresolvedFailureReply(failures);
+      logger.warn(
+        {
+          agentId,
+          conversationId,
+          failedTools: failures.map((f) => f.toolName),
+          originalPreview: responseContent.slice(0, 160),
+        },
+        'Replacing success-confirming reply after unresolved tool failure(s)',
+      );
+      responseContent = honest;
     }
 
     // Persist the assistant response
