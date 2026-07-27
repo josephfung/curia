@@ -935,12 +935,35 @@ export class AgentRuntime {
       injectedBullpenThreadIds.add(taskMetadataRecord['threadId'] as string);
     }
 
+    // Ambient Bullpen threads are surfaced so an agent is aware of active
+    // inter-agent discussions — but NOT inside autonomous scheduler runs (#1609).
+    // A scheduled job (e.g. the coordinator's hourly approval-expiry-sweep) runs
+    // unattended with human-channel send tools pinned; injecting an unrelated
+    // unread @mention there invites the model to "reply" to it out-of-band and
+    // mis-route internal agent chatter to a human channel — in prod this landed a
+    // bullpen ack ("@meeting-debrief Noted…") on the principal's Signal. Bullpen
+    // mentions are already delivered in-thread by the dedicated Bullpen dispatch
+    // path, so ambient injection into a scheduler task is both redundant and
+    // unsafe. Interactive channel conversations and bullpen-origin tasks
+    // (channelId 'bullpen') keep the tier.
+    const suppressAmbientBullpen = taskEvent.payload.channelId === 'scheduler';
+    if (suppressAmbientBullpen) {
+      // Observability parity with the adjacent system-channel sender-context skip
+      // above — makes "tier suppressed" distinguishable from "no pending threads".
+      logger.debug(
+        { agentId, conversationId },
+        'Scheduler run — ambient bullpen tier suppressed (#1609); mentions are handled via the dedicated bullpen dispatch path',
+      );
+    }
+
     // Inject pending Bullpen threads as a system message so the agent is aware
     // of active inter-agent discussions. Inserted after sender context (if any),
     // before conversation history — matching spec context budget priority order.
     // Refreshed before every chatWithRetry call so the model sees current thread
     // state, not a stale snapshot from the start of the task (#213).
-    await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, injectedBullpenThreadIds);
+    if (!suppressAmbientBullpen) {
+      await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, injectedBullpenThreadIds);
+    }
 
     // Record bullpen context in the budget for observability. Match by the
     // same `[Bullpen` sentinel that refreshBullpenContext uses so the two
@@ -1634,7 +1657,10 @@ export class AgentRuntime {
 
       // Refresh Bullpen context before the next LLM round so the model sees
       // any new replies or closures that occurred during skill execution (#213).
-      await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, injectedBullpenThreadIds);
+      // Suppressed for scheduler runs — see the suppressAmbientBullpen note above (#1609).
+      if (!suppressAmbientBullpen) {
+        await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, injectedBullpenThreadIds);
+      }
 
       maybeAppendCheckpointBudgetNudge();
       // Continue the loop — the full conversation history is now in messages
