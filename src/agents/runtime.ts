@@ -432,8 +432,9 @@ export class AgentRuntime {
     }
 
     // Channel-agnostic date-arithmetic guardrail (ADR-038 / #1595). Shared module
-    // is the source of truth for both coordinator text and voice — compose here
-    // rather than duplicating prose in agents/coordinator.yaml.
+    // is the sole ### Date & time instruction for the coordinator — do not leave a
+    // pointer stub in agents/coordinator.yaml (that would leak repo paths into the
+    // model-visible prompt and duplicate the heading). Provenance lives here.
     if (agentId === 'coordinator') {
       effectiveSystemPrompt += '\n\n' + DATE_RESOLVE_GUARDRAIL;
     }

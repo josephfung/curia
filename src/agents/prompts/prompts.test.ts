@@ -3,6 +3,7 @@ import {
   DATE_RESOLVE_GUARDRAIL,
   PRONOUN_RESOLUTION_GUARDRAIL,
   ROUTING_DECISION_GUARDRAIL,
+  VOICE_ASYNC_OFFRAMP_GUIDANCE,
 } from './index.js';
 
 describe('shared prompt guardrails (#1595 / ADR-038)', () => {
@@ -16,9 +17,16 @@ describe('shared prompt guardrails (#1595 / ADR-038)', () => {
     expect(PRONOUN_RESOLUTION_GUARDRAIL).toContain('Your calendar');
   });
 
-  it('routing guardrail names the three-way decision', () => {
+  it('routing guardrail names the three-way decision and outbound match rule', () => {
     expect(ROUTING_DECISION_GUARDRAIL).toContain('Handle directly');
     expect(ROUTING_DECISION_GUARDRAIL).toContain('Borrow-then-answer');
     expect(ROUTING_DECISION_GUARDRAIL).toContain('Transfer-ownership');
+    expect(ROUTING_DECISION_GUARDRAIL).toContain('ACTIVE OUTBOUND CONTEXT');
+  });
+
+  it('voice async off-ramp offers deferral without inventing results', () => {
+    expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).toContain('async-offramp');
+    expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).toContain('follow up');
+    expect(VOICE_ASYNC_OFFRAMP_GUIDANCE).toContain('Do **not** pretend you finished');
   });
 });
