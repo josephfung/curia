@@ -4,7 +4,6 @@
 // adapters (which need live deps) by using `satisfies`-style type assertions in a typed
 // helper plus a runtime prototype check.
 import { describe, it, expect } from 'vitest';
-import type { Channel } from './channel.js';
 import { CliAdapter } from './cli/cli-adapter.js';
 import { SignalAdapter } from './signal/signal-adapter.js';
 import { EmailAdapter } from './email/email-adapter.js';
@@ -12,6 +11,7 @@ import { HttpAdapter } from './http/http-adapter.js';
 import { SlackAdapter } from './slack/slack-adapter.js';
 import { SmsAdapter } from './sms/sms-adapter.js';
 import { VoiceAdapter } from './voice/voice-adapter.js';
+import type { Channel } from './channel.js';
 
 // Type-level assertion: each class's instance type must be assignable to Channel.
 // If an adapter is missing a member, this file fails to typecheck.
@@ -32,5 +32,16 @@ describe('channel adapters implement Channel', () => {
       expect(typeof cls.prototype.start).toBe('function');
       expect(typeof cls.prototype.stop).toBe('function');
     }
+  });
+
+  it('queueable channels implement isOutboundReady; voice does not (#1380)', () => {
+    for (const cls of [SignalAdapter, SlackAdapter, SmsAdapter]) {
+      expect(typeof cls.prototype.isOutboundReady).toBe('function');
+    }
+    // Voice must NOT opt in — delayed delivery is not meaningful for duplex audio.
+    expect(
+      Object.prototype.hasOwnProperty.call(VoiceAdapter.prototype, 'isOutboundReady')
+        || 'isOutboundReady' in VoiceAdapter.prototype,
+    ).toBe(false);
   });
 });

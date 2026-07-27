@@ -10,7 +10,7 @@ import type { Logger } from '../../logger.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { OutboundMessageEvent } from '../../bus/events.js';
-import { createInboundMessage } from '../../bus/events.js';
+import { createInboundMessage, createChannelDisconnected, createChannelReconnect } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
 import { BoundedTtlMap } from '../slack/bounded-ttl-map.js';
@@ -32,14 +32,25 @@ export interface SmsAdapterConfig {
 export class SmsAdapter implements Channel {
   readonly name = 'sms';
   readonly isToggleable = true;
+  /**
+   * SMS is HTTP (no persistent socket). Still queueable (#1380): readiness tracks
+   * adapter start/stop, and the gateway also enqueues on transient Telnyx/network
+   * failures then retries after backoff.
+   */
+  readonly supportsOutboundQueue = true;
   private readonly config: SmsAdapterConfig;
   private readonly log: Logger;
   /** Telnyx may redeliver; dedupe by webhook event id (same TTL/size as Slack). */
   private readonly seenEventIds = new BoundedTtlMap<true>(10 * 60 * 1000, 2_000);
+  private running = false;
 
   constructor(config: SmsAdapterConfig) {
     this.config = config;
     this.log = config.logger.child({ component: 'sms-adapter' });
+  }
+
+  isOutboundReady(): boolean {
+    return this.running;
   }
 
   async start(): Promise<void> {
@@ -59,10 +70,22 @@ export class SmsAdapter implements Channel {
     });
 
     webhookBridge.setHandler((rawBody, headers) => this.handleWebhook(rawBody, headers));
+    this.running = true;
+    // Flush any messages queued while the adapter was stopped (#1380).
+    void bus.publish('channel', createChannelReconnect({ channel: 'sms' })).catch((err) => {
+      this.log.error({ err }, 'Failed to publish channel.reconnect');
+    });
     this.log.info('SMS adapter started — Telnyx webhook handler installed');
   }
 
   async stop(): Promise<void> {
+    this.running = false;
+    void this.config.bus.publish(
+      'channel',
+      createChannelDisconnected({ channel: 'sms', reason: 'SMS adapter stopped' }),
+    ).catch((err) => {
+      this.log.error({ err }, 'Failed to publish channel.disconnected');
+    });
     this.config.webhookBridge.setHandler(null);
     this.seenEventIds.clear();
     this.log.info('SMS adapter stopped');

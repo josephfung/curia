@@ -9,7 +9,7 @@ import type { Logger } from '../../logger.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { OutboundMessageEvent } from '../../bus/events.js';
-import { createInboundMessage, createInboundReaction } from '../../bus/events.js';
+import { createInboundMessage, createInboundReaction, createChannelDisconnected, createChannelReconnect } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
 import { SlackClient } from './slack-client.js';
@@ -36,9 +36,13 @@ export interface SlackAdapterConfig {
 export class SlackAdapter implements Channel {
   readonly name = 'slack';
   readonly isToggleable = true;
+  /** Socket Mode can drop; queue outbound until reconnect (#1380). */
+  readonly supportsOutboundQueue = true;
   private readonly config: SlackAdapterConfig;
   private readonly log: Logger;
   private readonly boundHandleEvent: (event: SlackInboundEvent, kind: SlackInboundKind) => void;
+  private readonly boundConnected: () => void;
+  private readonly boundDisconnected: () => void;
   /**
    * Short-lived dedupe of Slack event keys. Process-local only — cleared on
    * stop() and lost on restart/reconnect. Absorbs Slack redelivery-on-missed-ack
@@ -75,6 +79,23 @@ export class SlackAdapter implements Channel {
         this.log.error({ err }, 'Slack adapter: unexpected error in inbound handler');
       });
     };
+    this.boundConnected = () => {
+      void this.config.bus.publish('channel', createChannelReconnect({ channel: 'slack' })).catch((err) => {
+        this.log.error({ err }, 'Failed to publish channel.reconnect');
+      });
+    };
+    this.boundDisconnected = () => {
+      void this.config.bus.publish(
+        'channel',
+        createChannelDisconnected({ channel: 'slack', reason: 'Slack Socket Mode disconnected' }),
+      ).catch((err) => {
+        this.log.error({ err }, 'Failed to publish channel.disconnected');
+      });
+    };
+  }
+
+  isOutboundReady(): boolean {
+    return this.config.client.isConnected();
   }
 
   async start(): Promise<void> {
@@ -93,6 +114,10 @@ export class SlackAdapter implements Channel {
       }
     });
 
+    // Publish channel lifecycle for outbound-queue flush (#1380).
+    client.on('connected', this.boundConnected);
+    client.on('disconnected', this.boundDisconnected);
+
     client.on('event', this.boundHandleEvent);
     await client.connect();
 
@@ -105,6 +130,8 @@ export class SlackAdapter implements Channel {
 
   async stop(): Promise<void> {
     this.config.client.off('event', this.boundHandleEvent);
+    this.config.client.off('connected', this.boundConnected);
+    this.config.client.off('disconnected', this.boundDisconnected);
     await this.config.client.disconnect();
     this.recentDedupeKeys.clear();
     this.activeThreads.clear();
