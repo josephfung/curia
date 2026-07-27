@@ -124,9 +124,16 @@ function resolveAgent(agentFile: string): string[] {
 }
 
 describe('resolved pin sets after #1494 bundling', () => {
-  it('diagnostics resolves only the three read-only query tools + date-resolve + request-clarification', () => {
+  it('diagnostics resolves query tools + resolve-time-window + date-resolve + request-clarification', () => {
     expect(resolveAgent('diagnostics.yaml')).toEqual(
-      ['audit-query', 'audit-trace', 'date-resolve', 'ops-lookup', 'request-clarification'].sort(),
+      [
+        'audit-query',
+        'audit-trace',
+        'date-resolve',
+        'ops-lookup',
+        'request-clarification',
+        'resolve-time-window',
+      ].sort(),
     );
   });
 
