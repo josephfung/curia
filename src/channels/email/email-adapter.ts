@@ -20,6 +20,8 @@ import {
   createInboundMessage,
   createChannelPoll,
   createChannelStalled,
+  createChannelDisconnected,
+  createChannelReconnect,
   type OutboundMessageEvent,
   type OutboundNotificationEvent,
 } from '../../bus/events.js';
@@ -109,6 +111,12 @@ export interface EmailAdapterConfig {
 export class EmailAdapter implements Channel {
   readonly name = 'email';
   readonly isToggleable = true;
+  /**
+   * Email is HTTP (Nylas). Queueable like SMS (#1380): readiness tracks adapter
+   * start/stop; the gateway also enqueues on transient Nylas/network failures.
+   * Auth/grant failures stay non-queueable.
+   */
+  readonly supportsOutboundQueue = true;
   private config: EmailAdapterConfig;
   // Existing setInterval handle — cleared in stop() to halt the poll loop. The
   // overlap guard (`processing`) plus clearing this interval are sufficient to
@@ -117,6 +125,8 @@ export class EmailAdapter implements Channel {
   private pollTimer?: ReturnType<typeof setInterval>;
   private lastSeenTimestamp: number = 0;
   private processing = false;
+  /** True between start() and stop() — outbound-queue readiness (#1380). */
+  private running = false;
 
   // ── Watchdog state ─────────────────────────────────────────────────────────
   // Tracks the last successful poll completion time for stall detection.
@@ -184,6 +194,10 @@ export class EmailAdapter implements Channel {
   /** Polling interval in ms — used by the health probe to compute the stall threshold. */
   get pollingIntervalMs(): number {
     return this.config.pollingIntervalMs;
+  }
+
+  isOutboundReady(): boolean {
+    return this.running;
   }
 
   async start(): Promise<void> {
@@ -309,6 +323,7 @@ export class EmailAdapter implements Channel {
     this._lastSuccessfulPollAt = null;
     this.stalledEmitted = false;
     this.stalledEmitAttempts = 0;
+    this.running = true;
 
     // Poll on interval; also run the watchdog check each tick.
     this.pollTimer = setInterval(() => {
@@ -317,6 +332,12 @@ export class EmailAdapter implements Channel {
     }, pollingIntervalMs);
     logger.info({ pollingIntervalMs }, 'Email adapter started — polling Nylas');
 
+    // Flush any messages queued while adapters were stopped (#1380). Multiple
+    // account adapters may each publish reconnect — flush is idempotent.
+    void bus.publish('channel', createChannelReconnect({ channel: 'email' })).catch((err) => {
+      logger.error({ err, accountId }, 'Failed to publish channel.reconnect');
+    });
+
     // Do an initial poll immediately and await it so callers that await start()
     // can be confident the first poll has completed before they assert results.
     // Subsequent polls run on setInterval (fire-and-forget).
@@ -324,11 +345,21 @@ export class EmailAdapter implements Channel {
   }
 
   async stop(): Promise<void> {
+    this.running = false;
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
     this.startedAt = null;
+    void this.config.bus.publish(
+      'channel',
+      createChannelDisconnected({
+        channel: 'email',
+        reason: `Email adapter stopped (account=${this.config.accountId})`,
+      }),
+    ).catch((err) => {
+      this.config.logger.error({ err }, 'Failed to publish channel.disconnected');
+    });
     this.config.logger.info('Email adapter stopped');
   }
 

@@ -35,7 +35,7 @@ describe('channel adapters implement Channel', () => {
   });
 
   it('queueable channels implement isOutboundReady; voice does not (#1380)', () => {
-    for (const cls of [SignalAdapter, SlackAdapter, SmsAdapter]) {
+    for (const cls of [SignalAdapter, SlackAdapter, SmsAdapter, EmailAdapter]) {
       expect(typeof cls.prototype.isOutboundReady).toBe('function');
     }
     // Voice must NOT opt in — delayed delivery is not meaningful for duplex audio.

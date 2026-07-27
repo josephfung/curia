@@ -107,7 +107,7 @@ A `known_failures` table records tool + error-type combinations that consistentl
 
 - Each adapter implements reconnection with exponential backoff (see [04-channels.md](04-channels.md))
 - If an adapter can't reconnect: publishes `channel.disconnected`, stops, health endpoint reports it
-- Outbound messages for queueable channels (Signal, Slack, SMS — `Channel.supportsOutboundQueue`) are queued in Postgres (max 100 per channel, 24h TTL). On `channel.reconnect`, queued messages are delivered in order (#1380). Voice does not queue.
+- Outbound messages for queueable channels (Signal, Slack, SMS, email — `Channel.supportsOutboundQueue`) are queued in Postgres (max 100 per channel, 24h TTL). On `channel.reconnect`, queued messages are delivered in order (#1380). Voice does not queue.
 
 ### Scheduled Job Failures
 
@@ -249,4 +249,4 @@ This is enforced by code review convention. A lint rule (`no-empty-catch` + cust
 - **Cross-task `known_failures` table** — data collection for future warnings is not yet implemented.
 - **`no-empty-catch` ESLint rule** — the "Never Swallow" rule is enforced by convention only; the rule is absent from `eslint.config.js`.
 
-Outbound messages for queueable channels (Signal, Slack, SMS — see `Channel.supportsOutboundQueue`) are persisted in Postgres while the transport is unavailable (max 100 per channel, 24h TTL) and delivered in order on `channel.reconnect` (#1380). Voice does not queue.
+Outbound messages for queueable channels (Signal, Slack, SMS, email — see `Channel.supportsOutboundQueue`) are persisted in Postgres while the transport is unavailable (max 100 per channel, 24h TTL) and delivered in order on `channel.reconnect` (#1380). Voice does not queue.

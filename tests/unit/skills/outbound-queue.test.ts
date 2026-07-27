@@ -228,6 +228,78 @@ describe('OutboundGateway queue (#1380)', () => {
     expect(outboundQueue.enqueue).not.toHaveBeenCalled();
   });
 
+  it('queues an email send on a transient Nylas failure', async () => {
+    vi.useFakeTimers();
+    const nylasClient = {
+      sendMessage: vi.fn().mockRejectedValue(new Error('fetch failed')),
+    };
+    const outboundQueue = {
+      enqueue: vi.fn().mockResolvedValue({ id: 'q-email' }),
+      listPending: vi.fn().mockResolvedValue([]),
+      deleteByIds: vi.fn(),
+      deleteExpired: vi.fn(),
+      countPending: vi.fn(),
+    };
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', nylasClient as never]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['email', () => true]]),
+    });
+
+    const result = await gateway.send({
+      channel: 'email',
+      to: 'ceo@example.com',
+      subject: 'hi',
+      body: 'hello while nylas flaky',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.queued).toBe(true);
+    expect(outboundQueue.enqueue).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(outboundQueue.listPending).toHaveBeenCalledWith('email');
+    vi.useRealTimers();
+  });
+
+  it('does not queue email on auth/grant failures', async () => {
+    const nylasClient = {
+      sendMessage: vi.fn().mockRejectedValue(new Error('HTTP 401 unauthorized: invalid grant')),
+    };
+    const outboundQueue = {
+      enqueue: vi.fn(),
+      listPending: vi.fn(),
+      deleteByIds: vi.fn(),
+      deleteExpired: vi.fn(),
+      countPending: vi.fn(),
+    };
+
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', nylasClient as never]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['email', () => true]]),
+    });
+
+    const result = await gateway.send({
+      channel: 'email',
+      to: 'ceo@example.com',
+      subject: 'hi',
+      body: 'should not queue',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.queued).toBeUndefined();
+    expect(outboundQueue.enqueue).not.toHaveBeenCalled();
+  });
+
   it('flushes queued Signal messages incrementally (delete after each success)', async () => {
     const signalClient = {
       send: vi.fn().mockResolvedValue('ts-1'),

@@ -42,7 +42,7 @@ export interface Channel {
    * Optional outbound-queue capability (#1380). When true, OutboundGateway may
    * durably queue sends while `isOutboundReady()` is false and flush on
    * `channel.reconnect`. Opt in for reconnectable transports (Signal, Slack,
-   * SMS); leave unset for voice / http / cli.
+   * SMS, email); leave unset for voice / http / cli.
    */
   readonly supportsOutboundQueue?: boolean;
   isOutboundReady?(): boolean;
