@@ -28,25 +28,40 @@ function createMocks() {
 
 describe('OutboundQueueRepo (#1380)', () => {
   it('rejects enqueue when the per-channel cap is reached', async () => {
-    const pool = {
+    const client = {
       query: vi.fn()
-        // deleteExpired
-        .mockResolvedValueOnce({ rowCount: 0 })
-        // countPending
-        .mockResolvedValueOnce({ rows: [{ count: '100' }] }),
+        .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({}) // advisory lock
+        .mockResolvedValueOnce({ rowCount: 0 }) // deleteExpired
+        .mockResolvedValueOnce({ rows: [{ count: '100' }] }) // count
+        .mockResolvedValueOnce({}), // ROLLBACK
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+      query: vi.fn(),
     };
     const repo = new OutboundQueueRepo(pool as never, { maxPerChannel: 100 });
     await expect(
       repo.enqueue({ channel: 'signal', recipient: '+15555550100', message: 'hi' }),
     ).rejects.toBeInstanceOf(OutboundQueueFullError);
+    expect(client.release).toHaveBeenCalled();
   });
 
   it('inserts a row when under the cap', async () => {
-    const pool = {
+    const client = {
       query: vi.fn()
-        .mockResolvedValueOnce({ rowCount: 0 })
-        .mockResolvedValueOnce({ rows: [{ count: '0' }] })
-        .mockResolvedValueOnce({ rows: [{ id: 'queue-1' }] }),
+        .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({}) // lock
+        .mockResolvedValueOnce({ rowCount: 0 }) // delete
+        .mockResolvedValueOnce({ rows: [{ count: '0' }] }) // count
+        .mockResolvedValueOnce({ rows: [{ id: 'queue-1' }] }) // insert
+        .mockResolvedValueOnce({}), // COMMIT
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+      query: vi.fn(),
     };
     const repo = new OutboundQueueRepo(pool as never, { maxPerChannel: 100, ttlHours: 24 });
     const result = await repo.enqueue({
@@ -55,7 +70,7 @@ describe('OutboundQueueRepo (#1380)', () => {
       message: 'queued',
     });
     expect(result).toEqual({ id: 'queue-1' });
-    expect(pool.query).toHaveBeenCalledTimes(3);
+    expect(client.release).toHaveBeenCalled();
   });
 });
 
@@ -102,7 +117,7 @@ describe('OutboundGateway queue (#1380)', () => {
     expect(outboundQueue.enqueue).toHaveBeenCalledOnce();
   });
 
-  it('flushes queued Signal messages all-or-nothing on reconnect', async () => {
+  it('flushes queued Signal messages incrementally (delete after each success)', async () => {
     const signalClient = {
       send: vi.fn().mockResolvedValue('ts-1'),
       isConnected: vi.fn().mockReturnValue(true),
@@ -128,7 +143,7 @@ describe('OutboundGateway queue (#1380)', () => {
     const outboundQueue = {
       enqueue: vi.fn(),
       listPending: vi.fn().mockResolvedValue(rows),
-      deleteByIds: vi.fn().mockResolvedValue(2),
+      deleteByIds: vi.fn().mockResolvedValue(1),
       deleteExpired: vi.fn(),
       countPending: vi.fn(),
     };
@@ -146,10 +161,11 @@ describe('OutboundGateway queue (#1380)', () => {
     const flushed = await gateway.flushChannel('signal');
     expect(flushed).toEqual({ flushed: 2, skipped: false });
     expect(signalClient.send).toHaveBeenCalledTimes(2);
-    expect(outboundQueue.deleteByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(outboundQueue.deleteByIds).toHaveBeenNthCalledWith(1, ['a']);
+    expect(outboundQueue.deleteByIds).toHaveBeenNthCalledWith(2, ['b']);
   });
 
-  it('keeps all rows when any flush dispatch fails', async () => {
+  it('deletes successful rows then stops so they are not re-sent', async () => {
     const signalClient = {
       send: vi.fn()
         .mockResolvedValueOnce('ts-1')
@@ -177,7 +193,7 @@ describe('OutboundGateway queue (#1380)', () => {
     const outboundQueue = {
       enqueue: vi.fn(),
       listPending: vi.fn().mockResolvedValue(rows),
-      deleteByIds: vi.fn(),
+      deleteByIds: vi.fn().mockResolvedValue(1),
       deleteExpired: vi.fn(),
       countPending: vi.fn(),
     };
@@ -193,8 +209,9 @@ describe('OutboundGateway queue (#1380)', () => {
     });
 
     const flushed = await gateway.flushChannel('signal');
-    expect(flushed.flushed).toBe(0);
-    expect(outboundQueue.deleteByIds).not.toHaveBeenCalled();
+    expect(flushed.flushed).toBe(1);
+    expect(outboundQueue.deleteByIds).toHaveBeenCalledTimes(1);
+    expect(outboundQueue.deleteByIds).toHaveBeenCalledWith(['a']);
   });
 
   it('start() flushes on channel.reconnect', async () => {

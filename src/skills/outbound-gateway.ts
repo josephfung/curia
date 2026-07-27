@@ -1239,7 +1239,9 @@ export class OutboundGateway {
 
   /**
    * Flush pending queue rows for a channel after reconnect (#1380).
-   * All-or-nothing: if any dispatch fails, no rows are deleted.
+   * Delete + audit each successful send immediately — external dispatch cannot
+   * roll back, so an all-or-nothing DELETE after the loop would duplicate-deliver
+   * earlier rows on the next flush. Stop on first failure; later rows stay queued.
    */
   async flushChannel(channel: string): Promise<{ flushed: number; skipped: boolean }> {
     if (!this.outboundQueue) return { flushed: 0, skipped: true };
@@ -1256,36 +1258,57 @@ export class OutboundGateway {
       const pending = await this.outboundQueue.listPending(channel);
       if (pending.length === 0) return { flushed: 0, skipped: false };
 
-      const results: OutboundSendResult[] = [];
+      let flushed = 0;
       for (const row of pending) {
+        let result: OutboundSendResult;
         if (row.payload.channel === 'signal') {
-          results.push(await this.dispatchSignal(row.payload));
+          result = await this.dispatchSignal(row.payload);
         } else if (row.payload.channel === 'slack') {
-          results.push(await this.dispatchSlack(row.payload));
+          result = await this.dispatchSlack(row.payload);
         } else if (row.payload.channel === 'sms') {
-          results.push(await this.dispatchSms(row.payload));
+          result = await this.dispatchSms(row.payload);
         } else if (row.payload.channel === 'email') {
-          results.push(await this.dispatchEmail(row.payload));
+          result = await this.dispatchEmail(row.payload);
         } else {
-          results.push({ success: false, blockedReason: `Unknown channel in queue: ${row.channel}` });
+          result = { success: false, blockedReason: `Unknown channel in queue: ${row.channel}` };
         }
+
+        if (!result.success) {
+          this.log.warn(
+            { channel, queueId: row.id, blockedReason: result.blockedReason },
+            'outbound-gateway: flush stopped — remaining rows stay queued for next reconnect',
+          );
+          break;
+        }
+
+        // External send already happened — delete this row before the next dispatch.
+        await this.outboundQueue.deleteByIds([row.id]);
+
+        const content = row.payload.channel === 'email'
+          ? row.payload.body
+          : row.payload.message;
+        if (row.payload.channel === 'signal' && row.payload.recipient) {
+          await this.promoteOrCreateRecipientContact('signal', row.payload.recipient);
+        } else if (row.payload.channel === 'sms') {
+          await this.promoteOrCreateRecipientContact('sms', row.payload.recipient);
+        } else if (row.payload.channel === 'email') {
+          await this.promoteOrCreateRecipientContact('email', row.payload.to);
+        }
+
+        await this.publishDelivered({
+          channel: row.payload.channel,
+          recipientId: row.recipient,
+          content,
+          messageId: result.messageId,
+        });
+        flushed += 1;
       }
 
-      if (results.some((r) => !r.success)) {
-        this.log.warn(
-          {
-            channel,
-            pending: pending.length,
-            failed: results.filter((r) => !r.success).length,
-          },
-          'outbound-gateway: flush aborted — keeping all queued rows (all-or-nothing)',
-        );
-        return { flushed: 0, skipped: false };
-      }
-
-      await this.outboundQueue.deleteByIds(pending.map((r) => r.id));
-      this.log.info({ channel, flushed: pending.length }, 'outbound-gateway: queue flushed');
-      return { flushed: pending.length, skipped: false };
+      this.log.info(
+        { channel, flushed, pending: pending.length },
+        'outbound-gateway: queue flush complete',
+      );
+      return { flushed, skipped: false };
     } finally {
       this.flushInFlight.delete(channel);
     }
