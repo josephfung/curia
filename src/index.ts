@@ -1818,19 +1818,14 @@ async function main(): Promise<void> {
     // channels.voice.model. Need both a provider that exposes stream() and a
     // registry entry advertising streaming+tools (#1553) — OpenRouter's
     // stream() alone does not prove the resolved model can duplex or tool-call.
+    // Capability check runs BEFORE resolveProviderForModel so an unknown voice
+    // override warns and disables voice instead of process.exit(1) (#1553 review).
     const voiceModel = config.voiceModel ?? modelRouter.resolve('fast').model;
-    const voiceBaseProvider = resolveProviderForModel(voiceModel, 'VoiceRuntime');
     const voiceCaps = evaluateVoiceModelCapabilities(
       voiceModel,
       modelRegistry.getModel(voiceModel)?.capabilities,
     );
-    if (typeof voiceBaseProvider.stream !== 'function') {
-      logger.warn(
-        { voiceModel, provider: voiceBaseProvider.id },
-        'Voice channel enabled but the resolved LLM provider does not support stream(); '
-        + 'voice adapter not started. Remap channels.voice.model / the fast tier to a streaming provider.',
-      );
-    } else if (!voiceCaps.ok) {
+    if (!voiceCaps.ok) {
       logger.warn(
         {
           voiceModel,
@@ -1842,6 +1837,14 @@ async function main(): Promise<void> {
         + 'Remap channels.voice.model / the fast tier to a model with streaming and tools.',
       );
     } else {
+      const voiceBaseProvider = resolveProviderForModel(voiceModel, 'VoiceRuntime');
+      if (typeof voiceBaseProvider.stream !== 'function') {
+        logger.warn(
+          { voiceModel, provider: voiceBaseProvider.id },
+          'Voice channel enabled but the resolved LLM provider does not support stream(); '
+          + 'voice adapter not started. Remap channels.voice.model / the fast tier to a streaming provider.',
+        );
+      } else {
       // Wrap in telemetry so voice turns emit llm.call cost events like every other path.
       const voiceLlmProvider = new TelemetryLlmProvider(voiceBaseProvider, bus, logger, 'voice-turn', modelRegistry);
       const voiceLivekitUrl = config.voiceLivekitUrl;
@@ -1890,6 +1893,7 @@ async function main(): Promise<void> {
         voiceModel: config.voiceModel,
         voiceRuntime,
       });
+      }
     }
   } else if (channelShouldStart.has('voice')) {
     logger.warn('channel voice is enabled + resolvable but runtime credentials are missing (LiveKit, Deepgram, Cartesia, or the Cartesia voice ID); no Voice adapter constructed — check vault credentials and restart');
