@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **ADR-038** — voice brain parity via shared-hardening; text may use `stream()`. (#1595)
+- **ADR-038 (Proposed)** — voice brain shared-hardening spike + async off-ramp design. (#1595)
 - **`src/agents/prompts/`** — shared date-resolve guardrail composed by voice + coordinator. (#1595)
 - **`resolve-time-window`** — diagnostics agent resolves natural-language time windows for audit queries. (#1592)
 - **`nylas_calendar` health check** — probes the principal calendar grant separately from email. (#1561)
@@ -25,7 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **coordinator** — date-resolve rule sourced from shared prompt module (v0.18.1). (#1595)
+- **coordinator** — date-resolve owned by shared module; no prompt plumbing stub (v0.18.2). (#1595)
 - **Console mobile** — dashboard/chat fit phone viewports; voice Call control polished. (#1571)
 - **`resolve-learning-digest`** — accepts a unique task-id prefix for digest resolve. (#1545)
 - **`/api/health` mcp checks** — dynamic per enabled MCP server; 0 tools → degraded. (#1500)

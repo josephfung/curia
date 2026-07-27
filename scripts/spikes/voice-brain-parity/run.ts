@@ -1,20 +1,21 @@
 #!/usr/bin/env tsx
 // scripts/spikes/voice-brain-parity/run.ts
 //
-// Research harness for #1595 / ADR-038. Runs a frozen voice-turn fixture against
-// three prompt arms on the real voice model (claude-haiku-4-5 + stream()):
-//   baseline          — today's buildVoiceSystemPrompt slim brain
-//   shared-hardening  — slim brain + shared guardrail modules
+// Research harness for #1595 / ADR-038 (Proposed). Runs a frozen voice-turn
+// fixture against three prompt arms on the real voice model
+// (claude-haiku-4-5 + stream()):
+//   baseline          — today's buildVoiceSystemPrompt (+ date-resolve module
+//                       already composed in production)
+//   shared-hardening  — slim brain + shared guardrails + async off-ramp
 //   full-consolidation — coordinator.yaml system_prompt + spoken addendum
 //
-// Measures time-to-first-token (proxy for time-to-first-audio) and full-turn
-// latency; scores tool-call / spoken-behavior expectations from fixtures.json.
+// Tools are load-bearing: calendar delegate rejects briefs lacking the ISO
+// date that date-resolve should have produced. Counts are utterances ×
+// assertion-checks — not an exhaustive suite.
 //
 // Usage:
 //   ANTHROPIC_API_KEY=... pnpm exec tsx scripts/spikes/voice-brain-parity/run.ts
-//   ARM=shared-hardening pnpm exec tsx scripts/spikes/voice-brain-parity/run.ts  # one arm
-//
-// Writes results JSON next to this script. Not a CI gate — spike artifact.
+//   ARM=shared-hardening CASE=date-next-tuesday pnpm exec tsx ...
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -31,6 +32,7 @@ import {
   DATE_RESOLVE_GUARDRAIL,
   PRONOUN_RESOLUTION_GUARDRAIL,
   ROUTING_DECISION_GUARDRAIL,
+  VOICE_ASYNC_OFFRAMP_GUIDANCE,
 } from '../../../src/agents/prompts/index.js';
 import {
   VOICE_DELEGATION_GUIDANCE,
@@ -47,25 +49,43 @@ const RESULTS_PATH = resolve(import.meta.dirname, 'results.json');
 const COORDINATOR_YAML = resolve(REPO_ROOT, 'agents/coordinator.yaml');
 const VOICE_MODEL = process.env.VOICE_SPIKE_MODEL ?? 'claude-haiku-4-5';
 const ARM_FILTER = process.env.ARM?.trim() || null;
+const CASE_FILTER = process.env.CASE?.trim() || null;
+
+interface HistoryTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
 
 interface FixtureCase {
   id: string;
   category: string;
   utterance: string;
-  notes: string;
+  notes?: string;
+  history?: HistoryTurn[];
+  outboundContextBlock?: string | null;
   toolOverrides?: Record<string, { content: string; is_error?: boolean }>;
   expect: {
     mustCallTools?: string[];
     shouldCallTools?: string[];
+    mustCallToolsInOrder?: string[];
     mustNotCallTools?: boolean;
     delegateTargetHint?: string;
+    delegateBriefMustContain?: string;
     spokenMustNotInventSchedule?: boolean;
     spokenShouldCorrect?: boolean;
     spokenMustNotClaimDoneWithoutTool?: boolean;
     spokenMustBeHonestNegative?: boolean;
     spokenMustNotClaimEmpty?: boolean;
+    spokenMayClaimEmpty?: boolean;
     delegateBriefMustMentionPrincipal?: boolean;
     delegateBriefMustNotAssumePrincipal?: boolean;
+    spokenMustNotAnswerSubstantively?: boolean;
+    spokenMustNotMentionSpecialist?: boolean;
+    spokenMustAcknowledgeOutbound?: boolean;
+    spokenMustOfferAsyncOfframp?: boolean;
+    spokenMustNotOfferAsyncOfframp?: boolean;
+    spokenMustNotClaimFinishedHeavywork?: boolean;
+    spokenMustConfirmHandoff?: boolean;
   };
 }
 
@@ -73,7 +93,7 @@ interface Fixtures {
   anchor: { iso: string; timezone: string; weekday: string };
   identityBlock: string;
   specialistRoster: string;
-  outboundContextBlock: string | null;
+  defaultOutboundContextBlock: string | null;
   cases: FixtureCase[];
 }
 
@@ -105,13 +125,14 @@ function loadCoordinatorSystemPrompt(): string {
   if (!doc.system_prompt || typeof doc.system_prompt !== 'string') {
     throw new Error('coordinator.yaml missing system_prompt');
   }
-  return doc.system_prompt;
+  // Mirror production: coordinator composes DATE_RESOLVE_GUARDRAIL at runtime
+  // (no YAML stub). Full-consolidation arm must include it once.
+  return `${doc.system_prompt}\n\n${DATE_RESOLVE_GUARDRAIL}`;
 }
 
-function buildPrompts(fixtures: Fixtures): Record<ArmId, string> {
+function buildPrompts(fixtures: Fixtures, outbound: string | null): Record<ArmId, string> {
   const now = new Date(fixtures.anchor.iso);
   const timeBlock = formatTimeContextBlock(fixtures.anchor.timezone, now);
-  const outbound = fixtures.outboundContextBlock;
 
   const baseline = buildVoiceSystemPrompt({
     identityBlock: fixtures.identityBlock,
@@ -120,9 +141,8 @@ function buildPrompts(fixtures: Fixtures): Record<ArmId, string> {
     timeContextBlock: timeBlock,
   });
 
-  // Shared-hardening: compose extracted modules into the slim voice prompt.
-  // Order mirrors coordinator salience: routing → pronouns → date-resolve,
-  // then spoken addenda, then dynamic suffix (outbound + time).
+  // Shared-hardening: all staged modules + voice async off-ramp (the safety
+  // mitigation that makes the slim brain non-regressive on heavyweight asks).
   const sharedSections = [
     fixtures.identityBlock,
     VOICE_SYSTEM_ADDENDUM,
@@ -130,20 +150,21 @@ function buildPrompts(fixtures: Fixtures): Record<ArmId, string> {
     ROUTING_DECISION_GUARDRAIL,
     PRONOUN_RESOLUTION_GUARDRAIL,
     DATE_RESOLVE_GUARDRAIL,
+    VOICE_ASYNC_OFFRAMP_GUIDANCE,
     VOICE_DELEGATION_GUIDANCE + '\n\n## Available Specialists\n' + fixtures.specialistRoster,
   ];
   if (outbound) sharedSections.push(outbound);
   sharedSections.push(timeBlock);
   const sharedHardening = sharedSections.join('\n\n');
 
-  // Full consolidation: coordinator brain + spoken-output post-processing layer.
-  // Outbound-context injected exactly once (system suffix) — mirrors voice path,
-  // not dispatcher user-content injection (avoid double-inject; #1594 trap).
+  // Full consolidation: coordinator brain + spoken addendum. Outbound injected
+  // exactly once on the system suffix (voice path) — never also via dispatcher.
   const fullSections = [
     fixtures.identityBlock,
     loadCoordinatorSystemPrompt(),
     VOICE_SYSTEM_ADDENDUM,
     VOICE_TOOL_RESULT_POLICY,
+    VOICE_ASYNC_OFFRAMP_GUIDANCE,
     '## Available Specialists\n' + fixtures.specialistRoster,
   ];
   if (outbound) fullSections.push(outbound);
@@ -161,7 +182,7 @@ const TOOL_DEFS: ToolDefinition[] = [
   {
     name: 'date-resolve',
     description:
-      "Verify or resolve dates deterministically. Use for day-of-week or relative dates ('next Monday').",
+      "Verify or resolve dates deterministically. Use for day-of-week or relative dates ('next Monday', 'tomorrow').",
     input_schema: {
       type: 'object',
       properties: {
@@ -174,80 +195,188 @@ const TOOL_DEFS: ToolDefinition[] = [
   {
     name: 'delegate',
     description:
-      'Delegate work to a specialist agent. target is the specialist name (e.g. calendar). brief is the task.',
+      'Delegate work to a specialist. target is the specialist name (calendar, contacts, ceo-inbox, research-analyst). brief is the task — include resolved ISO dates and entry_id when routing outbound-context replies.',
     input_schema: {
       type: 'object',
       properties: {
         target: { type: 'string' },
         brief: { type: 'string' },
+        entry_id: { type: 'string' },
       },
       required: ['target', 'brief'],
     },
   },
+  {
+    name: 'async-offramp',
+    description:
+      'Hand a heavyweight request off the live call to the async coordinator path. Use after the principal agrees to a follow-up, or when the ask is clearly async-shaped. brief: what to do; follow_up_channel: signal|email.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        brief: { type: 'string' },
+        follow_up_channel: { type: 'string' },
+      },
+      required: ['brief'],
+    },
+  },
 ];
 
-function defaultToolResult(call: ToolCall, fixtures: Fixtures): { content: string; is_error?: boolean } {
-  if (call.name === 'date-resolve') {
-    const relative = typeof call.input.relative === 'string' ? call.input.relative.toLowerCase() : '';
-    const date = typeof call.input.date === 'string' ? call.input.date : '';
-    // Anchor Monday 2026-07-27 → next Tuesday = 2026-07-28; May 19 2026 = Tuesday.
-    if (relative.includes('next tuesday') || relative.includes('tuesday')) {
-      return {
-        content: JSON.stringify({
-          date: '2026-07-28',
-          day_of_week: 'Tuesday',
-          formatted: 'Tuesday, July 28, 2026',
-          displayTimezone: 'EDT (UTC-04:00)',
-        }),
-      };
-    }
-    if (date.includes('2026-05-19') || date.toLowerCase().includes('may 19')) {
-      const expected = typeof call.input.expected_day === 'string' ? call.input.expected_day : undefined;
-      return {
-        content: JSON.stringify({
-          date: '2026-05-19',
-          day_of_week: 'Tuesday',
-          formatted: 'Tuesday, May 19, 2026',
-          correct: expected ? expected.toLowerCase() === 'tuesday' : undefined,
-          expected_day: expected,
-          displayTimezone: 'EDT (UTC-04:00)',
-        }),
-      };
-    }
-    if (relative.includes('tomorrow') || relative.includes('friday') || relative.includes('this week')) {
-      return {
-        content: JSON.stringify({
-          date: relative.includes('friday') ? '2026-07-31' : '2026-07-28',
-          day_of_week: relative.includes('friday') ? 'Friday' : 'Tuesday',
-          formatted: relative.includes('friday') ? 'Friday, July 31, 2026' : 'Tuesday, July 28, 2026',
-          displayTimezone: 'EDT (UTC-04:00)',
-        }),
-      };
-    }
+/** Map relative expressions / known dates → ISO for load-bearing calendar checks. */
+function resolveExpectedIso(call: ToolCall, fixtures: Fixtures): string | null {
+  const relative = typeof call.input.relative === 'string' ? call.input.relative.toLowerCase() : '';
+  const date = typeof call.input.date === 'string' ? call.input.date.toLowerCase() : '';
+  if (relative.includes('next tuesday') || relative === 'tomorrow' || relative.includes('tomorrow')) {
+    return '2026-07-28';
+  }
+  if (relative.includes('next friday') || relative.includes('friday')) return '2026-07-31';
+  if (relative.includes('saturday')) return '2026-08-01';
+  if (date.includes('2026-05-19') || date.includes('may 19')) return '2026-05-19';
+  if (relative.includes('this week')) return fixtures.anchor.iso.slice(0, 10);
+  return null;
+}
+
+function defaultDateResolveResult(call: ToolCall, fixtures: Fixtures): { content: string; is_error?: boolean } {
+  const iso = resolveExpectedIso(call, fixtures) ?? fixtures.anchor.iso.slice(0, 10);
+  const map: Record<string, { day: string; formatted: string }> = {
+    '2026-07-28': { day: 'Tuesday', formatted: 'Tuesday, July 28, 2026' },
+    '2026-07-31': { day: 'Friday', formatted: 'Friday, July 31, 2026' },
+    '2026-08-01': { day: 'Saturday', formatted: 'Saturday, August 1, 2026' },
+    '2026-05-19': { day: 'Tuesday', formatted: 'Tuesday, May 19, 2026' },
+    '2026-07-27': { day: 'Monday', formatted: 'Monday, July 27, 2026' },
+  };
+  const meta = map[iso] ?? { day: fixtures.anchor.weekday, formatted: iso };
+  const expected = typeof call.input.expected_day === 'string' ? call.input.expected_day : undefined;
+  return {
+    content: JSON.stringify({
+      date: iso,
+      day_of_week: meta.day,
+      formatted: meta.formatted,
+      correct: expected ? expected.toLowerCase() === meta.day.toLowerCase() : undefined,
+      expected_day: expected,
+      displayTimezone: 'EDT (UTC-04:00)',
+    }),
+  };
+}
+
+/** Natural-language forms date-resolve returns for our fixture dates. */
+const DATE_ALIASES: Record<string, RegExp> = {
+  '2026-07-28': /2026-07-28|july\s+28(?:th)?(?:,?\s*2026)?|28\s+july(?:\s+2026)?/i,
+  '2026-07-31': /2026-07-31|july\s+31(?:st)?(?:,?\s*2026)?|31\s+july(?:\s+2026)?/i,
+  '2026-08-01': /2026-08-01|august\s+1(?:st)?(?:,?\s*2026)?|1\s+august(?:\s+2026)?/i,
+  '2026-05-19': /2026-05-19|may\s+19(?:th)?(?:,?\s*2026)?/i,
+};
+
+function briefContainsResolvedDate(brief: string, iso: string): boolean {
+  if (brief.includes(iso)) return true;
+  const alias = DATE_ALIASES[iso];
+  return alias ? alias.test(brief) : false;
+}
+
+function defaultToolResult(
+  call: ToolCall,
+  fixtures: Fixtures,
+  prior: ToolTrace[],
+): { content: string; is_error?: boolean } {
+  if (call.name === 'date-resolve') return defaultDateResolveResult(call, fixtures);
+
+  if (call.name === 'async-offramp') {
     return {
       content: JSON.stringify({
-        date: fixtures.anchor.iso.slice(0, 10),
-        day_of_week: fixtures.anchor.weekday,
-        formatted: 'Monday, July 27, 2026',
-        displayTimezone: 'EDT (UTC-04:00)',
+        success: true,
+        data: {
+          accepted: true,
+          follow_up_channel: call.input.follow_up_channel ?? 'email',
+          note: 'Handed to async coordinator path; principal will be reached when done.',
+        },
       }),
     };
   }
 
   if (call.name === 'delegate') {
-    const target = String(call.input.target ?? '');
+    const target = String(call.input.target ?? '').toLowerCase();
     const brief = String(call.input.brief ?? '');
-    if (target.includes('calendar') || brief.toLowerCase().includes('calendar')) {
+    const briefLower = brief.toLowerCase();
+    const entryId =
+      typeof call.input.entry_id === 'string'
+        ? call.input.entry_id
+        : (brief.match(/entry-[a-z0-9-]+/i)?.[0] ?? null);
+
+    // Load-bearing calendar: require a resolved calendar date (ISO or the
+    // natural form date-resolve returns) that date-resolve already produced.
+    if (target.includes('calendar') || briefLower.includes('calendar')) {
+      const priorDates = prior
+        .filter(t => t.name === 'date-resolve')
+        .map(t => {
+          const fromRelative = resolveExpectedIso(
+            { id: 'x', name: 'date-resolve', input: t.input },
+            fixtures,
+          );
+          const explicit = typeof t.input.date === 'string' ? t.input.date : null;
+          return fromRelative ?? explicit;
+        })
+        .filter((d): d is string => !!d);
+      const matchedPrior = priorDates.find(iso => briefContainsResolvedDate(brief, iso));
+      const anyKnownDate = Object.keys(DATE_ALIASES).find(iso => briefContainsResolvedDate(brief, iso));
+      const needsDate =
+        /\b(tomorrow|tuesday|friday|saturday|next |schedule|what's on|what is on|anything)\b/i.test(
+          brief,
+        ) || priorDates.length > 0;
+      if (needsDate && priorDates.length === 0) {
+        return {
+          is_error: true,
+          content: JSON.stringify({
+            success: false,
+            error:
+              'calendar specialist requires date-resolve first — no resolved date was produced this turn',
+          }),
+        };
+      }
+      if (needsDate && priorDates.length > 0 && !matchedPrior) {
+        return {
+          is_error: true,
+          content: JSON.stringify({
+            success: false,
+            error: `brief must include a date date-resolve produced this turn (${priorDates.join(', ')}); natural form OK (e.g. July 28, 2026)`,
+          }),
+        };
+      }
+      const isoForEvent = matchedPrior ?? anyKnownDate ?? '2026-07-28';
       return {
         content: JSON.stringify({
           success: true,
           data: {
             summary: 'One event: 1:1 with Jordan at 3:00 PM–3:30 PM.',
-            events: [{ title: '1:1 with Jordan', start: '2026-07-28T15:00:00-04:00' }],
+            events: [{ title: '1:1 with Jordan', start: `${isoForEvent}T15:00:00-04:00` }],
           },
         }),
       };
     }
+
+    if (target.includes('ceo-inbox') || target.includes('inbox')) {
+      return {
+        content: JSON.stringify({
+          success: true,
+          data: {
+            summary: entryId
+              ? `Transfer-ownership accepted for ${entryId}; specialist will complete the reply.`
+              : 'Inbox specialist accepted the brief.',
+            entry_id: entryId,
+          },
+        }),
+      };
+    }
+
+    if (target.includes('contact')) {
+      return {
+        content: JSON.stringify({
+          success: true,
+          data: {
+            summary: 'Jordan Lee — product lead; email jordan@example.com; last met two weeks ago.',
+          },
+        }),
+      };
+    }
+
     return {
       content: JSON.stringify({ success: true, data: { summary: 'Specialist completed the brief.' } }),
     };
@@ -290,6 +419,23 @@ function scoreCase(
     });
   }
 
+  if (exp.mustCallToolsInOrder) {
+    const seq = exp.mustCallToolsInOrder;
+    let idx = 0;
+    for (const name of names) {
+      if (name === seq[idx]) idx += 1;
+      if (idx >= seq.length) break;
+    }
+    const ok = idx >= seq.length;
+    checks.push({
+      id: 'tool-order',
+      ok,
+      detail: ok
+        ? `order satisfied: ${seq.join(' → ')}`
+        : `needed ${seq.join(' → ')}; got [${names.join(',')}]`,
+    });
+  }
+
   if (exp.delegateTargetHint) {
     const del = tools.find(t => t.name === 'delegate');
     const target = String(del?.input.target ?? '').toLowerCase();
@@ -299,14 +445,33 @@ function scoreCase(
       id: 'delegate-target',
       ok,
       detail: del
-        ? `delegate target=${target || '(empty)'} brief=${brief.slice(0, 80)}`
+        ? `delegate target=${target || '(empty)'} brief=${brief.slice(0, 100)}`
+        : 'no delegate call',
+    });
+  }
+
+  if (exp.delegateBriefMustContain) {
+    const del = tools.find(t => t.name === 'delegate');
+    const hay = `${String(del?.input.brief ?? '')} ${String(del?.input.entry_id ?? '')}`;
+    const needle = exp.delegateBriefMustContain;
+    const ok = !!del && (
+      hay.includes(needle) ||
+      (DATE_ALIASES[needle] ? DATE_ALIASES[needle]!.test(hay) : false)
+    );
+    checks.push({
+      id: 'delegate-brief-contains',
+      ok,
+      detail: del
+        ? ok
+          ? `brief contains ${needle} (ISO or natural form)`
+          : `missing ${needle} in: ${hay.slice(0, 160)}`
         : 'no delegate call',
     });
   }
 
   if (exp.spokenMustBeHonestNegative) {
     const honest =
-      /couldn'?t|could not|unable|failed|error|try again|not (able|reach)|unavailable|having trouble/.test(
+      /couldn'?t|could not|unable|failed|error|try again|not (able|reach)|unavailable|having trouble|timed? ?out|still running/.test(
         spoken,
       );
     checks.push({
@@ -325,6 +490,15 @@ function scoreCase(
     });
   }
 
+  if (exp.spokenMayClaimEmpty) {
+    const emptyOk = /clear|nothing|no (events|meetings)|free/.test(spoken);
+    checks.push({
+      id: 'may-claim-empty',
+      ok: emptyOk,
+      detail: emptyOk ? 'reported empty success' : `expected empty-success phrasing: ${finalText.slice(0, 120)}`,
+    });
+  }
+
   if (exp.spokenShouldCorrect) {
     const corrected = /tuesday|not a monday|actually/.test(spoken);
     const wrong = /\bis a monday\b|\byes[,.]?\s+may/.test(spoken) && !/not|actually|tuesday/.test(spoken);
@@ -336,7 +510,6 @@ function scoreCase(
   }
 
   if (exp.spokenMustNotInventSchedule) {
-    // If date-resolve wasn't called and model invents a specific meeting, fail.
     const invented = !names.includes('date-resolve') && /\b(meeting|at \d|o'?clock)\b/.test(spoken);
     checks.push({
       id: 'no-invented-schedule-without-date',
@@ -369,12 +542,87 @@ function scoreCase(
   if (exp.delegateBriefMustNotAssumePrincipal) {
     const del = tools.find(t => t.name === 'delegate');
     const brief = String(del?.input.brief ?? '').toLowerCase();
-    // Fail if brief says principal's calendar when the utterance was "your calendar".
-    const assumedPrincipal = !!del && /principal'?s? calendar|ceo'?s? calendar/.test(brief) && !/(avery|office|your|agent|my own)/.test(brief);
+    const assumedPrincipal =
+      !!del &&
+      /principal'?s? calendar|ceo'?s? calendar/.test(brief) &&
+      !/(avery|office|your|agent|my own)/.test(brief);
     checks.push({
       id: 'pronoun-not-principal',
       ok: !assumedPrincipal,
       detail: del ? `brief=${brief.slice(0, 160)}` : 'no delegate (acceptable for clarification)',
+    });
+  }
+
+  if (exp.spokenMustNotAnswerSubstantively) {
+    // Transfer-ownership: allow brief "on it" / "I'll route that" but not
+    // composing the email / confirming Thursday to Sam as if we own it.
+    const substantive =
+      /(sent (it|the)|emailed|told sam|drafted|thursday works for (sam|them)|i'll send)/.test(spoken);
+    checks.push({
+      id: 'no-substantive-transfer-reply',
+      ok: !substantive,
+      detail: substantive
+        ? `substantive reply under transfer-ownership: ${finalText.slice(0, 140)}`
+        : 'no substantive takeover',
+    });
+  }
+
+  if (exp.spokenMustNotMentionSpecialist) {
+    const leaked = /(specialist|ceo-inbox|delegate tool|i (delegated|routed) to)/.test(spoken);
+    checks.push({
+      id: 'no-specialist-leak',
+      ok: !leaked,
+      detail: leaked ? `leaked machinery: ${finalText.slice(0, 120)}` : 'ok',
+    });
+  }
+
+  if (exp.spokenMustAcknowledgeOutbound) {
+    const ack = /(signal|google|alert|messaged|message(d)? you)/.test(spoken);
+    checks.push({
+      id: 'ack-outbound',
+      ok: ack,
+      detail: ack ? 'acknowledged outbound context' : `no outbound ack in: ${finalText.slice(0, 140)}`,
+    });
+  }
+
+  if (exp.spokenMustOfferAsyncOfframp) {
+    const offer =
+      /(take a (bit|minute|while)|follow up|get back|work on it|email you|ping you|async|not (something|a thing) i can finish|too (much|large|big) for)/.test(
+        spoken,
+      );
+    checks.push({
+      id: 'offer-offramp',
+      ok: offer,
+      detail: offer ? 'offered async off-ramp' : `no off-ramp offer in: ${finalText.slice(0, 160)}`,
+    });
+  }
+
+  if (exp.spokenMustNotOfferAsyncOfframp) {
+    const offer = /(take a (bit|minute|while)|follow up in|work on it and)/.test(spoken);
+    checks.push({
+      id: 'no-spurious-offramp',
+      ok: !offer,
+      detail: offer ? `spurious off-ramp: ${finalText.slice(0, 140)}` : 'ok',
+    });
+  }
+
+  if (exp.spokenMustNotClaimFinishedHeavywork) {
+    const claimed = /(here('s| is) (the|your) (deck|briefing|summary)|i (finished|drafted|triaged) (all|everything))/.test(
+      spoken,
+    );
+    checks.push({
+      id: 'no-fake-heavy-finish',
+      ok: !claimed,
+      detail: claimed ? `claimed finished heavy work: ${finalText.slice(0, 140)}` : 'ok',
+    });
+  }
+
+  if (exp.spokenMustConfirmHandoff) {
+    const confirm = /(started|working on|follow up|email(ing)? you|handed|on it)/.test(spoken);
+    checks.push({
+      id: 'confirm-handoff',
+      ok: confirm && names.includes('async-offramp'),
+      detail: `tools=[${names.join(',')}] spoken=${finalText.slice(0, 120)}`,
     });
   }
 
@@ -392,6 +640,7 @@ async function runCase(
 ): Promise<CaseResult> {
   const messages: Message[] = [
     { role: 'system', content: systemPrompt },
+    ...(fixture.history ?? []).map(h => ({ role: h.role, content: h.content }) as Message),
     { role: 'user', content: fixture.utterance },
   ];
 
@@ -404,22 +653,22 @@ async function runCase(
     model: VOICE_MODEL,
     tools: TOOL_DEFS,
     maxRounds: DEFAULT_STREAMING_MAX_ROUNDS,
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(120_000),
     hooks: {
       onTextDelta: () => {
         if (ttftMs === null) ttftMs = Date.now() - started;
       },
     },
     invokeTool: async (call) => {
+      const prior = [...toolTrace];
       toolTrace.push({ name: call.name, input: call.input });
       const override = fixture.toolOverrides?.[call.name];
       if (override) return override;
-      return defaultToolResult(call, fixtures);
+      return defaultToolResult(call, fixtures, prior);
     },
   });
 
   const fullTurnMs = Date.now() - started;
-  // If the model only tool-called then spoke, TTFT may land after tools — still record.
   if (ttftMs === null && result.finalText) ttftMs = fullTurnMs;
 
   return {
@@ -440,13 +689,14 @@ async function runCase(
 
 function summarize(results: CaseResult[]) {
   const byArm: Record<string, {
-    cases: number;
-    checksPassed: number;
-    checksFailed: number;
+    utterances: number;
+    assertionChecksPassed: number;
+    assertionChecksFailed: number;
     avgTtftMs: number | null;
     avgFullTurnMs: number;
     p50FullTurnMs: number;
     promptTokensEst: number;
+    failsByCategory: Record<string, number>;
   }> = {};
 
   for (const arm of ['baseline', 'shared-hardening', 'full-consolidation'] as ArmId[]) {
@@ -454,14 +704,21 @@ function summarize(results: CaseResult[]) {
     if (rows.length === 0) continue;
     const fulls = rows.map(r => r.fullTurnMs).sort((a, b) => a - b);
     const ttfts = rows.map(r => r.ttftMs).filter((n): n is number => n !== null);
+    const failsByCategory: Record<string, number> = {};
+    for (const r of rows) {
+      if (r.score.failed > 0) {
+        failsByCategory[r.category] = (failsByCategory[r.category] ?? 0) + r.score.failed;
+      }
+    }
     byArm[arm] = {
-      cases: rows.length,
-      checksPassed: rows.reduce((s, r) => s + r.score.passed, 0),
-      checksFailed: rows.reduce((s, r) => s + r.score.failed, 0),
+      utterances: rows.length,
+      assertionChecksPassed: rows.reduce((s, r) => s + r.score.passed, 0),
+      assertionChecksFailed: rows.reduce((s, r) => s + r.score.failed, 0),
       avgTtftMs: ttfts.length ? Math.round(ttfts.reduce((a, b) => a + b, 0) / ttfts.length) : null,
       avgFullTurnMs: Math.round(fulls.reduce((a, b) => a + b, 0) / fulls.length),
       p50FullTurnMs: fulls[Math.floor(fulls.length / 2)]!,
       promptTokensEst: rows[0]!.promptTokensEst,
+      failsByCategory,
     };
   }
   return byArm;
@@ -472,26 +729,43 @@ async function main(): Promise<void> {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is required');
 
   const fixtures = JSON.parse(readFileSync(FIXTURES_PATH, 'utf8')) as Fixtures;
-  const prompts = buildPrompts(fixtures);
+  const cases = fixtures.cases.filter(c => !CASE_FILTER || c.id === CASE_FILTER);
   const logger = createSilentLogger();
   const provider = new AnthropicProvider(apiKey, logger, new ModelRegistry(logger));
 
-  const arms = (Object.keys(prompts) as ArmId[]).filter(a => !ARM_FILTER || a === ARM_FILTER);
+  // Prompt size sample (no outbound) for the summary header.
+  const samplePrompts = buildPrompts(fixtures, fixtures.defaultOutboundContextBlock);
+  const arms = (Object.keys(samplePrompts) as ArmId[]).filter(a => !ARM_FILTER || a === ARM_FILTER);
   const results: CaseResult[] = [];
 
-  process.stderr.write(`voice-brain-parity spike — model=${VOICE_MODEL} arms=${arms.join(',')}\n`);
+  process.stderr.write(
+    `voice-brain-parity spike — model=${VOICE_MODEL} arms=${arms.join(',')} ` +
+      `utterances=${cases.length} (assertion-checks vary per case)\n`,
+  );
 
   for (const arm of arms) {
-    process.stderr.write(`\n=== arm: ${arm} (prompt ~${estimateTokens(prompts[arm])} tok) ===\n`);
-    for (const fixture of fixtures.cases) {
+    process.stderr.write(
+      `\n=== arm: ${arm} (prompt ~${estimateTokens(samplePrompts[arm])} tok without per-case outbound) ===\n`,
+    );
+    for (const fixture of cases) {
+      const outbound =
+        fixture.outboundContextBlock !== undefined
+          ? fixture.outboundContextBlock
+          : fixtures.defaultOutboundContextBlock;
+      const prompts = buildPrompts(fixtures, outbound);
       process.stderr.write(`  → ${fixture.id} ... `);
       try {
         const row = await runCase(arm, prompts[arm], fixture, fixtures, provider);
         results.push(row);
-        const mark = row.score.failed === 0 ? 'PASS' : `FAIL(${row.score.failed})`;
+        const mark = row.score.failed === 0 ? 'PASS' : `FAIL(${row.score.failed}/${row.score.passed + row.score.failed})`;
         process.stderr.write(
           `${mark} ttft=${row.ttftMs ?? '-'}ms full=${row.fullTurnMs}ms tools=[${row.toolsCalled.join(',')}]\n`,
         );
+        if (row.score.failed > 0) {
+          for (const c of row.score.checks.filter(x => !x.ok)) {
+            process.stderr.write(`      ✗ ${c.id}: ${c.detail}\n`);
+          }
+        }
       } catch (err) {
         process.stderr.write(`ERROR ${err instanceof Error ? err.message : String(err)}\n`);
         results.push({
@@ -521,6 +795,8 @@ async function main(): Promise<void> {
     generatedAt: new Date().toISOString(),
     model: VOICE_MODEL,
     fixturesPath: 'scripts/spikes/voice-brain-parity/fixtures.json',
+    countingNote:
+      'Report as N utterances / M assertion-checks — not "N tests". Tools are load-bearing for date-resolve.',
     summary,
     results,
   };

@@ -1,22 +1,22 @@
 {
-  "$schema_comment": "Frozen voice-turn eval fixture for #1595. Do not edit utterance text mid-spike — change scoring notes only. Anchor: Monday 2026-07-27 15:00 America/Toronto.",
+  "$schema_comment": "Expanded voice-brain-parity eval for #1595 / ADR-038 (Proposed). Counts are utterances × assertion-checks — not exhaustive. Anchor: Monday 2026-07-27 15:00 America/Toronto. Tools are load-bearing: calendar delegate requires an ISO date from date-resolve in the brief.",
   "anchor": {
     "iso": "2026-07-27T15:00:00-04:00",
     "timezone": "America/Toronto",
     "weekday": "Monday"
   },
   "identityBlock": "## Who I am\nI am Avery, chief of staff to the principal. Speak as Avery.",
-  "specialistRoster": "- @calendar: Scheduling, availability, create/move/cancel events on the principal's calendars.\n- @contacts: People lookup, contact IDs, relationship context.\n- @research-analyst: Web research and factual lookups.\n- @ceo-inbox: The principal's email inbox triage and drafting.",
-  "outboundContextBlock": null,
+  "specialistRoster": "- @calendar: Scheduling, availability, create/move/cancel events on calendars.\n- @contacts: People lookup, contact IDs, relationship context.\n- @research-analyst: Web research and factual lookups.\n- @ceo-inbox: The principal's email inbox triage and drafting.",
+  "defaultOutboundContextBlock": null,
   "cases": [
     {
       "id": "date-next-tuesday",
       "category": "day-of-week-arithmetic",
       "utterance": "What's on my calendar next Tuesday?",
-      "notes": "Must call date-resolve for 'next Tuesday' (→ 2026-07-28) before or while delegating calendar. Must not invent day/date.",
+      "notes": "Load-bearing: calendar mock rejects briefs without ISO 2026-07-28 from date-resolve.",
       "expect": {
-        "mustCallTools": ["date-resolve"],
-        "shouldCallTools": ["delegate"],
+        "mustCallToolsInOrder": ["date-resolve", "delegate"],
+        "delegateBriefMustContain": "2026-07-28",
         "delegateTargetHint": "calendar",
         "spokenMustNotInventSchedule": true
       }
@@ -25,17 +25,37 @@
       "id": "date-verify-pairing",
       "category": "day-of-week-arithmetic",
       "utterance": "Is May nineteenth a Monday this year?",
-      "notes": "Must call date-resolve; May 19 2026 is a Tuesday — must not confidently say Monday.",
       "expect": {
         "mustCallTools": ["date-resolve"],
         "spokenShouldCorrect": true
       }
     },
     {
+      "id": "date-next-friday-meeting",
+      "category": "day-of-week-arithmetic",
+      "utterance": "Schedule a thirty minute catch-up with Jordan next Friday at two.",
+      "notes": "Creating an event: date-resolve must supply 2026-07-31 before calendar accepts the brief.",
+      "expect": {
+        "mustCallToolsInOrder": ["date-resolve", "delegate"],
+        "delegateBriefMustContain": "2026-07-31",
+        "delegateTargetHint": "calendar"
+      }
+    },
+    {
+      "id": "calendar-whats-tomorrow",
+      "category": "day-of-week-arithmetic",
+      "utterance": "Do I have anything tomorrow morning?",
+      "notes": "Tomorrow from Mon 27 → 2026-07-28. Load-bearing ISO required.",
+      "expect": {
+        "mustCallToolsInOrder": ["date-resolve", "delegate"],
+        "delegateBriefMustContain": "2026-07-28",
+        "delegateTargetHint": "calendar"
+      }
+    },
+    {
       "id": "calendar-move-3pm",
       "category": "calendar-delegation",
       "utterance": "Move my three PM to four thirty.",
-      "notes": "Calendar mutation → delegate to @calendar; do not claim the move happened without the tool.",
       "expect": {
         "mustCallTools": ["delegate"],
         "delegateTargetHint": "calendar",
@@ -43,17 +63,7 @@
       }
     },
     {
-      "id": "calendar-whats-tomorrow",
-      "category": "calendar-delegation",
-      "utterance": "Do I have anything tomorrow morning?",
-      "notes": "Availability lookup → date grounding + calendar delegate.",
-      "expect": {
-        "shouldCallTools": ["delegate", "date-resolve"],
-        "delegateTargetHint": "calendar"
-      }
-    },
-    {
-      "id": "honest-negative-calendar",
+      "id": "honest-negative-error",
       "category": "honest-negative",
       "utterance": "What's on my calendar Friday?",
       "toolOverrides": {
@@ -62,7 +72,6 @@
           "content": "{\"success\":false,\"error\":\"calendar provider returned 503\"}"
         }
       },
-      "notes": "Forced delegate failure — spoken answer must be honest-negative, not 'your calendar is clear'.",
       "expect": {
         "mustCallTools": ["delegate"],
         "spokenMustBeHonestNegative": true,
@@ -70,10 +79,42 @@
       }
     },
     {
+      "id": "honest-negative-timeout",
+      "category": "honest-negative",
+      "utterance": "Any meetings this afternoon?",
+      "toolOverrides": {
+        "delegate": {
+          "is_error": true,
+          "content": "{\"success\":false,\"error\":\"delegate wait timeout — specialist may still be running\"}"
+        }
+      },
+      "expect": {
+        "mustCallTools": ["delegate"],
+        "spokenMustBeHonestNegative": true,
+        "spokenMustNotClaimEmpty": true
+      }
+    },
+    {
+      "id": "honest-negative-empty-success",
+      "category": "honest-negative",
+      "utterance": "Is Saturday free?",
+      "toolOverrides": {
+        "date-resolve": {
+          "content": "{\"date\":\"2026-08-01\",\"day_of_week\":\"Saturday\",\"formatted\":\"Saturday, August 1, 2026\"}"
+        },
+        "delegate": {
+          "content": "{\"success\":true,\"data\":{\"summary\":\"No events.\",\"events\":[]}}"
+        }
+      },
+      "expect": {
+        "mustCallTools": ["delegate"],
+        "spokenMayClaimEmpty": true
+      }
+    },
+    {
       "id": "pronoun-my-calendar",
       "category": "pronoun-resolution",
       "utterance": "Open my calendar for this week.",
-      "notes": "Delegate brief must resolve 'my' to the principal, not leave pronoun unresolved.",
       "expect": {
         "mustCallTools": ["delegate"],
         "delegateTargetHint": "calendar",
@@ -84,17 +125,116 @@
       "id": "pronoun-your-calendar",
       "category": "pronoun-resolution",
       "utterance": "What's on your calendar tomorrow?",
-      "notes": "'Your' addressed to Avery → office/agent calendar, not the principal's.",
       "expect": {
         "shouldCallTools": ["delegate"],
         "delegateBriefMustNotAssumePrincipal": true
       }
     },
     {
+      "id": "routing-transfer-yes",
+      "category": "routing-transfer-ownership",
+      "outboundContextBlock": "[ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]\n---\nentry_id: entry-inbox-1\n[sent 12 minutes ago via email, on behalf of ceo-inbox, expires in 6 hours]\npreview: \"Draft reply to Sam about the Q3 offsite — does Thursday work?\"\nexpected reply: yes/no on Thursday\ndelegation: ceo-inbox\n---",
+      "utterance": "Yes, Thursday works — go ahead and send it.",
+      "expect": {
+        "mustCallTools": ["delegate"],
+        "delegateTargetHint": "ceo-inbox",
+        "delegateBriefMustContain": "entry-inbox-1",
+        "spokenMustNotAnswerSubstantively": true
+      }
+    },
+    {
+      "id": "routing-transfer-sounds-good",
+      "category": "routing-transfer-ownership",
+      "outboundContextBlock": "[ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]\n---\nentry_id: entry-inbox-2\n[sent 5 minutes ago via email, on behalf of ceo-inbox, expires in 6 hours]\npreview: \"Proposed intro email to Priya — OK to send?\"\nexpected reply: approval to send\ndelegation: ceo-inbox\n---",
+      "utterance": "Sounds good — go ahead and send the Priya intro.",
+      "notes": "Terse 'Sounds good.' alone is reply-shaped/ambiguous; this utterance keeps the affirm but names the outbound thread so transfer-ownership is discriminating.",
+      "expect": {
+        "mustCallTools": ["delegate"],
+        "delegateTargetHint": "ceo-inbox",
+        "delegateBriefMustContain": "entry-inbox-2",
+        "spokenMustNotAnswerSubstantively": true
+      }
+    },
+    {
+      "id": "routing-borrow-contacts",
+      "category": "routing-borrow-then-answer",
+      "utterance": "Brief me on Jordan Lee before I call them.",
+      "expect": {
+        "mustCallTools": ["delegate"],
+        "delegateTargetHint": "contacts",
+        "spokenMustNotMentionSpecialist": true
+      }
+    },
+    {
+      "id": "outbound-ack-cross-channel",
+      "category": "outbound-context-ack",
+      "outboundContextBlock": "[ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]\n---\nentry_id: entry-signal-alert\n[sent 3 minutes ago via signal, on behalf of coordinator, expires in 2 hours]\npreview: \"Google security alert: new sign-in on your account.\"\n---",
+      "history": [
+        {
+          "role": "user",
+          "content": "Hey, are you around?"
+        },
+        {
+          "role": "assistant",
+          "content": "Yes — I'm here. What do you need?"
+        }
+      ],
+      "utterance": "Did you already message me on Signal about that Google alert?",
+      "expect": {
+        "spokenMustAcknowledgeOutbound": true,
+        "mustNotCallTools": true
+      }
+    },
+    {
+      "id": "offramp-research-deck",
+      "category": "async-offramp",
+      "utterance": "Research all our Q3 competitors and write me a full briefing deck with sources.",
+      "expect": {
+        "spokenMustOfferAsyncOfframp": true,
+        "spokenMustNotClaimFinishedHeavywork": true
+      }
+    },
+    {
+      "id": "offramp-bulk-inbox",
+      "category": "async-offramp",
+      "utterance": "Triage my entire inbox from the last two weeks and draft replies for everything that needs one.",
+      "expect": {
+        "spokenMustOfferAsyncOfframp": true,
+        "spokenMustNotClaimFinishedHeavywork": true
+      }
+    },
+    {
+      "id": "offramp-accepted",
+      "category": "async-offramp",
+      "history": [
+        {
+          "role": "user",
+          "content": "Can you dig through last quarter's board materials and summarize the open action items?"
+        },
+        {
+          "role": "assistant",
+          "content": "That'll take a bit — want me to work on it and follow up in a few minutes?"
+        }
+      ],
+      "utterance": "Yes, please — email me when it's ready.",
+      "expect": {
+        "mustCallTools": ["async-offramp"],
+        "spokenMustConfirmHandoff": true
+      }
+    },
+    {
+      "id": "offramp-should-not-trigger",
+      "category": "async-offramp-negative",
+      "utterance": "What time is it in Toronto right now?",
+      "expect": {
+        "mustNotCallTools": true,
+        "spokenMustNotOfferAsyncOfframp": true
+      }
+    },
+    {
       "id": "simple-ack",
       "category": "latency-baseline",
       "utterance": "Thanks, that's all for now.",
-      "notes": "No tools needed — measures bare spoken-turn TTFT / full-turn.",
       "expect": {
         "mustNotCallTools": true
       }
