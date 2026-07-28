@@ -27,7 +27,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Voice** — composes `VOICE_ASYNC_OFFRAMP_GUIDANCE` now that real handoff exists. (#1614)
-- **coordinator** — pins `async-offramp`; version 0.19.0. (#1614)
 - **coordinator** — date-resolve owned by shared module; no prompt plumbing stub (v0.18.2). (#1595)
 - **Console mobile** — dashboard/chat fit phone viewports; voice Call control polished. (#1571)
 - **`resolve-learning-digest`** — accepts a unique task-id prefix for digest resolve. (#1545)

@@ -1441,7 +1441,10 @@ export class ExecutionLayer {
           if (!skillRegistry) {
             // Fallback: tools-only (pre-Phase-3a behaviour) when skillRegistry unset.
             return this.registry.search(query)
-              .filter(s => s.manifest.name !== 'tool-registry' && s.manifest.name !== 'skill-activate')
+              .filter(s =>
+                s.manifest.name !== 'tool-registry'
+                && s.manifest.name !== 'skill-activate'
+                && s.manifest.name !== 'async-offramp')
               .filter(s => {
                 const allowed = s.manifest.allowed_callers;
                 if (!allowed || allowed.length === 0) return true;

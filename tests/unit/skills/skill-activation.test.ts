@@ -120,9 +120,10 @@ describe('unifiedToolSearch', () => {
     expect(hits.some((h) => h.name === 'secret-admin')).toBe(false);
   });
 
-  it('excludes tool-registry and skill-activate from results', () => {
+  it('excludes tool-registry, skill-activate, and async-offramp from results', () => {
     const { tools, skills } = setup();
     tools.register(toolManifest('skill-activate', { description: 'Activate a skill' }), noopHandler);
+    tools.register(toolManifest('async-offramp', { description: 'Voice async off-ramp' }), noopHandler);
     const hits = unifiedToolSearch({
       query: '',
       toolRegistry: tools,
@@ -131,6 +132,7 @@ describe('unifiedToolSearch', () => {
     });
     expect(hits.map((h) => h.name)).not.toContain('tool-registry');
     expect(hits.map((h) => h.name)).not.toContain('skill-activate');
+    expect(hits.map((h) => h.name)).not.toContain('async-offramp');
   });
 });
 

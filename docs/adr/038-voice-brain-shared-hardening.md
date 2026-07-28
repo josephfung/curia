@@ -100,7 +100,7 @@ on its own measured benefit — do **not** ship the bundle:
 |---|---|---|
 | **Routing** (`ROUTING_DECISION_GUARDRAIL`) | transfer-ownership Δ +0.075 (3/5 +, 2/5 0) — **not** a ≥4/5 paired win | **Hold** — no clean win, and the bundle it rides in regresses honest-negative (#1613) |
 | **Pronoun** (`PRONOUN_RESOLUTION_GUARDRAIL`) | Δ identically **0**; `pronoun-your` 0/5 — yet full-consolidation solves it 5/5, so the case is solvable, the module just doesn't | **Hold** — pure token cost today (#1613) |
-| **Off-ramp** (`VOICE_ASYNC_OFFRAMP_GUIDANCE`) | the one category paired win (Δ +0.267, 5/5 +) — tool was mocked at measurement; real tool now lands in #1614 | **Compose** with real handoff (#1614) |
+| **Off-ramp** (`VOICE_ASYNC_OFFRAMP_GUIDANCE`) | historical paired win (Δ +0.267, 5/5 +) measured while tool was mocked and baseline lacked the module | **Compose** with real handoff (#1614). Production baseline now includes it — fresh paired runs no longer isolate an off-ramp delta; archive the pre-compose evidence |
 | **Date-resolve** (already in prod) | wash / distraction risk (`date-next-friday` ↑, `date-next-tuesday` ↓ 5/5→4/5) | Keep; close handoff via **#1612**, not more prompt text |
 | **Bundle cost** | stacking the modules **regressed** honest-negative (−0.05; shared 2 fails vs baseline 0) | Real cost of composing more instruction — weigh per module, not as a bundle |
 
@@ -186,7 +186,10 @@ When a request exceeds live-call scope, voice should:
    not handed off (tool returns `success: false` on enqueue failure).
 
 Prompt module: `src/agents/prompts/voice-async-offramp.ts` (voice-only).
-Tool: `skills/async-offramp/` (pinned on coordinator; voice inherits).
+Tool: `skills/async-offramp/` — injected by the voice tool bridge
+(`src/index.ts`), **not** pinned on the coordinator (the async destination
+must not advertise a recursive off-ramp). Excluded from text-turn discovery;
+handler rejects non-voice `channelId`.
 Eval scores against the **real** handler (spike `invokeTool`), not a mock.
 
 ### Tentative resolution of #1563's blocking question
@@ -203,7 +206,7 @@ Issue #1563 stays blocked on this decision.
 | `DATE_RESOLVE_GUARDRAIL` | yes | **yes** (both; YAML has no pointer stub) |
 | `ROUTING_DECISION_GUARDRAIL` | yes | **hold** (#1613) — no clean paired win; +0.075 transfer only |
 | `PRONOUN_RESOLUTION_GUARDRAIL` | yes | **hold** — zero paired benefit until `pronoun-your` moves (#1613) |
-| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | yes / real tool | **yes** (voice compose + tool — #1614; Accept gate #3 cleared) |
+| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | yes / real tool | **yes** (voice compose + voice-bridge tool — #1614; Accept gate #3 cleared). Not a coordinator pin — injected by the voice tool bridge only |
 
 ### Prompt-shape rule
 
