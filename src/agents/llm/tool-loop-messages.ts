@@ -1,11 +1,12 @@
 // tool-loop-messages.ts — shared ContentBlock assembly for tool_use / tool_result turns.
 //
-// Used by the shared streaming turn primitive (streaming-turn.ts) and by
-// AgentRuntime.handleTask (non-streaming chat path). Both must emit
-// Anthropic-compatible assistant+user message pairs when a model requests tools.
+// Used by the shared streaming turn primitive (streaming-turn.ts). Both voice
+// (VoiceTurnRunner) and text (AgentRuntime.handleTask via chat-compatible
+// openStream) assemble Anthropic-compatible assistant+user message pairs here
+// when a model requests tools.
 //
 // See also: src/agents/llm/streaming-turn.ts, src/channels/voice/turn-runner.ts,
-// src/agents/runtime.ts (~tool_use loop). Issue #1552.
+// src/agents/runtime.ts. Issues #1552 / #1563.
 
 import type {
   ContentBlock,

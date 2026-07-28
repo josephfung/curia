@@ -1,5 +1,9 @@
-import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, ContentBlock } from './llm/provider.js';
-import { buildAssistantToolUseMessage, buildToolResultBlock } from './llm/tool-loop-messages.js';
+import type { LLMProvider, LLMResponse, LLMUsage, Message, ToolDefinition, LLMCallProvenance } from './llm/provider.js';
+import {
+  llmResponseAsStream,
+  runStreamingToolLoop,
+  type StreamingTurnOpenStreamParams,
+} from './llm/streaming-turn.js';
 import type { EventBus } from '../bus/bus.js';
 import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
 import type { Tier } from './llm/model-router.js';
@@ -1004,7 +1008,7 @@ export class AgentRuntime {
     messages.push(...budgetedHistory);
     messages.push({ role: 'user', content: promptContent });
 
-    const maybeAppendCheckpointBudgetNudge = (): void => {
+    const maybeAppendCheckpointBudgetNudge = (target: Message[] = messages): void => {
       if (!resumableActive || checkpointBudgetNudgeSent) return;
       if (!shouldSendCheckpointBudgetNudge(
         budget.turnsUsed,
@@ -1018,7 +1022,7 @@ export class AgentRuntime {
       const throughputMetrics = resumableNudgeCtx
         ? computeResumableThroughput(resumableNudgeCtx.resumable, resumableNudgeCtx.circuit)
         : null;
-      messages.push({
+      target.push({
         role: 'user',
         content: buildCheckpointBudgetNudgeMessage(remaining, budget.maxTurns, throughputMetrics),
       });
@@ -1058,19 +1062,6 @@ export class AgentRuntime {
     } catch (err) {
       logger.error({ err, agentId }, 'Failed to publish context.budget event — budget tracking gap');
     }
-
-    // Tool-use loop: call LLM, handle tool calls, feed results back, repeat.
-    // The Anthropic API requires the full conversation context including the
-    // assistant's tool_use content blocks and the user's tool_result blocks.
-    // We build these as structured ContentBlock[] in the messages array so
-    // the provider can pass them through to the API correctly.
-    //
-    // Budget-driven loop: each LLM round-trip consumes one turn from the budget.
-    // The loop exits when: the LLM returns text, the budget is exhausted, or
-    // consecutive errors exceed the threshold.
-    maybeAppendCheckpointBudgetNudge();
-    let response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent, budgetHandoff);
-    if (!response) return; // chatWithRetry already published error events
 
     // Extract caller context once — it doesn't change between tool-use rounds.
     // Primary source: senderContext from the inbound message (set by the dispatcher).
@@ -1112,398 +1103,594 @@ export class AgentRuntime {
     const turnDateResolveTracker = new TurnDateResolveTracker();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
 
-    // TWO TOOL LOOPS (#1552 / #1563): this non-streaming chat() loop is still
-    // the text-channel path. Voice uses streaming-turn.ts via a thin
-    // VoiceTurnRunner wrapper — they share tool-loop-messages.ts shapes, but
-    // handleTask does NOT yet delegate here. Opting text into the streaming
-    // primitive requires an explicit "text goes streaming" decision (#1563):
-    // this loop also owns retry/fallback, error budgets, DelegationGuard,
-    // clarification, tool bus events, and delegate timeout injection.
-    // Round caps stay parameterized (errorBudget.maxTurns vs voice's
-    // DEFAULT_STREAMING_MAX_ROUNDS=8). Autonomy/Gate-C: both call
-    // executionLayer.invoke. Assistant text is not sanitizeOutput'd on either
-    // path (skill results are, inside invoke).
-    while (response.type === 'tool_use' && executionLayer) {
-      // Check turn budget before processing this round of tool calls
-      budget.turnsUsed++;
+    // Tool-use loop: call LLM, handle tool calls, feed results back, repeat.
+    // The Anthropic API requires the full conversation context including the
+    // assistant's tool_use content blocks and the user's tool_result blocks.
+    // We build these as structured ContentBlock[] in the messages array so
+    // the provider can pass them through to the API correctly.
+    //
+    // Budget-driven loop: each LLM round-trip consumes one turn from the budget.
+    // The loop exits when: the LLM returns text, the budget is exhausted, or
+    // consecutive errors exceed the threshold.
+    //
+    // TWO TOOL LOOPS (#1552 / #1563): text delegates to runStreamingToolLoop via a
+    // chat-compatible openStream adapter over chatWithRetry (ADR-038) so retry /
+    // fallback / telemetry stay intact while sharing round cap, invoke sequencing,
+    // and message assembly with voice. Voice still opens provider.stream() directly
+    // — do not fold voice into handleTask. Round caps stay parameterized
+    // (errorBudget.maxTurns vs voice's DEFAULT_STREAMING_MAX_ROUNDS=8). Autonomy /
+    // Gate-C: both call executionLayer.invoke. Assistant text is not
+    // sanitizeOutput'd on either path (skill results are, inside invoke).
+
+    const zeroUsage: LLMUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+    };
+    const streamModel = this.config.resolvedModel ?? this.config.modelName ?? 'unknown';
+    const fallbackProvenance: LLMCallProvenance = {
+      requestedModel: streamModel,
+      actualModel: streamModel,
+      providerRequestId: 'n/a',
+    };
+
+    let response: LLMResponse;
+
+    if (!executionLayer) {
+      // No execution layer: single chatWithRetry shot, then fall through to
+      // final-response handling (tool_use-without-EL / text / error).
       maybeAppendCheckpointBudgetNudge();
-      if (budget.turnsUsed >= budget.maxTurns) {
-        await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', budgetHandoff);
-        return;
-      }
-
-      logger.info(
-        { agentId, turn: budget.turnsUsed, toolCalls: response.toolCalls.map(tc => tc.name) },
-        'LLM requested tool calls',
+      const noElResponse = await this.chatWithRetry(
+        provider,
+        { messages, tools: workingToolDefs },
+        budget,
+        taskEvent,
+        budgetHandoff,
       );
+      if (!noElResponse) return; // chatWithRetry already published error events
+      response = noElResponse;
+    } else {
+      let earlyExitHandled = false;
+      let llmFailureHandled = false;
+      let lastLlmUsage: LLMUsage | undefined;
+      let lastLlmProvenance: LLMCallProvenance | undefined;
 
-      // Build the assistant turn with the actual tool_use content blocks.
-      // The Anthropic API requires these to exist so tool_result blocks can
-      // reference their IDs in the next user turn. Shape shared with the
-      // streaming turn primitive via tool-loop-messages.ts (#1552).
-      messages.push(buildAssistantToolUseMessage(response.toolCalls, response.content));
-
-      // Execute each tool call through the execution layer.
-      // Publish tool.invoke and tool.result bus events for audit coverage.
-      const toolResultBlocks: ContentBlock[] = [];
-      for (const toolCall of response.toolCalls) {
-        logger.info({ agentId, skill: toolCall.name, callId: toolCall.id }, 'Invoking skill');
-        skillsCalled.push(toolCall.name);
-
-        // For delegate calls: inject timeout_ms so the specialist gets an appropriate wait
-        // window. Two sources, checked in priority order:
-        //   1. Scheduled task: the task event's expectedDurationSeconds (from the scheduler)
-        //   2. Target agent config: the target agent's expected_duration_seconds (from YAML)
-        // The LLM's explicit timeout_ms always wins if provided.
-        // This is transparent to the LLM — it doesn't need to know about scheduling internals.
-        let skillInput = toolCall.input;
-        if (toolCall.name === 'delegate') {
-          // Guard: only proceed if the input is a plain non-null object. The `in` operator
-          // throws a TypeError on null or primitives, and an array input is malformed anyway.
-          if (typeof skillInput !== 'object' || skillInput === null || Array.isArray(skillInput)) {
-            logger.warn(
-              { agentId, taskEventId: taskEvent.id, inputType: Array.isArray(skillInput) ? 'array' : typeof skillInput },
-              'delegate call has non-object input — skipping timeout injection; delegate will use default timeout',
-            );
-          } else {
-            const inputRecord = skillInput as Record<string, unknown>;
-
-            // Normalize agent name: LLMs sometimes produce "@agent-name" (bullpen @-mention
-            // style). Strip the leading '@' so the registry lookup and downstream handler
-            // see the canonical registered name.
-            if (typeof inputRecord['agent'] === 'string' && (inputRecord['agent'] as string).startsWith('@')) {
-              const rawName = inputRecord['agent'] as string;
-              inputRecord['agent'] = rawName.slice(1);
-              logger.info(
-                { agentId, rawAgent: rawName, normalizedAgent: inputRecord['agent'] },
-                'Stripped leading @ from delegate agent name',
+      const streamResult = await runStreamingToolLoop(messages, {
+        provider,
+        model: streamModel,
+        tools: workingToolDefs,
+        maxRounds: budget.maxTurns,
+        signal: new AbortController().signal,
+        logger,
+        openStream: async function* (this: AgentRuntime, params: StreamingTurnOpenStreamParams) {
+          // NOTE: beforeRound already mutated working messages; params.messages is a
+          // snapshot taken AFTER beforeRound — use params for chatWithRetry.
+          const chatResponse = await this.chatWithRetry(
+            provider,
+            { messages: params.messages, tools: workingToolDefs },
+            budget,
+            taskEvent,
+            budgetHandoff,
+          );
+          if (!chatResponse) {
+            llmFailureHandled = true;
+            yield {
+              type: 'error' as const,
+              error: {
+                type: 'UNKNOWN' as const,
+                source: 'runtime',
+                message: 'chatWithRetry handled failure',
+                retryable: false,
+                context: { handled: true },
+                timestamp: new Date(),
+              },
+            };
+            return;
+          }
+          if (chatResponse.type !== 'error') {
+            lastLlmUsage = chatResponse.usage;
+            lastLlmProvenance = chatResponse.provenance;
+          }
+          yield* llmResponseAsStream(chatResponse);
+        }.bind(this),
+        hooks: {
+          beforeRound: async ({ messages: workingMessages, round }) => {
+            if (round > 0 && !suppressAmbientBullpen) {
+              await this.refreshBullpenContext(
+                workingMessages,
+                bullpenInsertAt,
+                agentId,
+                injectedBullpenThreadIds,
               );
             }
+            maybeAppendCheckpointBudgetNudge(workingMessages);
+          },
+          onToolUse: async ({ toolCalls }) => {
+            budget.turnsUsed++;
+            if (budget.turnsUsed >= budget.maxTurns) {
+              await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', budgetHandoff);
+              earlyExitHandled = true;
+              return 'stop';
+            }
+            logger.info(
+              { agentId, turn: budget.turnsUsed, toolCalls: toolCalls.map(tc => tc.name) },
+              'LLM requested tool calls',
+            );
+            return 'continue';
+          },
+          afterTools: async () => {
+            if (budget.consecutiveErrors >= budget.maxConsecutiveErrors) {
+              if (pendingClarification) {
+                logger.warn(
+                  { agentId, question: pendingClarification.question.slice(0, 100) },
+                  'Discarding pending clarification due to error budget exhaustion — specialist question will not reach the CEO',
+                );
+              }
+              await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors');
+              earlyExitHandled = true;
+              return 'stop';
+            }
 
-            if (!('timeout_ms' in inputRecord) || inputRecord['timeout_ms'] === undefined) {
-              // Source 1: scheduler's expectedDurationSeconds on the task event
-              let durationSeconds = taskEvent.payload.expectedDurationSeconds;
+            if (pendingClarification) {
+              const resumeToken = encodeResumeToken({
+                agent: agentId,
+                originalTask: taskEvent.payload.content,
+                context: pendingClarification.context,
+              });
 
-              // Source 2: target agent's expected_duration_seconds from agent YAML config
-              // Only used when the scheduler didn't provide a value.
-              if (durationSeconds === undefined && this.config.agentRegistry) {
-                const rawAgent = inputRecord['agent'];
-                if (typeof rawAgent !== 'string') {
-                  // LLM produced a malformed delegate call — agent field missing or non-string.
-                  // Warn so the audit log shows the root cause rather than a silent timeout miss.
-                  logger.warn(
-                    { agentId, taskEventId: taskEvent.id, agentFieldType: typeof rawAgent },
-                    'delegate call has non-string agent field — cannot look up expected_duration_seconds; delegate will use default timeout',
-                  );
-                } else {
-                  const targetEntry = this.config.agentRegistry.get(rawAgent);
-                  if (targetEntry === undefined) {
-                    // Agent name is valid but unknown to the registry — likely a YAML typo or a
-                    // newly added agent that hasn't been registered yet.
-                    logger.warn(
-                      { agentId, taskEventId: taskEvent.id, targetAgent: rawAgent },
-                      'delegate target agent not found in registry — cannot look up expected_duration_seconds; delegate will use default timeout',
-                    );
-                  } else {
-                    durationSeconds = targetEntry.expectedDurationSeconds;
-                  }
-                }
+              const clarificationContent = JSON.stringify({
+                _curia_protocol: 'clarification_request',
+                question: pendingClarification.question,
+                context: pendingClarification.context,
+                resume_token: resumeToken,
+              });
+
+              if (memory) {
+                await memory.addTurn(conversationId, agentId, { role: 'assistant', content: clarificationContent });
               }
 
-              if (durationSeconds !== undefined) {
-                try {
-                  const timeoutMs = computeDelegateTimeoutMs(durationSeconds);
-                  skillInput = { ...inputRecord, timeout_ms: timeoutMs };
-                } catch (err) {
-                  logger.warn(
-                    { err, agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds },
-                    'Could not compute delegate timeout from expectedDurationSeconds — skipping injection; delegate will use default timeout',
-                  );
+              const clarificationResponse = createAgentResponse({
+                agentId,
+                conversationId,
+                content: clarificationContent,
+                skillsCalled,
+                parentEventId: taskEvent.id,
+              });
+              await bus.publish('agent', clarificationResponse);
+
+              logger.info(
+                { agentId, conversationId, question: pendingClarification.question.slice(0, 100) },
+                'Task paused for clarification — specialist requested CEO direction',
+              );
+              earlyExitHandled = true;
+              return 'stop';
+            }
+
+            if (pendingDelegationEscalation) {
+              const esc = pendingDelegationEscalation;
+              const agentLabel = esc.agent || 'specialist';
+              if (!esc.agent) {
+                logger.warn(
+                  { agentId, conversationId },
+                  'pendingDelegationEscalation has empty agent name — humanized message using fallback label',
+                );
+              }
+              const parts: string[] = [];
+              if (esc.reason === 'timeout') {
+                parts.push(`I wasn't able to get a response from the ${agentLabel} in time.`);
+                if (esc.possiblySucceeded) parts.push('The request may still be completing in the background.');
+              } else if (esc.reason === 'blocked') {
+                parts.push(`The ${agentLabel} was blocked and couldn't complete the task.`);
+              } else {
+                logger.info(
+                  { agentId, conversationId, targetAgent: esc.agent, reason: esc.reason },
+                  'Humanizing delegation failure with generic message',
+                );
+                parts.push(`The ${agentLabel} wasn't able to complete the task.`);
+              }
+              if (esc.escalated) parts.push("I've logged a follow-up task to review the outcome.");
+              const escalationContent = parts.join(' ');
+
+              if (memory) {
+                await memory.addTurn(conversationId, agentId, { role: 'assistant', content: escalationContent });
+              }
+
+              const escalationResponse = createAgentResponse({
+                agentId,
+                conversationId,
+                content: escalationContent,
+                skillsCalled,
+                parentEventId: taskEvent.id,
+              });
+              await bus.publish('agent', escalationResponse);
+
+              logger.info(
+                {
+                  agentId,
+                  conversationId,
+                  targetAgent: pendingDelegationEscalation.agent,
+                  reason: pendingDelegationEscalation.reason,
+                  escalated: pendingDelegationEscalation.escalated,
+                },
+                pendingDelegationEscalation.escalated
+                  ? 'Task stopped after non-retryable delegation failure — escalated to CEO backlog'
+                  : 'Task stopped after non-retryable delegation failure — CEO backlog escalation failed',
+              );
+              earlyExitHandled = true;
+              return 'stop';
+            }
+
+            return 'continue';
+          },
+        },
+        invokeTool: async (toolCall, ctx) => {
+          const transcript = ctx?.messages ?? messages;
+
+          // When escalation is pending mid-batch, skip remaining tools (matches
+          // the former `break` after pendingDelegationEscalation is set).
+          if (pendingDelegationEscalation) {
+            return {
+              content: 'Skipped — delegation failure escalation pending for this turn.',
+              is_error: true,
+            };
+          }
+
+          logger.info({ agentId, skill: toolCall.name, callId: toolCall.id }, 'Invoking skill');
+          skillsCalled.push(toolCall.name);
+
+          // For delegate calls: inject timeout_ms so the specialist gets an appropriate wait
+          // window. Two sources, checked in priority order:
+          //   1. Scheduled task: the task event's expectedDurationSeconds (from the scheduler)
+          //   2. Target agent config: the target agent's expected_duration_seconds (from YAML)
+          // The LLM's explicit timeout_ms always wins if provided.
+          // This is transparent to the LLM — it doesn't need to know about scheduling internals.
+          let skillInput = toolCall.input;
+          if (toolCall.name === 'delegate') {
+            // Guard: only proceed if the input is a plain non-null object. The `in` operator
+            // throws a TypeError on null or primitives, and an array input is malformed anyway.
+            if (typeof skillInput !== 'object' || skillInput === null || Array.isArray(skillInput)) {
+              logger.warn(
+                { agentId, taskEventId: taskEvent.id, inputType: Array.isArray(skillInput) ? 'array' : typeof skillInput },
+                'delegate call has non-object input — skipping timeout injection; delegate will use default timeout',
+              );
+            } else {
+              const inputRecord = skillInput as Record<string, unknown>;
+
+              // Normalize agent name: LLMs sometimes produce "@agent-name" (bullpen @-mention
+              // style). Strip the leading '@' so the registry lookup and downstream handler
+              // see the canonical registered name.
+              if (typeof inputRecord['agent'] === 'string' && (inputRecord['agent'] as string).startsWith('@')) {
+                const rawName = inputRecord['agent'] as string;
+                inputRecord['agent'] = rawName.slice(1);
+                logger.info(
+                  { agentId, rawAgent: rawName, normalizedAgent: inputRecord['agent'] },
+                  'Stripped leading @ from delegate agent name',
+                );
+              }
+
+              if (!('timeout_ms' in inputRecord) || inputRecord['timeout_ms'] === undefined) {
+                // Source 1: scheduler's expectedDurationSeconds on the task event
+                let durationSeconds = taskEvent.payload.expectedDurationSeconds;
+
+                // Source 2: target agent's expected_duration_seconds from agent YAML config
+                // Only used when the scheduler didn't provide a value.
+                if (durationSeconds === undefined && this.config.agentRegistry) {
+                  const rawAgent = inputRecord['agent'];
+                  if (typeof rawAgent !== 'string') {
+                    // LLM produced a malformed delegate call — agent field missing or non-string.
+                    // Warn so the audit log shows the root cause rather than a silent timeout miss.
+                    logger.warn(
+                      { agentId, taskEventId: taskEvent.id, agentFieldType: typeof rawAgent },
+                      'delegate call has non-string agent field — cannot look up expected_duration_seconds; delegate will use default timeout',
+                    );
+                  } else {
+                    const targetEntry = this.config.agentRegistry.get(rawAgent);
+                    if (targetEntry === undefined) {
+                      // Agent name is valid but unknown to the registry — likely a YAML typo or a
+                      // newly added agent that hasn't been registered yet.
+                      logger.warn(
+                        { agentId, taskEventId: taskEvent.id, targetAgent: rawAgent },
+                        'delegate target agent not found in registry — cannot look up expected_duration_seconds; delegate will use default timeout',
+                      );
+                    } else {
+                      durationSeconds = targetEntry.expectedDurationSeconds;
+                    }
+                  }
+                }
+
+                if (durationSeconds !== undefined) {
+                  try {
+                    const timeoutMs = computeDelegateTimeoutMs(durationSeconds);
+                    skillInput = { ...inputRecord, timeout_ms: timeoutMs };
+                  } catch (err) {
+                    logger.warn(
+                      { err, agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds },
+                      'Could not compute delegate timeout from expectedDurationSeconds — skipping injection; delegate will use default timeout',
+                    );
+                  }
                 }
               }
             }
           }
-        }
 
-        // Publish tool.invoke for audit trail — after injection so the recorded input
-        // reflects the actual values passed to the skill (including injected timeout_ms).
-        const invokeEvent = createToolInvoke({
-          agentId,
-          conversationId,
-          toolName: toolCall.name,
-          input: skillInput,
-          taskEventId: taskEvent.id,
-          parentEventId: taskEvent.id,
-        });
-        await bus.publish('agent', invokeEvent);
+          // Publish tool.invoke for audit trail — after injection so the recorded input
+          // reflects the actual values passed to the skill (including injected timeout_ms).
+          const invokeEvent = createToolInvoke({
+            agentId,
+            conversationId,
+            toolName: toolCall.name,
+            input: skillInput,
+            taskEventId: taskEvent.id,
+            parentEventId: taskEvent.id,
+          });
+          await bus.publish('agent', invokeEvent);
 
-        const invokeOptions = {
-          taskEventId: taskEvent.id,
-          agentId,
-          channelId: taskEvent.payload.channelId,
-          conversationId,
-          parentEventId: invokeEvent.id,
-          taskMetadata: taskEvent.payload.metadata,
-          liveTurn: taskEvent.payload.liveTurn,
-          delegationGuard,
-          turnDateResolveResults: turnDateResolveTracker.snapshot(),
-        };
+          const invokeOptions = {
+            taskEventId: taskEvent.id,
+            agentId,
+            channelId: taskEvent.payload.channelId,
+            conversationId,
+            parentEventId: invokeEvent.id,
+            taskMetadata: taskEvent.payload.metadata,
+            liveTurn: taskEvent.payload.liveTurn,
+            delegationGuard,
+            turnDateResolveResults: turnDateResolveTracker.snapshot(),
+          };
 
-        const startTime = Date.now();
-        let delegateBlocked = false;
-        let result: Awaited<ReturnType<ExecutionLayer['invoke']>>;
-        if (
-          toolCall.name === 'delegate' &&
-          typeof skillInput === 'object' &&
-          skillInput !== null &&
-          !Array.isArray(skillInput)
-        ) {
-          const delegateInput = skillInput as Record<string, unknown>;
-          const delegateAgent = typeof delegateInput['agent'] === 'string' ? delegateInput['agent'] : '';
-          const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
-          const hasResumeToken =
-            typeof delegateInput['resume_token'] === 'string' && delegateInput['resume_token'] !== '';
-          if (!hasResumeToken && delegateAgent && delegateTask) {
-            const dKey = delegationKey(delegateAgent, delegateTask);
-            if (!delegationGuard.canAttempt(dKey)) {
-              delegateBlocked = true;
-              const prior = delegationGuard.getFailure(dKey);
-              logger.warn(
-                { agentId, targetAgent: delegateAgent, reason: prior?.reason },
-                'Blocked identical re-delegation after specialist failure',
-              );
-              result = {
-                success: true,
-                data: {
-                  agent: delegateAgent,
-                  failed: true,
-                  blocked: true,
-                  reason: prior?.reason ?? 'blocked',
-                  retryable: false,
-                  message: prior?.message
-                    ?? `Re-delegation to '${delegateAgent}' is blocked for this task.`,
-                  escalated: delegationGuard.isEscalated(dKey),
-                },
-              };
+          const startTime = Date.now();
+          let delegateBlocked = false;
+          let result: Awaited<ReturnType<ExecutionLayer['invoke']>>;
+          if (
+            toolCall.name === 'delegate' &&
+            typeof skillInput === 'object' &&
+            skillInput !== null &&
+            !Array.isArray(skillInput)
+          ) {
+            const delegateInput = skillInput as Record<string, unknown>;
+            const delegateAgent = typeof delegateInput['agent'] === 'string' ? delegateInput['agent'] : '';
+            const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
+            const hasResumeToken =
+              typeof delegateInput['resume_token'] === 'string' && delegateInput['resume_token'] !== '';
+            if (!hasResumeToken && delegateAgent && delegateTask) {
+              const dKey = delegationKey(delegateAgent, delegateTask);
+              if (!delegationGuard.canAttempt(dKey)) {
+                delegateBlocked = true;
+                const prior = delegationGuard.getFailure(dKey);
+                logger.warn(
+                  { agentId, targetAgent: delegateAgent, reason: prior?.reason },
+                  'Blocked identical re-delegation after specialist failure',
+                );
+                result = {
+                  success: true,
+                  data: {
+                    agent: delegateAgent,
+                    failed: true,
+                    blocked: true,
+                    reason: prior?.reason ?? 'blocked',
+                    retryable: false,
+                    message: prior?.message
+                      ?? `Re-delegation to '${delegateAgent}' is blocked for this task.`,
+                    escalated: delegationGuard.isEscalated(dKey),
+                  },
+                };
+              } else {
+                result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
+              }
             } else {
               result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
             }
           } else {
             result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
           }
-        } else {
-          result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
-        }
-        const durationMs = Date.now() - startTime;
+          const durationMs = Date.now() - startTime;
 
-        // Publish tool.result for audit trail
-        // Published by agent layer on behalf of the execution layer —
-        // the execution layer doesn't have bus access in Phase 3.
-        // TODO: When execution layer gets bus access, move this publish there.
-        const resultEvent = createToolResult({
-          agentId,
-          conversationId,
-          toolName: toolCall.name,
-          result,
-          durationMs,
-          parentEventId: invokeEvent.id,
-        });
-        await bus.publish('agent', resultEvent);
+          // Publish tool.result for audit trail
+          // Published by agent layer on behalf of the execution layer —
+          // the execution layer doesn't have bus access in Phase 3.
+          // TODO: When execution layer gets bus access, move this publish there.
+          const resultEvent = createToolResult({
+            agentId,
+            conversationId,
+            toolName: toolCall.name,
+            result,
+            durationMs,
+            parentEventId: invokeEvent.id,
+          });
+          await bus.publish('agent', resultEvent);
 
-        if (toolCall.name === 'date-resolve') {
-          turnDateResolveTracker.recordFromToolResult(result);
-        }
-
-        if (result.success) {
-          // Success: reset consecutive error counter
-          budget.consecutiveErrors = 0;
-
-          // When a tool result is (partly) re-emitted into the turn by the runtime
-          // — e.g. skill-activate, whose instructions/reference bodies are spliced
-          // as system messages below — the generic tool_result JSON is slimmed to a
-          // metadata-only acknowledgement so the payload is not injected twice (#1505).
-          let toolResultOverride: string | undefined;
-
-          // Dynamic tool-list expansion: when tool-registry returns successfully,
-          // append discovered kind:'tool' atoms to the working list. kind:'skill'
-          // results require skill-activate (instructions + member tools together).
-          // Expansion is per-task (workingToolDefs is a local copy) — concurrent tasks
-          // never see each other's discovered tools.
-          if (toolCall.name === 'tool-registry' && workingToolDefs) {
-            try {
-              const data = typeof result.data === 'string'
-                ? JSON.parse(result.data) as unknown
-                : result.data;
-              const discovered = (data as {
-                tools?: Array<{ name: string; kind?: 'tool' | 'skill' }>;
-              })?.tools ?? [];
-              const currentNames = new Set(workingToolDefs.map(t => t.name));
-              const newNames = discovered
-                .filter(s => !s.kind || s.kind === 'tool')
-                .map(s => s.name)
-                .filter(name => !currentNames.has(name));
-              if (newNames.length > 0) {
-                workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
-                logger.info(
-                  { agentId, addedTools: newNames },
-                  'Expanded working tool list with discovered tools',
-                );
-              }
-            } catch (err) {
-              // Non-fatal: if we can't parse the tool-registry result, the LLM simply
-              // cannot call discovered tools this turn. Log at warn and continue —
-              // failing to expand the tool list must not abort the task.
-              logger.warn({ err, agentId }, 'Failed to expand tool list from tool-registry result');
-            }
+          if (toolCall.name === 'date-resolve') {
+            turnDateResolveTracker.recordFromToolResult(result);
           }
 
-          // Skill activation (#1495/#1490): expand member tools + inject SKILL.md
-          // instructions (and optional progressive-disclosure reference content)
-          // into the in-flight turn. Durable persistence is handled by skill-activate itself.
-          if (toolCall.name === SKILL_ACTIVATE_TOOL_NAME && workingToolDefs) {
-            try {
-              const data = typeof result.data === 'string'
-                ? JSON.parse(result.data) as unknown
-                : result.data;
-              const activation = parseSkillActivationProtocol(data);
-              if (activation) {
+          if (result.success) {
+            // Success: reset consecutive error counter
+            budget.consecutiveErrors = 0;
+
+            // When a tool result is (partly) re-emitted into the turn by the runtime
+            // — e.g. skill-activate, whose instructions/reference bodies are spliced
+            // as system messages below — the generic tool_result JSON is slimmed to a
+            // metadata-only acknowledgement so the payload is not injected twice (#1505).
+            let toolResultOverride: string | undefined;
+
+            // Dynamic tool-list expansion: when tool-registry returns successfully,
+            // append discovered kind:'tool' atoms to the working list. kind:'skill'
+            // results require skill-activate (instructions + member tools together).
+            // Expansion is per-task (workingToolDefs is a local copy) — concurrent tasks
+            // never see each other's discovered tools.
+            if (toolCall.name === 'tool-registry' && workingToolDefs) {
+              try {
+                const data = typeof result.data === 'string'
+                  ? JSON.parse(result.data) as unknown
+                  : result.data;
+                const discovered = (data as {
+                  tools?: Array<{ name: string; kind?: 'tool' | 'skill' }>;
+                })?.tools ?? [];
                 const currentNames = new Set(workingToolDefs.map(t => t.name));
-                const newNames = activation.tools.filter(name => !currentNames.has(name));
+                const newNames = discovered
+                  .filter(s => !s.kind || s.kind === 'tool')
+                  .map(s => s.name)
+                  .filter(name => !currentNames.has(name));
                 if (newNames.length > 0) {
                   workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
+                  logger.info(
+                    { agentId, addedTools: newNames },
+                    'Expanded working tool list with discovered tools',
+                  );
                 }
-                const instructionBlock = formatActivatedSkillInstructionBlock(
-                  activation.skill,
-                  activation.instructions,
-                  { references: activation.references, assets: activation.assets },
-                );
-                const insertAt = messages.findIndex(m => m.role !== 'system') === -1
-                  ? messages.length
-                  : Math.max(1, messages.findIndex(m => m.role !== 'system'));
-                let spliceAt = insertAt;
-                if (instructionBlock) {
-                  // Inject after the system prompt so subsequent LLM rounds see the
-                  // discipline block (mirrors Bullpen mid-turn system-message splice).
-                  messages.splice(spliceAt, 0, { role: 'system', content: instructionBlock });
-                  spliceAt += 1;
-                }
-                if (activation.referenceContent) {
-                  messages.splice(spliceAt, 0, {
-                    role: 'system',
-                    content: formatSkillReferenceBlock(
-                      activation.skill,
-                      activation.referenceContent.path,
-                      activation.referenceContent.content,
-                      activation.referenceContent.truncated,
-                    ),
-                  });
-                }
-                logger.info(
-                  {
-                    agentId,
-                    skill: activation.skill,
-                    addedTools: newNames,
-                    instructionsLoaded: activation.instructions.length > 0,
-                    skippedTools: activation.skippedTools,
-                    references: activation.references.length,
-                    assets: activation.assets.length,
-                    referenceLoaded: activation.referenceContent?.path,
-                  },
-                  'Activated skill for task turn',
-                );
-                // Instructions + reference content are now in the turn as system
-                // messages; slim the tool_result to metadata so they aren't injected
-                // a second time via the generic JSON stringify below (#1505).
-                toolResultOverride = JSON.stringify(buildSkillActivationAck(activation));
+              } catch (err) {
+                // Non-fatal: if we can't parse the tool-registry result, the LLM simply
+                // cannot call discovered tools this turn. Log at warn and continue —
+                // failing to expand the tool list must not abort the task.
+                logger.warn({ err, agentId }, 'Failed to expand tool list from tool-registry result');
               }
-            } catch (err) {
-              logger.warn({ err, agentId }, 'Failed to apply skill-activate result to working tool list');
             }
-          }
 
-          // Clarification protocol detection: when request-clarification returns
-          // successfully, capture the question and findings for the short-circuit exit.
-          // Follows the same pattern as the tool-registry check above — inspect by
-          // skill name, parse the structured result, take runtime-level action.
-          if (toolCall.name === 'request-clarification') {
-            try {
-              const clarData = typeof result.data === 'string'
-                ? JSON.parse(result.data) as unknown
-                : result.data;
-              const typed = clarData as { _curia_protocol?: string; question?: string; context?: string };
-              if (typed?._curia_protocol === 'clarification_request') {
-                if (!typed.question || !typed.context) {
-                  // Protocol marker is present but required fields are missing — the
-                  // handler should prevent this, but a modified or third-party skill
-                  // could emit an incomplete marker. Log so it's visible in audit.
-                  logger.warn(
-                    { agentId, hasQuestion: !!typed.question, hasContext: !!typed.context },
-                    'request-clarification result has protocol marker but missing required fields — cannot short-circuit',
-                  );
-                } else if (pendingClarification) {
-                  logger.warn(
-                    { agentId },
-                    'Multiple request-clarification calls in one turn — using the first',
-                  );
-                } else {
-                  pendingClarification = {
-                    question: typed.question,
-                    context: typed.context,
-                  };
-                }
-              }
-            } catch (err) {
-              // Non-fatal: if we can't parse the result, the clarification simply isn't
-              // detected and the loop continues normally. The specialist will produce a
-              // regular text response.
-              logger.warn({ err, agentId }, 'Failed to parse request-clarification result — skipping short-circuit');
-            }
-          }
-
-          // Delegation failure circuit-breaker (#1171): when delegate returns failed{retryable},
-          // record the outcome and escalate to the CEO backlog when retries are exhausted or
-          // the failure is non-retryable. Short-circuit the turn after escalation so the LLM
-          // cannot blind-re-delegate in subsequent rounds.
-          // Paused delegate results (#1174) are success at the delegation layer — do not record.
-          if (
-            toolCall.name === 'delegate' &&
-            !delegateBlocked &&
-            typeof skillInput === 'object' &&
-            skillInput !== null &&
-            !Array.isArray(skillInput)
-          ) {
-            const delegatePaused = parseDelegatePausedData(result.data, logger);
-            if (!delegatePaused) {
-              const delegateFailure = parseDelegateFailureData(result.data, logger);
-              if (delegateFailure) {
-                const delegateInput = skillInput as Record<string, unknown>;
-                const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
-                const dKey = delegationKey(delegateFailure.agent, delegateTask);
-                delegationGuard.recordFailure(dKey, delegateFailure);
-                if (delegationGuard.shouldEscalate(dKey)) {
-                  const escalated = await escalateDelegationFailure(
-                    executionLayer,
-                    caller,
-                    invokeOptions,
-                    { ...delegateFailure, task: delegateTask },
-                    logger,
-                  );
-                  if (escalated) {
-                    delegationGuard.markEscalated(dKey);
+            // Skill activation (#1495/#1490): expand member tools + inject SKILL.md
+            // instructions (and optional progressive-disclosure reference content)
+            // into the in-flight turn. Durable persistence is handled by skill-activate itself.
+            if (toolCall.name === SKILL_ACTIVATE_TOOL_NAME && workingToolDefs) {
+              try {
+                const data = typeof result.data === 'string'
+                  ? JSON.parse(result.data) as unknown
+                  : result.data;
+                const activation = parseSkillActivationProtocol(data);
+                if (activation) {
+                  const currentNames = new Set(workingToolDefs.map(t => t.name));
+                  const newNames = activation.tools.filter(name => !currentNames.has(name));
+                  if (newNames.length > 0) {
+                    workingToolDefs.push(...executionLayer.getToolDefinitions(newNames));
                   }
-                  pendingDelegationEscalation = { ...delegateFailure, task: delegateTask, escalated };
+                  const instructionBlock = formatActivatedSkillInstructionBlock(
+                    activation.skill,
+                    activation.instructions,
+                    { references: activation.references, assets: activation.assets },
+                  );
+                  const insertAt = transcript.findIndex(m => m.role !== 'system') === -1
+                    ? transcript.length
+                    : Math.max(1, transcript.findIndex(m => m.role !== 'system'));
+                  let spliceAt = insertAt;
+                  if (instructionBlock) {
+                    // Inject after the system prompt so subsequent LLM rounds see the
+                    // discipline block (mirrors Bullpen mid-turn system-message splice).
+                    transcript.splice(spliceAt, 0, { role: 'system', content: instructionBlock });
+                    spliceAt += 1;
+                  }
+                  if (activation.referenceContent) {
+                    transcript.splice(spliceAt, 0, {
+                      role: 'system',
+                      content: formatSkillReferenceBlock(
+                        activation.skill,
+                        activation.referenceContent.path,
+                        activation.referenceContent.content,
+                        activation.referenceContent.truncated,
+                      ),
+                    });
+                  }
+                  logger.info(
+                    {
+                      agentId,
+                      skill: activation.skill,
+                      addedTools: newNames,
+                      instructionsLoaded: activation.instructions.length > 0,
+                      skippedTools: activation.skippedTools,
+                      references: activation.references.length,
+                      assets: activation.assets.length,
+                      referenceLoaded: activation.referenceContent?.path,
+                    },
+                    'Activated skill for task turn',
+                  );
+                  // Instructions + reference content are now in the turn as system
+                  // messages; slim the tool_result to metadata so they aren't injected
+                  // a second time via the generic JSON stringify below (#1505).
+                  toolResultOverride = JSON.stringify(buildSkillActivationAck(activation));
+                }
+              } catch (err) {
+                logger.warn({ err, agentId }, 'Failed to apply skill-activate result to working tool list');
+              }
+            }
+
+            // Clarification protocol detection: when request-clarification returns
+            // successfully, capture the question and findings for the short-circuit exit.
+            // Follows the same pattern as the tool-registry check above — inspect by
+            // skill name, parse the structured result, take runtime-level action.
+            if (toolCall.name === 'request-clarification') {
+              try {
+                const clarData = typeof result.data === 'string'
+                  ? JSON.parse(result.data) as unknown
+                  : result.data;
+                const typed = clarData as { _curia_protocol?: string; question?: string; context?: string };
+                if (typed?._curia_protocol === 'clarification_request') {
+                  if (!typed.question || !typed.context) {
+                    // Protocol marker is present but required fields are missing — the
+                    // handler should prevent this, but a modified or third-party skill
+                    // could emit an incomplete marker. Log so it's visible in audit.
+                    logger.warn(
+                      { agentId, hasQuestion: !!typed.question, hasContext: !!typed.context },
+                      'request-clarification result has protocol marker but missing required fields — cannot short-circuit',
+                    );
+                  } else if (pendingClarification) {
+                    logger.warn(
+                      { agentId },
+                      'Multiple request-clarification calls in one turn — using the first',
+                    );
+                  } else {
+                    pendingClarification = {
+                      question: typed.question,
+                      context: typed.context,
+                    };
+                  }
+                }
+              } catch (err) {
+                // Non-fatal: if we can't parse the result, the clarification simply isn't
+                // detected and the loop continues normally. The specialist will produce a
+                // regular text response.
+                logger.warn({ err, agentId }, 'Failed to parse request-clarification result — skipping short-circuit');
+              }
+            }
+
+            // Delegation failure circuit-breaker (#1171): when delegate returns failed{retryable},
+            // record the outcome and escalate to the CEO backlog when retries are exhausted or
+            // the failure is non-retryable. Short-circuit the turn after escalation so the LLM
+            // cannot blind-re-delegate in subsequent rounds.
+            // Paused delegate results (#1174) are success at the delegation layer — do not record.
+            if (
+              toolCall.name === 'delegate' &&
+              !delegateBlocked &&
+              typeof skillInput === 'object' &&
+              skillInput !== null &&
+              !Array.isArray(skillInput)
+            ) {
+              const delegatePaused = parseDelegatePausedData(result.data, logger);
+              if (!delegatePaused) {
+                const delegateFailure = parseDelegateFailureData(result.data, logger);
+                if (delegateFailure) {
+                  const delegateInput = skillInput as Record<string, unknown>;
+                  const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
+                  const dKey = delegationKey(delegateFailure.agent, delegateTask);
+                  delegationGuard.recordFailure(dKey, delegateFailure);
+                  if (delegationGuard.shouldEscalate(dKey)) {
+                    const escalated = await escalateDelegationFailure(
+                      executionLayer,
+                      caller,
+                      invokeOptions,
+                      { ...delegateFailure, task: delegateTask },
+                      logger,
+                    );
+                    if (escalated) {
+                      delegationGuard.markEscalated(dKey);
+                    }
+                    pendingDelegationEscalation = { ...delegateFailure, task: delegateTask, escalated };
+                  }
                 }
               }
             }
+
+            const resultContent = toolResultOverride
+              ?? (typeof result.data === 'string' ? result.data : JSON.stringify(result.data));
+            return { content: resultContent };
           }
 
-          const resultContent = toolResultOverride
-            ?? (typeof result.data === 'string' ? result.data : JSON.stringify(result.data));
-          toolResultBlocks.push(buildToolResultBlock(toolCall.id, resultContent));
-          if (pendingDelegationEscalation) {
-            break;
-          }
-        } else {
           // Failure: classify the error and format as a structured <task_error> block
           // so the LLM gets machine-readable error context instead of raw strings.
           // Transient DB outages (#1381) are tracked on budget.dbFailures and do NOT
@@ -1543,145 +1730,68 @@ export class AgentRuntime {
             isDbFailure ? budget.dbFailures : budget.consecutiveErrors,
             isDbFailure ? budget.dbFailures : budget.maxConsecutiveErrors,
           );
-          toolResultBlocks.push(buildToolResultBlock(toolCall.id, formattedError, true));
-        }
-      }
+          return { content: formattedError, is_error: true };
+        },
+      });
 
-      // Check consecutive error budget after processing all tool calls in this turn
-      if (budget.consecutiveErrors >= budget.maxConsecutiveErrors) {
-        if (pendingClarification) {
-          logger.warn(
-            { agentId, question: pendingClarification.question.slice(0, 100) },
-            'Discarding pending clarification due to error budget exhaustion — specialist question will not reach the CEO',
-          );
-        }
-        // Still append results so the LLM history is consistent, then bail
-        messages.push({ role: 'user', content: toolResultBlocks });
-        await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors');
+      // Sync working transcript for empty-recovery / any post-loop message use.
+      messages.length = 0;
+      messages.push(...streamResult.messages);
+
+      if (earlyExitHandled || llmFailureHandled) {
         return;
       }
 
-      // Append tool results as a user turn with structured content blocks.
-      // This is the format the Anthropic API expects — each tool_result references
-      // a tool_use_id from the preceding assistant turn.
-      messages.push({ role: 'user', content: toolResultBlocks });
+      if (streamResult.stopReason === 'stopped') {
+        return;
+      }
 
-      // Clarification short-circuit: if request-clarification was called successfully
-      // in this batch, bypass further LLM rounds and emit a deterministic protocol
-      // response. The DelegateHandler parses this JSON to return a typed result to
-      // the coordinator — no LLM text parsing involved.
-      if (pendingClarification) {
-        // Construct resume_token via the shared helper so the format stays in one place
-        // (consumed by the delegate skill on re-delegation). Base64-encoded, versioned, capped.
-        const resumeToken = encodeResumeToken({
-          agent: agentId,
-          originalTask: taskEvent.payload.content,
-          context: pendingClarification.context,
-        });
-
-        const clarificationContent = JSON.stringify({
-          _curia_protocol: 'clarification_request',
-          question: pendingClarification.question,
-          context: pendingClarification.context,
-          resume_token: resumeToken,
-        });
-
-        // Persist the protocol response as the assistant turn
-        if (memory) {
-          await memory.addTurn(conversationId, agentId, { role: 'assistant', content: clarificationContent });
-        }
-
-        const clarificationResponse = createAgentResponse({
-          agentId,
-          conversationId,
-          content: clarificationContent,
-          skillsCalled,
-          parentEventId: taskEvent.id,
-        });
-        await bus.publish('agent', clarificationResponse);
-
-        logger.info(
-          { agentId, conversationId, question: pendingClarification.question.slice(0, 100) },
-          'Task paused for clarification — specialist requested CEO direction',
+      if (streamResult.stopReason === 'message_end') {
+        response = {
+          type: 'text',
+          content: streamResult.finalText,
+          usage: lastLlmUsage ?? zeroUsage,
+          provenance: lastLlmProvenance ?? fallbackProvenance,
+        };
+      } else if (streamResult.stopReason === 'exhausted') {
+        // Treat like tool_use without completion — existing fallback / isResponseError.
+        response = {
+          type: 'tool_use',
+          toolCalls: [],
+          content: "I wasn't able to complete that request — I hit my tool-use limit. Please try rephrasing.",
+          usage: lastLlmUsage ?? zeroUsage,
+          provenance: lastLlmProvenance ?? fallbackProvenance,
+        };
+      } else if (streamResult.stopReason === 'stream_error') {
+        const streamErr = streamResult.error ?? {
+          type: 'UNKNOWN' as const,
+          source: 'runtime',
+          message: 'Streaming tool loop failed',
+          retryable: false,
+          context: {},
+          timestamp: new Date(),
+        };
+        await this.publishAgentError(streamErr, taskEvent);
+        await this.sendErrorResponse(taskEvent, streamErr);
+        return;
+      } else {
+        // empty_stream / aborted — sensible fallback error response
+        logger.error(
+          { agentId, conversationId, stopReason: streamResult.stopReason },
+          'Streaming tool loop ended without a usable response',
         );
-        return;
-      }
-
-      // Delegation failure short-circuit (#1171, #1329): after a non-retryable specialist
-      // failure (or exhausted retryable attempts), emit a human-readable response so the
-      // coordinator reports the honest reason instead of confabulating or re-delegating.
-      // The `delegate` skill is only available to the coordinator — no other agent is wired
-      // with it — so this path is only reachable by the coordinator, and its response goes
-      // directly to the principal's channel. Emitting a _curia_protocol JSON signal here
-      // would be meaningless (there is no parent to consume it) and leaks raw JSON to the user.
-      if (pendingDelegationEscalation) {
-        const esc = pendingDelegationEscalation;
-        // Guard against an empty agent name (external payload field); fallback avoids
-        // a confusing blank in the user-facing message ("from the  specialist").
-        // No article prefix — templates below unconditionally prepend "the ".
-        const agentLabel = esc.agent || 'specialist';
-        if (!esc.agent) {
-          logger.warn(
-            { agentId, conversationId },
-            'pendingDelegationEscalation has empty agent name — humanized message using fallback label',
-          );
-        }
-        const parts: string[] = [];
-        if (esc.reason === 'timeout') {
-          parts.push(`I wasn't able to get a response from the ${agentLabel} in time.`);
-          if (esc.possiblySucceeded) parts.push('The request may still be completing in the background.');
-        } else if (esc.reason === 'blocked') {
-          parts.push(`The ${agentLabel} was blocked and couldn't complete the task.`);
-        } else {
-          // maxTurns, maxConsecutiveErrors, tool_error, api_error, or unknown reason.
-          logger.info(
-            { agentId, conversationId, targetAgent: esc.agent, reason: esc.reason },
-            'Humanizing delegation failure with generic message',
-          );
-          parts.push(`The ${agentLabel} wasn't able to complete the task.`);
-        }
-        if (esc.escalated) parts.push("I've logged a follow-up task to review the outcome.");
-        const escalationContent = parts.join(' ');
-
-        if (memory) {
-          await memory.addTurn(conversationId, agentId, { role: 'assistant', content: escalationContent });
-        }
-
-        const escalationResponse = createAgentResponse({
-          agentId,
-          conversationId,
-          content: escalationContent,
-          skillsCalled,
-          parentEventId: taskEvent.id,
-        });
-        await bus.publish('agent', escalationResponse);
-
-        logger.info(
-          {
-            agentId,
-            conversationId,
-            targetAgent: pendingDelegationEscalation.agent,
-            reason: pendingDelegationEscalation.reason,
-            escalated: pendingDelegationEscalation.escalated,
+        response = {
+          type: 'error',
+          error: {
+            type: 'UNKNOWN',
+            source: 'runtime',
+            message: `Streaming tool loop ended: ${streamResult.stopReason}`,
+            retryable: false,
+            context: { stopReason: streamResult.stopReason },
+            timestamp: new Date(),
           },
-          pendingDelegationEscalation.escalated
-            ? 'Task stopped after non-retryable delegation failure — escalated to CEO backlog'
-            : 'Task stopped after non-retryable delegation failure — CEO backlog escalation failed',
-        );
-        return;
+        };
       }
-
-      // Refresh Bullpen context before the next LLM round so the model sees
-      // any new replies or closures that occurred during skill execution (#213).
-      // Suppressed for scheduler runs — see the suppressAmbientBullpen note above (#1609).
-      if (!suppressAmbientBullpen) {
-        await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, injectedBullpenThreadIds);
-      }
-
-      maybeAppendCheckpointBudgetNudge();
-      // Continue the loop — the full conversation history is now in messages
-      response = await this.chatWithRetry(provider, { messages, tools: workingToolDefs }, budget, taskEvent, budgetHandoff);
-      if (!response) return; // chatWithRetry already published error events
     }
 
     // Handle the final response (text or tool_use without execution layer).
@@ -1690,8 +1800,13 @@ export class AgentRuntime {
     let responseContent: string;
     let isResponseError = false;
     if (response.type === 'tool_use') {
-      // No execution layer configured — the LLM wanted tools but we can't run them
-      logger.warn({ agentId }, 'LLM returned tool_use but no execution layer configured');
+      // No execution layer, or streaming loop exhausted without a text completion.
+      logger.warn(
+        { agentId, toolCallCount: response.toolCalls.length },
+        response.toolCalls.length === 0
+          ? 'Tool loop exhausted without a text response'
+          : 'LLM returned tool_use but no execution layer configured',
+      );
       isResponseError = true;
       responseContent = response.content ?? "I wasn't able to complete that request — I hit my tool-use limit. Please try rephrasing.";
     } else if (response.type === 'text') {
