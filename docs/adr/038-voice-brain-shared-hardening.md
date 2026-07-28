@@ -102,6 +102,13 @@ on its own measured benefit — do **not** ship the bundle:
 
 ### Evidence — variance rerun (5 interleaved reps, 2026-07-28)
 
+> ⚠️ These figures were produced by an eval harness that carried two scoring
+> bugs since fixed in this PR (CodeRabbit review): asymmetric weekday matching
+> in `resolveExpectedIso`, and delegate checks scoring the first (possibly
+> rejected) `delegate` call rather than the final one. Both could only *under*-
+> count self-correcting or bare-weekday turns. Re-run the harness with the fixes
+> before citing these numbers for Acceptance.
+
 Harness: `scripts/spikes/voice-brain-parity/` — Haiku 4.5, `stream()` + tools.
 **19 utterances / ~50 assertion-checks × 5 reps.** Arms interleaved within
 each rep. Calendar mock is load-bearing. Canonical artifact: `variance.json`
@@ -176,7 +183,7 @@ Eval currently measures recognition against a **mocked** tool only.
 **Pending ADR acceptance:** if shared-hardening is Accepted (gates cleared),
 text channels **may** use `LLMProvider.stream()` — convergence onto the
 shared streaming primitive with separately composed prompts. Until then
-#1563 stays blocked on this decision.
+Issue #1563 stays blocked on this decision.
 
 ### What is / is not in production on this branch
 

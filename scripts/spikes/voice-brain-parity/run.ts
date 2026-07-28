@@ -227,10 +227,13 @@ const TOOL_DEFS: ToolDefinition[] = [
 function resolveExpectedIso(call: ToolCall, fixtures: Fixtures): string | null {
   const relative = typeof call.input.relative === 'string' ? call.input.relative.toLowerCase() : '';
   const date = typeof call.input.date === 'string' ? call.input.date.toLowerCase() : '';
-  if (relative.includes('next tuesday') || relative === 'tomorrow' || relative.includes('tomorrow')) {
+  // Match bare weekday names symmetrically (Tuesday/Friday/Saturday) — a spoken
+  // "Tuesday" without "next" must still resolve, or the mock silently mislabels
+  // the load-bearing ISO date and poisons the paired-delta evidence.
+  if (relative.includes('tuesday') || relative === 'tomorrow' || relative.includes('tomorrow')) {
     return '2026-07-28';
   }
-  if (relative.includes('next friday') || relative.includes('friday')) return '2026-07-31';
+  if (relative.includes('friday')) return '2026-07-31';
   if (relative.includes('saturday')) return '2026-08-01';
   if (date.includes('2026-05-19') || date.includes('may 19')) return '2026-05-19';
   if (relative.includes('this week')) return fixtures.anchor.iso.slice(0, 10);
@@ -439,7 +442,7 @@ function scoreCase(
   }
 
   if (exp.delegateTargetHint) {
-    const del = tools.find(t => t.name === 'delegate');
+    const del = [...tools].reverse().find(t => t.name === 'delegate');
     const target = String(del?.input.target ?? '').toLowerCase();
     const brief = String(del?.input.brief ?? '').toLowerCase();
     const ok = !!del && (target.includes(exp.delegateTargetHint) || brief.includes(exp.delegateTargetHint));
@@ -453,7 +456,7 @@ function scoreCase(
   }
 
   if (exp.delegateBriefMustContain) {
-    const del = tools.find(t => t.name === 'delegate');
+    const del = [...tools].reverse().find(t => t.name === 'delegate');
     const hay = `${String(del?.input.brief ?? '')} ${String(del?.input.entry_id ?? '')}`;
     const needle = exp.delegateBriefMustContain;
     const ok = !!del && (
@@ -531,7 +534,7 @@ function scoreCase(
   }
 
   if (exp.delegateBriefMustMentionPrincipal) {
-    const del = tools.find(t => t.name === 'delegate');
+    const del = [...tools].reverse().find(t => t.name === 'delegate');
     const brief = String(del?.input.brief ?? '').toLowerCase();
     const ok = !!del && /(principal|ceo|joseph|executive|the (user|caller)'s)/.test(brief);
     checks.push({
@@ -542,7 +545,7 @@ function scoreCase(
   }
 
   if (exp.delegateBriefMustNotAssumePrincipal) {
-    const del = tools.find(t => t.name === 'delegate');
+    const del = [...tools].reverse().find(t => t.name === 'delegate');
     const brief = String(del?.input.brief ?? '').toLowerCase();
     const assumedPrincipal =
       !!del &&

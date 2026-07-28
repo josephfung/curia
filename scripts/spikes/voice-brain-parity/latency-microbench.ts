@@ -29,10 +29,14 @@ const MODEL = process.env.VOICE_SPIKE_MODEL ?? 'claude-haiku-4-5';
 const OUT = resolve(import.meta.dirname, 'latency-microbench.json');
 
 function coordinatorPrompt(): string {
-  const doc = yaml.load(readFileSync(resolve(REPO_ROOT, 'agents/coordinator.yaml'), 'utf8')) as {
-    system_prompt: string;
-  };
-  return doc.system_prompt;
+  const raw = yaml.load(readFileSync(resolve(REPO_ROOT, 'agents/coordinator.yaml'), 'utf8'));
+  // Runtime check before narrowing the `unknown` yaml.load() result to the required-property shape.
+  const doc = raw as unknown as { system_prompt?: string };
+  if (!doc.system_prompt || typeof doc.system_prompt !== 'string') {
+    throw new Error('coordinator.yaml missing system_prompt');
+  }
+  // Mirror production / run.ts: coordinator composes DATE_RESOLVE_GUARDRAIL at runtime.
+  return `${doc.system_prompt}\n\n${DATE_RESOLVE_GUARDRAIL}`;
 }
 
 function prompts(): Record<string, string> {
