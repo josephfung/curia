@@ -1720,7 +1720,10 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
   };
 
-  it('splices instruction block and expands workingToolDefs after skill-activate', async () => {
+  it('splices instruction block into streaming transcript so the next LLM round sees it (#1563)', async () => {
+    // skill-activate writes into ctx.messages (the primitive's workingMessages),
+    // not the outer messages array. This test fails if that splice targets the
+    // wrong array — the following openStream/chat round would miss the block.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
@@ -1806,7 +1809,9 @@ describe('AgentRuntime skill-activate (#1495)', () => {
     expect(secondTools).toContain('task-create');
     expect(secondTools).toContain('task-list');
 
-    // Instruction block spliced as a system message.
+    // Instruction block must appear in the FOLLOWING LLM round's messages —
+    // proof the splice landed on the streaming working transcript (ctx.messages),
+    // which openStream snapshots for chatWithRetry.
     const secondMessages = chatCalls[1]!.messages as Array<{ role: string; content: unknown }>;
     const instructionMsg = secondMessages.find(
       (m) => m.role === 'system'
@@ -1815,6 +1820,15 @@ describe('AgentRuntime skill-activate (#1495)', () => {
         && m.content.includes('Task Management'),
     );
     expect(instructionMsg).toBeDefined();
+    // First round must NOT yet have the activation block (splice happens mid-tool).
+    const firstMessages = chatCalls[0]!.messages as Array<{ role: string; content: unknown }>;
+    expect(
+      firstMessages.some(
+        (m) => m.role === 'system'
+          && typeof m.content === 'string'
+          && m.content.includes('[Activated skill: tasks]'),
+      ),
+    ).toBe(false);
   });
 
   it('re-loads active skills on wake without rewriting when the set is unchanged', async () => {

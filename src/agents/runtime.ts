@@ -1156,12 +1156,17 @@ export class AgentRuntime {
       let lastLlmUsage: LLMUsage | undefined;
       let lastLlmProvenance: LLMCallProvenance | undefined;
 
+      // Text turns are intentionally non-cancellable today (same as pre-#1563):
+      // chatWithRetry does not take an AbortSignal, and openStream ignores
+      // params.signal. The controller is kept reachable as a required-arg
+      // placeholder for a future turn-level cancel/timeout.
+      const turnAbort = new AbortController();
       const streamResult = await runStreamingToolLoop(messages, {
         provider,
         model: streamModel,
         tools: workingToolDefs,
         maxRounds: budget.maxTurns,
-        signal: new AbortController().signal,
+        signal: turnAbort.signal,
         logger,
         openStream: async function* (this: AgentRuntime, params: StreamingTurnOpenStreamParams) {
           // NOTE: beforeRound already mutated working messages; params.messages is a
@@ -1327,7 +1332,9 @@ export class AgentRuntime {
             return 'continue';
           },
         },
-        invokeTool: async (toolCall, ctx) => {
+          invokeTool: async (toolCall, ctx) => {
+          // Prefer the primitive's working transcript (ctx.messages) so mid-turn
+          // splices (skill-activate) are visible to the next openStream snapshot.
           const transcript = ctx?.messages ?? messages;
 
           // When escalation is pending mid-batch, skip remaining tools (matches
@@ -1737,7 +1744,13 @@ export class AgentRuntime {
         },
       });
 
-      // Sync working transcript for empty-recovery / any post-loop message use.
+      // Sync the outer messages array from the primitive's working transcript.
+      // On message_end, streamResult.messages ends with the terminal assistant
+      // turn (streaming-turn appends it). Pre-#1563 the loop left messages at
+      // the last user tool_result — final assistant text was never pushed here.
+      // Harmless today: this array is not re-sent post-loop; memory persists
+      // responseContent separately; empty-recovery only runs when no terminal
+      // turn was appended (empty finalText). Do not double-append the assistant.
       messages.length = 0;
       messages.push(...streamResult.messages);
 
@@ -1746,6 +1759,12 @@ export class AgentRuntime {
       }
 
       if (streamResult.stopReason === 'stopped') {
+        // Defensive: every hook 'stop' sets earlyExitHandled above and has already
+        // published a response. Reaching here means a hook stopped silently.
+        logger.warn(
+          { agentId, conversationId },
+          'Streaming tool loop stopped without a published response — no reply sent to the user',
+        );
         return;
       }
 
@@ -1757,6 +1776,8 @@ export class AgentRuntime {
           provenance: lastLlmProvenance ?? fallbackProvenance,
         };
       } else if (streamResult.stopReason === 'exhausted') {
+        // Unreachable on the text path (defensive): onToolUse bails when
+        // turnsUsed >= maxTurns one round before this maxRounds cap would fire.
         // Treat like tool_use without completion — existing fallback / isResponseError.
         response = {
           type: 'tool_use',
@@ -1766,6 +1787,9 @@ export class AgentRuntime {
           provenance: lastLlmProvenance ?? fallbackProvenance,
         };
       } else if (streamResult.stopReason === 'stream_error') {
+        // Unreachable on the text path (defensive): chatWithRetry returns null on
+        // every failure (caught by llmFailureHandled), never a materialized
+        // type:'error' for llmResponseAsStream to surface here.
         const streamErr = streamResult.error ?? {
           type: 'UNKNOWN' as const,
           source: 'runtime',
