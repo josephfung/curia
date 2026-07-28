@@ -1,20 +1,24 @@
-// streaming-turn.ts — streaming tool-loop primitive (#1552).
+// streaming-turn.ts — streaming tool-loop primitive (#1552 / #1563).
 //
-// What shipped: VoiceTurnRunner delegates stream()+tool assembly here. Text
-// AgentRuntime.handleTask still owns its own non-streaming chat() tool loop —
-// convergence requires an explicit "text goes streaming" decision (#1563), not
-// just finishing this extraction. Do **not** fold voice into handleTask.
+// Both VoiceTurnRunner and AgentRuntime.handleTask delegate tool-loop /
+// message assembly here. Voice opens provider.stream() directly; text uses a
+// chat-compatible openStream adapter over chatWithRetry (ADR-038: text may use
+// stream() — adapter keeps retry/fallback/telemetry intact while sharing round
+// cap, invoke sequencing, and sanitization policy). Do **not** fold voice into
+// handleTask — both call this primitive.
 //
-// Owns: provider.stream() consume, AbortSignal cancel, tool_use / tool_result
-// message assembly (via tool-loop-messages.ts), round cap, invokeTool sequencing.
+// Owns: stream consume (or openStream), AbortSignal cancel, tool_use /
+// tool_result message assembly (via tool-loop-messages.ts), round cap,
+// invokeTool sequencing, optional onToolUse / afterTools policy hooks.
 // Does NOT own: sentence-chunk TTS, filler speech, barge-in UX, chatWithRetry,
-// DelegationGuard, clarification short-circuits, or autonomy prompt injection.
+// DelegationGuard, clarification short-circuits, or autonomy prompt injection
+// (those stay in callers / openStream adapters).
 //
 // Round-cap policy: callers pass maxRounds. Voice uses DEFAULT_STREAMING_MAX_ROUNDS
-// (8) so a runaway tool loop fails fast into an audible fallback; text AgentRuntime
-// keeps per-agent error_budget.max_turns on the chat() path (often 20–40). Sharing
-// the coordinator's maxTurns=40 with spoken turns would leave the line silent far
-// too long — the divergence is intentional and parameterized here.
+// (8) so a runaway tool loop fails fast into an audible fallback; text passes
+// error_budget.max_turns and enforces turnsUsed semantics via onToolUse (often
+// 20–40). Sharing the coordinator's maxTurns=40 with spoken turns would leave
+// the line silent far too long — the divergence is intentional and parameterized.
 //
 // Autonomy / Gate-C: this primitive never bypasses ExecutionLayer. Callers supply
 // invokeTool; voice and handleTask both route through executionLayer.invoke, so
@@ -36,6 +40,8 @@ import {
 } from './tool-loop-messages.js';
 import type {
   LLMProvider,
+  LLMResponse,
+  LLMStreamEvent,
   Message,
   ToolCall,
   ToolDefinition,
@@ -52,9 +58,39 @@ const DEFAULT_MISSING_INVOKE_TOOL_RESULT =
 
 export type StreamingTurnInvokeTool = (
   call: ToolCall,
+  /** Mutable working transcript — text path splices skill-activate system blocks here. */
+  ctx?: { messages: Message[] },
 ) => Promise<{ content: string; is_error?: boolean }>;
 
+/** Hook decision: continue the loop, or stop and return to the caller. */
+export type StreamingTurnRoundDecision = 'continue' | 'stop';
+
+export interface StreamingTurnOpenStreamParams {
+  messages: Message[];
+  tools?: ToolDefinition[];
+  model: string;
+  signal: AbortSignal;
+}
+
+/**
+ * Optional stream opener for callers that wrap chat()/retry (text path #1563)
+ * or otherwise cannot use provider.stream() directly. When set,
+ * assertStreamingProvider is skipped.
+ */
+export type StreamingTurnOpenStream = (
+  params: StreamingTurnOpenStreamParams,
+) => AsyncIterable<LLMStreamEvent>;
+
 export interface StreamingTurnHooks {
+  /**
+   * Called at the start of each LLM round with the mutable working transcript.
+   * Text uses this for Bullpen refresh + checkpoint budget nudges before chat.
+   */
+  beforeRound?: (info: {
+    messages: Message[];
+    round: number;
+    toolRounds: number;
+  }) => void | Promise<void>;
   /** Called for each text_delta from the model (before sentence chunking). */
   onTextDelta?: (text: string) => void | Promise<void>;
   /**
@@ -66,14 +102,39 @@ export interface StreamingTurnHooks {
     toolCalls: ToolCall[];
     content?: string;
   }) => void | Promise<void>;
+  /**
+   * Called after tool_use is observed, before onBeforeTools / invokeTool.
+   * Text AgentRuntime uses this for turnsUsed / maxTurns budget checks.
+   * Return `'stop'` to exit without invoking tools (stopReason: `'stopped'`).
+   */
+  onToolUse?: (info: {
+    toolCalls: ToolCall[];
+    content?: string;
+    round: number;
+    messages: Message[];
+  }) => Promise<StreamingTurnRoundDecision>;
+  /**
+   * Called after tool results are appended to `messages` (mutable working
+   * transcript). Text uses this for clarification / delegation short-circuits
+   * and consecutive-error budget checks.
+   * Return `'stop'` to exit (stopReason: `'stopped'`).
+   */
+  afterTools?: (info: {
+    messages: Message[];
+    toolCalls: ToolCall[];
+    toolRounds: number;
+  }) => Promise<StreamingTurnRoundDecision>;
 }
 
 export interface StreamingTurnConfig {
-  /** Must implement stream() — construct-time callers should refuse otherwise. */
+  /**
+   * Must implement stream() unless `openStream` is provided (chat-compatible
+   * adapter path). Construct-time voice callers should still assertStreamingProvider.
+   */
   provider: LLMProvider;
   model: string;
   tools?: ToolDefinition[];
-  /** Hard cap on tool-use rounds. Required — see DEFAULT_STREAMING_MAX_ROUNDS. */
+  /** Hard cap on LLM rounds. Required — see DEFAULT_STREAMING_MAX_ROUNDS. */
   maxRounds: number;
   signal: AbortSignal;
   invokeTool?: StreamingTurnInvokeTool;
@@ -81,6 +142,12 @@ export interface StreamingTurnConfig {
   logger?: Logger;
   /** Placeholder tool_result content when invokeTool is missing. */
   missingInvokeToolResult?: string;
+  /**
+   * Custom per-round stream source. Text AgentRuntime passes a chatWithRetry
+   * adapter here so retry/fallback/telemetry stay on the chat path while the
+   * tool loop is shared (#1563 / ADR-038).
+   */
+  openStream?: StreamingTurnOpenStream;
 }
 
 export type StreamingTurnStopReason =
@@ -88,7 +155,9 @@ export type StreamingTurnStopReason =
   | 'aborted'
   | 'exhausted'
   | 'stream_error'
-  | 'empty_stream';
+  | 'empty_stream'
+  /** Caller hook (onToolUse / afterTools) requested an early exit. */
+  | 'stopped';
 
 export interface StreamingTurnResult {
   /**
@@ -137,8 +206,40 @@ export function assertStreamingProvider(provider: LLMProvider): void {
 }
 
 /**
+ * Adapt a single chat()/LLMResponse into stream events so callers can feed
+ * chatWithRetry (or any non-streaming round) into runStreamingToolLoop (#1563).
+ */
+export async function* llmResponseAsStream(
+  response: LLMResponse,
+): AsyncIterable<LLMStreamEvent> {
+  if (response.type === 'error') {
+    yield { type: 'error', error: response.error, ...(response.usage ? { usage: response.usage } : {}) };
+    return;
+  }
+  if (response.type === 'tool_use') {
+    yield {
+      type: 'tool_use',
+      toolCalls: response.toolCalls,
+      content: response.content,
+      usage: response.usage,
+      provenance: response.provenance,
+    };
+    return;
+  }
+  if (response.content.length > 0) {
+    yield { type: 'text_delta', text: response.content };
+  }
+  yield {
+    type: 'message_end',
+    content: response.content,
+    usage: response.usage,
+    provenance: response.provenance,
+  };
+}
+
+/**
  * Run one streaming assistant turn with a tool-use loop.
- * Resolves on message_end, abort, round-cap exhaustion, or empty stream.
+ * Resolves on message_end, abort, round-cap exhaustion, caller stop, or empty stream.
  * Stream terminal errors are returned on the result (not thrown) so callers
  * can map them to channel-specific error types.
  */
@@ -146,7 +247,9 @@ export async function runStreamingToolLoop(
   initialMessages: Message[],
   config: StreamingTurnConfig,
 ): Promise<StreamingTurnResult> {
-  assertStreamingProvider(config.provider);
+  if (!config.openStream) {
+    assertStreamingProvider(config.provider);
+  }
 
   if (!Number.isFinite(config.maxRounds) || config.maxRounds < 1) {
     throw new Error(`streaming turn maxRounds must be a positive integer; got ${config.maxRounds}`);
@@ -172,6 +275,14 @@ export async function runStreamingToolLoop(
       };
     }
 
+    if (config.hooks?.beforeRound) {
+      await config.hooks.beforeRound({
+        messages: workingMessages,
+        round,
+        toolRounds,
+      });
+    }
+
     // Per-round delta accumulator — used for empty message_end transcript
     // fallback so we do not re-append pre-tool narration already present in a
     // prior assistant tool_use turn (whole-turn streamedText still tracks all
@@ -180,12 +291,20 @@ export async function runStreamingToolLoop(
 
     // Snapshot for the provider — never hand out the live workingMessages array
     // (providers/tests often retain the reference; we mutate after tool rounds).
-    const stream = config.provider.stream!({
+    const streamParams: StreamingTurnOpenStreamParams = {
       messages: [...workingMessages],
       tools: config.tools,
       model: config.model,
-      options: { signal },
-    });
+      signal,
+    };
+    const stream = config.openStream
+      ? config.openStream(streamParams)
+      : config.provider.stream!({
+          messages: streamParams.messages,
+          tools: streamParams.tools,
+          model: streamParams.model,
+          options: { signal },
+        });
 
     let toolUse: { toolCalls: ToolCall[]; content?: string } | undefined;
     let messageEnd: { content: string } | undefined;
@@ -270,6 +389,26 @@ export async function runStreamingToolLoop(
     }
 
     if (toolUse) {
+      if (config.hooks?.onToolUse) {
+        const decision = await config.hooks.onToolUse({
+          toolCalls: toolUse.toolCalls,
+          content: toolUse.content,
+          round,
+          messages: workingMessages,
+        });
+        if (decision === 'stop') {
+          return {
+            finalText: streamedText,
+            streamedText,
+            messages: workingMessages,
+            toolRounds,
+            aborted: false,
+            exhausted: false,
+            stopReason: 'stopped',
+          };
+        }
+      }
+
       toolRounds += 1;
       if (config.hooks?.onBeforeTools) {
         await config.hooks.onBeforeTools(toolUse);
@@ -287,7 +426,7 @@ export async function runStreamingToolLoop(
         let result: { content: string; is_error?: boolean };
         if (config.invokeTool) {
           try {
-            result = await config.invokeTool(call);
+            result = await config.invokeTool(call, { messages: workingMessages });
           } catch (err) {
             config.logger?.warn({ tool: call.name, err }, 'streaming turn tool invocation threw');
             result = {
@@ -332,6 +471,25 @@ export async function runStreamingToolLoop(
       }
 
       workingMessages.push(buildUserToolResultMessage(toolResults));
+
+      if (config.hooks?.afterTools) {
+        const decision = await config.hooks.afterTools({
+          messages: workingMessages,
+          toolCalls: toolUse.toolCalls,
+          toolRounds,
+        });
+        if (decision === 'stop') {
+          return {
+            finalText: streamedText,
+            streamedText,
+            messages: workingMessages,
+            toolRounds,
+            aborted: false,
+            exhausted: false,
+            stopReason: 'stopped',
+          };
+        }
+      }
       continue;
     }
 

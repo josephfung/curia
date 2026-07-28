@@ -1,14 +1,14 @@
 // turn-runner.ts — VoiceTurnRunner drives a single spoken assistant turn.
 //
 // Thin voice wrapper over the streaming turn primitive
-// (src/agents/llm/streaming-turn.ts, #1552). This file owns only voice UX:
+// (src/agents/llm/streaming-turn.ts, #1552 / #1563). This file owns only voice UX:
 // sentence-chunk TTS, filler speech, barge-in AbortSignal semantics, and the
 // audible exhaustion fallback. Tool-loop / message assembly / round-cap /
 // stream+abort live in the shared primitive.
 //
-// Text AgentRuntime.handleTask stays on non-streaming provider.chat() — opt-in
-// is tracked as #1563 (requires a "text goes streaming" decision). Do not fold
-// voice into handleTask. Cross-link: src/agents/runtime.ts tool_use loop.
+// Text AgentRuntime.handleTask also delegates here via a chat-compatible
+// openStream adapter over chatWithRetry (ADR-038) — do not fold voice into
+// handleTask; both call the same primitive. Cross-link: src/agents/runtime.ts.
 // Sibling: #1551 (brain/context + history read model).
 
 import { randomUUID } from 'node:crypto';

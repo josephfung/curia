@@ -139,7 +139,10 @@ describe('runStreamingToolLoop (#1552)', () => {
       toolCalls: [toolCall],
       content: 'Checking.',
     });
-    expect(invokeTool).toHaveBeenCalledWith(toolCall);
+    expect(invokeTool).toHaveBeenCalledWith(
+      toolCall,
+      expect.objectContaining({ messages: expect.any(Array) }),
+    );
     expect(result.toolRounds).toBe(1);
     expect(result.stopReason).toBe('message_end');
     expect(result.finalText).toBe('Sunny.');
