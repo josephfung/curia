@@ -1206,8 +1206,11 @@ export class AgentRuntime {
             }
             maybeAppendCheckpointBudgetNudge(workingMessages);
           },
-          onToolUse: async ({ toolCalls }) => {
+          onToolUse: async ({ toolCalls, messages: workingMessages }) => {
+            // Match former while-loop order: increment, nudge (uses updated
+            // turnsUsed), then enforce maxTurns before invoking tools.
             budget.turnsUsed++;
+            maybeAppendCheckpointBudgetNudge(workingMessages);
             if (budget.turnsUsed >= budget.maxTurns) {
               await this.handleBudgetExceeded(budget, taskEvent, 'maxTurns', budgetHandoff);
               earlyExitHandled = true;
