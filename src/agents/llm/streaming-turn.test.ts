@@ -14,6 +14,7 @@ import {
   assertStreamingProvider,
   llmResponseAsStream,
   runStreamingToolLoop,
+  type StreamingTurnOpenStreamParams,
 } from './streaming-turn.js';
 import { buildAssistantToolUseMessage, buildUserToolResultMessage } from './tool-loop-messages.js';
 
@@ -442,11 +443,7 @@ describe('runStreamingToolLoop (#1552)', () => {
   });
 
   it('accepts openStream without provider.stream (chat-compatible adapter #1563)', async () => {
-    const openStream = vi.fn(async function* (_params: {
-      messages: Array<{ role: string; content: string }>;
-      model: string;
-      signal: AbortSignal;
-    }) {
+    const openStream = vi.fn(async function* (_params: StreamingTurnOpenStreamParams) {
       yield textDelta('via ');
       yield { type: 'message_end' as const, content: 'via adapter', usage, provenance };
     });
