@@ -1,7 +1,7 @@
 # ADR-038: Voice brain parity — shared-hardening vs full consolidation
 
 Date: 2026-07-27
-Status: Proposed
+Status: Accepted
 
 ## Context
 
@@ -58,7 +58,7 @@ effect. Call a comparison a **paired win** when the delta is positive in
 ≥4/5 reps and never negative (`variance.json` → `paired`). Marginal
 min>max separation remains a stricter optional signal.
 
-## Proposed decision
+## Decision
 
 **Reject full consolidation** as the voice brain direction — the ~19×
 instruction-token cost alone carries that rejection (latency microbench +
@@ -66,8 +66,9 @@ prompt-size estimates). On quality it does not win either: full-consolidation
 trails shared-hardening (Δ +0.044, not a paired win) and is roughly tied with
 baseline, while carrying that token load on every spoken turn.
 
-**Lean shared-hardening**, but **do not Accept yet**, and **do not bundle
-module compose**. Gates:
+**Accept shared-hardening.** All three gates below are now cleared (quality
+evidence, #1612 date-in-brief, #1614 off-ramp handoff). Compose modules **per
+measured benefit, not as a bundle**. Gates:
 
 1. **Quality claim (paired, not marginal).** Across 5 interleaved reps
    (corrected harness), the `shared − baseline` **check-rate** delta is +0.036
@@ -192,12 +193,11 @@ must not advertise a recursive off-ramp). Excluded from text-turn discovery;
 handler rejects non-voice `channelId`.
 Eval scores against the **real** handler (spike `invokeTool`), not a mock.
 
-### Tentative resolution of #1563's blocking question
+### Resolution of #1563's blocking question
 
-**Pending ADR acceptance:** if shared-hardening is Accepted (gates cleared),
-text channels **may** use `LLMProvider.stream()` — convergence onto the
-shared streaming primitive with separately composed prompts. Until then
-Issue #1563 stays blocked on this decision.
+Shared-hardening is **Accepted** (all gates cleared), so text channels **may**
+use `LLMProvider.stream()` — convergence onto the shared streaming primitive
+with separately composed prompts. **#1563 is unblocked** and is the follow-up.
 
 ### What is / is not in production on this branch
 
@@ -222,7 +222,7 @@ The coordinator's sole `### Date & time` instruction is the composed
 - #1614 — implement the real async off-ramp handoff (gate #3) — **done**
 - #1563 — text → streaming (unblocks on Accept)
 
-## Consequences (if Accepted)
+## Consequences
 
 - Voice stays a curated subset brain (ADR-037) **plus** shared guardrail
   modules **plus** a real async off-ramp — no full YAML on the spoken path.

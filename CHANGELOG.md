@@ -16,7 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **`async-offramp`** — voice hands heavyweight asks to async coordinator for principal callback. (#1614)
-- **ADR-038 (Proposed)** — corrected paired-variance evidence; per-module compose gates. #1612/#1613/#1614. (#1595)
+- **ADR-038 (Accepted)** — shared-hardening; voice off-ramp shipped; text→streaming (#1563) unblocked. (#1595)
 - **`src/agents/prompts/`** — shared date-resolve guardrail composed by voice + coordinator. (#1595)
 - **`resolve-time-window`** — diagnostics agent resolves natural-language time windows for audit queries. (#1592)
 - **`nylas_calendar` health check** — probes the principal calendar grant separately from email. (#1561)
