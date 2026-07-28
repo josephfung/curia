@@ -60,22 +60,25 @@ min>max separation remains a stricter optional signal.
 
 ## Proposed decision
 
-**Reject full consolidation** as the voice brain direction — the ~25×
+**Reject full consolidation** as the voice brain direction — the ~19×
 instruction-token cost alone carries that rejection (latency microbench +
-prompt-size estimates). Paired deltas also favor shared-hardening over
-full consolidation on every rep (see below); consolidation does not win
-quality.
+prompt-size estimates). On quality it does not win either: full-consolidation
+trails shared-hardening (Δ +0.044, not a paired win) and is roughly tied with
+baseline, while carrying that token load on every spoken turn.
 
 **Lean shared-hardening**, but **do not Accept yet**, and **do not bundle
 module compose**. Gates:
 
-1. **Quality claim (paired, not marginal).** Across 5 interleaved reps,
-   `shared − baseline` check-rate delta is positive on **5/5** reps
-   (mean +0.068) — a paired win the marginal ranges understated. That win
-   is **largely carried by `async-offramp`**, which is still a mocked
-   capability. Net of offramp, remaining modules must each earn compose
-   on their own paired benefit (see per-module table) — not ride a
-   bundled "shared-hardening wins" claim.
+1. **Quality claim (paired, not marginal).** Across 5 interleaved reps
+   (corrected harness), the `shared − baseline` **check-rate** delta is +0.036
+   (4/5 reps positive, one negative) — **not** a check-level paired win; the
+   **utterance-rate** delta is +0.105 (4/5 positive, none negative) — a paired
+   win, but thin. Either way it is **entirely carried by `async-offramp`** (the
+   only category paired win), a still-**mocked** capability. Net of off-ramp:
+   routing is marginal (+0.075, not a win), pronoun is **zero**, day-of-week is a
+   **tie**, and the bundle **regressed** honest-negative (−0.05). So each module
+   must earn compose on its own benefit — there is no bundled "shared-hardening
+   wins" claim.
 2. **`date-resolve` → brief handoff is a structural bug, not a prompt gap**
    (#1612). The guardrail induces the tool call; the model can still put a
    wrong date in the delegate brief. Fix calendar/delegate validation
@@ -93,21 +96,21 @@ Baseline already composes `DATE_RESOLVE_GUARDRAIL`. The shared-hardening
 eval arm adds routing + pronouns + off-ramp. Gate each production compose
 on its own measured benefit — do **not** ship the bundle:
 
-| Module | Paired evidence vs baseline | Production compose |
+| Module | Paired evidence vs baseline (corrected harness) | Production compose |
 |---|---|---|
-| **Routing** (`ROUTING_DECISION_GUARDRAIL`) | transfer-ownership Δ mean +0.075; never negative (3/5 +, 2/5 0) | **Compose** — modest, consistent non-regression (#1613) |
-| **Pronoun** (`PRONOUN_RESOLUTION_GUARDRAIL`) | Δ identically 0; `pronoun-your` 0/5 either way | **Hold** until it moves `pronoun-your` — pure token cost today (#1613) |
-| **Off-ramp** (`VOICE_ASYNC_OFFRAMP_GUIDANCE`) | paired win (Δ mean +0.40, 5/5 +) but **mocked** tool | **Compose only after real handoff** (gate #3, handoff #1614; compose per #1613) |
-| **Date-resolve** (already in prod) | wash / distraction risk (`date-next-friday` ↑, `date-next-tuesday` ↓, honest-negative dipped once) | Keep; close handoff via **#1612**, not more prompt text |
+| **Routing** (`ROUTING_DECISION_GUARDRAIL`) | transfer-ownership Δ +0.075 (3/5 +, 2/5 0) — **not** a ≥4/5 paired win | **Hold** — no clean win, and the bundle it rides in regresses honest-negative (#1613) |
+| **Pronoun** (`PRONOUN_RESOLUTION_GUARDRAIL`) | Δ identically **0**; `pronoun-your` 0/5 — yet full-consolidation solves it 5/5, so the case is solvable, the module just doesn't | **Hold** — pure token cost today (#1613) |
+| **Off-ramp** (`VOICE_ASYNC_OFFRAMP_GUIDANCE`) | the one category paired win (Δ +0.267, 5/5 +) — but the tool is **mocked** | **Compose only after real handoff** (gate #3, handoff #1614; compose per #1613) |
+| **Date-resolve** (already in prod) | wash / distraction risk (`date-next-friday` ↑, `date-next-tuesday` ↓ 5/5→4/5) | Keep; close handoff via **#1612**, not more prompt text |
+| **Bundle cost** | stacking the modules **regressed** honest-negative (−0.05; shared 2 fails vs baseline 0) | Real cost of composing more instruction — weigh per module, not as a bundle |
 
-### Evidence — variance rerun (5 interleaved reps, 2026-07-28)
+### Evidence — variance rerun (5 interleaved reps, 2026-07-28, corrected harness)
 
-> ⚠️ These figures were produced by an eval harness that carried two scoring
-> bugs since fixed in this PR (CodeRabbit review): asymmetric weekday matching
-> in `resolveExpectedIso`, and delegate checks scoring the first (possibly
-> rejected) `delegate` call rather than the final one. Both could only *under*-
-> count self-correcting or bare-weekday turns. Re-run the harness with the fixes
-> before citing these numbers for Acceptance.
+> Re-run after the CodeRabbit harness fixes (symmetric weekday matching in
+> `resolveExpectedIso`; delegate checks now score the final delegate call, not
+> the first/rejected one). Those fixes removed false-negatives that had inflated
+> the `shared − baseline` gap — the corrected delta is roughly half the earlier
+> draft's, and it surfaced an honest-negative regression the buggy harness hid.
 
 Harness: `scripts/spikes/voice-brain-parity/` — Haiku 4.5, `stream()` + tools.
 **19 utterances / ~50 assertion-checks × 5 reps.** Arms interleaved within
@@ -118,46 +121,51 @@ each rep. Calendar mock is load-bearing. Canonical artifact: `variance.json`
 
 | Comparison | mean Δ | per-rep Δ | paired win? |
 |---|---|---|---|
-| shared − baseline | **+0.068** | +0.04, +0.06, +0.02, +0.12, +0.10 | **yes (5/5 +)** |
-| shared − full | **+0.072** | +0.06, +0.12, +0.06, +0.04, +0.08 | **yes (5/5 +)** |
-| baseline − full | +0.004 | +0.02, +0.06, +0.04, −0.08, −0.02 | no |
+| shared − baseline | **+0.036** | +0.06, +0.04, +0.06, +0.04, −0.02 | no (4/5 +, 1 −) |
+| shared − full | +0.044 | +0.04, +0.04, +0.16, 0, −0.02 | no (3/5 +) |
+| baseline − full | +0.008 | −0.02, 0, +0.10, −0.04, 0 | no |
 
-Utterance-rate paired deltas tell the same story (shared − baseline mean
-+0.158, 5/5 +).
+Utterance-rate is the stronger signal: shared − baseline mean **+0.105**,
+per-rep +0.158, +0.105, +0.158, +0.105, 0 — **a paired win** (4/5 +, none −).
+So the edge is real at the utterance level but thin, and (below) concentrated
+in a single category.
 
 **Marginal pass-rates** (secondary; ranges overlap even when paired wins):
 
 | Arm | Prompt tokens (est.) | Check pass-rate mean [min, max] | Utterance pass-rate |
 |---|---|---|---|
-| baseline (prod slim + date-resolve) | ~656 | 0.888 [0.860, 0.920] | 0.737 [0.684, 0.789] |
-| shared-hardening (+ routing, pronouns, off-ramp) | ~1 563 | 0.956 [0.900, 0.980] | 0.895 [0.789, 0.947] |
-| full-consolidation | ~12 415 | 0.884 [0.840, 0.940] | 0.726 [0.632, 0.842] |
+| baseline (prod slim + date-resolve) | ~665 | 0.912 [0.880, 0.940] | 0.789 [0.737, 0.842] |
+| shared-hardening (+ routing, pronouns, off-ramp) | ~1 572 | 0.948 [0.920, 0.980] | 0.895 [0.842, 0.947] |
+| full-consolidation | ~12 606 | 0.904 [0.820, 0.960] | 0.811 [0.684, 0.895] |
 
 **Per-category paired Δ (shared − baseline)** and marginal rates:
 
-| Category | paired Δ mean (signs) | paired win? | marginal shared / baseline |
+| Category | paired Δ (shared − baseline) | paired win? | marginal shared / baseline / full |
 |---|---|---|---|
-| async-offramp | **+0.400** (5/5 +) | **yes** | 0.933 / 0.533 (also marginal ★) |
-| routing-transfer-ownership | +0.075 (3+, 2×0) | no (≥4/5) | 1.000 / 0.925 |
-| day-of-week-arithmetic | +0.067 (3+, 2×0) | no | 0.967 / 0.900 |
-| pronoun-resolution | **0** (5×0) | no | 0.800 / 0.800 |
-| honest-negative | −0.050 (1−, 4×0) | no | 0.950 / 1.000 |
+| async-offramp | **+0.267** (5/5 +) | **yes** | 0.967 / 0.700 / 0.767 |
+| routing-transfer-ownership | +0.075 (3/5 +, 2×0) | no | 0.975 / 0.900 / 0.875 |
+| day-of-week-arithmetic | 0 (1+, 1−, 3×0) | no | 0.933 / 0.933 / 0.883 |
+| pronoun-resolution | **0** (5×0) | no | 0.800 / 0.800 / **0.960** |
+| honest-negative | **−0.050** (1×−0.25, 4×0) | no (regression) | 0.950 / **1.000** / 0.900 |
 
 **Focus cases** (utterance all-checks-pass / 5 reps):
 
 | Case | baseline | shared | full |
 |---|---|---|---|
-| `pronoun-your-calendar` | 0/5 | 0/5 | 1/5 |
-| `date-next-friday-meeting` | 2/5 | 5/5 | 0/5 |
-| `date-next-tuesday` | 5/5 | 3/5 | 4/5 |
+| `pronoun-your-calendar` | 0/5 | 0/5 | **5/5** |
+| `date-next-friday-meeting` | 3/5 | 4/5 | 3/5 |
+| `date-next-tuesday` | 5/5 | 4/5 | 4/5 |
 
-`pronoun-your` ("your calendar" → Avery) is a **known gap** — the pronoun
-module earns nothing on this fixture until that case moves. Wrong-date-in-
-brief failures (even after calling `date-resolve`) are tracked as #1612.
+`pronoun-your` ("your calendar" → Avery): the pronoun module earns nothing
+(0/5, same as baseline), yet full-consolidation nails it 5/5 — the case is
+solvable, the extracted module just doesn't do it. `date-next-tuesday` even
+regressed under shared (5/5 → 4/5). Wrong-date-in-brief failures (even after
+calling `date-resolve`) are tracked as #1612.
 
-Bare-turn latency (prior interleaved microbench, 5 reps): baseline p50 TTFT
-~526 ms; shared-hardening ~657 ms; full-consolidation ~782 ms. Full
-consolidation remains ~25× the instruction tokens every spoken turn.
+Bare-turn latency (prior interleaved microbench, not re-run — prompt sizes
+barely changed): baseline p50 TTFT ~526 ms; shared-hardening ~657 ms;
+full-consolidation ~782 ms. Full consolidation remains ~19× the instruction
+tokens every spoken turn.
 
 Outbound-context: both prototype arms inject `formatInjectionBlock` **once**
 on the voice system-prompt path. Preserve that invariant.
@@ -190,7 +198,7 @@ Issue #1563 stays blocked on this decision.
 | Module | In eval shared-hardening arm | Wired into prod voice / coordinator |
 |---|---|---|
 | `DATE_RESOLVE_GUARDRAIL` | yes | **yes** (both; YAML has no pointer stub) |
-| `ROUTING_DECISION_GUARDRAIL` | yes | **eligible to compose** (#1613) — modest paired benefit |
+| `ROUTING_DECISION_GUARDRAIL` | yes | **hold** (#1613) — no clean paired win; +0.075 transfer only |
 | `PRONOUN_RESOLUTION_GUARDRAIL` | yes | **hold** — zero paired benefit until `pronoun-your` moves (#1613) |
 | `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | guidance yes / tool mocked | **no** — real handoff (#1614) is an Accept + compose gate (compose per #1613) |
 
@@ -204,7 +212,7 @@ The coordinator's sole `### Date & time` instruction is the composed
 ### Related issues
 
 - #1612 — structural date-resolve → brief validation (orthogonal, high impact)
-- #1613 — compose modules that **pay for themselves** (routing yes; pronoun hold; off-ramp after real handoff); supersedes bundled #1605
+- #1613 — compose modules that **pay for themselves** (all three currently HOLD — routing/pronoun show no clean win on the corrected harness; off-ramp only after its real handoff); supersedes bundled #1605
 - #1614 — implement the real async off-ramp handoff (gate #3)
 - #1563 — text → streaming (unblocks on Accept)
 

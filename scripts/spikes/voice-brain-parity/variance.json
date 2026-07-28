@@ -1,93 +1,13 @@
 {
-  "generatedAt": "2026-07-28T01:05:42.932Z",
+  "generatedAt": "2026-07-28T15:25:25.545Z",
   "model": "claude-haiku-4-5",
   "overall": {
     "baseline": {
-      "checkPassRateMean": 0.888,
-      "checkPassRateMin": 0.86,
-      "checkPassRateMax": 0.92,
-      "utterancePassRateMean": 0.737,
-      "utterancePassRateMin": 0.684,
-      "utterancePassRateMax": 0.789,
-      "perRep": [
-        {
-          "checksPassed": 46,
-          "checksTotal": 50,
-          "utterancesPassed": 15,
-          "utterancesTotal": 19
-        },
-        {
-          "checksPassed": 46,
-          "checksTotal": 50,
-          "utterancesPassed": 15,
-          "utterancesTotal": 19
-        },
-        {
-          "checksPassed": 44,
-          "checksTotal": 50,
-          "utterancesPassed": 14,
-          "utterancesTotal": 19
-        },
-        {
-          "checksPassed": 43,
-          "checksTotal": 50,
-          "utterancesPassed": 13,
-          "utterancesTotal": 19
-        },
-        {
-          "checksPassed": 43,
-          "checksTotal": 50,
-          "utterancesPassed": 13,
-          "utterancesTotal": 19
-        }
-      ]
-    },
-    "shared-hardening": {
-      "checkPassRateMean": 0.956,
-      "checkPassRateMin": 0.9,
-      "checkPassRateMax": 0.98,
-      "utterancePassRateMean": 0.895,
-      "utterancePassRateMin": 0.789,
-      "utterancePassRateMax": 0.947,
-      "perRep": [
-        {
-          "checksPassed": 48,
-          "checksTotal": 50,
-          "utterancesPassed": 17,
-          "utterancesTotal": 19
-        },
-        {
-          "checksPassed": 49,
-          "checksTotal": 50,
-          "utterancesPassed": 18,
-          "utterancesTotal": 19
-        },
-        {
-          "checksPassed": 45,
-          "checksTotal": 50,
-          "utterancesPassed": 15,
-          "utterancesTotal": 19
-        },
-        {
-          "checksPassed": 49,
-          "checksTotal": 50,
-          "utterancesPassed": 18,
-          "utterancesTotal": 19
-        },
-        {
-          "checksPassed": 48,
-          "checksTotal": 50,
-          "utterancesPassed": 17,
-          "utterancesTotal": 19
-        }
-      ]
-    },
-    "full-consolidation": {
-      "checkPassRateMean": 0.884,
-      "checkPassRateMin": 0.84,
+      "checkPassRateMean": 0.912,
+      "checkPassRateMin": 0.88,
       "checkPassRateMax": 0.94,
-      "utterancePassRateMean": 0.726,
-      "utterancePassRateMin": 0.632,
+      "utterancePassRateMean": 0.789,
+      "utterancePassRateMin": 0.737,
       "utterancePassRateMax": 0.842,
       "perRep": [
         {
@@ -97,15 +17,21 @@
           "utterancesTotal": 19
         },
         {
-          "checksPassed": 43,
+          "checksPassed": 44,
           "checksTotal": 50,
-          "utterancesPassed": 13,
+          "utterancesPassed": 15,
           "utterancesTotal": 19
         },
         {
-          "checksPassed": 42,
+          "checksPassed": 46,
           "checksTotal": 50,
-          "utterancesPassed": 12,
+          "utterancesPassed": 15,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 46,
+          "checksTotal": 50,
+          "utterancesPassed": 15,
           "utterancesTotal": 19
         },
         {
@@ -113,11 +39,85 @@
           "checksTotal": 50,
           "utterancesPassed": 16,
           "utterancesTotal": 19
+        }
+      ]
+    },
+    "shared-hardening": {
+      "checkPassRateMean": 0.948,
+      "checkPassRateMin": 0.92,
+      "checkPassRateMax": 0.98,
+      "utterancePassRateMean": 0.895,
+      "utterancePassRateMin": 0.842,
+      "utterancePassRateMax": 0.947,
+      "perRep": [
+        {
+          "checksPassed": 48,
+          "checksTotal": 50,
+          "utterancesPassed": 17,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 46,
+          "checksTotal": 50,
+          "utterancesPassed": 17,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 49,
+          "checksTotal": 50,
+          "utterancesPassed": 18,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 48,
+          "checksTotal": 50,
+          "utterancesPassed": 17,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 46,
+          "checksTotal": 50,
+          "utterancesPassed": 16,
+          "utterancesTotal": 19
+        }
+      ]
+    },
+    "full-consolidation": {
+      "checkPassRateMean": 0.904,
+      "checkPassRateMin": 0.82,
+      "checkPassRateMax": 0.96,
+      "utterancePassRateMean": 0.811,
+      "utterancePassRateMin": 0.684,
+      "utterancePassRateMax": 0.895,
+      "perRep": [
+        {
+          "checksPassed": 46,
+          "checksTotal": 50,
+          "utterancesPassed": 16,
+          "utterancesTotal": 19
         },
         {
           "checksPassed": 44,
           "checksTotal": 50,
-          "utterancesPassed": 14,
+          "utterancesPassed": 15,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 41,
+          "checksTotal": 50,
+          "utterancesPassed": 13,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 48,
+          "checksTotal": 50,
+          "utterancesPassed": 17,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 47,
+          "checksTotal": 50,
+          "utterancesPassed": 16,
           "utterancesTotal": 19
         }
       ]
@@ -126,23 +126,19 @@
   "byCategory": {
     "async-offramp": {
       "baseline": {
-        "checkPassRateMean": 0.533,
+        "checkPassRateMean": 0.7,
         "checkPassRateMin": 0.5,
-        "checkPassRateMax": 0.667
+        "checkPassRateMax": 0.833
       },
       "shared-hardening": {
-        "checkPassRateMean": 0.933,
+        "checkPassRateMean": 0.967,
         "checkPassRateMin": 0.833,
-        "checkPassRateMax": 1,
-        "separatesAbove": [
-          "baseline",
-          "full-consolidation"
-        ]
+        "checkPassRateMax": 1
       },
       "full-consolidation": {
-        "checkPassRateMean": 0.667,
+        "checkPassRateMean": 0.767,
         "checkPassRateMin": 0.667,
-        "checkPassRateMax": 0.667
+        "checkPassRateMax": 0.833
       }
     },
     "async-offramp-negative": {
@@ -181,19 +177,19 @@
     },
     "day-of-week-arithmetic": {
       "baseline": {
-        "checkPassRateMean": 0.9,
-        "checkPassRateMin": 0.833,
+        "checkPassRateMean": 0.933,
+        "checkPassRateMin": 0.75,
         "checkPassRateMax": 1
       },
       "shared-hardening": {
-        "checkPassRateMean": 0.967,
-        "checkPassRateMin": 0.917,
+        "checkPassRateMean": 0.933,
+        "checkPassRateMin": 0.75,
         "checkPassRateMax": 1
       },
       "full-consolidation": {
-        "checkPassRateMean": 0.85,
-        "checkPassRateMin": 0.75,
-        "checkPassRateMax": 0.917
+        "checkPassRateMean": 0.883,
+        "checkPassRateMin": 0.667,
+        "checkPassRateMax": 1
       }
     },
     "honest-negative": {
@@ -208,8 +204,8 @@
         "checkPassRateMax": 1
       },
       "full-consolidation": {
-        "checkPassRateMean": 1,
-        "checkPassRateMin": 1,
+        "checkPassRateMean": 0.9,
+        "checkPassRateMin": 0.75,
         "checkPassRateMax": 1
       }
     },
@@ -259,8 +255,8 @@
         "checkPassRateMax": 0.8
       },
       "full-consolidation": {
-        "checkPassRateMean": 0.76,
-        "checkPassRateMin": 0.6,
+        "checkPassRateMean": 0.96,
+        "checkPassRateMin": 0.8,
         "checkPassRateMax": 1
       }
     },
@@ -283,17 +279,17 @@
     },
     "routing-transfer-ownership": {
       "baseline": {
-        "checkPassRateMean": 0.925,
-        "checkPassRateMin": 0.875,
+        "checkPassRateMean": 0.9,
+        "checkPassRateMin": 0.75,
         "checkPassRateMax": 1
       },
       "shared-hardening": {
-        "checkPassRateMean": 1,
-        "checkPassRateMin": 1,
+        "checkPassRateMean": 0.975,
+        "checkPassRateMin": 0.875,
         "checkPassRateMax": 1
       },
       "full-consolidation": {
-        "checkPassRateMean": 0.9,
+        "checkPassRateMean": 0.875,
         "checkPassRateMin": 0.75,
         "checkPassRateMax": 1
       }
@@ -316,33 +312,33 @@
         "reps": 5
       },
       "full-consolidation": {
-        "passRateMean": 0.2,
-        "passRateMin": 0,
-        "passRateMax": 1,
-        "passes": 1,
-        "reps": 5
-      }
-    },
-    "date-next-friday-meeting": {
-      "baseline": {
-        "passRateMean": 0.4,
-        "passRateMin": 0,
-        "passRateMax": 1,
-        "passes": 2,
-        "reps": 5
-      },
-      "shared-hardening": {
         "passRateMean": 1,
         "passRateMin": 1,
         "passRateMax": 1,
         "passes": 5,
         "reps": 5
+      }
+    },
+    "date-next-friday-meeting": {
+      "baseline": {
+        "passRateMean": 0.6,
+        "passRateMin": 0,
+        "passRateMax": 1,
+        "passes": 3,
+        "reps": 5
+      },
+      "shared-hardening": {
+        "passRateMean": 0.8,
+        "passRateMin": 0,
+        "passRateMax": 1,
+        "passes": 4,
+        "reps": 5
       },
       "full-consolidation": {
-        "passRateMean": 0,
+        "passRateMean": 0.6,
         "passRateMin": 0,
-        "passRateMax": 0,
-        "passes": 0,
+        "passRateMax": 1,
+        "passes": 3,
         "reps": 5
       }
     },
@@ -355,10 +351,10 @@
         "reps": 5
       },
       "shared-hardening": {
-        "passRateMean": 0.6,
+        "passRateMean": 0.8,
         "passRateMin": 0,
         "passRateMax": 1,
-        "passes": 3,
+        "passes": 4,
         "reps": 5
       },
       "full-consolidation": {
@@ -370,120 +366,119 @@
       }
     }
   },
-  "reps": 5,
   "paired": {
     "checkRate": {
       "shared-hardening−baseline": {
-        "mean": 0.068,
-        "min": 0.02,
-        "max": 0.12,
-        "perRep": [
-          0.04,
-          0.06,
-          0.02,
-          0.12,
-          0.1
-        ],
-        "positiveReps": 5,
-        "negativeReps": 0,
-        "zeroReps": 0,
-        "pairedWin": true
-      },
-      "shared-hardening−full-consolidation": {
-        "mean": 0.072,
-        "min": 0.04,
-        "max": 0.12,
-        "perRep": [
-          0.06,
-          0.12,
-          0.06,
-          0.04,
-          0.08
-        ],
-        "positiveReps": 5,
-        "negativeReps": 0,
-        "zeroReps": 0,
-        "pairedWin": true
-      },
-      "baseline−full-consolidation": {
-        "mean": 0.004,
-        "min": -0.08,
+        "mean": 0.036,
+        "min": -0.02,
         "max": 0.06,
         "perRep": [
-          0.02,
           0.06,
           0.04,
-          -0.08,
+          0.06,
+          0.04,
+          -0.02
+        ],
+        "positiveReps": 4,
+        "negativeReps": 1,
+        "zeroReps": 0,
+        "pairedWin": false
+      },
+      "shared-hardening−full-consolidation": {
+        "mean": 0.044,
+        "min": -0.02,
+        "max": 0.16,
+        "perRep": [
+          0.04,
+          0.04,
+          0.16,
+          0,
           -0.02
         ],
         "positiveReps": 3,
+        "negativeReps": 1,
+        "zeroReps": 1,
+        "pairedWin": false
+      },
+      "baseline−full-consolidation": {
+        "mean": 0.008,
+        "min": -0.04,
+        "max": 0.1,
+        "perRep": [
+          -0.02,
+          0,
+          0.1,
+          -0.04,
+          0
+        ],
+        "positiveReps": 1,
         "negativeReps": 2,
-        "zeroReps": 0,
+        "zeroReps": 2,
         "pairedWin": false
       }
     },
     "utteranceRate": {
       "shared-hardening−baseline": {
-        "mean": 0.158,
-        "min": 0.053,
-        "max": 0.263,
+        "mean": 0.105,
+        "min": 0,
+        "max": 0.158,
         "perRep": [
+          0.158,
           0.105,
           0.158,
-          0.053,
-          0.263,
-          0.211
+          0.105,
+          0
         ],
-        "positiveReps": 5,
+        "positiveReps": 4,
         "negativeReps": 0,
-        "zeroReps": 0,
+        "zeroReps": 1,
         "pairedWin": true
       },
       "shared-hardening−full-consolidation": {
-        "mean": 0.168,
-        "min": 0.105,
+        "mean": 0.084,
+        "min": 0,
         "max": 0.263,
-        "perRep": [
-          0.158,
-          0.263,
-          0.158,
-          0.105,
-          0.158
-        ],
-        "positiveReps": 5,
-        "negativeReps": 0,
-        "zeroReps": 0,
-        "pairedWin": true
-      },
-      "baseline−full-consolidation": {
-        "mean": 0.011,
-        "min": -0.158,
-        "max": 0.105,
         "perRep": [
           0.053,
           0.105,
-          0.105,
-          -0.158,
-          -0.053
+          0.263,
+          0,
+          0
         ],
         "positiveReps": 3,
+        "negativeReps": 0,
+        "zeroReps": 2,
+        "pairedWin": false
+      },
+      "baseline−full-consolidation": {
+        "mean": -0.021,
+        "min": -0.105,
+        "max": 0.105,
+        "perRep": [
+          -0.105,
+          0,
+          0.105,
+          -0.105,
+          0
+        ],
+        "positiveReps": 1,
         "negativeReps": 2,
-        "zeroReps": 0,
+        "zeroReps": 2,
         "pairedWin": false
       }
     },
     "byCategory": {
       "async-offramp": {
         "shared-hardening−baseline": {
-          "mean": 0.4,
-          "min": 0.333,
-          "max": 0.5,
+          "mean": 0.267,
+          "min": 0.167,
+          "max": 0.333,
           "perRep": [
             0.333,
             0.333,
             0.333,
-            0.5,
-            0.5
+            0.167,
+            0.167
           ],
           "positiveReps": 5,
           "negativeReps": 0,
@@ -491,15 +486,15 @@
           "pairedWin": true
         },
         "shared-hardening−full-consolidation": {
-          "mean": 0.267,
+          "mean": 0.2,
           "min": 0.167,
           "max": 0.333,
           "perRep": [
             0.167,
-            0.333,
             0.167,
             0.333,
-            0.333
+            0.167,
+            0.167
           ],
           "positiveReps": 5,
           "negativeReps": 0,
@@ -507,19 +502,19 @@
           "pairedWin": true
         },
         "baseline−full-consolidation": {
-          "mean": -0.133,
+          "mean": -0.067,
           "min": -0.167,
           "max": 0,
           "perRep": [
             -0.167,
+            -0.167,
             0,
-            -0.167,
-            -0.167,
-            -0.167
+            0,
+            0
           ],
           "positiveReps": 0,
-          "negativeReps": 4,
-          "zeroReps": 1,
+          "negativeReps": 2,
+          "zeroReps": 3,
           "pairedWin": false
         }
       },
@@ -625,51 +620,51 @@
       },
       "day-of-week-arithmetic": {
         "shared-hardening−baseline": {
-          "mean": 0.067,
-          "min": 0,
-          "max": 0.167,
+          "mean": 0,
+          "min": -0.083,
+          "max": 0.083,
           "perRep": [
-            0,
-            0,
             0.083,
-            0.167,
-            0.083
+            0,
+            0,
+            0,
+            -0.083
           ],
-          "positiveReps": 3,
-          "negativeReps": 0,
-          "zeroReps": 2,
+          "positiveReps": 1,
+          "negativeReps": 1,
+          "zeroReps": 3,
           "pairedWin": false
         },
         "shared-hardening−full-consolidation": {
-          "mean": 0.117,
-          "min": 0.083,
-          "max": 0.25,
+          "mean": 0.05,
+          "min": -0.083,
+          "max": 0.333,
           "perRep": [
-            0.083,
-            0.25,
-            0.083,
-            0.083,
-            0.083
+            0,
+            0,
+            0.333,
+            0,
+            -0.083
           ],
-          "positiveReps": 5,
-          "negativeReps": 0,
-          "zeroReps": 0,
-          "pairedWin": true
+          "positiveReps": 1,
+          "negativeReps": 1,
+          "zeroReps": 3,
+          "pairedWin": false
         },
         "baseline−full-consolidation": {
           "mean": 0.05,
           "min": -0.083,
-          "max": 0.25,
+          "max": 0.333,
           "perRep": [
-            0.083,
-            0.25,
-            0,
             -0.083,
+            0,
+            0.333,
+            0,
             0
           ],
-          "positiveReps": 2,
+          "positiveReps": 1,
           "negativeReps": 1,
-          "zeroReps": 2,
+          "zeroReps": 3,
           "pairedWin": false
         }
       },
@@ -681,9 +676,9 @@
           "perRep": [
             0,
             0,
-            -0.25,
             0,
-            0
+            0,
+            -0.25
           ],
           "positiveReps": 0,
           "negativeReps": 1,
@@ -691,35 +686,35 @@
           "pairedWin": false
         },
         "shared-hardening−full-consolidation": {
-          "mean": -0.05,
+          "mean": 0.05,
           "min": -0.25,
-          "max": 0,
+          "max": 0.25,
           "perRep": [
+            0.25,
             0,
+            0.25,
             0,
-            -0.25,
-            0,
-            0
+            -0.25
           ],
-          "positiveReps": 0,
+          "positiveReps": 2,
           "negativeReps": 1,
-          "zeroReps": 4,
+          "zeroReps": 2,
           "pairedWin": false
         },
         "baseline−full-consolidation": {
-          "mean": 0,
+          "mean": 0.1,
           "min": 0,
-          "max": 0,
+          "max": 0.25,
           "perRep": [
+            0.25,
             0,
-            0,
-            0,
+            0.25,
             0,
             0
           ],
-          "positiveReps": 0,
+          "positiveReps": 2,
           "negativeReps": 0,
-          "zeroReps": 5,
+          "zeroReps": 3,
           "pairedWin": false
         }
       },
@@ -841,35 +836,35 @@
           "pairedWin": false
         },
         "shared-hardening−full-consolidation": {
-          "mean": 0.04,
+          "mean": -0.16,
           "min": -0.2,
-          "max": 0.2,
+          "max": 0,
           "perRep": [
-            0.2,
-            0,
-            0.2,
+            -0.2,
+            -0.2,
+            -0.2,
             -0.2,
             0
           ],
-          "positiveReps": 2,
-          "negativeReps": 1,
-          "zeroReps": 2,
+          "positiveReps": 0,
+          "negativeReps": 4,
+          "zeroReps": 1,
           "pairedWin": false
         },
         "baseline−full-consolidation": {
-          "mean": 0.04,
+          "mean": -0.16,
           "min": -0.2,
-          "max": 0.2,
+          "max": 0,
           "perRep": [
-            0.2,
-            0,
-            0.2,
+            -0.2,
+            -0.2,
+            -0.2,
             -0.2,
             0
           ],
-          "positiveReps": 2,
-          "negativeReps": 1,
-          "zeroReps": 2,
+          "positiveReps": 0,
+          "negativeReps": 4,
+          "zeroReps": 1,
           "pairedWin": false
         }
       },
@@ -930,8 +925,8 @@
           "max": 0.125,
           "perRep": [
             0,
-            0.125,
             0,
+            0.125,
             0.125,
             0.125
           ],
@@ -946,8 +941,8 @@
           "max": 0.25,
           "perRep": [
             0,
-            0.125,
             0.25,
+            0.125,
             0,
             0.125
           ],
@@ -962,8 +957,8 @@
           "max": 0.25,
           "perRep": [
             0,
-            0,
             0.25,
+            0,
             -0.125,
             0
           ],
@@ -975,5 +970,5 @@
       }
     }
   },
-  "analysisNote": "Prefer paired.checkRate / paired.byCategory (per-rep deltas) over marginal min/max for interleaved arms. pairedWin = ≥4/5 positive and never negative."
+  "reps": 5
 }
