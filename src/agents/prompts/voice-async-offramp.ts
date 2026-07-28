@@ -11,9 +11,9 @@
 
 /**
  * Spoken-turn guidance for deferring work that exceeds live-call scope.
- * Recognition + offer language only — the actual async handoff (publish
- * inbound / schedule coordinator task / follow up on Signal/email) is the
- * implementation follow-up tracked beside ADR-038.
+ * Recognition + offer language; the real handoff is the `async-offramp` tool
+ * (`skills/async-offramp/`), which enqueues a coordinator `agent.task` and
+ * reaches the principal on Signal/email when done (#1614 / ADR-038 gate #3).
  */
 export const VOICE_ASYNC_OFFRAMP_GUIDANCE = [
   '### Live-call scope and async off-ramp',

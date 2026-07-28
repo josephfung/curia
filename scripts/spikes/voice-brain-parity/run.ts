@@ -10,8 +10,9 @@
 //   full-consolidation — coordinator.yaml system_prompt + spoken addendum
 //
 // Tools are load-bearing: calendar delegate rejects briefs lacking the ISO
-// date that date-resolve should have produced. Counts are utterances ×
-// assertion-checks — not an exhaustive suite.
+// date that date-resolve should have produced. async-offramp invokes the
+// real handler (skills/async-offramp) against a fake bus — not a mock (#1614).
+// Counts are utterances × assertion-checks — not an exhaustive suite.
 //
 // Usage:
 //   ANTHROPIC_API_KEY=... pnpm exec tsx scripts/spikes/voice-brain-parity/run.ts
@@ -42,6 +43,14 @@ import {
 } from '../../../src/channels/voice/voice-runtime.js';
 import { createSilentLogger } from '../../../src/logger.js';
 import { formatTimeContextBlock } from '../../../src/time/time-context.js';
+import {
+  AsyncOfframpHandler,
+  resetAsyncOfframpDedupForTests,
+} from '../../../skills/async-offramp/handler.js';
+import type { ToolContext } from '../../../src/skills/types.js';
+import type { EventBus } from '../../../src/bus/bus.js';
+import type { BusEvent } from '../../../src/bus/events.js';
+import pino from 'pino';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 const FIXTURES_PATH = resolve(import.meta.dirname, 'fixtures.json');
@@ -143,9 +152,9 @@ function buildPrompts(fixtures: Fixtures, outbound: string | null): Record<ArmId
     timeContextBlock: timeBlock,
   });
 
-  // Shared-hardening: all staged modules + voice async off-ramp (the safety
-  // mitigation that makes the slim brain non-regressive on heavyweight asks).
-  const sharedSections = [
+  // Shared-hardening: production baseline modules (date-resolve + async
+  // off-ramp after #1614) plus the still-staged routing + pronoun modules.
+  const sharedHardening = [
     fixtures.identityBlock,
     VOICE_SYSTEM_ADDENDUM,
     VOICE_TOOL_RESULT_POLICY,
@@ -154,24 +163,23 @@ function buildPrompts(fixtures: Fixtures, outbound: string | null): Record<ArmId
     DATE_RESOLVE_GUARDRAIL,
     VOICE_ASYNC_OFFRAMP_GUIDANCE,
     VOICE_DELEGATION_GUIDANCE + '\n\n## Available Specialists\n' + fixtures.specialistRoster,
-  ];
-  if (outbound) sharedSections.push(outbound);
-  sharedSections.push(timeBlock);
-  const sharedHardening = sharedSections.join('\n\n');
+    ...(outbound ? [outbound] : []),
+    timeBlock,
+  ].join('\n\n');
 
   // Full consolidation: coordinator brain + spoken addendum. Outbound injected
   // exactly once on the system suffix (voice path) — never also via dispatcher.
-  const fullSections = [
+  // Off-ramp guidance stays explicit here (coordinator YAML does not carry it).
+  const fullConsolidation = [
     fixtures.identityBlock,
     loadCoordinatorSystemPrompt(),
     VOICE_SYSTEM_ADDENDUM,
     VOICE_TOOL_RESULT_POLICY,
     VOICE_ASYNC_OFFRAMP_GUIDANCE,
     '## Available Specialists\n' + fixtures.specialistRoster,
-  ];
-  if (outbound) fullSections.push(outbound);
-  fullSections.push(timeBlock);
-  const fullConsolidation = fullSections.join('\n\n');
+    ...(outbound ? [outbound] : []),
+    timeBlock,
+  ].join('\n\n');
 
   return {
     baseline,
@@ -277,24 +285,65 @@ function briefContainsResolvedDate(brief: string, iso: string): boolean {
   return alias ? alias.test(brief) : false;
 }
 
+function makeSpikeOfframpBus() {
+  const published: BusEvent[] = [];
+  const bus = {
+    subscribe() {
+      /* unused in spike */
+    },
+    async publish(_layer: string, event: BusEvent) {
+      published.push(event);
+    },
+  } as unknown as EventBus;
+  return { bus, published };
+}
+
+const spikeOfframpHandler = new AsyncOfframpHandler();
+
+/** Invoke the real async-offramp handler (#1614) — no mocked success payload. */
+async function invokeRealAsyncOfframp(
+  call: ToolCall,
+): Promise<{ content: string; is_error?: boolean }> {
+  const { bus } = makeSpikeOfframpBus();
+  const ctx = {
+    input: call.input,
+    log: pino({ level: 'silent' }),
+    bus,
+    agentId: 'coordinator',
+    conversationId: 'voice:spike-eval',
+    channelId: 'voice',
+    taskEventId: 'spike-session',
+    liveTurn: true,
+    caller: { contactId: 'ceo-spike', role: 'ceo', channel: 'voice' },
+    taskMetadata: {
+      originator: {
+        contactId: 'ceo-spike',
+        systemRole: 'principal',
+        channel: 'voice',
+        initiatedAt: new Date().toISOString(),
+        tier: 'known',
+      },
+      voiceSessionId: 'spike-session',
+    },
+  } as unknown as ToolContext;
+
+  const result = await spikeOfframpHandler.execute(ctx);
+  if (result.success) {
+    return { content: JSON.stringify(result.data ?? { ok: true }) };
+  }
+  return { content: result.error ?? 'async-offramp failed', is_error: true };
+}
+
 function defaultToolResult(
   call: ToolCall,
   fixtures: Fixtures,
   prior: ToolTrace[],
-): { content: string; is_error?: boolean } {
+): { content: string; is_error?: boolean } | Promise<{ content: string; is_error?: boolean }> {
   if (call.name === 'date-resolve') return defaultDateResolveResult(call, fixtures);
 
+  // Real handler — scores against actual enqueue shape, not a hardcoded mock (#1614).
   if (call.name === 'async-offramp') {
-    return {
-      content: JSON.stringify({
-        success: true,
-        data: {
-          accepted: true,
-          follow_up_channel: call.input.follow_up_channel ?? 'email',
-          note: 'Handed to async coordinator path; principal will be reached when done.',
-        },
-      }),
-    };
+    return invokeRealAsyncOfframp(call);
   }
 
   if (call.name === 'delegate') {
@@ -643,6 +692,9 @@ async function runCase(
   fixtures: Fixtures,
   provider: AnthropicProvider,
 ): Promise<CaseResult> {
+  // Fresh dedup map per case so real async-offramp enqueues don't collide across fixtures.
+  resetAsyncOfframpDedupForTests();
+
   const messages: Message[] = [
     { role: 'system', content: systemPrompt },
     ...(fixture.history ?? []).map(h => ({ role: h.role, content: h.content }) as Message),
