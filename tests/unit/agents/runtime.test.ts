@@ -816,8 +816,14 @@ describe('AgentRuntime', () => {
     expect(systemMsg).toContain('- email: ceo@example.com');
     expect(systemMsg).toContain('- signal: +15550001234');
     expect(systemMsg).toContain('Do not infer or substitute — these are authoritative.');
-    // Block appended after base prompt with correct separator
-    expect(systemMsg).toContain('Base prompt.\n\n## Principal Contact Details');
+    // Principal Contact Details block appended after the base prompt with a
+    // blank-line separator. For the coordinator the shared date-resolve
+    // guardrail (ADR-038 / #1595) is composed in between, so assert the
+    // separator + ordering rather than literal adjacency to the base prompt.
+    expect(systemMsg).toContain('\n\n## Principal Contact Details');
+    expect(systemMsg.indexOf('Base prompt.')).toBeLessThan(
+      systemMsg.indexOf('## Principal Contact Details'),
+    );
   });
 
   it('omits ## Principal Contact Details block when principalIdentities is empty', async () => {
