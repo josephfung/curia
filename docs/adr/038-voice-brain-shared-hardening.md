@@ -45,108 +45,122 @@ shared module covers and that still matter on a live call include:
 Combined with voice's 8-round cap, a heavyweight / stateful /
 clarification-needing request can make voice **fail or hallucinate** instead
 of degrading gracefully — i.e. feel dramatically less capable than the
-coordinator. Shared-hardening is only safe with a **first-class async
-off-ramp** (designed below; recognition evaluated in the fixture).
+coordinator. Shared-hardening is only safe once a **first-class async
+off-ramp handoff is real** (not merely prompt-recognized) — see gates below.
 
 ### Evaluation standard
 
-An earlier draft of this ADR treated **8 single-turn utterances /
-21 assertion-checks** with a non-load-bearing calendar mock as decisive.
-That is not enough to carry the call (see PR #1608 review). The current
-fixture is larger and discriminating, but still a spike instrument — not a
-production smoke suite. Counts are reported as **utterances /
-assertion-checks**.
+Counts are **utterances / assertion-checks**, not "N tests". A single-run
+point estimate is insufficient for quality claims under LLM variance: report
+**pass-rate mean ± range over ≥5 interleaved reps**, and call a category a
+win only when one arm's min rate is strictly above another's max
+(`scripts/spikes/voice-brain-parity/variance.json`).
 
 ## Proposed decision
 
-**Lean shared-hardening** (reject full consolidation as the voice brain
-direction), **contingent on** shipping the async off-ramp alongside the
-remaining shared modules. Status stays **Proposed** until the expanded
-evidence below is accepted and the off-ramp handoff is implemented beyond
-prompt recognition.
+**Reject full consolidation** as the voice brain direction — the ~25×
+instruction-token cost alone carries that rejection (latency microbench +
+prompt-size estimates), and the variance rerun does not show consolidation
+winning quality overall.
 
-### Evidence (expanded fixture, 2026-07-27 re-run)
+**Lean shared-hardening**, but **do not Accept yet**. Three gates remain:
+
+1. **Quality-parity claim needs interval separation (or a narrowed claim).**
+   Across 5 interleaved reps, shared-hardening leads on mean check pass-rate
+   but its range still overlaps baseline — so
+   "shared-hardening ≈ consolidation on quality" / "shared beats baseline
+   overall" is **not** established as a clean win. Per-category, only
+   `async-offramp` cleanly separates (shared above both other arms).
+2. **`date-resolve` → brief handoff is a structural bug, not a prompt gap**
+   (#1612). The guardrail induces the tool call; the model can still put a
+   wrong date in the delegate brief. Fix calendar/delegate validation
+   orthogonally (and preferably before Accept).
+3. **Off-ramp acceptance gates on a real handoff**, not mock recognition.
+   `VOICE_ASYNC_OFFRAMP_GUIDANCE` + fixture `mustCallTools: ["async-offramp"]`
+   measure recognition only. Acceptance requires an `async-offramp` tool that
+   actually enqueues coordinator work and reaches the principal on
+   Signal/email. Do not ship the prompt that offers follow-ups until that
+   path exists.
+
+### Evidence — variance rerun (5 interleaved reps, 2026-07-28)
 
 Harness: `scripts/spikes/voice-brain-parity/` — Haiku 4.5, `stream()` + tools.
-**19 utterances / 50 assertion-checks.** Calendar mock is load-bearing (rejects
-briefs that omit a date `date-resolve` produced this turn; ISO or natural form
-accepted). Fixture covers day-of-week arithmetic, calendar delegation, honest-
-negative (error / timeout / empty-success), pronouns, transfer-ownership,
-borrow-then-answer, outbound-context ack (multi-turn), and async off-ramp
-(positive + negative + accepted handoff).
+**19 utterances / ~50 assertion-checks × 5 reps.** Arms interleaved within
+each rep. Calendar mock is load-bearing. Raw: `variance.json`, `results.json`.
 
-| Arm | Prompt tokens (est.) | Assertion-checks | Failures by category |
+**Overall assertion-check pass-rate** (mean [min, max] across reps):
+
+| Arm | Prompt tokens (est.) | Check pass-rate | Utterance pass-rate |
 |---|---|---|---|
-| baseline (prod slim + date-resolve module only) | ~656 | 44 pass / 6 fail | date×3, pronoun×1, offramp×2 |
-| **shared-hardening** (routing + pronouns + date-resolve + off-ramp) | ~1 563 | **48 / 2** | date×1, pronoun×1 |
-| full-consolidation (full YAML + spoken addendum + off-ramp) | ~12 415 | 45 / 5 | date×2, transfer×3 |
+| baseline (prod slim + date-resolve module) | ~656 | 0.888 [0.860, 0.920] | 0.737 [0.684, 0.789] |
+| shared-hardening (+ routing, pronouns, off-ramp) | ~1 563 | 0.956 [0.900, 0.980] | 0.895 [0.789, 0.947] |
+| full-consolidation | ~12 415 | 0.884 [0.840, 0.940] | 0.726 [0.632, 0.842] |
+
+Shared-hardening's overall min (0.900) does **not** strictly exceed baseline's
+max (0.920) or consolidation's max (0.940) — **no overall separation**.
+
+**Per-category** (check pass-rate mean [min, max]; ★ = min strictly above
+other arms' max):
+
+| Category | baseline | shared-hardening | full-consolidation |
+|---|---|---|---|
+| async-offramp ★ | 0.533 [0.50, 0.67] | **0.933 [0.83, 1.00]** | 0.667 [0.67, 0.67] |
+| routing-transfer-ownership | 0.925 [0.88, 1.00] | 1.000 [1.00, 1.00] | 0.900 [0.75, 1.00] |
+| day-of-week-arithmetic | 0.900 [0.83, 1.00] | 0.967 [0.92, 1.00] | 0.850 [0.75, 0.92] |
+| pronoun-resolution | 0.800 [0.80, 0.80] | 0.800 [0.80, 0.80] | 0.760 [0.60, 1.00] |
+| honest-negative | 1.000 | 0.950 [0.75, 1.00] | 1.000 |
+| (other categories) | ~1.0 all arms | ~1.0 | ~1.0 |
+
+**Focus cases** (utterance all-checks-pass / 5 reps):
+
+| Case | baseline | shared | full |
+|---|---|---|---|
+| `pronoun-your-calendar` | 0/5 | 0/5 | 1/5 |
+| `date-next-friday-meeting` | 2/5 | 5/5 | 0/5 |
+| `date-next-tuesday` | 5/5 | 3/5 | 4/5 |
+
+`pronoun-your` ("your calendar" → Avery) is a **known gap** for the pronoun
+module compose (#1605) — not a clean sweep vs consolidation. Wrong-date-in-
+brief failures (even after calling `date-resolve`) are tracked as #1612.
 
 Bare-turn latency (prior interleaved microbench, 5 reps): baseline p50 TTFT
-526 ms (~488 tok at the time); shared-hardening 657 ms; full-consolidation
-782 ms. Full consolidation remains ~25× the instruction tokens every spoken
-turn (cost / cache-write / cold-cache risk) and imported text-channel
-mechanics that hurt live-call UX (transfer-ownership substantive reply on
-`routing-transfer-yes` in an earlier run; transfer miss on this run).
-
-**What moved quality:** routing + pronoun + off-ramp modules in the
-shared-hardening arm — not date-resolve alone. Baseline already composes
-`DATE_RESOLVE_GUARDRAIL` in production; the expanded load-bearing date cases
-still show residual day-arithmetic misses across all arms (model sometimes
-passes a wrong calendar date into the brief despite calling `date-resolve`).
-Pronoun-your ("your calendar" → Avery) remains hard on baseline and
-shared-hardening; full-consolidation passed that case on this run.
-
-**Off-ramp:** shared-hardening passed all four offramp assertion groups on
-this run (offer / don't-fake-finish / accepted handoff / no spurious offer).
-Baseline missed bulk-inbox offer and handoff-confirm phrasing. Full
-consolidation passed offramp cases here but has previously claimed finished
-heavy work — keep the negative checks.
+~526 ms; shared-hardening ~657 ms; full-consolidation ~782 ms. Full
+consolidation remains ~25× the instruction tokens every spoken turn.
 
 Outbound-context: both prototype arms inject `formatInjectionBlock` **once**
-on the voice system-prompt path (never also via the dispatcher user-content
-path). Preserve that invariant.
+on the voice system-prompt path. Preserve that invariant.
 
-### Async off-ramp design (required mitigation)
+### Async off-ramp design (required mitigation — handoff not done)
 
 When a request exceeds live-call scope, voice should:
 
-1. **Recognize** — heavyweight, long-running, needs a clarification loop, or
-   needs coordinator-only depth (see `VOICE_ASYNC_OFFRAMP_GUIDANCE`).
-2. **Offer** — natural spoken deferral: *"That'll take a bit — want me to work
-   on it and follow up in a few minutes?"*
-3. **Hand off** — on agreement (or clearly async-shaped asks), call
-   `async-offramp` with a crisp brief + follow-up channel. Implementation
-   follow-up: publish onto the normal async dispatch path (coordinator task /
-   inbound.message) rather than a prompt-only stub.
+1. **Recognize** — heavyweight / long-running / clarification-loop /
+   coordinator-depth (see `VOICE_ASYNC_OFFRAMP_GUIDANCE`).
+2. **Offer** — natural spoken deferral.
+3. **Hand off** — on agreement, call `async-offramp` with brief + follow-up
+   channel. **Implementation required before Accept:** enqueue on the normal
+   async dispatch path (coordinator task / inbound.message).
 4. **Close the loop** — reach the principal on Signal/email when done.
+   Never claim a follow-up that was not handed off.
 
-Prompt module: `src/agents/prompts/voice-async-offramp.ts` (voice-only; do
-not compose into coordinator YAML). Eval cases live under category
-`async-offramp` / `async-offramp-negative` in
-`scripts/spikes/voice-brain-parity/fixtures.json`.
+Prompt module: `src/agents/prompts/voice-async-offramp.ts` (voice-only).
+Eval currently measures recognition against a **mocked** tool only.
 
 ### Tentative resolution of #1563's blocking question
 
-**Pending ADR acceptance:** if shared-hardening is accepted, text channels
-**may** use `LLMProvider.stream()` — convergence onto the shared streaming
-primitive with separately composed prompts. Do **not** fold voice into
-`handleTask`'s non-streaming loop, and do not make voice adopt the full
-coordinator YAML. Until this ADR is Accepted, #1563 stays blocked on the
-decision.
+**Pending ADR acceptance:** if shared-hardening is Accepted (gates cleared),
+text channels **may** use `LLMProvider.stream()` — convergence onto the
+shared streaming primitive with separately composed prompts. Until then
+#1563 stays blocked on this decision.
 
 ### What is / is not in production on this branch
 
 | Module | In eval shared-hardening arm | Wired into prod voice / coordinator |
 |---|---|---|
 | `DATE_RESOLVE_GUARDRAIL` | yes | **yes** (both; YAML has no pointer stub) |
-| `ROUTING_DECISION_GUARDRAIL` | yes | no — follow-up after Accepted |
-| `PRONOUN_RESOLUTION_GUARDRAIL` | yes | no — follow-up after Accepted |
-| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + `async-offramp` tool | yes | no — implement handoff + compose after Accepted |
-
-Shipping date-resolve first remains a small, reversible compose; the
-expanded fixture now exercises it with a load-bearing calendar mock. The
-modules that moved quality (routing / pronouns / off-ramp) stay staged until
-this ADR is Accepted.
+| `ROUTING_DECISION_GUARDRAIL` | yes | no — after Accepted + #1605 |
+| `PRONOUN_RESOLUTION_GUARDRAIL` | yes | no — after Accepted + #1605 (incl. pronoun-your gap) |
+| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | guidance yes / tool mocked | **no** — real handoff is an Accept gate |
 
 ### Prompt-shape rule
 
@@ -155,19 +169,22 @@ model-visible prompts. Provenance belongs in code comments (`runtime.ts`).
 The coordinator's sole `### Date & time` instruction is the composed
 `DATE_RESOLVE_GUARDRAIL` module.
 
+### Related issues
+
+- #1612 — structural date-resolve → brief validation (orthogonal, high impact)
+- #1605 — compose remaining shared guardrails (incl. pronoun-your)
+- #1606 — text → streaming (unblocks on Accept)
+
 ## Consequences (if Accepted)
 
 - Voice stays a curated subset brain (ADR-037) **plus** shared guardrail
-  modules **plus** the async off-ramp — no full YAML on the spoken critical path.
+  modules **plus** a real async off-ramp — no full YAML on the spoken path.
 - Guardrail drift is structural: channel-agnostic rules live in
-  `src/agents/prompts/` and are composed by both brains. Copy-pasting
-  coordinator lines into `VOICE_*` constants is out of policy.
+  `src/agents/prompts/`. Copy-pasting coordinator lines into `VOICE_*` is
+  out of policy.
 - Text → streaming (#1563 / #1606) unblocks on acceptance.
-- Follow-ups: compose routing + pronouns (#1605), implement async-offramp
-  handoff (new issue on acceptance), keep expanding the spike fixture toward
-  a durable voice eval.
-- Full consolidation remains a rejected alternative unless a later fixture
-  shows a failure mode that uniquely requires the full YAML *and* cannot be
-  closed by shared modules + off-ramp.
-- Spike harness retained under `scripts/spikes/voice-brain-parity/` for
-  re-runs.
+- Full consolidation remains rejected unless a later variance run shows a
+  failure mode that uniquely requires the full YAML *and* cannot be closed by
+  shared modules + off-ramp + #1612.
+- Spike harness retained under `scripts/spikes/voice-brain-parity/` (`REPS=N`
+  for variance).

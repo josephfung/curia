@@ -1,0 +1,374 @@
+{
+  "generatedAt": "2026-07-28T01:05:42.932Z",
+  "model": "claude-haiku-4-5",
+  "overall": {
+    "baseline": {
+      "checkPassRateMean": 0.888,
+      "checkPassRateMin": 0.86,
+      "checkPassRateMax": 0.92,
+      "utterancePassRateMean": 0.737,
+      "utterancePassRateMin": 0.684,
+      "utterancePassRateMax": 0.789,
+      "perRep": [
+        {
+          "checksPassed": 46,
+          "checksTotal": 50,
+          "utterancesPassed": 15,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 46,
+          "checksTotal": 50,
+          "utterancesPassed": 15,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 44,
+          "checksTotal": 50,
+          "utterancesPassed": 14,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 43,
+          "checksTotal": 50,
+          "utterancesPassed": 13,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 43,
+          "checksTotal": 50,
+          "utterancesPassed": 13,
+          "utterancesTotal": 19
+        }
+      ]
+    },
+    "shared-hardening": {
+      "checkPassRateMean": 0.956,
+      "checkPassRateMin": 0.9,
+      "checkPassRateMax": 0.98,
+      "utterancePassRateMean": 0.895,
+      "utterancePassRateMin": 0.789,
+      "utterancePassRateMax": 0.947,
+      "perRep": [
+        {
+          "checksPassed": 48,
+          "checksTotal": 50,
+          "utterancesPassed": 17,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 49,
+          "checksTotal": 50,
+          "utterancesPassed": 18,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 45,
+          "checksTotal": 50,
+          "utterancesPassed": 15,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 49,
+          "checksTotal": 50,
+          "utterancesPassed": 18,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 48,
+          "checksTotal": 50,
+          "utterancesPassed": 17,
+          "utterancesTotal": 19
+        }
+      ]
+    },
+    "full-consolidation": {
+      "checkPassRateMean": 0.884,
+      "checkPassRateMin": 0.84,
+      "checkPassRateMax": 0.94,
+      "utterancePassRateMean": 0.726,
+      "utterancePassRateMin": 0.632,
+      "utterancePassRateMax": 0.842,
+      "perRep": [
+        {
+          "checksPassed": 45,
+          "checksTotal": 50,
+          "utterancesPassed": 14,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 43,
+          "checksTotal": 50,
+          "utterancesPassed": 13,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 42,
+          "checksTotal": 50,
+          "utterancesPassed": 12,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 47,
+          "checksTotal": 50,
+          "utterancesPassed": 16,
+          "utterancesTotal": 19
+        },
+        {
+          "checksPassed": 44,
+          "checksTotal": 50,
+          "utterancesPassed": 14,
+          "utterancesTotal": 19
+        }
+      ]
+    }
+  },
+  "byCategory": {
+    "async-offramp": {
+      "baseline": {
+        "checkPassRateMean": 0.533,
+        "checkPassRateMin": 0.5,
+        "checkPassRateMax": 0.667
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 0.933,
+        "checkPassRateMin": 0.833,
+        "checkPassRateMax": 1,
+        "separatesAbove": [
+          "baseline",
+          "full-consolidation"
+        ]
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 0.667,
+        "checkPassRateMin": 0.667,
+        "checkPassRateMax": 0.667
+      }
+    },
+    "async-offramp-negative": {
+      "baseline": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      }
+    },
+    "calendar-delegation": {
+      "baseline": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      }
+    },
+    "day-of-week-arithmetic": {
+      "baseline": {
+        "checkPassRateMean": 0.9,
+        "checkPassRateMin": 0.833,
+        "checkPassRateMax": 1
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 0.967,
+        "checkPassRateMin": 0.917,
+        "checkPassRateMax": 1
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 0.85,
+        "checkPassRateMin": 0.75,
+        "checkPassRateMax": 0.917
+      }
+    },
+    "honest-negative": {
+      "baseline": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 0.95,
+        "checkPassRateMin": 0.75,
+        "checkPassRateMax": 1
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      }
+    },
+    "latency-baseline": {
+      "baseline": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      }
+    },
+    "outbound-context-ack": {
+      "baseline": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      }
+    },
+    "pronoun-resolution": {
+      "baseline": {
+        "checkPassRateMean": 0.8,
+        "checkPassRateMin": 0.8,
+        "checkPassRateMax": 0.8
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 0.8,
+        "checkPassRateMin": 0.8,
+        "checkPassRateMax": 0.8
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 0.76,
+        "checkPassRateMin": 0.6,
+        "checkPassRateMax": 1
+      }
+    },
+    "routing-borrow-then-answer": {
+      "baseline": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      }
+    },
+    "routing-transfer-ownership": {
+      "baseline": {
+        "checkPassRateMean": 0.925,
+        "checkPassRateMin": 0.875,
+        "checkPassRateMax": 1
+      },
+      "shared-hardening": {
+        "checkPassRateMean": 1,
+        "checkPassRateMin": 1,
+        "checkPassRateMax": 1
+      },
+      "full-consolidation": {
+        "checkPassRateMean": 0.9,
+        "checkPassRateMin": 0.75,
+        "checkPassRateMax": 1
+      }
+    }
+  },
+  "byCase": {
+    "pronoun-your-calendar": {
+      "baseline": {
+        "passRateMean": 0,
+        "passRateMin": 0,
+        "passRateMax": 0,
+        "passes": 0,
+        "reps": 5
+      },
+      "shared-hardening": {
+        "passRateMean": 0,
+        "passRateMin": 0,
+        "passRateMax": 0,
+        "passes": 0,
+        "reps": 5
+      },
+      "full-consolidation": {
+        "passRateMean": 0.2,
+        "passRateMin": 0,
+        "passRateMax": 1,
+        "passes": 1,
+        "reps": 5
+      }
+    },
+    "date-next-friday-meeting": {
+      "baseline": {
+        "passRateMean": 0.4,
+        "passRateMin": 0,
+        "passRateMax": 1,
+        "passes": 2,
+        "reps": 5
+      },
+      "shared-hardening": {
+        "passRateMean": 1,
+        "passRateMin": 1,
+        "passRateMax": 1,
+        "passes": 5,
+        "reps": 5
+      },
+      "full-consolidation": {
+        "passRateMean": 0,
+        "passRateMin": 0,
+        "passRateMax": 0,
+        "passes": 0,
+        "reps": 5
+      }
+    },
+    "date-next-tuesday": {
+      "baseline": {
+        "passRateMean": 1,
+        "passRateMin": 1,
+        "passRateMax": 1,
+        "passes": 5,
+        "reps": 5
+      },
+      "shared-hardening": {
+        "passRateMean": 0.6,
+        "passRateMin": 0,
+        "passRateMax": 1,
+        "passes": 3,
+        "reps": 5
+      },
+      "full-consolidation": {
+        "passRateMean": 0.8,
+        "passRateMin": 0,
+        "passRateMax": 1,
+        "passes": 4,
+        "reps": 5
+      }
+    }
+  },
+  "reps": 5
+}

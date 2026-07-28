@@ -1,41 +1,39 @@
 # Voice brain parity spike (#1595) — notes
 
-Date: 2026-07-27 (updated after PR #1608 blocking review)
+Date: 2026-07-27 (updated 2026-07-28 after second PR #1608 review)
 
-ADR-038 is **Proposed** — not Accepted. This note points at the frozen
-fixture, measurement artifacts, and the async off-ramp design; it is not a
-second decision log.
+ADR-038 is **Proposed** — Accept gates: variance-backed quality claim (or
+narrowed claim), #1612 date-in-brief structural fix, real async-offramp handoff.
 
 ## Artifacts
 
 | Path | Role |
 |---|---|
-| `scripts/spikes/voice-brain-parity/fixtures.json` | Frozen eval set (19 utterances; load-bearing tools; routing / offramp / multi-turn) |
-| `scripts/spikes/voice-brain-parity/run.ts` | Three-arm quality + latency harness |
-| `scripts/spikes/voice-brain-parity/results.json` | Latest expanded run (report as utterances / assertion-checks) |
-| `scripts/spikes/voice-brain-parity/latency-microbench.ts` | Interleaved bare-turn TTFT microbench |
+| `fixtures.json` | Frozen eval set (19 utterances; load-bearing tools) |
+| `run.ts` | Three-arm harness; `REPS=N` for interleaved variance |
+| `variance.json` | 5-rep pass-rate mean [min,max] overall + per category |
+| `results.json` | Raw per-rep rows (large) |
 | `src/agents/prompts/` | Shared modules + voice-only async off-ramp guidance |
+
+## Variance (5 interleaved reps)
+
+Overall check pass-rate mean [min, max]:
+
+- baseline: 0.888 [0.860, 0.920]
+- shared-hardening: 0.956 [0.900, 0.980] — leads mean, **no interval separation** vs baseline
+- full-consolidation: 0.884 [0.840, 0.940]
+
+Category with clean separation (shared min > others' max): **async-offramp only**.
+
+Focus: `pronoun-your-calendar` 0/5 shared & baseline, 1/5 full — known #1605 gap.
+Wrong-date-in-brief after calling date-resolve → #1612.
 
 ## Counting
 
-Say **"19 utterances / 50 assertion-checks"**, not "50 tests". The suite is a
-spike differentiator, not exhaustive coverage of coordinator depth.
-
-## Async off-ramp
-
-Design lives in ADR-038 and `VOICE_ASYNC_OFFRAMP_GUIDANCE`. Recognition is
-evaluated in the fixture; the real dispatch handoff (async coordinator task +
-Signal/email follow-up) is implementation work after the ADR is Accepted.
-
-## Outbound-context check
-
-Both prototype arms inject `formatInjectionBlock` **once** on the system
-prompt suffix (voice path). Neither re-enters the dispatcher user-content
-injection.
+Say **"19 utterances / ~50 assertion-checks × N reps"**, not "N tests".
 
 ## Re-run
 
 ```bash
-ANTHROPIC_API_KEY=… pnpm exec tsx scripts/spikes/voice-brain-parity/run.ts
-ANTHROPIC_API_KEY=… REPS=5 pnpm exec tsx scripts/spikes/voice-brain-parity/latency-microbench.ts
+ANTHROPIC_API_KEY=… REPS=5 pnpm exec tsx scripts/spikes/voice-brain-parity/run.ts
 ```
