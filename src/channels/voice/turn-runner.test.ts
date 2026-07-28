@@ -145,7 +145,7 @@ describe('VoiceTurnRunner', () => {
     const result = await runner.runTurn({ messages: [{ role: 'user', content: 'weather?' }], signal: new AbortController().signal });
 
     expect(invokeTool).toHaveBeenCalledOnce();
-    expect(invokeTool).toHaveBeenCalledWith(toolCall);
+    expect(invokeTool).toHaveBeenCalledWith(toolCall, expect.objectContaining({ messages: expect.any(Array) }));
     expect(fillers).toEqual(['One moment.']);
     // Preceding text ("Let me check.") is spoken before the filler, then the answer.
     expect(spoken).toContain('Let me check.');

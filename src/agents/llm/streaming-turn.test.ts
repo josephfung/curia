@@ -12,6 +12,7 @@ import {
   DEFAULT_STREAMING_MAX_ROUNDS,
   StreamUnsupportedError,
   assertStreamingProvider,
+  llmResponseAsStream,
   runStreamingToolLoop,
 } from './streaming-turn.js';
 import { buildAssistantToolUseMessage, buildUserToolResultMessage } from './tool-loop-messages.js';
@@ -438,5 +439,174 @@ describe('runStreamingToolLoop (#1552)', () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow(/maxRounds/);
+  });
+
+  it('accepts openStream without provider.stream (chat-compatible adapter #1563)', async () => {
+    const openStream = vi.fn(async function* () {
+      yield textDelta('via ');
+      yield { type: 'message_end' as const, content: 'via adapter', usage, provenance };
+    });
+
+    const result = await runStreamingToolLoop([{ role: 'user', content: 'hi' }], {
+      provider: new NoStreamProvider(),
+      model: 'fake',
+      maxRounds: 2,
+      signal: new AbortController().signal,
+      openStream,
+    });
+
+    expect(openStream).toHaveBeenCalledTimes(1);
+    expect(result.stopReason).toBe('message_end');
+    expect(result.finalText).toBe('via adapter');
+  });
+
+  it('onToolUse returning stop exits before invokeTool (stopReason stopped)', async () => {
+    const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
+    const provider = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [toolCall], usage, provenance }],
+    ]);
+    const invokeTool = vi.fn(async () => ({ content: 'should not run' }));
+
+    const result = await runStreamingToolLoop([], {
+      provider,
+      model: 'fake',
+      maxRounds: 3,
+      signal: new AbortController().signal,
+      invokeTool,
+      hooks: {
+        onToolUse: async () => 'stop',
+      },
+    });
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.stopReason).toBe('stopped');
+    expect(result.toolRounds).toBe(0);
+  });
+
+  it('afterTools returning stop exits after tool results are appended', async () => {
+    const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
+    const provider = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [toolCall], content: 'checking', usage, provenance }],
+      [{ type: 'message_end', content: 'should not reach', usage, provenance }],
+    ]);
+
+    const result = await runStreamingToolLoop([], {
+      provider,
+      model: 'fake',
+      maxRounds: 3,
+      signal: new AbortController().signal,
+      invokeTool: async () => ({ content: '{"ok":true}' }),
+      hooks: {
+        afterTools: async () => 'stop',
+      },
+    });
+
+    expect(result.stopReason).toBe('stopped');
+    expect(result.toolRounds).toBe(1);
+    expect(provider.streamCalls).toBe(1);
+    // Assistant tool_use + user tool_result must both be present.
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]).toEqual(buildAssistantToolUseMessage([toolCall], 'checking'));
+    expect(result.messages[1]).toEqual(
+      buildUserToolResultMessage([{ id: 'call_1', content: '{"ok":true}' }]),
+    );
+  });
+
+  it('beforeRound receives mutable working messages each LLM round', async () => {
+    const toolCall: ToolCall = { id: 'call_1', name: 'lookup', input: {} };
+    const provider = new FakeStreamProvider([
+      [{ type: 'tool_use', toolCalls: [toolCall], usage, provenance }],
+      [{ type: 'message_end', content: 'done', usage, provenance }],
+    ]);
+    const rounds: number[] = [];
+
+    await runStreamingToolLoop([{ role: 'user', content: 'hi' }], {
+      provider,
+      model: 'fake',
+      maxRounds: 3,
+      signal: new AbortController().signal,
+      invokeTool: async (_call, ctx) => {
+        ctx?.messages.push({ role: 'system', content: 'injected' });
+        return { content: 'ok' };
+      },
+      hooks: {
+        beforeRound: async ({ round, messages: msgs }) => {
+          rounds.push(round);
+          if (round === 1) {
+            expect(msgs.some((m) => m.role === 'system' && m.content === 'injected')).toBe(true);
+          }
+        },
+      },
+    });
+
+    expect(rounds).toEqual([0, 1]);
+  });
+});
+
+describe('llmResponseAsStream (#1563)', () => {
+  it('maps text responses to text_delta + message_end', async () => {
+    const events: LLMStreamEvent[] = [];
+    for await (const event of llmResponseAsStream({
+      type: 'text',
+      content: 'hello',
+      usage,
+      provenance,
+    })) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      { type: 'text_delta', text: 'hello' },
+      { type: 'message_end', content: 'hello', usage, provenance },
+    ]);
+  });
+
+  it('maps empty text to message_end only', async () => {
+    const events: LLMStreamEvent[] = [];
+    for await (const event of llmResponseAsStream({
+      type: 'text',
+      content: '',
+      usage,
+      provenance,
+    })) {
+      events.push(event);
+    }
+    expect(events).toEqual([{ type: 'message_end', content: '', usage, provenance }]);
+  });
+
+  it('maps tool_use and error responses', async () => {
+    const toolCall: ToolCall = { id: 'c1', name: 'x', input: {} };
+    const toolEvents: LLMStreamEvent[] = [];
+    for await (const event of llmResponseAsStream({
+      type: 'tool_use',
+      toolCalls: [toolCall],
+      content: 'preamble',
+      usage,
+      provenance,
+    })) {
+      toolEvents.push(event);
+    }
+    expect(toolEvents).toEqual([
+      {
+        type: 'tool_use',
+        toolCalls: [toolCall],
+        content: 'preamble',
+        usage,
+        provenance,
+      },
+    ]);
+
+    const err = {
+      type: 'RATE_LIMIT' as const,
+      source: 'mock',
+      message: 'slow down',
+      retryable: true,
+      context: {},
+      timestamp: new Date(),
+    };
+    const errEvents: LLMStreamEvent[] = [];
+    for await (const event of llmResponseAsStream({ type: 'error', error: err })) {
+      errEvents.push(event);
+    }
+    expect(errEvents).toEqual([{ type: 'error', error: err }]);
   });
 });
