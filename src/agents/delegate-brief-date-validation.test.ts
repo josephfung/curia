@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   briefContainsResolvedDate,
+  briefHasDateLikeContent,
   calendarBriefNeedsResolvedDate,
   extractDateResolveResult,
   isCalendarDelegation,
@@ -24,17 +25,33 @@ describe('isCalendarDelegation', () => {
 
 describe('calendarBriefNeedsResolvedDate', () => {
   it('requires a date for relative phrasing', () => {
-    expect(calendarBriefNeedsResolvedDate("What's on my calendar next Tuesday?", [])).toBe(true);
+    expect(calendarBriefNeedsResolvedDate("What's on my calendar next Tuesday?")).toBe(true);
+  });
+
+  it('requires a date for bare weekdays', () => {
+    expect(calendarBriefNeedsResolvedDate("What's on my calendar Friday?")).toBe(true);
   });
 
   it('does not require a date for move-without-day requests', () => {
-    expect(calendarBriefNeedsResolvedDate('Move my three PM to four thirty.', [])).toBe(false);
+    expect(calendarBriefNeedsResolvedDate('Move my three PM to four thirty.')).toBe(false);
   });
 
-  it('requires a date when date-resolve already ran this turn', () => {
-    expect(
-      calendarBriefNeedsResolvedDate('Schedule the meeting.', [{ isoDate: '2026-07-31' }]),
-    ).toBe(true);
+  it('does not treat "next meeting" / "this call" / bare schedule as relative dates', () => {
+    expect(calendarBriefNeedsResolvedDate('Reschedule my next meeting.')).toBe(false);
+    expect(calendarBriefNeedsResolvedDate('Join this call at 3.')).toBe(false);
+    expect(calendarBriefNeedsResolvedDate('Schedule the meeting.')).toBe(false);
+  });
+});
+
+describe('briefHasDateLikeContent', () => {
+  it('detects ISO and natural month-day forms', () => {
+    expect(briefHasDateLikeContent('Check 2026-07-31.')).toBe(true);
+    expect(briefHasDateLikeContent('Book July 31 at 2pm.')).toBe(true);
+    expect(briefHasDateLikeContent('Book July 31st, 2026.')).toBe(true);
+  });
+
+  it('does not treat time-only move briefs as date-like', () => {
+    expect(briefHasDateLikeContent('Move my three PM to four thirty.')).toBe(false);
   });
 });
 
@@ -51,12 +68,21 @@ describe('briefContainsResolvedDate', () => {
     );
   });
 
-  it('matches month-day without weekday', () => {
+  it('matches month-day without weekday when brief has no year', () => {
     expect(briefContainsResolvedDate('Book July 31 at 2pm.', resolved)).toBe(true);
+  });
+
+  it('matches ordinal-suffixed dates', () => {
+    expect(briefContainsResolvedDate('Book July 31st at 2pm.', resolved)).toBe(true);
+    expect(briefContainsResolvedDate('Book July 31st, 2026 at 2pm.', resolved)).toBe(true);
   });
 
   it('rejects a contradicting date', () => {
     expect(briefContainsResolvedDate('Schedule on August 1, 2026 at 2pm.', resolved)).toBe(false);
+  });
+
+  it('rejects correct month-day with the wrong year', () => {
+    expect(briefContainsResolvedDate('Schedule on July 31, 2027 at 2pm.', resolved)).toBe(false);
   });
 });
 
@@ -83,7 +109,7 @@ describe('validateDelegateBriefDates', () => {
     expect(result.error).toMatch(/must include a date date-resolve produced/i);
   });
 
-  it('rejects calendar asks that skip date-resolve', () => {
+  it('rejects relative calendar asks that skip date-resolve', () => {
     const result = validateDelegateBriefDates({
       agent: 'calendar',
       task: "What's on my calendar next Tuesday?",
@@ -110,6 +136,32 @@ describe('validateDelegateBriefDates', () => {
       priorDateResolves: [],
     });
     expect(result.ok).toBe(true);
+  });
+
+  it('allows date-free calendar briefs even when an earlier date-resolve ran', () => {
+    const result = validateDelegateBriefDates({
+      agent: 'calendar',
+      task: 'Move my three PM to four thirty.',
+      priorDateResolves: [friday],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not over-trigger on "next meeting" / bare schedule without date-resolve', () => {
+    expect(
+      validateDelegateBriefDates({
+        agent: 'calendar',
+        task: 'Reschedule my next meeting.',
+        priorDateResolves: [],
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateDelegateBriefDates({
+        agent: 'calendar',
+        task: 'Schedule the meeting.',
+        priorDateResolves: [],
+      }).ok,
+    ).toBe(true);
   });
 });
 

@@ -25,9 +25,24 @@ export type ValidateDelegateBriefDatesResult =
 
 const CALENDAR_AGENT_PATTERN = /calendar/i;
 
-/** Relative / day-of-week phrasing that requires a resolved date in calendar briefs. */
-const RELATIVE_DATE_IN_BRIEF =
-  /\b(tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next\s+\w+|this\s+\w+|what'?s on|what is on|anything\s+(on|scheduled)|schedule\b)/i;
+const WEEKDAY =
+  'monday|tuesday|wednesday|thursday|friday|saturday|sunday';
+
+/**
+ * Genuine relative / day-of-week phrasing that requires a resolved date.
+ * Deliberately excludes bare "next meeting" / "this call" / "schedule" —
+ * those are not calendar dates to resolve.
+ */
+const RELATIVE_DATE_IN_BRIEF = new RegExp(
+  String.raw`\b(tomorrow|today|${WEEKDAY}|next\s+(?:${WEEKDAY})|this\s+(?:${WEEKDAY}))\b`,
+  'i',
+);
+
+/** ISO date or month+day natural forms that look like a stated calendar date. */
+const DATE_LIKE_IN_BRIEF =
+  /\b\d{4}-\d{2}-\d{2}\b|\b(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\.?\s+\d{1,2}(?:st|nd|rd|th)?\b/i;
+
+const YEAR_IN_BRIEF = /\b(?:19|20)\d{2}\b/;
 
 export function isCalendarDelegation(agent: string, task: string): boolean {
   const agentLower = agent.toLowerCase();
@@ -35,11 +50,14 @@ export function isCalendarDelegation(agent: string, task: string): boolean {
   return CALENDAR_AGENT_PATTERN.test(agentLower) || taskLower.includes('calendar');
 }
 
-export function calendarBriefNeedsResolvedDate(
-  task: string,
-  priorDateResolves: readonly TurnDateResolveResult[],
-): boolean {
-  return RELATIVE_DATE_IN_BRIEF.test(task) || priorDateResolves.length > 0;
+/** True when the brief uses relative/day-of-week language that needs date-resolve. */
+export function calendarBriefNeedsResolvedDate(task: string): boolean {
+  return RELATIVE_DATE_IN_BRIEF.test(task);
+}
+
+/** True when the brief states a concrete calendar date (ISO or month+day). */
+export function briefHasDateLikeContent(task: string): boolean {
+  return DATE_LIKE_IN_BRIEF.test(task);
 }
 
 /** Parse a successful date-resolve tool payload into a turn record. */
@@ -62,6 +80,21 @@ export function extractDateResolveResult(data: unknown): TurnDateResolveResult |
   };
 }
 
+function dayWithOrdinal(day: number): string {
+  const mod100 = day % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${day}th`;
+  switch (day % 10) {
+    case 1:
+      return `${day}st`;
+    case 2:
+      return `${day}nd`;
+    case 3:
+      return `${day}rd`;
+    default:
+      return `${day}th`;
+  }
+}
+
 /** True when the brief mentions the ISO date or a natural form date-resolve produced. */
 export function briefContainsResolvedDate(
   brief: string,
@@ -72,15 +105,29 @@ export function briefContainsResolvedDate(
   const dt = DateTime.fromISO(resolved.isoDate);
   if (!dt.isValid) return false;
 
+  const month = dt.toFormat('MMMM');
+  const monthShort = dt.toFormat('MMM');
+  const day = dt.day;
+  const year = dt.toFormat('yyyy');
+  const ordinalDay = dayWithOrdinal(day);
+
+  // Full-date candidates (always safe — year pins the match).
   const candidates = new Set<string>();
   if (resolved.formatted) candidates.add(resolved.formatted);
-  candidates.add(dt.toFormat('MMMM d, yyyy'));
-  candidates.add(dt.toFormat('MMMM d yyyy'));
-  candidates.add(dt.toFormat('MMM d, yyyy'));
-  candidates.add(dt.toFormat('d MMMM yyyy'));
-  candidates.add(dt.toFormat('MMMM do, yyyy'));
-  candidates.add(dt.toFormat('MMMM do'));
-  candidates.add(dt.toFormat('MMMM d'));
+  candidates.add(`${month} ${day}, ${year}`);
+  candidates.add(`${month} ${day} ${year}`);
+  candidates.add(`${monthShort} ${day}, ${year}`);
+  candidates.add(`${day} ${month} ${year}`);
+  candidates.add(`${month} ${ordinalDay}, ${year}`);
+  candidates.add(`${month} ${ordinalDay} ${year}`);
+
+  // Yearless month/day only when the brief does not already spell out a year —
+  // otherwise "July 31, 2027" would falsely match a 2026-07-31 resolve.
+  if (!YEAR_IN_BRIEF.test(brief)) {
+    candidates.add(`${month} ${day}`);
+    candidates.add(`${month} ${ordinalDay}`);
+    candidates.add(`${monthShort} ${day}`);
+  }
 
   const briefLower = brief.toLowerCase();
   for (const candidate of candidates) {
@@ -98,11 +145,11 @@ export function validateDelegateBriefDates(
     return { ok: true };
   }
 
-  if (!calendarBriefNeedsResolvedDate(task, priorDateResolves)) {
-    return { ok: true };
-  }
+  const needsResolved = calendarBriefNeedsResolvedDate(task);
+  const hasDateLike = briefHasDateLikeContent(task);
 
-  if (priorDateResolves.length === 0) {
+  // Relative/day-of-week asks must call date-resolve this turn.
+  if (needsResolved && priorDateResolves.length === 0) {
     return {
       ok: false,
       error:
@@ -110,14 +157,20 @@ export function validateDelegateBriefDates(
     };
   }
 
-  const matched = priorDateResolves.find(resolved => briefContainsResolvedDate(task, resolved));
-  if (!matched) {
-    const isoList = priorDateResolves.map(r => r.isoDate).join(', ');
-    return {
-      ok: false,
-      error:
-        `Brief must include a date date-resolve produced this turn (${isoList}); natural form OK (e.g. July 28, 2026)`,
-    };
+  // When the brief states a date (relative ask, or concrete date-like text) and
+  // date-resolve already ran, require the brief to cite one of those results.
+  // Unrelated earlier date-resolve calls do NOT force date-free briefs (e.g.
+  // "move my 3pm to 4:30") to include a resolved date.
+  if (priorDateResolves.length > 0 && (needsResolved || hasDateLike)) {
+    const matched = priorDateResolves.find(resolved => briefContainsResolvedDate(task, resolved));
+    if (!matched) {
+      const isoList = priorDateResolves.map(r => r.isoDate).join(', ');
+      return {
+        ok: false,
+        error:
+          `Brief must include a date date-resolve produced this turn (${isoList}); natural form OK (e.g. July 28, 2026)`,
+      };
+    }
   }
 
   return { ok: true };
