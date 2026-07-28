@@ -24,6 +24,7 @@ import type { OutboundContextService } from '../../dispatch/outbound-context.js'
 import type { Logger } from '../../logger.js';
 import type { LLMProvider, Message, ToolCall, ToolDefinition } from '../../agents/llm/provider.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../agents/prompts/date-resolve-guardrail.js';
+import { VOICE_ASYNC_OFFRAMP_GUIDANCE } from '../../agents/prompts/voice-async-offramp.js';
 import { TurnDateResolveTracker } from '../../agents/delegate-brief-date-validation.js';
 import type { WorkingMemory } from '../../memory/working-memory.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
@@ -86,12 +87,13 @@ function isHardTtsFailure(err: unknown): boolean {
  * Brain stance (#1551, revised by ADR-038): spoken turns get a curated subset
  * of the coordinator's context — office identity/persona block, specialist
  * roster + delegation guidance, shared channel-agnostic guardrails (starting
- * with date-resolve, #1595), and a fresh date/time block — assembled by
- * buildVoiceSystemPrompt(). They deliberately do NOT get the coordinator's
- * full YAML system prompt or KG/sender enrichment (latency + text-channel
- * content that makes no sense spoken). Active outbound-context entries are
- * included (#1594) so voice can acknowledge recent proactive sends on other
- * channels. See ADR-037 Consequences and ADR-038.
+ * with date-resolve, #1595), the voice async off-ramp (#1614), and a fresh
+ * date/time block — assembled by buildVoiceSystemPrompt(). They deliberately
+ * do NOT get the coordinator's full YAML system prompt or KG/sender enrichment
+ * (latency + text-channel content that makes no sense spoken). Active
+ * outbound-context entries are included (#1594) so voice can acknowledge
+ * recent proactive sends on other channels. See ADR-037 Consequences and
+ * ADR-038.
  */
 export const VOICE_SYSTEM_ADDENDUM =
   'You are speaking to the principal in a live voice call. Reply in a natural, ' +
@@ -161,6 +163,9 @@ export function buildVoiceSystemPrompt(parts: {
   // (ADR-038 / #1595). Always present: voice already pins date-resolve via
   // coordinator tools; the failure mode was missing instruction, not missing tool.
   sections.push(DATE_RESOLVE_GUARDRAIL);
+  // Async off-ramp (#1614 / ADR-038 gate #3): composed only once the real
+  // async-offramp tool exists — never promise a follow-up we cannot deliver.
+  sections.push(VOICE_ASYNC_OFFRAMP_GUIDANCE);
   if (parts.specialistRoster) {
     sections.push(
       VOICE_DELEGATION_GUIDANCE + '\n\n## Available Specialists\n' + parts.specialistRoster,

@@ -6,6 +6,7 @@ import { OutboundContextService } from '../../dispatch/outbound-context.js';
 import { createSilentLogger } from '../../logger.js';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, Message } from '../../agents/llm/provider.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../agents/prompts/date-resolve-guardrail.js';
+import { VOICE_ASYNC_OFFRAMP_GUIDANCE } from '../../agents/prompts/voice-async-offramp.js';
 import { WorkingMemory } from '../../memory/working-memory.js';
 import {
   VoiceRuntime,
@@ -20,6 +21,14 @@ import { FakeSttProvider } from './speech/fake-stt.js';
 import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from './speech/types.js';
 import { TtsHttpError } from './speech/types.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
+
+/** Slim spoken prompt with no identity/roster/outbound/time — includes shared modules. */
+const SLIM_VOICE_PROMPT = [
+  VOICE_SYSTEM_ADDENDUM,
+  VOICE_TOOL_RESULT_POLICY,
+  DATE_RESOLVE_GUARDRAIL,
+  VOICE_ASYNC_OFFRAMP_GUIDANCE,
+].join('\n\n');
 
 const logger = createSilentLogger();
 const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
@@ -590,7 +599,7 @@ describe('VoiceRuntime brain/context parity (#1551)', () => {
     await runtime.awaitIdle('sp2');
 
     const system = llm.seenMessages[0]![0]!;
-    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`);
+    expect(system.content).toBe(SLIM_VOICE_PROMPT);
   });
 
   it('omits a throwing identity block and still runs the turn', async () => {
@@ -906,10 +915,8 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     expect(prompt.indexOf('[ACTIVE OUTBOUND CONTEXT'))
       .toBeLessThan(prompt.indexOf('## Current Date & Time'));
     // Empty outbound → identical to the slim path without that section (still
-    // includes the shared date-resolve guardrail — ADR-038).
-    expect(buildVoiceSystemPrompt({})).toBe(
-      `${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`,
-    );
+    // includes shared date-resolve + async off-ramp — ADR-038 / #1614).
+    expect(buildVoiceSystemPrompt({})).toBe(SLIM_VOICE_PROMPT);
   });
 
   it('buildVoiceSystemPrompt composes the shared date-resolve guardrail', () => {
@@ -918,6 +925,14 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     expect(prompt).toContain('### Date & time');
     expect(prompt.indexOf(VOICE_TOOL_RESULT_POLICY))
       .toBeLessThan(prompt.indexOf(DATE_RESOLVE_GUARDRAIL));
+  });
+
+  it('buildVoiceSystemPrompt composes the voice async off-ramp guidance (#1614)', () => {
+    const prompt = buildVoiceSystemPrompt({});
+    expect(prompt).toContain('async-offramp');
+    expect(prompt).toContain('Live-call scope and async off-ramp');
+    expect(prompt.indexOf(DATE_RESOLVE_GUARDRAIL))
+      .toBeLessThan(prompt.indexOf(VOICE_ASYNC_OFFRAMP_GUIDANCE));
   });
 
   it('injects an active Signal outbound-context entry into the spoken-turn system prompt', async () => {
@@ -973,7 +988,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
 
     expect(getActive).toHaveBeenCalledOnce();
     const system = llm.seenMessages[0]![0]!;
-    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`);
+    expect(system.content).toBe(SLIM_VOICE_PROMPT);
     expect(system.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
   });
 
@@ -1000,7 +1015,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     await runtime.awaitIdle('oc3');
 
     const system = llm.seenMessages[0]![0]!;
-    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`);
+    expect(system.content).toBe(SLIM_VOICE_PROMPT);
     expect(transport.publishedFrames.length).toBeGreaterThan(0);
   });
 
@@ -1027,7 +1042,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     await runtime.awaitIdle('oc4');
 
     const system = llm.seenMessages[0]![0]!;
-    expect(system.content).toBe(`${VOICE_SYSTEM_ADDENDUM}\n\n${VOICE_TOOL_RESULT_POLICY}\n\n${DATE_RESOLVE_GUARDRAIL}`);
+    expect(system.content).toBe(SLIM_VOICE_PROMPT);
     expect(system.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
     expect(transport.publishedFrames.length).toBeGreaterThan(0);
   });

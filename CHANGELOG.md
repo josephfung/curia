@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`async-offramp`** — voice hands heavyweight asks to async coordinator for principal callback. (#1614)
 - **ADR-038 (Proposed)** — corrected paired-variance evidence; per-module compose gates. #1612/#1613/#1614. (#1595)
 - **`src/agents/prompts/`** — shared date-resolve guardrail composed by voice + coordinator. (#1595)
 - **`resolve-time-window`** — diagnostics agent resolves natural-language time windows for audit queries. (#1592)
@@ -25,6 +26,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Voice** — composes `VOICE_ASYNC_OFFRAMP_GUIDANCE` now that real handoff exists. (#1614)
+- **coordinator** — pins `async-offramp`; version 0.19.0. (#1614)
 - **coordinator** — date-resolve owned by shared module; no prompt plumbing stub (v0.18.2). (#1595)
 - **Console mobile** — dashboard/chat fit phone viewports; voice Call control polished. (#1571)
 - **`resolve-learning-digest`** — accepts a unique task-id prefix for digest resolve. (#1545)

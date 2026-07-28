@@ -87,8 +87,8 @@ module compose**. Gates:
    `VOICE_ASYNC_OFFRAMP_GUIDANCE` + fixture `mustCallTools: ["async-offramp"]`
    measure recognition only. Acceptance requires an `async-offramp` tool that
    actually enqueues coordinator work and reaches the principal on
-   Signal/email. Do not ship the prompt that offers follow-ups until that
-   path exists. Implementation tracked in #1614.
+   Signal/email. **Shipped in #1614** — compose into production voice is now
+   safe.
 
 ### Per-module compose gates (#1605 reframed)
 
@@ -100,7 +100,7 @@ on its own measured benefit — do **not** ship the bundle:
 |---|---|---|
 | **Routing** (`ROUTING_DECISION_GUARDRAIL`) | transfer-ownership Δ +0.075 (3/5 +, 2/5 0) — **not** a ≥4/5 paired win | **Hold** — no clean win, and the bundle it rides in regresses honest-negative (#1613) |
 | **Pronoun** (`PRONOUN_RESOLUTION_GUARDRAIL`) | Δ identically **0**; `pronoun-your` 0/5 — yet full-consolidation solves it 5/5, so the case is solvable, the module just doesn't | **Hold** — pure token cost today (#1613) |
-| **Off-ramp** (`VOICE_ASYNC_OFFRAMP_GUIDANCE`) | the one category paired win (Δ +0.267, 5/5 +) — but the tool is **mocked** | **Compose only after real handoff** (gate #3, handoff #1614; compose per #1613) |
+| **Off-ramp** (`VOICE_ASYNC_OFFRAMP_GUIDANCE`) | the one category paired win (Δ +0.267, 5/5 +) — tool was mocked at measurement; real tool now lands in #1614 | **Compose** with real handoff (#1614) |
 | **Date-resolve** (already in prod) | wash / distraction risk (`date-next-friday` ↑, `date-next-tuesday` ↓ 5/5→4/5) | Keep; close handoff via **#1612**, not more prompt text |
 | **Bundle cost** | stacking the modules **regressed** honest-negative (−0.05; shared 2 fails vs baseline 0) | Real cost of composing more instruction — weigh per module, not as a bundle |
 
@@ -170,7 +170,7 @@ tokens every spoken turn.
 Outbound-context: both prototype arms inject `formatInjectionBlock` **once**
 on the voice system-prompt path. Preserve that invariant.
 
-### Async off-ramp design (required mitigation — handoff not done)
+### Async off-ramp design (required mitigation — handoff shipped in #1614)
 
 When a request exceeds live-call scope, voice should:
 
@@ -178,13 +178,16 @@ When a request exceeds live-call scope, voice should:
    coordinator-depth (see `VOICE_ASYNC_OFFRAMP_GUIDANCE`).
 2. **Offer** — natural spoken deferral.
 3. **Hand off** — on agreement, call `async-offramp` with brief + follow-up
-   channel. **Implementation required before Accept:** enqueue on the normal
-   async dispatch path (coordinator task / inbound.message).
-4. **Close the loop** — reach the principal on Signal/email when done.
-   Never claim a follow-up that was not handed off.
+   channel. The real tool (`skills/async-offramp/`) enqueues a coordinator
+   `agent.task` on the normal dispatch path (voice re-enters the path it
+   bypasses at `dispatcher.ts`).
+4. **Close the loop** — the async coordinator reaches the principal on
+   Signal/email via existing send skills. Never claim a follow-up that was
+   not handed off (tool returns `success: false` on enqueue failure).
 
 Prompt module: `src/agents/prompts/voice-async-offramp.ts` (voice-only).
-Eval currently measures recognition against a **mocked** tool only.
+Tool: `skills/async-offramp/` (pinned on coordinator; voice inherits).
+Eval scores against the **real** handler (spike `invokeTool`), not a mock.
 
 ### Tentative resolution of #1563's blocking question
 
@@ -200,7 +203,7 @@ Issue #1563 stays blocked on this decision.
 | `DATE_RESOLVE_GUARDRAIL` | yes | **yes** (both; YAML has no pointer stub) |
 | `ROUTING_DECISION_GUARDRAIL` | yes | **hold** (#1613) — no clean paired win; +0.075 transfer only |
 | `PRONOUN_RESOLUTION_GUARDRAIL` | yes | **hold** — zero paired benefit until `pronoun-your` moves (#1613) |
-| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | guidance yes / tool mocked | **no** — real handoff (#1614) is an Accept + compose gate (compose per #1613) |
+| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | yes / real tool | **yes** (voice compose + tool — #1614; Accept gate #3 cleared) |
 
 ### Prompt-shape rule
 
@@ -212,8 +215,8 @@ The coordinator's sole `### Date & time` instruction is the composed
 ### Related issues
 
 - #1612 — structural date-resolve → brief validation (orthogonal, high impact)
-- #1613 — compose modules that **pay for themselves** (all three currently HOLD — routing/pronoun show no clean win on the corrected harness; off-ramp only after its real handoff); supersedes bundled #1605
-- #1614 — implement the real async off-ramp handoff (gate #3)
+- #1613 — compose modules that **pay for themselves** (routing/pronoun still HOLD; off-ramp compose landed with #1614 once the real handoff existed); supersedes bundled #1605
+- #1614 — implement the real async off-ramp handoff (gate #3) — **done**
 - #1563 — text → streaming (unblocks on Accept)
 
 ## Consequences (if Accepted)
