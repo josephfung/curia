@@ -2591,6 +2591,7 @@ async function main(): Promise<void> {
             conversationId: ctx.conversationId,
             taskEventId: ctx.sessionId,
             liveTurn: true,
+            turnDateResolveResults: ctx.turnDateResolveResults,
             // Stamp a proper TaskOriginator so elevated skills / Gate C see a
             // live principal turn (same shape the dispatcher uses for web chat).
             taskMetadata: {

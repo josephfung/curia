@@ -32,6 +32,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`delegate`** — calendar briefs must match same-turn date-resolve output. (#1612)
 - **Coordinator** — ambient bullpen mentions no longer bleed into scheduler jobs and leak to the principal. (#1609)
 - **Voice** — injects active outbound-context so spoken turns see recent cross-channel sends. (#1594)
 - **`calendar-list-events`** — all-calendar 401/403 failures name grant reconnect action. (#1561)

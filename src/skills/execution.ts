@@ -109,6 +109,8 @@ export interface InvokeOptions {
   /** Per-task-turn guard against blind identical re-delegation (#1171). Owned by the agent
    *  runtime; forwarded to the delegate skill for defense in depth. */
   delegationGuard?: import('../agents/delegation-guard.js').DelegationGuard;
+  /** date-resolve outputs from earlier in this agent turn (#1612). Forwarded to delegate. */
+  turnDateResolveResults?: readonly import('../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
 }
 
 /** Cap on the input rendering passed to the escalation judge — keeps full email bodies and
@@ -1284,6 +1286,7 @@ export class ExecutionLayer {
       // Distinct from taskMetadata so no persistence skill can sweep it into a wakeable row.
       liveTurn: options?.liveTurn,
       delegationGuard: options?.delegationGuard,
+      turnDateResolveResults: options?.turnDateResolveResults,
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.
       timezone: this.timezone,

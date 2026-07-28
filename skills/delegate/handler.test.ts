@@ -1,5 +1,5 @@
 // handler.test.ts — delegate skill: forwarding of relay context for specialist resume (#995).
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import pino from 'pino';
 import { DelegateHandler } from './handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
@@ -35,11 +35,29 @@ function makeBus() {
   return { bus, published };
 }
 
-const agentRegistry = {
+const agentRegistryMock: {
+  has: (n: string) => boolean;
+  get: (n: string) => { name: string; role: string };
+  listSpecialists: () => Array<{ name: string }>;
+} = {
   has: (n: string) => n === 'research-analyst',
   get: (n: string) => ({ name: n, role: 'specialist' }),
   listSpecialists: () => [{ name: 'research-analyst' }],
-} as unknown as ToolContext['agentRegistry'];
+};
+
+const agentRegistry = agentRegistryMock as unknown as ToolContext['agentRegistry'];
+
+function useCalendarRegistry(): void {
+  agentRegistryMock.has = (n: string) => n === 'calendar';
+  agentRegistryMock.get = (n: string) => ({ name: n, role: 'specialist' });
+  agentRegistryMock.listSpecialists = () => [{ name: 'calendar' }];
+}
+
+function restoreDefaultRegistry(): void {
+  agentRegistryMock.has = (n: string) => n === 'research-analyst';
+  agentRegistryMock.get = (n: string) => ({ name: n, role: 'specialist' });
+  agentRegistryMock.listSpecialists = () => [{ name: 'research-analyst' }];
+}
 
 function makeCtx(bus: EventBus, over: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -116,6 +134,86 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
 
     const task = published.find(e => e.type === 'agent.task') as AgentTaskEvent;
     expect(task.payload.liveTurn).toBeUndefined();
+  });
+});
+
+describe('DelegateHandler date-resolve brief validation (#1612)', () => {
+  afterEach(() => {
+    restoreDefaultRegistry();
+  });
+
+  it('rejects a calendar brief that contradicts date-resolve output from this turn', async () => {
+    const { bus, published } = makeBus();
+    useCalendarRegistry();
+
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, {
+        input: {
+          agent: 'calendar',
+          task: 'Schedule a catch-up on August 1, 2026 at 2pm.',
+        },
+        turnDateResolveResults: [{ isoDate: '2026-07-31', formatted: 'Friday, July 31, 2026' }],
+      }),
+    );
+    if (result.success) throw new Error('expected delegate to reject a contradicting calendar brief');
+    expect(result.error).toMatch(/must include a date date-resolve produced/i);
+    expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
+  });
+
+  it('accepts a calendar brief that matches date-resolve output from this turn', async () => {
+    const { bus, published } = makeBus();
+    useCalendarRegistry();
+
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, {
+        input: {
+          agent: 'calendar',
+          task: 'Schedule a catch-up on Friday, July 31, 2026 at 2pm.',
+        },
+        turnDateResolveResults: [{ isoDate: '2026-07-31', formatted: 'Friday, July 31, 2026' }],
+      }),
+    );
+    expect(result.success).toBe(true);
+    expect(published.find(e => e.type === 'agent.task')).toBeDefined();
+  });
+
+  it('rejects relative calendar asks when date-resolve was not called this turn', async () => {
+    const { bus, published } = makeBus();
+    useCalendarRegistry();
+
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, {
+        input: {
+          agent: 'calendar',
+          task: "What's on my calendar next Tuesday?",
+        },
+      }),
+    );
+    if (result.success) throw new Error('expected delegate to require date-resolve first');
+    expect(result.error).toMatch(/requires date-resolve first/i);
+    expect(published.find(e => e.type === 'agent.task')).toBeUndefined();
+  });
+
+  it('skips date validation when resuming with a resume_token', async () => {
+    const { bus, published } = makeBus();
+    useCalendarRegistry();
+    const resume_token = encodeResumeToken({
+      agent: 'calendar',
+      originalTask: 'Schedule the Friday meeting.',
+      context: 'Waiting on CEO direction for the exact time.',
+    });
+
+    const result = await new DelegateHandler().execute(
+      makeCtx(bus, {
+        input: {
+          agent: 'calendar',
+          task: 'Use 2pm.',
+          resume_token,
+        },
+      }),
+    );
+    expect(result.success).toBe(true);
+    expect(published.find(e => e.type === 'agent.task')).toBeDefined();
   });
 });
 

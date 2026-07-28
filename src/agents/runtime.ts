@@ -22,6 +22,7 @@ import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
 import { formatTurnBudgetBlock } from './turn-budget.js';
 import { DATE_RESOLVE_GUARDRAIL } from './prompts/date-resolve-guardrail.js';
+import { TurnDateResolveTracker } from './delegate-brief-date-validation.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import {
   buildCheckpointBudgetNudgeMessage,
@@ -1108,6 +1109,7 @@ export class AgentRuntime {
     // Delegation circuit-breaker state (#1171). Tracks identical delegate(agent, task)
     // calls within this turn so non-retryable specialist failures cannot be blind-retried.
     const delegationGuard = new DelegationGuard();
+    const turnDateResolveTracker = new TurnDateResolveTracker();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
 
     // TWO TOOL LOOPS (#1552 / #1563): this non-streaming chat() loop is still
@@ -1244,6 +1246,7 @@ export class AgentRuntime {
           taskMetadata: taskEvent.payload.metadata,
           liveTurn: taskEvent.payload.liveTurn,
           delegationGuard,
+          turnDateResolveResults: turnDateResolveTracker.snapshot(),
         };
 
         const startTime = Date.now();
@@ -1306,6 +1309,10 @@ export class AgentRuntime {
           parentEventId: invokeEvent.id,
         });
         await bus.publish('agent', resultEvent);
+
+        if (toolCall.name === 'date-resolve') {
+          turnDateResolveTracker.recordFromToolResult(result);
+        }
 
         if (result.success) {
           // Success: reset consecutive error counter
