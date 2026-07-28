@@ -24,6 +24,7 @@ import type { OutboundContextService } from '../../dispatch/outbound-context.js'
 import type { Logger } from '../../logger.js';
 import type { LLMProvider, Message, ToolCall, ToolDefinition } from '../../agents/llm/provider.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../agents/prompts/date-resolve-guardrail.js';
+import { TurnDateResolveTracker } from '../../agents/delegate-brief-date-validation.js';
 import type { WorkingMemory } from '../../memory/working-memory.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
@@ -257,7 +258,11 @@ export interface VoiceToolBridge {
   resolveVoiceTools: () => ToolDefinition[];
   invokeTool: (
     call: ToolCall,
-    ctx: { conversationId: string; sessionId: string },
+    ctx: {
+      conversationId: string;
+      sessionId: string;
+      turnDateResolveResults?: readonly import('../../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
+    },
   ) => Promise<{ content: string; is_error?: boolean }>;
   /**
    * Per-turn compiled office identity/persona block (hot-reloadable, same as
@@ -710,16 +715,31 @@ export class VoiceRuntime {
       ? this.toolBridge.resolveVoiceTools()
       : (this.config.resolveVoiceTools ? this.config.resolveVoiceTools() : this.config.tools);
 
+    const turnDateResolveTracker = new TurnDateResolveTracker();
+
     const invokeTool = this.toolBridge
-      ? (call: ToolCall) => this.toolBridge!.invokeTool(call, {
-        conversationId: session.conversationId,
-        sessionId: session.sessionId,
-      })
-      : this.config.invokeTool
-        ? (call: ToolCall) => this.config.invokeTool!(call, {
+      ? async (call: ToolCall) => {
+        const result = await this.toolBridge!.invokeTool(call, {
           conversationId: session.conversationId,
           sessionId: session.sessionId,
-        })
+          turnDateResolveResults: turnDateResolveTracker.snapshot(),
+        });
+        if (call.name === 'date-resolve') {
+          turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
+        }
+        return result;
+      }
+      : this.config.invokeTool
+        ? async (call: ToolCall) => {
+          const result = await this.config.invokeTool!(call, {
+            conversationId: session.conversationId,
+            sessionId: session.sessionId,
+          });
+          if (call.name === 'date-resolve') {
+            turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
+          }
+          return result;
+        }
         : undefined;
 
     const userMessage: Message = { role: 'user', content: utterance };
