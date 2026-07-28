@@ -442,20 +442,41 @@ describe('runStreamingToolLoop (#1552)', () => {
   });
 
   it('accepts openStream without provider.stream (chat-compatible adapter #1563)', async () => {
-    const openStream = vi.fn(async function* () {
+    const openStream = vi.fn(async function* (_params: {
+      messages: Array<{ role: string; content: string }>;
+      model: string;
+      signal: AbortSignal;
+    }) {
       yield textDelta('via ');
       yield { type: 'message_end' as const, content: 'via adapter', usage, provenance };
     });
 
-    const result = await runStreamingToolLoop([{ role: 'user', content: 'hi' }], {
+    const initial = [{ role: 'user' as const, content: 'hi' }];
+    const result = await runStreamingToolLoop(initial, {
       provider: new NoStreamProvider(),
       model: 'fake',
       maxRounds: 2,
       signal: new AbortController().signal,
       openStream,
+      hooks: {
+        beforeRound: async ({ messages: msgs }) => {
+          msgs.push({ role: 'system', content: 'nudge' });
+        },
+      },
     });
 
     expect(openStream).toHaveBeenCalledTimes(1);
+    // Snapshot is taken AFTER beforeRound — adapter must see the nudge.
+    expect(openStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          { role: 'user', content: 'hi' },
+          { role: 'system', content: 'nudge' },
+        ],
+        model: 'fake',
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(result.stopReason).toBe('message_end');
     expect(result.finalText).toBe('via adapter');
   });
