@@ -214,7 +214,11 @@ export interface VoiceRuntimeConfig {
   /** Optional tool invoker; when absent the runner returns a not-wired placeholder. */
   invokeTool?: (
     call: ToolCall,
-    ctx: { conversationId: string; sessionId: string },
+    ctx: {
+      conversationId: string;
+      sessionId: string;
+      turnDateResolveResults?: readonly import('../../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
+    },
   ) => Promise<{ content: string; is_error?: boolean }>;
   /**
    * Max UTF-8 bytes for an accumulated STT utterance before it is dropped.
@@ -734,6 +738,7 @@ export class VoiceRuntime {
           const result = await this.config.invokeTool!(call, {
             conversationId: session.conversationId,
             sessionId: session.sessionId,
+            turnDateResolveResults: turnDateResolveTracker.snapshot(),
           });
           if (call.name === 'date-resolve') {
             turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
