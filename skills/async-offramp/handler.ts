@@ -2,6 +2,12 @@
 //
 // Voice → async coordinator handoff (#1614 / ADR-038 gate #3).
 //
+// Voice-only tool: advertised by the voice tool bridge (src/index.ts), NOT
+// pinned on the coordinator. The coordinator is the async *destination* — pinning
+// here would let text turns (and off-ramped tasks) call it recursively.
+// allowed_callers stays ["coordinator"] because the bridge invokes with
+// agentId: 'coordinator'; the channelId === 'voice' guard is the real gate.
+//
 // Voice bypasses normal inbound→coordinator dispatch (dispatcher.ts skips
 // channelId === 'voice'). When a live-call request exceeds the slim brain's
 // scope, this tool re-enters the normal path by publishing a coordinator
@@ -22,6 +28,14 @@ import { createAgentTask } from '../../src/bus/events.js';
 
 const FOLLOW_UP_CHANNELS = new Set(['signal', 'email']);
 const DEFAULT_FOLLOW_UP = 'email';
+/**
+ * Last-resort sender when originator and caller are both missing.
+ * Same synthetic principal id the voice runtime / web chat use
+ * (`DEFAULT_SENDER_ID` in voice-runtime.ts) — voice is principal-only today
+ * (#1598), so attributing to that identity is safer than inventing a new one
+ * or refusing a handoff the principal already agreed to.
+ */
+const FALLBACK_PRINCIPAL_SENDER_ID = 'ceo-web-user';
 /** Cap the in-process dedup map so a long-lived process cannot grow without bound. */
 const MAX_DEDUP_ENTRIES = 5_000;
 
@@ -57,7 +71,11 @@ function buildIdempotencyKey(
   followUpChannel: string,
   explicitKey: string | undefined,
 ): string {
-  if (explicitKey) return `explicit:${explicitKey}`;
+  // Always scope to conversation — an LLM-supplied key like "deck" must not
+  // collide across sessions (CodeRabbit #1617).
+  if (explicitKey) {
+    return `explicit:${conversationId ?? 'unknown'}|${explicitKey}`;
+  }
   const material = `${conversationId ?? 'unknown'}|${normalizeBrief(brief)}|${followUpChannel}`;
   return createHash('sha256').update(material).digest('hex');
 }
@@ -97,6 +115,20 @@ export function resetAsyncOfframpDedupForTests(): void {
 
 export class AsyncOfframpHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
+    // Voice-only backstop: not pinned on the coordinator, but discovery could
+    // otherwise resurface it to a text turn (allowed_callers includes coordinator).
+    // Reject anything that isn't a live voice channel invocation.
+    if (ctx.channelId !== 'voice') {
+      ctx.log.warn(
+        { channelId: ctx.channelId, agentId: ctx.agentId },
+        'async-offramp rejected — voice-only tool (not available on text/async turns)',
+      );
+      return {
+        success: false,
+        error: 'async-offramp is voice-only — use the normal coordinator path for async work',
+      };
+    }
+
     if (!ctx.bus) {
       return { success: false, error: 'async-offramp requires bus capability — handoff unavailable' };
     }
@@ -154,7 +186,7 @@ export class AsyncOfframpHandler implements ToolHandler {
     const senderId =
       originator?.contactId ??
       ctx.caller?.contactId ??
-      'ceo-web-user';
+      FALLBACK_PRINCIPAL_SENDER_ID;
 
     const parentEventId = ctx.taskEventId ?? `async-offramp-${randomUUID()}`;
     const conversationId = `voice-offramp:${idempotencyKey.slice(0, 32)}`;

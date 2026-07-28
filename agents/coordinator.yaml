@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.19.0"
+version: "0.18.2"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -687,10 +687,6 @@ pinned_skills:
   # human channel (#1609).
   - bullpen
   - delegate
-  # Voice → async coordinator handoff (#1614 / ADR-038). Voice inherits this
-  # pin via the coordinator tool bridge; text turns rarely need it but the
-  # tool is harmless there (opt-in, action_risk: low).
-  - async-offramp
   - drive-download-file
   - signal-send
   - sms-send

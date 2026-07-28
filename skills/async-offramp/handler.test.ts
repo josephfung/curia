@@ -161,6 +161,31 @@ describe('AsyncOfframpHandler', () => {
     }
   });
 
+  it('scopes explicit idempotency_key to the conversation (no cross-session swallow)', async () => {
+    const { bus, published } = makeBus();
+    await handler.execute(
+      makeCtx(bus, { brief: 'Deck A', follow_up_channel: 'email', idempotency_key: 'deck' }),
+    );
+    await handler.execute(
+      makeCtx(
+        bus,
+        { brief: 'Deck B for another call', follow_up_channel: 'email', idempotency_key: 'deck' },
+        { conversationId: 'voice:other-session' },
+      ),
+    );
+    expect(published).toHaveLength(2);
+  });
+
+  it('rejects non-voice channel invocations (voice-only backstop)', async () => {
+    const { bus, published } = makeBus();
+    const result = await handler.execute(
+      makeCtx(bus, { brief: 'Should not enqueue' }, { channelId: 'email' }),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/voice-only/i);
+    expect(published).toHaveLength(0);
+  });
+
   it('returns honest failure when enqueue publish fails (no false confirm)', async () => {
     const { bus, published } = makeBus({ failPublish: true });
     const result = await handler.execute(

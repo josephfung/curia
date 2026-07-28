@@ -1,7 +1,7 @@
 {
   "name": "async-offramp",
-  "description": "Hand a heavyweight request off the live voice call to the async coordinator path. Use after the principal agrees to a follow-up, or when the ask is clearly async-shaped (deep research, bulk triage, multi-document drafting, clarification loops). Provide a crisp brief of what to do and how to follow up (signal or email). Returns accepted:true only when the work was actually enqueued — never claim a follow-up on failure.",
-  "version": "0.1.0",
+  "description": "Hand a heavyweight request off the live voice call to the async coordinator path. Voice-only — not available on text turns. Use after the principal agrees to a follow-up, or when the ask is clearly async-shaped (deep research, bulk triage, multi-document drafting, clarification loops). Provide a crisp brief of what to do and how to follow up (signal or email). Returns accepted:true only when the work was actually enqueued — never claim a follow-up on failure.",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

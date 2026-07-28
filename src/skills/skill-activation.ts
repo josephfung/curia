@@ -25,6 +25,8 @@ export {
 } from './skill-instruction-format.js';
 
 export const SKILL_ACTIVATE_TOOL_NAME = 'skill-activate';
+/** Voice-bridge-only tools excluded from text-turn discovery (#1614). */
+export const ASYNC_OFFRAMP_TOOL_NAME = 'async-offramp';
 export const SKILL_ACTIVATION_PROTOCOL = 'skill_activation' as const;
 
 export interface DiscoveryHit {
@@ -71,7 +73,7 @@ export function unifiedToolSearch(options: {
   toolRegistry: ToolRegistry;
   skillRegistry: SkillRegistry;
   agentId: string;
-  /** Tool names excluded from results (e.g. tool-registry, skill-activate). */
+  /** Tool names excluded from results (e.g. tool-registry, skill-activate, async-offramp). */
   excludeToolNames?: ReadonlySet<string>;
 }): DiscoveryHit[] {
   const {
@@ -79,7 +81,12 @@ export function unifiedToolSearch(options: {
     toolRegistry,
     skillRegistry,
     agentId,
-    excludeToolNames = new Set(['tool-registry', SKILL_ACTIVATE_TOOL_NAME]),
+    excludeToolNames = new Set([
+      'tool-registry',
+      SKILL_ACTIVATE_TOOL_NAME,
+      // Voice-only: injected by the voice tool bridge, never discoverable on text (#1614).
+      ASYNC_OFFRAMP_TOOL_NAME,
+    ]),
   } = options;
 
   const results: DiscoveryHit[] = [];

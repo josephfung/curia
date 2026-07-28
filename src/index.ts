@@ -2568,6 +2568,12 @@ async function main(): Promise<void> {
           if (!voiceToolNames.includes(discoveryTool)) voiceToolNames.push(discoveryTool);
         }
       }
+      // Voice-only async off-ramp (#1614 / ADR-038): NOT a coordinator pin — the
+      // coordinator is the async destination and must not advertise (or re-call)
+      // an off-ramp tool on text/async turns. Injected here beside discovery tools.
+      if (!voiceToolNames.includes('async-offramp')) {
+        voiceToolNames.push('async-offramp');
+      }
       const voiceToolDefs = toolRegistry.toToolDefinitions(voiceToolNames);
       runtime.configureTools({
         resolveVoiceTools: () => voiceToolDefs,

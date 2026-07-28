@@ -154,6 +154,9 @@ function buildPrompts(fixtures: Fixtures, outbound: string | null): Record<ArmId
 
   // Shared-hardening: production baseline modules (date-resolve + async
   // off-ramp after #1614) plus the still-staged routing + pronoun modules.
+  // Note: baseline via buildVoiceSystemPrompt() now also includes off-ramp, so
+  // paired shared−baseline no longer isolates an off-ramp delta — that evidence
+  // is historical (pre-compose). Future paired runs measure routing/pronoun only.
   const sharedHardening = [
     fixtures.identityBlock,
     VOICE_SYSTEM_ADDENDUM,
