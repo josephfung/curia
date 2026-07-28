@@ -85,7 +85,7 @@ module compose**. Gates:
    measure recognition only. Acceptance requires an `async-offramp` tool that
    actually enqueues coordinator work and reaches the principal on
    Signal/email. Do not ship the prompt that offers follow-ups until that
-   path exists.
+   path exists. Implementation tracked in #1614.
 
 ### Per-module compose gates (#1605 reframed)
 
@@ -97,7 +97,7 @@ on its own measured benefit — do **not** ship the bundle:
 |---|---|---|
 | **Routing** (`ROUTING_DECISION_GUARDRAIL`) | transfer-ownership Δ mean +0.075; never negative (3/5 +, 2/5 0) | **Compose** — modest, consistent non-regression (#1613) |
 | **Pronoun** (`PRONOUN_RESOLUTION_GUARDRAIL`) | Δ identically 0; `pronoun-your` 0/5 either way | **Hold** until it moves `pronoun-your` — pure token cost today (#1613) |
-| **Off-ramp** (`VOICE_ASYNC_OFFRAMP_GUIDANCE`) | paired win (Δ mean +0.40, 5/5 +) but **mocked** tool | **Compose only after real handoff** (gate #3; #1613) |
+| **Off-ramp** (`VOICE_ASYNC_OFFRAMP_GUIDANCE`) | paired win (Δ mean +0.40, 5/5 +) but **mocked** tool | **Compose only after real handoff** (gate #3, handoff #1614; compose per #1613) |
 | **Date-resolve** (already in prod) | wash / distraction risk (`date-next-friday` ↑, `date-next-tuesday` ↓, honest-negative dipped once) | Keep; close handoff via **#1612**, not more prompt text |
 
 ### Evidence — variance rerun (5 interleaved reps, 2026-07-28)
@@ -185,7 +185,7 @@ shared streaming primitive with separately composed prompts. Until then
 | `DATE_RESOLVE_GUARDRAIL` | yes | **yes** (both; YAML has no pointer stub) |
 | `ROUTING_DECISION_GUARDRAIL` | yes | **eligible to compose** (#1613) — modest paired benefit |
 | `PRONOUN_RESOLUTION_GUARDRAIL` | yes | **hold** — zero paired benefit until `pronoun-your` moves (#1613) |
-| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | guidance yes / tool mocked | **no** — real handoff is an Accept + compose gate (#1613) |
+| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | guidance yes / tool mocked | **no** — real handoff (#1614) is an Accept + compose gate (compose per #1613) |
 
 ### Prompt-shape rule
 
@@ -198,7 +198,8 @@ The coordinator's sole `### Date & time` instruction is the composed
 
 - #1612 — structural date-resolve → brief validation (orthogonal, high impact)
 - #1613 — compose modules that **pay for themselves** (routing yes; pronoun hold; off-ramp after real handoff); supersedes bundled #1605
-- #1606 — text → streaming (unblocks on Accept)
+- #1614 — implement the real async off-ramp handoff (gate #3)
+- #1563 — text → streaming (unblocks on Accept)
 
 ## Consequences (if Accepted)
 
@@ -207,7 +208,7 @@ The coordinator's sole `### Date & time` instruction is the composed
 - Guardrail drift is structural: channel-agnostic rules live in
   `src/agents/prompts/`. Copy-pasting coordinator lines into `VOICE_*` is
   out of policy.
-- Text → streaming (#1563 / #1606) unblocks on acceptance.
+- Text → streaming (#1563) unblocks on acceptance.
 - Full consolidation remains rejected unless a later variance run shows a
   failure mode that uniquely requires the full YAML *and* cannot be closed by
   shared modules + off-ramp + #1612.
