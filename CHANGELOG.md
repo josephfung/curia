@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **ADR-038 (Proposed)** — voice brain shared-hardening spike; Accept gated on variance, #1612, off-ramp. (#1595)
+- **ADR-038 (Proposed)** — paired variance + per-module compose gates; #1612/#1613. (#1595)
 - **`src/agents/prompts/`** — shared date-resolve guardrail composed by voice + coordinator. (#1595)
 - **`resolve-time-window`** — diagnostics agent resolves natural-language time windows for audit queries. (#1592)
 - **`nylas_calendar` health check** — probes the principal calendar grant separately from email. (#1561)

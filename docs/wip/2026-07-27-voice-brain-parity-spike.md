@@ -1,36 +1,34 @@
 # Voice brain parity spike (#1595) — notes
 
-Date: 2026-07-27 (updated 2026-07-28 after second PR #1608 review)
+Date: 2026-07-27 (updated 2026-07-28 after third PR #1608 review)
 
-ADR-038 is **Proposed** — Accept gates: variance-backed quality claim (or
-narrowed claim), #1612 date-in-brief structural fix, real async-offramp handoff.
+ADR-038 is **Proposed**. Prefer **paired per-rep deltas** over marginal
+min/max. Compose modules only when each pays for itself (#1605 reframed).
 
 ## Artifacts
 
 | Path | Role |
 |---|---|
 | `fixtures.json` | Frozen eval set (19 utterances; load-bearing tools) |
-| `run.ts` | Three-arm harness; `REPS=N` for interleaved variance |
-| `variance.json` | 5-rep pass-rate mean [min,max] overall + per category |
-| `results.json` | Raw per-rep rows (large) |
+| `run.ts` | Three-arm harness; `REPS=N` interleaved variance + paired deltas |
+| `variance.json` | Marginal rates **and** `paired` check/utterance/category deltas |
 | `src/agents/prompts/` | Shared modules + voice-only async off-ramp guidance |
 
-## Variance (5 interleaved reps)
+## Paired overall (5 interleaved reps)
 
-Overall check pass-rate mean [min, max]:
+| Comparison | mean Δ | signs | paired win |
+|---|---|---|---|
+| shared − baseline | +0.068 | 5/5 + | yes |
+| shared − full | +0.072 | 5/5 + | yes |
 
-- baseline: 0.888 [0.860, 0.920]
-- shared-hardening: 0.956 [0.900, 0.980] — leads mean, **no interval separation** vs baseline
-- full-consolidation: 0.884 [0.840, 0.940]
+Carried largely by mocked `async-offramp`. Net of that: routing modest +;
+pronoun Δ=0; date wash with distraction risk → #1612.
 
-Category with clean separation (shared min > others' max): **async-offramp only**.
+## Per-module compose (#1613; supersedes bundled #1605)
 
-Focus: `pronoun-your-calendar` 0/5 shared & baseline, 1/5 full — known #1605 gap.
-Wrong-date-in-brief after calling date-resolve → #1612.
-
-## Counting
-
-Say **"19 utterances / ~50 assertion-checks × N reps"**, not "N tests".
+- Routing — compose
+- Pronoun — hold until `pronoun-your` moves
+- Off-ramp — compose only after real handoff
 
 ## Re-run
 

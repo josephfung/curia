@@ -831,7 +831,94 @@ function aggregateVariance(reps: RepSummary[], arms: ArmId[]) {
     }
   }
 
-  return { overall, byCategory, byCase, reps: reps.length };
+  // Paired analysis: arms are interleaved within each rep, so compare
+  // per-rep deltas rather than marginal min/max ranges.
+  const paired: {
+    checkRate: Record<string, PairedDelta>;
+    utteranceRate: Record<string, PairedDelta>;
+    byCategory: Record<string, Record<string, PairedDelta>>;
+  } = {
+    checkRate: {},
+    utteranceRate: {},
+    byCategory: {},
+  };
+
+  const pairs: Array<{ key: string; a: ArmId; b: ArmId }> = [
+    { key: 'shared-hardening−baseline', a: 'shared-hardening', b: 'baseline' },
+    { key: 'shared-hardening−full-consolidation', a: 'shared-hardening', b: 'full-consolidation' },
+    { key: 'baseline−full-consolidation', a: 'baseline', b: 'full-consolidation' },
+  ].filter(p => arms.includes(p.a) && arms.includes(p.b));
+
+  for (const { key, a, b } of pairs) {
+    const checkDeltas = reps.map(rep => {
+      const sa = rep.byArm[a]!;
+      const sb = rep.byArm[b]!;
+      const ra = sa.assertionChecksPassed / Math.max(1, sa.assertionChecksPassed + sa.assertionChecksFailed);
+      const rb = sb.assertionChecksPassed / Math.max(1, sb.assertionChecksPassed + sb.assertionChecksFailed);
+      return ra - rb;
+    });
+    const utterDeltas = reps.map(rep => {
+      const ca = Object.values(rep.casePass[a] ?? {});
+      const cb = Object.values(rep.casePass[b] ?? {});
+      const ra = ca.filter(Boolean).length / Math.max(1, ca.length);
+      const rb = cb.filter(Boolean).length / Math.max(1, cb.length);
+      return ra - rb;
+    });
+    paired.checkRate[key] = summarizePairedDelta(checkDeltas);
+    paired.utteranceRate[key] = summarizePairedDelta(utterDeltas);
+  }
+
+  for (const cat of [...categories].sort()) {
+    paired.byCategory[cat] = {};
+    for (const { key, a, b } of pairs) {
+      const deltas = reps.map(rep => {
+        const ca = rep.categoryChecks[a]?.[cat];
+        const cb = rep.categoryChecks[b]?.[cat];
+        const ra = !ca || ca.total === 0 ? 1 : ca.passed / ca.total;
+        const rb = !cb || cb.total === 0 ? 1 : cb.passed / cb.total;
+        return ra - rb;
+      });
+      paired.byCategory[cat]![key] = summarizePairedDelta(deltas);
+    }
+  }
+
+  return { overall, byCategory, byCase, paired, reps: reps.length };
+}
+
+interface PairedDelta {
+  mean: number;
+  min: number;
+  max: number;
+  /** Per-rep deltas (a − b). */
+  perRep: number[];
+  positiveReps: number;
+  negativeReps: number;
+  zeroReps: number;
+  /**
+   * True when delta is >0 in ≥4/5 reps (or all reps when n<5) and never negative.
+   * Correct win test for interleaved/paired arms — prefer over marginal min/max.
+   */
+  pairedWin: boolean;
+}
+
+function summarizePairedDelta(deltas: number[]): PairedDelta {
+  const positiveReps = deltas.filter(d => d > 0).length;
+  const negativeReps = deltas.filter(d => d < 0).length;
+  const zeroReps = deltas.filter(d => d === 0).length;
+  // For n≥5: ≥4 positive and never negative. For n<5: all positive.
+  const pairedWin =
+    negativeReps === 0 &&
+    (deltas.length >= 5 ? positiveReps >= 4 : positiveReps === deltas.length);
+  return {
+    mean: round3(mean(deltas)),
+    min: round3(Math.min(...deltas)),
+    max: round3(Math.max(...deltas)),
+    perRep: deltas.map(round3),
+    positiveReps,
+    negativeReps,
+    zeroReps,
+    pairedWin,
+  };
 }
 
 function mean(xs: number[]): number {
@@ -951,7 +1038,15 @@ async function main(): Promise<void> {
     writeFileSync(VARIANCE_PATH, JSON.stringify({ generatedAt: out.generatedAt, model: VOICE_MODEL, ...variance }, null, 2));
     process.stderr.write(`\nWrote ${VARIANCE_PATH}\n`);
     process.stderr.write(JSON.stringify(variance.overall, null, 2) + '\n');
-    process.stderr.write('byCategory separations:\n');
+    process.stderr.write('paired check-rate deltas (a−b):\n');
+    for (const [key, stats] of Object.entries(variance.paired.checkRate)) {
+      process.stderr.write(
+        `  ${key}: mean=${stats.mean} [${stats.min},${stats.max}] ` +
+          `+${stats.positiveReps}/-${stats.negativeReps}/0${stats.zeroReps} ` +
+          `pairedWin=${stats.pairedWin} perRep=${JSON.stringify(stats.perRep)}\n`,
+      );
+    }
+    process.stderr.write('byCategory separations / paired wins vs baseline:\n');
     for (const [cat, armsMap] of Object.entries(variance.byCategory)) {
       for (const [arm, stats] of Object.entries(armsMap)) {
         const sep = stats.separatesAbove?.length
@@ -959,6 +1054,12 @@ async function main(): Promise<void> {
           : '';
         process.stderr.write(
           `  ${cat}/${arm}: mean=${stats.checkPassRateMean} [${stats.checkPassRateMin},${stats.checkPassRateMax}]${sep}\n`,
+        );
+      }
+      const pairedSb = variance.paired.byCategory[cat]?.['shared-hardening−baseline'];
+      if (pairedSb) {
+        process.stderr.write(
+          `  ${cat} paired shared−baseline: mean=${pairedSb.mean} win=${pairedSb.pairedWin}\n`,
         );
       }
     }
