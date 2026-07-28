@@ -51,3 +51,4 @@ tests/redteam/results/
 # Superpowers subagent-driven-development scratch (task briefs, reports, review
 # diffs) — local workflow artifacts, never committed
 .superpowers/
+scripts/spikes/voice-brain-parity/results.json

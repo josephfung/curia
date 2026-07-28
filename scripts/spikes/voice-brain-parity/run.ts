@@ -50,6 +50,8 @@ const COORDINATOR_YAML = resolve(REPO_ROOT, 'agents/coordinator.yaml');
 const VOICE_MODEL = process.env.VOICE_SPIKE_MODEL ?? 'claude-haiku-4-5';
 const ARM_FILTER = process.env.ARM?.trim() || null;
 const CASE_FILTER = process.env.CASE?.trim() || null;
+const REPS = Math.max(1, Number(process.env.REPS ?? 1) || 1);
+const VARIANCE_PATH = resolve(import.meta.dirname, 'variance.json');
 
 interface HistoryTurn {
   role: 'user' | 'assistant';
@@ -618,7 +620,7 @@ function scoreCase(
   }
 
   if (exp.spokenMustConfirmHandoff) {
-    const confirm = /(started|working on|follow up|email(ing)? you|handed|on it)/.test(spoken);
+    const confirm = /(started|working on|follow up|email(ing)? you|handed|on it|queued)/.test(spoken);
     checks.push({
       id: 'confirm-handoff',
       ok: confirm && names.includes('async-offramp'),
@@ -724,6 +726,122 @@ function summarize(results: CaseResult[]) {
   return byArm;
 }
 
+interface RepSummary {
+  rep: number;
+  byArm: ReturnType<typeof summarize>;
+  /** caseId → whether all assertion-checks passed */
+  casePass: Record<string, Record<string, boolean>>;
+  /** category → { passedChecks, totalChecks } per arm */
+  categoryChecks: Record<string, Record<string, { passed: number; total: number }>>;
+}
+
+function aggregateVariance(reps: RepSummary[], arms: ArmId[]) {
+  const categories = new Set<string>();
+  const caseIds = new Set<string>();
+  for (const rep of reps) {
+    for (const arm of arms) {
+      for (const cat of Object.keys(rep.categoryChecks[arm] ?? {})) categories.add(cat);
+      for (const id of Object.keys(rep.casePass[arm] ?? {})) caseIds.add(id);
+    }
+  }
+
+  const overall: Record<string, {
+    checkPassRateMean: number;
+    checkPassRateMin: number;
+    checkPassRateMax: number;
+    utterancePassRateMean: number;
+    utterancePassRateMin: number;
+    utterancePassRateMax: number;
+    perRep: Array<{ checksPassed: number; checksTotal: number; utterancesPassed: number; utterancesTotal: number }>;
+  }> = {};
+
+  for (const arm of arms) {
+    const perRep = reps.map(rep => {
+      const s = rep.byArm[arm]!;
+      const checksPassed = s.assertionChecksPassed;
+      const checksTotal = s.assertionChecksPassed + s.assertionChecksFailed;
+      const caseMap = rep.casePass[arm] ?? {};
+      const utterancesTotal = Object.keys(caseMap).length;
+      const utterancesPassed = Object.values(caseMap).filter(Boolean).length;
+      return { checksPassed, checksTotal, utterancesPassed, utterancesTotal };
+    });
+    const checkRates = perRep.map(r => r.checksPassed / Math.max(1, r.checksTotal));
+    const utterRates = perRep.map(r => r.utterancesPassed / Math.max(1, r.utterancesTotal));
+    overall[arm] = {
+      checkPassRateMean: round3(mean(checkRates)),
+      checkPassRateMin: round3(Math.min(...checkRates)),
+      checkPassRateMax: round3(Math.max(...checkRates)),
+      utterancePassRateMean: round3(mean(utterRates)),
+      utterancePassRateMin: round3(Math.min(...utterRates)),
+      utterancePassRateMax: round3(Math.max(...utterRates)),
+      perRep,
+    };
+  }
+
+  const byCategory: Record<string, Record<string, {
+    checkPassRateMean: number;
+    checkPassRateMin: number;
+    checkPassRateMax: number;
+    /** True when this arm's min rate is strictly above every other arm's max. */
+    separatesAbove?: string[];
+  }>> = {};
+
+  for (const cat of [...categories].sort()) {
+    byCategory[cat] = {};
+    const ratesByArm: Record<string, number[]> = {};
+    for (const arm of arms) {
+      const rates = reps.map(rep => {
+        const cell = rep.categoryChecks[arm]?.[cat];
+        if (!cell || cell.total === 0) return 1;
+        return cell.passed / cell.total;
+      });
+      ratesByArm[arm] = rates;
+      byCategory[cat]![arm] = {
+        checkPassRateMean: round3(mean(rates)),
+        checkPassRateMin: round3(Math.min(...rates)),
+        checkPassRateMax: round3(Math.max(...rates)),
+      };
+    }
+    for (const arm of arms) {
+      const mine = byCategory[cat]![arm]!;
+      const above = arms.filter(other => {
+        if (other === arm) return false;
+        const o = byCategory[cat]![other]!;
+        return mine.checkPassRateMin > o.checkPassRateMax;
+      });
+      if (above.length > 0) mine.separatesAbove = above;
+    }
+  }
+
+  // Known hard cases called out in review.
+  const caseFocus = ['pronoun-your-calendar', 'date-next-friday-meeting', 'date-next-tuesday'];
+  const byCase: Record<string, Record<string, { passRateMean: number; passRateMin: number; passRateMax: number; passes: number; reps: number }>> = {};
+  for (const caseId of caseFocus.filter(id => caseIds.has(id))) {
+    byCase[caseId] = {};
+    for (const arm of arms) {
+      const flags = reps.map(rep => rep.casePass[arm]?.[caseId] ?? false);
+      const rate = flags.filter(Boolean).length / flags.length;
+      byCase[caseId]![arm] = {
+        passRateMean: round3(rate),
+        passRateMin: flags.every(Boolean) ? 1 : flags.some(Boolean) ? 0 : 0,
+        passRateMax: flags.some(Boolean) ? 1 : 0,
+        passes: flags.filter(Boolean).length,
+        reps: flags.length,
+      };
+    }
+  }
+
+  return { overall, byCategory, byCase, reps: reps.length };
+}
+
+function mean(xs: number[]): number {
+  return xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+}
+
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
 async function main(): Promise<void> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is required');
@@ -736,71 +854,115 @@ async function main(): Promise<void> {
   // Prompt size sample (no outbound) for the summary header.
   const samplePrompts = buildPrompts(fixtures, fixtures.defaultOutboundContextBlock);
   const arms = (Object.keys(samplePrompts) as ArmId[]).filter(a => !ARM_FILTER || a === ARM_FILTER);
-  const results: CaseResult[] = [];
+  const allResults: CaseResult[] = [];
+  const repSummaries: RepSummary[] = [];
 
   process.stderr.write(
     `voice-brain-parity spike — model=${VOICE_MODEL} arms=${arms.join(',')} ` +
-      `utterances=${cases.length} (assertion-checks vary per case)\n`,
+      `utterances=${cases.length} reps=${REPS} (assertion-checks vary per case)\n`,
   );
 
-  for (const arm of arms) {
-    process.stderr.write(
-      `\n=== arm: ${arm} (prompt ~${estimateTokens(samplePrompts[arm])} tok without per-case outbound) ===\n`,
-    );
+  for (let rep = 0; rep < REPS; rep++) {
+    process.stderr.write(`\n######## rep ${rep + 1}/${REPS} ########\n`);
+    const results: CaseResult[] = [];
+    // Interleave arms within a rep to dilute warm-cache bias across consecutive same-arm calls.
     for (const fixture of cases) {
       const outbound =
         fixture.outboundContextBlock !== undefined
           ? fixture.outboundContextBlock
           : fixtures.defaultOutboundContextBlock;
       const prompts = buildPrompts(fixtures, outbound);
-      process.stderr.write(`  → ${fixture.id} ... `);
-      try {
-        const row = await runCase(arm, prompts[arm], fixture, fixtures, provider);
-        results.push(row);
-        const mark = row.score.failed === 0 ? 'PASS' : `FAIL(${row.score.failed}/${row.score.passed + row.score.failed})`;
-        process.stderr.write(
-          `${mark} ttft=${row.ttftMs ?? '-'}ms full=${row.fullTurnMs}ms tools=[${row.toolsCalled.join(',')}]\n`,
-        );
-        if (row.score.failed > 0) {
-          for (const c of row.score.checks.filter(x => !x.ok)) {
-            process.stderr.write(`      ✗ ${c.id}: ${c.detail}\n`);
+      for (const arm of arms) {
+        process.stderr.write(`  [r${rep}:${arm}] ${fixture.id} ... `);
+        try {
+          const row = await runCase(arm, prompts[arm], fixture, fixtures, provider);
+          results.push(row);
+          const mark = row.score.failed === 0 ? 'PASS' : `FAIL(${row.score.failed}/${row.score.passed + row.score.failed})`;
+          process.stderr.write(
+            `${mark} ttft=${row.ttftMs ?? '-'}ms full=${row.fullTurnMs}ms tools=[${row.toolsCalled.join(',')}]\n`,
+          );
+          if (row.score.failed > 0) {
+            for (const c of row.score.checks.filter(x => !x.ok)) {
+              process.stderr.write(`      ✗ ${c.id}: ${c.detail}\n`);
+            }
           }
+        } catch (err) {
+          process.stderr.write(`ERROR ${err instanceof Error ? err.message : String(err)}\n`);
+          results.push({
+            arm,
+            caseId: fixture.id,
+            category: fixture.category,
+            promptTokensEst: estimateTokens(prompts[arm]),
+            ttftMs: null,
+            fullTurnMs: 0,
+            toolRounds: 0,
+            toolsCalled: [],
+            toolTrace: [],
+            finalText: '',
+            stopReason: 'error',
+            score: {
+              passed: 0,
+              failed: 1,
+              checks: [{ id: 'run', ok: false, detail: err instanceof Error ? err.message : String(err) }],
+            },
+          });
         }
-      } catch (err) {
-        process.stderr.write(`ERROR ${err instanceof Error ? err.message : String(err)}\n`);
-        results.push({
-          arm,
-          caseId: fixture.id,
-          category: fixture.category,
-          promptTokensEst: estimateTokens(prompts[arm]),
-          ttftMs: null,
-          fullTurnMs: 0,
-          toolRounds: 0,
-          toolsCalled: [],
-          toolTrace: [],
-          finalText: '',
-          stopReason: 'error',
-          score: {
-            passed: 0,
-            failed: 1,
-            checks: [{ id: 'run', ok: false, detail: err instanceof Error ? err.message : String(err) }],
-          },
-        });
       }
     }
+
+    allResults.push(...results);
+    const casePass: RepSummary['casePass'] = {};
+    const categoryChecks: RepSummary['categoryChecks'] = {};
+    for (const arm of arms) {
+      casePass[arm] = {};
+      categoryChecks[arm] = {};
+      for (const row of results.filter(r => r.arm === arm)) {
+        casePass[arm]![row.caseId] = row.score.failed === 0;
+        const cell = categoryChecks[arm]![row.category] ?? { passed: 0, total: 0 };
+        cell.passed += row.score.passed;
+        cell.total += row.score.passed + row.score.failed;
+        categoryChecks[arm]![row.category] = cell;
+      }
+    }
+    repSummaries.push({
+      rep,
+      byArm: summarize(results),
+      casePass,
+      categoryChecks,
+    });
   }
 
-  const summary = summarize(results);
+  const summary = summarize(allResults);
+  const variance = REPS > 1 ? aggregateVariance(repSummaries, arms) : null;
   const out = {
     generatedAt: new Date().toISOString(),
     model: VOICE_MODEL,
+    reps: REPS,
     fixturesPath: 'scripts/spikes/voice-brain-parity/fixtures.json',
     countingNote:
-      'Report as N utterances / M assertion-checks — not "N tests". Tools are load-bearing for date-resolve.',
+      'Report as N utterances / M assertion-checks — not "N tests". Tools are load-bearing for date-resolve. ' +
+      'When reps>1, prefer variance.json overall/byCategory pass-rate mean±range over a single point estimate.',
     summary,
-    results,
+    variance,
+    results: allResults,
   };
   writeFileSync(RESULTS_PATH, JSON.stringify(out, null, 2));
+  if (variance) {
+    writeFileSync(VARIANCE_PATH, JSON.stringify({ generatedAt: out.generatedAt, model: VOICE_MODEL, ...variance }, null, 2));
+    process.stderr.write(`\nWrote ${VARIANCE_PATH}\n`);
+    process.stderr.write(JSON.stringify(variance.overall, null, 2) + '\n');
+    process.stderr.write('byCategory separations:\n');
+    for (const [cat, armsMap] of Object.entries(variance.byCategory)) {
+      for (const [arm, stats] of Object.entries(armsMap)) {
+        const sep = stats.separatesAbove?.length
+          ? ` separates↑ ${stats.separatesAbove.join(',')}`
+          : '';
+        process.stderr.write(
+          `  ${cat}/${arm}: mean=${stats.checkPassRateMean} [${stats.checkPassRateMin},${stats.checkPassRateMax}]${sep}\n`,
+        );
+      }
+    }
+  }
   process.stderr.write(`\nWrote ${RESULTS_PATH}\n`);
   process.stderr.write(JSON.stringify(summary, null, 2) + '\n');
 }
