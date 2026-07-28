@@ -370,5 +370,610 @@
       }
     }
   },
-  "reps": 5
+  "reps": 5,
+  "paired": {
+    "checkRate": {
+      "shared-hardening−baseline": {
+        "mean": 0.068,
+        "min": 0.02,
+        "max": 0.12,
+        "perRep": [
+          0.04,
+          0.06,
+          0.02,
+          0.12,
+          0.1
+        ],
+        "positiveReps": 5,
+        "negativeReps": 0,
+        "zeroReps": 0,
+        "pairedWin": true
+      },
+      "shared-hardening−full-consolidation": {
+        "mean": 0.072,
+        "min": 0.04,
+        "max": 0.12,
+        "perRep": [
+          0.06,
+          0.12,
+          0.06,
+          0.04,
+          0.08
+        ],
+        "positiveReps": 5,
+        "negativeReps": 0,
+        "zeroReps": 0,
+        "pairedWin": true
+      },
+      "baseline−full-consolidation": {
+        "mean": 0.004,
+        "min": -0.08,
+        "max": 0.06,
+        "perRep": [
+          0.02,
+          0.06,
+          0.04,
+          -0.08,
+          -0.02
+        ],
+        "positiveReps": 3,
+        "negativeReps": 2,
+        "zeroReps": 0,
+        "pairedWin": false
+      }
+    },
+    "utteranceRate": {
+      "shared-hardening−baseline": {
+        "mean": 0.158,
+        "min": 0.053,
+        "max": 0.263,
+        "perRep": [
+          0.105,
+          0.158,
+          0.053,
+          0.263,
+          0.211
+        ],
+        "positiveReps": 5,
+        "negativeReps": 0,
+        "zeroReps": 0,
+        "pairedWin": true
+      },
+      "shared-hardening−full-consolidation": {
+        "mean": 0.168,
+        "min": 0.105,
+        "max": 0.263,
+        "perRep": [
+          0.158,
+          0.263,
+          0.158,
+          0.105,
+          0.158
+        ],
+        "positiveReps": 5,
+        "negativeReps": 0,
+        "zeroReps": 0,
+        "pairedWin": true
+      },
+      "baseline−full-consolidation": {
+        "mean": 0.011,
+        "min": -0.158,
+        "max": 0.105,
+        "perRep": [
+          0.053,
+          0.105,
+          0.105,
+          -0.158,
+          -0.053
+        ],
+        "positiveReps": 3,
+        "negativeReps": 2,
+        "zeroReps": 0,
+        "pairedWin": false
+      }
+    },
+    "byCategory": {
+      "async-offramp": {
+        "shared-hardening−baseline": {
+          "mean": 0.4,
+          "min": 0.333,
+          "max": 0.5,
+          "perRep": [
+            0.333,
+            0.333,
+            0.333,
+            0.5,
+            0.5
+          ],
+          "positiveReps": 5,
+          "negativeReps": 0,
+          "zeroReps": 0,
+          "pairedWin": true
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": 0.267,
+          "min": 0.167,
+          "max": 0.333,
+          "perRep": [
+            0.167,
+            0.333,
+            0.167,
+            0.333,
+            0.333
+          ],
+          "positiveReps": 5,
+          "negativeReps": 0,
+          "zeroReps": 0,
+          "pairedWin": true
+        },
+        "baseline−full-consolidation": {
+          "mean": -0.133,
+          "min": -0.167,
+          "max": 0,
+          "perRep": [
+            -0.167,
+            0,
+            -0.167,
+            -0.167,
+            -0.167
+          ],
+          "positiveReps": 0,
+          "negativeReps": 4,
+          "zeroReps": 1,
+          "pairedWin": false
+        }
+      },
+      "async-offramp-negative": {
+        "shared-hardening−baseline": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "baseline−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        }
+      },
+      "calendar-delegation": {
+        "shared-hardening−baseline": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "baseline−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        }
+      },
+      "day-of-week-arithmetic": {
+        "shared-hardening−baseline": {
+          "mean": 0.067,
+          "min": 0,
+          "max": 0.167,
+          "perRep": [
+            0,
+            0,
+            0.083,
+            0.167,
+            0.083
+          ],
+          "positiveReps": 3,
+          "negativeReps": 0,
+          "zeroReps": 2,
+          "pairedWin": false
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": 0.117,
+          "min": 0.083,
+          "max": 0.25,
+          "perRep": [
+            0.083,
+            0.25,
+            0.083,
+            0.083,
+            0.083
+          ],
+          "positiveReps": 5,
+          "negativeReps": 0,
+          "zeroReps": 0,
+          "pairedWin": true
+        },
+        "baseline−full-consolidation": {
+          "mean": 0.05,
+          "min": -0.083,
+          "max": 0.25,
+          "perRep": [
+            0.083,
+            0.25,
+            0,
+            -0.083,
+            0
+          ],
+          "positiveReps": 2,
+          "negativeReps": 1,
+          "zeroReps": 2,
+          "pairedWin": false
+        }
+      },
+      "honest-negative": {
+        "shared-hardening−baseline": {
+          "mean": -0.05,
+          "min": -0.25,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            -0.25,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 1,
+          "zeroReps": 4,
+          "pairedWin": false
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": -0.05,
+          "min": -0.25,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            -0.25,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 1,
+          "zeroReps": 4,
+          "pairedWin": false
+        },
+        "baseline−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        }
+      },
+      "latency-baseline": {
+        "shared-hardening−baseline": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "baseline−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        }
+      },
+      "outbound-context-ack": {
+        "shared-hardening−baseline": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "baseline−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        }
+      },
+      "pronoun-resolution": {
+        "shared-hardening−baseline": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": 0.04,
+          "min": -0.2,
+          "max": 0.2,
+          "perRep": [
+            0.2,
+            0,
+            0.2,
+            -0.2,
+            0
+          ],
+          "positiveReps": 2,
+          "negativeReps": 1,
+          "zeroReps": 2,
+          "pairedWin": false
+        },
+        "baseline−full-consolidation": {
+          "mean": 0.04,
+          "min": -0.2,
+          "max": 0.2,
+          "perRep": [
+            0.2,
+            0,
+            0.2,
+            -0.2,
+            0
+          ],
+          "positiveReps": 2,
+          "negativeReps": 1,
+          "zeroReps": 2,
+          "pairedWin": false
+        }
+      },
+      "routing-borrow-then-answer": {
+        "shared-hardening−baseline": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        },
+        "baseline−full-consolidation": {
+          "mean": 0,
+          "min": 0,
+          "max": 0,
+          "perRep": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "positiveReps": 0,
+          "negativeReps": 0,
+          "zeroReps": 5,
+          "pairedWin": false
+        }
+      },
+      "routing-transfer-ownership": {
+        "shared-hardening−baseline": {
+          "mean": 0.075,
+          "min": 0,
+          "max": 0.125,
+          "perRep": [
+            0,
+            0.125,
+            0,
+            0.125,
+            0.125
+          ],
+          "positiveReps": 3,
+          "negativeReps": 0,
+          "zeroReps": 2,
+          "pairedWin": false
+        },
+        "shared-hardening−full-consolidation": {
+          "mean": 0.1,
+          "min": 0,
+          "max": 0.25,
+          "perRep": [
+            0,
+            0.125,
+            0.25,
+            0,
+            0.125
+          ],
+          "positiveReps": 3,
+          "negativeReps": 0,
+          "zeroReps": 2,
+          "pairedWin": false
+        },
+        "baseline−full-consolidation": {
+          "mean": 0.025,
+          "min": -0.125,
+          "max": 0.25,
+          "perRep": [
+            0,
+            0,
+            0.25,
+            -0.125,
+            0
+          ],
+          "positiveReps": 1,
+          "negativeReps": 1,
+          "zeroReps": 3,
+          "pairedWin": false
+        }
+      }
+    }
+  },
+  "analysisNote": "Prefer paired.checkRate / paired.byCategory (per-rep deltas) over marginal min/max for interleaved arms. pairedWin = ≥4/5 positive and never negative."
 }

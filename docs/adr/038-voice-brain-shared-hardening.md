@@ -50,27 +50,32 @@ off-ramp handoff is real** (not merely prompt-recognized) — see gates below.
 
 ### Evaluation standard
 
-Counts are **utterances / assertion-checks**, not "N tests". A single-run
-point estimate is insufficient for quality claims under LLM variance: report
-**pass-rate mean ± range over ≥5 interleaved reps**, and call a category a
-win only when one arm's min rate is strictly above another's max
-(`scripts/spikes/voice-brain-parity/variance.json`).
+Counts are **utterances / assertion-checks**, not "N tests". Run ≥5
+**interleaved** reps (arms paired on per-rep difficulty). Prefer the
+**per-rep paired delta** (`shared − baseline`, `shared − full`) over
+marginal min/max ranges — marginal overlap can hide a consistent paired
+effect. Call a comparison a **paired win** when the delta is positive in
+≥4/5 reps and never negative (`variance.json` → `paired`). Marginal
+min>max separation remains a stricter optional signal.
 
 ## Proposed decision
 
 **Reject full consolidation** as the voice brain direction — the ~25×
 instruction-token cost alone carries that rejection (latency microbench +
-prompt-size estimates), and the variance rerun does not show consolidation
-winning quality overall.
+prompt-size estimates). Paired deltas also favor shared-hardening over
+full consolidation on every rep (see below); consolidation does not win
+quality.
 
-**Lean shared-hardening**, but **do not Accept yet**. Three gates remain:
+**Lean shared-hardening**, but **do not Accept yet**, and **do not bundle
+module compose**. Gates:
 
-1. **Quality-parity claim needs interval separation (or a narrowed claim).**
-   Across 5 interleaved reps, shared-hardening leads on mean check pass-rate
-   but its range still overlaps baseline — so
-   "shared-hardening ≈ consolidation on quality" / "shared beats baseline
-   overall" is **not** established as a clean win. Per-category, only
-   `async-offramp` cleanly separates (shared above both other arms).
+1. **Quality claim (paired, not marginal).** Across 5 interleaved reps,
+   `shared − baseline` check-rate delta is positive on **5/5** reps
+   (mean +0.068) — a paired win the marginal ranges understated. That win
+   is **largely carried by `async-offramp`**, which is still a mocked
+   capability. Net of offramp, remaining modules must each earn compose
+   on their own paired benefit (see per-module table) — not ride a
+   bundled "shared-hardening wins" claim.
 2. **`date-resolve` → brief handoff is a structural bug, not a prompt gap**
    (#1612). The guardrail induces the tool call; the model can still put a
    wrong date in the delegate brief. Fix calendar/delegate validation
@@ -82,34 +87,54 @@ winning quality overall.
    Signal/email. Do not ship the prompt that offers follow-ups until that
    path exists.
 
+### Per-module compose gates (#1605 reframed)
+
+Baseline already composes `DATE_RESOLVE_GUARDRAIL`. The shared-hardening
+eval arm adds routing + pronouns + off-ramp. Gate each production compose
+on its own measured benefit — do **not** ship the bundle:
+
+| Module | Paired evidence vs baseline | Production compose |
+|---|---|---|
+| **Routing** (`ROUTING_DECISION_GUARDRAIL`) | transfer-ownership Δ mean +0.075; never negative (3/5 +, 2/5 0) | **Compose** — modest, consistent non-regression (#1613) |
+| **Pronoun** (`PRONOUN_RESOLUTION_GUARDRAIL`) | Δ identically 0; `pronoun-your` 0/5 either way | **Hold** until it moves `pronoun-your` — pure token cost today (#1613) |
+| **Off-ramp** (`VOICE_ASYNC_OFFRAMP_GUIDANCE`) | paired win (Δ mean +0.40, 5/5 +) but **mocked** tool | **Compose only after real handoff** (gate #3; #1613) |
+| **Date-resolve** (already in prod) | wash / distraction risk (`date-next-friday` ↑, `date-next-tuesday` ↓, honest-negative dipped once) | Keep; close handoff via **#1612**, not more prompt text |
+
 ### Evidence — variance rerun (5 interleaved reps, 2026-07-28)
 
 Harness: `scripts/spikes/voice-brain-parity/` — Haiku 4.5, `stream()` + tools.
 **19 utterances / ~50 assertion-checks × 5 reps.** Arms interleaved within
-each rep. Calendar mock is load-bearing. Raw: `variance.json`, `results.json`.
+each rep. Calendar mock is load-bearing. Canonical artifact: `variance.json`
+(incl. `paired`).
 
-**Overall assertion-check pass-rate** (mean [min, max] across reps):
+**Paired check-rate deltas** (preferred statistic):
 
-| Arm | Prompt tokens (est.) | Check pass-rate | Utterance pass-rate |
+| Comparison | mean Δ | per-rep Δ | paired win? |
 |---|---|---|---|
-| baseline (prod slim + date-resolve module) | ~656 | 0.888 [0.860, 0.920] | 0.737 [0.684, 0.789] |
+| shared − baseline | **+0.068** | +0.04, +0.06, +0.02, +0.12, +0.10 | **yes (5/5 +)** |
+| shared − full | **+0.072** | +0.06, +0.12, +0.06, +0.04, +0.08 | **yes (5/5 +)** |
+| baseline − full | +0.004 | +0.02, +0.06, +0.04, −0.08, −0.02 | no |
+
+Utterance-rate paired deltas tell the same story (shared − baseline mean
++0.158, 5/5 +).
+
+**Marginal pass-rates** (secondary; ranges overlap even when paired wins):
+
+| Arm | Prompt tokens (est.) | Check pass-rate mean [min, max] | Utterance pass-rate |
+|---|---|---|---|
+| baseline (prod slim + date-resolve) | ~656 | 0.888 [0.860, 0.920] | 0.737 [0.684, 0.789] |
 | shared-hardening (+ routing, pronouns, off-ramp) | ~1 563 | 0.956 [0.900, 0.980] | 0.895 [0.789, 0.947] |
 | full-consolidation | ~12 415 | 0.884 [0.840, 0.940] | 0.726 [0.632, 0.842] |
 
-Shared-hardening's overall min (0.900) does **not** strictly exceed baseline's
-max (0.920) or consolidation's max (0.940) — **no overall separation**.
+**Per-category paired Δ (shared − baseline)** and marginal rates:
 
-**Per-category** (check pass-rate mean [min, max]; ★ = min strictly above
-other arms' max):
-
-| Category | baseline | shared-hardening | full-consolidation |
+| Category | paired Δ mean (signs) | paired win? | marginal shared / baseline |
 |---|---|---|---|
-| async-offramp ★ | 0.533 [0.50, 0.67] | **0.933 [0.83, 1.00]** | 0.667 [0.67, 0.67] |
-| routing-transfer-ownership | 0.925 [0.88, 1.00] | 1.000 [1.00, 1.00] | 0.900 [0.75, 1.00] |
-| day-of-week-arithmetic | 0.900 [0.83, 1.00] | 0.967 [0.92, 1.00] | 0.850 [0.75, 0.92] |
-| pronoun-resolution | 0.800 [0.80, 0.80] | 0.800 [0.80, 0.80] | 0.760 [0.60, 1.00] |
-| honest-negative | 1.000 | 0.950 [0.75, 1.00] | 1.000 |
-| (other categories) | ~1.0 all arms | ~1.0 | ~1.0 |
+| async-offramp | **+0.400** (5/5 +) | **yes** | 0.933 / 0.533 (also marginal ★) |
+| routing-transfer-ownership | +0.075 (3+, 2×0) | no (≥4/5) | 1.000 / 0.925 |
+| day-of-week-arithmetic | +0.067 (3+, 2×0) | no | 0.967 / 0.900 |
+| pronoun-resolution | **0** (5×0) | no | 0.800 / 0.800 |
+| honest-negative | −0.050 (1−, 4×0) | no | 0.950 / 1.000 |
 
 **Focus cases** (utterance all-checks-pass / 5 reps):
 
@@ -119,8 +144,8 @@ other arms' max):
 | `date-next-friday-meeting` | 2/5 | 5/5 | 0/5 |
 | `date-next-tuesday` | 5/5 | 3/5 | 4/5 |
 
-`pronoun-your` ("your calendar" → Avery) is a **known gap** for the pronoun
-module compose (#1605) — not a clean sweep vs consolidation. Wrong-date-in-
+`pronoun-your` ("your calendar" → Avery) is a **known gap** — the pronoun
+module earns nothing on this fixture until that case moves. Wrong-date-in-
 brief failures (even after calling `date-resolve`) are tracked as #1612.
 
 Bare-turn latency (prior interleaved microbench, 5 reps): baseline p50 TTFT
@@ -158,9 +183,9 @@ shared streaming primitive with separately composed prompts. Until then
 | Module | In eval shared-hardening arm | Wired into prod voice / coordinator |
 |---|---|---|
 | `DATE_RESOLVE_GUARDRAIL` | yes | **yes** (both; YAML has no pointer stub) |
-| `ROUTING_DECISION_GUARDRAIL` | yes | no — after Accepted + #1605 |
-| `PRONOUN_RESOLUTION_GUARDRAIL` | yes | no — after Accepted + #1605 (incl. pronoun-your gap) |
-| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | guidance yes / tool mocked | **no** — real handoff is an Accept gate |
+| `ROUTING_DECISION_GUARDRAIL` | yes | **eligible to compose** (#1613) — modest paired benefit |
+| `PRONOUN_RESOLUTION_GUARDRAIL` | yes | **hold** — zero paired benefit until `pronoun-your` moves (#1613) |
+| `VOICE_ASYNC_OFFRAMP_GUIDANCE` + real `async-offramp` tool | guidance yes / tool mocked | **no** — real handoff is an Accept + compose gate (#1613) |
 
 ### Prompt-shape rule
 
@@ -172,7 +197,7 @@ The coordinator's sole `### Date & time` instruction is the composed
 ### Related issues
 
 - #1612 — structural date-resolve → brief validation (orthogonal, high impact)
-- #1605 — compose remaining shared guardrails (incl. pronoun-your)
+- #1613 — compose modules that **pay for themselves** (routing yes; pronoun hold; off-ramp after real handoff); supersedes bundled #1605
 - #1606 — text → streaming (unblocks on Accept)
 
 ## Consequences (if Accepted)
