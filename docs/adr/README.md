@@ -14,6 +14,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 
 ## Status values
 
+- **Proposed** — under consideration; not yet in force
 - **Accepted** — in force; the current approach
 - **Deprecated** — no longer relevant but kept for historical record
 - **Superseded by ADR-NNN** — replaced by a later decision

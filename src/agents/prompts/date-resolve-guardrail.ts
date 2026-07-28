@@ -16,7 +16,7 @@ export const DATE_RESOLVE_GUARDRAIL = [
   'When interpreting relative dates ("next Friday", "the Monday after"), always',
   'resolve them to specific calendar dates and state the dates explicitly so the',
   'user can confirm you understood correctly.',
-  'The current date, time, and timezone are injected each turn.',
+  'The current date, time, and timezone are injected each turn when a timezone is configured.',
   '',
   'IMPORTANT: You are unreliable at day-of-week arithmetic — all LLMs are. When',
   'you need to state a day-of-week for a specific date (or vice versa), call',
