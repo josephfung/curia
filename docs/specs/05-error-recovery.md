@@ -44,24 +44,59 @@ When an error occurs during agent execution:
      <message>Nylas API request timed out after 30s</message>
      <attempt>2 of 3</attempt>
      <suggestion>Consider using a different mailbox or retrying later</suggestion>
+     <reporting_constraint>This call did not succeed. Do not state or imply to the user that this action was completed unless a later attempt at it succeeds. Work that did succeed in this turn may be reported normally.</reporting_constraint>
    </task_error>
    ```
    <!-- TODO: Evaluate TOON (Token-Oriented Object Notation) as a more token-efficient
         alternative to XML for this structured block. See #55. -->
 3. **Resume, don't restart** — the LLM sees the full history including the error, and can make an informed decision: retry with different parameters, try an alternative skill, or report to the user.
 
-### Tool-failure honesty guard (#1546)
+### Action-reporting honesty (#1546)
 
-Tool failures are already injected as `<task_error>` with `is_error: true`. That is
-not always enough: the model can still write a success confirmation ("Got it —
-I've noted the dismissal") after a failed skill. The outbound Stage-2 LLM judge
-**skips principal-only recipients**, so CEO replies are never checked there.
+A failed tool call must not be reported to the user as a completed action. In the
+incident behind #1546 the coordinator called `resolve-learning-digest`, got
+`success: false`, and thirteen seconds later told the CEO "Got it — I've noted the
+dismissal." The item stayed pending.
 
-**Mechanism (runtime, before `agent.response`):** track unresolved tool failures
-for the turn; if the final text looks like an unacknowledged success confirmation,
-replace it with a deterministic honest reply listing the failure(s). Same family
-as empty-text recovery and the #1171 delegation short-circuit. Prompt guidance
-in `coordinator.yaml` is belt-and-suspenders, not the primary control.
+**This was not a missing-information failure.** The `<task_error>` block was in
+context with `is_error: true` when the reply was written. The model had the
+evidence and did not weight it — an attention failure, not a knowledge gap.
+
+**Mechanism: `<reporting_constraint>`, carried by every `<task_error>`.** The
+constraint states the rule at the point of maximum salience — the last line of the
+error block, immediately before generation resumes — instead of relying on a rule
+several hundred lines up in the system prompt. It is scoped in two directions: a
+later successful attempt at the same action is reportable as success, and other
+work in the same turn is unaffected. Both carve-outs matter; a blanket "never
+claim success" rule suppresses honest reporting of the work that did land.
+
+`coordinator.yaml` carries a matching prose rule. Prompt and constraint are the
+same control at two altitudes, not a primary and a backstop.
+
+**There is no outbound truthfulness gate, by design.** The two-stage outbound
+filter (`src/dispatch/outbound-filter.ts`) is a *disclosure* control — Stage 2
+returns `{"leak": true|false}` and Stage 2.5 classifies tier-sensitive disclosure.
+Neither evaluates whether a claim is true, for any recipient. Its
+principal-sole-recipient bypass is correct for that purpose and is not a coverage
+gap in honesty.
+
+A runtime guard that inspected the finished reply and rewrote suspected
+success-claims was built and rejected (#1579). Detecting a false success claim
+means classifying English prose, and the words that carry the claim — "noted",
+"done", "confirmed", "completed" — are also ordinary state description ("standup
+confirmed", "4 tasks completed") and plain acknowledgement ("noted — I'll hold
+off"). A keyword rule fired on roughly 40% of honest replies in a turn that had
+any tool failure, and because the guard replaced the whole reply it destroyed
+correct content on every false positive: a turn that returned the CEO's schedule
+and honestly flagged one failed sync became "I wasn't able to complete that."
+Prevention at generation time is cheaper and has no such failure mode. Revisit
+only with production evidence that the constraint is insufficient, and prefer
+a correction that adds to the reply over one that replaces it.
+
+**Root cause of the incident itself** was a skill contract violation, fixed
+separately in #1545: `resolve-learning-digest`'s manifest advertised
+`task_id` as "full UUID or unique prefix", but the handler did an exact-key
+lookup. The coordinator supplied the documented short prefix and the call failed.
 
 Prod forensic: conversation `email:19f843bdadc2eb85`, `2026-07-21T13:11Z`.
 

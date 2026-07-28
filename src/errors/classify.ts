@@ -166,8 +166,31 @@ function escapeXml(text: string): string {
 }
 
 /**
+ * Reporting constraint carried by every <task_error> (#1546).
+ *
+ * The prod incident behind #1546 was not a missing-information failure: the
+ * `<task_error>` block was already in context, with `is_error: true`, when the
+ * coordinator told the CEO "Got it — I've noted the dismissal." The model had
+ * the evidence and did not weight it. So this states the reporting rule at the
+ * point of maximum salience — the last line the model reads before resuming
+ * generation — rather than relying on a rule several hundred lines up in the
+ * system prompt.
+ *
+ * Deliberately scoped in two directions: a later successful attempt at the same
+ * action IS reportable as success, and other actions in the same turn are
+ * unaffected. Without those carve-outs the constraint would suppress honest
+ * reporting of the work that did land.
+ */
+const TASK_ERROR_REPORTING_CONSTRAINT =
+  'This call did not succeed. Do not state or imply to the user that this action '
+  + 'was completed unless a later attempt at it succeeds. Work that did succeed in '
+  + 'this turn may be reported normally.';
+
+/**
  * Format a structured <task_error> XML block for injection into LLM history.
  * Terminal leaf — no nested XML, no child tags inside <message>.
+ *
+ * <reporting_constraint> is last so it sits closest to the resumption point.
  */
 export function formatTaskError(
   toolName: string,
@@ -182,6 +205,7 @@ export function formatTaskError(
     `  <error_type>${escapeXml(errorType)}</error_type>`,
     `  <message>${escapeXml(message)}</message>`,
     `  <attempt>${attempt} of ${maxAttempts}</attempt>`,
+    `  <reporting_constraint>${TASK_ERROR_REPORTING_CONSTRAINT}</reporting_constraint>`,
     '</task_error>',
   ].join('\n');
 }

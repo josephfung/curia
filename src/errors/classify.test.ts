@@ -202,4 +202,29 @@ describe('formatTaskError', () => {
     expect(result).toContain('&amp;');
     expect(result).toContain('&gt;');
   });
+
+  // #1546: the reporting constraint is the salience mechanism that replaced the
+  // outbound rewrite guard. It must be present on every failure and must be the
+  // LAST thing before </task_error> — closest to where generation resumes.
+  it('carries a reporting constraint against claiming the failed action succeeded', () => {
+    const result = formatTaskError('resolve-learning-digest', 'SKILL_ERROR', 'No actionable confirm item', 1, 5);
+    expect(result).toContain('<reporting_constraint>');
+    expect(result).toMatch(/did not succeed/i);
+    expect(result).toMatch(/do not state or imply/i);
+  });
+
+  it('places the reporting constraint last, immediately before the closing tag', () => {
+    const lines = formatTaskError('email-send', 'TIMEOUT', 'timed out', 1, 3).split('\n');
+    expect(lines.at(-1)).toBe('</task_error>');
+    expect(lines.at(-2)).toContain('<reporting_constraint>');
+  });
+
+  // The constraint must not suppress honest reporting of a successful retry or of
+  // other work in the same turn — that over-correction is what makes a blanket
+  // "never claim success" rule harmful.
+  it('scopes the constraint so retries and other successful work stay reportable', () => {
+    const result = formatTaskError('email-send', 'TIMEOUT', 'timed out', 1, 3);
+    expect(result).toMatch(/unless a later attempt at it succeeds/i);
+    expect(result).toMatch(/work that did succeed in this turn may be reported normally/i);
+  });
 });
