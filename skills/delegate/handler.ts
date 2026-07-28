@@ -32,6 +32,7 @@ import {
   formatPausedProgressMessage,
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
+import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 
 // Default wait for the specialist to respond — appropriate for interactive tasks.
 // Long-running scheduled tasks should pass timeout_ms explicitly (injected by the runtime
@@ -141,10 +142,25 @@ export class DelegateHandler implements ToolHandler {
 
     const conversationId = conversation_id ?? `delegate-${randomUUID()}`;
 
+    const hasResumeToken = typeof resume_token === 'string' && resume_token !== '';
+    if (!hasResumeToken) {
+      const briefValidation = validateDelegateBriefDates({
+        agent,
+        task,
+        priorDateResolves: ctx.turnDateResolveResults ?? [],
+      });
+      if (!briefValidation.ok) {
+        ctx.log.warn(
+          { targetAgent: agent, priorDates: (ctx.turnDateResolveResults ?? []).map(r => r.isoDate) },
+          'Rejected calendar delegate brief — date handoff validation failed',
+        );
+        return { success: false, error: briefValidation.error };
+      }
+    }
+
     // Identical-delegation guard (#1171): resume continuations are exempt — they carry new
     // CEO direction and a different effective brief. Without a resume_token, block when the
     // runtime has already recorded a non-retryable failure for this agent+task pair.
-    const hasResumeToken = typeof resume_token === 'string' && resume_token !== '';
     if (!hasResumeToken && ctx.delegationGuard) {
       const dKey = delegationKey(agent, task);
       if (!ctx.delegationGuard.canAttempt(dKey)) {

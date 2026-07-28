@@ -318,6 +318,9 @@ export interface ToolContext {
   /** Per-task-turn guard against blind identical re-delegation (#1171). Populated by the
    *  agent runtime and read by the delegate skill. */
   delegationGuard?: import('../agents/delegation-guard.js').DelegationGuard;
+  /** date-resolve outputs from earlier in this agent turn (#1612). Populated by the runtime
+   *  / voice bridge and read by the delegate skill for brief validation. */
+  turnDateResolveResults?: readonly import('../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
   /** Shared sensitivity classifier — available to skills declaring 'sensitivityClassifier'.
    *  Classifies free text against config sensitivity_rules. */
   sensitivityClassifier?: import('../memory/sensitivity.js').SensitivityClassifier;
