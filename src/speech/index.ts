@@ -19,7 +19,14 @@ export type {
   TtsSynthesizeOptions,
 } from './types.js';
 
-export { SttHttpError, TtsHttpError } from './types.js';
+export {
+  AUDIO_FILE_CONTENT_TYPE,
+  BATCH_REQUEST_TIMEOUT_MS,
+  resolveBatchSignal,
+  SpeechHttpError,
+  SttHttpError,
+  TtsHttpError,
+} from './types.js';
 
 export { DeepgramSttProvider } from './deepgram-stt.js';
 export { CartesiaTtsProvider } from './cartesia-tts.js';

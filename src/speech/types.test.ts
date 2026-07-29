@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { classifyError } from '../errors/classify.js';
 import type {
   BatchSpeechToTextProvider,
   BatchTextToSpeechProvider,
@@ -7,6 +8,13 @@ import type {
   SttSession,
   SttTranscriptEvent,
   TextToSpeechProvider,
+} from './types.js';
+import {
+  AUDIO_FILE_CONTENT_TYPE,
+  SpeechHttpError,
+  SttHttpError,
+  TtsHttpError,
+  resolveBatchSignal,
 } from './types.js';
 
 describe('speech provider types', () => {
@@ -57,7 +65,7 @@ describe('speech provider types', () => {
         return {
           bytes: new Uint8Array([1]),
           format: opts.format,
-          contentType: opts.format === 'mp3' ? 'audio/mpeg' : 'audio/wav',
+          contentType: AUDIO_FILE_CONTENT_TYPE[opts.format],
           sampleRate: 24000,
         };
       },
@@ -82,5 +90,37 @@ describe('speech provider types', () => {
       format: 'wav',
       contentType: 'audio/wav',
     });
+  });
+
+  it('SpeechHttpError exposes status for classifyError and statusCode for callers', () => {
+    const sttErr = new SttHttpError(401, 'Deepgram STT request failed with HTTP 401');
+    const ttsErr = new TtsHttpError(503, 'Cartesia TTS request failed with HTTP 503');
+
+    expect(sttErr).toBeInstanceOf(SpeechHttpError);
+    expect(sttErr.status).toBe(401);
+    expect(sttErr.statusCode).toBe(401);
+    expect(ttsErr.status).toBe(503);
+    expect(ttsErr.statusCode).toBe(503);
+
+    expect(classifyError(sttErr, 'stt:deepgram')).toMatchObject({
+      type: 'AUTH_FAILURE',
+      context: { status: 401 },
+    });
+    expect(classifyError(ttsErr, 'tts:cartesia')).toMatchObject({
+      type: 'PROVIDER_ERROR',
+      context: { status: 503 },
+    });
+  });
+
+  it('resolveBatchSignal always returns a signal (default timeout when caller omits)', () => {
+    const signal = resolveBatchSignal();
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+
+    const controller = new AbortController();
+    const combined = resolveBatchSignal(controller.signal);
+    expect(combined).toBeInstanceOf(AbortSignal);
+    controller.abort();
+    expect(combined.aborted).toBe(true);
   });
 });

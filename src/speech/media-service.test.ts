@@ -54,7 +54,7 @@ describe('SpeechMediaService', () => {
         sampleRate: 16000,
       },
     });
-    expect(tts.fileRequests[0]).toMatchObject({
+    expect(tts.fileRequests[0]!).toMatchObject({
       text: 'spoken reply',
       format: 'mp3',
       voiceId: 'v1',
@@ -80,7 +80,7 @@ describe('SpeechMediaService', () => {
       type: 'AUTH_FAILURE',
       source: 'stt:fake-stt',
       retryable: false,
-      context: { statusCode: 401 },
+      context: { status: 401 },
     });
     expect(result.error.message).toContain('401');
   });
@@ -103,7 +103,7 @@ describe('SpeechMediaService', () => {
       type: 'PROVIDER_ERROR',
       source: 'tts:fake-tts',
       retryable: true,
-      context: { statusCode: 503 },
+      context: { status: 503 },
     });
   });
 
@@ -121,5 +121,18 @@ describe('SpeechMediaService', () => {
     if (result.ok) return;
     expect(result.error.type).toBe('UNKNOWN');
     expect(result.error.message).toContain('boom');
+  });
+
+  it('treats an empty transcript as ok success (nothing recognized)', async () => {
+    const stt = new FakeSttProvider({ fileTranscript: { text: '' } });
+    const service = new SpeechMediaService({
+      stt,
+      tts: new FakeTtsProvider(),
+      logger: createSilentLogger(),
+    });
+
+    const result = await service.transcribe({ audio: new Uint8Array([1]) });
+
+    expect(result).toEqual({ ok: true, value: { text: '' } });
   });
 });

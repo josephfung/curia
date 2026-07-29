@@ -1,6 +1,8 @@
 import type { Logger } from '../logger.js';
 import {
+  AUDIO_FILE_CONTENT_TYPE,
   TtsHttpError,
+  resolveBatchSignal,
   type AudioFileFormat,
   type BatchTextToSpeechProvider,
   type PcmFrame,
@@ -15,11 +17,6 @@ const CARTESIA_VERSION = '2026-03-01';
 const DEFAULT_MODEL_ID = 'sonic-3.5';
 const DEFAULT_SAMPLE_RATE = 24000;
 const DEFAULT_MP3_BIT_RATE = 128_000;
-
-const CONTENT_TYPE_BY_FORMAT: Record<AudioFileFormat, string> = {
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-};
 
 interface ByteReader {
   read(): Promise<{ done: boolean; value?: Uint8Array }>;
@@ -157,7 +154,7 @@ export class CartesiaTtsProvider implements TextToSpeechProvider, BatchTextToSpe
         },
         output_format: buildFileOutputFormat(opts.format, sampleRate, opts.bitRate),
       }),
-      signal: opts.signal,
+      signal: resolveBatchSignal(opts.signal),
     });
 
     if (!response.ok) {
@@ -177,7 +174,7 @@ export class CartesiaTtsProvider implements TextToSpeechProvider, BatchTextToSpe
     return {
       bytes,
       format: opts.format,
-      contentType: CONTENT_TYPE_BY_FORMAT[opts.format],
+      contentType: AUDIO_FILE_CONTENT_TYPE[opts.format],
       sampleRate,
     };
   }

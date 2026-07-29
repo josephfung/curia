@@ -158,6 +158,7 @@ describe('CartesiaTtsProvider', () => {
       });
 
       const [, init] = fetchMock.mock.calls[0]!;
+      expect(init.signal).toBeInstanceOf(AbortSignal);
       expect(JSON.parse(init.body as string)).toEqual({
         model_id: 'sonic-3.5',
         transcript: 'hello',
