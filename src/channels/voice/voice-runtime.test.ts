@@ -160,8 +160,6 @@ function makeRuntime(overrides: {
   outboundContextService?: OutboundContextService;
   /** Late-bound coordinator bridge (tools + context providers), applied via configureTools(). */
   bridge?: VoiceToolBridge;
-  /** Opening greeting defaults off in unit tests so scripted LLM replies map 1:1 to user turns. */
-  openingGreeting?: boolean;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];
@@ -191,9 +189,6 @@ function makeRuntime(overrides: {
     timezone: overrides.timezone,
     historyReadTimeoutMs: overrides.historyReadTimeoutMs,
     outboundContextService: overrides.outboundContextService,
-    // Default false so existing tests' LLM scripts are not consumed by the
-    // opening greeting (#1596). Greeting-specific tests opt in explicitly.
-    openingGreeting: overrides.openingGreeting ?? false,
   });
   if (overrides.bridge) runtime.configureTools(overrides.bridge);
   return { runtime, bus, events, stt, transport, tts, store };
@@ -256,6 +251,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s2',
       roomName: 'voice-s2',
       agentToken: 'tok',
+      openingGreeting: false,
     });
 
     stt.emit({ text: 'tell me a long story', isFinal: true, speechFinal: true });
@@ -297,6 +293,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-echo',
       roomName: 'voice-s-echo',
       agentToken: 'tok',
+      openingGreeting: false,
     });
     stt.emit({ text: 'say something', isFinal: true, speechFinal: true });
     await delay(40);
@@ -321,6 +318,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-close',
       roomName: 'voice-s-close',
       agentToken: 'tok',
+      openingGreeting: false,
     });
     expect(runtime.activeSessionCount).toBe(1);
 
@@ -343,6 +341,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s3',
       roomName: 'voice-s3',
       agentToken: 'tok',
+      openingGreeting: false,
     });
     expect(runtime.activeSessionCount).toBe(1);
 
@@ -375,6 +374,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s5',
       roomName: 'voice-s5',
       agentToken: 'tok',
+      openingGreeting: false,
     });
 
     await expect(runtime.endSession('s5', 'stt_error')).resolves.toBeNull();
@@ -399,6 +399,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-tts-fail',
       roomName: 'voice-s-tts-fail',
       agentToken: 'tok',
+      openingGreeting: false,
     });
 
     stt.emit({ text: 'one', isFinal: true, speechFinal: true });
@@ -437,6 +438,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-tts-blip',
       roomName: 'voice-s-tts-blip',
       agentToken: 'tok',
+      openingGreeting: false,
     });
 
     stt.emit({ text: 'one', isFinal: true, speechFinal: true });
@@ -463,6 +465,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-tts-hard',
       roomName: 'voice-s-tts-hard',
       agentToken: 'tok',
+      openingGreeting: false,
     });
 
     stt.emit({ text: 'hello', isFinal: true, speechFinal: true });
@@ -501,6 +504,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-pub-fail',
       roomName: 'voice-s-pub-fail',
       agentToken: 'tok',
+      openingGreeting: false,
     });
 
     for (const utter of ['one', 'two', 'three'] as const) {
@@ -528,6 +532,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s4',
       roomName: 'voice-s4',
       agentToken: 'tok',
+      openingGreeting: false,
     });
     stt.emit({ text: 'look something up', isFinal: true, speechFinal: true });
     await runtime.awaitIdle('s4');
@@ -552,6 +557,7 @@ describe('VoiceRuntime brain/context parity (#1551)', () => {
       conversationId: `voice:${id}`,
       roomName: `voice-${id}`,
       agentToken: 'tok',
+      openingGreeting: false,
     });
   }
 
@@ -956,6 +962,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       conversationId: 'voice:oc1',
       roomName: 'voice-oc1',
       agentToken: 'tok',
+      openingGreeting: false,
     });
     stt.emit({ text: 'did you message me', isFinal: true, speechFinal: true });
     await runtime.awaitIdle('oc1');
@@ -989,6 +996,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       conversationId: 'voice:oc2',
       roomName: 'voice-oc2',
       agentToken: 'tok',
+      openingGreeting: false,
     });
     stt.emit({ text: 'hello', isFinal: true, speechFinal: true });
     await runtime.awaitIdle('oc2');
@@ -1017,6 +1025,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       conversationId: 'voice:oc3',
       roomName: 'voice-oc3',
       agentToken: 'tok',
+      openingGreeting: false,
     });
     stt.emit({ text: 'are you there', isFinal: true, speechFinal: true });
     await runtime.awaitIdle('oc3');
@@ -1044,6 +1053,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       conversationId: 'voice:oc4',
       roomName: 'voice-oc4',
       agentToken: 'tok',
+      openingGreeting: false,
     });
     stt.emit({ text: 'did you message me', isFinal: true, speechFinal: true });
     await runtime.awaitIdle('oc4');
@@ -1065,7 +1075,6 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       llm,
       tts: new SlowTtsProvider(3, 1),
       store,
-      openingGreeting: true,
       timezone: 'America/Toronto',
     });
 
@@ -1074,6 +1083,7 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       conversationId: 'voice:g1',
       roomName: 'voice-g1',
       agentToken: 'tok',
+      openingGreeting: true,
     });
     await runtime.awaitIdle('g1');
 
@@ -1117,7 +1127,6 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
     const { runtime } = makeRuntime({
       llm,
       tts: new SlowTtsProvider(2, 1),
-      openingGreeting: true,
       outboundContextService: real,
     });
 
@@ -1126,6 +1135,7 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       conversationId: 'voice:g2',
       roomName: 'voice-g2',
       agentToken: 'tok',
+      openingGreeting: true,
     });
     await runtime.awaitIdle('g2');
 
@@ -1153,13 +1163,14 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       3,
     );
     const tts = new SlowTtsProvider(50, 5);
-    const { runtime, stt, events } = makeRuntime({ llm, tts, openingGreeting: true });
+    const { runtime, stt, events } = makeRuntime({ llm, tts });
 
     await runtime.startSession({
       sessionId: 'g3',
       conversationId: 'voice:g3',
       roomName: 'voice-g3',
       agentToken: 'tok',
+      openingGreeting: true,
     });
 
     // Let the greeting start speaking.
@@ -1182,7 +1193,7 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
     expect(llm.seenMessages.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('persists only the spoken greeting to working memory (not the synthetic cue)', async () => {
+  it('persists synthetic user cue + greeting so later turns stay user-first', async () => {
     const llm = new FakeStreamProvider([replyScript('Hey boss.')]);
     const addTurn = vi.fn(async () => {});
     const workingMemory = {
@@ -1193,7 +1204,6 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
     const { runtime } = makeRuntime({
       llm,
       tts: new SlowTtsProvider(2, 1),
-      openingGreeting: true,
       workingMemory,
     });
 
@@ -1202,13 +1212,86 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       conversationId: 'voice:g4',
       roomName: 'voice-g4',
       agentToken: 'tok',
+      openingGreeting: true,
     });
     await runtime.awaitIdle('g4');
 
-    expect(addTurn).toHaveBeenCalledTimes(1);
-    expect(addTurn).toHaveBeenCalledWith('voice:g4', 'coordinator', {
+    expect(addTurn).toHaveBeenCalledTimes(2);
+    expect(addTurn).toHaveBeenNthCalledWith(1, 'voice:g4', 'coordinator', {
+      role: 'user',
+      content: VOICE_GREETING_USER_MESSAGE,
+    });
+    expect(addTurn).toHaveBeenNthCalledWith(2, 'voice:g4', 'coordinator', {
       role: 'assistant',
       content: 'Hey boss.',
     });
+  });
+
+  it('completed greeting → user turn assembles a user-first message array (Anthropic contract)', async () => {
+    /**
+     * Provider stub that throws if the first non-system message is not `user` —
+     * locks the regression that a completed greeting must not leave history
+     * assistant-led (Anthropic Messages API 400).
+     */
+    class UserFirstEnforcingProvider extends FakeStreamProvider {
+      override async *stream(params: {
+        messages?: Message[];
+        options?: Record<string, unknown>;
+      }): AsyncIterable<LLMStreamEvent> {
+        const nonSystem = (params.messages ?? []).filter(m => m.role !== 'system');
+        const first = nonSystem[0];
+        if (first && first.role !== 'user') {
+          throw new Error(
+            `provider contract violated: first non-system message must be user, got ${first.role}`,
+          );
+        }
+        yield* super.stream(params);
+      }
+    }
+
+    const llm = new UserFirstEnforcingProvider([
+      replyScript('Good morning.'),
+      replyScript('Your calendar is clear this afternoon.'),
+    ]);
+    const turns: Array<{ role: string; content: string }> = [];
+    const workingMemory = {
+      addTurn: vi.fn(async (_c: string, _a: string, turn: { role: string; content: string }) => {
+        turns.push(turn);
+      }),
+      getHistory: vi.fn(async () => [...turns]),
+    } as unknown as WorkingMemory;
+
+    const { runtime, stt, transport } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory,
+    });
+
+    await runtime.startSession({
+      sessionId: 'g5',
+      conversationId: 'voice:g5',
+      roomName: 'voice-g5',
+      agentToken: 'tok',
+      openingGreeting: true,
+    });
+    await runtime.awaitIdle('g5');
+
+    // Greeting completed and persisted cue + assistant.
+    expect(turns).toEqual([
+      { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
+      { role: 'assistant', content: 'Good morning.' },
+    ]);
+
+    stt.emit({ text: "what's on my calendar", isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('g5');
+
+    expect(llm.seenMessages).toHaveLength(2);
+    const userTurnMessages = llm.seenMessages[1]!;
+    const nonSystem = userTurnMessages.filter(m => m.role !== 'system');
+    expect(nonSystem[0]!.role).toBe('user');
+    expect(nonSystem[0]!.content).toBe(VOICE_GREETING_USER_MESSAGE);
+    expect(nonSystem[1]).toEqual({ role: 'assistant', content: 'Good morning.' });
+    expect(nonSystem[2]).toEqual({ role: 'user', content: "what's on my calendar" });
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
   });
 });

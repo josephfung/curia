@@ -18,6 +18,7 @@ import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../s
 import { resolveConsoleOriginator } from '../console-originator.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
+import { isVoiceGreetingCueContent } from '../../voice/greeting.js';
 import { validateTaskErrorBudget } from '../../../tasks/task-error-budget.js';
 
 export interface KnowledgeGraphRouteOptions {
@@ -1522,7 +1523,9 @@ export async function knowledgeGraphRoutes(
    *
    * Only user/assistant turns are returned — system turns (synthetic summaries
    * inserted by the summarisation pass) are excluded since they are internal
-   * artifacts not intended for display.
+   * artifacts not intended for display. The synthetic voice opening cue
+   * (`VOICE_GREETING_USER_MESSAGE`, #1596) is also excluded — it exists so
+   * Anthropic-safe user-first history, not for the principal to read.
    */
   app.get('/api/kg/chat/history', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
@@ -1577,7 +1580,12 @@ export async function knowledgeGraphRoutes(
       // Take at most `limit` rows, then restore chronological order.
       const rows = result.rows.slice(0, limit).reverse();
 
-      const messages = rows.map((row) => {
+      const messages = rows.flatMap((row) => {
+        // Voice opening cue is persisted so spoken-turn history stays user-first
+        // for Anthropic, but must not surface as a chat bubble (#1596).
+        if (row.role === 'user' && isVoiceGreetingCueContent(row.content)) {
+          return [];
+        }
         // Per-row try/catch so one bad message doesn't fail the whole page.
         let html: string | null = null;
         // Strip dispatcher-injected outbound context preambles from user messages
@@ -1593,13 +1601,13 @@ export async function knowledgeGraphRoutes(
             logger.warn({ err: convErr, messageId: row.id }, 'markdownToHtml failed for history row; falling back to plain text');
           }
         }
-        return {
+        return [{
           id: row.id,
           role: row.role as 'user' | 'assistant',
           content,
           html,
           timestamp: row.created_at.toISOString(),
-        };
+        }];
       });
 
       return reply.send({ messages, hasMore });
