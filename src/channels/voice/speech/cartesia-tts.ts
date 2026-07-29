@@ -1,10 +1,25 @@
 import type { Logger } from '../../../logger.js';
-import { TtsHttpError, type PcmFrame, type TextToSpeechProvider, type TtsSynthesizeOptions } from './types.js';
+import {
+  TtsHttpError,
+  type AudioFileFormat,
+  type BatchTextToSpeechProvider,
+  type PcmFrame,
+  type SynthesizeToFileOptions,
+  type SynthesizeToFileResult,
+  type TextToSpeechProvider,
+  type TtsSynthesizeOptions,
+} from './types.js';
 
 const CARTESIA_TTS_BYTES_URL = 'https://api.cartesia.ai/tts/bytes';
 const CARTESIA_VERSION = '2026-03-01';
 const DEFAULT_MODEL_ID = 'sonic-3.5';
 const DEFAULT_SAMPLE_RATE = 24000;
+const DEFAULT_MP3_BIT_RATE = 128_000;
+
+const CONTENT_TYPE_BY_FORMAT: Record<AudioFileFormat, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+};
 
 interface ByteReader {
   read(): Promise<{ done: boolean; value?: Uint8Array }>;
@@ -54,7 +69,51 @@ function makeAbortError(): Error {
   return err;
 }
 
-export class CartesiaTtsProvider implements TextToSpeechProvider {
+function buildFileOutputFormat(
+  format: AudioFileFormat,
+  sampleRate: number,
+  bitRate: number | undefined,
+): Record<string, string | number> {
+  if (format === 'mp3') {
+    return {
+      container: 'mp3',
+      sample_rate: sampleRate,
+      bit_rate: bitRate ?? DEFAULT_MP3_BIT_RATE,
+    };
+  }
+  return {
+    container: 'wav',
+    encoding: 'pcm_s16le',
+    sample_rate: sampleRate,
+  };
+}
+
+async function bufferResponseBody(body: ByteReadableStream): Promise<Uint8Array> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+export class CartesiaTtsProvider implements TextToSpeechProvider, BatchTextToSpeechProvider {
   readonly id = 'cartesia';
 
   private readonly controllers = new Map<string, AbortController>();
@@ -65,6 +124,63 @@ export class CartesiaTtsProvider implements TextToSpeechProvider {
     private readonly logger: Logger,
     private readonly defaultVoiceId?: string,
   ) {}
+
+  /**
+   * Synthesize text into an encoded audio file (mp3/wav) by requesting that
+   * container from Cartesia's bytes API and buffering the response body.
+   * Used for voice-note replies on text channels (Signal/Slack).
+   */
+  async synthesizeToFile(opts: SynthesizeToFileOptions): Promise<SynthesizeToFileResult> {
+    const voiceId = opts.voiceId ?? this.defaultVoiceId;
+    if (!voiceId) {
+      throw new Error('Cartesia TTS requires a voiceId or defaultVoiceId');
+    }
+    if (!opts.text.trim()) {
+      throw new Error('Cartesia TTS synthesizeToFile requires non-empty text');
+    }
+
+    const sampleRate = opts.sampleRate ?? DEFAULT_SAMPLE_RATE;
+    const response = await fetch(CARTESIA_TTS_BYTES_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Cartesia-Version': CARTESIA_VERSION,
+        'Content-Type': 'application/json',
+        Accept: 'audio/*',
+      },
+      body: JSON.stringify({
+        model_id: DEFAULT_MODEL_ID,
+        transcript: opts.text,
+        voice: {
+          mode: 'id',
+          id: voiceId,
+        },
+        output_format: buildFileOutputFormat(opts.format, sampleRate, opts.bitRate),
+      }),
+      signal: opts.signal,
+    });
+
+    if (!response.ok) {
+      throw responseError(response);
+    }
+
+    const body = asByteReadableStream(response.body);
+    if (!body) {
+      throw new Error('Cartesia TTS response did not include a readable audio body');
+    }
+
+    const bytes = await bufferResponseBody(body);
+    if (bytes.byteLength === 0) {
+      throw new Error('Cartesia TTS synthesizeToFile returned empty audio');
+    }
+
+    return {
+      bytes,
+      format: opts.format,
+      contentType: CONTENT_TYPE_BY_FORMAT[opts.format],
+      sampleRate,
+    };
+  }
 
   async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
     const voiceId = opts.voiceId ?? this.defaultVoiceId;

@@ -1,24 +1,46 @@
-import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from './types.js';
+import type {
+  AudioFileFormat,
+  BatchTextToSpeechProvider,
+  PcmFrame,
+  SynthesizeToFileOptions,
+  SynthesizeToFileResult,
+  TextToSpeechProvider,
+  TtsSynthesizeOptions,
+} from './types.js';
 
 export interface FakeTtsProviderOptions {
   sampleRate?: number;
   frameSamples?: number;
   frameCount?: number;
+  /** Fixed bytes returned by synthesizeToFile. */
+  fileBytes?: Uint8Array;
+  /** When set, synthesizeToFile rejects with this error. */
+  fileError?: Error;
 }
 
-export class FakeTtsProvider implements TextToSpeechProvider {
+const CONTENT_TYPE_BY_FORMAT: Record<AudioFileFormat, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+};
+
+export class FakeTtsProvider implements TextToSpeechProvider, BatchTextToSpeechProvider {
   readonly id = 'fake-tts';
   readonly requests: TtsSynthesizeOptions[] = [];
+  readonly fileRequests: SynthesizeToFileOptions[] = [];
 
   private readonly sampleRate: number;
   private readonly frameSamples: number;
   private readonly frameCount: number;
   private readonly cancelled = new Set<string>();
+  private fileBytes: Uint8Array;
+  private fileError: Error | undefined;
 
   constructor(opts: FakeTtsProviderOptions = {}) {
     this.sampleRate = opts.sampleRate ?? 24000;
     this.frameSamples = opts.frameSamples ?? 160;
     this.frameCount = opts.frameCount ?? 3;
+    this.fileBytes = opts.fileBytes ?? new Uint8Array([1, 2, 3, 4]);
+    this.fileError = opts.fileError;
   }
 
   async *synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame> {
@@ -36,8 +58,28 @@ export class FakeTtsProvider implements TextToSpeechProvider {
     }
   }
 
+  async synthesizeToFile(opts: SynthesizeToFileOptions): Promise<SynthesizeToFileResult> {
+    this.fileRequests.push(opts);
+    if (this.fileError) throw this.fileError;
+    const sampleRate = opts.sampleRate ?? this.sampleRate;
+    return {
+      bytes: this.fileBytes,
+      format: opts.format,
+      contentType: CONTENT_TYPE_BY_FORMAT[opts.format],
+      sampleRate,
+    };
+  }
+
   cancel(streamId: string): void {
     this.cancelled.add(streamId);
+  }
+
+  setFileBytes(bytes: Uint8Array): void {
+    this.fileBytes = bytes;
+  }
+
+  setFileError(err: Error | undefined): void {
+    this.fileError = err;
   }
 
   private isCancelled(opts: TtsSynthesizeOptions): boolean {

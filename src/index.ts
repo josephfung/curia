@@ -85,6 +85,7 @@ import { VoiceRuntime } from './channels/voice/voice-runtime.js';
 import { evaluateVoiceModelCapabilities } from './channels/voice/voice-model-capabilities.js';
 import { DeepgramSttProvider } from './channels/voice/speech/deepgram-stt.js';
 import { CartesiaTtsProvider } from './channels/voice/speech/cartesia-tts.js';
+import { SpeechMediaService } from './speech/speech-media-service.js';
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
 import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
@@ -910,6 +911,10 @@ async function main(): Promise<void> {
   let smsClient: SmsClient | undefined;
   let smsAdapter: SmsAdapter | undefined;
   let voiceAdapter: VoiceAdapter | undefined;
+  // Batch STT/TTS for text-channel voice notes (#1597). Needs Deepgram + Cartesia
+  // (+ voice id) only — not LiveKit. Channel adapters (#1600/#1601) consume this
+  // without importing VoiceRuntime.
+  let speechMediaService: SpeechMediaService | undefined;
   if (config.smsApiKey && config.smsFromNumber && config.smsWebhookPublicKey) {
     smsClient = new SmsClient({
       apiKey: config.smsApiKey,
@@ -920,6 +925,25 @@ async function main(): Promise<void> {
     logger.info('SMS client created (Telnyx Messaging)');
   } else {
     logger.warn('SMS Telnyx credentials not fully configured — SMS channel disabled. Set them in the console (Settings → Channels → SMS); Telnyx credentials are vault-only (no env fallback).');
+  }
+
+  if (config.voiceDeepgramApiKey && config.voiceCartesiaApiKey && config.voiceCartesiaVoiceId) {
+    speechMediaService = new SpeechMediaService({
+      stt: new DeepgramSttProvider(config.voiceDeepgramApiKey, logger),
+      tts: new CartesiaTtsProvider(config.voiceCartesiaApiKey, logger, config.voiceCartesiaVoiceId),
+      logger,
+    });
+    // Retained for #1600/#1601 (Signal/Slack voice-note DI). Streaming voice
+    // still builds its own STT/TTS providers below.
+    logger.info(
+      { speechMediaReady: speechMediaService !== undefined },
+      'Speech media service ready (batch STT/TTS for voice notes)',
+    );
+  } else {
+    logger.warn(
+      'Speech media credentials incomplete — batch STT/TTS unavailable. '
+      + 'Set Deepgram and Cartesia (including voice ID) under Settings → Channels → Voice.',
+    );
   }
 
   if (

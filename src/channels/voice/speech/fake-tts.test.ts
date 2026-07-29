@@ -58,6 +58,18 @@ describe('FakeTtsProvider', () => {
     expect(first.done).toBe(false);
     expect(second.done).toBe(true);
   });
+
+  it('synthesizeToFile returns configured bytes for the requested format', async () => {
+    const bytes = new Uint8Array([9, 9]);
+    const provider = new FakeTtsProvider({ fileBytes: bytes, sampleRate: 16000 });
+
+    await expect(provider.synthesizeToFile({ text: 'hi', format: 'wav' })).resolves.toEqual({
+      bytes,
+      format: 'wav',
+      contentType: 'audio/wav',
+      sampleRate: 16000,
+    });
+  });
 });
 
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {

@@ -37,4 +37,15 @@ describe('FakeSttProvider', () => {
     expect(session.audioFrames).toEqual([]);
     expect(transcriptSpy).not.toHaveBeenCalled();
   });
+
+  it('transcribeFile returns the configured transcript', async () => {
+    const provider = new FakeSttProvider({
+      fileTranscript: { text: 'from file', confidence: 0.5 },
+    });
+    const audio = new Uint8Array([1, 2]);
+
+    await expect(provider.transcribeFile({ audio, contentType: 'audio/wav' }))
+      .resolves.toEqual({ text: 'from file', confidence: 0.5 });
+    expect(provider.fileRequests).toEqual([{ audio, contentType: 'audio/wav' }]);
+  });
 });
