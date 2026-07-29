@@ -12,12 +12,14 @@ import {
   VoiceRuntime,
   buildVoiceSystemPrompt,
   VOICE_SYSTEM_ADDENDUM,
+  VOICE_SPOKEN_STYLE_ADDENDUM,
   VOICE_TOOL_RESULT_POLICY,
   VOICE_DELEGATION_GUIDANCE,
   VOICE_GREETING_INSTRUCTION,
   VOICE_GREETING_USER_MESSAGE,
 } from './voice-runtime.js';
 import type { VoiceToolBridge } from './voice-runtime.js';
+import { partnerCaller } from './test-fixtures.js';
 import { FakeAudioTransport } from './fake-audio-transport.js';
 import { FakeSttProvider, TtsHttpError } from '../../speech/index.js';
 import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from '../../speech/index.js';
@@ -947,6 +949,24 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       .toBeLessThan(prompt.indexOf(VOICE_ASYNC_OFFRAMP_GUIDANCE));
   });
 
+  it('buildVoiceSystemPrompt reflects a non-principal audience (#1598)', () => {
+    const prompt = buildVoiceSystemPrompt({
+      audience: { liveTurn: false, displayName: 'Alex Partner' },
+    });
+    expect(prompt).toContain('You are speaking to Alex Partner in a live voice call.');
+    expect(prompt).toContain('They are not the principal');
+    expect(prompt).not.toContain('You are speaking to the principal');
+    expect(prompt).toContain(VOICE_SPOKEN_STYLE_ADDENDUM);
+  });
+
+  it('buildVoiceSystemPrompt keeps the principal audience line for liveTurn callers', () => {
+    const prompt = buildVoiceSystemPrompt({
+      audience: { liveTurn: true, displayName: 'Joseph' },
+    });
+    expect(prompt).toContain(VOICE_SYSTEM_ADDENDUM);
+    expect(prompt).toBe(SLIM_VOICE_PROMPT);
+  });
+
   it('injects an active Signal outbound-context entry into the spoken-turn system prompt', async () => {
     const llm = new FakeStreamProvider([reply('Yes, I messaged you on Signal about the Google alert.')]);
     const outbound = fakeOutboundContext({ entries: [signalAlertEntry] });
@@ -978,6 +998,35 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       content: 'did you message me',
     });
     expect(systemText).not.toContain('did you message me');
+  });
+
+  it('does not inject outbound context for a non-principal (liveTurn=false) caller (#1598)', async () => {
+    const llm = new FakeStreamProvider([reply('Hello.')]);
+    const getActive = vi.fn(async () => [signalAlertEntry]);
+    const outbound = fakeOutboundContext({ getActive });
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      outboundContextService: outbound,
+    });
+
+    await runtime.startSession({
+      sessionId: 'oc-nonprincipal',
+      conversationId: 'voice:oc-nonprincipal',
+      roomName: 'voice-oc-nonprincipal',
+      agentToken: 'tok',
+      openingGreeting: false,
+      caller: partnerCaller(),
+    });
+    stt.emit({ text: 'did you message me', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('oc-nonprincipal');
+
+    expect(getActive).not.toHaveBeenCalled();
+    const system = llm.seenMessages[0]![0]!;
+    const systemText = typeof system.content === 'string' ? system.content : '';
+    expect(systemText).not.toContain('[ACTIVE OUTBOUND CONTEXT');
+    expect(systemText).toContain('You are speaking to Alex Partner');
+    expect(systemText).not.toContain('You are speaking to the principal');
   });
 
   it('leaves the system prompt unchanged when getActive returns no entries', async () => {

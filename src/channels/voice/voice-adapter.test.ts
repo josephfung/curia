@@ -7,6 +7,7 @@ import type { VoiceRuntime } from './voice-runtime.js';
 import { VoiceSessionBridge } from './session-bridge.js';
 import { VoiceAdapter } from './voice-adapter.js';
 import { mintVoiceParticipantToken } from './livekit/token.js';
+import { partnerCaller, principalCaller } from './test-fixtures.js';
 
 // Mock JWT minting so tests don't need real keys and can simulate a signing
 // failure on the agent token (the second mint) independently of the principal.
@@ -15,6 +16,7 @@ vi.mock('./livekit/token.js', () => ({
 }));
 
 const logger = pino({ level: 'silent' });
+const PRINCIPAL_ID = '11111111-1111-1111-1111-111111111111';
 
 beforeEach(() => {
   // Reset to the default resolving implementation before every test so a
@@ -85,7 +87,7 @@ function fakeRuntime(): VoiceRuntime {
 }
 
 describe('VoiceAdapter', () => {
-  it('installs a handler that creates sessions, mints a token, and publishes started', async () => {
+  it('installs a handler that creates sessions, mints a token with the resolved contact id, and publishes started', async () => {
     const bridge = new VoiceSessionBridge();
     const { bus, publish, subscribe } = fakeBus();
     const { store, create } = fakeStore();
@@ -106,8 +108,9 @@ describe('VoiceAdapter', () => {
     const handler = bridge.getHandler();
     expect(handler).not.toBeNull();
 
+    const caller = principalCaller();
     const result = await handler!.createSession({
-      principalContactId: '11111111-1111-1111-1111-111111111111',
+      caller,
       metadata: { source: 'test' },
     });
 
@@ -119,12 +122,52 @@ describe('VoiceAdapter', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: result.body.conversationId,
       livekitRoom: result.body.roomName,
-      principalContactId: '11111111-1111-1111-1111-111111111111',
+      principalContactId: PRINCIPAL_ID,
       metadata: { source: 'test' },
     }));
-    expect(runtime.startSession).toHaveBeenCalledOnce();
+    expect(mintVoiceParticipantToken).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ identity: PRINCIPAL_ID, name: 'Joseph' }),
+    );
+    expect(runtime.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({ caller }),
+    );
     expect(publish.mock.calls[0]![0]).toBe('channel');
     expect(publish.mock.calls[0]![1].type).toBe('voice.session.started');
+  });
+
+  it('mints LiveKit identity from a non-principal contact id (not the literal principal)', async () => {
+    const bridge = new VoiceSessionBridge();
+    const { bus } = fakeBus();
+    const { store } = fakeStore();
+    const runtime = fakeRuntime();
+    const adapter = new VoiceAdapter({
+      bus,
+      logger,
+      sessionBridge: bridge,
+      sessionStore: store,
+      livekitUrl: 'wss://voice.example.test',
+      livekitApiKey: 'devkey',
+      livekitApiSecret: 'devsecret',
+      voiceRuntime: runtime,
+    });
+    await adapter.start();
+
+    const caller = partnerCaller();
+    await bridge.getHandler()!.createSession({ caller });
+
+    expect(mintVoiceParticipantToken).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        identity: caller.contactId,
+        name: 'Alex Partner',
+      }),
+    );
+    // Must not mint the hardcoded 'principal' identity.
+    const identities = vi.mocked(mintVoiceParticipantToken).mock.calls
+      .map(c => c[1]?.identity)
+      .filter(id => id !== 'curia-agent');
+    expect(identities).not.toContain('principal');
   });
 
   it('rejects session creation when VoiceRuntime is unavailable', async () => {
@@ -143,7 +186,7 @@ describe('VoiceAdapter', () => {
 
     await adapter.start();
     const result = await bridge.getHandler()!.createSession({
-      principalContactId: '11111111-1111-1111-1111-111111111111',
+      caller: principalCaller(),
     });
 
     expect(result.status).toBe(503);
@@ -202,7 +245,7 @@ describe('VoiceAdapter', () => {
 
     await adapter.start();
     const result = await bridge.getHandler()!.createSession({
-      principalContactId: '11111111-1111-1111-1111-111111111111',
+      caller: principalCaller(),
     });
 
     // Fail closed with 500; the runtime loop is never started; and the persisted

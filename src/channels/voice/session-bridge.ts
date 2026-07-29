@@ -1,5 +1,8 @@
+import type { VoiceCallerContext } from './caller-context.js';
+
 export interface VoiceSessionCreateRequest {
-  principalContactId?: string;
+  /** Resolved caller identity (originator / tier / liveTurn) — stamped once at create. */
+  caller: VoiceCallerContext;
   metadata?: Record<string, unknown>;
 }
 

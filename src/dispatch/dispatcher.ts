@@ -7,7 +7,7 @@ import {
   summarizeAuthorizationDecision,
   formatAuthorizationSubjectSummary,
 } from '../contacts/authorization.js';
-import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator } from '../contacts/types.js';
+import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy } from '../contacts/types.js';
 import { isAutomatedKind } from '../contacts/types.js';
 import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
 import type { InboundScanner } from './inbound-scanner.js';
@@ -16,6 +16,7 @@ import type { DbPool } from '../db/connection.js';
 import { computeTrustScore, DEFAULT_TRUST_WEIGHTS } from './trust-scorer.js';
 import type { TrustScorerWeights } from './trust-scorer.js';
 import { parseEmailMetadata, sanitizeNylasMessageId, buildCcPreamble, buildThreadParticipantsBlock } from './email-metadata.js';
+import { stampOriginator } from './stamp-originator.js';
 import {
   CONTENT_BLOCK_MAX_RETRIES,
   buildContentBlockRewriteTask,
@@ -804,41 +805,14 @@ export class Dispatcher {
     // SECURITY: originator is the ONLY source of systemRole for downstream authorization.
     // Channel-supplied originator is stripped in mergeTaskMetadata.
     //
-    // Defence in depth (#1059): inbound messages are external by definition. When the sender
-    // could not be resolved to a contact — the channel adapter's first-contact creation was
-    // skipped (rate caps, a creation failure, a malformed From) or no resolver is wired — we
-    // still stamp an originator with tier='unknown'. The Dispatch layer must not assume the
-    // Channel layer always pre-creates the contact: a missing originator would make the
-    // execution layer's Gate C fail-open (skip) on a consequential action, whereas tier='unknown'
-    // routes it through normal tier enforcement (which escalates third-party-facing sends). No
-    // contact UUID exists, so the raw channel sender id is the contactId sentinel — consistent
-    // with the existing non-UUID originator.contactId values ('system', 'primary-user'); the
-    // skill layer already guards UUID-typed lookups against non-UUID caller ids.
-    const originator: TaskOriginator = senderContext?.resolved
-      ? {
-          contactId: senderContext.contactId,
-          systemRole: senderContext.systemRole ?? null,
-          channel: payload.channelId,
-          initiatedAt: new Date().toISOString(),
-          tier: senderContext.tier,
-        }
-      : {
-          contactId: payload.senderId,
-          systemRole: null,
-          channel: payload.channelId,
-          initiatedAt: new Date().toISOString(),
-          tier: 'unknown',
-        };
-    // The LIVE PRINCIPAL TURN signal (#1126) is `true` iff this inbound resolved to the principal.
-    // It is the sole satisfier of the `elevated` skill gate. It is stamped as a DISTINCT field on
-    // the agent.task payload (below), NOT inside the metadata bag — so no skill that forwards
-    // `metadata` to a persisted row can ever sweep it into wakeable state. It is structurally
-    // absent from every wake, scheduler fire, and persisted task (those construct their own
-    // agent.task without it); `delegate` forwards it across a synchronous delegation only. A woken
-    // principal-LINEAGE task therefore carries the principal originator (for the autonomy
-    // principal-bypass ladder) but NOT this signal — which is what closes the self-approval hole.
+    // Derivation lives in stampOriginator() — shared with the voice session-create path so
+    // the elevated-gate signal has one source of truth (#1598 / #1126 / #1059).
+    const { originator, liveTurn } = stampOriginator({
+      senderContext,
+      channel: payload.channelId,
+      senderId: payload.senderId,
+    });
     const originatorMeta: Record<string, unknown> = { originator };
-    const liveTurn = originator.systemRole === 'principal';
     if (!senderContext?.resolved) {
       this.logger.warn(
         { channelId: payload.channelId, senderId: payload.senderId },
