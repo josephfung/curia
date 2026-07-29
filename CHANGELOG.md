@@ -45,6 +45,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **MCP `callTool`** — a timed-out skill now aborts the underlying MCP request instead of stranding it. (#1666)
 - **LLM provider streaming** — every provider releases its SDK stream on abort/error/early-exit, preventing a heap leak. (#1648, #1651)
 - **`classifyError`** — `AbortSignal.timeout` / abort DOMExceptions map to `TIMEOUT`. (#1597)
+- **`contact-dedup-exclude`** — multi-valued exclusions coexist; agent leaves task open on write failure. (#1623)
 - **`delegate`** — calendar briefs must match same-turn date-resolve output. (#1612)
 - **Coordinator** — ambient bullpen mentions no longer bleed into scheduler jobs and leak to the principal. (#1609)
 - **Voice** — injects active outbound-context so spoken turns see recent cross-channel sends. (#1594)

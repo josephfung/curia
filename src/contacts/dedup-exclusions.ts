@@ -28,15 +28,9 @@ export interface WriteExclusionOptions {
  * properties.value = contactBId — matching what hasExclusion() queries for.
  *
  * Throws if the fact was not stored (action: 'conflict' | 'auto_rejected' | ...).
- * The 'conflict' case typically fires when a contact already has a dedup_exclusion
- * for a DIFFERENT pair — EntityMemory's contradiction detection treats same-attribute,
- * different-label facts at equal confidence as conflicts. Callers should catch and
- * surface this rather than treating a non-throwing return as a guarantee of persistence.
- *
- * @TODO: The underlying fix is to key contradiction detection on (attribute + value)
- * rather than (attribute + label), so multiple dedup_exclusion facts per node are
- * permitted. That change touches shared memory-validation semantics and should be
- * done in a dedicated issue (see curia#1027 discussion).
+ * Multiple exclusions per entity are supported: `dedup_exclusion` is registered as
+ * a multi-valued attribute in MemoryValidator, so different `value` properties do
+ * not trigger contradiction or dedup-merge (#1623).
  */
 export async function writeExclusion(opts: WriteExclusionOptions): Promise<void> {
   const { contactBId: rawContactBId, kgNodeId, storeFact, source = 'contacts-dedup' } = opts;

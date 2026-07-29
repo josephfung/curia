@@ -471,6 +471,129 @@ describe('MemoryValidator', () => {
     });
   });
 
+  describe('multi-valued attributes (dedup_exclusion)', () => {
+    it('allows two exclusions with different values on the same entity (no contradiction)', async () => {
+      const entity = await store.createNode({
+        type: 'person', label: 'Seth', properties: {}, source: 'test',
+      });
+      const firstExclusion = await store.createNode({
+        type: 'fact',
+        label: 'dedup_exclusion: c2',
+        properties: { attribute: 'dedup_exclusion', value: 'c2' },
+        confidence: 1.0,
+        source: 'test',
+      });
+      await store.createEdge({
+        sourceNodeId: entity.id,
+        targetNodeId: firstExclusion.id,
+        type: 'relates_to',
+        properties: {},
+        source: 'test',
+      });
+
+      const result = await validator.validateContradiction({
+        entityNodeId: entity.id,
+        label: 'dedup_exclusion: c3',
+        properties: { attribute: 'dedup_exclusion', value: 'c3' },
+        confidence: 1.0,
+        source: 'test',
+      });
+
+      expect(result.action).toBe('create');
+    });
+
+    it('still deduplicates when re-writing the same exclusion value', async () => {
+      const entity = await store.createNode({
+        type: 'person', label: 'Seth', properties: {}, source: 'test',
+      });
+      const existingExclusion = await store.createNode({
+        type: 'fact',
+        label: 'dedup_exclusion: c2',
+        properties: { attribute: 'dedup_exclusion', value: 'c2' },
+        confidence: 1.0,
+        source: 'test',
+      });
+      await store.createEdge({
+        sourceNodeId: entity.id,
+        targetNodeId: existingExclusion.id,
+        type: 'relates_to',
+        properties: {},
+        source: 'test',
+      });
+
+      const result = await validator.validateContradiction({
+        entityNodeId: entity.id,
+        label: 'dedup_exclusion: c2',
+        properties: { attribute: 'dedup_exclusion', value: 'c2' },
+        confidence: 1.0,
+        source: 'test',
+      });
+
+      // Same label → falls through to validate() dedup → update (idempotent)
+      expect(result.action).toBe('update');
+    });
+
+    it('still flags contradiction for single-valued attributes (e.g. role)', async () => {
+      const entity = await store.createNode({
+        type: 'person', label: 'Bob', properties: {}, source: 'test',
+      });
+      const existingFact = await store.createNode({
+        type: 'fact',
+        label: 'Bob is a CFO',
+        properties: { attribute: 'role', value: 'CFO' },
+        confidence: 1.0,
+        source: 'test',
+      });
+      await store.createEdge({
+        sourceNodeId: entity.id,
+        targetNodeId: existingFact.id,
+        type: 'relates_to',
+        properties: {},
+        source: 'test',
+      });
+
+      const result = await validator.validateContradiction({
+        entityNodeId: entity.id,
+        label: 'Bob is a CEO',
+        properties: { attribute: 'role', value: 'CEO' },
+        confidence: 1.0,
+        source: 'test',
+      });
+
+      expect(result.action).toBe('conflict');
+    });
+
+    it('exempts multi-valued attributes from dedup-merge when values differ', async () => {
+      const entity = await store.createNode({
+        type: 'person', label: 'Seth', properties: {}, source: 'test',
+      });
+      const firstExclusion = await store.createNode({
+        type: 'fact',
+        label: 'dedup_exclusion: c2',
+        properties: { attribute: 'dedup_exclusion', value: 'c2' },
+        confidence: 1.0,
+        source: 'test',
+      });
+      await store.createEdge({
+        sourceNodeId: entity.id,
+        targetNodeId: firstExclusion.id,
+        type: 'relates_to',
+        properties: {},
+        source: 'test',
+      });
+
+      // Even if labels are embedding-similar, different values must not merge
+      const result = await validator.validate({
+        entityNodeId: entity.id,
+        label: 'dedup_exclusion: c3',
+        properties: { attribute: 'dedup_exclusion', value: 'c3' },
+        source: 'test',
+      });
+
+      expect(result.action).toBe('create');
+    });
+  });
+
   describe('source attribution', () => {
     it('records full provenance chain on validation result', async () => {
       const entity = await store.createNode({

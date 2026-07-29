@@ -7,6 +7,13 @@ import type { StoreFactOptions, ValidationResult } from './types.js';
 // Spec line 116: cosine similarity threshold for deduplication
 const DEDUP_SIMILARITY_THRESHOLD = 0.92;
 
+// Attributes that are multi-valued by design — multiple facts with the same attribute
+// but different `value` properties may coexist on one entity. Contradiction detection
+// and embedding dedup-merge must both be skipped when `value` differs (#1623).
+const MULTI_VALUED_ATTRIBUTES: ReadonlySet<string> = new Set([
+  'dedup_exclusion',
+]);
+
 // Spec line 126: max writes per agent per task
 // Exported so tests can exhaust the limit without hard-coding the magic number.
 export const MAX_WRITES_PER_AGENT_TASK = 50;
@@ -106,6 +113,16 @@ export class MemoryValidator {
 
       const similarity = EmbeddingService.cosineSimilarity(newEmbedding, targetNode.embedding);
       if (similarity >= DEDUP_SIMILARITY_THRESHOLD) {
+        // Multi-valued attributes must not be merged when their `value` differs —
+        // the similar labels (differing only by UUID) would cause the dedup-merge
+        // to overwrite `value` and silently destroy the first exclusion.
+        const incomingAttr = (options.properties as Record<string, unknown> | undefined)?.attribute;
+        if (typeof incomingAttr === 'string' && MULTI_VALUED_ATTRIBUTES.has(incomingAttr)) {
+          const existingValue = (targetNode.properties as Record<string, unknown>).value;
+          const incomingValue = (options.properties as Record<string, unknown>).value;
+          if (existingValue !== incomingValue) continue;
+        }
+
         // Near-duplicate detected — signal a merge. Caller is responsible for
         // persisting the merged properties via store.updateNode().
         return {
@@ -177,6 +194,15 @@ export class MemoryValidator {
 
       const existingAttribute = (targetNode.properties as Record<string, unknown>).attribute;
       if (existingAttribute !== attribute) continue;
+
+      // Multi-valued attributes (e.g. dedup_exclusion) can hold N distinct values
+      // per entity. Skip contradiction when the attribute is allowlisted and the
+      // value property differs — these are independent facts, not contradictions.
+      if (typeof attribute === 'string' && MULTI_VALUED_ATTRIBUTES.has(attribute)) {
+        const existingValue = (targetNode.properties as Record<string, unknown>).value;
+        const incomingValue = (options.properties as Record<string, unknown> | undefined)?.value;
+        if (existingValue !== incomingValue) continue;
+      }
 
       // Same entity, same attribute, different label → contradiction.
       // Identical label is not a contradiction (dedup will handle it).
