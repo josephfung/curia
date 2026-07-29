@@ -101,6 +101,14 @@ export interface StoreFactOptions {
   // Optional category hint passed to the classifier (e.g. 'financial').
   // Allows skills that know the category of their data to skip keyword scanning.
   sensitivityCategory?: string;
+  /**
+   * When true, this fact is multi-valued: multiple facts with the same
+   * `properties.attribute` but different `properties.value` may coexist on one
+   * entity. Contradiction detection and embedding dedup-merge skip when values
+   * differ. Callers that write multi-valued facts (e.g. `writeExclusion`) must
+   * set this flag — the validator stays domain-agnostic (#1623).
+   */
+  multiValued?: boolean;
 }
 
 // -- Validated data for a new fact node, produced by MemoryValidator --

@@ -471,15 +471,15 @@ describe('MemoryValidator', () => {
     });
   });
 
-  describe('multi-valued attributes (dedup_exclusion)', () => {
-    it('allows two exclusions with different values on the same entity (no contradiction)', async () => {
+  describe('multi-valued facts (StoreFactOptions.multiValued)', () => {
+    it('allows two facts with different values on the same entity (no contradiction)', async () => {
       const entity = await store.createNode({
         type: 'person', label: 'Seth', properties: {}, source: 'test',
       });
       const firstExclusion = await store.createNode({
         type: 'fact',
         label: 'dedup_exclusion: c2',
-        properties: { attribute: 'dedup_exclusion', value: 'c2' },
+        properties: { attribute: 'dedup_exclusion', value: 'c2', multi_valued: true },
         confidence: 1.0,
         source: 'test',
       });
@@ -494,22 +494,23 @@ describe('MemoryValidator', () => {
       const result = await validator.validateContradiction({
         entityNodeId: entity.id,
         label: 'dedup_exclusion: c3',
-        properties: { attribute: 'dedup_exclusion', value: 'c3' },
+        properties: { attribute: 'dedup_exclusion', value: 'c3', multi_valued: true },
         confidence: 1.0,
         source: 'test',
+        multiValued: true,
       });
 
       expect(result.action).toBe('create');
     });
 
-    it('still deduplicates when re-writing the same exclusion value', async () => {
+    it('still deduplicates when re-writing the same multi-valued value', async () => {
       const entity = await store.createNode({
         type: 'person', label: 'Seth', properties: {}, source: 'test',
       });
       const existingExclusion = await store.createNode({
         type: 'fact',
         label: 'dedup_exclusion: c2',
-        properties: { attribute: 'dedup_exclusion', value: 'c2' },
+        properties: { attribute: 'dedup_exclusion', value: 'c2', multi_valued: true },
         confidence: 1.0,
         source: 'test',
       });
@@ -524,9 +525,10 @@ describe('MemoryValidator', () => {
       const result = await validator.validateContradiction({
         entityNodeId: entity.id,
         label: 'dedup_exclusion: c2',
-        properties: { attribute: 'dedup_exclusion', value: 'c2' },
+        properties: { attribute: 'dedup_exclusion', value: 'c2', multi_valued: true },
         confidence: 1.0,
         source: 'test',
+        multiValued: true,
       });
 
       // Same label → falls through to validate() dedup → update (idempotent)
@@ -563,14 +565,14 @@ describe('MemoryValidator', () => {
       expect(result.action).toBe('conflict');
     });
 
-    it('exempts multi-valued attributes from dedup-merge when values differ', async () => {
+    it('exempts multi-valued facts from dedup-merge when values differ', async () => {
       const entity = await store.createNode({
         type: 'person', label: 'Seth', properties: {}, source: 'test',
       });
       const firstExclusion = await store.createNode({
         type: 'fact',
         label: 'dedup_exclusion: c2',
-        properties: { attribute: 'dedup_exclusion', value: 'c2' },
+        properties: { attribute: 'dedup_exclusion', value: 'c2', multi_valued: true },
         confidence: 1.0,
         source: 'test',
       });
@@ -586,10 +588,45 @@ describe('MemoryValidator', () => {
       const result = await validator.validate({
         entityNodeId: entity.id,
         label: 'dedup_exclusion: c3',
-        properties: { attribute: 'dedup_exclusion', value: 'c3' },
+        properties: { attribute: 'dedup_exclusion', value: 'c3', multi_valued: true },
+        source: 'test',
+        multiValued: true,
+      });
+
+      expect(result.action).toBe('create');
+    });
+
+    it('does not merge an unrelated fact into an existing multi-valued fact (guard asymmetry)', async () => {
+      const entity = await store.createNode({
+        type: 'person', label: 'Seth', properties: {}, source: 'test',
+      });
+      // Existing multi-valued exclusion — incoming write is NOT multiValued but has a
+      // near-identical label. Without checking the existing side, validate() would merge.
+      const existingExclusion = await store.createNode({
+        type: 'fact',
+        label: 'dedup_exclusion: c2',
+        properties: { attribute: 'dedup_exclusion', value: 'c2', multi_valued: true },
+        confidence: 1.0,
+        source: 'test',
+      });
+      await store.createEdge({
+        sourceNodeId: entity.id,
+        targetNodeId: existingExclusion.id,
+        type: 'relates_to',
+        properties: {},
         source: 'test',
       });
 
+      const result = await validator.validate({
+        entityNodeId: entity.id,
+        // Same label text as the exclusion → fake embedder yields cosine 1.0
+        label: 'dedup_exclusion: c2',
+        properties: { note: 'unrelated' },
+        source: 'test',
+        // deliberately NOT multiValued
+      });
+
+      // Existing is multi-valued with value c2; incoming has no value → values differ → create
       expect(result.action).toBe('create');
     });
   });

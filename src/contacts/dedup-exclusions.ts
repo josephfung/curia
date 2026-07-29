@@ -28,9 +28,8 @@ export interface WriteExclusionOptions {
  * properties.value = contactBId — matching what hasExclusion() queries for.
  *
  * Throws if the fact was not stored (action: 'conflict' | 'auto_rejected' | ...).
- * Multiple exclusions per entity are supported: `dedup_exclusion` is registered as
- * a multi-valued attribute in MemoryValidator, so different `value` properties do
- * not trigger contradiction or dedup-merge (#1623).
+ * Multiple exclusions per entity are supported via StoreFactOptions.multiValued —
+ * different `value` properties do not trigger contradiction or dedup-merge (#1623).
  */
 export async function writeExclusion(opts: WriteExclusionOptions): Promise<void> {
   const { contactBId: rawContactBId, kgNodeId, storeFact, source = 'contacts-dedup' } = opts;
@@ -40,12 +39,15 @@ export async function writeExclusion(opts: WriteExclusionOptions): Promise<void>
   const result = await storeFact({
     entityNodeId: kgNodeId,
     label: `dedup_exclusion: ${contactBId}`,
-    properties: { attribute: 'dedup_exclusion', value: contactBId },
+    // multi_valued in properties so subsequent unrelated writes can detect this
+    // fact as multi-valued on the existing side (guard asymmetry fix, #1623).
+    properties: { attribute: 'dedup_exclusion', value: contactBId, multi_valued: true },
     // Permanent decay — exclusion decisions must not quietly expire
     decayClass: 'permanent',
     confidence: 1.0,
     source,
     sensitivity: 'internal',
+    multiValued: true,
   });
   if (!result.stored) {
     throw new Error(
