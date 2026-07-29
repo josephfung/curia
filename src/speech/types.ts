@@ -1,3 +1,14 @@
+// types.ts — STT/TTS provider contracts for live duplex and file-shaped voice notes.
+//
+// Two access shapes share this module:
+//   • Streaming — PCM sessions for live calls (VoiceRuntime)
+//   • Batch     — finished audio files for text-channel voice notes (SpeechMediaService)
+//
+// Concrete providers (Deepgram, Cartesia) implement both. Channels depend down
+// into src/speech/; this module never imports a channel.
+
+// ─── Streaming (live duplex) ───────────────────────────────────────────────
+
 export interface PcmFrame {
   pcm: Int16Array;
   sampleRate: number;
@@ -31,6 +42,23 @@ export interface SpeechToTextProvider {
   startSession(opts: SttSessionOptions): Promise<SttSession>;
 }
 
+export interface TtsSynthesizeOptions {
+  text: string;
+  /** Opaque id for cancel() */
+  streamId: string;
+  voiceId?: string;
+  sampleRate?: number;
+  signal?: AbortSignal;
+}
+
+export interface TextToSpeechProvider {
+  readonly id: string;
+  synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame>;
+  cancel(streamId: string): void;
+}
+
+// ─── Batch (finished files / voice notes) ──────────────────────────────────
+
 /**
  * Options for one-shot (prerecorded) transcription of a finished audio file
  * — e.g. a Signal/Slack voice note. Distinct from the streaming session path.
@@ -58,21 +86,6 @@ export interface TranscribeFileResult {
 export interface BatchSpeechToTextProvider {
   readonly id: string;
   transcribeFile(opts: TranscribeFileOptions): Promise<TranscribeFileResult>;
-}
-
-export interface TtsSynthesizeOptions {
-  text: string;
-  /** Opaque id for cancel() */
-  streamId: string;
-  voiceId?: string;
-  sampleRate?: number;
-  signal?: AbortSignal;
-}
-
-export interface TextToSpeechProvider {
-  readonly id: string;
-  synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame>;
-  cancel(streamId: string): void;
 }
 
 /**
@@ -109,6 +122,8 @@ export interface BatchTextToSpeechProvider {
   readonly id: string;
   synthesizeToFile(opts: SynthesizeToFileOptions): Promise<SynthesizeToFileResult>;
 }
+
+// ─── Structured HTTP errors ────────────────────────────────────────────────
 
 /**
  * Structured HTTP failure from an STT provider. Prefer this over embedding the

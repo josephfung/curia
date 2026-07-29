@@ -1,12 +1,12 @@
-// speech-media-service.ts — batch STT / TTS-to-file for text-channel voice notes.
+// media-service.ts — batch STT / TTS-to-file for text-channel voice notes.
 //
 // Wraps BatchSpeechToTextProvider / BatchTextToSpeechProvider so Signal/Slack
 // (and other channel adapters) can transcribe inbound audio and synthesize
 // outbound voice notes without importing VoiceRuntime or duplex session code.
 //
-// Streaming STT/TTS for live calls stays in src/channels/voice/**; this service
-// is the file-shaped entry point (#1597). Failures return AgentError — never
-// silently drop.
+// Streaming STT/TTS for live calls uses the same providers via their streaming
+// interfaces; this service is the file-shaped entry point (#1597). Failures
+// return AgentError — never silently drop.
 
 import type { Logger } from '../logger.js';
 import type { AgentError, ErrorType } from '../errors/types.js';
@@ -21,7 +21,7 @@ import {
   type BatchTextToSpeechProvider,
   type SynthesizeToFileResult,
   type TranscribeFileResult,
-} from '../channels/voice/speech/types.js';
+} from './types.js';
 
 export type { AudioFileFormat, SynthesizeToFileResult, TranscribeFileResult };
 

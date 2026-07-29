@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createSilentLogger } from '../logger.js';
-import { FakeSttProvider } from '../channels/voice/speech/fake-stt.js';
-import { FakeTtsProvider } from '../channels/voice/speech/fake-tts.js';
-import { SttHttpError, TtsHttpError } from '../channels/voice/speech/types.js';
-import { SpeechMediaService } from './speech-media-service.js';
+import { FakeSttProvider } from './fake-stt.js';
+import { FakeTtsProvider } from './fake-tts.js';
+import { SttHttpError, TtsHttpError } from './types.js';
+import { SpeechMediaService } from './media-service.js';
 
 describe('SpeechMediaService', () => {
   it('transcribes an audio file via the batch STT provider', async () => {

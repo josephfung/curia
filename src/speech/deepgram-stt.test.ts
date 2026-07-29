@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSilentLogger } from '../../../logger.js';
+import { createSilentLogger } from '../logger.js';
 import { DeepgramSttProvider } from './deepgram-stt.js';
 import { SttHttpError, type SttTranscriptEvent } from './types.js';
 

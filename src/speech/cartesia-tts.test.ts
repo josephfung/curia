@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createSilentLogger } from '../../../logger.js';
+import { createSilentLogger } from '../logger.js';
 import { CartesiaTtsProvider } from './cartesia-tts.js';
 import { TtsHttpError, type PcmFrame } from './types.js';
 
