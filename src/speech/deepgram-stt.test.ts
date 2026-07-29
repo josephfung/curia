@@ -194,7 +194,12 @@ describe('DeepgramSttProvider', () => {
     });
 
     it('throws SttHttpError on non-2xx responses', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 401 })));
+      const cancel = vi.fn(async () => {});
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        body: { cancel },
+      }));
       const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
 
       try {
@@ -205,6 +210,7 @@ describe('DeepgramSttProvider', () => {
         expect((err as SttHttpError).statusCode).toBe(401);
         expect((err as SttHttpError).message).toBe('Deepgram STT request failed with HTTP 401');
       }
+      expect(cancel).toHaveBeenCalledOnce();
     });
 
     it('rejects empty audio before calling the network', async () => {

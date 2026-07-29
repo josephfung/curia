@@ -56,6 +56,15 @@ function responseError(response: Response): TtsHttpError {
   return new TtsHttpError(response.status, `Cartesia TTS request failed with HTTP ${response.status}`);
 }
 
+/** Best-effort drain so undici does not pin the socket on error paths. */
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Already closed / locked — nothing further to do.
+  }
+}
+
 function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError';
 }
@@ -97,6 +106,13 @@ async function bufferResponseBody(body: ByteReadableStream): Promise<Uint8Array>
       chunks.push(value);
       total += value.byteLength;
     }
+  } catch (err) {
+    try {
+      await reader.cancel(err);
+    } catch {
+      // Best-effort — reader may already be cancelled.
+    }
+    throw err;
   } finally {
     reader.releaseLock();
   }
@@ -158,11 +174,13 @@ export class CartesiaTtsProvider implements TextToSpeechProvider, BatchTextToSpe
     });
 
     if (!response.ok) {
+      await cancelResponseBody(response);
       throw responseError(response);
     }
 
     const body = asByteReadableStream(response.body);
     if (!body) {
+      await cancelResponseBody(response);
       throw new Error('Cartesia TTS response did not include a readable audio body');
     }
 
@@ -225,11 +243,13 @@ export class CartesiaTtsProvider implements TextToSpeechProvider, BatchTextToSpe
       });
 
       if (!response.ok) {
+        await cancelResponseBody(response);
         throw responseError(response);
       }
 
       const body = asByteReadableStream(response.body);
       if (!body) {
+        await cancelResponseBody(response);
         throw new Error('Cartesia TTS response did not include a readable audio body');
       }
 
