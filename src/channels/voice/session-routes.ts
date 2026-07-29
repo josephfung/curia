@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Logger } from '../../logger.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import { assertSecret, type SessionStore } from '../http/session-auth.js';
+import { resolveConsoleVoiceCaller } from './caller-context.js';
 import type { VoiceSessionBridge } from './session-bridge.js';
 
 export interface VoiceSessionRouteOptions {
@@ -37,8 +38,13 @@ export async function voiceSessionRoutes(
     if (!handler) return reply.status(503).send({ error: 'Voice channel not available' });
 
     try {
+      // Console transport is principal-proven by the bootstrap secret (same as 'web').
+      // Resolve the principal explicitly, then stamp originator/liveTurn via the shared
+      // helper — do NOT route through ContactResolver.resolve('voice', …) so a future
+      // real caller token still hits resolveByChannelIdentity (#1598 / #1602).
+      const caller = await resolveConsoleVoiceCaller({ contactService, logger: log });
       const result = await handler.createSession({
-        principalContactId: await resolvePrincipalContactId(contactService, log),
+        caller,
         metadata: parseMetadata(request.body),
       });
       return reply.status(result.status).send(result.body);
@@ -61,18 +67,6 @@ export async function voiceSessionRoutes(
       return reply.status(500).send({ error: 'Internal voice session error' });
     }
   });
-}
-
-async function resolvePrincipalContactId(
-  contactService: ContactService,
-  logger: Logger,
-): Promise<string | undefined> {
-  try {
-    return (await contactService.findContactBySystemRole('principal'))?.id;
-  } catch (err) {
-    logger.warn({ err }, 'Unable to resolve principal contact for voice session');
-    return undefined;
-  }
 }
 
 function parseMetadata(body: unknown): Record<string, unknown> | undefined {

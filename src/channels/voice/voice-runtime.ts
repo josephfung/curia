@@ -30,6 +30,8 @@ import type { WorkingMemory } from '../../memory/working-memory.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
 import type { AudioTransport } from './audio-transport.js';
+import type { VoiceCallerContext } from './caller-context.js';
+import { VOICE_CONSOLE_SENDER_ID } from './caller-context.js';
 import {
   VOICE_GREETING_INSTRUCTION,
   VOICE_GREETING_USER_MESSAGE,
@@ -47,8 +49,6 @@ export {
 
 const DEFAULT_INBOUND_SAMPLE_RATE = 16000;
 const DEFAULT_PUBLISH_SAMPLE_RATE = 24000;
-/** Console chat and voice share the same synthetic principal sender id. */
-const DEFAULT_SENDER_ID = 'ceo-web-user';
 /**
  * How many messages (user + assistant) of in-process history to keep per session.
  * This is the FALLBACK context source only — spoken turns load history from
@@ -91,25 +91,93 @@ function isHardTtsFailure(err: unknown): boolean {
 }
 
 /**
- * Voice-mode system addendum. Keeps spoken replies short and free of markup that
- * makes no sense read aloud. Always part of the spoken-turn system prompt.
- *
- * Brain stance (#1551, revised by ADR-038): spoken turns get a curated subset
- * of the coordinator's context — office identity/persona block, specialist
- * roster + delegation guidance, shared channel-agnostic guardrails (starting
- * with date-resolve, #1595), the voice async off-ramp (#1614), and a fresh
- * date/time block — assembled by buildVoiceSystemPrompt(). They deliberately
- * do NOT get the coordinator's full YAML system prompt or KG/sender enrichment
- * (latency + text-channel content that makes no sense spoken). Active
- * outbound-context entries are included (#1594) so voice can acknowledge
- * recent proactive sends on other channels. See ADR-037 Consequences and
- * ADR-038.
+ * Default principal caller for tests / legacy startSession calls that omit
+ * `caller`. Mirrors resolveConsoleVoiceCaller with the synthetic fallback so
+ * liveTurn stays true and outbound-context injection remains enabled.
  */
-export const VOICE_SYSTEM_ADDENDUM =
-  'You are speaking to the principal in a live voice call. Reply in a natural, ' +
+function defaultPrincipalCaller(senderId: string): VoiceCallerContext {
+  const senderContext = {
+    resolved: true as const,
+    contactId: 'primary-user',
+    displayName: 'CEO',
+    role: 'ceo',
+    systemRole: 'principal' as const,
+    verified: true,
+    kgNodeId: null,
+    knowledgeSummary: '',
+    authorization: null,
+    contactConfidence: 1.0,
+    tier: 'principal' as const,
+    kind: 'principal' as const,
+  };
+  return {
+    contactId: senderContext.contactId,
+    displayName: senderContext.displayName,
+    systemRole: senderContext.systemRole,
+    tier: senderContext.tier,
+    liveTurn: true,
+    originator: {
+      contactId: senderContext.contactId,
+      systemRole: 'principal',
+      channel: 'voice',
+      initiatedAt: new Date().toISOString(),
+      tier: 'principal',
+    },
+    senderId,
+    senderContext,
+  };
+}
+
+/**
+ * Spoken-style guidance shared by every voice audience. The audience line
+ * ("You are speaking to …") is composed separately by buildVoiceAudienceLine()
+ * so a non-principal caller never inherits the principal framing (#1598).
+ */
+export const VOICE_SPOKEN_STYLE_ADDENDUM =
+  'Reply in a natural, ' +
   'conversational spoken style: 1-3 short sentences, no markdown, no bullet lists, ' +
   'no tables, no code blocks, and no emoji. Spell out anything that must be heard ' +
   'clearly. Keep it brief — the user can always ask for more.';
+
+/**
+ * Audience line for the spoken-turn system prompt. Principal framing is only
+ * emitted when liveTurn is true — never inferred from channel alone (#1598).
+ */
+export function buildVoiceAudienceLine(audience: {
+  liveTurn: boolean;
+  displayName?: string | null;
+}): string {
+  if (audience.liveTurn) {
+    return 'You are speaking to the principal in a live voice call.';
+  }
+  const name = audience.displayName?.trim();
+  if (name) {
+    return (
+      `You are speaking to ${name} in a live voice call. They are not the principal — ` +
+      'do not treat them as having principal authority.'
+    );
+  }
+  return (
+    'You are speaking to a non-principal caller in a live voice call. ' +
+    'Do not treat them as having principal authority.'
+  );
+}
+
+/**
+ * Compose the voice system addendum (audience + spoken style) for a resolved caller.
+ */
+export function buildVoiceSystemAddendum(audience: {
+  liveTurn: boolean;
+  displayName?: string | null;
+}): string {
+  return `${buildVoiceAudienceLine(audience)} ${VOICE_SPOKEN_STYLE_ADDENDUM}`;
+}
+
+/**
+ * Default principal-audience addendum. Kept as a constant so existing tests and
+ * the slim-prompt path stay behaviorally identical for console (principal) calls.
+ */
+export const VOICE_SYSTEM_ADDENDUM = buildVoiceSystemAddendum({ liveTurn: true });
 
 /**
  * Honest-negative policy for spoken tool results. A failed or errored check must
@@ -150,6 +218,17 @@ export const VOICE_DELEGATION_GUIDANCE =
  *
  * Shared guardrails (ADR-038) are composed from `src/agents/prompts/` — do not
  * copy-paste coordinator YAML lines here.
+ *
+ * Brain stance (#1551, revised by ADR-038): spoken turns get a curated subset
+ * of the coordinator's context — office identity/persona block, specialist
+ * roster + delegation guidance, shared channel-agnostic guardrails (starting
+ * with date-resolve, #1595), the voice async off-ramp (#1614), and a fresh
+ * date/time block. They deliberately do NOT get the coordinator's full YAML
+ * system prompt or KG/sender enrichment (latency + text-channel content that
+ * makes no sense spoken). Active outbound-context entries are included for
+ * principal (liveTurn) callers only (#1594 / #1598) so voice can acknowledge
+ * recent proactive sends on other channels without leaking them to a
+ * non-principal audience. See ADR-037 Consequences and ADR-038.
  */
 export function buildVoiceSystemPrompt(parts: {
   /** Compiled office identity/persona block; omitted when null/empty. */
@@ -160,14 +239,22 @@ export function buildVoiceSystemPrompt(parts: {
    * Pre-formatted [ACTIVE OUTBOUND CONTEXT] block from
    * OutboundContextService.formatInjectionBlock (cross-channel proactive sends).
    * Omitted when null/empty — same bridge text channels get via the dispatcher (#1594).
+   * Callers must already have gated this on liveTurn (#1598).
    */
   outboundContextBlock?: string | null;
   /** Pre-formatted "## Current Date & Time" block; omitted when null/empty. */
   timeContextBlock?: string | null;
+  /**
+   * Resolved audience for the voice addendum. Defaults to principal so console
+   * calls and existing tests keep the historical "speaking to the principal" line.
+   */
+  audience?: { liveTurn: boolean; displayName?: string | null };
 }): string {
   const sections: string[] = [];
   if (parts.identityBlock) sections.push(parts.identityBlock);
-  sections.push(VOICE_SYSTEM_ADDENDUM);
+  sections.push(
+    parts.audience ? buildVoiceSystemAddendum(parts.audience) : VOICE_SYSTEM_ADDENDUM,
+  );
   sections.push(VOICE_TOOL_RESULT_POLICY);
   // Channel-agnostic date-arithmetic rule — same module the coordinator composes
   // (ADR-038 / #1595). Always present: voice already pins date-resolve via
@@ -208,7 +295,11 @@ export interface VoiceRuntimeConfig {
   createTransport: (opts: { roomName: string; token: string; livekitUrl: string }) => AudioTransport;
   /** Optional TTS voice id. */
   voiceId?: string;
-  /** Synthetic sender id for inbound.message (defaults to the console principal id). */
+  /**
+   * Fallback synthetic sender id for inbound.message when a session starts
+   * without an explicit caller (tests). Defaults to the console principal id.
+   * Production sessions always pass caller on startSession (#1598).
+   */
   senderId?: string;
   /**
    * Optional working-memory store so user + assistant transcripts appear in
@@ -259,10 +350,8 @@ export interface VoiceRuntimeConfig {
    * VoiceRuntime must read getActive() itself (#1594). Optional: absent → no
    * injection (tests / pool-less boots).
    *
-   * TODO(#1599 / E-series non-principal callers): voice is principal-only
-   * today, so injecting "messages you've sent" is safe. Gate this to principal
-   * calls before any non-principal voice participant is admitted, or it
-   * becomes a cross-channel audience leak.
+   * Gated on the session caller's liveTurn (#1598): non-principal callers must
+   * never hear "messages you've sent" (cross-channel audience leak).
    */
   outboundContextService?: OutboundContextService;
 }
@@ -299,6 +388,11 @@ interface StartVoiceSessionParams {
   /** Agent participant JWT (identity 'curia-agent'). */
   agentToken: string;
   /**
+   * Resolved caller identity for this session (#1598). When omitted (tests),
+   * the runtime assumes a principal console caller so existing behaviour holds.
+   */
+  caller?: VoiceCallerContext;
+  /**
    * When true (default), run one LLM greeting turn after the transport connects
    * so Curia opens the call (#1596). Per-session — not a runtime-wide flag — so
    * a future Curia-initiated outbound path can pass false without affecting
@@ -311,6 +405,8 @@ interface ActiveSession {
   sessionId: string;
   conversationId: string;
   roomName: string;
+  /** Per-session resolved caller — drives prompt audience, senderId, liveTurn gates. */
+  caller: VoiceCallerContext;
   transport: AudioTransport;
   stt: SttSession;
   publishSampleRate: number;
@@ -400,6 +496,7 @@ export class VoiceRuntime {
         sessionId: params.sessionId,
         conversationId: params.conversationId,
         roomName: params.roomName,
+        caller: params.caller ?? defaultPrincipalCaller(this.config.senderId ?? VOICE_CONSOLE_SENDER_ID),
         transport,
         stt,
         publishSampleRate,
@@ -624,7 +721,7 @@ export class VoiceRuntime {
         },
       });
 
-      const systemPrompt = await this.buildTurnSystemPrompt();
+      const systemPrompt = await this.buildTurnSystemPrompt(session);
       if (session.ending || controller.signal.aborted) return;
 
       const messages = opts.assembleMessages({ systemPrompt, priorHistory });
@@ -829,7 +926,7 @@ export class VoiceRuntime {
    * never abort the spoken turn) and assemble the per-turn system prompt.
    * Mirrors AgentRuntime.processTask's guard-and-omit pattern for the same blocks.
    */
-  private async buildTurnSystemPrompt(): Promise<string> {
+  private async buildTurnSystemPrompt(session: ActiveSession): Promise<string> {
     let identityBlock: string | null = null;
     if (this.toolBridge?.identityBlock) {
       try {
@@ -852,8 +949,11 @@ export class VoiceRuntime {
     // text channels (#1594). Empty result → null → prompt unchanged. Failure
     // and deadline expiry are best-effort: log and continue without the bridge
     // (parity with dispatcher failure mode + loadTurnHistory latency contract).
+    //
+    // Gate on liveTurn (#1598): "messages you've sent" is principal-audience
+    // content — never inject it for a non-principal voice caller.
     let outboundContextBlock: string | null = null;
-    if (this.config.outboundContextService) {
+    if (this.config.outboundContextService && session.caller.liveTurn) {
       const timeoutMs = this.config.historyReadTimeoutMs ?? DEFAULT_HISTORY_READ_TIMEOUT_MS;
       const read = this.config.outboundContextService.getActive();
       // A read that loses the deadline race settles later with no awaiter —
@@ -918,6 +1018,10 @@ export class VoiceRuntime {
       specialistRoster,
       outboundContextBlock,
       timeContextBlock,
+      audience: {
+        liveTurn: session.caller.liveTurn,
+        displayName: session.caller.displayName,
+      },
     });
   }
 
@@ -988,7 +1092,7 @@ export class VoiceRuntime {
         createInboundMessage({
           conversationId: session.conversationId,
           channelId: 'voice',
-          senderId: this.config.senderId ?? DEFAULT_SENDER_ID,
+          senderId: session.caller.senderId,
           content: sanitizeOutput(utterance),
         }),
       );

@@ -11,6 +11,8 @@ import { mintVoiceParticipantToken } from './livekit/token.js';
 
 /** LiveKit identity for the server-side agent participant that VoiceRuntime joins as. */
 const AGENT_IDENTITY = 'curia-agent';
+/** voice_sessions.principal_contact_id is UUID — only persist real contact ids. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface VoiceAdapterConfig {
   bus: EventBus;
@@ -79,6 +81,10 @@ export class VoiceAdapter implements Channel {
     const sessionId = randomUUID();
     const conversationId = `voice:${sessionId}`;
     const roomName = `voice-${sessionId}`;
+    const { caller } = req;
+    // LiveKit participant identity is the resolved contact id (not the literal
+    // 'principal') so a future non-principal transport cannot inherit CEO standing
+    // at the media layer (#1598).
     const token = await mintVoiceParticipantToken(
       {
         apiKey: this.config.livekitApiKey,
@@ -86,16 +92,20 @@ export class VoiceAdapter implements Channel {
       },
       {
         roomName,
-        identity: 'principal',
-        name: 'Principal',
+        identity: caller.contactId,
+        name: caller.displayName || (caller.liveTurn ? 'Principal' : 'Caller'),
       },
     );
+
+    // voice_sessions.principal_contact_id is UUID NOT NULL REFERENCES — only store
+    // a real contact UUID (synthetic 'primary-user' stays null).
+    const principalContactId = UUID_RE.test(caller.contactId) ? caller.contactId : undefined;
 
     const session = await this.config.sessionStore.create({
       id: sessionId,
       conversationId,
       livekitRoom: roomName,
-      principalContactId: req.principalContactId,
+      principalContactId,
       metadata: req.metadata,
     });
 
@@ -139,6 +149,7 @@ export class VoiceAdapter implements Channel {
         conversationId: session.conversationId,
         roomName: session.livekitRoom,
         agentToken,
+        caller,
         // Console POST /api/voice/sessions is always principal-initiated inbound.
         // A future Curia-initiated outbound path must pass openingGreeting: false
         // so Curia does not talk over the CEO answering (#1596).
