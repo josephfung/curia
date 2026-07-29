@@ -4,7 +4,7 @@
 // audio via emitRemoteAudio(). No LiveKit / native code is loaded.
 
 import type { AudioTransport, AudioTransportCloseReason } from './audio-transport.js';
-import type { PcmFrame } from './speech/types.js';
+import type { PcmFrame } from '../../speech/index.js';
 
 export class FakeAudioTransport implements AudioTransport {
   readonly publishedFrames: PcmFrame[] = [];

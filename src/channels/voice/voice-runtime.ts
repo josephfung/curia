@@ -34,8 +34,8 @@ import {
   VOICE_GREETING_INSTRUCTION,
   VOICE_GREETING_USER_MESSAGE,
 } from './greeting.js';
-import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from './speech/types.js';
-import { TtsHttpError } from './speech/types.js';
+import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from '../../speech/index.js';
+import { TtsHttpError } from '../../speech/index.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
 import { VoiceTurnRunner } from './turn-runner.js';
 

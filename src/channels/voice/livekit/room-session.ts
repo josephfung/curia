@@ -20,7 +20,7 @@
 
 import type { Logger } from '../../../logger.js';
 import type { AudioTransport, AudioTransportCloseReason } from '../audio-transport.js';
-import type { PcmFrame } from '../speech/types.js';
+import type { PcmFrame } from '../../../speech/index.js';
 // Type-only imports are erased at compile time and never load the native addon.
 import type {
   AudioFrame,

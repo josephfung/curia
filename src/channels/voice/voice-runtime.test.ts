@@ -19,9 +19,8 @@ import {
 } from './voice-runtime.js';
 import type { VoiceToolBridge } from './voice-runtime.js';
 import { FakeAudioTransport } from './fake-audio-transport.js';
-import { FakeSttProvider } from './speech/fake-stt.js';
-import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from './speech/types.js';
-import { TtsHttpError } from './speech/types.js';
+import { FakeSttProvider, TtsHttpError } from '../../speech/index.js';
+import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from '../../speech/index.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
 
 /** Slim spoken prompt with no identity/roster/outbound/time — includes shared modules. */

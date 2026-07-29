@@ -6,7 +6,7 @@
 // transports (Signal RingRTC, SIP) plug in here without touching the runtime or
 // the speech providers.
 
-import type { PcmFrame } from './speech/types.js';
+import type { PcmFrame } from '../../speech/index.js';
 
 export type AudioTransportCloseReason =
   | 'principal_disconnected'
