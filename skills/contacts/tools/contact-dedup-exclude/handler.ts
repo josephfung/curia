@@ -30,7 +30,7 @@ export class ContactDedupExcludeHandler implements ToolHandler {
     let contactBExcluded = false;
 
     try {
-      let [contactA, contactB] = await Promise.all([
+      const [contactA, contactB] = await Promise.all([
         ctx.contactService.getContact(contactAId),
         ctx.contactService.getContact(contactBId),
       ]);
@@ -42,52 +42,58 @@ export class ContactDedupExcludeHandler implements ToolHandler {
         return { success: false, error: `Contact not found: ${contactBId}` };
       }
 
-      // Ensure both contacts have KG nodes so exclusion facts can be attached.
-      // Contacts created by auto-extraction may not have nodes until enriched;
-      // we backfill them here rather than failing (#1623 bug 3).
-      if (contactA.kgNodeId === null) {
-        ctx.log.info({ contactAId }, 'contact-dedup-exclude: contact A has no KG node — creating one');
-        contactA = await ctx.contactService.ensureKgNode(contactAId);
-      }
-      if (contactB.kgNodeId === null) {
-        ctx.log.info({ contactBId }, 'contact-dedup-exclude: contact B has no KG node — creating one');
-        contactB = await ctx.contactService.ensureKgNode(contactBId);
-      }
-
       const source = ctx.memoryWriteSource ?? 'contacts-dedup';
       const storeFact = ctx.entityMemory.storeFact.bind(ctx.entityMemory);
 
       // Write on A's node naming B. Each side is independent: if A's write fails (e.g.
       // KG conflict), we still attempt B — hasExclusion is bidirectional so a single
       // side is enough to prevent the pair from resurfacing.
-      try {
-        await writeExclusion({ contactBId, kgNodeId: contactA.kgNodeId!, storeFact, source });
-        contactAExcluded = true;
-      } catch (writeErrA) {
-        ctx.log.error(
-          { writeErrA, contactAId, contactBId },
-          'contact-dedup-exclude: failed to write exclusion on A — still attempting B',
-        );
+      //
+      // Note: kg_node_id = NULL is the designed outcome of same-display-name collisions
+      // (createContact retries without a KG link when idx_contacts_kg_node_unique fires).
+      // Do not invent a node here — that recreates the collision (#1623 review).
+      if (contactA.kgNodeId !== null) {
+        try {
+          await writeExclusion({ contactBId, kgNodeId: contactA.kgNodeId, storeFact, source });
+          contactAExcluded = true;
+        } catch (writeErrA) {
+          ctx.log.error(
+            { writeErrA, contactAId, contactBId },
+            'contact-dedup-exclude: failed to write exclusion on A — still attempting B',
+          );
+        }
+      } else {
+        ctx.log.warn({ contactAId, contactBId }, 'contact-dedup-exclude: contact A has no KG node — exclusion written on B only');
       }
 
       // Write on B's node naming A — bidirectional so hasExclusion finds it regardless of
       // which contact's node is checked first
-      try {
-        await writeExclusion({ contactBId: contactAId, kgNodeId: contactB.kgNodeId!, storeFact, source });
-        contactBExcluded = true;
-      } catch (writeErrB) {
-        ctx.log.error(
-          { writeErrB, contactAId, contactBId, contactAExcluded },
-          'contact-dedup-exclude: failed to write exclusion on B',
-        );
+      if (contactB.kgNodeId !== null) {
+        try {
+          await writeExclusion({ contactBId: contactAId, kgNodeId: contactB.kgNodeId, storeFact, source });
+          contactBExcluded = true;
+        } catch (writeErrB) {
+          ctx.log.error(
+            { writeErrB, contactAId, contactBId, contactAExcluded },
+            'contact-dedup-exclude: failed to write exclusion on B',
+          );
+        }
+      } else {
+        ctx.log.warn({ contactAId, contactBId }, 'contact-dedup-exclude: contact B has no KG node — exclusion written on A only');
       }
 
-      // Both writes failed — nothing was stored.
+      // Both sides failed (no KG nodes, or both writes errored) — nothing was stored.
       if (!contactAExcluded && !contactBExcluded) {
-        ctx.log.warn({ contactAId, contactBId }, 'contact-dedup-exclude: exclusion could not be written on either contact');
+        const bothMissingNodes = contactA.kgNodeId === null && contactB.kgNodeId === null;
+        ctx.log.warn(
+          { contactAId, contactBId, contactAHasNode: contactA.kgNodeId !== null, contactBHasNode: contactB.kgNodeId !== null },
+          'contact-dedup-exclude: exclusion could not be written on either contact',
+        );
         return {
           success: false,
-          error: 'Could not write dedup exclusion on either contact — both KG writes failed (conflict or store error). Check logs for details.',
+          error: bothMissingNodes
+            ? 'Could not write dedup exclusion — both contacts have no KG node (common for same-name collisions). Exclusion cannot be stored until at least one contact has a linked KG node.'
+            : 'Could not write dedup exclusion on either contact — both KG writes failed (conflict or store error). Check logs for details.',
         };
       }
 

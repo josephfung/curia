@@ -646,34 +646,6 @@ export class ContactService {
     return this.backend.getContact(id);
   }
 
-  /**
-   * Ensure a contact has a linked KG person node. If `kgNodeId` is already set,
-   * re-fetches and returns the contact unchanged. If null, creates a person entity
-   * via EntityMemory and links it, then returns the updated contact.
-   *
-   * Requires EntityMemory — throws if not available.
-   */
-  async ensureKgNode(contactId: string): Promise<Contact> {
-    const contact = await this.backend.getContact(contactId);
-    if (!contact) throw new ContactNotFoundError(contactId);
-    if (contact.kgNodeId !== null) return contact;
-
-    if (!this.entityMemory) {
-      throw new Error('ensureKgNode requires entityMemory but it is not configured');
-    }
-
-    const { entity } = await this.entityMemory.createEntity({
-      type: 'person',
-      label: contact.displayName,
-      properties: {},
-      source: 'contacts-dedup',
-    });
-
-    const linked: Contact = { ...contact, kgNodeId: entity.id, updatedAt: new Date() };
-    await this.backend.updateContact(linked);
-    return linked;
-  }
-
   /** Find contacts by display name (case-insensitive exact match). */
   async findContactByName(name: string): Promise<Contact[]> {
     return this.backend.findContactByName(name);

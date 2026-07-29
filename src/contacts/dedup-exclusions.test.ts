@@ -39,6 +39,8 @@ describe('writeExclusion', () => {
     expect(args.entityNodeId).toBe('kg-c1');
     expect((args.properties as Record<string, unknown>).attribute).toBe('dedup_exclusion');
     expect((args.properties as Record<string, unknown>).value).toBe('c2');
+    expect((args.properties as Record<string, unknown>).multi_valued).toBe(true);
+    expect(args.multiValued).toBe(true);
     // Exclusion facts must be permanent so they survive decay
     expect(args.decayClass).toBe('permanent');
   });

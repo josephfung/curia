@@ -7,16 +7,31 @@ import type { StoreFactOptions, ValidationResult } from './types.js';
 // Spec line 116: cosine similarity threshold for deduplication
 const DEDUP_SIMILARITY_THRESHOLD = 0.92;
 
-// Attributes that are multi-valued by design — multiple facts with the same attribute
-// but different `value` properties may coexist on one entity. Contradiction detection
-// and embedding dedup-merge must both be skipped when `value` differs (#1623).
-const MULTI_VALUED_ATTRIBUTES: ReadonlySet<string> = new Set([
-  'dedup_exclusion',
-]);
-
 // Spec line 126: max writes per agent per task
 // Exported so tests can exhaust the limit without hard-coding the magic number.
 export const MAX_WRITES_PER_AGENT_TASK = 50;
+
+/**
+ * True when either the incoming write or the existing fact is multi-valued AND
+ * their `value` properties differ — these are independent facts, not duplicates
+ * or contradictions. Incoming writes set `StoreFactOptions.multiValued`; existing
+ * facts persist the marker as `properties.multi_valued` so subsequent unrelated
+ * writes cannot silently merge into them (#1623).
+ */
+function isDistinctMultiValuedFact(
+  options: StoreFactOptions,
+  existingProperties: Record<string, unknown>,
+): boolean {
+  const incomingMulti =
+    options.multiValued === true ||
+    (options.properties as Record<string, unknown> | undefined)?.multi_valued === true;
+  const existingMulti = existingProperties.multi_valued === true;
+  if (!incomingMulti && !existingMulti) return false;
+
+  const existingValue = existingProperties.value;
+  const incomingValue = (options.properties as Record<string, unknown> | undefined)?.value;
+  return existingValue !== incomingValue;
+}
 
 /**
  * Memory validation gates per spec 01 (lines 107-131).
@@ -113,14 +128,12 @@ export class MemoryValidator {
 
       const similarity = EmbeddingService.cosineSimilarity(newEmbedding, targetNode.embedding);
       if (similarity >= DEDUP_SIMILARITY_THRESHOLD) {
-        // Multi-valued attributes must not be merged when their `value` differs —
-        // the similar labels (differing only by UUID) would cause the dedup-merge
-        // to overwrite `value` and silently destroy the first exclusion.
-        const incomingAttr = (options.properties as Record<string, unknown> | undefined)?.attribute;
-        if (typeof incomingAttr === 'string' && MULTI_VALUED_ATTRIBUTES.has(incomingAttr)) {
-          const existingValue = (targetNode.properties as Record<string, unknown>).value;
-          const incomingValue = (options.properties as Record<string, unknown>).value;
-          if (existingValue !== incomingValue) continue;
+        // Multi-valued facts must not be merged when their `value` differs —
+        // near-identical labels would otherwise overwrite `value` and destroy
+        // the first fact. Check either side so an unrelated incoming write
+        // cannot merge into an existing multi-valued fact either.
+        if (isDistinctMultiValuedFact(options, targetNode.properties as Record<string, unknown>)) {
+          continue;
         }
 
         // Near-duplicate detected — signal a merge. Caller is responsible for
@@ -195,13 +208,10 @@ export class MemoryValidator {
       const existingAttribute = (targetNode.properties as Record<string, unknown>).attribute;
       if (existingAttribute !== attribute) continue;
 
-      // Multi-valued attributes (e.g. dedup_exclusion) can hold N distinct values
-      // per entity. Skip contradiction when the attribute is allowlisted and the
-      // value property differs — these are independent facts, not contradictions.
-      if (typeof attribute === 'string' && MULTI_VALUED_ATTRIBUTES.has(attribute)) {
-        const existingValue = (targetNode.properties as Record<string, unknown>).value;
-        const incomingValue = (options.properties as Record<string, unknown> | undefined)?.value;
-        if (existingValue !== incomingValue) continue;
+      // Multi-valued facts can hold N distinct values per entity. Skip contradiction
+      // when either side is multi-valued and the value property differs.
+      if (isDistinctMultiValuedFact(options, targetNode.properties as Record<string, unknown>)) {
+        continue;
       }
 
       // Same entity, same attribute, different label → contradiction.
