@@ -19,7 +19,7 @@ import {
   VOICE_GREETING_USER_MESSAGE,
 } from './voice-runtime.js';
 import type { VoiceToolBridge } from './voice-runtime.js';
-import { partnerCaller } from './test-fixtures.js';
+import { partnerCaller, principalCaller } from './test-fixtures.js';
 import { FakeAudioTransport } from './fake-audio-transport.js';
 import { FakeSttProvider, TtsHttpError } from '../../speech/index.js';
 import type { PcmFrame, TextToSpeechProvider, TtsSynthesizeOptions } from '../../speech/index.js';
@@ -220,6 +220,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s1',
       roomName: 'voice-s1',
       agentToken: 'tok',
+      caller: principalCaller(),
     });
 
     stt.emit({ text: 'hello curia', isFinal: true, speechFinal: true });
@@ -252,6 +253,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s2',
       roomName: 'voice-s2',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
 
@@ -294,6 +296,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-echo',
       roomName: 'voice-s-echo',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
     stt.emit({ text: 'say something', isFinal: true, speechFinal: true });
@@ -319,6 +322,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-close',
       roomName: 'voice-s-close',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
     expect(runtime.activeSessionCount).toBe(1);
@@ -342,6 +346,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s3',
       roomName: 'voice-s3',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
     expect(runtime.activeSessionCount).toBe(1);
@@ -375,6 +380,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s5',
       roomName: 'voice-s5',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
 
@@ -400,6 +406,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-tts-fail',
       roomName: 'voice-s-tts-fail',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
 
@@ -439,6 +446,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-tts-blip',
       roomName: 'voice-s-tts-blip',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
 
@@ -466,6 +474,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-tts-hard',
       roomName: 'voice-s-tts-hard',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
 
@@ -505,6 +514,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s-pub-fail',
       roomName: 'voice-s-pub-fail',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
 
@@ -533,6 +543,7 @@ describe('VoiceRuntime', () => {
       conversationId: 'voice:s4',
       roomName: 'voice-s4',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
     stt.emit({ text: 'look something up', isFinal: true, speechFinal: true });
@@ -558,6 +569,7 @@ describe('VoiceRuntime brain/context parity (#1551)', () => {
       conversationId: `voice:${id}`,
       roomName: `voice-${id}`,
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
   }
@@ -982,6 +994,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       conversationId: 'voice:oc1',
       roomName: 'voice-oc1',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
     stt.emit({ text: 'did you message me', isFinal: true, speechFinal: true });
@@ -1045,6 +1058,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       conversationId: 'voice:oc2',
       roomName: 'voice-oc2',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
     stt.emit({ text: 'hello', isFinal: true, speechFinal: true });
@@ -1074,6 +1088,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       conversationId: 'voice:oc3',
       roomName: 'voice-oc3',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
     stt.emit({ text: 'are you there', isFinal: true, speechFinal: true });
@@ -1102,6 +1117,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       conversationId: 'voice:oc4',
       roomName: 'voice-oc4',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: false,
     });
     stt.emit({ text: 'did you message me', isFinal: true, speechFinal: true });
@@ -1132,6 +1148,7 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       conversationId: 'voice:g1',
       roomName: 'voice-g1',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: true,
     });
     await runtime.awaitIdle('g1');
@@ -1184,6 +1201,7 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       conversationId: 'voice:g2',
       roomName: 'voice-g2',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: true,
     });
     await runtime.awaitIdle('g2');
@@ -1219,6 +1237,7 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       conversationId: 'voice:g3',
       roomName: 'voice-g3',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: true,
     });
 
@@ -1261,6 +1280,7 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       conversationId: 'voice:g4',
       roomName: 'voice-g4',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: true,
     });
     await runtime.awaitIdle('g4');
@@ -1321,6 +1341,7 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       conversationId: 'voice:g5',
       roomName: 'voice-g5',
       agentToken: 'tok',
+      caller: principalCaller(),
       openingGreeting: true,
     });
     await runtime.awaitIdle('g5');
