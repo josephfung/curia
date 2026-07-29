@@ -37,7 +37,6 @@ import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
 import type { AudioTransport } from './audio-transport.js';
 import type { VoiceCallerContext } from './caller-context.js';
-import { VOICE_CONSOLE_SENDER_ID } from './caller-context.js';
 import {
   VOICE_GREETING_INSTRUCTION,
   VOICE_GREETING_USER_MESSAGE,
@@ -94,44 +93,6 @@ const HARD_TTS_STATUS_CODES = new Set([401, 403, 404]);
 /** Auth / missing-voice hard failures should not wait for the soft threshold. */
 function isHardTtsFailure(err: unknown): boolean {
   return err instanceof TtsHttpError && HARD_TTS_STATUS_CODES.has(err.statusCode);
-}
-
-/**
- * Default principal caller for tests / legacy startSession calls that omit
- * `caller`. Mirrors resolveConsoleVoiceCaller with the synthetic fallback so
- * liveTurn stays true and outbound-context injection remains enabled.
- */
-function defaultPrincipalCaller(senderId: string): VoiceCallerContext {
-  const senderContext = {
-    resolved: true as const,
-    contactId: 'primary-user',
-    displayName: 'CEO',
-    role: 'ceo',
-    systemRole: 'principal' as const,
-    verified: true,
-    kgNodeId: null,
-    knowledgeSummary: '',
-    authorization: null,
-    contactConfidence: 1.0,
-    tier: 'principal' as const,
-    kind: 'principal' as const,
-  };
-  return {
-    contactId: senderContext.contactId,
-    displayName: senderContext.displayName,
-    systemRole: senderContext.systemRole,
-    tier: senderContext.tier,
-    liveTurn: true,
-    originator: {
-      contactId: senderContext.contactId,
-      systemRole: 'principal',
-      channel: 'voice',
-      initiatedAt: new Date().toISOString(),
-      tier: 'principal',
-    },
-    senderId,
-    senderContext,
-  };
 }
 
 /**
@@ -304,12 +265,6 @@ export interface VoiceRuntimeConfig {
   /** Optional TTS voice id. */
   voiceId?: string;
   /**
-   * Fallback synthetic sender id for inbound.message when a session starts
-   * without an explicit caller (tests). Defaults to the console principal id.
-   * Production sessions always pass caller on startSession (#1598).
-   */
-  senderId?: string;
-  /**
    * Optional working-memory store so user + assistant transcripts appear in
    * console chat history (same path as web chat). Spoken egress stays on TTS —
    * this does not go through OutboundGateway (parity with web chat).
@@ -331,6 +286,8 @@ export interface VoiceRuntimeConfig {
     ctx: {
       conversationId: string;
       sessionId: string;
+      /** Resolved caller identity — required so the fallback path cannot drop authorization context. */
+      caller: VoiceCallerContext;
       turnDateResolveResults?: readonly import('../../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
     },
   ) => Promise<{ content: string; is_error?: boolean }>;
@@ -398,10 +355,11 @@ interface StartVoiceSessionParams {
   /** Agent participant JWT (identity 'curia-agent'). */
   agentToken: string;
   /**
-   * Resolved caller identity for this session (#1598). When omitted (tests),
-   * the runtime assumes a principal console caller so existing behaviour holds.
+   * Resolved caller identity for this session (#1598). Required — omitting it
+   * must not silently grant principal standing. Tests pass principalCaller() /
+   * partnerCaller() from test-fixtures.ts.
    */
-  caller?: VoiceCallerContext;
+  caller: VoiceCallerContext;
   /**
    * When true (default), run one LLM greeting turn after the transport connects
    * so Curia opens the call (#1596). Per-session — not a runtime-wide flag — so
@@ -472,12 +430,11 @@ export class VoiceRuntime {
       return;
     }
 
-    const resolvedCaller = params.caller ?? defaultPrincipalCaller(this.config.senderId ?? VOICE_CONSOLE_SENDER_ID);
     const transport = this.config.createTransport({
       roomName: params.roomName,
       token: params.agentToken,
       livekitUrl: this.config.livekitUrl,
-      callerIdentity: resolvedCaller.contactId,
+      callerIdentity: params.caller.contactId,
     }) as RateAwareTransport;
 
     const inboundSampleRate = transport.inboundSampleRate ?? DEFAULT_INBOUND_SAMPLE_RATE;
@@ -504,17 +461,11 @@ export class VoiceRuntime {
         },
       });
 
-      if (!params.caller) {
-        this.log.warn(
-          { sessionId: params.sessionId },
-          'startSession called without a resolved caller; defaulting to principal (test/legacy path only)',
-        );
-      }
       const session: ActiveSession = {
         sessionId: params.sessionId,
         conversationId: params.conversationId,
         roomName: params.roomName,
-        caller: resolvedCaller,
+        caller: params.caller,
         transport,
         stt,
         publishSampleRate,
@@ -772,6 +723,7 @@ export class VoiceRuntime {
               const result = await this.config.invokeTool!(call, {
                 conversationId: session.conversationId,
                 sessionId: session.sessionId,
+                caller: session.caller,
                 turnDateResolveResults: turnDateResolveTracker.snapshot(),
               });
               if (call.name === 'date-resolve') {
