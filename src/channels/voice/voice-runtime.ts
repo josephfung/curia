@@ -545,22 +545,53 @@ export class VoiceRuntime {
       .then(() => this.runGreetingTurn(session));
   }
 
+  /** Clear llmActive / currentController for a turn that is unwinding. */
+  private clearTurnState(session: ActiveSession, controller: AbortController): void {
+    session.llmActive = false;
+    if (session.currentController === controller) {
+      session.currentController = null;
+    }
+  }
+
+  private trimSessionHistory(session: ActiveSession): void {
+    if (session.history.length > MAX_HISTORY_MESSAGES) {
+      session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
+    }
+  }
+
   /**
-   * Opening turn for inbound console calls (#1596). Speaks an LLM greeting
-   * (context-aware via the outbound-context bridge + time block) before any
-   * user speech. Barge-in cancels it the same way as a normal assistant turn.
-   *
-   * On success, persists a synthetic leading user cue *and* the assistant
-   * greeting so later turns stay provider-safe (Anthropic requires user-first).
-   * The cue is never published as inbound.message; the console history endpoint
-   * filters it from display via isVoiceGreetingCueContent.
+   * Shared spoken-turn lifecycle for greeting and user turns (#1596 review).
+   * Owns: controller/`llmActive`, mark-active, ending/aborted checkpoints,
+   * speech handler, system prompt, VoiceTurnRunner, and a single finally teardown.
+   * Callers supply only what differs (TTFA key, message assembly, tools, persist).
    */
-  private async runGreetingTurn(session: ActiveSession): Promise<void> {
+  private async runAssistantTurn(
+    session: ActiveSession,
+    opts: {
+      ttfaLogKey: 'voice.ttfa_ms' | 'voice.greeting_ttfa_ms';
+      ttfaLogMessage: string;
+      failureLogMessage: string;
+      /**
+       * Prior history for message assembly. When omitted the core loads it
+       * (greeting). User turns pass the pre-loaded prior so the current
+       * utterance can be persisted before the assistant runs.
+       */
+      priorHistory?: Message[];
+      assembleMessages: (ctx: {
+        systemPrompt: string;
+        priorHistory: Message[];
+      }) => Message[];
+      /** Wire coordinator tools + filler (user turns). Greeting passes false. */
+      withTools: boolean;
+      /** Persist a completed spoken reply (in-process + working_memory). */
+      persistSuccess: (finalText: string) => Promise<void>;
+    },
+  ): Promise<void> {
     if (session.ending) return;
 
     // Register the controller BEFORE any await so a concurrent endSession can
     // abort this turn (otherwise updateStatus yields with currentController
-    // still null and a phantom greeting can persist after hangup).
+    // still null and a phantom reply can persist after hangup).
     const controller = new AbortController();
     session.currentController = controller;
     session.llmActive = true;
@@ -577,18 +608,18 @@ export class VoiceRuntime {
 
       if (session.ending || controller.signal.aborted) return;
 
-      const priorHistory = await this.loadTurnHistory(session);
+      const priorHistory = opts.priorHistory ?? await this.loadTurnHistory(session);
       if (session.ending || controller.signal.aborted) return;
 
-      const greetingStartedAt = Date.now();
+      const turnStartedAt = Date.now();
       let ttfaRecorded = false;
       const onSpeechText = this.createSpeechHandler(session, controller, {
         onFirstAudio: () => {
           if (ttfaRecorded) return;
           ttfaRecorded = true;
           this.log.debug(
-            { sessionId: session.sessionId, 'voice.greeting_ttfa_ms': Date.now() - greetingStartedAt },
-            'voice greeting time-to-first-audio',
+            { sessionId: session.sessionId, [opts.ttfaLogKey]: Date.now() - turnStartedAt },
+            opts.ttfaLogMessage,
           );
         },
       });
@@ -596,58 +627,128 @@ export class VoiceRuntime {
       const systemPrompt = await this.buildTurnSystemPrompt();
       if (session.ending || controller.signal.aborted) return;
 
-      const messages: Message[] = [
-        { role: 'system', content: `${systemPrompt}\n\n${VOICE_GREETING_INSTRUCTION}` },
-        ...priorHistory,
-        { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
-      ];
+      const messages = opts.assembleMessages({ systemPrompt, priorHistory });
 
-      // No tools on the greeting — keep the open short and latency-tight; outbound
-      // context is already in the system prompt when present.
+      let tools: ToolDefinition[] | undefined;
+      let invokeTool: ((call: ToolCall) => Promise<{ content: string; is_error?: boolean }>) | undefined;
+      let onFiller: ((text: string) => Promise<void>) | undefined;
+
+      if (opts.withTools) {
+        tools = this.toolBridge
+          ? this.toolBridge.resolveVoiceTools()
+          : (this.config.resolveVoiceTools ? this.config.resolveVoiceTools() : this.config.tools);
+
+        const turnDateResolveTracker = new TurnDateResolveTracker();
+        invokeTool = this.toolBridge
+          ? async (call: ToolCall) => {
+            const result = await this.toolBridge!.invokeTool(call, {
+              conversationId: session.conversationId,
+              sessionId: session.sessionId,
+              turnDateResolveResults: turnDateResolveTracker.snapshot(),
+            });
+            if (call.name === 'date-resolve') {
+              turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
+            }
+            return result;
+          }
+          : this.config.invokeTool
+            ? async (call: ToolCall) => {
+              const result = await this.config.invokeTool!(call, {
+                conversationId: session.conversationId,
+                sessionId: session.sessionId,
+                turnDateResolveResults: turnDateResolveTracker.snapshot(),
+              });
+              if (call.name === 'date-resolve') {
+                turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
+              }
+              return result;
+            }
+            : undefined;
+
+        onFiller = async filler => {
+          await onSpeechText(filler, { streamId: `${session.sessionId}-filler` });
+        };
+      }
+
       const runner = new VoiceTurnRunner({
         provider: this.config.llm,
         model: this.config.model,
         logger: this.log,
+        tools,
+        invokeTool,
+        onFiller,
         onSpeechText,
       });
 
       const result = await runner.runTurn({ messages, signal: controller.signal });
       if (result.aborted || session.ending || result.finalText.length === 0) return;
 
-      // Persist cue + greeting together so history stays user-first for every
-      // subsequent provider call (Anthropic/Gemini reject a leading assistant).
-      session.history.push(
+      await opts.persistSuccess(result.finalText);
+    } catch (err) {
+      this.log.warn({ sessionId: session.sessionId, err }, opts.failureLogMessage);
+    } finally {
+      this.clearTurnState(session, controller);
+    }
+  }
+
+  /**
+   * Opening turn for inbound console calls (#1596). Speaks an LLM greeting
+   * (context-aware via the outbound-context bridge + time block) before any
+   * user speech. Barge-in cancels it the same way as a normal assistant turn.
+   *
+   * On success, persists a synthetic leading user cue *and* the assistant
+   * greeting so later turns stay provider-safe (Anthropic requires user-first).
+   * The cue is never published as inbound.message; the console history endpoint
+   * filters it from display via isVoiceGreetingCueContent.
+   */
+  private async runGreetingTurn(session: ActiveSession): Promise<void> {
+    await this.runAssistantTurn(session, {
+      ttfaLogKey: 'voice.greeting_ttfa_ms',
+      ttfaLogMessage: 'voice greeting time-to-first-audio',
+      failureLogMessage: 'voice greeting turn failed',
+      // No tools — keep the open short and latency-tight; outbound context is
+      // already in the system prompt when present.
+      withTools: false,
+      assembleMessages: ({ systemPrompt, priorHistory }) => [
+        { role: 'system', content: `${systemPrompt}\n\n${VOICE_GREETING_INSTRUCTION}` },
+        ...priorHistory,
         { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
-        { role: 'assistant', content: result.finalText },
-      );
-      if (session.history.length > MAX_HISTORY_MESSAGES) {
-        session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
-      }
-      if (this.config.workingMemory) {
+      ],
+      persistSuccess: async (finalText) => {
+        // Persist cue + greeting together so history stays user-first for every
+        // subsequent provider call (Anthropic/Gemini reject a leading assistant).
+        session.history.push(
+          { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
+          { role: 'assistant', content: finalText },
+        );
+        this.trimSessionHistory(session);
+        if (!this.config.workingMemory) return;
         try {
           await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
             role: 'user',
             content: VOICE_GREETING_USER_MESSAGE,
           });
-          await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
-            role: 'assistant',
-            content: result.finalText,
-          });
+          try {
+            await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
+              role: 'assistant',
+              content: finalText,
+            });
+          } catch (assistantErr) {
+            // Cue landed but the spoken reply did not — next loadTurnHistory will
+            // see a cue-only prefix and lose the fact Curia already greeted.
+            this.log.warn(
+              { sessionId: session.sessionId, err: assistantErr },
+              'greeting cue persisted but assistant reply write failed — working memory now missing the spoken greeting',
+            );
+          }
         } catch (err) {
           this.log.warn(
             { sessionId: session.sessionId, err },
             'failed to persist voice greeting to working memory',
           );
         }
-      }
-    } catch (err) {
-      this.log.warn({ sessionId: session.sessionId, err }, 'voice greeting turn failed');
-    } finally {
-      session.llmActive = false;
-      if (session.currentController === controller) {
-        session.currentController = null;
-      }
-    }
+      },
+    });
   }
 
   /**
@@ -900,6 +1001,7 @@ export class VoiceRuntime {
     // to the LLM context exactly once (turns are serialized per session, so the
     // read cannot race the write below).
     const priorHistory = await this.loadTurnHistory(session);
+    if (session.ending) return;
 
     // Persist user turn to working_memory so console history can show it.
     if (this.config.workingMemory) {
@@ -913,140 +1015,45 @@ export class VoiceRuntime {
       }
     }
 
-    // Register controller before mark-active await so hangup can abort this turn.
-    const controller = new AbortController();
-    session.currentController = controller;
-    session.llmActive = true;
-
-    // Flip DB status starting → active on the first real turn.
-    if (!session.markedActive) {
-      session.markedActive = true;
-      try {
-        await this.config.sessionStore.updateStatus(session.sessionId, 'active');
-      } catch (err) {
-        this.log.warn({ sessionId: session.sessionId, err }, 'failed to mark voice session active');
-      }
-    }
-
-    if (session.ending || controller.signal.aborted) {
-      session.llmActive = false;
-      if (session.currentController === controller) {
-        session.currentController = null;
-      }
-      return;
-    }
-
-    const userTurnEndAt = Date.now();
-    let ttfaRecorded = false;
-
-    const tools = this.toolBridge
-      ? this.toolBridge.resolveVoiceTools()
-      : (this.config.resolveVoiceTools ? this.config.resolveVoiceTools() : this.config.tools);
-
-    const turnDateResolveTracker = new TurnDateResolveTracker();
-
-    const invokeTool = this.toolBridge
-      ? async (call: ToolCall) => {
-        const result = await this.toolBridge!.invokeTool(call, {
-          conversationId: session.conversationId,
-          sessionId: session.sessionId,
-          turnDateResolveResults: turnDateResolveTracker.snapshot(),
-        });
-        if (call.name === 'date-resolve') {
-          turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
-        }
-        return result;
-      }
-      : this.config.invokeTool
-        ? async (call: ToolCall) => {
-          const result = await this.config.invokeTool!(call, {
-            conversationId: session.conversationId,
-            sessionId: session.sessionId,
-            turnDateResolveResults: turnDateResolveTracker.snapshot(),
-          });
-          if (call.name === 'date-resolve') {
-            turnDateResolveTracker.recordFromJsonContent(result.content, result.is_error);
-          }
-          return result;
-        }
-        : undefined;
-
     const userMessage: Message = { role: 'user', content: utterance };
     // Retain the user request even if barge-in aborts the assistant reply —
     // otherwise the next turn loses conversational continuity. The in-process
     // copy is only the fallback context source (see loadTurnHistory).
     session.history.push(userMessage);
-    if (session.history.length > MAX_HISTORY_MESSAGES) {
-      session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
-    }
+    this.trimSessionHistory(session);
 
-    const messages: Message[] = [
-      { role: 'system', content: await this.buildTurnSystemPrompt() },
-      ...priorHistory,
-      userMessage,
-    ];
-
-    if (session.ending || controller.signal.aborted) {
-      session.llmActive = false;
-      if (session.currentController === controller) {
-        session.currentController = null;
-      }
-      return;
-    }
-
-    const onSpeechText = this.createSpeechHandler(session, controller, {
-      onFirstAudio: () => {
-        if (ttfaRecorded) return;
-        ttfaRecorded = true;
-        this.log.debug(
-          { sessionId: session.sessionId, 'voice.ttfa_ms': Date.now() - userTurnEndAt },
-          'voice time-to-first-audio',
-        );
-      },
-    });
-
-    const runner = new VoiceTurnRunner({
-      provider: this.config.llm,
-      model: this.config.model,
-      logger: this.log,
-      tools,
-      invokeTool,
-      onFiller: async filler => {
-        await onSpeechText(filler, { streamId: `${session.sessionId}-filler` });
-      },
-      onSpeechText,
-    });
-
-    try {
-      const result = await runner.runTurn({ messages, signal: controller.signal });
-      if (!result.aborted && !session.ending && result.finalText.length > 0) {
+    await this.runAssistantTurn(session, {
+      ttfaLogKey: 'voice.ttfa_ms',
+      ttfaLogMessage: 'voice time-to-first-audio',
+      failureLogMessage: 'voice turn failed',
+      priorHistory,
+      withTools: true,
+      assembleMessages: ({ systemPrompt, priorHistory: prior }) => [
+        { role: 'system', content: systemPrompt },
+        ...prior,
+        userMessage,
+      ],
+      persistSuccess: async (finalText) => {
         // Append only the completed assistant reply (user was already pushed).
-        session.history.push({ role: 'assistant', content: result.finalText });
-        if (session.history.length > MAX_HISTORY_MESSAGES) {
-          session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
-        }
+        session.history.push({ role: 'assistant', content: finalText });
+        this.trimSessionHistory(session);
         // Persist assistant transcript so console history can show what was spoken.
         // Spoken egress stays on TTS — we do not publish outbound.message (web chat
         // also skips OutboundGateway for principal console replies).
-        if (this.config.workingMemory) {
-          try {
-            await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
-              role: 'assistant',
-              content: result.finalText,
-            });
-          } catch (err) {
-            this.log.warn({ sessionId: session.sessionId, err }, 'failed to persist voice assistant turn to working memory');
-          }
+        if (!this.config.workingMemory) return;
+        try {
+          await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
+            role: 'assistant',
+            content: finalText,
+          });
+        } catch (err) {
+          this.log.warn(
+            { sessionId: session.sessionId, err },
+            'failed to persist voice assistant turn to working memory',
+          );
         }
-      }
-    } catch (err) {
-      this.log.warn({ sessionId: session.sessionId, err }, 'voice turn failed');
-    } finally {
-      session.llmActive = false;
-      if (session.currentController === controller) {
-        session.currentController = null;
-      }
-    }
+      },
+    });
   }
 
   async endSession(sessionId: string, reason: string): Promise<VoiceSessionRecord | null> {
