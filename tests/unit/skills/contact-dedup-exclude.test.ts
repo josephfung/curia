@@ -130,13 +130,19 @@ describe('ContactDedupExcludeHandler', () => {
     expect((callB.properties as Record<string, unknown>).value).toBe(UUID_A);
   });
 
-  it('skips writing on a contact with no KG node', async () => {
+  it('ensures KG node on contact B when it has no kgNodeId, then writes both sides', async () => {
     const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
     const contactService = {
       getContact: vi.fn().mockImplementation(async (id: string) => ({
         id,
-        kgNodeId: id === UUID_A ? 'kg-a' : null, // B has no KG node
+        kgNodeId: id === UUID_A ? 'kg-a' : null,
+        displayName: id === UUID_A ? 'Alice' : 'Bob',
       })),
+      ensureKgNode: vi.fn().mockResolvedValue({
+        id: UUID_B,
+        kgNodeId: 'kg-b-new',
+        displayName: 'Bob',
+      }),
     } as unknown as ToolContext['contactService'];
     const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
 
@@ -149,10 +155,10 @@ describe('ContactDedupExcludeHandler', () => {
     if (result.success) {
       const data = result.data as { contact_a_excluded: boolean; contact_b_excluded: boolean };
       expect(data.contact_a_excluded).toBe(true);
-      expect(data.contact_b_excluded).toBe(false);
+      expect(data.contact_b_excluded).toBe(true);
     }
-    // Only one write — B has no KG node to attach a fact to
-    expect(storeFactMock).toHaveBeenCalledTimes(1);
+    expect(contactService!.ensureKgNode).toHaveBeenCalledWith(UUID_B);
+    expect(storeFactMock).toHaveBeenCalledTimes(2);
   });
 
   it('returns failure when getContact throws', async () => {
@@ -246,10 +252,19 @@ describe('ContactDedupExcludeHandler', () => {
     if (!result.success) expect(result.error).toContain('dedup exclusion');
   });
 
-  it('returns failure when neither contact has a KG node', async () => {
-    const storeFactMock = vi.fn();
+  it('ensures KG nodes and writes exclusions when both contacts have null kgNodeId', async () => {
+    const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
     const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) => ({ id, kgNodeId: null })),
+      getContact: vi.fn().mockImplementation(async (id: string) => ({
+        id,
+        kgNodeId: null,
+        displayName: id === UUID_A ? 'Seth A' : 'Seth B',
+      })),
+      ensureKgNode: vi.fn().mockImplementation(async (id: string) => ({
+        id,
+        kgNodeId: id === UUID_A ? 'kg-a-new' : 'kg-b-new',
+        displayName: id === UUID_A ? 'Seth A' : 'Seth B',
+      })),
     } as unknown as ToolContext['contactService'];
     const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
 
@@ -258,10 +273,9 @@ describe('ContactDedupExcludeHandler', () => {
       { contactService, entityMemory },
     ));
 
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('dedup exclusion');
-    // No facts should be written when there's nowhere to attach them
-    expect(storeFactMock).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    expect(contactService!.ensureKgNode).toHaveBeenCalledTimes(2);
+    expect(storeFactMock).toHaveBeenCalledTimes(2);
   });
 
   it('uses ctx.memoryWriteSource as the storeFact source', async () => {

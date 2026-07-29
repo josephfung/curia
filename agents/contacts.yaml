@@ -1,5 +1,5 @@
 name: contacts
-version: "0.12.0"
+version: "0.12.1"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -158,7 +158,8 @@ system_prompt: |
   5. On confirmation: call contact-merge with dry_run: false.
   6. If the CEO explicitly says they are not the same person ("not a duplicate",
      "different people", "don't merge them"): call contact-dedup-exclude with both
-     contact IDs. This prevents the pair from being proposed again.
+     contact IDs. If it returns `success: false`, tell the CEO the exclusion could
+     not be saved and will need a retry — do not silently proceed.
   7. Never auto-merge without CEO confirmation.
 
   ### When you have a dedup review task
@@ -173,8 +174,10 @@ system_prompt: |
      succeeds, close out the task (see "Closing a dedup task" below).
   6. **Pair excluded.** If the CEO explicitly says they are not the same person
      ("not a duplicate", "different people", "don't merge them"): call
-     contact-dedup-exclude with both contact IDs (this prevents the pair from
-     resurfacing on future sweeps), then close out the task.
+     contact-dedup-exclude with both contact IDs. If it returns `success: true`,
+     close out the task (see "Closing a dedup task" below). If it returns
+     `success: false`, do NOT close the task — leave it open and tell the CEO
+     that the "not a duplicate" decision could not be saved and will need a retry.
   7. **Deferred.** If the CEO defers or wants to decide later: do NOT call
      contact-dedup-exclude (the pair may resurface on a future sweep), but still
      close out the task — a deferral is a terminal outcome for this review.
