@@ -1,6 +1,7 @@
 import type { Logger } from '../logger.js';
 import {
   SttHttpError,
+  resolveBatchSignal,
   type BatchSpeechToTextProvider,
   type PcmFrame,
   type SpeechToTextProvider,
@@ -304,7 +305,7 @@ export class DeepgramSttProvider implements SpeechToTextProvider, BatchSpeechToT
         'Content-Type': opts.contentType ?? DEFAULT_PRERECORDED_CONTENT_TYPE,
       },
       body,
-      signal: opts.signal,
+      signal: resolveBatchSignal(opts.signal),
     });
 
     if (!response.ok) {

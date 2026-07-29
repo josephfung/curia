@@ -190,6 +190,7 @@ describe('DeepgramSttProvider', () => {
         'Content-Type': 'audio/mp4',
       });
       expect(init.body).toEqual(audio);
+      expect(init.signal).toBeInstanceOf(AbortSignal);
     });
 
     it('throws SttHttpError on non-2xx responses', async () => {

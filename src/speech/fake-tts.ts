@@ -1,5 +1,4 @@
 import type {
-  AudioFileFormat,
   BatchTextToSpeechProvider,
   PcmFrame,
   SynthesizeToFileOptions,
@@ -7,6 +6,7 @@ import type {
   TextToSpeechProvider,
   TtsSynthesizeOptions,
 } from './types.js';
+import { AUDIO_FILE_CONTENT_TYPE } from './types.js';
 
 export interface FakeTtsProviderOptions {
   sampleRate?: number;
@@ -17,11 +17,6 @@ export interface FakeTtsProviderOptions {
   /** When set, synthesizeToFile rejects with this error. */
   fileError?: Error;
 }
-
-const CONTENT_TYPE_BY_FORMAT: Record<AudioFileFormat, string> = {
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-};
 
 export class FakeTtsProvider implements TextToSpeechProvider, BatchTextToSpeechProvider {
   readonly id = 'fake-tts';
@@ -65,7 +60,7 @@ export class FakeTtsProvider implements TextToSpeechProvider, BatchTextToSpeechP
     return {
       bytes: this.fileBytes,
       format: opts.format,
-      contentType: CONTENT_TYPE_BY_FORMAT[opts.format],
+      contentType: AUDIO_FILE_CONTENT_TYPE[opts.format],
       sampleRate,
     };
   }

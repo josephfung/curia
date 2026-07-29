@@ -931,18 +931,16 @@ async function main(): Promise<void> {
       tts: new CartesiaTtsProvider(config.voiceCartesiaApiKey, logger, config.voiceCartesiaVoiceId),
       logger,
     });
-    // Retained for #1600/#1601 (Signal/Slack voice-note DI). Streaming voice
-    // still builds its own STT/TTS providers below.
-    logger.info(
-      { speechMediaReady: speechMediaService !== undefined },
-      'Speech media service ready (batch STT/TTS for voice notes)',
-    );
+    logger.info('Speech media service ready (batch STT/TTS for voice notes)');
   } else {
     logger.warn(
       'Speech media credentials incomplete — batch STT/TTS unavailable. '
       + 'Set Deepgram and Cartesia (including voice ID) under Settings → Channels → Voice.',
     );
   }
+  // Retained for #1600/#1601 (Signal/Slack voice-note DI). Streaming voice
+  // still builds its own STT/TTS providers below.
+  void speechMediaService;
 
   if (
     config.voiceLivekitUrl &&
