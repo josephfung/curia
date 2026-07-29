@@ -83,6 +83,37 @@ describe('classifyError', () => {
     expect(result.retryable).toBe(true);
   });
 
+  it('classifies AbortSignal.timeout reason as TIMEOUT (retryable)', async () => {
+    const signal = AbortSignal.timeout(1);
+    await new Promise<void>((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+
+    const result = classifyError(signal.reason, 'stt:deepgram');
+    expect(signal.reason).toBeInstanceOf(Error);
+    expect((signal.reason as Error).name).toBe('TimeoutError');
+    expect(result.type).toBe('TIMEOUT');
+    expect(result.retryable).toBe(true);
+    expect(result.context.abortName).toBe('TimeoutError');
+  });
+
+  it('classifies AbortError (caller cancel) as TIMEOUT (retryable)', () => {
+    const controller = new AbortController();
+    controller.abort();
+    const reason = controller.signal.reason;
+
+    const result = classifyError(reason, 'tts:cartesia');
+    expect(reason).toBeInstanceOf(Error);
+    expect((reason as Error).name).toBe('AbortError');
+    expect(result.type).toBe('TIMEOUT');
+    expect(result.retryable).toBe(true);
+    expect(result.context.abortName).toBe('AbortError');
+  });
+
   it('classifies ECONNREFUSED as PROVIDER_ERROR', () => {
     const err = Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
     const result = classifyError(err, 'anthropic');
