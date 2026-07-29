@@ -23,6 +23,11 @@ export interface UseVoiceCallResult {
   muted: boolean;
   error: string | null;
   sessionId: string | null;
+  /**
+   * True once a remote (Curia) audio track has been subscribed this call.
+   * Used to flip UI copy from "Greeting…" → "Listening…" (#1596).
+   */
+  heardAssistant: boolean;
   startCall: () => Promise<void>;
   toggleMute: () => Promise<void>;
   hangUp: () => Promise<void>;
@@ -65,6 +70,7 @@ export function useVoiceCall(): UseVoiceCallResult {
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [heardAssistant, setHeardAssistant] = useState(false);
 
   const mountedRef = useRef(true);
   const roomRef = useRef<Room | null>(null);
@@ -88,6 +94,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     element.style.display = 'none';
     document.body.appendChild(element);
     audioElementsRef.current.push(element);
+    if (mountedRef.current) setHeardAssistant(true);
     void element.play().catch(() => {
       if (mountedRef.current) {
         setError('Audio playback was blocked. Use the call controls to reconnect.');
@@ -117,6 +124,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     if (mountedRef.current) {
       setSessionId(null);
       setMuted(false);
+      setHeardAssistant(false);
     }
   }, [detachAllAudio]);
 
@@ -171,6 +179,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     if (mountedRef.current) {
       setCallState('connecting');
       setError(null);
+      setHeardAssistant(false);
     }
 
     try {
@@ -287,6 +296,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     muted,
     error,
     sessionId,
+    heardAssistant,
     startCall,
     toggleMute,
     hangUp,

@@ -102,6 +102,21 @@ export const VOICE_SYSTEM_ADDENDUM =
   'clearly. Keep it brief — the user can always ask for more.';
 
 /**
+ * Opening-turn instruction for inbound console calls (#1596). Appended to the
+ * spoken-turn system prompt so Curia greets first; lean on outbound-context and
+ * the time block when present. Not used for Curia-initiated outbound calls.
+ */
+export const VOICE_GREETING_INSTRUCTION =
+  'The principal just called and joined the line. Open the conversation naturally ' +
+  'and briefly — a short spoken greeting appropriate to the time of day. If active ' +
+  'outbound context is present, acknowledge it in one breath. Do not wait for them ' +
+  'to speak first. One or two short sentences only.';
+
+/** Synthetic user message that triggers the opening turn — never persisted to history. */
+export const VOICE_GREETING_USER_MESSAGE =
+  '[Call connected — open the conversation.]';
+
+/**
  * Honest-negative policy for spoken tool results. A failed or errored check must
  * be narrated as "couldn't check", never as a confident empty result — "your
  * calendar is clear" after a failed lookup is a trust hazard the principal may
@@ -255,6 +270,13 @@ export interface VoiceRuntimeConfig {
    * becomes a cross-channel audience leak.
    */
   outboundContextService?: OutboundContextService;
+  /**
+   * When true (default), run one LLM greeting turn after the transport connects
+   * so Curia opens inbound console calls (#1596). Set false in unit tests that
+   * script only user-turn LLM responses. Curia-initiated outbound calls are out
+   * of scope until an outbound-call path exists.
+   */
+  openingGreeting?: boolean;
 }
 
 /**
@@ -419,6 +441,13 @@ export class VoiceRuntime {
         this.handleTranscript(session, event);
       });
 
+      // Inbound console calls: Curia opens the conversation (#1596). Enqueued on
+      // the turn chain so a barged-in greeting fully unwinds before the first
+      // user turn. Outbound (Curia-initiated) greets are deferred — no path yet.
+      if (this.config.openingGreeting !== false) {
+        this.enqueueGreetingTurn(session);
+      }
+
       this.log.info(
         { sessionId: params.sessionId, conversationId: params.conversationId, inboundSampleRate, publishSampleRate },
         'Voice session runtime started',
@@ -510,6 +539,169 @@ export class VoiceRuntime {
         this.log.warn({ sessionId: session.sessionId, err }, 'previous voice turn rejected; continuing chain');
       })
       .then(() => this.runUserTurn(session, utterance));
+  }
+
+  private enqueueGreetingTurn(session: ActiveSession): void {
+    session.turnTail = session.turnTail
+      .catch(err => {
+        this.log.warn({ sessionId: session.sessionId, err }, 'previous voice turn rejected; continuing chain');
+      })
+      .then(() => this.runGreetingTurn(session));
+  }
+
+  /**
+   * Opening turn for inbound console calls (#1596). Speaks an LLM greeting
+   * (context-aware via the outbound-context bridge + time block) before any
+   * user speech. Barge-in cancels it the same way as a normal assistant turn.
+   * The synthetic user cue is never persisted; only the spoken reply is.
+   */
+  private async runGreetingTurn(session: ActiveSession): Promise<void> {
+    if (session.ending) return;
+
+    if (!session.markedActive) {
+      session.markedActive = true;
+      try {
+        await this.config.sessionStore.updateStatus(session.sessionId, 'active');
+      } catch (err) {
+        this.log.warn({ sessionId: session.sessionId, err }, 'failed to mark voice session active');
+      }
+    }
+
+    const controller = new AbortController();
+    session.currentController = controller;
+    session.llmActive = true;
+
+    const greetingStartedAt = Date.now();
+    let ttfaRecorded = false;
+    const onSpeechText = this.createSpeechHandler(session, controller, {
+      onFirstAudio: () => {
+        if (ttfaRecorded) return;
+        ttfaRecorded = true;
+        this.log.debug(
+          { sessionId: session.sessionId, 'voice.greeting_ttfa_ms': Date.now() - greetingStartedAt },
+          'voice greeting time-to-first-audio',
+        );
+      },
+    });
+
+    const priorHistory = await this.loadTurnHistory(session);
+    const systemPrompt = await this.buildTurnSystemPrompt();
+    const messages: Message[] = [
+      { role: 'system', content: `${systemPrompt}\n\n${VOICE_GREETING_INSTRUCTION}` },
+      ...priorHistory,
+      { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
+    ];
+
+    // No tools on the greeting — keep the open short and latency-tight; outbound
+    // context is already in the system prompt when present.
+    const runner = new VoiceTurnRunner({
+      provider: this.config.llm,
+      model: this.config.model,
+      logger: this.log,
+      onSpeechText,
+    });
+
+    try {
+      const result = await runner.runTurn({ messages, signal: controller.signal });
+      if (!result.aborted && result.finalText.length > 0) {
+        session.history.push({ role: 'assistant', content: result.finalText });
+        if (session.history.length > MAX_HISTORY_MESSAGES) {
+          session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
+        }
+        if (this.config.workingMemory) {
+          try {
+            await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
+              role: 'assistant',
+              content: result.finalText,
+            });
+          } catch (err) {
+            this.log.warn(
+              { sessionId: session.sessionId, err },
+              'failed to persist voice greeting to working memory',
+            );
+          }
+        }
+      }
+    } catch (err) {
+      this.log.warn({ sessionId: session.sessionId, err }, 'voice greeting turn failed');
+    } finally {
+      session.llmActive = false;
+      if (session.currentController === controller) {
+        session.currentController = null;
+      }
+    }
+  }
+
+  /**
+   * Shared TTS publish path for user turns and the opening greeting. Counts soft
+   * TTS failures toward the session teardown threshold (#1556).
+   */
+  private createSpeechHandler(
+    session: ActiveSession,
+    controller: AbortController,
+    opts: { onFirstAudio?: () => void },
+  ): (sentence: string, meta: { streamId: string }) => Promise<void> {
+    return async (sentence: string, meta: { streamId: string }): Promise<void> => {
+      if (controller.signal.aborted || session.ending) return;
+      const ttsStreamId = `${meta.streamId}:${session.ttsSeq++}`;
+      session.activeTtsStreamIds.add(ttsStreamId);
+      session.ttsActive = true;
+      try {
+        for await (const frame of this.config.tts.synthesize({
+          text: sentence,
+          streamId: ttsStreamId,
+          voiceId: this.config.voiceId,
+          sampleRate: session.publishSampleRate,
+          signal: controller.signal,
+        })) {
+          if (controller.signal.aborted || session.ending) break;
+          opts.onFirstAudio?.();
+          // Publish is outside the TTS failure streak — a LiveKit blip must not
+          // be recorded as tts_error (#1556 review).
+          try {
+            await session.transport.publishAudio(frame);
+          } catch (publishErr) {
+            this.log.warn(
+              { sessionId: session.sessionId, err: publishErr },
+              'failed to publish TTS audio frame; not counted as a TTS synthesis failure',
+            );
+            break;
+          }
+        }
+        // Healthy synthesis (including barge-in abort mid-stream) clears the streak.
+        if (!session.ending) session.consecutiveTtsFailures = 0;
+      } catch (err) {
+        if (controller.signal.aborted || session.ending) return;
+        session.consecutiveTtsFailures += 1;
+        const hard = isHardTtsFailure(err);
+        this.log.warn(
+          {
+            sessionId: session.sessionId,
+            err,
+            consecutiveFailures: session.consecutiveTtsFailures,
+            hard,
+          },
+          'TTS synthesis failed',
+        );
+        // Soft: tolerate a blip. Hard (auth / bad voice id) or repeated soft → end
+        // with tts_error so the console reflects it (mirrors stt_error).
+        if (hard || session.consecutiveTtsFailures >= TTS_CONSECUTIVE_FAILURE_LIMIT) {
+          this.log.error(
+            {
+              sessionId: session.sessionId,
+              err,
+              consecutiveFailures: session.consecutiveTtsFailures,
+              hard,
+            },
+            'TTS synthesis failures exceeded threshold; ending session',
+          );
+          void this.endSession(session.sessionId, 'tts_error');
+        }
+      } finally {
+        session.activeTtsStreamIds.delete(ttsStreamId);
+        if (session.activeTtsStreamIds.size === 0) session.ttsActive = false;
+      }
+    };
   }
 
   /**
@@ -767,73 +959,16 @@ export class VoiceRuntime {
       userMessage,
     ];
 
-    const onSpeechText = async (sentence: string, meta: { streamId: string }): Promise<void> => {
-      if (controller.signal.aborted || session.ending) return;
-      const ttsStreamId = `${meta.streamId}:${session.ttsSeq++}`;
-      session.activeTtsStreamIds.add(ttsStreamId);
-      session.ttsActive = true;
-      try {
-        for await (const frame of this.config.tts.synthesize({
-          text: sentence,
-          streamId: ttsStreamId,
-          voiceId: this.config.voiceId,
-          sampleRate: session.publishSampleRate,
-          signal: controller.signal,
-        })) {
-          if (controller.signal.aborted || session.ending) break;
-          if (!ttfaRecorded) {
-            ttfaRecorded = true;
-            this.log.debug(
-              { sessionId: session.sessionId, 'voice.ttfa_ms': Date.now() - userTurnEndAt },
-              'voice time-to-first-audio',
-            );
-          }
-          // Publish is outside the TTS failure streak — a LiveKit blip must not
-          // be recorded as tts_error (#1556 review).
-          try {
-            await session.transport.publishAudio(frame);
-          } catch (publishErr) {
-            this.log.warn(
-              { sessionId: session.sessionId, err: publishErr },
-              'failed to publish TTS audio frame; not counted as a TTS synthesis failure',
-            );
-            break;
-          }
-        }
-        // Healthy synthesis (including barge-in abort mid-stream) clears the streak.
-        if (!session.ending) session.consecutiveTtsFailures = 0;
-      } catch (err) {
-        if (controller.signal.aborted || session.ending) return;
-        session.consecutiveTtsFailures += 1;
-        const hard = isHardTtsFailure(err);
-        this.log.warn(
-          {
-            sessionId: session.sessionId,
-            err,
-            consecutiveFailures: session.consecutiveTtsFailures,
-            hard,
-          },
-          'TTS synthesis failed',
+    const onSpeechText = this.createSpeechHandler(session, controller, {
+      onFirstAudio: () => {
+        if (ttfaRecorded) return;
+        ttfaRecorded = true;
+        this.log.debug(
+          { sessionId: session.sessionId, 'voice.ttfa_ms': Date.now() - userTurnEndAt },
+          'voice time-to-first-audio',
         );
-        // Soft: tolerate a blip. Hard (auth / bad voice id) or repeated soft → end
-        // with tts_error so the console reflects it (mirrors stt_error).
-        if (hard || session.consecutiveTtsFailures >= TTS_CONSECUTIVE_FAILURE_LIMIT) {
-          this.log.error(
-            {
-              sessionId: session.sessionId,
-              err,
-              consecutiveFailures: session.consecutiveTtsFailures,
-              hard,
-            },
-            'TTS synthesis failures exceeded threshold; ending session',
-          );
-          void this.endSession(session.sessionId, 'tts_error');
-        }
-      } finally {
-        session.activeTtsStreamIds.delete(ttsStreamId);
-        if (session.activeTtsStreamIds.size === 0) session.ttsActive = false;
-      }
-    };
+      },
+    });
 
     const runner = new VoiceTurnRunner({
       provider: this.config.llm,

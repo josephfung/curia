@@ -8,9 +8,16 @@ import type { UseVoiceCallResult } from './useVoiceCall.js';
 
 type VoiceCallBarProps = UseVoiceCallResult;
 
-function statusText(callState: UseVoiceCallResult['callState'], muted: boolean): string {
+function statusText(
+  callState: UseVoiceCallResult['callState'],
+  muted: boolean,
+  heardAssistant: boolean,
+): string {
   if (callState === 'connecting') return 'Connecting…';
-  if (callState === 'connected') return muted ? 'On call · muted' : 'Listening…';
+  if (callState === 'connected') {
+    if (!heardAssistant) return 'Greeting…';
+    return muted ? 'On call · muted' : 'Listening…';
+  }
   return 'Voice call unavailable';
 }
 
@@ -19,6 +26,7 @@ export function VoiceCallBar({
   callState,
   muted,
   error,
+  heardAssistant = false,
   startCall,
   toggleMute,
   hangUp,
@@ -50,7 +58,7 @@ export function VoiceCallBar({
   return (
     <div className={`voice-call-bar ${callState}`} role="status" aria-live="polite">
       <span className="voice-call-live-dot" aria-hidden="true" />
-      <span className="voice-call-status">{statusText(callState, muted)}</span>
+      <span className="voice-call-status">{statusText(callState, muted, heardAssistant)}</span>
       {error && <span className="voice-call-error">{error}</span>}
       <span className="voice-call-spacer" />
       <button
