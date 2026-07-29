@@ -4,7 +4,8 @@
 // structured AgentError values. The runtime uses these for retry decisions,
 // budget tracking, and structured error injection into LLM history.
 //
-// Classification uses status codes and error codes — never string matching.
+// Classification uses status codes, system error codes, and stable Error.name
+// discriminants for AbortSignal DOMExceptions — never message-string matching.
 // This prevents the fragile pattern matching Zora suffered from.
 
 import type { AgentError, ErrorType } from './types.js';
@@ -55,6 +56,14 @@ const CODE_MAP: Record<string, ErrorType> = {
   EPERM: 'AUTH_FAILURE',
 };
 
+// AbortSignal DOMException.name → ErrorType. These errors expose a numeric
+// `.code` (e.g. 23) that CODE_MAP cannot see — name is the stable discriminant.
+// TimeoutError: AbortSignal.timeout(). AbortError: caller abort / AbortSignal.any.
+const ABORT_NAME_MAP: Record<string, ErrorType> = {
+  TimeoutError: 'TIMEOUT',
+  AbortError: 'TIMEOUT',
+};
+
 // Max length for sanitized error messages injected into LLM context.
 // sanitizeOutput() appends '[truncated — output exceeded limit]' (35 chars) when it truncates,
 // so the actual output can be up to maxLength + 35 chars. We use 400
@@ -92,7 +101,8 @@ function sanitizeMessage(message: string): string {
  * Classification priority:
  * 1. HTTP status code (most reliable — from API responses)
  * 2. Node.js error code (system-level failures)
- * 3. Fallback to UNKNOWN
+ * 3. AbortSignal DOMException name (TimeoutError / AbortError)
+ * 4. Fallback to UNKNOWN
  *
  * Note: Postgres outages are classified at DB call sites via
  * `createDbUnavailableAgentError` / `isDbUnavailableError` (#1381). Generic
@@ -122,7 +132,17 @@ export function classifyError(err: unknown, source: string): AgentError {
     }
   }
 
-  // 3. Prefer an AgentError already attached by a DB call site (#1381).
+  // 3. AbortSignal timeout / abort DOMExceptions. `.code` is numeric here, so
+  // step 2 cannot see them — use the stable Error.name discriminant (#1597).
+  if (type === 'UNKNOWN' && err instanceof Error) {
+    const abortType = ABORT_NAME_MAP[err.name];
+    if (abortType) {
+      type = abortType;
+      context.abortName = err.name;
+    }
+  }
+
+  // 4. Prefer an AgentError already attached by a DB call site (#1381).
   const attached = (err as { agentError?: AgentError })?.agentError;
   if (attached && attached.type === 'DATABASE_UNAVAILABLE') {
     return attached;

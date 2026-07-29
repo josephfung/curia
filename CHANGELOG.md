@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Speech media service** — batch Deepgram STT + Cartesia TTS-to-file for voice notes. (#1597)
+- **Speech media service** — top-level `src/speech/` batch STT/TTS for voice notes. (#1597)
 - **Voice opening greeting** — Curia speaks first on inbound console calls. (#1596)
 - **`async-offramp`** — voice hands heavyweight asks to async coordinator for principal callback. (#1614)
 - **ADR-038 (Accepted)** — shared-hardening; voice off-ramp shipped; text→streaming (#1563) unblocked. (#1595)
@@ -37,6 +37,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`classifyError`** — `AbortSignal.timeout` / abort DOMExceptions map to `TIMEOUT`. (#1597)
 - **`delegate`** — calendar briefs must match same-turn date-resolve output. (#1612)
 - **Coordinator** — ambient bullpen mentions no longer bleed into scheduler jobs and leak to the principal. (#1609)
 - **Voice** — injects active outbound-context so spoken turns see recent cross-channel sends. (#1594)
