@@ -14,6 +14,8 @@ import {
   VOICE_SYSTEM_ADDENDUM,
   VOICE_TOOL_RESULT_POLICY,
   VOICE_DELEGATION_GUIDANCE,
+  VOICE_GREETING_INSTRUCTION,
+  VOICE_GREETING_USER_MESSAGE,
 } from './voice-runtime.js';
 import type { VoiceToolBridge } from './voice-runtime.js';
 import { FakeAudioTransport } from './fake-audio-transport.js';
@@ -158,6 +160,8 @@ function makeRuntime(overrides: {
   outboundContextService?: OutboundContextService;
   /** Late-bound coordinator bridge (tools + context providers), applied via configureTools(). */
   bridge?: VoiceToolBridge;
+  /** Opening greeting defaults off in unit tests so scripted LLM replies map 1:1 to user turns. */
+  openingGreeting?: boolean;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];
@@ -187,6 +191,9 @@ function makeRuntime(overrides: {
     timezone: overrides.timezone,
     historyReadTimeoutMs: overrides.historyReadTimeoutMs,
     outboundContextService: overrides.outboundContextService,
+    // Default false so existing tests' LLM scripts are not consumed by the
+    // opening greeting (#1596). Greeting-specific tests opt in explicitly.
+    openingGreeting: overrides.openingGreeting ?? false,
   });
   if (overrides.bridge) runtime.configureTools(overrides.bridge);
   return { runtime, bus, events, stt, transport, tts, store };
@@ -1045,5 +1052,163 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     expect(system.content).toBe(SLIM_VOICE_PROMPT);
     expect(system.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
     expect(transport.publishedFrames.length).toBeGreaterThan(0);
+  });
+});
+
+describe('VoiceRuntime opening greeting (#1596)', () => {
+  it('speaks an LLM greeting before any user speech and does not publish inbound.message', async () => {
+    const llm = new FakeStreamProvider([
+      replyScript('Good morning — what can I help with?'),
+    ]);
+    const { store, statuses } = fakeStore();
+    const { runtime, events, transport } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(3, 1),
+      store,
+      openingGreeting: true,
+      timezone: 'America/Toronto',
+    });
+
+    await runtime.startSession({
+      sessionId: 'g1',
+      conversationId: 'voice:g1',
+      roomName: 'voice-g1',
+      agentToken: 'tok',
+    });
+    await runtime.awaitIdle('g1');
+
+    expect(transport.publishedFrames.length).toBeGreaterThan(0);
+    expect(events.filter(e => e.type === 'inbound.message')).toHaveLength(0);
+    expect(statuses).toContain('active');
+
+    expect(llm.seenMessages).toHaveLength(1);
+    const messages = llm.seenMessages[0]!;
+    const system = messages[0]!;
+    expect(system.role).toBe('system');
+    expect(system.content).toContain(VOICE_GREETING_INSTRUCTION);
+    expect(system.content).toContain('## Current Date & Time');
+    const user = messages[messages.length - 1]!;
+    expect(user).toEqual({ role: 'user', content: VOICE_GREETING_USER_MESSAGE });
+  });
+
+  it('includes outbound-context in the greeting system prompt when active', async () => {
+    const llm = new FakeStreamProvider([
+      replyScript('Hey — is this about that Google alert?'),
+    ]);
+    const signalAlertEntry: OutboundContextRow = {
+      id: 'entry-signal-alert',
+      conversationId: 'signal:ceo',
+      channelId: 'signal',
+      agentId: 'coordinator',
+      contentPreview: 'Google security alert: new sign-in on your account.',
+      expectedReply: null,
+      delegationHint: null,
+      metadata: { subject: 'security-alert' },
+      createdAt: new Date(Date.now() - 2 * 60 * 1000),
+      expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000),
+      released: false,
+    };
+    const real = new OutboundContextService(
+      { query: async () => ({ rows: [] }) } as never,
+      logger,
+    );
+    real.getActive = async () => [signalAlertEntry];
+
+    const { runtime } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      openingGreeting: true,
+      outboundContextService: real,
+    });
+
+    await runtime.startSession({
+      sessionId: 'g2',
+      conversationId: 'voice:g2',
+      roomName: 'voice-g2',
+      agentToken: 'tok',
+    });
+    await runtime.awaitIdle('g2');
+
+    const system = llm.seenMessages[0]![0]!;
+    expect(system.content).toContain('[ACTIVE OUTBOUND CONTEXT');
+    expect(system.content).toContain(VOICE_GREETING_INSTRUCTION);
+    expect(system.content).toContain('Google security alert');
+  });
+
+  it('barge-in cancels an in-flight greeting so the user turn can proceed', async () => {
+    const llm = new FakeStreamProvider(
+      [
+        [
+          { type: 'text_delta', text: 'Good afternoon, hope you are well today. ' },
+          { type: 'text_delta', text: 'What would you like to cover? ' },
+          {
+            type: 'message_end',
+            content: 'Good afternoon, hope you are well today. What would you like to cover?',
+            usage,
+            provenance,
+          },
+        ],
+        replyScript('Got it — calendar is clear.'),
+      ],
+      3,
+    );
+    const tts = new SlowTtsProvider(50, 5);
+    const { runtime, stt, events } = makeRuntime({ llm, tts, openingGreeting: true });
+
+    await runtime.startSession({
+      sessionId: 'g3',
+      conversationId: 'voice:g3',
+      roomName: 'voice-g3',
+      agentToken: 'tok',
+    });
+
+    // Let the greeting start speaking.
+    await delay(40);
+    expect(tts.requests.length).toBeGreaterThan(0);
+
+    // Principal interrupts mid-greeting.
+    stt.emit({ text: 'what is on my calendar', isFinal: false, confidence: 0.9 });
+    stt.emit({ text: 'what is on my calendar', isFinal: true, speechFinal: true });
+
+    await runtime.awaitIdle('g3');
+
+    expect(tts.cancelled.size).toBeGreaterThan(0);
+    const inbound = events.find(e => e.type === 'inbound.message');
+    expect(inbound).toBeDefined();
+    expect((inbound as { payload: { content: string } }).payload.content).toBe(
+      'what is on my calendar',
+    );
+    // Greeting + user turn both ran against the LLM.
+    expect(llm.seenMessages.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('persists only the spoken greeting to working memory (not the synthetic cue)', async () => {
+    const llm = new FakeStreamProvider([replyScript('Hey boss.')]);
+    const addTurn = vi.fn(async () => {});
+    const workingMemory = {
+      addTurn,
+      getHistory: vi.fn(async () => []),
+    } as unknown as WorkingMemory;
+
+    const { runtime } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      openingGreeting: true,
+      workingMemory,
+    });
+
+    await runtime.startSession({
+      sessionId: 'g4',
+      conversationId: 'voice:g4',
+      roomName: 'voice-g4',
+      agentToken: 'tok',
+    });
+    await runtime.awaitIdle('g4');
+
+    expect(addTurn).toHaveBeenCalledTimes(1);
+    expect(addTurn).toHaveBeenCalledWith('voice:g4', 'coordinator', {
+      role: 'assistant',
+      content: 'Hey boss.',
+    });
   });
 });

@@ -10,6 +10,7 @@ function props(overrides: Partial<UseVoiceCallResult> = {}): UseVoiceCallResult 
     muted: false,
     error: null,
     sessionId: null,
+    heardAssistant: false,
     startCall: vi.fn(),
     toggleMute: vi.fn(),
     hangUp: vi.fn(),
@@ -32,8 +33,18 @@ describe('VoiceCallBar (#1571)', () => {
     expect(html).toContain('Hang up');
   });
 
-  it('renders in-call mute and hang up when connected', () => {
-    const html = renderToStaticMarkup(<VoiceCallBar {...props({ callState: 'connected' })} />);
+  it('renders Greeting before remote audio is heard (#1596)', () => {
+    const html = renderToStaticMarkup(
+      <VoiceCallBar {...props({ callState: 'connected', heardAssistant: false })} />,
+    );
+    expect(html).toContain('Greeting');
+    expect(html).not.toContain('Listening');
+  });
+
+  it('renders Listening once Curia audio has been heard', () => {
+    const html = renderToStaticMarkup(
+      <VoiceCallBar {...props({ callState: 'connected', heardAssistant: true })} />,
+    );
     expect(html).toContain('Listening');
     expect(html).toContain('Mute');
     expect(html).toContain('Hang up');

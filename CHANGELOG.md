@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Voice opening greeting** — Curia speaks first on inbound console calls. (#1596)
 - **`async-offramp`** — voice hands heavyweight asks to async coordinator for principal callback. (#1614)
 - **ADR-038 (Accepted)** — shared-hardening; voice off-ramp shipped; text→streaming (#1563) unblocked. (#1595)
 - **`src/agents/prompts/`** — shared date-resolve guardrail composed by voice + coordinator. (#1595)
