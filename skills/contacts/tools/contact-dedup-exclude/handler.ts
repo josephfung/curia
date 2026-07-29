@@ -93,7 +93,7 @@ export class ContactDedupExcludeHandler implements ToolHandler {
           success: false,
           error: bothMissingNodes
             ? 'Could not write dedup exclusion — both contacts have no KG node (common for same-name collisions). Exclusion cannot be stored until at least one contact has a linked KG node.'
-            : 'Could not write dedup exclusion on either contact — both KG writes failed (conflict or store error). Check logs for details.',
+            : 'Could not write dedup exclusion on either contact — no eligible KG write succeeded (missing KG node, conflict, or store error). Check logs for details.',
         };
       }
 
