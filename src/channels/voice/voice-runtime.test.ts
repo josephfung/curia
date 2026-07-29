@@ -921,6 +921,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       identityBlock: '## Identity\nYou are Vera.',
       outboundContextBlock,
       timeContextBlock: '## Current Date & Time\nTimezone: America/Toronto',
+      audience: { liveTurn: true },
     });
     expect(prompt).toContain('[ACTIVE OUTBOUND CONTEXT');
     expect(prompt).toContain('entry_id: entry-signal-alert');
@@ -930,11 +931,11 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       .toBeLessThan(prompt.indexOf('## Current Date & Time'));
     // Empty outbound → identical to the slim path without that section (still
     // includes shared date-resolve + async off-ramp — ADR-038 / #1614).
-    expect(buildVoiceSystemPrompt({})).toBe(SLIM_VOICE_PROMPT);
+    expect(buildVoiceSystemPrompt({ audience: { liveTurn: true } })).toBe(SLIM_VOICE_PROMPT);
   });
 
   it('buildVoiceSystemPrompt composes the shared date-resolve guardrail', () => {
-    const prompt = buildVoiceSystemPrompt({});
+    const prompt = buildVoiceSystemPrompt({ audience: { liveTurn: true } });
     expect(prompt).toContain('date-resolve to verify');
     expect(prompt).toContain('### Date & time');
     expect(prompt.indexOf(VOICE_TOOL_RESULT_POLICY))
@@ -942,7 +943,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
   });
 
   it('buildVoiceSystemPrompt composes the voice async off-ramp guidance (#1614)', () => {
-    const prompt = buildVoiceSystemPrompt({});
+    const prompt = buildVoiceSystemPrompt({ audience: { liveTurn: true } });
     expect(prompt).toContain('async-offramp');
     expect(prompt).toContain('Live-call scope and async off-ramp');
     expect(prompt.indexOf(DATE_RESOLVE_GUARDRAIL))

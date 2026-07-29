@@ -38,7 +38,7 @@ export interface VoiceCallerContext {
 
 export type ResolveVoiceCallerResult =
   | { ok: true; caller: VoiceCallerContext }
-  | { ok: false; reason: 'unknown_sender' };
+  | { ok: false; reason: 'unknown_sender' | 'blocked' };
 
 /**
  * Build a SenderContext for the principal contact (or the synthetic CLI/web fallback).
@@ -154,6 +154,11 @@ export async function resolveConsoleVoiceCaller(opts: {
  *
  * No HTTP entry point uses this yet — it is the seam for #1602 and is unit-tested
  * so non-principal / unresolved tokens cannot silently inherit principal standing.
+ *
+ * Policy note (#1598 follow-up): the unknown_sender default (`?? 'ignore'`) and the
+ * blocked-tier gate below duplicate dispatcher policy rather than reading the shared
+ * channel-trust config. Reconcile against the dispatcher's config path when #1602
+ * wires a real transport — do not extend these independently.
  */
 export async function resolveVoiceCallerFromToken(opts: {
   contactResolver: ContactResolver;
@@ -171,8 +176,9 @@ export async function resolveVoiceCallerFromToken(opts: {
   const senderContext = await opts.contactResolver.resolve('voice', opts.callerToken);
   // Blocked contacts are denied before constructing a caller — mirrors dispatcher.ts
   // which drops blocked senders before reaching the coordinator (#1598).
+  // Distinct reason from unknown_sender so audit can tell "unknown" from "denied".
   if (senderContext.resolved && senderContext.tier === 'blocked') {
-    return { ok: false, reason: 'unknown_sender' };
+    return { ok: false, reason: 'blocked' };
   }
   if (!senderContext.resolved) {
     const policy = opts.channelPolicies?.voice?.unknownSender ?? 'ignore';

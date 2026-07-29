@@ -199,7 +199,7 @@ describe('resolveVoiceCallerFromToken', () => {
       callerToken: 'blocked-token',
     });
 
-    expect(result).toEqual({ ok: false, reason: 'unknown_sender' });
+    expect(result).toEqual({ ok: false, reason: 'blocked' });
   });
 
   it('does not short-circuit voice to principal — resolve goes to ContactResolver', async () => {

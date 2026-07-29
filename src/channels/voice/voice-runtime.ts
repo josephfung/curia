@@ -17,7 +17,13 @@
 // History: spoken-turn context reloads from working_memory (the same rows the
 // console chat history endpoint reads) each turn; the in-process session history
 // is only a fallback when the store is absent or the read fails (#1551).
-
+//
+// liveTurn scope (#1598 / #1126): voice stamps liveTurn once per *session* at
+// create time (a continuous call with one human), whereas every other channel
+// stamps it per inbound *turn*. The elevated skill gate therefore stays
+// satisfied for the call's full duration. This widening is deliberate — a
+// voice session is one live conversation, not a sequence of independent
+// messages — and must not be copied onto text channels.
 import type { EventBus } from '../../bus/bus.js';
 import { createInboundMessage, createVoiceSessionEnded } from '../../bus/events.js';
 import type { OutboundContextService } from '../../dispatch/outbound-context.js';
@@ -245,16 +251,14 @@ export function buildVoiceSystemPrompt(parts: {
   /** Pre-formatted "## Current Date & Time" block; omitted when null/empty. */
   timeContextBlock?: string | null;
   /**
-   * Resolved audience for the voice addendum. Defaults to principal so console
-   * calls and existing tests keep the historical "speaking to the principal" line.
+   * Resolved audience for the voice addendum. Required so a missing audience
+   * cannot silently default to principal framing (#1598).
    */
-  audience?: { liveTurn: boolean; displayName?: string | null };
+  audience: { liveTurn: boolean; displayName?: string | null };
 }): string {
   const sections: string[] = [];
   if (parts.identityBlock) sections.push(parts.identityBlock);
-  sections.push(
-    parts.audience ? buildVoiceSystemAddendum(parts.audience) : VOICE_SYSTEM_ADDENDUM,
-  );
+  sections.push(buildVoiceSystemAddendum(parts.audience));
   sections.push(VOICE_TOOL_RESULT_POLICY);
   // Channel-agnostic date-arithmetic rule — same module the coordinator composes
   // (ADR-038 / #1595). Always present: voice already pins date-resolve via
