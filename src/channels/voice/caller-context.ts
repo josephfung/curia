@@ -131,7 +131,15 @@ export async function resolveConsoleVoiceCaller(opts: {
   try {
     principal = await opts.contactService.findContactBySystemRole('principal');
   } catch (err) {
-    opts.logger.warn({ err }, 'Unable to resolve principal contact for voice session; using synthetic principal');
+    // Narrow to real pg/SQLSTATE errors (five-character alphanumeric code) before
+    // suppressing — a TypeError or programming bug must not be silently promoted to
+    // a synthetic principal identity. Mirrors contact-resolver.ts:79-89 (#1598).
+    const sqlState = err !== null && typeof err === 'object' && 'code' in err
+      ? (err as { code?: unknown }).code
+      : undefined;
+    const isDbError = typeof sqlState === 'string' && /^[0-9A-Z]{5}$/.test(sqlState);
+    if (!isDbError) throw err;
+    opts.logger.warn({ err }, 'Unable to resolve principal contact for voice session (DB error); using synthetic principal');
   }
   if (!principal) {
     opts.logger.warn('No principal contact found for voice session; using synthetic principal');
@@ -154,10 +162,18 @@ export async function resolveVoiceCallerFromToken(opts: {
   /**
    * senderId stamped on inbound.message when resolved. Defaults to the contact id
    * (or the raw token when unresolved and admitted).
+   * Note: for a token-resolved caller this is the contact UUID, not a channel address —
+   * safe because the dispatcher skips voice inbound.message (dispatcher.ts:258) so it
+   * is audit-only and never re-resolved as a channel identity.
    */
   senderId?: string;
 }): Promise<ResolveVoiceCallerResult> {
   const senderContext = await opts.contactResolver.resolve('voice', opts.callerToken);
+  // Blocked contacts are denied before constructing a caller — mirrors dispatcher.ts
+  // which drops blocked senders before reaching the coordinator (#1598).
+  if (senderContext.resolved && senderContext.tier === 'blocked') {
+    return { ok: false, reason: 'unknown_sender' };
+  }
   if (!senderContext.resolved) {
     const policy = opts.channelPolicies?.voice?.unknownSender ?? 'ignore';
     if (policy === 'ignore') {

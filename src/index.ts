@@ -1915,8 +1915,8 @@ async function main(): Promise<void> {
         llm: voiceLlmProvider,
         model: voiceModel,
         livekitUrl: voiceLivekitUrl,
-        createTransport: ({ token, livekitUrl }) =>
-          new LiveKitRoomSession({ url: livekitUrl, token, logger }),
+        createTransport: ({ token, livekitUrl, callerIdentity }) =>
+          new LiveKitRoomSession({ url: livekitUrl, token, callerIdentity, logger }),
         workingMemory: memory,
         maxUtteranceBytes: yamlConfig.channels?.max_message_bytes ?? 102_400,
         // Same per-turn date/timezone grounding the coordinator gets — without it
@@ -2614,28 +2614,24 @@ async function main(): Promise<void> {
         specialistRoster: () =>
           agentRegistry.listSpecialists().length > 0 ? agentRegistry.specialistSummary() : null,
         invokeTool: async (call, ctx) => {
-          const caller = {
-            contactId: principalContact?.id ?? 'ceo-web-user',
-            role: 'ceo',
+          // Use the per-session resolved caller from VoiceCallerContext (#1598).
+          // liveTurn and originator come from the shared stampOriginator derivation —
+          // one source of truth for the elevated gate instead of the prior literals.
+          const { caller: sessionCaller } = ctx;
+          const executionCaller = {
+            contactId: sessionCaller.originator.contactId,
+            role: sessionCaller.originator.systemRole ?? 'unknown',
             channel: 'voice',
           };
-          const result = await executionLayer.invoke(call.name, call.input, caller, {
+          const result = await executionLayer.invoke(call.name, call.input, executionCaller, {
             agentId: 'coordinator',
             channelId: 'voice',
             conversationId: ctx.conversationId,
             taskEventId: ctx.sessionId,
-            liveTurn: true,
+            liveTurn: sessionCaller.liveTurn,
             turnDateResolveResults: ctx.turnDateResolveResults,
-            // Stamp a proper TaskOriginator so elevated skills / Gate C see a
-            // live principal turn (same shape the dispatcher uses for web chat).
             taskMetadata: {
-              originator: {
-                contactId: principalContact?.id ?? 'ceo-web-user',
-                systemRole: 'principal',
-                channel: 'voice',
-                initiatedAt: new Date().toISOString(),
-                tier: principalContact?.tier ?? 'known',
-              },
+              originator: sessionCaller.originator,
               voiceSessionId: ctx.sessionId,
             },
           });

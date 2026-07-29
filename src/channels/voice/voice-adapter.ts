@@ -97,7 +97,7 @@ export class VoiceAdapter implements Channel {
       },
     );
 
-    // voice_sessions.principal_contact_id is UUID NOT NULL REFERENCES — only store
+    // voice_sessions.principal_contact_id is UUID NULL ON DELETE SET NULL — only store
     // a real contact UUID (synthetic 'primary-user' stays null).
     const principalContactId = UUID_RE.test(caller.contactId) ? caller.contactId : undefined;
 

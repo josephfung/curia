@@ -291,8 +291,12 @@ export interface VoiceRuntimeConfig {
   llm: LLMProvider;
   model: string;
   livekitUrl: string;
-  /** Builds the per-session audio transport (LiveKitRoomSession in prod, fake in tests). */
-  createTransport: (opts: { roomName: string; token: string; livekitUrl: string }) => AudioTransport;
+  /**
+   * Builds the per-session audio transport (LiveKitRoomSession in prod, fake in tests).
+   * `callerIdentity` is the resolved contact id minted in the caller's LiveKit token (#1598);
+   * the transport uses it to detect caller disconnect (ParticipantDisconnected).
+   */
+  createTransport: (opts: { roomName: string; token: string; livekitUrl: string; callerIdentity: string }) => AudioTransport;
   /** Optional TTS voice id. */
   voiceId?: string;
   /**
@@ -369,6 +373,8 @@ export interface VoiceToolBridge {
     ctx: {
       conversationId: string;
       sessionId: string;
+      /** Resolved caller identity for this session — drives liveTurn/originator at the execution layer. */
+      caller: VoiceCallerContext;
       turnDateResolveResults?: readonly import('../../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
     },
   ) => Promise<{ content: string; is_error?: boolean }>;
@@ -462,10 +468,12 @@ export class VoiceRuntime {
       return;
     }
 
+    const resolvedCaller = params.caller ?? defaultPrincipalCaller(this.config.senderId ?? VOICE_CONSOLE_SENDER_ID);
     const transport = this.config.createTransport({
       roomName: params.roomName,
       token: params.agentToken,
       livekitUrl: this.config.livekitUrl,
+      callerIdentity: resolvedCaller.contactId,
     }) as RateAwareTransport;
 
     const inboundSampleRate = transport.inboundSampleRate ?? DEFAULT_INBOUND_SAMPLE_RATE;
@@ -492,11 +500,17 @@ export class VoiceRuntime {
         },
       });
 
+      if (!params.caller) {
+        this.log.warn(
+          { sessionId: params.sessionId },
+          'startSession called without a resolved caller; defaulting to principal (test/legacy path only)',
+        );
+      }
       const session: ActiveSession = {
         sessionId: params.sessionId,
         conversationId: params.conversationId,
         roomName: params.roomName,
-        caller: params.caller ?? defaultPrincipalCaller(this.config.senderId ?? VOICE_CONSOLE_SENDER_ID),
+        caller: resolvedCaller,
         transport,
         stt,
         publishSampleRate,
@@ -741,6 +755,7 @@ export class VoiceRuntime {
             const result = await this.toolBridge!.invokeTool(call, {
               conversationId: session.conversationId,
               sessionId: session.sessionId,
+              caller: session.caller,
               turnDateResolveResults: turnDateResolveTracker.snapshot(),
             });
             if (call.name === 'date-resolve') {

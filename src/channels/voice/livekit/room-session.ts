@@ -34,15 +34,19 @@ import type {
 /** The LiveKit npm module shape we consume, resolved at runtime via dynamic import. */
 type RtcModule = typeof import('@livekit/rtc-node');
 
-/** Console principal identity minted by VoiceAdapter.createSession. */
-const PRINCIPAL_IDENTITY = 'principal';
-
 export interface LiveKitRoomSessionConfig {
   /** LiveKit WebSocket URL (wss://…). */
   url: string;
   /** Agent participant JWT (mint with identity 'curia-agent'). */
   token: string;
   logger: Logger;
+  /**
+   * LiveKit identity minted for the remote (human) participant — the value passed
+   * to mintVoiceParticipantToken as `identity` in VoiceAdapter.createSession.
+   * Used to detect caller disconnect (ParticipantDisconnected teardown).
+   * Defaults to 'principal' for backward-compat (pre-#1598 sessions without this field).
+   */
+  callerIdentity?: string;
   /** Inbound (remote → STT) sample rate. Default 16000 (Deepgram-friendly). */
   inboundSampleRate?: number;
   /** Outbound (TTS → publish) sample rate. Default 24000 (Cartesia default). */
@@ -115,11 +119,13 @@ export class LiveKitRoomSession implements AudioTransport {
         this.startConsuming(rtc, track);
       });
 
-      // Principal closed the console tab / lost WebRTC — tear the Curia session down
+      // Caller closed the console tab / lost WebRTC — tear the Curia session down
       // so we don't leave STT sockets and an `active` voice_sessions row behind.
+      // callerIdentity is the resolved contact id (post-#1598) or 'principal' (legacy/compat).
+      const callerIdentity = this.config.callerIdentity ?? 'principal';
       room.on(rtc.RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
-        if (participant.identity === PRINCIPAL_IDENTITY) {
-          this.log.info({ identity: participant.identity }, 'Principal left LiveKit room');
+        if (participant.identity === callerIdentity) {
+          this.log.info({ identity: participant.identity }, 'Caller left LiveKit room');
           this.emitClose('principal_disconnected');
         }
       });
