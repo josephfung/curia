@@ -24,8 +24,10 @@ export interface UseVoiceCallResult {
   error: string | null;
   sessionId: string | null;
   /**
-   * True once a remote (Curia) audio track has been subscribed this call.
-   * Used to flip UI copy from "Greeting…" → "Listening…" (#1596).
+   * True once a remote (Curia) participant has actually spoken this call
+   * (LiveKit active-speaker / isSpeaking). Used to flip UI copy from
+   * "Greeting…" → "Listening…" (#1596). TrackSubscribed alone is too early —
+   * the agent publishes a silent audio track at connect time.
    */
   heardAssistant: boolean;
   startCall: () => Promise<void>;
@@ -94,7 +96,6 @@ export function useVoiceCall(): UseVoiceCallResult {
     element.style.display = 'none';
     document.body.appendChild(element);
     audioElementsRef.current.push(element);
-    if (mountedRef.current) setHeardAssistant(true);
     void element.play().catch(() => {
       if (mountedRef.current) {
         setError('Audio playback was blocked. Use the call controls to reconnect.');
@@ -196,30 +197,40 @@ export function useVoiceCall(): UseVoiceCallResult {
       sessionIdRef.current = session.sessionId;
       if (mountedRef.current) setSessionId(session.sessionId);
 
-      room = new Room();
+      const callRoom = new Room();
+      room = callRoom;
 
-      room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+      callRoom.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
         attachRemoteAudio(track);
       });
-      room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
+      callRoom.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
         detachRemoteAudio(track);
       });
-      room.on(RoomEvent.Disconnected, () => {
-        if (roomRef.current !== room) return;
-        resetLocalCall(room);
+      // TrackSubscribed fires as soon as the agent publishes its (still silent)
+      // audio track at connect — that is not "heard greeting". Flip on actual
+      // speaking via LiveKit active-speaker detection (#1596).
+      callRoom.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+        const localId = callRoom.localParticipant.identity;
+        if (speakers.some((p) => p.identity !== localId && p.isSpeaking)) {
+          if (mountedRef.current) setHeardAssistant(true);
+        }
+      });
+      callRoom.on(RoomEvent.Disconnected, () => {
+        if (roomRef.current !== callRoom) return;
+        resetLocalCall(callRoom);
         if (mountedRef.current) setCallState('idle');
       });
 
-      roomRef.current = room;
-      await room.connect(session.livekitUrl, session.token, { autoSubscribe: true });
+      roomRef.current = callRoom;
+      await callRoom.connect(session.livekitUrl, session.token, { autoSubscribe: true });
 
-      for (const participant of room.remoteParticipants.values()) {
+      for (const participant of callRoom.remoteParticipants.values()) {
         for (const publication of participant.audioTrackPublications.values()) {
           if (publication.track) attachRemoteAudio(publication.track);
         }
       }
 
-      await room.localParticipant.setMicrophoneEnabled(true);
+      await callRoom.localParticipant.setMicrophoneEnabled(true);
       if (mountedRef.current) {
         setMuted(false);
         setCallState('connected');

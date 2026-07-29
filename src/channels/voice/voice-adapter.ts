@@ -139,6 +139,10 @@ export class VoiceAdapter implements Channel {
         conversationId: session.conversationId,
         roomName: session.livekitRoom,
         agentToken,
+        // Console POST /api/voice/sessions is always principal-initiated inbound.
+        // A future Curia-initiated outbound path must pass openingGreeting: false
+        // so Curia does not talk over the CEO answering (#1596).
+        openingGreeting: true,
       })
       .catch(async err => {
         this.log.error({ err, sessionId: session.id }, 'Voice runtime failed to start session');

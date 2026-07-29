@@ -30,10 +30,20 @@ import type { WorkingMemory } from '../../memory/working-memory.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
 import type { AudioTransport } from './audio-transport.js';
+import {
+  VOICE_GREETING_INSTRUCTION,
+  VOICE_GREETING_USER_MESSAGE,
+} from './greeting.js';
 import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from './speech/types.js';
 import { TtsHttpError } from './speech/types.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
 import { VoiceTurnRunner } from './turn-runner.js';
+
+export {
+  VOICE_GREETING_INSTRUCTION,
+  VOICE_GREETING_USER_MESSAGE,
+  isVoiceGreetingCueContent,
+} from './greeting.js';
 
 const DEFAULT_INBOUND_SAMPLE_RATE = 16000;
 const DEFAULT_PUBLISH_SAMPLE_RATE = 24000;
@@ -100,21 +110,6 @@ export const VOICE_SYSTEM_ADDENDUM =
   'conversational spoken style: 1-3 short sentences, no markdown, no bullet lists, ' +
   'no tables, no code blocks, and no emoji. Spell out anything that must be heard ' +
   'clearly. Keep it brief — the user can always ask for more.';
-
-/**
- * Opening-turn instruction for inbound console calls (#1596). Appended to the
- * spoken-turn system prompt so Curia greets first; lean on outbound-context and
- * the time block when present. Not used for Curia-initiated outbound calls.
- */
-export const VOICE_GREETING_INSTRUCTION =
-  'The principal just called and joined the line. Open the conversation naturally ' +
-  'and briefly — a short spoken greeting appropriate to the time of day. If active ' +
-  'outbound context is present, acknowledge it in one breath. Do not wait for them ' +
-  'to speak first. One or two short sentences only.';
-
-/** Synthetic user message that triggers the opening turn — never persisted to history. */
-export const VOICE_GREETING_USER_MESSAGE =
-  '[Call connected — open the conversation.]';
 
 /**
  * Honest-negative policy for spoken tool results. A failed or errored check must
@@ -270,13 +265,6 @@ export interface VoiceRuntimeConfig {
    * becomes a cross-channel audience leak.
    */
   outboundContextService?: OutboundContextService;
-  /**
-   * When true (default), run one LLM greeting turn after the transport connects
-   * so Curia opens inbound console calls (#1596). Set false in unit tests that
-   * script only user-turn LLM responses. Curia-initiated outbound calls are out
-   * of scope until an outbound-call path exists.
-   */
-  openingGreeting?: boolean;
 }
 
 /**
@@ -310,6 +298,13 @@ interface StartVoiceSessionParams {
   roomName: string;
   /** Agent participant JWT (identity 'curia-agent'). */
   agentToken: string;
+  /**
+   * When true (default), run one LLM greeting turn after the transport connects
+   * so Curia opens the call (#1596). Per-session — not a runtime-wide flag — so
+   * a future Curia-initiated outbound path can pass false without affecting
+   * inbound console calls on the same VoiceRuntime instance.
+   */
+  openingGreeting?: boolean;
 }
 
 interface ActiveSession {
@@ -443,8 +438,9 @@ export class VoiceRuntime {
 
       // Inbound console calls: Curia opens the conversation (#1596). Enqueued on
       // the turn chain so a barged-in greeting fully unwinds before the first
-      // user turn. Outbound (Curia-initiated) greets are deferred — no path yet.
-      if (this.config.openingGreeting !== false) {
+      // user turn. Per-session flag — outbound (Curia-initiated) callers pass
+      // openingGreeting: false when that path exists.
+      if (params.openingGreeting !== false) {
         this.enqueueGreetingTurn(session);
       }
 
@@ -553,73 +549,95 @@ export class VoiceRuntime {
    * Opening turn for inbound console calls (#1596). Speaks an LLM greeting
    * (context-aware via the outbound-context bridge + time block) before any
    * user speech. Barge-in cancels it the same way as a normal assistant turn.
-   * The synthetic user cue is never persisted; only the spoken reply is.
+   *
+   * On success, persists a synthetic leading user cue *and* the assistant
+   * greeting so later turns stay provider-safe (Anthropic requires user-first).
+   * The cue is never published as inbound.message; the console history endpoint
+   * filters it from display via isVoiceGreetingCueContent.
    */
   private async runGreetingTurn(session: ActiveSession): Promise<void> {
     if (session.ending) return;
 
-    if (!session.markedActive) {
-      session.markedActive = true;
-      try {
-        await this.config.sessionStore.updateStatus(session.sessionId, 'active');
-      } catch (err) {
-        this.log.warn({ sessionId: session.sessionId, err }, 'failed to mark voice session active');
-      }
-    }
-
+    // Register the controller BEFORE any await so a concurrent endSession can
+    // abort this turn (otherwise updateStatus yields with currentController
+    // still null and a phantom greeting can persist after hangup).
     const controller = new AbortController();
     session.currentController = controller;
     session.llmActive = true;
 
-    const greetingStartedAt = Date.now();
-    let ttfaRecorded = false;
-    const onSpeechText = this.createSpeechHandler(session, controller, {
-      onFirstAudio: () => {
-        if (ttfaRecorded) return;
-        ttfaRecorded = true;
-        this.log.debug(
-          { sessionId: session.sessionId, 'voice.greeting_ttfa_ms': Date.now() - greetingStartedAt },
-          'voice greeting time-to-first-audio',
-        );
-      },
-    });
-
-    const priorHistory = await this.loadTurnHistory(session);
-    const systemPrompt = await this.buildTurnSystemPrompt();
-    const messages: Message[] = [
-      { role: 'system', content: `${systemPrompt}\n\n${VOICE_GREETING_INSTRUCTION}` },
-      ...priorHistory,
-      { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
-    ];
-
-    // No tools on the greeting — keep the open short and latency-tight; outbound
-    // context is already in the system prompt when present.
-    const runner = new VoiceTurnRunner({
-      provider: this.config.llm,
-      model: this.config.model,
-      logger: this.log,
-      onSpeechText,
-    });
-
     try {
-      const result = await runner.runTurn({ messages, signal: controller.signal });
-      if (!result.aborted && result.finalText.length > 0) {
-        session.history.push({ role: 'assistant', content: result.finalText });
-        if (session.history.length > MAX_HISTORY_MESSAGES) {
-          session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
+      if (!session.markedActive) {
+        session.markedActive = true;
+        try {
+          await this.config.sessionStore.updateStatus(session.sessionId, 'active');
+        } catch (err) {
+          this.log.warn({ sessionId: session.sessionId, err }, 'failed to mark voice session active');
         }
-        if (this.config.workingMemory) {
-          try {
-            await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
-              role: 'assistant',
-              content: result.finalText,
-            });
-          } catch (err) {
-            this.log.warn(
-              { sessionId: session.sessionId, err },
-              'failed to persist voice greeting to working memory',
-            );
-          }
+      }
+
+      if (session.ending || controller.signal.aborted) return;
+
+      const priorHistory = await this.loadTurnHistory(session);
+      if (session.ending || controller.signal.aborted) return;
+
+      const greetingStartedAt = Date.now();
+      let ttfaRecorded = false;
+      const onSpeechText = this.createSpeechHandler(session, controller, {
+        onFirstAudio: () => {
+          if (ttfaRecorded) return;
+          ttfaRecorded = true;
+          this.log.debug(
+            { sessionId: session.sessionId, 'voice.greeting_ttfa_ms': Date.now() - greetingStartedAt },
+            'voice greeting time-to-first-audio',
+          );
+        },
+      });
+
+      const systemPrompt = await this.buildTurnSystemPrompt();
+      if (session.ending || controller.signal.aborted) return;
+
+      const messages: Message[] = [
+        { role: 'system', content: `${systemPrompt}\n\n${VOICE_GREETING_INSTRUCTION}` },
+        ...priorHistory,
+        { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
+      ];
+
+      // No tools on the greeting — keep the open short and latency-tight; outbound
+      // context is already in the system prompt when present.
+      const runner = new VoiceTurnRunner({
+        provider: this.config.llm,
+        model: this.config.model,
+        logger: this.log,
+        onSpeechText,
+      });
+
+      const result = await runner.runTurn({ messages, signal: controller.signal });
+      if (result.aborted || session.ending || result.finalText.length === 0) return;
+
+      // Persist cue + greeting together so history stays user-first for every
+      // subsequent provider call (Anthropic/Gemini reject a leading assistant).
+      session.history.push(
+        { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
+        { role: 'assistant', content: result.finalText },
+      );
+      if (session.history.length > MAX_HISTORY_MESSAGES) {
+        session.history.splice(0, session.history.length - MAX_HISTORY_MESSAGES);
+      }
+      if (this.config.workingMemory) {
+        try {
+          await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
+            role: 'user',
+            content: VOICE_GREETING_USER_MESSAGE,
+          });
+          await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
+            role: 'assistant',
+            content: result.finalText,
+          });
+        } catch (err) {
+          this.log.warn(
+            { sessionId: session.sessionId, err },
+            'failed to persist voice greeting to working memory',
+          );
         }
       }
     } catch (err) {
@@ -895,6 +913,11 @@ export class VoiceRuntime {
       }
     }
 
+    // Register controller before mark-active await so hangup can abort this turn.
+    const controller = new AbortController();
+    session.currentController = controller;
+    session.llmActive = true;
+
     // Flip DB status starting → active on the first real turn.
     if (!session.markedActive) {
       session.markedActive = true;
@@ -905,9 +928,13 @@ export class VoiceRuntime {
       }
     }
 
-    const controller = new AbortController();
-    session.currentController = controller;
-    session.llmActive = true;
+    if (session.ending || controller.signal.aborted) {
+      session.llmActive = false;
+      if (session.currentController === controller) {
+        session.currentController = null;
+      }
+      return;
+    }
 
     const userTurnEndAt = Date.now();
     let ttfaRecorded = false;
@@ -959,6 +986,14 @@ export class VoiceRuntime {
       userMessage,
     ];
 
+    if (session.ending || controller.signal.aborted) {
+      session.llmActive = false;
+      if (session.currentController === controller) {
+        session.currentController = null;
+      }
+      return;
+    }
+
     const onSpeechText = this.createSpeechHandler(session, controller, {
       onFirstAudio: () => {
         if (ttfaRecorded) return;
@@ -984,7 +1019,7 @@ export class VoiceRuntime {
 
     try {
       const result = await runner.runTurn({ messages, signal: controller.signal });
-      if (!result.aborted && result.finalText.length > 0) {
+      if (!result.aborted && !session.ending && result.finalText.length > 0) {
         // Append only the completed assistant reply (user was already pushed).
         session.history.push({ role: 'assistant', content: result.finalText });
         if (session.history.length > MAX_HISTORY_MESSAGES) {
