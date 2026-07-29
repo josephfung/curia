@@ -134,12 +134,15 @@ export function classifyError(err: unknown, source: string): AgentError {
 
   // 3. AbortSignal timeout / abort DOMExceptions. `.code` is numeric here, so
   // step 2 cannot see them — use the stable Error.name discriminant (#1597).
-  if (type === 'UNKNOWN' && err instanceof Error) {
-    const abortType = ABORT_NAME_MAP[err.name];
-    if (abortType) {
-      type = abortType;
-      context.abortName = err.name;
-    }
+  // Object.hasOwn: a bare map lookup walks Object.prototype, so a weird
+  // err.name like `toString` must not resolve to an inherited function.
+  if (
+    type === 'UNKNOWN'
+    && err instanceof Error
+    && Object.hasOwn(ABORT_NAME_MAP, err.name)
+  ) {
+    type = ABORT_NAME_MAP[err.name]!;
+    context.abortName = err.name;
   }
 
   // 4. Prefer an AgentError already attached by a DB call site (#1381).

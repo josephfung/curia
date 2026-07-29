@@ -114,6 +114,15 @@ describe('classifyError', () => {
     expect(result.context.abortName).toBe('AbortError');
   });
 
+  it('does not treat inherited Object.prototype names as abort types', () => {
+    const err = new Error('prototype pollution of Error.name');
+    err.name = 'toString';
+    const result = classifyError(err, 'test');
+    expect(result.type).toBe('UNKNOWN');
+    expect(result.retryable).toBe(false);
+    expect(result.context.abortName).toBeUndefined();
+  });
+
   it('classifies ECONNREFUSED as PROVIDER_ERROR', () => {
     const err = Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
     const result = classifyError(err, 'anthropic');

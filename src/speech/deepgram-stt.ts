@@ -309,6 +309,11 @@ export class DeepgramSttProvider implements SpeechToTextProvider, BatchSpeechToT
     });
 
     if (!response.ok) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Best-effort drain so undici does not pin the socket on error paths.
+      }
       throw prerecordedResponseError(response);
     }
 

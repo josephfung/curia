@@ -191,13 +191,31 @@ describe('CartesiaTtsProvider', () => {
       });
     });
 
-    it('throws TtsHttpError on non-2xx responses', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('bad', { status: 503 })));
-      const provider = new CartesiaTtsProvider('cartesia-key', createSilentLogger(), 'voice-1');
+  it('throws TtsHttpError on non-2xx responses', async () => {
+    const cancel = vi.fn(async () => {});
+    const body = {
+      getReader() {
+        return {
+          async read() {
+            return { done: true as const };
+          },
+          async cancel() {},
+          releaseLock() {},
+        };
+      },
+      cancel,
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      body,
+    }));
+    const provider = new CartesiaTtsProvider('cartesia-key', createSilentLogger(), 'voice-1');
 
-      await expect(provider.synthesizeToFile({ text: 'hello', format: 'mp3' }))
-        .rejects.toMatchObject({ name: 'TtsHttpError', statusCode: 503 });
-    });
+    await expect(provider.synthesizeToFile({ text: 'hello', format: 'mp3' }))
+      .rejects.toMatchObject({ name: 'TtsHttpError', statusCode: 503 });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 
     it('rejects blank text before calling the network', async () => {
       const fetchMock = vi.fn();
