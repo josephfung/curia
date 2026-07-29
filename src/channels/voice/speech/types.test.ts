@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  BatchSpeechToTextProvider,
+  BatchTextToSpeechProvider,
   PcmFrame,
   SpeechToTextProvider,
   SttSession,
@@ -42,6 +44,25 @@ describe('speech provider types', () => {
       cancel() {},
     };
 
+    const batchStt: BatchSpeechToTextProvider = {
+      id: 'structural-batch-stt',
+      async transcribeFile() {
+        return { text: 'from file', confidence: 0.8 };
+      },
+    };
+
+    const batchTts: BatchTextToSpeechProvider = {
+      id: 'structural-batch-tts',
+      async synthesizeToFile(opts) {
+        return {
+          bytes: new Uint8Array([1]),
+          format: opts.format,
+          contentType: opts.format === 'mp3' ? 'audio/mpeg' : 'audio/wav',
+          sampleRate: 24000,
+        };
+      },
+    };
+
     const started = await stt.startSession({ sampleRate: 16000 });
     started.onTranscript(event => events.push(event));
     started.sendAudio(frame);
@@ -53,5 +74,13 @@ describe('speech provider types', () => {
 
     expect(events).toEqual([{ text: 'hello', isFinal: true, speechFinal: true, confidence: 0.9 }]);
     expect(frames).toEqual([frame]);
+    expect(await batchStt.transcribeFile({ audio: new Uint8Array([1]) })).toEqual({
+      text: 'from file',
+      confidence: 0.8,
+    });
+    expect(await batchTts.synthesizeToFile({ text: 'hi', format: 'wav' })).toMatchObject({
+      format: 'wav',
+      contentType: 'audio/wav',
+    });
   });
 });

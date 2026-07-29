@@ -132,4 +132,80 @@ describe('CartesiaTtsProvider', () => {
     expect(second.done).toBe(true);
     expect(cancelCalled).toBe(true);
   });
+
+  describe('synthesizeToFile', () => {
+    it('posts for an mp3 container and buffers the encoded body', async () => {
+      const audioBytes = new Uint8Array([0xff, 0xfb, 0x10, 0x00]);
+      const fetchMock = vi.fn().mockResolvedValue(new Response(
+        streamFromChunks([audioBytes.slice(0, 2), audioBytes.slice(2)]),
+        { status: 200 },
+      ));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const provider = new CartesiaTtsProvider('cartesia-key', createSilentLogger(), 'voice-1');
+      const result = await provider.synthesizeToFile({
+        text: 'hello',
+        format: 'mp3',
+        sampleRate: 24000,
+        bitRate: 128000,
+      });
+
+      expect(result).toEqual({
+        bytes: audioBytes,
+        format: 'mp3',
+        contentType: 'audio/mpeg',
+        sampleRate: 24000,
+      });
+
+      const [, init] = fetchMock.mock.calls[0]!;
+      expect(JSON.parse(init.body as string)).toEqual({
+        model_id: 'sonic-3.5',
+        transcript: 'hello',
+        voice: { mode: 'id', id: 'voice-1' },
+        output_format: {
+          container: 'mp3',
+          sample_rate: 24000,
+          bit_rate: 128000,
+        },
+      });
+    });
+
+    it('requests wav with pcm_s16le encoding', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response(
+        streamFromChunks([new Uint8Array([82, 73, 70, 70])]),
+        { status: 200 },
+      ));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const provider = new CartesiaTtsProvider('cartesia-key', createSilentLogger(), 'voice-1');
+      const result = await provider.synthesizeToFile({ text: 'hi', format: 'wav' });
+
+      expect(result.contentType).toBe('audio/wav');
+      expect(result.format).toBe('wav');
+      const [, init] = fetchMock.mock.calls[0]!;
+      expect(JSON.parse(init.body as string).output_format).toEqual({
+        container: 'wav',
+        encoding: 'pcm_s16le',
+        sample_rate: 24000,
+      });
+    });
+
+    it('throws TtsHttpError on non-2xx responses', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('bad', { status: 503 })));
+      const provider = new CartesiaTtsProvider('cartesia-key', createSilentLogger(), 'voice-1');
+
+      await expect(provider.synthesizeToFile({ text: 'hello', format: 'mp3' }))
+        .rejects.toMatchObject({ name: 'TtsHttpError', statusCode: 503 });
+    });
+
+    it('rejects blank text before calling the network', async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const provider = new CartesiaTtsProvider('cartesia-key', createSilentLogger(), 'voice-1');
+
+      await expect(provider.synthesizeToFile({ text: '   ', format: 'mp3' }))
+        .rejects.toThrow('non-empty text');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

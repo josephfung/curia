@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSilentLogger } from '../../../logger.js';
 import { DeepgramSttProvider } from './deepgram-stt.js';
-import type { SttTranscriptEvent } from './types.js';
+import { SttHttpError, type SttTranscriptEvent } from './types.js';
 
 type MockSocketPayload = string | Uint8Array;
 
@@ -151,5 +151,69 @@ describe('DeepgramSttProvider', () => {
     socket.fail('auth failed');
 
     await expect(sessionPromise).rejects.toThrow('auth failed');
+  });
+
+  describe('transcribeFile', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('posts audio bytes to Deepgram prerecorded REST and returns the transcript', async () => {
+      const audio = new Uint8Array([1, 2, 3, 4]);
+      const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+        metadata: { duration: 1.25 },
+        results: {
+          channels: [{ alternatives: [{ transcript: 'hello world', confidence: 0.91 }] }],
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
+      const result = await provider.transcribeFile({
+        audio,
+        contentType: 'audio/mp4',
+        language: 'en',
+      });
+
+      expect(result).toEqual({ text: 'hello world', confidence: 0.91, durationSeconds: 1.25 });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const [url, init] = fetchMock.mock.calls[0]!;
+      const parsedUrl = new URL(url as string);
+      expect(parsedUrl.origin).toBe('https://api.deepgram.com');
+      expect(parsedUrl.pathname).toBe('/v1/listen');
+      expect(parsedUrl.searchParams.get('model')).toBe('nova-3');
+      expect(parsedUrl.searchParams.get('smart_format')).toBe('true');
+      expect(parsedUrl.searchParams.get('language')).toBe('en');
+      expect(init.method).toBe('POST');
+      expect(init.headers).toMatchObject({
+        Authorization: 'Token dg-key',
+        'Content-Type': 'audio/mp4',
+      });
+      expect(init.body).toEqual(audio);
+    });
+
+    it('throws SttHttpError on non-2xx responses', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('nope', { status: 401 })));
+      const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
+
+      try {
+        await provider.transcribeFile({ audio: new Uint8Array([1]) });
+        expect.unreachable('expected SttHttpError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(SttHttpError);
+        expect((err as SttHttpError).statusCode).toBe(401);
+        expect((err as SttHttpError).message).toBe('Deepgram STT request failed with HTTP 401');
+      }
+    });
+
+    it('rejects empty audio before calling the network', async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const provider = new DeepgramSttProvider('dg-key', createSilentLogger());
+
+      await expect(provider.transcribeFile({ audio: new Uint8Array() }))
+        .rejects.toThrow('non-empty audio');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 });

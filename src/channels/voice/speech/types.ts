@@ -31,6 +31,35 @@ export interface SpeechToTextProvider {
   startSession(opts: SttSessionOptions): Promise<SttSession>;
 }
 
+/**
+ * Options for one-shot (prerecorded) transcription of a finished audio file
+ * — e.g. a Signal/Slack voice note. Distinct from the streaming session path.
+ */
+export interface TranscribeFileOptions {
+  /** Raw audio bytes (any Deepgram-supported container: m4a, ogg/opus, mp3, wav, …). */
+  audio: Uint8Array;
+  /** Content-Type hint for the provider (e.g. `audio/mp4`, `audio/ogg`). */
+  contentType?: string;
+  language?: string;
+  signal?: AbortSignal;
+}
+
+export interface TranscribeFileResult {
+  text: string;
+  confidence?: number;
+  /** Audio duration reported by the provider, when available. */
+  durationSeconds?: number;
+}
+
+/**
+ * Batch STT entry point alongside {@link SpeechToTextProvider}'s streaming session.
+ * Implementations may also implement the streaming interface (Deepgram does both).
+ */
+export interface BatchSpeechToTextProvider {
+  readonly id: string;
+  transcribeFile(opts: TranscribeFileOptions): Promise<TranscribeFileResult>;
+}
+
 export interface TtsSynthesizeOptions {
   text: string;
   /** Opaque id for cancel() */
@@ -44,6 +73,55 @@ export interface TextToSpeechProvider {
   readonly id: string;
   synthesize(opts: TtsSynthesizeOptions): AsyncIterable<PcmFrame>;
   cancel(streamId: string): void;
+}
+
+/**
+ * Encoded audio containers for voice-note / file delivery.
+ *
+ * Cartesia's bytes API natively emits `mp3` and `wav` (plus raw PCM for the
+ * duplex path). Signal attachments and Slack uploads both accept these;
+ * native Signal voice-bubble AAC/`.m4a` can be layered later if needed.
+ */
+export type AudioFileFormat = 'mp3' | 'wav';
+
+export interface SynthesizeToFileOptions {
+  text: string;
+  format: AudioFileFormat;
+  voiceId?: string;
+  sampleRate?: number;
+  /** Required by Cartesia for `mp3` (e.g. 128000). Ignored for `wav`. */
+  bitRate?: number;
+  signal?: AbortSignal;
+}
+
+export interface SynthesizeToFileResult {
+  bytes: Uint8Array;
+  format: AudioFileFormat;
+  contentType: string;
+  sampleRate: number;
+}
+
+/**
+ * Batch TTS entry point alongside {@link TextToSpeechProvider}'s streaming PCM.
+ * Implementations may also implement the streaming interface (Cartesia does both).
+ */
+export interface BatchTextToSpeechProvider {
+  readonly id: string;
+  synthesizeToFile(opts: SynthesizeToFileOptions): Promise<SynthesizeToFileResult>;
+}
+
+/**
+ * Structured HTTP failure from an STT provider. Prefer this over embedding the
+ * status in `Error.message` so callers can classify without string matching.
+ */
+export class SttHttpError extends Error {
+  readonly statusCode: number;
+
+  constructor(statusCode: number, message?: string) {
+    super(message ?? `STT request failed with HTTP ${statusCode}`);
+    this.name = 'SttHttpError';
+    this.statusCode = statusCode;
+  }
 }
 
 /**

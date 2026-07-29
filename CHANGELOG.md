@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Speech media service** — batch Deepgram STT + Cartesia TTS-to-file for voice notes. (#1597)
 - **Voice opening greeting** — Curia speaks first on inbound console calls. (#1596)
 - **`async-offramp`** — voice hands heavyweight asks to async coordinator for principal callback. (#1614)
 - **ADR-038 (Accepted)** — shared-hardening; voice off-ramp shipped; text→streaming (#1563) unblocked. (#1595)

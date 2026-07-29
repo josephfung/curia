@@ -1,10 +1,14 @@
 import type { Logger } from '../../../logger.js';
-import type {
-  PcmFrame,
-  SpeechToTextProvider,
-  SttSession,
-  SttSessionOptions,
-  SttTranscriptEvent,
+import {
+  SttHttpError,
+  type BatchSpeechToTextProvider,
+  type PcmFrame,
+  type SpeechToTextProvider,
+  type SttSession,
+  type SttSessionOptions,
+  type SttTranscriptEvent,
+  type TranscribeFileOptions,
+  type TranscribeFileResult,
 } from './types.js';
 
 interface ProviderWebSocketMessageEvent {
@@ -32,11 +36,13 @@ type ProviderWebSocketConstructor = new (url: string, protocols?: string[]) => P
 const WEBSOCKET_OPEN = 1;
 const WEBSOCKET_CLOSING = 2;
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen';
+const DEEPGRAM_PRERECORDED_URL = 'https://api.deepgram.com/v1/listen';
 // Bound the socket lifecycle waits so a stalled connect (no onopen) or a silent
 // drop after Finalize/CloseStream (no onclose) can't hang the awaiting caller
 // (VoiceRuntime.startSession / session teardown) forever.
 const CONNECT_TIMEOUT_MS = 10_000;
 const CLOSE_TIMEOUT_MS = 5_000;
+const DEFAULT_PRERECORDED_CONTENT_TYPE = 'application/octet-stream';
 
 function getWebSocketConstructor(): ProviderWebSocketConstructor {
   const ctor = (globalThis as { WebSocket?: ProviderWebSocketConstructor }).WebSocket;
@@ -117,6 +123,41 @@ function closeDescription(event: ProviderWebSocketCloseEvent): string {
   const code = event.code ?? 'unknown';
   const reason = event.reason ? `: ${event.reason}` : '';
   return `Deepgram STT socket closed unexpectedly (${code}${reason})`;
+}
+
+function buildPrerecordedUrl(opts: Pick<TranscribeFileOptions, 'language'>): string {
+  const url = new URL(DEEPGRAM_PRERECORDED_URL);
+  url.searchParams.set('model', 'nova-3');
+  url.searchParams.set('punctuate', 'true');
+  url.searchParams.set('smart_format', 'true');
+  if (opts.language) {
+    url.searchParams.set('language', opts.language);
+  }
+  return url.toString();
+}
+
+function parsePrerecordedResult(data: unknown): TranscribeFileResult {
+  const payload = asRecord(data);
+  const results = asRecord(payload?.results);
+  const channels = Array.isArray(results?.channels) ? results.channels : [];
+  const firstChannel = asRecord(channels[0]);
+  const alternatives = Array.isArray(firstChannel?.alternatives) ? firstChannel.alternatives : [];
+  const firstAlternative = asRecord(alternatives[0]);
+  const text = typeof firstAlternative?.transcript === 'string' ? firstAlternative.transcript : '';
+
+  const metadata = asRecord(payload?.metadata);
+  const durationSeconds = typeof metadata?.duration === 'number' ? metadata.duration : undefined;
+  const confidence = parseConfidence(firstAlternative?.confidence);
+
+  return {
+    text,
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+  };
+}
+
+function prerecordedResponseError(response: Response): SttHttpError {
+  return new SttHttpError(response.status, `Deepgram STT request failed with HTTP ${response.status}`);
 }
 
 class DeepgramSttSession implements SttSession {
@@ -235,13 +276,51 @@ class DeepgramSttSession implements SttSession {
   }
 }
 
-export class DeepgramSttProvider implements SpeechToTextProvider {
+export class DeepgramSttProvider implements SpeechToTextProvider, BatchSpeechToTextProvider {
   readonly id = 'deepgram';
 
   constructor(
     private readonly apiKey: string,
     private readonly logger: Logger,
   ) {}
+
+  /**
+   * One-shot prerecorded transcription via Deepgram's REST `/v1/listen`.
+   * Used for finished voice-note files on text channels (Signal/Slack).
+   */
+  async transcribeFile(opts: TranscribeFileOptions): Promise<TranscribeFileResult> {
+    if (opts.audio.byteLength === 0) {
+      throw new Error('Deepgram STT transcribeFile requires non-empty audio');
+    }
+
+    // Copy into a plain ArrayBuffer-backed Uint8Array so fetch BodyInit typing
+    // accepts it (SharedArrayBuffer-backed views are rejected by TS lib dom).
+    const body = new Uint8Array(opts.audio);
+
+    const response = await fetch(buildPrerecordedUrl(opts), {
+      method: 'POST',
+      headers: {
+        Authorization: `Token ${this.apiKey}`,
+        'Content-Type': opts.contentType ?? DEFAULT_PRERECORDED_CONTENT_TYPE,
+      },
+      body,
+      signal: opts.signal,
+    });
+
+    if (!response.ok) {
+      throw prerecordedResponseError(response);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = await response.json();
+    } catch (err) {
+      this.logger.warn({ err }, 'Deepgram STT prerecorded response was not JSON');
+      throw new Error('Deepgram STT prerecorded response was not JSON');
+    }
+
+    return parsePrerecordedResult(parsed);
+  }
 
   async startSession(opts: SttSessionOptions): Promise<SttSession> {
     const WebSocketCtor = getWebSocketConstructor();
