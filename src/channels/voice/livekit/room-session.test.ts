@@ -1,32 +1,67 @@
 // room-session.test.ts — unit tests for LiveKitRoomSession.
 //
-// @livekit/rtc-node is a native addon loaded lazily. Tests mock the dynamic
-// import so no native binary is needed. Full integration (connect / audio / teardown
-// on real events) requires the native binary and is out of scope for unit tests;
-// these cover the observable config wiring that the ParticipantDisconnected handler
-// depends on (#1598 blocker 2 fix).
+// @livekit/rtc-node is a native addon loaded lazily via dynamic import() inside
+// connect(). Tests mock the package so no native binary is needed, and drive
+// the real ParticipantDisconnected handler — the regression that previously
+// silently broke session teardown when LiveKit identity changed (#1598).
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import pino from 'pino';
-import type { LiveKitRoomSessionConfig } from './room-session.js';
+import { LiveKitRoomSession } from './room-session.js';
 
 const logger = pino({ level: 'silent' });
 
-vi.mock('@livekit/rtc-node', () => ({
-  Room: class {},
-  RoomEvent: { TrackSubscribed: 'TrackSubscribed', ParticipantDisconnected: 'ParticipantDisconnected', Disconnected: 'Disconnected' },
-  TrackKind: { KIND_AUDIO: 1 },
-  TrackSource: { SOURCE_MICROPHONE: 0 },
-  AudioSource: class { close = vi.fn(); captureFrame = vi.fn(); },
-  LocalAudioTrack: class { static createAudioTrack = vi.fn(() => ({})); close = vi.fn(); },
-  AudioStream: class { getReader() { return { read: vi.fn(async () => ({ done: true })), releaseLock: vi.fn(), cancel: vi.fn() }; } },
-  AudioFrame: class {},
-  TrackPublishOptions: class {},
+// vi.mock is hoisted — declare the shared handler map with vi.hoisted() to avoid TDZ.
+const { handlers } = vi.hoisted(() => ({
+  handlers: new Map<string, (p: unknown) => void>(),
 }));
 
-describe('LiveKitRoomSession — callerIdentity config field (#1598)', () => {
-  it('stores callerIdentity when provided', async () => {
-    const { LiveKitRoomSession } = await import('./room-session.js');
+vi.mock('@livekit/rtc-node', () => ({
+  Room: class {
+    localParticipant = { publishTrack: vi.fn(async () => undefined) };
+    on(event: string, cb: (p: unknown) => void) {
+      handlers.set(event, cb);
+      return this;
+    }
+    connect = vi.fn(async () => undefined);
+    disconnect = vi.fn(async () => undefined);
+  },
+  RoomEvent: {
+    TrackSubscribed: 'TrackSubscribed',
+    ParticipantDisconnected: 'ParticipantDisconnected',
+    Disconnected: 'Disconnected',
+  },
+  TrackKind: { KIND_AUDIO: 1 },
+  TrackSource: { SOURCE_MICROPHONE: 0 },
+  AudioSource: class {
+    close = vi.fn(async () => undefined);
+    captureFrame = vi.fn(async () => undefined);
+  },
+  LocalAudioTrack: class {
+    close = vi.fn(async () => undefined);
+    static createAudioTrack = vi.fn(() => new (this as unknown as { new (): unknown })());
+  },
+  AudioStream: class {
+    getReader() {
+      return {
+        read: vi.fn(async () => ({ done: true, value: undefined })),
+        releaseLock: vi.fn(),
+        cancel: vi.fn(async () => undefined),
+      };
+    }
+  },
+  AudioFrame: class {},
+  TrackPublishOptions: class {
+    constructor(_opts: unknown) {}
+  },
+}));
+
+describe('LiveKitRoomSession — ParticipantDisconnected teardown (#1598)', () => {
+  beforeEach(() => {
+    handlers.clear();
+  });
+
+  it('fires onClose when the resolved caller identity disconnects', async () => {
     const uuid = '11111111-1111-1111-1111-111111111111';
     const session = new LiveKitRoomSession({
       url: 'wss://livekit.test',
@@ -34,28 +69,60 @@ describe('LiveKitRoomSession — callerIdentity config field (#1598)', () => {
       callerIdentity: uuid,
       logger,
     });
-    expect((session as unknown as { config: LiveKitRoomSessionConfig }).config.callerIdentity).toBe(uuid);
+    const closed: string[] = [];
+    session.onClose(r => closed.push(r));
+    await session.connect();
+
+    handlers.get('ParticipantDisconnected')!({ identity: uuid });
+    expect(closed).toEqual(['principal_disconnected']);
   });
 
-  it('leaves callerIdentity undefined when omitted (connect() falls back to "principal")', async () => {
-    const { LiveKitRoomSession } = await import('./room-session.js');
+  it('ignores a disconnect from any other participant identity', async () => {
+    const uuid = '11111111-1111-1111-1111-111111111111';
     const session = new LiveKitRoomSession({
       url: 'wss://livekit.test',
       token: 'tok',
+      callerIdentity: uuid,
       logger,
     });
-    // Verify the fallback path: undefined → 'principal' via `?? 'principal'` in connect()
-    expect((session as unknown as { config: LiveKitRoomSessionConfig }).config.callerIdentity).toBeUndefined();
+    const closed: string[] = [];
+    session.onClose(r => closed.push(r));
+    await session.connect();
+
+    handlers.get('ParticipantDisconnected')!({ identity: 'curia-agent' });
+    expect(closed).toEqual([]);
   });
 
-  it('onClose callbacks are registered and called exactly once per close', async () => {
-    const { LiveKitRoomSession } = await import('./room-session.js');
-    const session = new LiveKitRoomSession({ url: 'wss://livekit.test', token: 'tok', logger });
-    const reasons: string[] = [];
-    session.onClose(r => reasons.push(r));
-    // emitClose is private; trigger via disconnect() path — disconnect() sets disconnecting=true
-    // before emitting so it won't fire onClose. Instead call the internal path directly.
-    // We verify the callback list is populated (integration of onClose registration).
-    expect((session as unknown as { closeCallbacks: unknown[] }).closeCallbacks).toHaveLength(1);
+  it('does not fire onClose for the literal "principal" when callerIdentity is a contact id', async () => {
+    // Sanity: the exact pre-#1598 regression — comparing against the hardcoded
+    // 'principal' string while the minted identity is a UUID — must not match.
+    const uuid = '22222222-2222-2222-2222-222222222222';
+    const session = new LiveKitRoomSession({
+      url: 'wss://livekit.test',
+      token: 'tok',
+      callerIdentity: uuid,
+      logger,
+    });
+    const closed: string[] = [];
+    session.onClose(r => closed.push(r));
+    await session.connect();
+
+    handlers.get('ParticipantDisconnected')!({ identity: 'principal' });
+    expect(closed).toEqual([]);
+  });
+
+  it('fires onClose for RoomEvent.Disconnected', async () => {
+    const session = new LiveKitRoomSession({
+      url: 'wss://livekit.test',
+      token: 'tok',
+      callerIdentity: '11111111-1111-1111-1111-111111111111',
+      logger,
+    });
+    const closed: string[] = [];
+    session.onClose(r => closed.push(r));
+    await session.connect();
+
+    handlers.get('Disconnected')!(undefined);
+    expect(closed).toEqual(['room_disconnected']);
   });
 });

@@ -2618,9 +2618,13 @@ async function main(): Promise<void> {
           // liveTurn and originator come from the shared stampOriginator derivation —
           // one source of truth for the elevated gate instead of the prior literals.
           const { caller: sessionCaller } = ctx;
+          // CallerContext.role is a job role ('ceo', 'cfo', …), not systemRole.
+          // Prefer the resolved senderContext.role when available.
           const executionCaller = {
             contactId: sessionCaller.originator.contactId,
-            role: sessionCaller.originator.systemRole ?? 'unknown',
+            role: sessionCaller.senderContext.resolved
+              ? sessionCaller.senderContext.role
+              : null,
             channel: 'voice',
           };
           const result = await executionLayer.invoke(call.name, call.input, executionCaller, {

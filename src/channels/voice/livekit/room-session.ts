@@ -43,10 +43,10 @@ export interface LiveKitRoomSessionConfig {
   /**
    * LiveKit identity minted for the remote (human) participant — the value passed
    * to mintVoiceParticipantToken as `identity` in VoiceAdapter.createSession.
-   * Used to detect caller disconnect (ParticipantDisconnected teardown).
-   * Defaults to 'principal' for backward-compat (pre-#1598 sessions without this field).
+   * Required: the ParticipantDisconnected teardown handler compares against this
+   * so a missing/wrong value silently leaves STT sockets and active rows behind (#1598).
    */
-  callerIdentity?: string;
+  callerIdentity: string;
   /** Inbound (remote → STT) sample rate. Default 16000 (Deepgram-friendly). */
   inboundSampleRate?: number;
   /** Outbound (TTS → publish) sample rate. Default 24000 (Cartesia default). */
@@ -121,8 +121,8 @@ export class LiveKitRoomSession implements AudioTransport {
 
       // Caller closed the console tab / lost WebRTC — tear the Curia session down
       // so we don't leave STT sockets and an `active` voice_sessions row behind.
-      // callerIdentity is the resolved contact id (post-#1598) or 'principal' (legacy/compat).
-      const callerIdentity = this.config.callerIdentity ?? 'principal';
+      // callerIdentity is the resolved contact id minted in the caller's LiveKit token (#1598).
+      const callerIdentity = this.config.callerIdentity;
       room.on(rtc.RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
         if (participant.identity === callerIdentity) {
           this.log.info({ identity: participant.identity }, 'Caller left LiveKit room');

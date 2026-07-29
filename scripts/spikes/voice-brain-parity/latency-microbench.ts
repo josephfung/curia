@@ -52,6 +52,7 @@ function prompts(): Record<string, string> {
     identityBlock: fixtures.identityBlock,
     specialistRoster: fixtures.specialistRoster,
     timeContextBlock: time,
+    audience: { liveTurn: true },
   });
   const shared = [
     fixtures.identityBlock,

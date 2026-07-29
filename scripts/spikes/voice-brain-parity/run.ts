@@ -150,6 +150,7 @@ function buildPrompts(fixtures: Fixtures, outbound: string | null): Record<ArmId
     specialistRoster: fixtures.specialistRoster,
     outboundContextBlock: outbound,
     timeContextBlock: timeBlock,
+    audience: { liveTurn: true },
   });
 
   // Shared-hardening: production baseline modules (date-resolve + async
