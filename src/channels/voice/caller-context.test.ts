@@ -77,6 +77,43 @@ describe('resolveConsoleVoiceCaller', () => {
     expect(caller.originator.channel).toBe('voice');
     expect(caller.originator.tier).toBe('principal');
   });
+
+  it('falls back to synthetic principal when findContactBySystemRole returns null', async () => {
+    const contactService = {
+      findContactBySystemRole: vi.fn().mockResolvedValue(null),
+    } as unknown as ContactService;
+    const warnLogger = pino({ level: 'silent' });
+    const warnSpy = vi.spyOn(warnLogger, 'warn');
+
+    const caller = await resolveConsoleVoiceCaller({ contactService, logger: warnLogger });
+    expect(caller.liveTurn).toBe(true);
+    expect(caller.contactId).toBe('primary-user');
+    expect(caller.originator.systemRole).toBe('principal');
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('falls back to synthetic principal on a DB error (SQLSTATE code), logs a warning', async () => {
+    const dbError = Object.assign(new Error('connection reset'), { code: '08006' });
+    const contactService = {
+      findContactBySystemRole: vi.fn().mockRejectedValue(dbError),
+    } as unknown as ContactService;
+    const warnLogger = pino({ level: 'silent' });
+    const warnSpy = vi.spyOn(warnLogger, 'warn');
+
+    const caller = await resolveConsoleVoiceCaller({ contactService, logger: warnLogger });
+    expect(caller.liveTurn).toBe(true);
+    expect(caller.contactId).toBe('primary-user');
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('re-throws non-DB errors (e.g. TypeError) so they are not silently promoted to principal', async () => {
+    const typeError = new TypeError('unexpected undefined');
+    const contactService = {
+      findContactBySystemRole: vi.fn().mockRejectedValue(typeError),
+    } as unknown as ContactService;
+
+    await expect(resolveConsoleVoiceCaller({ contactService, logger })).rejects.toThrow('unexpected undefined');
+  });
 });
 
 describe('resolveVoiceCallerFromToken', () => {
@@ -133,6 +170,33 @@ describe('resolveVoiceCallerFromToken', () => {
     const result = await resolveVoiceCallerFromToken({
       contactResolver,
       callerToken: 'unknown-token',
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'unknown_sender' });
+  });
+
+  it('rejects a resolved but blocked-tier contact (mirrors dispatcher blocked-sender gate)', async () => {
+    const blockedSender: SenderContext = {
+      resolved: true,
+      contactId: PARTNER_ID,
+      displayName: 'Blocked Person',
+      role: 'partner',
+      systemRole: null,
+      verified: true,
+      kgNodeId: null,
+      knowledgeSummary: '',
+      authorization: null,
+      contactConfidence: 0.9,
+      tier: 'blocked',
+      kind: 'person',
+    };
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue(blockedSender),
+    } as unknown as ContactResolver;
+
+    const result = await resolveVoiceCallerFromToken({
+      contactResolver,
+      callerToken: 'blocked-token',
     });
 
     expect(result).toEqual({ ok: false, reason: 'unknown_sender' });
