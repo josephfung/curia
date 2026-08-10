@@ -297,50 +297,69 @@ export class AnthropicProvider implements LLMProvider {
       const { createParams, signal } = built;
       const stream = this.client.messages.stream(createParams, signal ? { signal } : undefined);
 
-      for await (const event of stream) {
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta' && event.delta.text) {
-          yield { type: 'text_delta', text: event.delta.text };
+      // Guarantee the underlying fetch Response / ReadableStream is released on every
+      // exit path — normal completion, a thrown error, an AbortSignal firing, or a
+      // consumer that stops iterating this generator early (which runs this finally via
+      // the generator's .return()). An undrained SDK stream retains its response
+      // ArrayBuffers on the V8 heap; under the scheduler's steady background LLM calls
+      // that accumulates until an OOM restart (#1648; upstream anthropics/claude-code#33380).
+      // MessageStream.abort() is idempotent — calling it after finalMessage() is a no-op.
+      try {
+        for await (const event of stream) {
+          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta' && event.delta.text) {
+            yield { type: 'text_delta', text: event.delta.text };
+          }
         }
-      }
 
-      const response = await stream.finalMessage();
-      this.logger.debug(
-        {
-          model,
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-          cacheCreationTokens: response.usage.cache_creation_input_tokens ?? 0,
-          cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
-          stopReason: response.stop_reason,
-        },
-        'Anthropic streaming API call completed',
-      );
+        const response = await stream.finalMessage();
+        this.logger.debug(
+          {
+            model,
+            inputTokens: response.usage.input_tokens,
+            outputTokens: response.usage.output_tokens,
+            cacheCreationTokens: response.usage.cache_creation_input_tokens ?? 0,
+            cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+            stopReason: response.stop_reason,
+          },
+          'Anthropic streaming API call completed',
+        );
 
-      const usage = this.usageFromResponse(response);
-      const provenance = this.provenanceFromResponse(response, model);
-      const toolCalls = this.toolCallsFromResponse(response);
-      const content = this.textFromResponse(response);
+        const usage = this.usageFromResponse(response);
+        const provenance = this.provenanceFromResponse(response, model);
+        const toolCalls = this.toolCallsFromResponse(response);
+        const content = this.textFromResponse(response);
 
-      if (toolCalls.length > 0) {
+        if (toolCalls.length > 0) {
+          yield {
+            type: 'tool_use',
+            toolCalls,
+            content: content || undefined,
+            usage,
+            provenance,
+          };
+          return;
+        }
+
+        if (!content) {
+          this.logger.error({ model, stopReason: response.stop_reason }, 'LLM returned empty streamed text response');
+        }
         yield {
-          type: 'tool_use',
-          toolCalls,
-          content: content || undefined,
+          type: 'message_end',
+          content,
           usage,
           provenance,
         };
-        return;
+      } finally {
+        // Best-effort cleanup; never let an abort() failure mask the real result or error.
+        try {
+          stream.abort();
+        } catch (abortErr) {
+          // warn (not debug): abort() IS the leak fix, so a persistent failure here means
+          // the stream leak has silently returned — we want that visible in prod, and it
+          // only ever logs when cleanup genuinely fails (never on the happy path).
+          this.logger.warn({ abortErr, model }, 'Anthropic stream cleanup abort() failed');
+        }
       }
-
-      if (!content) {
-        this.logger.error({ model, stopReason: response.stop_reason }, 'LLM returned empty streamed text response');
-      }
-      yield {
-        type: 'message_end',
-        content,
-        usage,
-        provenance,
-      };
     } catch (err) {
       this.logger.error({ err, model }, 'Anthropic streaming API call failed');
       yield { type: 'error', error: classifyError(err, 'anthropic') };
