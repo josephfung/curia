@@ -7,7 +7,7 @@
 # Pinned-Dependencies Docker finding on this line). Tag kept inline so Dependabot's
 # docker ecosystem (see .github/dependabot.yml) can read the pg16 version and bump
 # the digest within the major. Re-resolve the digest when intentionally moving pg majors.
-FROM pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+FROM pgvector/pgvector:pg16@sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-16-pgaudit \
