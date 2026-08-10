@@ -49,7 +49,7 @@
     "@fastify/static": "^10.1.2",
     "@ghostery/adblocker-playwright": "^2.18.1",
     "@livekit/rtc-node": "^0.13.31",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@slack/socket-mode": "^3.0.0",
     "@slack/web-api": "^8.0.0",
     "ajv": "^8.20.0",
