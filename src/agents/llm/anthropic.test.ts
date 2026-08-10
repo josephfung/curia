@@ -41,6 +41,10 @@ function makeStream(events: unknown[], finalMessage: unknown) {
       }
     },
     finalMessage: vi.fn().mockResolvedValue(finalMessage),
+    // The provider calls stream.abort() in a finally to release the underlying fetch
+    // Response/ReadableStream on every exit path (leak fix #1648). Mock it so streaming
+    // tests still pass and cleanup can be asserted.
+    abort: vi.fn(),
   };
 }
 
@@ -343,5 +347,71 @@ describe('AnthropicProvider — stream', () => {
     }));
 
     expect(mockStream.mock.calls[0]![1]).toEqual({ signal: controller.signal });
+  });
+
+  // Leak fix (#1648): the provider must release the underlying SDK MessageStream (its
+  // fetch Response/ReadableStream) on every exit path, or undrained streams retain their
+  // response ArrayBuffers on the heap. See anthropics/claude-code#33380.
+  const streamFinal = () => ({
+    id: 'msg_cleanup',
+    model: 'claude-sonnet-4-6',
+    content: [{ type: 'text', text: 'done' }],
+    usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    stop_reason: 'end_turn',
+  });
+
+  it('aborts the underlying stream after normal completion (releases the response buffer)', async () => {
+    const stream = makeStream(
+      [{ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } }],
+      streamFinal(),
+    );
+    mockStream.mockReturnValue(stream);
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await collectStream(provider.stream({ messages: [{ role: 'user', content: 'Hello' }], model: 'claude-sonnet-4-6' }));
+
+    expect(stream.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the underlying stream when the consumer stops iterating early', async () => {
+    const stream = makeStream(
+      [
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'a' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'b' } },
+      ],
+      streamFinal(),
+    );
+    mockStream.mockReturnValue(stream);
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    // Break after the first event: the async generator's finally must still run and
+    // abort the SDK stream, otherwise its Response buffer leaks.
+    const seen: LLMStreamEvent[] = [];
+    for await (const event of provider.stream({ messages: [{ role: 'user', content: 'Hello' }], model: 'claude-sonnet-4-6' })) {
+      seen.push(event);
+      break;
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(stream.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the underlying stream and yields an error when iteration throws', async () => {
+    const stream = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => Promise.reject(new Error('mid-stream boom')),
+        };
+      },
+      finalMessage: vi.fn(),
+      abort: vi.fn(),
+    };
+    mockStream.mockReturnValue(stream);
+
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({ messages: [{ role: 'user', content: 'Hello' }], model: 'claude-sonnet-4-6' }));
+
+    expect(stream.abort).toHaveBeenCalledTimes(1);
+    expect(events.at(-1)).toMatchObject({ type: 'error' });
   });
 });
