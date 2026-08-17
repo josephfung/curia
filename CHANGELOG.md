@@ -49,6 +49,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Ant Farm** — desk roster updates during scene boot are no longer dropped. (#1549)
 - **MCP bootstrap** — enabled servers with 0 tools now error-log and fail health. (#1500)
 - **Docker build** — flush shell hash after npm strip so the removal assertion stops false-failing publish. (#1568)
+- **Ant Farm SSE test** — force-close idle connections on teardown so fastify 5.11 doesn't hang `app.close()`. (#1642)
 
 ### Security
 

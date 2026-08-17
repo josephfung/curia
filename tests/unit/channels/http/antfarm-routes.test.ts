@@ -86,7 +86,10 @@ describe('antfarm routes', () => {
           return cleanup;
         }),
       } as unknown as EventRouter;
-      const app = Fastify();
+      // forceCloseConnections: fastify 5.11.1 (fastify/fastify#6889) stopped force-closing
+      // idle connections on close() by default, so the still-open SSE socket below would
+      // otherwise make app.close() hang waiting for a drain that never happens under fake timers.
+      const app = Fastify({ forceCloseConnections: true });
 
       await app.register(antfarmRoutes, {
         auditLogRepo: { findTimeline: vi.fn() } as unknown as AuditLogRepo,
