@@ -27,6 +27,7 @@ import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-re
 import { resolveSystemSnapshot } from './channels/http/routes/system.js';
 import { createPool } from './db/connection.js';
 import { DbAvailabilityMonitor } from './db/availability-monitor.js';
+import { MemorySampler } from './monitoring/memory-sampler.js';
 import { EventBus } from './bus/bus.js';
 import { AuditLogger } from './audit/logger.js';
 import { AuditLogRepo } from './audit/audit-log-repo.js';
@@ -2131,6 +2132,13 @@ async function main(): Promise<void> {
     );
   }
 
+  // MemorySampler — periodically logs process.memoryUsage() so the prod heap
+  // leak (#1650) is measurable without a heap snapshot: watch whether
+  // external/arrayBuffers (SDK/undici response buffers) or heapUsed (JS objects)
+  // is what grows. Cheap and safe on the RAM-constrained host.
+  const memorySampler = new MemorySampler({ logger });
+  memorySampler.start();
+
   // HealthService — observability layer for liveness probes and canary jobs (#434).
   // Requires: pool, bus, logger (always available), scheduler (just constructed),
   // mcpSessions (loaded at line 926), and modelRoutingConfig (from line 393).
@@ -3010,6 +3018,11 @@ async function main(): Promise<void> {
       dbAvailabilityMonitor.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping DB availability monitor during shutdown');
+    }
+    try {
+      memorySampler.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping memory sampler during shutdown');
     }
     // Purge temp files and stop the sweep timer before exit.
     if (tempFileStore) {
