@@ -69,6 +69,61 @@ describe('MemorySampler', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it('sample() never propagates even when the fallback warn() also throws', () => {
+    // Worst case under memory pressure (#1650): both info() and the guarded
+    // warn() fallback throw. The sampler must STILL not take down the process
+    // it is measuring — a second crash source would mask the real OOM signal.
+    const brokenLogger = {
+      info: () => {
+        throw new Error('info failed');
+      },
+      warn: () => {
+        throw new Error('warn failed');
+      },
+      error: () => {},
+      debug: () => {},
+      trace: () => {},
+      fatal: () => {},
+      child() {
+        return this;
+      },
+    };
+    const sampler = new MemorySampler({ logger: brokenLogger as unknown as Logger });
+
+    expect(() => sampler.sample()).not.toThrow();
+  });
+
+  it('start() does not abort bootstrap when the startup log throws — it still schedules sampling', () => {
+    // index.ts calls start() directly during bootstrap; a logging failure here
+    // must not propagate to main() and kill boot (#1650). start() must swallow
+    // the failed "started" line (and the failed baseline sample) and still arm
+    // the interval timer.
+    const infoThrows = {
+      info: () => {
+        throw new Error('startup log failed');
+      },
+      warn: vi.fn(),
+      error: () => {},
+      debug: () => {},
+      trace: () => {},
+      fatal: () => {},
+      child() {
+        return this;
+      },
+    };
+    const timer = fakeTimer();
+    const setIntervalFn = vi.fn(() => timer);
+    const sampler = new MemorySampler({
+      logger: infoThrows as unknown as Logger,
+      setIntervalFn: setIntervalFn as unknown as typeof setInterval,
+    });
+
+    expect(() => sampler.start()).not.toThrow();
+    // Continued past the failed log + failed baseline sample to arm the timer.
+    expect(setIntervalFn).toHaveBeenCalledTimes(1);
+    expect(timer.unref).toHaveBeenCalledTimes(1);
+  });
+
   it("start() emits a baseline sample immediately and schedules the interval (unref'd)", () => {
     const { logger, infos } = makeCapturingLogger();
     const timer = fakeTimer();
