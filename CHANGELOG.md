@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`MemorySampler`** — periodic `process.memoryUsage()` logging to diagnose heap growth in prod. (#1650)
 - **Speech media service** — top-level `src/speech/` batch STT/TTS for voice notes. (#1597)
 - **Voice opening greeting** — Curia speaks first on inbound console calls. (#1596)
 - **`async-offramp`** — voice hands heavyweight asks to async coordinator for principal callback. (#1614)
