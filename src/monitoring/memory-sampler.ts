@@ -51,7 +51,8 @@ export class MemorySampler {
    *  throw from the interval callback would be an uncaught exception (no
    *  uncaughtException handler exists) and would terminate the process — turning
    *  the diagnostic into a second crash source that masks the real OOM signal.
-   *  So we catch and log-and-continue instead of propagating. */
+   *  So a failed sample escalates to a *guarded* warn (still observable) and
+   *  never propagates. */
   sample(): void {
     try {
       const mem = process.memoryUsage();
@@ -67,16 +68,19 @@ export class MemorySampler {
         'Process memory sample',
       );
     } catch (err) {
-      // Loud but non-fatal: keep the failure observable without ever taking
-      // down the process under diagnosis.
-      this.log.warn({ err }, 'Memory sample failed — continuing');
+      // memoryUsage()/info() failed. Keep it observable via a *guarded* warn:
+      // the fallback log itself must not throw either, or we reintroduce the
+      // very crash path we are guarding against.
+      this.neverThrow(() => this.log.warn({ err }, 'Memory sample failed — continuing'));
     }
   }
 
   /** Start periodic sampling. Idempotent. */
   start(): void {
     if (this.timer !== null) return;
-    this.log.info({ intervalMs: this.intervalMs }, 'MemorySampler started');
+    // Guarded: index.ts calls start() directly during bootstrap, so a logging
+    // failure here must not propagate to main() and abort boot.
+    this.neverThrow(() => this.log.info({ intervalMs: this.intervalMs }, 'MemorySampler started'));
     // One immediate sample so the boot baseline is captured without waiting a
     // full interval.
     this.sample();
@@ -92,6 +96,31 @@ export class MemorySampler {
     if (this.timer === null) return;
     this.clearIntervalFn(this.timer);
     this.timer = null;
-    this.log.info('MemorySampler stopped');
+    this.neverThrow(() => this.log.info('MemorySampler stopped'));
+  }
+
+  /**
+   * Run a logging call that can never be allowed to throw.
+   *
+   * DELIBERATE, DOCUMENTED EXCEPTION to the repo rule that every catch must log,
+   * audit, and propagate (CLAUDE.md → Error Handling). Rationale, and the
+   * "audit path" for this exception:
+   *   - This is a best-effort diagnostic whose whole job is to stay alive on a
+   *     host that is already OOM-looping (#1650). Propagating a logging failure
+   *     would make it a SECOND crash source and mask the real OOM signal — the
+   *     opposite of its purpose.
+   *   - The thing that fails here is the logger itself, so there is no reliable
+   *     surface left to re-log on. Audit path: none, by design — a lost
+   *     telemetry line is acceptable data loss; a crashed process is not.
+   * Swallow at the lowest possible level so no caller (sample/start/stop) can be
+   * taken down by a log call.
+   */
+  private neverThrow(logCall: () => void): void {
+    try {
+      logCall();
+    } catch {
+      // Logger unusable (see method doc). Intentionally not re-logged or
+      // re-thrown: there is nothing left that could safely report it.
+    }
   }
 }
