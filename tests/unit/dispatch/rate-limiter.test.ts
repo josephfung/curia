@@ -156,7 +156,13 @@ describe('RateLimiter', () => {
     it('spares a sender whose window is still active when the sweep runs', async () => {
       const limiter = new RateLimiter({ windowMs: 60_000, maxPerSender: 1, maxGlobal: 100 });
 
-      // alice sends at t=0 (window [0, 60_000)).
+      // NOTE: t below is relative — vitest's fake clock starts at real wall-clock
+      // time, which is far larger than windowMs. That is load-bearing here: it makes
+      // the first checkSender stamp lastSweepAt and reset each sender's windowStart to
+      // "now" so the t=60_001 sweep sees bob's window as still active. Pinning the
+      // clock to a small base (e.g. vi.setSystemTime(0)) would break this test.
+
+      // alice sends at t≈0 (window [t, t+60_000)).
       expect(limiter.checkSender('alice')).toBe(true);
 
       // bob sends at t=30_000 (window [30_000, 90_000)) — no sweep yet this window.
