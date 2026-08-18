@@ -202,6 +202,11 @@ export class Scheduler {
       this.recoverStuckJobs().catch((err) => {
         this.logger.error({ err }, 'Unhandled error in recoverStuckJobs watchdog');
       });
+      // Reclaim burst counters for jobs that went terminal without the poller
+      // observing it (cancel/delete/suspend all mutate the DB directly) (#1664).
+      this.pruneStaleBurstCounts().catch((err) => {
+        this.logger.error({ err }, 'Unhandled error in pruneStaleBurstCounts watchdog');
+      });
     }, WATCHDOG_INTERVAL_MS);
 
     // Dream engine — background KG maintenance (decay, and future passes).
@@ -697,6 +702,14 @@ export class Scheduler {
               }
             }
           }
+
+          // One-shot jobs (no cron_expr) fire exactly once and never burst again,
+          // so their counter is dead weight the moment the run completes — drop it
+          // inline. Recurring jobs keep their counter (checkEveryNBursts spans runs)
+          // and are reclaimed by the watchdog sweep once they go terminal (#1664).
+          if (!job.cronExpr) {
+            this.burstCounts.delete(jobId);
+          }
         }
       }
 
@@ -961,6 +974,41 @@ export class Scheduler {
         }
       } catch (err) {
         this.logger.error({ err, jobId: row.id }, 'Failed to recover stuck job — will retry on next watchdog tick');
+      }
+    }
+  }
+
+  /**
+   * Evict burst counters for jobs that are no longer active recurring jobs.
+   *
+   * `burstCounts` is only meaningful for a pending/running **recurring** job between
+   * its runs — it drives checkEveryNBursts. One-shot completion is evicted inline in
+   * handleCompletion, but cancel, delete, and suspend all mutate the DB directly via
+   * SchedulerService without the poller ever seeing it, so those entries would live
+   * for the whole process lifetime. This sweep is the catch-all: it keeps only the
+   * counters whose job is still a pending/running recurring job and drops the rest.
+   * Runs on the watchdog cadence.
+   *
+   * Over-eviction is harmless: a wrongly-dropped counter simply restarts its N-burst
+   * window, and a missed drift check is explicitly not a security failure (see the
+   * burstCounts field declaration). (#1664)
+   */
+  async pruneStaleBurstCounts(): Promise<void> {
+    if (this.burstCounts.size === 0) return;
+
+    const ids = [...this.burstCounts.keys()];
+    const { rows } = await this.pool.query(
+      `SELECT id FROM scheduled_jobs
+        WHERE id = ANY($1::uuid[])
+          AND status IN ('pending', 'running')
+          AND cron_expr IS NOT NULL`,
+      [ids],
+    );
+    const live = new Set((rows as Array<{ id: string }>).map((r) => r.id));
+
+    for (const id of ids) {
+      if (!live.has(id)) {
+        this.burstCounts.delete(id);
       }
     }
   }
