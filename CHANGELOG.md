@@ -38,6 +38,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **MCP health probe** — liveness uses `ping()` not `listTools()`, ending a ~145 MB/hr validator leak. (#1663)
 - **`classifyError`** — `AbortSignal.timeout` / abort DOMExceptions map to `TIMEOUT`. (#1597)
 - **`delegate`** — calendar briefs must match same-turn date-resolve output. (#1612)
 - **Coordinator** — ambient bullpen mentions no longer bleed into scheduler jobs and leak to the principal. (#1609)

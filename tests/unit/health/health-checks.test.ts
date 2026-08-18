@@ -11,8 +11,8 @@ import {
 } from '../../../src/health/health-checks.js';
 import type { Logger } from '../../../src/logger.js';
 
-// Stub logger — all three probe functions (checkDb, checkSignal, checkMcpGoogleWorkspace)
-// now require a logger to warn on failure. Tests that don't care about log output pass this.
+// Stub logger — the probe functions (checkDb, checkSignal, checkMcpServers, ...)
+// require a logger to warn on failure. Tests that don't care about log output pass this.
 const stubLogger = { warn: () => {} } as unknown as Logger;
 
 describe('checkDb', () => {

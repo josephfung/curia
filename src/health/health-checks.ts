@@ -41,8 +41,19 @@ export interface BrowserServiceHealth {
 export interface McpSessionHealth {
   serverId: string;
   client: {
-    /** MCP SDK Client.listTools() — a lightweight round-trip that proves the subprocess is alive. */
-    listTools(): Promise<{ tools?: unknown[] }>;
+    /**
+     * MCP SDK `Client.ping()` — the protocol's liveness RPC. Proves the subprocess
+     * is alive with an empty-result JSON-RPC round-trip.
+     *
+     * Deliberately NOT `listTools()`: the SDK recompiles an Ajv validator for every
+     * tool's `outputSchema` on every `listTools()` call and retains it on a shared,
+     * process-lifetime Ajv instance (its cache is keyed by schema object reference,
+     * and each response is freshly parsed → cache miss every time). With the Docker
+     * healthcheck hitting `/api/health` every 30s, that leaked ~145 MB/hr and OOM-
+     * restarted prod (#1663). `ping()` returns no schemas, so it triggers no
+     * compilation. Tool discovery still uses `listTools()`, but only at boot.
+     */
+    ping(): Promise<unknown>;
   };
 }
 
@@ -203,10 +214,12 @@ export function checkBrowser(service: BrowserServiceHealth | undefined): CheckRe
  * Check every **enabled** MCP server that was attempted at boot (#1500).
  *
  * - Boot `zero_tools` / `unavailable` → fail (no live probe needed)
- * - Boot `ok` → live tools/list; fail if the call errors or returns 0 tools
+ * - Boot `ok` → live `ping()` liveness probe; fail if it errors or times out
  * - Disabled servers are absent from `serverStatuses` and never appear here
  *
- * Hard 3-second timeout per live probe.
+ * Hard 3-second timeout per live probe. The probe is `ping()`, not `listTools()`,
+ * so it triggers no MCP-SDK Ajv validator recompilation (the ~145 MB/hr leak, #1663).
+ * The boot-time `zero_tools` gate above still catches servers that expose no tools.
  */
 export async function checkMcpServers(
   serverStatuses: ReadonlyMap<string, McpServerBootStatus>,
@@ -231,14 +244,17 @@ export async function checkMcpServers(
       }
 
       try {
-        const toolList = await Promise.race([
-          session.client.listTools(),
+        // Liveness only: a resolved ping proves the subprocess is up and answering
+        // JSON-RPC. Zero-tools/unavailable servers were already failed by the boot
+        // gate above, so we don't re-count tools here (and must not — see the
+        // McpSessionHealth doc: listTools() leaks compiled validators, #1663).
+        await Promise.race([
+          session.client.ping(),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('timeout')), 3_000),
           ),
         ]);
-        const count = toolList.tools?.length ?? 0;
-        return [key, count > 0 ? 'ok' : 'fail'];
+        return [key, 'ok'];
       } catch (err) {
         logger.warn({ err, server: serverName }, 'checkMcpServers: MCP probe failed');
         return [key, 'fail'];
@@ -247,30 +263,6 @@ export async function checkMcpServers(
   );
 
   return Object.fromEntries(entries);
-}
-
-/**
- * @deprecated Prefer checkMcpServers. Kept as a thin wrapper for callers that
- * only care about google-workspace until they migrate.
- */
-export async function checkMcpGoogleWorkspace(
-  mcpSessions: McpSessionHealth[],
-  logger: Logger,
-): Promise<CheckResult> {
-  const session = mcpSessions.find(s => s.serverId === 'google-workspace');
-  if (!session) return 'skipped';
-  try {
-    const toolList = await Promise.race([
-      session.client.listTools(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 3_000),
-      ),
-    ]);
-    return (toolList.tools?.length ?? 0) > 0 ? 'ok' : 'fail';
-  } catch (err) {
-    logger.warn({ err }, 'checkMcpGoogleWorkspace: MCP probe failed');
-    return 'fail';
-  }
 }
 
 /** Outcome of the principal calendar grant probe, distinguishing auth failures. */
