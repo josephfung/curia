@@ -37,6 +37,10 @@ export class RateLimiter {
   /** Single global counter — tracks aggregate message rate across all senders. */
   private globalWindow: WindowEntry = { count: 0, windowStart: 0 };
 
+  /** Timestamp of the last idle-window sweep. Gates sweepExpired() to run at most
+   *  once per windowMs, so per-message cost stays O(1) amortized (#1665). */
+  private lastSweepAt = 0;
+
   constructor(config: RateLimiterConfig) {
     this.windowMs = config.windowMs;
     this.maxPerSender = config.maxPerSender;
@@ -64,12 +68,43 @@ export class RateLimiter {
    * The counter is NOT incremented on false — a rejected message does not consume quota.
    */
   checkSender(senderId: string): boolean {
+    // Reclaim windows for senders that have gone fully idle before touching this
+    // one. Without this, senderWindows grows by one entry per distinct sender ever
+    // seen and never shrinks — bounded by distinct-sender cardinality, but unbounded
+    // in principle (#1665).
+    this.sweepExpired();
+
     let entry = this.senderWindows.get(senderId);
     if (!entry) {
       entry = { count: 0, windowStart: 0 };
       this.senderWindows.set(senderId, entry);
     }
     return this.check(entry, this.maxPerSender);
+  }
+
+  /**
+   * Evict per-sender windows whose fixed window has fully elapsed.
+   *
+   * A sender whose window has expired holds no live rate-limit state — its next
+   * checkSender() would reset the window in place anyway. Deleting the entry is
+   * therefore behavior-preserving: a returning sender simply re-creates a fresh
+   * window on its next call, identical to the in-place reset it would have gotten.
+   *
+   * Gated to run at most once per windowMs (via lastSweepAt) so the O(n) scan is
+   * amortized to O(1) per message even under a high sender rate. Senders still
+   * inside their window are spared, so active rate-limiting is never disturbed. (#1665)
+   */
+  private sweepExpired(): void {
+    const now = Date.now();
+    if (now - this.lastSweepAt < this.windowMs) {
+      return;
+    }
+    this.lastSweepAt = now;
+    for (const [senderId, entry] of this.senderWindows) {
+      if (now - entry.windowStart >= this.windowMs) {
+        this.senderWindows.delete(senderId);
+      }
+    }
   }
 
   /**
