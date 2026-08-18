@@ -76,6 +76,13 @@ function fakeDbRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Read the Scheduler's private burst-counter Map to assert eviction (#1664).
+ *  TypeScript `private` is not enforced at runtime, so a cast is the standard way
+ *  to inspect internal bookkeeping from a unit test. */
+function burstCounts(s: Scheduler): Map<string, number> {
+  return (s as unknown as { burstCounts: Map<string, number> }).burstCounts;
+}
+
 describe('Scheduler', () => {
   let pool: ReturnType<typeof mockPool>;
   let bus: ReturnType<typeof mockBus>;
@@ -1354,6 +1361,119 @@ describe('Scheduler', () => {
       // The "Reason:" line stays a single line — the embedded newline did not split the message.
       const reasonLine = content.split('\n').find((l) => l.startsWith('Reason:'));
       expect(reasonLine).toContain('Now: re-send the debrief prompt');
+    });
+
+    it('evicts the burst counter when a one-shot drift-eligible job completes (#1664)', async () => {
+      // A one-shot job (no cron_expr) fires exactly once, so its burst counter is
+      // never needed again — it must be dropped inline on completion, not left to
+      // linger in the Map for the process lifetime.
+      const oneShotRow = fakeDbRow({
+        cron_expr: null,
+        run_at: new Date().toISOString(),
+        agent_task_id: 'task-os',
+        intent_anchor: 'Send the one-off report.',
+        task_payload: { skill: 'web-search', query: 'report' },
+      });
+      driftPool.query.mockResolvedValueOnce({ rows: [oneShotRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        cronExpr: null, // one-shot
+        agentTaskId: 'task-os',
+        intentAnchor: 'Send the one-off report.',
+        taskPayload: { skill: 'web-search', query: 'report' },
+        lastRunSummary: null,
+      });
+      driftDetector.check.mockResolvedValueOnce({ drifted: false, reason: 'Aligned.', confidence: 'high' });
+      driftDetector.shouldPause.mockReturnValueOnce(false);
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-os',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
+      });
+
+      await vi.waitFor(() => {
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+      });
+      expect(burstCounts(driftScheduler).has('job-1')).toBe(false);
+    });
+
+    it('keeps the burst counter across runs of a recurring drift-eligible job (#1664)', async () => {
+      // A recurring job's counter drives checkEveryNBursts and MUST persist between
+      // runs — the one-shot eviction must not touch it.
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        cronExpr: '0 9 * * *', // recurring
+        agentTaskId: 'task-99',
+        intentAnchor: 'Research AI safety articles weekly.',
+        taskPayload: { skill: 'web-search', query: 'AI safety' },
+        lastRunSummary: null,
+      });
+      driftDetector.check.mockResolvedValueOnce({ drifted: false, reason: 'Aligned.', confidence: 'high' });
+      driftDetector.shouldPause.mockReturnValueOnce(false);
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-rec',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
+      });
+
+      await vi.waitFor(() => {
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+      });
+      expect(burstCounts(driftScheduler).get('job-1')).toBe(1);
+    });
+  });
+
+  // -- burst-counter sweep (#1664) --
+
+  describe('pruneStaleBurstCounts', () => {
+    it('evicts burst counters for jobs that are no longer active recurring jobs', async () => {
+      // The poller never observes a cancel/delete/suspend (they mutate the DB via
+      // SchedulerService), so the watchdog sweep reconciles burstCounts against the
+      // set of jobs that are still pending/running recurring jobs.
+      const burst = burstCounts(scheduler);
+      burst.set('job-live', 3);
+      burst.set('job-gone', 1);
+
+      pool.query.mockResolvedValueOnce({ rows: [{ id: 'job-live' }] });
+
+      await scheduler.pruneStaleBurstCounts();
+
+      expect(burst.has('job-live')).toBe(true);
+      expect(burst.has('job-gone')).toBe(false);
+
+      // Parameterized query — the tracked ids are bound, never interpolated.
+      const [, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(params[0]).toEqual(['job-live', 'job-gone']);
+    });
+
+    it('does not query the DB when no burst counters are tracked', async () => {
+      await scheduler.pruneStaleBurstCounts();
+      expect(pool.query).not.toHaveBeenCalled();
     });
   });
 
