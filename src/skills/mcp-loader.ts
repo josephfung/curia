@@ -337,9 +337,14 @@ export function buildMcpToolHandler(params: {
         );
         const result = mapMcpResult(rawResult, logger, session.serverId, toolName);
         if (!result.success) {
-          // Log tool-level errors so operators can detect persistently failing tools.
+          // Log stable metadata only so operators can spot persistently failing
+          // tools. We deliberately DON'T log result.error: an MCP server receives
+          // vault-resolved fixed_inputs (secrets) as tool arguments, and a
+          // misbehaving server can echo those back in its error text, which would
+          // then leak into pino logs. The detail still reaches the agent via the
+          // returned ToolResult (secret-redacted by the execution layer).
           logger.warn(
-            { server: session.serverId, tool: toolName, error: result.error },
+            { server: session.serverId, tool: toolName },
             'MCP tool returned an error result',
           );
         }
@@ -351,7 +356,14 @@ export function buildMcpToolHandler(params: {
         // result logged above, yet would otherwise be invisible: the execution
         // layer only logs when handler.execute *throws*, and we deliberately
         // return `{ success: false }` instead (skills must never throw).
-        logger.warn({ server: session.serverId, tool: toolName, err }, 'MCP tool call threw');
+        //
+        // Log the error CLASS (SDK/runtime-controlled — e.g. McpError, AbortError),
+        // never the raw message: like result.error above, a thrown message can carry
+        // server-echoed fixed_input secrets.
+        logger.warn(
+          { server: session.serverId, tool: toolName, errorName: err instanceof Error ? err.name : typeof err },
+          'MCP tool call threw',
+        );
         const message = err instanceof Error ? err.message : String(err);
         return { success: false, error: `MCP tool '${toolName}' error: ${message}` };
       } finally {
