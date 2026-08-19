@@ -1467,8 +1467,8 @@ describe('Scheduler', () => {
       expect(burst.has('job-gone')).toBe(false);
 
       // Parameterized query — the tracked ids are bound, never interpolated.
-      const [, params] = pool.query.mock.calls[0] as [string, unknown[]];
-      expect(params[0]).toEqual(['job-live', 'job-gone']);
+      const [, params] = pool.query.mock.calls[0]! as [string, unknown[]];
+      expect(params[0]!).toEqual(['job-live', 'job-gone']);
     });
 
     it('does not query the DB when no burst counters are tracked', async () => {
