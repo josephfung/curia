@@ -1826,6 +1826,7 @@ export class AgentRuntime {
     // than a real result — consumers (delegate, scheduler) check this flag.
     let responseContent: string;
     let isResponseError = false;
+    let responseAgentError: AgentError | null = null;
     if (response.type === 'tool_use') {
       // No execution layer, or streaming loop exhausted without a text completion.
       logger.warn(
@@ -1835,6 +1836,16 @@ export class AgentRuntime {
           : 'LLM returned tool_use but no execution layer configured',
       );
       isResponseError = true;
+      responseAgentError = {
+        type: 'UNKNOWN',
+        source: 'runtime',
+        message: response.toolCalls.length === 0
+          ? 'Tool loop exhausted without a text response'
+          : 'LLM returned tool_use but no execution layer configured',
+        retryable: false,
+        context: { toolCallCount: response.toolCalls.length },
+        timestamp: new Date(),
+      };
       responseContent = response.content ?? "I wasn't able to complete that request — I hit my tool-use limit. Please try rephrasing.";
     } else if (response.type === 'text') {
       logger.info(
@@ -1885,30 +1896,15 @@ export class AgentRuntime {
             },
             'LLM returned empty text response after tool use — recovery also failed, sending fallback',
           );
-          // Publish agent.error so the scheduler subscriber receives a completion signal.
-          // Without this, the scheduler only sees agent.response(isError: true), which it
-          // explicitly skips — leaving the job stuck in "running" until the watchdog fires.
-          // Wrapped in try-catch because a publish failure (e.g. audit hook / DB write)
-          // must not prevent the fallback agent.response below from being sent.
-          try {
-            await this.publishAgentError(
-              {
-                type: 'UNKNOWN',
-                source: 'runtime',
-                message: 'LLM returned empty text after tool use; recovery prompt also produced no output',
-                retryable: false,
-                context: { recoveryType: recovery.type, inputTokens: response.usage.inputTokens },
-                timestamp: new Date(),
-              },
-              taskEvent,
-            );
-          } catch (publishErr) {
-            logger.error(
-              { agentId, conversationId, err: publishErr },
-              'Failed to publish agent.error for empty-response recovery failure',
-            );
-          }
           isResponseError = true;
+          responseAgentError = {
+            type: 'UNKNOWN',
+            source: 'runtime',
+            message: 'LLM returned empty text after tool use; recovery prompt also produced no output',
+            retryable: false,
+            context: { recoveryType: recovery.type, inputTokens: response.usage.inputTokens },
+            timestamp: new Date(),
+          };
           responseContent = "I'm sorry, I wasn't able to formulate a response. Please try again.";
         }
       } else {
@@ -1918,12 +1914,24 @@ export class AgentRuntime {
       // Shouldn't reach here — chatWithRetry handles errors — but be safe
       logger.error({ agentId, error: response.error }, 'LLM call failed after retries');
       isResponseError = true;
+      responseAgentError = {
+        type: 'UNKNOWN',
+        source: 'runtime',
+        message: 'LLM call failed after retries',
+        retryable: false,
+        context: {},
+        timestamp: new Date(),
+      };
       responseContent = "I'm sorry, I was unable to process that request. Please try again.";
     }
 
     // Persist the assistant response
     if (memory) {
       await memory.addTurn(conversationId, agentId, { role: 'assistant', content: responseContent });
+    }
+
+    if (isResponseError && responseAgentError) {
+      await this.publishAgentErrorForFallback(taskEvent, responseAgentError);
     }
 
     const responseEvent = createAgentResponse({
@@ -2490,6 +2498,24 @@ export class AgentRuntime {
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', errorEvent);
+  }
+
+  /**
+   * Best-effort paired error signal for fallback response paths.
+   * Scheduler completion on failures relies on agent.error, while agent.response(isError)
+   * provides user-facing context; publish errors first without blocking the response event.
+   */
+  private async publishAgentErrorForFallback(taskEvent: AgentTaskEvent, agentErr: AgentError): Promise<void> {
+    const { logger, agentId } = this.config;
+    const { conversationId } = taskEvent.payload;
+    try {
+      await this.publishAgentError(agentErr, taskEvent);
+    } catch (publishErr) {
+      logger.error(
+        { agentId, conversationId, err: publishErr },
+        'Failed to publish agent.error for fallback response',
+      );
+    }
   }
 
   /**
