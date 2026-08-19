@@ -203,6 +203,38 @@ describe('LLMProviderRouter', () => {
     expect(events).toEqual(streamEvents);
   });
 
+  it('propagates cleanup to the inner stream when the consumer stops iterating early (#1651)', async () => {
+    // The router delegates via `for await (... of inner.stream()) { yield }`. When the
+    // outer consumer breaks early, the router generator's .return() must reach the inner
+    // stream's finally — that's what runs a real provider's abort() cleanup. If the router
+    // ever swallowed that propagation, the leak fix in the underlying providers would be
+    // silently defeated when routed through here.
+    let innerCleanedUp = false;
+    const inner = makeProvider('anthropic');
+    inner.stream = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {
+        try {
+          yield { type: 'text_delta', text: 'a' } as LLMStreamEvent;
+          yield { type: 'text_delta', text: 'b' } as LLMStreamEvent;
+        } finally {
+          innerCleanedUp = true;
+        }
+      },
+    }));
+    providerRegistry.set('anthropic', inner);
+    const modelRegistry = makeModelRegistry({ 'claude-sonnet-4-6': 'anthropic' });
+    const router = new LLMProviderRouter(modelRegistry, providerRegistry);
+
+    const seen: LLMStreamEvent[] = [];
+    for await (const event of router.stream({ messages: MESSAGES, model: 'claude-sonnet-4-6' })) {
+      seen.push(event);
+      break;
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(innerCleanedUp).toBe(true);
+  });
+
   it('yields an error event when the resolved provider does not support stream', async () => {
     const modelRegistry = makeModelRegistry({ 'claude-sonnet-4-6': 'anthropic' });
     const router = new LLMProviderRouter(modelRegistry, providerRegistry);

@@ -473,6 +473,17 @@ export class OpenRouterProvider implements LLMProvider {
 
     let model: string | undefined = params.model ?? (typeof params.options?.model === 'string' ? params.options.model : undefined);
 
+    // Abort handle for the SDK stream, captured once it's created and invoked in the
+    // finally below so the underlying fetch Response / ReadableStream is released on
+    // EVERY exit path — normal completion, a thrown error, an AbortSignal firing, or a
+    // consumer that stops iterating this generator early (which runs the finally via
+    // the generator's .return()). An undrained SDK stream retains its response buffers
+    // on the V8 heap; under the scheduler's steady background LLM calls that would
+    // accumulate until an OOM restart. Parity with the Anthropic path (#1648/#1651).
+    // The OpenAI SDK exposes stream.controller (AbortController); abort() is idempotent,
+    // so calling it after the stream has already completed is a harmless no-op.
+    let abortStream: (() => void) | undefined;
+
     try {
       const built = this.buildCreateParams(params, 'stream');
       model = built.model;
@@ -483,6 +494,7 @@ export class OpenRouterProvider implements LLMProvider {
         stream_options: { include_usage: true },
       };
       const stream = await this.client.chat.completions.create(streamParams, signal ? { signal } : undefined);
+      abortStream = () => stream.controller.abort();
 
       let content = '';
       let usage: LLMUsage = {
@@ -601,6 +613,18 @@ export class OpenRouterProvider implements LLMProvider {
     } catch (err) {
       this.logger.error({ err, model }, 'OpenRouter streaming API call failed');
       yield { type: 'error', error: this.classifyProviderError(err) };
+    } finally {
+      // Best-effort cleanup; never let an abort() failure mask the real result or error.
+      if (abortStream) {
+        try {
+          abortStream();
+        } catch (abortErr) {
+          // warn (not debug): abort() IS the leak fix, so a persistent failure here means
+          // the stream leak has silently returned — we want that visible in prod, and it
+          // only ever logs when cleanup genuinely fails (never on the happy path).
+          this.logger.warn({ abortErr, model }, 'OpenRouter stream cleanup abort() failed');
+        }
+      }
     }
   }
 }

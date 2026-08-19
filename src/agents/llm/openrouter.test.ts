@@ -52,6 +52,11 @@ function makeStream(chunks: unknown[]) {
         yield chunk;
       }
     },
+    // The provider calls stream.controller.abort() in a finally to release the
+    // underlying fetch Response/ReadableStream on every exit path (leak fix #1648/#1651).
+    // Mirror the OpenAI SDK Stream's `controller: AbortController` so streaming tests
+    // still run and cleanup can be asserted.
+    controller: { abort: vi.fn() },
   };
 }
 
@@ -607,5 +612,72 @@ describe('OpenRouterProvider — stream', () => {
     }));
 
     expect(mockCreate.mock.calls[0]![1]).toEqual({ signal: controller.signal });
+  });
+
+  // Leak-parity fix (#1651, mirrors #1648): the provider must release the underlying
+  // OpenAI SDK Stream (its fetch Response/ReadableStream) on every exit path via
+  // stream.controller.abort(), or an undrained stream retains its response buffers on
+  // the V8 heap. Exercised by voice in prod today.
+  const okChunk = () => ({
+    id: 'chatcmpl-cleanup',
+    model: 'openai/gpt-4o',
+    choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop', logprobs: null }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    object: 'chat.completion.chunk',
+    created: 1700000000,
+  });
+
+  it('aborts the underlying stream after normal completion (releases the response buffer)', async () => {
+    const stream = makeStream([okChunk()]);
+    mockCreate.mockResolvedValue(stream);
+
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await collectStream(provider.stream({ messages: [{ role: 'user', content: 'Hello' }], model: 'openai/gpt-4o' }));
+
+    expect(stream.controller.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the underlying stream when the consumer stops iterating early', async () => {
+    const stream = makeStream([
+      {
+        id: 'chatcmpl-early', model: 'openai/gpt-4o',
+        choices: [{ index: 0, delta: { content: 'a' }, finish_reason: null, logprobs: null }],
+        usage: null, object: 'chat.completion.chunk', created: 1700000000,
+      },
+      {
+        id: 'chatcmpl-early', model: 'openai/gpt-4o',
+        choices: [{ index: 0, delta: { content: 'b' }, finish_reason: 'stop', logprobs: null }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }, object: 'chat.completion.chunk', created: 1700000000,
+      },
+    ]);
+    mockCreate.mockResolvedValue(stream);
+
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    // Break after the first event: the async generator's finally must still run and
+    // abort the SDK stream, otherwise its Response buffer leaks.
+    const seen: LLMStreamEvent[] = [];
+    for await (const event of provider.stream({ messages: [{ role: 'user', content: 'Hello' }], model: 'openai/gpt-4o' })) {
+      seen.push(event);
+      break;
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(stream.controller.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the underlying stream and yields an error when iteration throws', async () => {
+    const stream = {
+      [Symbol.asyncIterator]() {
+        return { next: () => Promise.reject(new Error('mid-stream boom')) };
+      },
+      controller: { abort: vi.fn() },
+    };
+    mockCreate.mockResolvedValue(stream);
+
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({ messages: [{ role: 'user', content: 'Hello' }], model: 'openai/gpt-4o' }));
+
+    expect(stream.controller.abort).toHaveBeenCalledTimes(1);
+    expect(events.at(-1)).toMatchObject({ type: 'error' });
   });
 });
