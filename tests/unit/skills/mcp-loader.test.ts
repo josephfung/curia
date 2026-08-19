@@ -575,9 +575,14 @@ describe('buildMcpToolHandler — request cancellation (#1666)', () => {
 
     const result = await handler.execute(ctx);
     expect(result).toEqual({ success: false, error: "MCP tool 'search' error: boom" });
+    // Logs the error CLASS for diagnosis, never the raw message — a thrown message
+    // can carry server-echoed fixed_input secrets (#1666 review).
     expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({ server: 'srv', tool: 'search', err: expect.any(Error) }),
+      { server: 'srv', tool: 'search', errorName: 'Error' },
       'MCP tool call threw',
     );
+    // Guard: the raw message must not appear anywhere in the logged metadata.
+    const [logMeta] = warn.mock.calls[0]!;
+    expect(JSON.stringify(logMeta)).not.toContain('boom');
   });
 });
