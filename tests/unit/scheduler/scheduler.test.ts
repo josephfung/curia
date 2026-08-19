@@ -83,6 +83,10 @@ function burstCounts(s: Scheduler): Map<string, number> {
   return (s as unknown as { burstCounts: Map<string, number> }).burstCounts;
 }
 
+function pendingJobs(s: Scheduler): Map<string, string> {
+  return (s as unknown as { pendingJobs: Map<string, string> }).pendingJobs;
+}
+
 describe('Scheduler', () => {
   let pool: ReturnType<typeof mockPool>;
   let bus: ReturnType<typeof mockBus>;
@@ -898,6 +902,58 @@ describe('Scheduler', () => {
       });
 
       expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', false, 'budget blown', undefined);
+    });
+
+    it('does not double-complete when both agent.response(isError) and agent.error are published', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
+      const taskEventId = taskEvent.id;
+
+      schedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+      scheduler.start();
+
+      const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      const errorHandler = bus.subscribe.mock.calls[1]?.[2] as (event: unknown) => Promise<void>;
+
+      // Runtime failure paths intentionally emit both events; scheduler must complete once.
+      await responseHandler({
+        id: 'resp-err-1',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEventId,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'fallback', isError: true },
+      });
+      await errorHandler({
+        id: 'err-2',
+        type: 'agent.error',
+        sourceLayer: 'agent',
+        parentEventId: taskEventId,
+        timestamp: new Date(),
+        payload: {
+          agentId: 'agent-1',
+          conversationId: 'c1',
+          errorType: 'UNKNOWN',
+          source: 'runtime',
+          message: 'Tool loop exhausted without a text response',
+          retryable: false,
+          context: {},
+        },
+      });
+
+      expect(schedulerService.completeJobRun).toHaveBeenCalledTimes(1);
+      expect(schedulerService.completeJobRun).toHaveBeenCalledWith(
+        'job-1',
+        false,
+        'Tool loop exhausted without a text response',
+        undefined,
+      );
+      expect(pendingJobs(scheduler).size).toBe(0);
+      expect(burstCounts(scheduler).has('job-1')).toBe(false);
     });
 
     it('ignores events not originating from the scheduler', async () => {

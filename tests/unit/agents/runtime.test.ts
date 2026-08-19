@@ -1623,6 +1623,106 @@ describe('AgentRuntime tool-use loop', () => {
     expect(agentErrors[0]!.payload.errorType).toBe('UNKNOWN');
   });
 
+  it('publishes agent.error when tool loop exhausts without a final text response', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'tool_use' as const,
+        toolCalls: [],
+        usage: { inputTokens: 50, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      }),
+    };
+
+    const agentErrors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.error', 'system', (event) => {
+      agentErrors.push(event as AgentErrorEvent);
+    });
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      // Intentionally omit executionLayer so tool_use falls back to runtime error path.
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'scheduler:job-tool-loop:run-1',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Run scheduled work',
+      parentEventId: 'parent-tool-loop',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]!.payload.isError).toBe(true);
+    expect(agentErrors).toHaveLength(1);
+    expect(agentErrors[0]!.parentEventId).toBe(task.id);
+    expect(agentErrors[0]!.payload.message).toContain('Tool loop exhausted');
+  });
+
+  it('publishes agent.error on defensive fallback when provider returns an unknown response shape', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({
+        type: 'unexpected-shape',
+        usage: { inputTokens: 10, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      } as unknown as Awaited<ReturnType<LLMProvider['chat']>>),
+    };
+
+    const agentErrors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.error', 'system', (event) => {
+      agentErrors.push(event as AgentErrorEvent);
+    });
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'scheduler:job-defensive-else:run-1',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Run scheduled work',
+      parentEventId: 'parent-defensive-else',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]!.payload.isError).toBe(true);
+    expect(agentErrors).toHaveLength(1);
+    expect(agentErrors[0]!.parentEventId).toBe(task.id);
+    expect(agentErrors[0]!.payload.message).toContain('failed after retries');
+  });
+
   it('does not publish agent.error when empty-response recovery succeeds', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);

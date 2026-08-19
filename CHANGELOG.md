@@ -39,6 +39,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scheduler runtime errors** — fallback `agent.response(isError)` paths now always emit paired `agent.error`. (#1647)
 - **MCP health probe** — liveness uses `ping()` not `listTools()`, ending a ~145 MB/hr validator leak. (#1663)
 - **Scheduler** — `burstCounts` evicts one-shot completions inline and stale jobs on the watchdog sweep. (#1664)
 - **`RateLimiter`** — idle per-sender windows are reclaimed once elapsed, bounding memory. (#1665)
