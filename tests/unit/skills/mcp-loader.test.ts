@@ -40,7 +40,8 @@ vi.mock('../../../src/skills/mcp-client.js', () => ({
 }));
 
 // Import the loader AFTER setting up mocks.
-const { loadMcpServers } = await import('../../../src/skills/mcp-loader.js');
+const { loadMcpServers, buildMcpToolHandler } = await import('../../../src/skills/mcp-loader.js');
+type BuildHandlerParams = Parameters<typeof buildMcpToolHandler>[0];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -387,10 +388,13 @@ servers:
     });
 
     expect(result).toEqual({ success: true, data: 'file contents here' });
-    expect(session.client.callTool).toHaveBeenCalledWith({
-      name: 'read_file',
-      arguments: { path: '/tmp/test.txt' },
-    });
+    // callTool is invoked with the default result schema plus RequestOptions that
+    // carry the abort signal and the manifest timeout (default 30s here) (#1666).
+    expect(session.client.callTool).toHaveBeenCalledWith(
+      { name: 'read_file', arguments: { path: '/tmp/test.txt' } },
+      undefined,
+      expect.objectContaining({ timeout: 30_000, signal: expect.any(AbortSignal) }),
+    );
   });
 
   it('returns success: false when MCP tool returns isError: true', async () => {
@@ -452,5 +456,128 @@ servers:
     // Must never throw — returns ToolResult failure instead.
     expect(result.success).toBe(false);
     expect((result as { success: false; error: string }).error).toMatch(/connection lost/);
+  });
+});
+
+describe('buildMcpToolHandler — request cancellation (#1666)', () => {
+  // Minimal ToolContext — the handler only reads ctx.input.
+  const ctx = {
+    toolName: 'search',
+    toolVersion: '1.0.0',
+    input: { q: 'hi' },
+    secret: () => '',
+    log: logger,
+  } as unknown as import('../../../src/skills/types.js').ToolContext;
+
+  /** Build a session whose client.callTool is the supplied spy. Cast through the
+   *  handler's own param type so the mock needn't implement the full SDK Client. */
+  function sessionWith(callTool: ReturnType<typeof vi.fn>): BuildHandlerParams['session'] {
+    return { serverId: 'srv', client: { callTool } } as unknown as BuildHandlerParams['session'];
+  }
+
+  /** Read the RequestOptions (3rd arg) the handler passed to callTool. */
+  function optionsFrom(callTool: ReturnType<typeof vi.fn>): { signal: AbortSignal; timeout: number } {
+    return callTool.mock.calls[0]![2] as { signal: AbortSignal; timeout: number };
+  }
+
+  it('passes an abort signal and explicit timeout, and returns the mapped result on success', async () => {
+    vi.useFakeTimers();
+    try {
+      const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'done' }] });
+      const handler = buildMcpToolHandler({
+        session: sessionWith(callTool),
+        toolName: 'search',
+        resolvedFixedInputs: {},
+        timeoutMs: 30_000,
+        logger,
+      });
+
+      const result = await handler.execute(ctx);
+      expect(result).toEqual({ success: true, data: 'done' });
+
+      const [callParams, resultSchema] = callTool.mock.calls[0]! as [unknown, unknown, unknown];
+      expect(callParams).toEqual({ name: 'search', arguments: { q: 'hi' } });
+      expect(resultSchema).toBeUndefined(); // default CallToolResultSchema
+
+      const options = optionsFrom(callTool);
+      expect(options.timeout).toBe(30_000);
+      expect(options.signal).toBeInstanceOf(AbortSignal);
+      expect(options.signal.aborted).toBe(false);
+
+      // The abort timer is cleared on success: advancing past the deadline must NOT
+      // abort the (already-returned) signal — no stray abort, no leaked timer.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(options.signal.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts the underlying MCP request when the execution-layer timeout elapses', async () => {
+    vi.useFakeTimers();
+    try {
+      // A hung MCP call that only settles when its abort signal fires — models a
+      // slow/stuck subprocess the SDK would otherwise leave pending.
+      const callTool = vi.fn(
+        (_params: unknown, _schema: unknown, options: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(new Error('request aborted')));
+          }),
+      );
+      const handler = buildMcpToolHandler({
+        session: sessionWith(callTool),
+        toolName: 'search',
+        resolvedFixedInputs: {},
+        timeoutMs: 30_000,
+        logger,
+      });
+
+      const pending = handler.execute(ctx);
+      await vi.advanceTimersByTimeAsync(30_000); // execution-layer deadline fires
+
+      const result = await pending;
+      expect(result.success).toBe(false);
+      expect(optionsFrom(callTool).signal.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('merges fixed inputs so the config value wins over caller input', async () => {
+    const callTool = vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] });
+    const handler = buildMcpToolHandler({
+      session: sessionWith(callTool),
+      toolName: 'search',
+      resolvedFixedInputs: { q: 'FIXED' },
+      timeoutMs: 30_000,
+      logger,
+    });
+
+    await handler.execute({ ...ctx, input: { q: 'caller' } } as unknown as typeof ctx);
+
+    const [callParams] = callTool.mock.calls[0]! as [{ arguments: Record<string, unknown> }];
+    expect(callParams.arguments).toEqual({ q: 'FIXED' });
+  });
+
+  it('returns a failure result AND logs when callTool rejects (transport/abort failures stay visible)', async () => {
+    const callTool = vi.fn().mockRejectedValue(new Error('boom'));
+    // Spy logger — a thrown rejection is otherwise invisible to operators, so the
+    // handler must log it (unlike the exec layer, which only logs actual throws).
+    const warn = vi.fn();
+    const spyLogger = { warn, error: vi.fn(), info: vi.fn(), debug: vi.fn(), child: () => spyLogger } as unknown as typeof logger;
+    const handler = buildMcpToolHandler({
+      session: sessionWith(callTool),
+      toolName: 'search',
+      resolvedFixedInputs: {},
+      timeoutMs: 30_000,
+      logger: spyLogger,
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result).toEqual({ success: false, error: "MCP tool 'search' error: boom" });
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ server: 'srv', tool: 'search', err: expect.any(Error) }),
+      'MCP tool call threw',
+    );
   });
 });

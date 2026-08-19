@@ -287,6 +287,83 @@ export async function resolveSecretsBlock(
 }
 
 // ---------------------------------------------------------------------------
+// MCP tool handler
+// ---------------------------------------------------------------------------
+
+/** The subset of an {@link McpSession} the tool handler needs: a `callTool`-capable
+ *  client plus the server id for logs. Narrowed so unit tests can pass a mock
+ *  client without constructing a full SDK `Client`. */
+type McpToolSession = {
+  serverId: string;
+  client: Pick<McpSession['client'], 'callTool'>;
+};
+
+/**
+ * Build the execution handler for a single MCP tool.
+ *
+ * Extracted from loadMcpServers so the request-cancellation behavior below can be
+ * unit-tested against a mock MCP client.
+ *
+ * #1666 — the execution layer races this handler against `manifest.timeout` and,
+ * when the timeout wins, rejects our promise WITHOUT cancelling the underlying MCP
+ * request. That leaves the SDK's pending-request entry (and the captured request +
+ * closures) alive until the SDK's own default timeout fires. We tie an
+ * AbortController to a timer set to the same `timeoutMs` the execution layer uses,
+ * and also pass an explicit `timeout`, so a timed-out tool call also tears down the
+ * in-flight MCP request instead of stranding it.
+ */
+export function buildMcpToolHandler(params: {
+  session: McpToolSession;
+  toolName: string;
+  resolvedFixedInputs: Record<string, string>;
+  timeoutMs: number;
+  logger: Logger;
+}): ToolHandler {
+  const { session, toolName, resolvedFixedInputs, timeoutMs, logger } = params;
+  return {
+    async execute(ctx: ToolContext): Promise<ToolResult> {
+      // Abort the MCP request if it outlives the execution-layer timeout (#1666).
+      const controller = new AbortController();
+      const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        // Merge fixed_inputs into the tool call arguments. Fixed values take
+        // precedence — even if an agent somehow passed a value for a stripped
+        // parameter (e.g. via prompt injection), the config value wins.
+        const mergedInput = mergeFixedInputs(ctx.input, resolvedFixedInputs);
+        const rawResult = await session.client.callTool(
+          { name: toolName, arguments: mergedInput },
+          undefined, // use the SDK's default CallToolResultSchema
+          { signal: controller.signal, timeout: timeoutMs },
+        );
+        const result = mapMcpResult(rawResult, logger, session.serverId, toolName);
+        if (!result.success) {
+          // Log tool-level errors so operators can detect persistently failing tools.
+          logger.warn(
+            { server: session.serverId, tool: toolName, error: result.error },
+            'MCP tool returned an error result',
+          );
+        }
+        return result;
+      } catch (err) {
+        // Log before converting — a thrown rejection here (transport/subprocess
+        // crash, JSON-RPC protocol error, the SDK's RequestTimeout, or our own
+        // abort above) is a MORE severe failure than the tool-level `isError`
+        // result logged above, yet would otherwise be invisible: the execution
+        // layer only logs when handler.execute *throws*, and we deliberately
+        // return `{ success: false }` instead (skills must never throw).
+        logger.warn({ server: session.serverId, tool: toolName, err }, 'MCP tool call threw');
+        const message = err instanceof Error ? err.message : String(err);
+        return { success: false, error: `MCP tool '${toolName}' error: ${message}` };
+      } finally {
+        // Always clear the timer so a completed call doesn't leave a pending abort
+        // (which would also keep the event loop alive during graceful shutdown).
+        clearTimeout(abortTimer);
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
@@ -554,38 +631,15 @@ export async function loadMcpServers(
         timeout: serverEntry.timeout_ms ?? 30000,
       };
 
-      // Capture the session reference in the closure — each tool needs its own
-      // copy so the reference stays valid across the async loop.
-      const capturedSession = session;
-      const toolName = tool.name;
-
-      const handler: ToolHandler = {
-        async execute(ctx: ToolContext): Promise<ToolResult> {
-          try {
-            // Merge fixed_inputs into the tool call arguments. Fixed values take
-            // precedence — even if an agent somehow passed a value for a stripped
-            // parameter (e.g. via prompt injection), the config value wins.
-            const mergedInput = mergeFixedInputs(ctx.input, resolvedFixedInputs);
-            const rawResult = await capturedSession.client.callTool({
-              name: toolName,
-              arguments: mergedInput,
-            });
-            const result = mapMcpResult(rawResult, logger, capturedSession.serverId, toolName);
-            if (!result.success) {
-              // Log tool-level errors so operators can detect persistently failing tools.
-              logger.warn(
-                { server: capturedSession.serverId, tool: toolName, error: result.error },
-                'MCP tool returned an error result',
-              );
-            }
-            return result;
-          } catch (err) {
-            // Skills must never throw — return a failure result instead.
-            const message = err instanceof Error ? err.message : String(err);
-            return { success: false, error: `MCP tool '${toolName}' error: ${message}` };
-          }
-        },
-      };
+      // Passing `session` as an argument captures it per-tool, so the reference
+      // stays valid across the async loop even as the outer `session` is reassigned.
+      const handler = buildMcpToolHandler({
+        session,
+        toolName: tool.name,
+        resolvedFixedInputs,
+        timeoutMs: manifest.timeout,
+        logger,
+      });
 
       // Build the raw MCP input schema for the fast-path in toToolDefinitions.
       // The MCP SDK returns `inputSchema` as a full JSON Schema object; we cast
