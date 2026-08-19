@@ -619,9 +619,10 @@ export class OpenRouterProvider implements LLMProvider {
         try {
           abortStream();
         } catch (abortErr) {
-          // warn (not debug): abort() IS the leak fix, so a persistent failure here means
-          // the stream leak has silently returned — we want that visible in prod, and it
-          // only ever logs when cleanup genuinely fails (never on the happy path).
+          // Best-effort cleanup, logged at warn (not error): the request result was already
+          // handled above and is unaffected — this is stream hygiene, not a request failure.
+          // It only fires if abort() itself fails (never on the happy path), so a recurring
+          // warn here is the signal that the stream leak (#1648/#1651) has returned.
           this.logger.warn({ abortErr, model }, 'OpenRouter stream cleanup abort() failed');
         }
       }
