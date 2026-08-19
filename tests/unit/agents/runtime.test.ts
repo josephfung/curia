@@ -1645,6 +1645,15 @@ describe('AgentRuntime tool-use loop', () => {
     bus.subscribe('agent.response', 'dispatch', (event) => {
       agentResponses.push(event as AgentResponseEvent);
     });
+    const publishedOrder: Array<{ type: 'agent.error' | 'agent.response'; parentEventId: string | undefined }> = [];
+    bus.subscribe('agent.error', 'dispatch', (event) => {
+      const errorEvent = event as AgentErrorEvent;
+      publishedOrder.push({ type: 'agent.error', parentEventId: errorEvent.parentEventId });
+    });
+    bus.subscribe('agent.response', 'system', (event) => {
+      const responseEvent = event as AgentResponseEvent;
+      publishedOrder.push({ type: 'agent.response', parentEventId: responseEvent.parentEventId });
+    });
 
     const agent = new AgentRuntime({
       agentId: 'coordinator',
@@ -1669,9 +1678,12 @@ describe('AgentRuntime tool-use loop', () => {
 
     expect(agentResponses).toHaveLength(1);
     expect(agentResponses[0]!.payload.isError).toBe(true);
+    expect(agentResponses[0]!.parentEventId).toBe(task.id);
     expect(agentErrors).toHaveLength(1);
     expect(agentErrors[0]!.parentEventId).toBe(task.id);
     expect(agentErrors[0]!.payload.message).toContain('Tool loop exhausted');
+    expect(publishedOrder[0]).toEqual({ type: 'agent.error', parentEventId: task.id });
+    expect(publishedOrder[1]).toEqual({ type: 'agent.response', parentEventId: task.id });
   });
 
   it('publishes agent.error on defensive fallback when provider returns an unknown response shape', async () => {
@@ -1694,6 +1706,15 @@ describe('AgentRuntime tool-use loop', () => {
     const agentResponses: AgentResponseEvent[] = [];
     bus.subscribe('agent.response', 'dispatch', (event) => {
       agentResponses.push(event as AgentResponseEvent);
+    });
+    const publishedOrder: Array<{ type: 'agent.error' | 'agent.response'; parentEventId: string | undefined }> = [];
+    bus.subscribe('agent.error', 'dispatch', (event) => {
+      const errorEvent = event as AgentErrorEvent;
+      publishedOrder.push({ type: 'agent.error', parentEventId: errorEvent.parentEventId });
+    });
+    bus.subscribe('agent.response', 'system', (event) => {
+      const responseEvent = event as AgentResponseEvent;
+      publishedOrder.push({ type: 'agent.response', parentEventId: responseEvent.parentEventId });
     });
 
     const agent = new AgentRuntime({
@@ -1718,9 +1739,12 @@ describe('AgentRuntime tool-use loop', () => {
 
     expect(agentResponses).toHaveLength(1);
     expect(agentResponses[0]!.payload.isError).toBe(true);
+    expect(agentResponses[0]!.parentEventId).toBe(task.id);
     expect(agentErrors).toHaveLength(1);
     expect(agentErrors[0]!.parentEventId).toBe(task.id);
     expect(agentErrors[0]!.payload.message).toContain('failed after retries');
+    expect(publishedOrder[0]).toEqual({ type: 'agent.error', parentEventId: task.id });
+    expect(publishedOrder[1]).toEqual({ type: 'agent.response', parentEventId: task.id });
   });
 
   it('does not publish agent.error when empty-response recovery succeeds', async () => {

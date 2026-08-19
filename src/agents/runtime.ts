@@ -257,7 +257,14 @@ export class AgentRuntime {
           ? attached
           : isDbUnavailableError(err)
             ? createDbUnavailableAgentError('runtime', err)
-            : null;
+            : {
+                type: 'UNKNOWN',
+                source: 'runtime',
+                message: err instanceof Error ? err.message : 'Unhandled error in agent task processing',
+                retryable: false,
+                context: {},
+                timestamp: new Date(),
+              } satisfies AgentError;
 
       this.config.logger.error(
         {
@@ -274,32 +281,15 @@ export class AgentRuntime {
       // Best-effort: try to send an error response so the user isn't left hanging.
       // Isolate agent.error from agent.response — a failed audit write on the
       // error event must not skip the user-facing response (#1381 review).
-      if (agentErr) {
-        try {
-          await this.publishAgentError(agentErr, taskEvent);
-        } catch (publishErr) {
-          this.config.logger.error({ err: publishErr }, 'Failed to publish agent.error');
-        }
-        try {
-          await this.sendErrorResponse(taskEvent, agentErr);
-        } catch (publishErr) {
-          this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
-        }
-      } else {
-        try {
-          const responseEvent = createAgentResponse({
-            agentId: this.config.agentId,
-            conversationId: taskEvent.payload.conversationId,
-            content: "I'm sorry, an unexpected error occurred while processing your request.",
-            // Mark as an error response (same as sendErrorResponse) so delegate and other
-            // consumers don't treat this fallback message as a real agent result.
-            isError: true,
-            parentEventId: taskEvent.id,
-          });
-          await this.config.bus.publish('agent', responseEvent);
-        } catch (publishErr) {
-          this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
-        }
+      try {
+        await this.publishAgentError(agentErr, taskEvent);
+      } catch (publishErr) {
+        this.config.logger.error({ err: publishErr }, 'Failed to publish agent.error');
+      }
+      try {
+        await this.sendErrorResponse(taskEvent, agentErr);
+      } catch (publishErr) {
+        this.config.logger.error({ err: publishErr }, 'Failed to publish error response');
       }
     } finally {
       // Clean up the rate limit entry for this task so the validator's writeCounts map
@@ -1925,13 +1915,13 @@ export class AgentRuntime {
       responseContent = "I'm sorry, I was unable to process that request. Please try again.";
     }
 
+    if (isResponseError && responseAgentError) {
+      await this.publishAgentErrorForFallback(taskEvent, responseAgentError);
+    }
+
     // Persist the assistant response
     if (memory) {
       await memory.addTurn(conversationId, agentId, { role: 'assistant', content: responseContent });
-    }
-
-    if (isResponseError && responseAgentError) {
-      await this.publishAgentErrorForFallback(taskEvent, responseAgentError);
     }
 
     const responseEvent = createAgentResponse({
