@@ -29,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **markdown-it** — upgraded to v15; coerce `attrGet('href')` to string, drop redundant `@types/markdown-it`. (#1640)
 - **`AgentRuntime`** — text tool loop delegates to `runStreamingToolLoop` via chat adapter. (#1563)
 - **Voice** — composes `VOICE_ASYNC_OFFRAMP_GUIDANCE` now that real handoff exists. (#1614)
 - **coordinator** — date-resolve owned by shared module; no prompt plumbing stub (v0.18.2). (#1595)
