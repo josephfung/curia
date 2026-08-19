@@ -20,7 +20,9 @@ const defaultLinkOpen =
 
 markdown.renderer.rules.link_open = (tokens, idx, options, env, self): string => {
   const token = tokens[idx]!;
-  const href = token.attrGet('href') ?? '';
+  // markdown-it v15 widened Token.attrGet()'s return type to `string | number`
+  // (attribute values can be numeric), so coerce to string before RegExp.test().
+  const href = String(token.attrGet('href') ?? '');
   if (/^(https?:)?\/\//i.test(href)) {
     token.attrSet('target', '_blank');
     token.attrSet('rel', 'noopener noreferrer');
