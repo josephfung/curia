@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Signal voice calls** — anyone can Signal-call Curia; live conversation via VoiceRuntime, config-gated off. (#1672)
 - **`MemorySampler`** — periodic `process.memoryUsage()` logging to diagnose heap growth in prod. (#1650)
 - **Speech media service** — top-level `src/speech/` batch STT/TTS for voice notes. (#1597)
 - **Voice opening greeting** — Curia speaks first on inbound console calls. (#1596)
