@@ -152,13 +152,16 @@ export async function resolveConsoleVoiceCaller(opts: {
  * Resolve a transport-supplied caller token via ContactResolver + stampOriginator.
  * Honors the voice channel's unknown_sender policy (default: ignore → fail closed).
  *
- * No HTTP entry point uses this yet — it is the seam for #1602 and is unit-tested
- * so non-principal / unresolved tokens cannot silently inherit principal standing.
+ * `resolveVoiceCallerFromToken` remains the token seam for a future generic voice
+ * transport. Real Signal-originated calls use `resolveSignalVoiceCaller` below
+ * (#1672), which resolves against the `'signal'` channel key (shared with inbound
+ * Signal texts) and follows the answer-everyone policy rather than this function's
+ * fail-closed unknown_sender gate.
  *
  * Policy note (#1598 follow-up): the unknown_sender default (`?? 'ignore'`) and the
  * blocked-tier gate below duplicate dispatcher policy rather than reading the shared
- * channel-trust config. Reconcile against the dispatcher's config path when #1602
- * wires a real transport — do not extend these independently.
+ * channel-trust config. Reconcile against the dispatcher's config path when a real
+ * token-based transport is wired — do not extend these independently.
  */
 export async function resolveVoiceCallerFromToken(opts: {
   contactResolver: ContactResolver;
@@ -192,4 +195,43 @@ export async function resolveVoiceCallerFromToken(opts: {
 
   const senderId = opts.senderId ?? senderContext.contactId;
   return { ok: true, caller: toCallerContext(senderContext, 'voice', senderId) };
+}
+
+export type ResolveSignalVoiceCallerResult =
+  | { ok: true; caller: VoiceCallerContext }
+  | { ok: false; reason: 'blocked' | 'no_identifier' };
+
+/**
+ * Resolve a Signal-originated voice call's caller identity.
+ *
+ * Resolves via the `'signal'` channel key — the SAME key inbound Signal texts use
+ * (contact_channel_identities) — so an existing contact matches on their verified
+ * Signal number and principal standing carries over from the text channel.
+ *
+ * Policy (answer-everyone, Joseph 2026-08-20, #1672): v1 admits both resolved
+ * contacts AND unresolved strangers — unlike `resolveVoiceCallerFromToken`'s
+ * fail-closed unknown_sender gate, a stranger calling in is not turned away; they
+ * get 'unknown' tier and liveTurn=false via stampOriginator, so lower-trust callers
+ * still fall out of elevated-skill / outbound-context gates even though the call
+ * itself is answered. Only two conditions are rejected outright: a blocked-tier
+ * contact (an explicit deny — mirrors resolveVoiceCallerFromToken and the
+ * dispatcher's blocked-sender gate) and a null callerNumber (no stable channel
+ * identifier to resolve or later create a contact from; the bridge logs the raw
+ * uuid and rejects rather than admitting an untraceable caller).
+ */
+export async function resolveSignalVoiceCaller(opts: {
+  contactResolver: ContactResolver;
+  /** E.164 from callEvent.number; may be null (uuid-only callers). */
+  callerNumber: string | null;
+  logger: Logger;
+}): Promise<ResolveSignalVoiceCallerResult> {
+  if (opts.callerNumber === null) {
+    return { ok: false, reason: 'no_identifier' };
+  }
+  const senderContext = await opts.contactResolver.resolve('signal', opts.callerNumber);
+  if (senderContext.resolved && senderContext.tier === 'blocked') {
+    return { ok: false, reason: 'blocked' };
+  }
+  // Resolved contact or unresolved stranger — both admitted (answer-everyone).
+  return { ok: true, caller: toCallerContext(senderContext, 'voice', opts.callerNumber) };
 }
