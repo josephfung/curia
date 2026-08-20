@@ -138,13 +138,15 @@ interface SetupOptions {
   maxCallSeconds?: number;
   /** Override sessionStore.create (e.g. reject, or hang forever). */
   createImpl?: (input: CreateVoiceSessionInput) => Promise<unknown>;
+  /** Override voiceRuntime.startSession (e.g. hang forever to exercise the setup-window race). */
+  startSessionImpl?: (params: FakeStartSessionCall) => Promise<void>;
   logger?: Logger;
 }
 
 function setup(opts: SetupOptions = {}) {
   const rpc = new FakeRpcClient();
 
-  const startSession = vi.fn(async (_params: FakeStartSessionCall) => undefined);
+  const startSession = vi.fn(opts.startSessionImpl ?? (async (_params: FakeStartSessionCall) => undefined));
   const endSession = vi.fn(async (_sessionId: string, _reason: string) => null);
   const runtime = {
     startSession,
@@ -611,5 +613,112 @@ describe('SignalCallBridge', () => {
     rpc.emit('callEvent', ringingEvent(freshCallId));
     await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(freshCallId));
     expect(rpc.rejectCall).not.toHaveBeenCalled();
+  });
+
+  // C2: caller-resolution throw must reject the call rather than leaving it
+  // in limbo (an unguarded throw would bubble to onCallEvent's catch-all,
+  // which only error-logs — no rejectCall is ever sent).
+  it('rejects the call instead of leaving it in limbo when caller resolution throws', async () => {
+    const { bridge, rpc } = setup({
+      resolveImpl: async () => {
+        throw new Error('contact resolver DB blip');
+      },
+    });
+    bridge.start();
+    const callId = 95n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.rejectCall).toHaveBeenCalledWith(callId));
+    expect(rpc.acceptCall).not.toHaveBeenCalled();
+  });
+
+  // I5: acceptCall itself failing (after a successful caller resolution)
+  // must also send an explicit reject, for consistency with every other
+  // rejection path in handleRingingIncoming.
+  it('rejects the call when acceptCall fails after a successful caller resolution', async () => {
+    const { bridge, rpc } = setup();
+    rpc.acceptCall.mockRejectedValueOnce(new Error('rpc socket write failed'));
+    bridge.start();
+    const callId = 96n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.rejectCall).toHaveBeenCalledWith(callId));
+  });
+
+  // I3: the busy check races two RINGING_INCOMING events for different
+  // callIds landing in the same synchronous burst — the pending reservation
+  // only happens after resolveSignalVoiceCaller's await, so without a
+  // synchronous reservation both would pass the busy check.
+  it('busy-rejects a second RINGING for a different callId that arrives synchronously while the first is still resolving', async () => {
+    let resolveFirst!: (v: InboundSenderContext) => void;
+    let resolveCalls = 0;
+    const resolveImpl = async (): Promise<InboundSenderContext> => {
+      resolveCalls += 1;
+      if (resolveCalls === 1) {
+        return new Promise<InboundSenderContext>(resolve => {
+          resolveFirst = resolve;
+        });
+      }
+      return resolvedSenderContext();
+    };
+    const { bridge, rpc } = setup({ resolveImpl });
+    bridge.start();
+    const callA = 100n;
+    const callB = 101n;
+
+    // Both emitted synchronously, back-to-back, before callA's
+    // resolveSignalVoiceCaller promise has a chance to settle.
+    rpc.emit('callEvent', ringingEvent(callA));
+    rpc.emit('callEvent', ringingEvent(callB));
+
+    await vi.waitFor(() => expect(rpc.rejectCall).toHaveBeenCalledWith(callB));
+    expect(rpc.acceptCall).not.toHaveBeenCalledWith(callB);
+
+    resolveFirst(resolvedSenderContext());
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callA));
+    expect(rpc.rejectCall).not.toHaveBeenCalledWith(callA);
+  });
+
+  // I1: ENDED arriving in the window between `active` being assigned and
+  // `startSession` resolving must not orphan a runtime session — the
+  // teardown has to happen AFTER startSession registers it, not before.
+  it('tears down a session that finishes registering after ENDED arrived mid-startSession (no zombie session, no cap timer leak)', async () => {
+    let resolveStartSession!: () => void;
+    const { bridge, rpc, startSession, endSession } = setup({
+      startSessionImpl: () =>
+        new Promise<void>(resolve => {
+          resolveStartSession = resolve;
+        }),
+    });
+    bridge.start();
+    const callId = 97n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callId));
+    rpc.emit('callEvent', connectedEvent(callId));
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+    const sessionId = startSession.mock.calls[0]![0].sessionId;
+
+    // Caller hangs up while startSession (STT connect, etc.) is still
+    // pending — `active` (with its capTimer) was already assigned before
+    // this await started, so this exercises the later setup-window race,
+    // distinct from the earlier row/publish window covered by the "aborts
+    // session start" test above.
+    rpc.emit('callEvent', endedEvent(callId));
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Not torn down yet — the session isn't registered in the runtime's
+    // session map until startSession resolves, so tearing down now would be
+    // a no-op against a session that doesn't exist yet.
+    expect(endSession).not.toHaveBeenCalled();
+
+    resolveStartSession();
+    await vi.waitFor(() => expect(endSession).toHaveBeenCalledWith(sessionId, 'remote_hangup'));
+
+    // No cap timer / active leak: a fresh call is accepted, not
+    // busy-rejected by a zombie `active` entry from the orphaned session.
+    const nextCallId = 98n;
+    rpc.emit('callEvent', ringingEvent(nextCallId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(nextCallId));
   });
 });
