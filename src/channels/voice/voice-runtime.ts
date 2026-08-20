@@ -352,8 +352,12 @@ interface StartVoiceSessionParams {
   sessionId: string;
   conversationId: string;
   roomName: string;
-  /** Agent participant JWT (identity 'curia-agent'). */
-  agentToken: string;
+  /**
+   * Agent participant JWT (identity 'curia-agent'). Optional when `transport`
+   * is supplied — LiveKit auth is irrelevant to a caller-provided transport
+   * (#1672). Required (and validated) when `transport` is absent.
+   */
+  agentToken?: string;
   /**
    * Resolved caller identity for this session (#1598). Required — omitting it
    * must not silently grant principal standing. Tests pass principalCaller() /
@@ -367,6 +371,12 @@ interface StartVoiceSessionParams {
    * inbound console calls on the same VoiceRuntime instance.
    */
   openingGreeting?: boolean;
+  /**
+   * Pre-built transport override (#1672). When set, createTransport is not
+   * called and deleteRoom is skipped at teardown — the supplier owns the
+   * media path lifecycle (e.g. SignalCallBridge / signal-cli tunnel).
+   */
+  transport?: AudioTransport;
 }
 
 interface ActiveSession {
@@ -392,6 +402,12 @@ interface ActiveSession {
   ending: boolean;
   /** Consecutive synthesize() failures; reset on a successful synthesis (#1556). */
   consecutiveTtsFailures: number;
+  /**
+   * True when the session was started with a caller-provided transport
+   * (#1672). Skips deleteRoom at teardown — the supplier owns the media
+   * lifecycle (e.g. the LiveKit room is not this runtime's to delete).
+   */
+  externalTransport: boolean;
 }
 
 export class VoiceRuntime {
@@ -430,12 +446,22 @@ export class VoiceRuntime {
       return;
     }
 
-    const transport = this.config.createTransport({
-      roomName: params.roomName,
-      token: params.agentToken,
-      livekitUrl: this.config.livekitUrl,
-      callerIdentity: params.caller.contactId,
-    }) as RateAwareTransport;
+    // (#1672) A caller-provided transport (e.g. a Signal call bridge) bypasses
+    // LiveKit entirely: no createTransport call, no agentToken requirement.
+    let transport: RateAwareTransport;
+    if (params.transport) {
+      transport = params.transport as RateAwareTransport;
+    } else {
+      if (!params.agentToken) {
+        throw new Error('startSession requires agentToken when no transport override is provided');
+      }
+      transport = this.config.createTransport({
+        roomName: params.roomName,
+        token: params.agentToken,
+        livekitUrl: this.config.livekitUrl,
+        callerIdentity: params.caller.contactId,
+      }) as RateAwareTransport;
+    }
 
     const inboundSampleRate = transport.inboundSampleRate ?? DEFAULT_INBOUND_SAMPLE_RATE;
     const publishSampleRate = transport.publishSampleRate ?? DEFAULT_PUBLISH_SAMPLE_RATE;
@@ -480,6 +506,7 @@ export class VoiceRuntime {
         ttsSeq: 0,
         ending: false,
         consecutiveTtsFailures: 0,
+        externalTransport: params.transport !== undefined,
       };
       this.sessions.set(params.sessionId, session);
 
@@ -1156,7 +1183,9 @@ export class VoiceRuntime {
 
       // Cleanup LiveKit room after hangup. Room delete does not revoke JWTs —
       // a leaked token remains valid until TTL and may auto-create the room.
-      if (this.config.deleteRoom) {
+      // Skipped for externally-supplied transports (#1672): there is no
+      // LiveKit room this runtime created, so nothing to delete.
+      if (this.config.deleteRoom && !session.externalTransport) {
         try {
           await this.config.deleteRoom(session.roomName);
         } catch (err) {
