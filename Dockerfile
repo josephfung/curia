@@ -58,9 +58,12 @@ COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 # image ships whatever versions were frozen when the base image was built, which
 # Trivy flags as known CVEs even though Debian has already published fixes.
 # Run upgrade before installing curl so curl is installed from the patched lists.
+# pulseaudio-utils provides parec/pacat, which SignalAudioTransport spawns to
+# move call PCM through the Pulse socket shared from the signal-cli container
+# (#1672). Client tools only — no PulseAudio daemon runs in this image.
 RUN apt-get update \
  && apt-get upgrade -y \
- && apt-get install -y --no-install-recommends curl \
+ && apt-get install -y --no-install-recommends curl pulseaudio-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root system user/group for the runtime process.
