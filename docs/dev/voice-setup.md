@@ -76,10 +76,11 @@ Enable Signal voice calls and set call duration limits with these environment va
 
 ### Policy
 
-Curia answers every inbound Signal call. Contact resolution determines whether
-the caller is framed as the principal or a non-principal contact; blocked
-contacts are declined. All calls enforce a hard per-call duration cap;
-no wrap-up message is spoken when the limit is reached.
+Curia answers inbound Signal calls from callers with a stable phone number.
+Contact resolution determines whether the caller is framed as the principal or a
+non-principal contact; blocked contacts and callers with no phone number
+(uuid-only, rejected as `no_identifier`) are declined. All calls enforce a hard
+per-call duration cap; no wrap-up message is spoken when the limit is reached.
 
 ### Deploy prerequisites
 

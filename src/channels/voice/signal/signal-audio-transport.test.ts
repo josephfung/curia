@@ -252,4 +252,56 @@ describe('SignalAudioTransport', () => {
     expect(warn).not.toHaveBeenCalled();
     expect(debug).toHaveBeenCalled();
   });
+
+  it('disconnect() resolves even when a child already exited (never re-emits exit)', async () => {
+    // Models real ChildProcess semantics that FakeChild does NOT: once a
+    // process has exited, kill() is a no-op and no further 'exit' fires. (The
+    // default FakeChild.kill() re-emits 'exit' on every call, which would mask
+    // this bug entirely.)
+    class DeadOnceChild extends FakeChild {
+      private exited = false;
+      emit(event: string | symbol, ...args: unknown[]): boolean {
+        if (event === 'exit') this.exited = true;
+        return super.emit(event, ...args);
+      }
+      override kill(signal?: NodeJS.Signals): boolean {
+        this.killed.push(signal ?? 'SIGTERM');
+        // A dead process yields nothing — no re-emit, unlike FakeChild.
+        return !this.exited;
+      }
+    }
+    const children: { cmd: string; child: DeadOnceChild }[] = [];
+    const spawnFn: SpawnFn = cmd => {
+      const child = new DeadOnceChild();
+      children.push({ cmd, child });
+      return child;
+    };
+    const transport = new SignalAudioTransport({
+      pulseServer: '/run/pulse/native',
+      inputDeviceName: 'signal_input_42',
+      outputDeviceName: 'signal_output_42',
+      logger: createSilentLogger(),
+      spawnFn,
+    });
+    await transport.connect();
+
+    // Both children die mid-call on their own — this is the exact path that
+    // reaches disconnect(): the exit fires close callbacks, the runtime then
+    // calls endSession(), which awaits disconnect(). terminateChild() must NOT
+    // wait for another 'exit' that will never come, or the promise hangs.
+    for (const { child } of children) child.emit('exit', 1, null);
+
+    // Bound the await so a regression fails fast instead of hanging the runner.
+    let settled = false;
+    await Promise.race([
+      transport.disconnect().then(() => {
+        settled = true;
+      }),
+      new Promise<void>((_, reject) => {
+        const t = setTimeout(() => reject(new Error('disconnect() did not resolve')), 1_000);
+        if (typeof t === 'object' && 'unref' in t) t.unref();
+      }),
+    ]);
+    expect(settled).toBe(true);
+  });
 });

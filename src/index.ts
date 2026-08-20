@@ -911,10 +911,13 @@ async function main(): Promise<void> {
   let smsClient: SmsClient | undefined;
   let smsAdapter: SmsAdapter | undefined;
   let voiceAdapter: VoiceAdapter | undefined;
-  // Hoisted out of the voice-adapter construction block below so the Signal
-  // voice-call bridge (#1672) can reuse the same VoiceRuntime instance without
-  // requiring the LiveKit voice channel to be enabled — the bridge only needs
-  // the runtime + STT/TTS/LLM stack, not LiveKit rooms.
+  // Hoisted so the Signal voice-call bridge (#1672) can reuse the same
+  // VoiceRuntime instance. NOTE: this is assigned only inside the voice-adapter
+  // construction block below, which is gated on the LiveKit credentials — so
+  // today enabling Signal voice calls also requires the LiveKit voice channel
+  // to be configured, even though Signal calls carry audio over PulseAudio and
+  // never open a LiveKit room. Constructing VoiceRuntime outside that gate
+  // (LiveKit only for the console transport) is a possible follow-up.
   let voiceRuntimeRef: VoiceRuntime | undefined;
   // Batch STT/TTS for text-channel voice notes (#1597). Needs Deepgram + Cartesia
   // (+ voice id) only — not LiveKit. Channel adapters (#1600/#1601) consume this
@@ -1986,17 +1989,24 @@ async function main(): Promise<void> {
         pulseServer: config.signalPulseSocketPath,
         maxCallSeconds: config.signalVoiceMaxCallSeconds,
       });
-      signalCallBridge.start();
-      logger.info({ maxCallSeconds: config.signalVoiceMaxCallSeconds }, 'Signal voice-call bridge started');
+      // Constructed here (needs voiceRuntimeRef), but NOT started here: start()
+      // subscribes to call events and would answer a call. It must run after
+      // the dispatcher + configureTools wiring (below) so an answered call has
+      // coordinator tools, and it must respect setup-required mode like every
+      // other adapter. Started down beside the other channel adapters.
+      logger.info({ maxCallSeconds: config.signalVoiceMaxCallSeconds }, 'Signal voice-call bridge constructed');
     } else {
       logger.warn(
         {
           hasSignalRpc: !!signalRpcClient,
+          // False here usually means the voice channel isn't fully configured —
+          // most often missing LiveKit creds, since VoiceRuntime is built inside
+          // the LiveKit-gated block (see the voiceRuntimeRef note above).
           hasVoiceRuntime: !!voiceRuntimeRef,
           hasPulseSocket: !!config.signalPulseSocketPath,
           hasSignalChannel: channelShouldStart.has('signal'),
         },
-        'SIGNAL_VOICE_CALLS_ENABLED is set but prerequisites are missing; Signal voice calls disabled',
+        'SIGNAL_VOICE_CALLS_ENABLED is set but prerequisites are missing (needs the Signal channel + the full voice channel incl. LiveKit/Deepgram/Cartesia + the Pulse socket path); Signal voice calls disabled',
       );
     }
   }
@@ -3157,6 +3167,18 @@ async function main(): Promise<void> {
       logger.info('Voice channel adapter started');
     } else if (voiceAdapter && setupRequiredAtBoot) {
       logger.warn('SETUP-REQUIRED mode: skipping Voice adapter startup — restart after setup to enable');
+    }
+
+    // Signal voice-call bridge (#1672): started here, alongside the other
+    // adapters and after dispatcher.register() + voiceRuntime.configureTools(),
+    // so an answered call has coordinator tools — and gated on setup-required
+    // like every other channel (no principal/tools/gateway exist in that mode,
+    // so answering a call would be answering with nobody home).
+    if (signalCallBridge && !setupRequiredAtBoot) {
+      signalCallBridge.start();
+      logger.info('Signal voice-call bridge started');
+    } else if (signalCallBridge && setupRequiredAtBoot) {
+      logger.warn('SETUP-REQUIRED mode: skipping Signal voice-call bridge startup — restart after setup to enable');
     }
   } catch (err) {
     logger.fatal({ err }, 'Fatal error during channel adapter startup — invoking shutdown');

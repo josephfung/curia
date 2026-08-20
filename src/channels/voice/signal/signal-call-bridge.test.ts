@@ -615,6 +615,68 @@ describe('SignalCallBridge', () => {
     expect(rpc.rejectCall).not.toHaveBeenCalled();
   });
 
+  // CodeRabbit #3: an accepted-but-never-connected call whose CONNECTED/ENDED
+  // is lost while the socket stays up must not wedge the channel forever — a
+  // bounded backstop timer drops it and hangs up, freeing the busy check.
+  it('expires a pending call that never reaches CONNECTED/ENDED, freeing the busy check', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge, rpc } = setup();
+      bridge.start();
+      const stuckCallId = 90n;
+      const nextCallId = 91n;
+
+      rpc.emit('callEvent', ringingEvent(stuckCallId));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rpc.acceptCall).toHaveBeenCalledWith(stuckCallId);
+
+      // No CONNECTED, no ENDED, socket stays up. A new ring right now is
+      // correctly busy-rejected (one call at a time).
+      rpc.emit('callEvent', ringingEvent(nextCallId));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rpc.rejectCall).toHaveBeenCalledWith(nextCallId);
+      expect(rpc.hangupCall).not.toHaveBeenCalled();
+
+      // After the backstop elapses, the stuck entry is dropped + hung up...
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(rpc.hangupCall).toHaveBeenCalledWith(stuckCallId);
+
+      // ...and the channel is free again: the next ring is accepted, not busy.
+      rpc.rejectCall.mockClear();
+      const laterCallId = 92n;
+      rpc.emit('callEvent', ringingEvent(laterCallId));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rpc.acceptCall).toHaveBeenCalledWith(laterCallId);
+      expect(rpc.rejectCall).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // CodeRabbit #3 companion: a call that DOES connect must cancel its pending
+  // backstop, so the timer never fires against a now-active/ended call.
+  it('cancels the pending backstop once a call connects', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge, rpc, startSession } = setup();
+      bridge.start();
+      const callId = 93n;
+
+      rpc.emit('callEvent', ringingEvent(callId));
+      await vi.advanceTimersByTimeAsync(0);
+      rpc.emit('callEvent', connectedEvent(callId));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startSession).toHaveBeenCalledTimes(1);
+
+      // Elapse well past the pending backstop: it must NOT hang up the call
+      // (the cap timer, not the pending timer, governs a connected call).
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(rpc.hangupCall).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // C2: caller-resolution throw must reject the call rather than leaving it
   // in limbo (an unguarded throw would bubble to onCallEvent's catch-all,
   // which only error-logs — no rejectCall is ever sent).
