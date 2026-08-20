@@ -260,9 +260,30 @@ export class SignalCallBridge {
   }
 
   private async handleRingingIncoming(ev: SignalCallEvent): Promise<void> {
-    // Only one call may be in flight at a time — a second ring while one is
-    // active (or mid-accept, i.e. still pending, or still resolving caller
-    // identity) is rejected as busy.
+    // A repeat RINGING_INCOMING for a call we are ALREADY handling is a
+    // duplicate event, not a competing call. signal-cli re-emits RINGING while
+    // the call rings (observed live 2026-08-20: the second event for the very
+    // first call tripped the busy check below and rejected the very call we
+    // were answering, so no call could ever connect). Ignore it — the original
+    // handler is still driving this callId through accept → CONNECTED. Checked
+    // against all three in-flight slots plus `connecting` (the CONNECTED-setup
+    // window, during which the id may briefly sit in none of the other three).
+    if (
+      this.active?.callId === ev.callId ||
+      this.pending.has(ev.callId) ||
+      this.ringing.has(ev.callId) ||
+      this.connecting.has(ev.callId)
+    ) {
+      this.log.debug(
+        { callId: ev.callId.toString() },
+        'Duplicate RINGING_INCOMING for a call already in flight; ignoring',
+      );
+      return;
+    }
+
+    // Only one call may be in flight at a time — a ring for a DIFFERENT callId
+    // while one is active (or mid-accept, i.e. still pending, or still
+    // resolving caller identity) is rejected as busy.
     if (this.active !== null || this.pending.size > 0 || this.ringing.size > 0) {
       this.fireAndLog(this.config.rpcClient.rejectCall(ev.callId), 'rejectCall', ev.callId);
       this.log.info({ callId: ev.callId.toString(), reason: 'busy' }, 'Rejecting incoming Signal call');
