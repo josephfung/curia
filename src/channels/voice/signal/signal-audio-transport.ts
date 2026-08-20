@@ -152,7 +152,18 @@ export class SignalAudioTransport implements AudioTransport {
       this.handleUnexpectedExit();
     });
     child.on('exit', (code, signal) => {
-      this.log.debug({ code, signal, child: name }, 'signal audio child process exited');
+      // A non-zero code / non-null signal while we're NOT in the middle of a
+      // local disconnect() is an abnormal exit — parec/pacat died on their
+      // own mid-call. That's worth a warn at prod log levels (default info),
+      // not a debug line nobody sees until they turn on verbose logging. An
+      // exit during our own disconnect() (SIGTERM/SIGKILL below) or a clean
+      // code-0/no-signal exit is expected/normal and stays at debug.
+      const abnormal = (code !== 0 || signal !== null) && !this.closing;
+      if (abnormal) {
+        this.log.warn({ code, signal, child: name }, 'signal audio child process exited abnormally');
+      } else {
+        this.log.debug({ code, signal, child: name }, 'signal audio child process exited');
+      }
       if (name === 'pacat') this.markPacatGone();
       this.handleUnexpectedExit();
     });
@@ -174,7 +185,18 @@ export class SignalAudioTransport implements AudioTransport {
   private fireClose(reason: AudioTransportCloseReason): void {
     if (this.closeFired) return; // "once" guarantee — e.g. both children exiting
     this.closeFired = true;
-    for (const cb of this.closeCallbacks) cb(reason);
+    // This runs inside a child-process 'exit'/'error' event emit (or a
+    // direct notifyRemoteHangup() call from the bridge). A throwing consumer
+    // callback would otherwise become an uncaught exception on that call
+    // stack and crash the process — guard each invocation individually so
+    // one bad listener can't stop the rest from being notified.
+    for (const cb of this.closeCallbacks) {
+      try {
+        cb(reason);
+      } catch (err) {
+        this.log.error({ err, reason }, 'onClose callback threw; continuing to next listener');
+      }
+    }
   }
 
   /**
@@ -207,7 +229,18 @@ export class SignalAudioTransport implements AudioTransport {
         sampleRate: 48_000,
         channels: 1,
       };
-      for (const cb of this.remoteCallbacks) cb(frame);
+      // This runs inside parec's stdout 'data' event emit. A throwing
+      // consumer callback would otherwise become an uncaught exception on
+      // that call stack and crash the process — guard each invocation
+      // individually so one bad listener can't stop the rest from getting
+      // the frame (or stop the next chunk's 'data' event from firing).
+      for (const cb of this.remoteCallbacks) {
+        try {
+          cb(frame);
+        } catch (err) {
+          this.log.error({ err }, 'onRemoteAudio callback threw; continuing to next listener');
+        }
+      }
     }
   }
 
