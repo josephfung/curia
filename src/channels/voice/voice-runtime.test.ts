@@ -161,6 +161,12 @@ function makeRuntime(overrides: {
   outboundContextService?: OutboundContextService;
   /** Late-bound coordinator bridge (tools + context providers), applied via configureTools(). */
   bridge?: VoiceToolBridge;
+  /**
+   * Spy/override for the LiveKit transport factory (#1672 transport-override
+   * tests need to assert it is never called when a session supplies its own
+   * transport). Defaults to the existing `() => transport` fixture behavior.
+   */
+  createTransport?: (opts: { roomName: string; token: string; livekitUrl: string; callerIdentity: string }) => FakeAudioTransport;
 }) {
   const bus = new EventBus(logger);
   const events: BusEvent[] = [];
@@ -183,7 +189,7 @@ function makeRuntime(overrides: {
     llm: overrides.llm,
     model: 'fake',
     livekitUrl: 'ws://localhost',
-    createTransport: () => transport,
+    createTransport: overrides.createTransport ?? (() => transport),
     invokeTool: overrides.invokeTool as never,
     deleteRoom: overrides.deleteRoom,
     workingMemory: overrides.workingMemory,
@@ -1363,5 +1369,50 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
     expect(nonSystem[1]).toEqual({ role: 'assistant', content: 'Good morning.' });
     expect(nonSystem[2]).toEqual({ role: 'user', content: "what's on my calendar" });
     expect(transport.publishedFrames.length).toBeGreaterThan(0);
+  });
+});
+
+describe('transport override (#1672)', () => {
+  it('uses a provided transport, never calls createTransport, and skips deleteRoom', async () => {
+    const llm = new FakeStreamProvider([]);
+    // Standalone fixture transport (not the makeRuntime default) so we can
+    // assert it, specifically, was connected/disconnected exactly once.
+    const provided = new FakeAudioTransport();
+    // Would build a *different* transport if invoked — asserting it's never
+    // called proves the runtime short-circuits createTransport entirely.
+    const createTransport = vi.fn(() => new FakeAudioTransport());
+    const deleteRoom = vi.fn(async () => {});
+    const { runtime } = makeRuntime({ llm, createTransport, deleteRoom });
+
+    await runtime.startSession({
+      sessionId: 'sess-ext',
+      conversationId: 'voice:sess-ext',
+      roomName: 'signal-call:42',
+      caller: principalCaller(),
+      transport: provided,
+      openingGreeting: false,
+    });
+
+    expect(createTransport).not.toHaveBeenCalled();
+    expect(provided.connected).toBe(true);
+
+    await runtime.endSession('sess-ext', 'test_end');
+
+    expect(deleteRoom).not.toHaveBeenCalled();
+    expect(provided.disconnectCount).toBe(1);
+  });
+
+  it('throws when neither agentToken nor transport is provided', async () => {
+    const llm = new FakeStreamProvider([]);
+    const { runtime } = makeRuntime({ llm });
+
+    await expect(
+      runtime.startSession({
+        sessionId: 's',
+        conversationId: 'voice:s',
+        roomName: 'r',
+        caller: principalCaller(),
+      }),
+    ).rejects.toThrow(/agentToken/);
   });
 });
