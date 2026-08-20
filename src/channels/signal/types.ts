@@ -7,8 +7,9 @@
 //   - Inbound: receive notifications (text messages, group messages)
 //   - Outbound: send requests, read receipt requests
 //
+// Voice-call control (callEvent notifications) lives in call-types.ts (#1672).
+//
 // Ignored envelope types (not modelled here because we drop them):
-//   - callMessage — voice/video call events
 //   - typingMessage — typing indicators
 //   - receiptMessage — delivery/read receipt confirmations from Signal peers
 //
