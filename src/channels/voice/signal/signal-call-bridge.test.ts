@@ -507,6 +507,94 @@ describe('SignalCallBridge', () => {
     expect(startSession).not.toHaveBeenCalled();
   });
 
+  it('processes only one of two same-tick CONNECTED events for the same call', async () => {
+    // sessionStore.create is deferred: both CONNECTED events land before the
+    // first handler's first await resolves, so `active` is still null and the
+    // pending entry still present for both — only the `connecting` reentrance
+    // guard separates them.
+    let resolveCreate!: () => void;
+    const { bridge, rpc, create, startSession } = setup({
+      createImpl: (input: CreateVoiceSessionInput) =>
+        new Promise(resolve => {
+          resolveCreate = () =>
+            resolve({
+              id: input.id ?? 'session-dup',
+              conversationId: input.conversationId,
+              livekitRoom: input.livekitRoom,
+              principalContactId: input.principalContactId ?? null,
+              status: 'starting' as const,
+              startedAt: new Date('2026-08-20T12:00:00Z'),
+              endedAt: null,
+              endReason: null,
+              metadata: input.metadata ?? {},
+            });
+        }),
+    });
+    bridge.start();
+    const callId = 90n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callId));
+
+    // Two CONNECTED back-to-back in the same tick (fast flap / duplicate
+    // delivery), before the hung sessionStore.create resolves.
+    rpc.emit('callEvent', connectedEvent(callId));
+    rpc.emit('callEvent', connectedEvent(callId));
+
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    resolveCreate();
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+    // Let any second (buggy) setup surface before asserting exactly-once.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(startSession).toHaveBeenCalledTimes(1);
+    expect(rpc.hangupCall).not.toHaveBeenCalled();
+  });
+
+  it('aborts session start when ENDED arrives while setup awaits are in flight', async () => {
+    let resolveCreate!: () => void;
+    const { bridge, rpc, create, startSession, endSession } = setup({
+      createImpl: (input: CreateVoiceSessionInput) =>
+        new Promise(resolve => {
+          resolveCreate = () =>
+            resolve({
+              id: input.id ?? 'session-aborted',
+              conversationId: input.conversationId,
+              livekitRoom: input.livekitRoom,
+              principalContactId: input.principalContactId ?? null,
+              status: 'starting' as const,
+              startedAt: new Date('2026-08-20T12:00:00Z'),
+              endedAt: null,
+              endReason: null,
+              metadata: input.metadata ?? {},
+            });
+        }),
+    });
+    bridge.start();
+    const callId = 91n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callId));
+    rpc.emit('callEvent', connectedEvent(callId));
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+
+    // Caller hangs up while sessionStore.create is still pending.
+    rpc.emit('callEvent', endedEvent(callId));
+    resolveCreate();
+
+    // The already-created row is ended; no session starts for the dead call.
+    await vi.waitFor(() => expect(endSession).toHaveBeenCalledWith(expect.any(String), 'remote_hangup'));
+    expect(startSession).not.toHaveBeenCalled();
+    // Remote already hung up — nothing for us to hang up.
+    expect(rpc.hangupCall).not.toHaveBeenCalled();
+
+    // State is clean: a fresh call is accepted, not busy-rejected.
+    const nextCallId = 92n;
+    rpc.emit('callEvent', ringingEvent(nextCallId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(nextCallId));
+  });
+
   it('clears pending calls on RPC disconnect so the next call is not busy-rejected', async () => {
     const { bridge, rpc } = setup();
     bridge.start();
