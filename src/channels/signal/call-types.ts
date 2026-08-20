@@ -8,22 +8,23 @@
 // serialized by string construction so the wire carries a bare number literal
 // (signal-cli's Jackson side reads numeric types, not strings).
 
-export type SignalCallState =
-  | 'RINGING_INCOMING'
-  | 'RINGING_OUTGOING'
-  | 'CONNECTING'
-  | 'CONNECTED'
-  | 'RECONNECTING'
-  | 'ENDED';
-
-const CALL_STATES: ReadonlySet<string> = new Set([
+// Single source of truth for valid Signal call states: SignalCallState (the
+// type) and CALL_STATES (the runtime validation Set used by the parser
+// below) both derive from this array, so adding/removing a state here
+// updates both automatically instead of relying on two hand-kept lists
+// staying in sync.
+const SIGNAL_CALL_STATES = [
   'RINGING_INCOMING',
   'RINGING_OUTGOING',
   'CONNECTING',
   'CONNECTED',
   'RECONNECTING',
   'ENDED',
-]);
+] as const;
+
+export type SignalCallState = (typeof SIGNAL_CALL_STATES)[number];
+
+const CALL_STATES: ReadonlySet<string> = new Set(SIGNAL_CALL_STATES);
 
 export interface SignalCallEvent {
   callId: bigint;
