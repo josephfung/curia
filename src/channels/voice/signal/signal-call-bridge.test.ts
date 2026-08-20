@@ -804,6 +804,65 @@ describe('SignalCallBridge', () => {
     await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
   });
 
+  it('ignores a duplicate RINGING_INCOMING for the already-active connected call (no reject, no re-accept)', async () => {
+    const { bridge, rpc, startSession } = setup();
+    bridge.start();
+    const callId = 112n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callId));
+    rpc.emit('callEvent', connectedEvent(callId));
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+    // A stray RINGING re-emit for the SAME call after it is live and `active`
+    // must be ignored — not re-accepted, not rejected (rejecting would tear
+    // down the live call). Pins the `active?.callId === ev.callId` clause.
+    rpc.emit('callEvent', ringingEvent(callId));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(rpc.rejectCall).not.toHaveBeenCalled();
+    expect(rpc.acceptCall).toHaveBeenCalledTimes(1);
+    expect(startSession).toHaveBeenCalledTimes(1);
+  });
+
+  // Pins the `connecting` clause specifically — the only window where the id
+  // sits in `connecting` but NONE of active/pending/ringing: after ENDED lands
+  // mid-startSession, handleEnded nulls `active` and pending is already cleared,
+  // yet `connecting` still holds the id until setup's finally runs. Without the
+  // connecting clause the busy check would see an idle bridge and freshly
+  // ACCEPT the duplicate for an already-ending call (RED: acceptCall twice).
+  it('ignores a duplicate RINGING_INCOMING while the call is still in the connecting slot after ENDED', async () => {
+    let resolveStartSession!: () => void;
+    const { bridge, rpc, startSession, endSession } = setup({
+      startSessionImpl: () =>
+        new Promise<void>(resolve => {
+          resolveStartSession = resolve;
+        }),
+    });
+    bridge.start();
+    const callId = 113n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callId));
+    rpc.emit('callEvent', connectedEvent(callId));
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+    const sessionId = startSession.mock.calls[0]![0].sessionId;
+
+    // ENDED while startSession is still pending: active → null, pending already
+    // cleared, id remains only in `connecting`.
+    rpc.emit('callEvent', endedEvent(callId));
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Duplicate RINGING in that gap must be ignored, not re-accepted.
+    rpc.emit('callEvent', ringingEvent(callId));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(rpc.acceptCall).toHaveBeenCalledTimes(1);
+    expect(rpc.rejectCall).not.toHaveBeenCalled();
+
+    // Setup completes and tears the ended call down cleanly.
+    resolveStartSession();
+    await vi.waitFor(() => expect(endSession).toHaveBeenCalledWith(sessionId, 'remote_hangup'));
+  });
+
   // I1: ENDED arriving in the window between `active` being assigned and
   // `startSession` resolving must not orphan a runtime session — the
   // teardown has to happen AFTER startSession registers it, not before.
