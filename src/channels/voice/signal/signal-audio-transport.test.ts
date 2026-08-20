@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { createSilentLogger } from '../../../logger.js';
+import type { Logger } from '../../../logger.js';
 import { SignalAudioTransport } from './signal-audio-transport.js';
 import type { AudioChildProcess, SpawnFn } from './signal-audio-transport.js';
 
@@ -17,7 +18,7 @@ class FakeChild extends EventEmitter implements AudioChildProcess {
   }
 }
 
-function setup() {
+function setup(opts: { logger?: Logger } = {}) {
   const children: { cmd: string; args: string[]; child: FakeChild }[] = [];
   const spawnFn: SpawnFn = (cmd, args) => {
     const child = new FakeChild();
@@ -28,10 +29,24 @@ function setup() {
     pulseServer: '/run/pulse/native',
     inputDeviceName: 'signal_input_42',
     outputDeviceName: 'signal_output_42',
-    logger: createSilentLogger(),
+    logger: opts.logger ?? createSilentLogger(),
     spawnFn,
   });
   return { transport, children };
+}
+
+/**
+ * Stub pino-shaped logger with spyable level methods, for tests that assert
+ * on the level a message was logged at (createSilentLogger swallows output
+ * so there's nothing to assert against).
+ */
+function stubLogger() {
+  const debug = vi.fn();
+  const info = vi.fn();
+  const warn = vi.fn();
+  const error = vi.fn();
+  const logger: Record<string, unknown> = { debug, info, warn, error };
+  return { logger: logger as unknown as Logger, debug, info, warn, error };
 }
 
 describe('SignalAudioTransport', () => {
@@ -171,5 +186,70 @@ describe('SignalAudioTransport', () => {
     await t2.connect();
     await t2.disconnect();
     expect(r2).toEqual([]);
+  });
+
+  it('does not let a throwing onRemoteAudio callback crash the process or block other listeners', async () => {
+    const { transport, children } = setup();
+    const received: number[] = [];
+    // Registered first so it runs before the well-behaved listener below —
+    // proves iteration continues past a throw rather than crashing out.
+    transport.onRemoteAudio(() => {
+      throw new Error('boom from a bad onRemoteAudio listener');
+    });
+    transport.onRemoteAudio(frame => {
+      received.push(frame.pcm.length);
+    });
+    await transport.connect();
+    const parec = children.find(c => c.cmd === 'parec')!.child;
+    parec.stdout.write(Buffer.alloc(1920)); // exactly one 20ms frame
+    await vi.waitFor(() => expect(received).toEqual([960]));
+    await transport.disconnect();
+  });
+
+  it('does not let a throwing onClose callback crash the process or block other listeners', async () => {
+    const { transport } = setup();
+    const reasons: string[] = [];
+    transport.onClose(() => {
+      throw new Error('boom from a bad onClose listener');
+    });
+    transport.onClose(r => reasons.push(r));
+    await transport.connect();
+    transport.notifyRemoteHangup();
+    expect(reasons).toEqual(['principal_disconnected']);
+  });
+
+  it('logs at warn (not debug) when a child exits abnormally outside of disconnect()', async () => {
+    const { logger, warn, debug } = stubLogger();
+    const { transport, children } = setup({ logger });
+    await transport.connect();
+    warn.mockClear();
+    debug.mockClear();
+
+    // Simulates parec dying on its own mid-call (not our own SIGTERM/SIGKILL).
+    children.find(c => c.cmd === 'parec')!.child.emit('exit', 1, null);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 1, signal: null, child: 'parec' }),
+      expect.any(String),
+    );
+    expect(debug).not.toHaveBeenCalledWith(
+      expect.objectContaining({ child: 'parec' }),
+      expect.stringContaining('exited'),
+    );
+  });
+
+  it('logs at debug (not warn) for the expected exits during our own disconnect()', async () => {
+    const { logger, warn, debug } = stubLogger();
+    const { transport } = setup({ logger });
+    await transport.connect();
+    warn.mockClear();
+    debug.mockClear();
+
+    // FakeChild.kill() simulates a prompt exit(0, signal) in response to our
+    // own SIGTERM — expected, not abnormal.
+    await transport.disconnect();
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(debug).toHaveBeenCalled();
   });
 });
