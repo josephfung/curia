@@ -1,8 +1,9 @@
 # Voice channel setup (LiveKit console calls)
 
-Duplex spoken conversation from the Curia web console. Phase 1 uses a
-self-hosted LiveKit server for WebRTC transport, Deepgram for STT, and Cartesia
-for TTS. Signal calling and PSTN/SIP are Phase 2.
+Duplex spoken conversation from the Curia web console and Signal calls.
+Phase 1 uses a self-hosted LiveKit server for WebRTC transport, Deepgram for
+STT, and Cartesia for TTS. Signal calling is now available (experimental).
+PSTN/SIP are Phase 2.
 
 ## Prerequisites
 
@@ -59,6 +60,38 @@ LIVEKIT_COMMAND="--config /etc/livekit.yaml"
 multiple simultaneous rooms), and sets `room.empty_timeout: 30` so abandoned
 rooms tear down promptly. Room timeouts / delete are cleanup only — they do not
 revoke JWTs; a leaked token remains valid until its TTL.
+
+## Signal calls (experimental)
+
+Curia can accept inbound voice calls via Signal. The feature is off by default
+and requires Signal-specific deploy infrastructure from curia-deploy.
+
+### Configuration
+
+Enable Signal voice calls and set call duration limits with these environment variables:
+
+- `SIGNAL_VOICE_CALLS_ENABLED` — enable/disable Signal calling (default `false`).
+- `SIGNAL_PULSE_SOCKET_PATH` — path to the PulseAudio socket shared from the signal-cli container.
+- `SIGNAL_VOICE_MAX_CALL_SECONDS` — hard per-call duration cap in seconds (default `600`).
+
+### Policy
+
+Curia answers every inbound Signal call. Contact resolution determines whether
+the caller is framed as the principal or a non-principal contact; blocked
+contacts are declined. All calls enforce a hard per-call duration cap;
+no wrap-up message is spoken when the limit is reached.
+
+### Deploy prerequisites
+
+Signal calling requires infrastructure that lands via curia-deploy (separate
+repo/PR):
+
+- signal-cli >= 0.14.7
+- signal-call-tunnel binary
+- PulseAudio running inside the signal-cli container with its socket shared to Curia
+
+Ensure these are in place and the Pulse socket path is set in `SIGNAL_PULSE_SOCKET_PATH`
+before enabling the feature via `SIGNAL_VOICE_CALLS_ENABLED`.
 
 ## Security & privacy notes
 
