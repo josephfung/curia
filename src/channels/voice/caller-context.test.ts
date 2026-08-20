@@ -6,6 +6,7 @@ import type { ChannelPolicyConfig, SenderContext } from '../../contacts/types.js
 import {
   buildPrincipalSenderContext,
   resolveConsoleVoiceCaller,
+  resolveSignalVoiceCaller,
   resolveVoiceCallerFromToken,
   VOICE_CONSOLE_SENDER_ID,
 } from './caller-context.js';
@@ -14,6 +15,23 @@ const logger = pino({ level: 'silent' });
 
 const PRINCIPAL_ID = '11111111-1111-1111-1111-111111111111';
 const PARTNER_ID = '22222222-2222-2222-2222-222222222222';
+
+function principalSender(): SenderContext {
+  return {
+    resolved: true,
+    contactId: PRINCIPAL_ID,
+    displayName: 'Joseph',
+    role: 'ceo',
+    systemRole: 'principal',
+    verified: true,
+    kgNodeId: null,
+    knowledgeSummary: '',
+    authorization: null,
+    contactConfidence: 1.0,
+    tier: 'principal',
+    kind: 'principal',
+  };
+}
 
 function partnerSender(): SenderContext {
   return {
@@ -213,5 +231,95 @@ describe('resolveVoiceCallerFromToken', () => {
     });
 
     expect(contactResolver.resolve).toHaveBeenCalledWith('voice', 'anything');
+  });
+});
+
+describe('resolveSignalVoiceCaller (#1672)', () => {
+  it('resolves the principal Signal number to a liveTurn caller', async () => {
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue(principalSender()),
+    } as unknown as ContactResolver;
+
+    const result = await resolveSignalVoiceCaller({
+      contactResolver,
+      callerNumber: '+15196161377',
+      logger,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.caller.liveTurn).toBe(true);
+      expect(result.caller.senderId).toBe('+15196161377');
+    }
+    expect(contactResolver.resolve).toHaveBeenCalledWith('signal', '+15196161377');
+  });
+
+  it('admits an unresolved stranger as unknown tier without liveTurn (answer-everyone policy)', async () => {
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: false,
+        channel: 'signal',
+        senderId: '+15550001111',
+      }),
+    } as unknown as ContactResolver;
+
+    const result = await resolveSignalVoiceCaller({
+      contactResolver,
+      callerNumber: '+15550001111',
+      logger,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.caller.tier).toBe('unknown');
+      expect(result.caller.liveTurn).toBe(false);
+    }
+  });
+
+  it('rejects blocked contacts', async () => {
+    const blockedSender: SenderContext = {
+      resolved: true,
+      contactId: PARTNER_ID,
+      displayName: 'Blocked Person',
+      role: 'partner',
+      systemRole: null,
+      verified: true,
+      kgNodeId: null,
+      knowledgeSummary: '',
+      authorization: null,
+      contactConfidence: 0.9,
+      tier: 'blocked',
+      kind: 'person',
+    };
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue(blockedSender),
+    } as unknown as ContactResolver;
+
+    const result = await resolveSignalVoiceCaller({
+      contactResolver,
+      callerNumber: '+15550001111',
+      logger,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'blocked' });
+  });
+
+  it('rejects uuid-only callers with no number', async () => {
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: false,
+        channel: 'signal',
+        senderId: '',
+      }),
+    } as unknown as ContactResolver;
+
+    const result = await resolveSignalVoiceCaller({
+      contactResolver,
+      callerNumber: null,
+      logger,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'no_identifier' });
+    expect(contactResolver.resolve).not.toHaveBeenCalled();
   });
 });
