@@ -68,6 +68,14 @@ export class SignalAudioTransport implements AudioTransport {
   private parec: AudioChildProcess | undefined;
   private pacat: AudioChildProcess | undefined;
 
+  // Children that have already emitted 'exit'/'error'. A dead child never
+  // emits 'exit' again, so terminateChild() — which resolves off a fresh
+  // 'exit' — would otherwise hang forever waiting on one. disconnect() is
+  // reached exactly when a child has died mid-call (handleUnexpectedExit →
+  // fireClose('transport_error') → runtime endSession() → disconnect()), so
+  // this is the common path, not a corner case. Short-circuit on it.
+  private readonly deadChildren = new WeakSet<AudioChildProcess>();
+
   // Buffer of not-yet-emitted parec stdout bytes; frames are sliced off the
   // front once >= SIGNAL_FRAME_BYTES have accumulated.
   private inboundCarry: Buffer = Buffer.alloc(0);
@@ -147,11 +155,13 @@ export class SignalAudioTransport implements AudioTransport {
   /** Attach exit/error/stderr handling common to both children. */
   private wireChild(child: AudioChildProcess, name: 'parec' | 'pacat'): void {
     child.on('error', err => {
+      this.deadChildren.add(child);
       this.log.error({ err, child: name }, 'signal audio child process error');
       if (name === 'pacat') this.markPacatGone();
       this.handleUnexpectedExit();
     });
     child.on('exit', (code, signal) => {
+      this.deadChildren.add(child);
       // A non-zero code / non-null signal while we're NOT in the middle of a
       // local disconnect() is an abnormal exit — parec/pacat died on their
       // own mid-call. That's worth a warn at prod log levels (default info),
@@ -313,6 +323,10 @@ export class SignalAudioTransport implements AudioTransport {
 
   /** SIGTERM a child and wait for it to exit, escalating to SIGKILL after a grace period. */
   private terminateChild(child: AudioChildProcess): Promise<void> {
+    // Already exited/errored — no further 'exit' will ever fire, so waiting for
+    // one would hang disconnect() (and everything awaiting it: endSession,
+    // SignalCallBridge.stop(), handleConnected).
+    if (this.deadChildren.has(child)) return Promise.resolve();
     return new Promise<void>(resolve => {
       let settled = false;
       const finish = (): void => {

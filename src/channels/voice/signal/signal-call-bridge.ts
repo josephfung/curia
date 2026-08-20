@@ -45,6 +45,18 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * wrap-up — see the enforceCap() doc comment below. */
 const DEFAULT_MAX_CALL_SECONDS = 600;
 
+/**
+ * Backstop lifetime for an accepted-but-not-yet-CONNECTED call. Normally the
+ * terminal event (CONNECTED or ENDED) clears the pending entry well within
+ * signal-cli's own ~60s ring timeout. If that event is never delivered while
+ * the socket stays up (a lost notification, an upstream bug), the entry would
+ * otherwise linger forever and the busy check would reject every future call
+ * until a process restart. This timer is the last unbounded-wait backstop —
+ * on expiry it drops the entry, logs, and hangs the call up. Set beyond the
+ * ring timeout so it only fires when signal-cli genuinely failed to report.
+ */
+const PENDING_CALL_TIMEOUT_MS = 90_000;
+
 export interface SignalCallBridgeConfig {
   bus: EventBus;
   logger: Logger;
@@ -74,8 +86,12 @@ export class SignalCallBridge {
 
   /** The single in-progress call (post-CONNECTED), or null between calls. */
   private active: ActiveCall | null = null;
-  /** Accepted-but-not-yet-CONNECTED calls, keyed by callId. */
+  /** Accepted-but-not-yet-CONNECTED calls, keyed by callId. Mutate ONLY via
+   * setPending()/clearPending() so the parallel expiry timers stay in sync. */
   private readonly pending = new Map<bigint, VoiceCallerContext>();
+  /** Per-pending expiry timers (PENDING_CALL_TIMEOUT_MS backstop), keyed by
+   * callId. Kept parallel to `pending`; both helpers below maintain the pair. */
+  private readonly pendingTimers = new Map<bigint, NodeJS.Timeout>();
   /**
    * callIds whose RINGING_INCOMING handler is between the busy check and
    * `pending.set(...)` — i.e. still awaiting resolveSignalVoiceCaller. The
@@ -150,6 +166,40 @@ export class SignalCallBridge {
     });
   }
 
+  /**
+   * Record an accepted call as pending and arm its expiry backstop. All
+   * pending insertions go through here so no entry can exist without a timer.
+   */
+  private setPending(callId: bigint, caller: VoiceCallerContext): void {
+    this.pending.set(callId, caller);
+    const timer = setTimeout(() => {
+      // Only reachable if the terminal event never arrived — every normal
+      // removal path calls clearPending(), which cancels this timer first.
+      this.pendingTimers.delete(callId);
+      if (this.pending.delete(callId)) {
+        this.log.warn(
+          { callId: callId.toString() },
+          'Accepted Signal call never reached CONNECTED/ENDED within the backstop; dropping it and hanging up',
+        );
+        this.fireAndLog(this.config.rpcClient.hangupCall(callId), 'hangupCall(pending_timeout)', callId);
+      }
+    }, PENDING_CALL_TIMEOUT_MS);
+    this.pendingTimers.set(callId, timer);
+  }
+
+  /**
+   * Remove a pending entry and cancel its expiry timer. Returns whether an
+   * entry existed (mirrors Map.delete's boolean, which handleEnded relies on).
+   */
+  private clearPending(callId: bigint): boolean {
+    const timer = this.pendingTimers.get(callId);
+    if (timer) {
+      clearTimeout(timer);
+      this.pendingTimers.delete(callId);
+    }
+    return this.pending.delete(callId);
+  }
+
   /** Subscribe to call events. Idempotent — a second call is a no-op. */
   start(): void {
     if (this.started) return;
@@ -165,6 +215,14 @@ export class SignalCallBridge {
     this.config.rpcClient.off('disconnected', this.onDisconnected);
     this.config.rpcClient.setCallEventsSubscription(false);
     this.started = false;
+
+    // Drop any accepted-but-not-connected calls and cancel their backstop
+    // timers so none fire after shutdown. (Best-effort hangup mirrors the
+    // active-call teardown below.)
+    for (const callId of [...this.pending.keys()]) {
+      this.clearPending(callId);
+      this.fireAndLog(this.config.rpcClient.hangupCall(callId), 'hangupCall(stop)', callId);
+    }
 
     if (!this.active) return;
     const { callId, sessionId, capTimer } = this.active;
@@ -242,12 +300,12 @@ export class SignalCallBridge {
         return;
       }
 
-      this.pending.set(ev.callId, result.caller);
+      this.setPending(ev.callId, result.caller);
       try {
         await this.config.rpcClient.acceptCall(ev.callId);
       } catch (err) {
         this.log.error({ err, callId: ev.callId.toString() }, 'acceptCall failed for incoming Signal call');
-        this.pending.delete(ev.callId);
+        this.clearPending(ev.callId);
         // Mirror the other rejection paths above: acceptCall failing leaves
         // signal-cli's own call state indeterminate from our side, so send
         // an explicit reject rather than silently dropping it.
@@ -295,7 +353,7 @@ export class SignalCallBridge {
 
     if (!ev.inputDeviceName || !ev.outputDeviceName) {
       this.log.error({ callId: ev.callId.toString() }, 'CONNECTED missing PulseAudio device names — hanging up');
-      this.pending.delete(ev.callId);
+      this.clearPending(ev.callId);
       this.fireAndLog(this.config.rpcClient.hangupCall(ev.callId), 'hangupCall', ev.callId);
       return;
     }
@@ -341,7 +399,7 @@ export class SignalCallBridge {
       // No hangupCall needed — the remote side already ended the call.
       if (this.endedDuringSetup.has(ev.callId)) {
         this.log.info({ callId: ev.callId.toString(), sessionId }, 'Signal call ended during session setup; aborting start');
-        this.pending.delete(ev.callId);
+        this.clearPending(ev.callId);
         try {
           await this.config.voiceRuntime.endSession(sessionId, 'remote_hangup');
         } catch (endErr) {
@@ -363,8 +421,9 @@ export class SignalCallBridge {
 
       this.active = { callId: ev.callId, sessionId, transport, capTimer, caller };
       // The call is now visible as `active`, so it may leave `pending`
-      // without opening the busy-check race window described above.
-      this.pending.delete(ev.callId);
+      // without opening the busy-check race window described above. clearPending
+      // also cancels the pending backstop timer (the cap timer now governs).
+      this.clearPending(ev.callId);
 
       await this.config.voiceRuntime.startSession({
         sessionId,
@@ -410,7 +469,7 @@ export class SignalCallBridge {
       );
       // Mirrors voice-adapter.ts:158-168, extended to cover pre-startSession
       // throws too: whatever partial state exists must be torn down.
-      this.pending.delete(ev.callId);
+      this.clearPending(ev.callId);
       if (this.active?.callId === ev.callId) {
         if (this.active.capTimer) clearTimeout(this.active.capTimer);
         this.active = null;
@@ -479,7 +538,7 @@ export class SignalCallBridge {
       this.endedDuringSetup.add(ev.callId);
     }
 
-    if (this.pending.delete(ev.callId)) {
+    if (this.clearPending(ev.callId)) {
       this.log.info({ callId: ev.callId.toString() }, 'Signal call ended before it connected');
     }
   }
@@ -508,7 +567,9 @@ export class SignalCallBridge {
     // a socket that no longer exists.)
     if (this.pending.size > 0) {
       const droppedCallIds = [...this.pending.keys()].map(id => id.toString());
-      this.pending.clear();
+      // clearPending per key so each entry's expiry timer is cancelled too
+      // (a bare pending.clear() would leak every pending backstop timer).
+      for (const callId of [...this.pending.keys()]) this.clearPending(callId);
       this.log.info({ droppedCallIds }, 'Signal RPC socket disconnected; dropping pending calls');
     }
 

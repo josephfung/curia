@@ -47,8 +47,12 @@ export interface Config {
   //   that was registered via `signal-cli register` + `signal-cli verify`.
   signalSocketPath: string | undefined;
   signalPhoneNumber: string | undefined;
-  // Signal voice calls (#1672) — dark by default. Requires the voice stack
-  // (LiveKit creds not needed, but Deepgram/Cartesia are) AND the Signal channel.
+  // Signal voice calls (#1672) — dark by default. Requires the Signal channel
+  // AND the full voice channel enabled. Signal calls never use LiveKit rooms at
+  // runtime (they carry audio over the shared PulseAudio socket), but the
+  // bridge reuses the VoiceRuntime that today is only constructed inside the
+  // LiveKit-gated voice-adapter block — so LiveKit creds are currently a
+  // prerequisite too, alongside Deepgram/Cartesia. See index.ts.
   signalVoiceCallsEnabled: boolean;
   // PulseAudio native socket shared from the signal-cli container.
   signalPulseSocketPath: string | undefined;
