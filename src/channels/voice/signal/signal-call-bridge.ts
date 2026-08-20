@@ -28,6 +28,7 @@ import type { SignalRpcClient } from '../../signal/signal-rpc-client.js';
 import type { AudioTransport } from '../audio-transport.js';
 import type { VoiceCallerContext } from '../caller-context.js';
 import { resolveSignalVoiceCaller } from '../caller-context.js';
+import type { ResolveSignalVoiceCallerResult } from '../caller-context.js';
 import type { VoiceSessionStore } from '../session-store.js';
 import type { VoiceRuntime } from '../voice-runtime.js';
 import { SignalAudioTransport } from './signal-audio-transport.js';
@@ -75,6 +76,18 @@ export class SignalCallBridge {
   private active: ActiveCall | null = null;
   /** Accepted-but-not-yet-CONNECTED calls, keyed by callId. */
   private readonly pending = new Map<bigint, VoiceCallerContext>();
+  /**
+   * callIds whose RINGING_INCOMING handler is between the busy check and
+   * `pending.set(...)` — i.e. still awaiting resolveSignalVoiceCaller. The
+   * pending reservation only happens AFTER that await, so without this set
+   * two RINGING_INCOMING events for different callIds landing in the same
+   * synchronous burst (both before either await resolves) would both pass
+   * the busy check and both get accepted. Reserved synchronously before the
+   * first await; cleared in a finally once the handler exits (however it
+   * exits — busy-check never applies to entries already here, since they're
+   * added only after passing it once).
+   */
+  private readonly ringing = new Set<bigint>();
   /**
    * Reentrance guard for handleConnected's setup sequence. The active-callId
    * short-circuit only protects once `active` is assigned, and pending.delete
@@ -190,30 +203,58 @@ export class SignalCallBridge {
 
   private async handleRingingIncoming(ev: SignalCallEvent): Promise<void> {
     // Only one call may be in flight at a time — a second ring while one is
-    // active (or mid-accept, i.e. still pending) is rejected as busy.
-    if (this.active !== null || this.pending.size > 0) {
+    // active (or mid-accept, i.e. still pending, or still resolving caller
+    // identity) is rejected as busy.
+    if (this.active !== null || this.pending.size > 0 || this.ringing.size > 0) {
       this.fireAndLog(this.config.rpcClient.rejectCall(ev.callId), 'rejectCall', ev.callId);
       this.log.info({ callId: ev.callId.toString(), reason: 'busy' }, 'Rejecting incoming Signal call');
       return;
     }
 
-    const result = await resolveSignalVoiceCaller({
-      contactResolver: this.config.contactResolver,
-      callerNumber: ev.number,
-      logger: this.log,
-    });
-    if (!result.ok) {
-      this.fireAndLog(this.config.rpcClient.rejectCall(ev.callId), 'rejectCall', ev.callId);
-      this.log.info({ callId: ev.callId.toString(), reason: result.reason }, 'Rejecting incoming Signal call');
-      return;
-    }
-
-    this.pending.set(ev.callId, result.caller);
+    // Reserve the ringing slot synchronously, before the first await, so a
+    // second RINGING_INCOMING for a different callId in the same
+    // synchronous burst sees a non-empty `ringing` set above and is
+    // busy-rejected too (see the field comment).
+    this.ringing.add(ev.callId);
     try {
-      await this.config.rpcClient.acceptCall(ev.callId);
-    } catch (err) {
-      this.log.error({ err, callId: ev.callId.toString() }, 'acceptCall failed for incoming Signal call');
-      this.pending.delete(ev.callId);
+      let result: ResolveSignalVoiceCallerResult;
+      try {
+        result = await resolveSignalVoiceCaller({
+          contactResolver: this.config.contactResolver,
+          callerNumber: ev.number,
+          logger: this.log,
+        });
+      } catch (err) {
+        // A DB blip (or any other throw) mid-resolution must not leave the
+        // call in limbo — reject it explicitly. Left unguarded, this would
+        // bubble to onCallEvent's outer catch-all, which only error-logs;
+        // no rejectCall would ever be sent and the caller would just hang.
+        this.log.error(
+          { err, callId: ev.callId.toString() },
+          'Caller resolution threw for an incoming Signal call — rejecting',
+        );
+        this.fireAndLog(this.config.rpcClient.rejectCall(ev.callId), 'rejectCall', ev.callId);
+        return;
+      }
+      if (!result.ok) {
+        this.fireAndLog(this.config.rpcClient.rejectCall(ev.callId), 'rejectCall', ev.callId);
+        this.log.info({ callId: ev.callId.toString(), reason: result.reason }, 'Rejecting incoming Signal call');
+        return;
+      }
+
+      this.pending.set(ev.callId, result.caller);
+      try {
+        await this.config.rpcClient.acceptCall(ev.callId);
+      } catch (err) {
+        this.log.error({ err, callId: ev.callId.toString() }, 'acceptCall failed for incoming Signal call');
+        this.pending.delete(ev.callId);
+        // Mirror the other rejection paths above: acceptCall failing leaves
+        // signal-cli's own call state indeterminate from our side, so send
+        // an explicit reject rather than silently dropping it.
+        this.fireAndLog(this.config.rpcClient.rejectCall(ev.callId), 'rejectCall', ev.callId);
+      }
+    } finally {
+      this.ringing.delete(ev.callId);
     }
   }
 
@@ -333,6 +374,35 @@ export class SignalCallBridge {
         transport,
         openingGreeting: true,
       });
+
+      // startSession has resolved and the session is now registered in the
+      // runtime's session map. If ENDED arrived while we were awaiting it,
+      // handleEnded (above) recorded it in endedDuringSetup instead of
+      // tearing down immediately, since nothing was registered yet to tear
+      // down. Do the real teardown now — endSession will find a registered
+      // session (live STT + subprocesses) instead of a no-op. The
+      // `this.active?.callId !== ev.callId` half of the check is
+      // belt-and-suspenders for any other path (stop(), handleDisconnected)
+      // that may have cleared `active` for this call during the same await
+      // window without going through endedDuringSetup.
+      if (this.endedDuringSetup.has(ev.callId) || this.active?.callId !== ev.callId) {
+        this.log.info(
+          { callId: ev.callId.toString(), sessionId },
+          'Signal call ended while startSession was still connecting; tearing down the now-registered session',
+        );
+        // Only clear `active`/capTimer if it's still this call's — another
+        // call could have become active in the meantime and must not be
+        // clobbered.
+        if (this.active?.callId === ev.callId) {
+          if (this.active.capTimer) clearTimeout(this.active.capTimer);
+          this.active = null;
+        }
+        try {
+          await this.config.voiceRuntime.endSession(sessionId, 'remote_hangup');
+        } catch (endErr) {
+          this.log.error({ err: endErr, sessionId }, 'endSession failed after mid-start hangup');
+        }
+      }
     } catch (err) {
       this.log.error(
         { err, sessionId, callId: ev.callId.toString() },
@@ -372,6 +442,24 @@ export class SignalCallBridge {
     if (this.active && this.active.callId === ev.callId) {
       const { transport, sessionId, capTimer } = this.active;
       if (capTimer) clearTimeout(capTimer);
+      // `active` (and its capTimer) is assigned in handleConnected BEFORE
+      // its `await voiceRuntime.startSession(...)` resolves — the cap timer
+      // needs to start ticking from CONNECTED, not from whenever the STT
+      // connection finishes. If ENDED lands in that window (`connecting`
+      // still holds this callId), startSession hasn't registered the
+      // session with the runtime yet and the transport's onClose hasn't
+      // been wired up: notifyRemoteHangup() here would be a silent no-op
+      // (empty closeCallbacks, and closeFired=true would swallow the real
+      // listener startSession registers moments later) and endSession would
+      // look up a session id the runtime doesn't know about yet. Flag it
+      // (reusing endedDuringSetup) so handleConnected's post-await recheck
+      // tears the session down once it actually exists, instead of doing a
+      // no-op teardown against state that isn't there yet.
+      if (this.connecting.has(ev.callId)) {
+        this.endedDuringSetup.add(ev.callId);
+        this.active = null;
+        return;
+      }
       // Drives the runtime's own teardown via AudioTransport.onClose.
       transport.notifyRemoteHangup();
       // Safety net: endSession is idempotent via the store's dedupe
