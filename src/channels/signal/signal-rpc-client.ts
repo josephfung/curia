@@ -32,11 +32,11 @@ import type { Logger } from '../../logger.js';
 import type {
   SignalSendParams,
   SignalReadReceiptParams,
-  JsonRpcRequest,
   JsonRpcMessage,
   SignalReceiveParams,
   SignalGroupDetails,
 } from './types.js';
+import { parseSignalCallEvent, quoteCallIds, serializeCallParams } from './call-types.js';
 
 export interface SignalRpcClientConfig {
   /** Path to the signal-cli Unix socket, e.g. '/run/signal-cli/socket' */
@@ -85,6 +85,12 @@ export class SignalRpcClient extends EventEmitter {
   private stopping = false;
   /** True while the Unix socket is open (#1380 outbound queue). */
   private connected = false;
+  /**
+   * True once a caller has asked for voice-call events. The subscription
+   * dies with the socket, so this flag drives a resubscribe on every
+   * reconnect — see setCallEventsSubscription() (#1672).
+   */
+  private callEventsWanted = false;
 
   constructor(config: SignalRpcClientConfig) {
     super();
@@ -192,6 +198,39 @@ export class SignalRpcClient extends EventEmitter {
     return result as SignalGroupDetails[];
   }
 
+  /**
+   * Enable (or disable) voice-call event delivery. When enabled, the client
+   * sends `subscribeCallEvents` now (if connected) and after every reconnect —
+   * signal-cli silently ignores incoming calls unless a live subscription exists,
+   * and the subscription dies with the socket (#1672).
+   */
+  setCallEventsSubscription(enabled: boolean): void {
+    this.callEventsWanted = enabled;
+    if (enabled && this.connected) void this.sendCallEventsSubscribe();
+  }
+
+  async acceptCall(callId: bigint): Promise<void> {
+    await this.callWithRawParams('acceptCall', serializeCallParams(this.config.accountNumber, callId));
+  }
+
+  async rejectCall(callId: bigint): Promise<void> {
+    await this.callWithRawParams('rejectCall', serializeCallParams(this.config.accountNumber, callId));
+  }
+
+  async hangupCall(callId: bigint): Promise<void> {
+    await this.callWithRawParams('hangupCall', serializeCallParams(this.config.accountNumber, callId));
+  }
+
+  private async sendCallEventsSubscribe(): Promise<void> {
+    try {
+      await this.call('subscribeCallEvents', { account: this.config.accountNumber });
+      this.log.info('Signal call events subscribed');
+    } catch (err) {
+      // Must not throw into the reconnect path; the next reconnect retries.
+      this.log.error({ err }, 'Failed to subscribe to Signal call events — incoming calls will be ignored until next reconnect');
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Private: connection management
   // ---------------------------------------------------------------------------
@@ -211,6 +250,9 @@ export class SignalRpcClient extends EventEmitter {
         // Reset backoff on successful connect so the next disconnect starts fresh.
         this.backoffMs = BACKOFF_INITIAL_MS;
         this.emit('connected');
+        // The call-events subscription lives on the socket, not the client —
+        // it must be re-sent on every reconnect (#1672).
+        if (this.callEventsWanted) void this.sendCallEventsSubscribe();
         resolve();
       });
 
@@ -280,6 +322,15 @@ export class SignalRpcClient extends EventEmitter {
    * Rejects after REQUEST_TIMEOUT_MS if no response arrives.
    */
   private call(method: string, params: Record<string, unknown>): Promise<unknown> {
+    return this.callWithRawParams(method, JSON.stringify(params));
+  }
+
+  /**
+   * Like call(), but the params JSON text is supplied verbatim — required for
+   * call methods whose callId must be a bare 64-bit number literal (bigint
+   * breaks JSON.stringify; Number breaks precision). See call-types.ts.
+   */
+  private callWithRawParams(method: string, paramsJson: string): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.socket || this.socket.destroyed) {
         reject(new Error('Signal RPC client is not connected'));
@@ -287,7 +338,6 @@ export class SignalRpcClient extends EventEmitter {
       }
 
       const id = `req-${++this.requestCounter}`;
-      const request: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
 
       // Timeout guard — reject if signal-cli doesn't respond within the window.
       const timeout = setTimeout(() => {
@@ -297,8 +347,10 @@ export class SignalRpcClient extends EventEmitter {
 
       this.pending.set(id, { resolve, reject, timeout });
 
-      // Write the request as a single newline-terminated JSON line.
-      const line = JSON.stringify(request) + '\n';
+      // Write the request as a single newline-terminated JSON line, built by
+      // string construction so paramsJson (which may contain a bare bigint
+      // literal) is embedded verbatim rather than re-serialized.
+      const line = `{"jsonrpc":"2.0","id":${JSON.stringify(id)},"method":${JSON.stringify(method)},"params":${paramsJson}}\n`;
       this.socket.write(line, (err) => {
         if (err) {
           clearTimeout(timeout);
@@ -342,7 +394,11 @@ export class SignalRpcClient extends EventEmitter {
   private handleLine(line: string): void {
     let parsed: JsonRpcMessage;
     try {
-      const raw = JSON.parse(line);
+      // callId values are signed 64-bit numbers that can exceed
+      // Number.MAX_SAFE_INTEGER; JSON.parse would silently round them, so
+      // quote them to strings first and let call-types.ts re-parse via BigInt.
+      // The includes() guard keeps the regex off the hot message-receive path.
+      const raw = JSON.parse(line.includes('"callId"') ? quoteCallIds(line) : line);
       // Guard against valid JSON that isn't an object (e.g. a bare string or number).
       // signal-cli should never send these, but be defensive — 'in' throws on non-objects.
       if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -387,9 +443,27 @@ export class SignalRpcClient extends EventEmitter {
 
   /**
    * Handle a server-initiated notification (no `id` field).
-   * The only notification we care about is `receive` — inbound messages.
+   * Notifications we care about: `receive` (inbound messages) and
+   * `callEvent` (voice-call state changes, #1672). Call events do NOT go
+   * through the message dedup window — they aren't messages and signal-cli
+   * does not re-deliver them on reconnect the way it does for `receive`.
    */
   private handleNotification(notification: { method: string; params: Record<string, unknown> }): void {
+    if (notification.method === 'callEvent') {
+      const result = (notification.params as { result?: unknown })?.result;
+      if (!result || typeof result !== 'object' || Array.isArray(result)) {
+        this.log.warn('Signal RPC: callEvent notification missing result object');
+        return;
+      }
+      const ev = parseSignalCallEvent(result as Record<string, unknown>);
+      if (!ev) {
+        this.log.warn('Signal RPC: unparseable callEvent notification');
+        return;
+      }
+      this.emit('callEvent', ev);
+      return;
+    }
+
     if (notification.method !== 'receive') {
       // signal-cli may send other notifications in the future (typing indicators, etc.).
       // Log at debug so we're aware but don't spam at info level.
