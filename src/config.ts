@@ -1272,6 +1272,10 @@ export function loadConfig(): Config {
     throw new Error(`NYLAS_POLL_INTERVAL_MS must be a number >= 1000, got: ${process.env.NYLAS_POLL_INTERVAL_MS}`);
   }
 
+  // Parsed once into a local (rather than twice inline below) so the
+  // > 0 validity check and the value used on the valid branch can't drift.
+  const parsedSignalVoiceMaxCallSeconds = Number.parseInt(process.env.SIGNAL_VOICE_MAX_CALL_SECONDS ?? '', 10);
+
   // Validate IANA timezone before any consumer sees it — bad config should fail at
   // startup, not silently produce wrong timestamps at runtime.
   const timezone = process.env.TIMEZONE ?? 'America/Toronto';
@@ -1306,9 +1310,7 @@ export function loadConfig(): Config {
     signalPhoneNumber: undefined,
     signalVoiceCallsEnabled: process.env.SIGNAL_VOICE_CALLS_ENABLED?.trim().toLowerCase() === 'true',
     signalPulseSocketPath: process.env.SIGNAL_PULSE_SOCKET_PATH?.trim() || undefined,
-    signalVoiceMaxCallSeconds: Number.parseInt(process.env.SIGNAL_VOICE_MAX_CALL_SECONDS ?? '', 10) > 0
-      ? Number.parseInt(process.env.SIGNAL_VOICE_MAX_CALL_SECONDS!, 10)
-      : 600,
+    signalVoiceMaxCallSeconds: parsedSignalVoiceMaxCallSeconds > 0 ? parsedSignalVoiceMaxCallSeconds : 600,
     slackBotToken: process.env.SLACK_BOT_TOKEN?.trim() || undefined,
     slackAppToken: process.env.SLACK_APP_TOKEN?.trim() || undefined,
     // SMS (Telnyx) is vault-only — resolved from channel.sms.* in
