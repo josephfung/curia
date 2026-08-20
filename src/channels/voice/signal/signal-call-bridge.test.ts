@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { createSilentLogger } from '../../../logger.js';
+import type { Logger } from '../../../logger.js';
 import type { ContactResolver } from '../../../contacts/contact-resolver.js';
 import type { InboundSenderContext, SenderContext } from '../../../contacts/types.js';
 import type { BusEvent, Layer } from '../../../bus/events.js';
@@ -117,9 +118,27 @@ class FakeCallTransport {
   publishAudio = vi.fn(async () => undefined);
 }
 
+/**
+ * Stub pino-shaped logger with spyable level methods. The bridge only uses
+ * child() + the four level methods, so this is a safe stand-in when a test
+ * needs to assert a warn/info was emitted (createSilentLogger has no spies).
+ */
+function stubLogger() {
+  const debug = vi.fn();
+  const info = vi.fn();
+  const warn = vi.fn();
+  const error = vi.fn();
+  const logger: Record<string, unknown> = { debug, info, warn, error };
+  logger.child = vi.fn(() => logger);
+  return { logger: logger as unknown as Logger, debug, info, warn, error };
+}
+
 interface SetupOptions {
   resolveImpl?: (channel: string, senderId: string) => Promise<InboundSenderContext>;
   maxCallSeconds?: number;
+  /** Override sessionStore.create (e.g. reject, or hang forever). */
+  createImpl?: (input: CreateVoiceSessionInput) => Promise<unknown>;
+  logger?: Logger;
 }
 
 function setup(opts: SetupOptions = {}) {
@@ -137,7 +156,7 @@ function setup(opts: SetupOptions = {}) {
     },
   } as unknown as VoiceRuntime;
 
-  const create = vi.fn(async (input: CreateVoiceSessionInput) => ({
+  const defaultCreateImpl = async (input: CreateVoiceSessionInput): Promise<unknown> => ({
     id: input.id ?? randomUUID(),
     conversationId: input.conversationId,
     livekitRoom: input.livekitRoom,
@@ -147,7 +166,8 @@ function setup(opts: SetupOptions = {}) {
     endedAt: null,
     endReason: null,
     metadata: input.metadata ?? {},
-  }));
+  });
+  const create = vi.fn<(input: CreateVoiceSessionInput) => Promise<unknown>>(opts.createImpl ?? defaultCreateImpl);
   const store = { create } as unknown as VoiceSessionStore;
 
   const publish = vi.fn(async (_layer: Layer, _event: BusEvent) => undefined);
@@ -165,7 +185,7 @@ function setup(opts: SetupOptions = {}) {
 
   const bridge = new SignalCallBridge({
     bus,
-    logger: createSilentLogger(),
+    logger: opts.logger ?? createSilentLogger(),
     rpcClient: rpc as unknown as SignalRpcClient,
     contactResolver,
     voiceRuntime: runtime,
@@ -234,6 +254,9 @@ describe('SignalCallBridge', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: expect.stringMatching(/^voice:/),
       livekitRoom: `signal-call:${callId.toString()}`,
+      // The resolved contactId is a real UUID, so it passes the UUID_RE gate
+      // and is persisted as principal_contact_id.
+      principalContactId: '33333333-3333-3333-3333-333333333333',
       metadata: {
         channel: 'signal',
         callerNumber: DEFAULT_NUMBER,
@@ -287,7 +310,7 @@ describe('SignalCallBridge', () => {
   });
 
   it('admits an unknown caller with tier unknown and liveTurn false (answer-everyone)', async () => {
-    const { bridge, rpc, startSession } = setup({
+    const { bridge, rpc, startSession, create } = setup({
       resolveImpl: async () => unresolvedSenderContext(),
     });
     bridge.start();
@@ -301,6 +324,9 @@ describe('SignalCallBridge', () => {
     const call = startSession.mock.calls[0]![0];
     expect(call.caller.tier).toBe('unknown');
     expect(call.caller.liveTurn).toBe(false);
+    // Unknown caller's contactId is the E.164 number (not a UUID) — the
+    // UUID-only principal_contact_id column must stay unset.
+    expect(create.mock.calls[0]![0].principalContactId).toBeUndefined();
   });
 
   it('hangs up instead of starting a session when CONNECTED arrives without a pending accept', async () => {
@@ -387,5 +413,115 @@ describe('SignalCallBridge', () => {
     expect(endSession).toHaveBeenCalledWith(sessionId, 'adapter_stop');
     expect(rpc.listenerCount('callEvent')).toBe(0);
     expect(rpc.listenerCount('disconnected')).toBe(0);
+  });
+
+  it('ignores a redundant CONNECTED for the already-active call (RingRTC reconnect) instead of hanging up', async () => {
+    const { bridge, rpc, startSession, endSession } = setup();
+    bridge.start();
+    const callId = 81n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callId));
+    rpc.emit('callEvent', connectedEvent(callId));
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+    // Network blip recovery: RECONNECTING → CONNECTED again for the SAME call.
+    rpc.emit('callEvent', connectedEvent(callId));
+    // Give the async handler a chance to run fully.
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(rpc.hangupCall).not.toHaveBeenCalled();
+    expect(endSession).not.toHaveBeenCalled();
+    // No second session was started — the call is still the original one.
+    expect(startSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans up (hangupCall, no session start) when sessionStore.create rejects mid-CONNECTED', async () => {
+    const { bridge, rpc, startSession, endSession } = setup({
+      createImpl: async () => {
+        throw new Error('db down');
+      },
+    });
+    bridge.start();
+    const callId = 82n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callId));
+    rpc.emit('callEvent', connectedEvent(callId));
+
+    await vi.waitFor(() => expect(rpc.hangupCall).toHaveBeenCalledWith(callId));
+    expect(startSession).not.toHaveBeenCalled();
+    // No row was created, so no endSession call either — nothing to end.
+    expect(endSession).not.toHaveBeenCalled();
+
+    // State must be fully cleared: a fresh incoming call is accepted, not
+    // busy-rejected (which would mean the failed call leaked into pending).
+    const nextCallId = 83n;
+    rpc.emit('callEvent', ringingEvent(nextCallId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(nextCallId));
+  });
+
+  it('logs a warning instead of an unhandled rejection when rejectCall fails on the busy path', async () => {
+    const { logger, warn } = stubLogger();
+    const { bridge, rpc, startSession } = setup({ logger });
+    bridge.start();
+    const activeCallId = 84n;
+    const busyCallId = 85n;
+
+    rpc.emit('callEvent', ringingEvent(activeCallId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(activeCallId));
+    rpc.emit('callEvent', connectedEvent(activeCallId));
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+
+    rpc.rejectCall.mockRejectedValueOnce(new Error('rpc socket write failed'));
+    rpc.emit('callEvent', ringingEvent(busyCallId));
+
+    // The rejection must be swallowed into a warn log — vitest fails the run
+    // on any unhandled rejection, so reaching this assertion IS the guarantee.
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ what: 'rejectCall', callId: busyCallId.toString() }),
+        expect.any(String),
+      );
+    });
+  });
+
+  it('keeps rejecting busy while a CONNECTED session setup is still in flight', async () => {
+    // sessionStore.create hangs forever — call A is mid-setup: not yet active,
+    // and (pre-fix) already deleted from pending. The busy invariant must hold.
+    const { bridge, rpc, create, startSession } = setup({
+      createImpl: () => new Promise(() => undefined),
+    });
+    bridge.start();
+    const callA = 86n;
+    const callB = 87n;
+
+    rpc.emit('callEvent', ringingEvent(callA));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callA));
+    rpc.emit('callEvent', connectedEvent(callA));
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+
+    rpc.emit('callEvent', ringingEvent(callB));
+    await vi.waitFor(() => expect(rpc.rejectCall).toHaveBeenCalledWith(callB));
+    expect(rpc.acceptCall).not.toHaveBeenCalledWith(callB);
+    expect(startSession).not.toHaveBeenCalled();
+  });
+
+  it('clears pending calls on RPC disconnect so the next call is not busy-rejected', async () => {
+    const { bridge, rpc } = setup();
+    bridge.start();
+    const staleCallId = 88n;
+    const freshCallId = 89n;
+
+    // Call accepted but CONNECTED never arrives — then the socket drops.
+    rpc.emit('callEvent', ringingEvent(staleCallId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(staleCallId));
+    rpc.emit('disconnected');
+
+    // After reconnect a new call rings: it must be accepted, not busy-rejected
+    // because of the stale pending entry (which would wedge the channel).
+    rpc.emit('callEvent', ringingEvent(freshCallId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(freshCallId));
+    expect(rpc.rejectCall).not.toHaveBeenCalled();
   });
 });
