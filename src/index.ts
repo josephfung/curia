@@ -87,6 +87,7 @@ import { evaluateVoiceModelCapabilities } from './channels/voice/voice-model-cap
 import { DeepgramSttProvider, CartesiaTtsProvider, SpeechMediaService } from './speech/index.js';
 import { LiveKitRoomSession } from './channels/voice/livekit/room-session.js';
 import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.js';
+import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
@@ -910,6 +911,11 @@ async function main(): Promise<void> {
   let smsClient: SmsClient | undefined;
   let smsAdapter: SmsAdapter | undefined;
   let voiceAdapter: VoiceAdapter | undefined;
+  // Hoisted out of the voice-adapter construction block below so the Signal
+  // voice-call bridge (#1672) can reuse the same VoiceRuntime instance without
+  // requiring the LiveKit voice channel to be enabled — the bridge only needs
+  // the runtime + STT/TTS/LLM stack, not LiveKit rooms.
+  let voiceRuntimeRef: VoiceRuntime | undefined;
   // Batch STT/TTS for text-channel voice notes (#1597). Needs Deepgram + Cartesia
   // (+ voice id) only — not LiveKit. Channel adapters (#1600/#1601) consume this
   // without importing VoiceRuntime.
@@ -1941,6 +1947,7 @@ async function main(): Promise<void> {
         // voiceRuntime.configureTools() after the coordinator is registered
         // (ExecutionLayer + pinned tools + agent registry exist then).
       });
+      voiceRuntimeRef = voiceRuntime;
       logger.info({ voiceModel }, 'Voice runtime constructed (streaming provider + model capabilities ok)');
 
       voiceAdapter = new VoiceAdapter({
@@ -1958,6 +1965,36 @@ async function main(): Promise<void> {
     }
   } else if (channelShouldStart.has('voice')) {
     logger.warn('channel voice is enabled + resolvable but runtime credentials are missing (LiveKit, Deepgram, Cartesia, or the Cartesia voice ID); no Voice adapter constructed — check vault credentials and restart');
+  }
+
+  // Signal voice calls (#1672): bridge signal-cli callEvents into VoiceRuntime.
+  // Dark by default — requires the flag, the Signal RPC client, the voice
+  // runtime, and the shared Pulse socket path.
+  let signalCallBridge: SignalCallBridge | undefined;
+  if (config.signalVoiceCallsEnabled) {
+    if (signalRpcClient && voiceRuntimeRef && config.signalPulseSocketPath) {
+      signalCallBridge = new SignalCallBridge({
+        bus,
+        logger,
+        rpcClient: signalRpcClient,
+        contactResolver,
+        voiceRuntime: voiceRuntimeRef,
+        sessionStore: voiceSessionStore,
+        pulseServer: config.signalPulseSocketPath,
+        maxCallSeconds: config.signalVoiceMaxCallSeconds,
+      });
+      signalCallBridge.start();
+      logger.info({ maxCallSeconds: config.signalVoiceMaxCallSeconds }, 'Signal voice-call bridge started');
+    } else {
+      logger.warn(
+        {
+          hasSignalRpc: !!signalRpcClient,
+          hasVoiceRuntime: !!voiceRuntimeRef,
+          hasPulseSocket: !!config.signalPulseSocketPath,
+        },
+        'SIGNAL_VOICE_CALLS_ENABLED is set but prerequisites are missing; Signal voice calls disabled',
+      );
+    }
   }
 
   // Scheduler — Postgres-backed job scheduler for cron and one-shot tasks.
@@ -2933,6 +2970,17 @@ async function main(): Promise<void> {
         await adapter.stop();
       } catch (err) {
         logger.error({ err }, 'Error stopping email adapter during shutdown');
+      }
+    }
+    if (signalCallBridge) {
+      try {
+        // Stop before signalAdapter/voiceAdapter: the bridge shares the Signal
+        // RPC client with signalAdapter (which disconnects the socket below)
+        // and owns any live call, so it must hang up and tear down its
+        // VoiceRuntime session while the socket is still connected.
+        await signalCallBridge.stop();
+      } catch (err) {
+        logger.error({ err }, 'Error stopping Signal voice-call bridge during shutdown');
       }
     }
     if (signalAdapter) {

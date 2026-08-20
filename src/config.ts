@@ -47,6 +47,13 @@ export interface Config {
   //   that was registered via `signal-cli register` + `signal-cli verify`.
   signalSocketPath: string | undefined;
   signalPhoneNumber: string | undefined;
+  // Signal voice calls (#1672) — dark by default. Requires the voice stack
+  // (LiveKit creds not needed, but Deepgram/Cartesia are) AND the Signal channel.
+  signalVoiceCallsEnabled: boolean;
+  // PulseAudio native socket shared from the signal-cli container.
+  signalPulseSocketPath: string | undefined;
+  // Hard per-call duration cap (answer-everyone guardrail).
+  signalVoiceMaxCallSeconds: number;
   // Slack channel config (Socket Mode). Both must be set to enable the Slack adapter.
   // slackBotToken: Bot User OAuth Token (xoxb-…).
   // slackAppToken: App-Level Token (xapp-…) with connections:write for Socket Mode.
@@ -1297,6 +1304,11 @@ export function loadConfig(): Config {
     // Signal adapter with a bogus socket path or phone number.
     signalSocketPath: process.env.SIGNAL_SOCKET_PATH?.trim() || undefined,
     signalPhoneNumber: undefined,
+    signalVoiceCallsEnabled: process.env.SIGNAL_VOICE_CALLS_ENABLED?.trim().toLowerCase() === 'true',
+    signalPulseSocketPath: process.env.SIGNAL_PULSE_SOCKET_PATH?.trim() || undefined,
+    signalVoiceMaxCallSeconds: Number.parseInt(process.env.SIGNAL_VOICE_MAX_CALL_SECONDS ?? '', 10) > 0
+      ? Number.parseInt(process.env.SIGNAL_VOICE_MAX_CALL_SECONDS!, 10)
+      : 600,
     slackBotToken: process.env.SLACK_BOT_TOKEN?.trim() || undefined,
     slackAppToken: process.env.SLACK_APP_TOKEN?.trim() || undefined,
     // SMS (Telnyx) is vault-only — resolved from channel.sms.* in
