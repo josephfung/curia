@@ -84,6 +84,15 @@ export class SignalAudioTransport implements AudioTransport {
   // killed too) — the seam promises "once".
   private closeFired = false;
 
+  // True once pacat has exited or errored. publishAudio checks it to drop
+  // frames instead of writing into a dead pipe, and markPacatGone() uses it
+  // to flush any backpressure waits that would otherwise never see 'drain'.
+  private pacatGone = false;
+  // publishAudio calls parked on 'drain'. Kept in a list (rather than a
+  // per-call child.on('exit') listener) so they can be flushed centrally on
+  // pacat death without leaking one exit listener per backpressured write.
+  private pacatDrainWaiters: Array<() => void> = [];
+
   constructor(opts: SignalAudioTransportOpts) {
     this.opts = opts;
     this.log = opts.logger;
@@ -118,6 +127,15 @@ export class SignalAudioTransport implements AudioTransport {
     this.wireChild(this.parec, 'parec');
     this.wireChild(this.pacat, 'pacat');
 
+    // Persistent stdin 'error' listener: when pacat dies mid-call, an
+    // in-flight or late write surfaces EPIPE on the stream. Without a
+    // listener, that 'error' would be an unhandled event and crash the
+    // process. It also marks pacat gone so pending backpressure waits settle.
+    this.pacat.stdin?.on('error', (err: Error) => {
+      this.log.debug({ err }, 'pacat stdin error (expected when pacat exits mid-call)');
+      this.markPacatGone();
+    });
+
     this.parec.stdout?.on('data', (chunk: Buffer) => this.handleInboundChunk(chunk));
 
     // No handshake to await — parec/pacat produce/consume bytes on their own
@@ -130,10 +148,12 @@ export class SignalAudioTransport implements AudioTransport {
   private wireChild(child: AudioChildProcess, name: 'parec' | 'pacat'): void {
     child.on('error', err => {
       this.log.error({ err, child: name }, 'signal audio child process error');
+      if (name === 'pacat') this.markPacatGone();
       this.handleUnexpectedExit();
     });
     child.on('exit', (code, signal) => {
       this.log.debug({ code, signal, child: name }, 'signal audio child process exited');
+      if (name === 'pacat') this.markPacatGone();
       this.handleUnexpectedExit();
     });
     // Drain stderr at debug level so it never accumulates unread (which
@@ -155,6 +175,20 @@ export class SignalAudioTransport implements AudioTransport {
     if (this.closeFired) return; // "once" guarantee — e.g. both children exiting
     this.closeFired = true;
     for (const cb of this.closeCallbacks) cb(reason);
+  }
+
+  /**
+   * Marks pacat dead and settles every publishAudio call parked on 'drain'.
+   * With pacat gone the drain event will never fire; an unsettled promise
+   * there would freeze the outbound write path for the rest of the call.
+   */
+  private markPacatGone(): void {
+    this.pacatGone = true;
+    // Swap-then-flush so waiters removing themselves (via their own settle
+    // cleanup) can't mutate the array we're iterating.
+    const waiters = this.pacatDrainWaiters;
+    this.pacatDrainWaiters = [];
+    for (const waiter of waiters) waiter();
   }
 
   private handleInboundChunk(chunk: Buffer): void {
@@ -187,8 +221,11 @@ export class SignalAudioTransport implements AudioTransport {
 
   async publishAudio(frame: PcmFrame): Promise<void> {
     const stdin = this.pacat?.stdin;
-    if (!stdin) {
-      this.log.warn('publishAudio called with no pacat stdin available; dropping frame');
+    if (!stdin || this.pacatGone || this.closing) {
+      // Dead or absent pipe: drop the frame rather than block. The exit
+      // handler has already fired 'transport_error' (or a local disconnect
+      // is in flight), so the runtime is tearing the session down anyway.
+      this.log.debug('publishAudio dropped a frame (pacat unavailable)');
       return;
     }
     const bytes = Buffer.from(frame.pcm.buffer, frame.pcm.byteOffset, frame.pcm.length * 2);
@@ -197,7 +234,29 @@ export class SignalAudioTransport implements AudioTransport {
     // Backpressure: TTS can produce audio faster than realtime, but pacat
     // only drains at 48kHz playback speed. Wait for 'drain' before letting
     // the caller queue more frames, or we'd grow an unbounded write buffer.
-    await new Promise<void>(resolve => stdin.once('drain', () => resolve()));
+    //
+    // The wait must ALSO settle if pacat dies (child exit/error — via the
+    // pacatDrainWaiters flush) or its stdin errors/closes before draining —
+    // otherwise 'drain' never fires and this promise would hang forever,
+    // freezing the outbound write path for the rest of the call. Resolving
+    // (not rejecting) is deliberate: the exit handler already fires
+    // 'transport_error', so the runtime tears down; the caller just needs
+    // the promise to settle. All listeners are removed on settle so nothing
+    // leaks across repeated backpressured writes.
+    await new Promise<void>(resolve => {
+      const settle = (): void => {
+        stdin.removeListener('drain', settle);
+        stdin.removeListener('close', settle);
+        stdin.removeListener('error', settle);
+        const idx = this.pacatDrainWaiters.indexOf(settle);
+        if (idx !== -1) this.pacatDrainWaiters.splice(idx, 1);
+        resolve();
+      };
+      stdin.once('drain', settle);
+      stdin.once('close', settle);
+      stdin.once('error', settle);
+      this.pacatDrainWaiters.push(settle);
+    });
   }
 
   /** Bridge calls this on callEvent ENDED so the runtime tears the session down. */

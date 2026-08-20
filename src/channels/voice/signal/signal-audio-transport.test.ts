@@ -84,6 +84,79 @@ describe('SignalAudioTransport', () => {
     expect(reasons).toEqual(['transport_error']);
   });
 
+  it('publishAudio settles instead of hanging when pacat dies before drain', async () => {
+    // stdin with a tiny highWaterMark: the very first 1920-byte write exceeds
+    // it, so write() returns false and publishAudio parks awaiting 'drain'.
+    // (A default PassThrough buffers ~64 KiB per side on Node 24 before
+    // signaling backpressure, which would make this test silently vacuous.)
+    class BackpressureChild extends FakeChild {
+      override stdin = new PassThrough({ highWaterMark: 1 });
+    }
+    const children: { cmd: string; child: FakeChild }[] = [];
+    const spawnFn: SpawnFn = cmd => {
+      const child = new BackpressureChild();
+      children.push({ cmd, child });
+      return child;
+    };
+    const transport = new SignalAudioTransport({
+      pulseServer: '/run/pulse/native',
+      inputDeviceName: 'signal_input_42',
+      outputDeviceName: 'signal_output_42',
+      logger: createSilentLogger(),
+      spawnFn,
+    });
+    await transport.connect();
+    const pacat = children.find(c => c.cmd === 'pacat')!.child;
+    const pcm = new Int16Array(960).fill(7);
+    // Parks on backpressure — no 'data' listener ever drains this stdin.
+    const pending = transport.publishAudio({ pcm, sampleRate: 48_000, channels: 1 });
+    // pacat dies before any drain: the pending publish must settle.
+    pacat.emit('exit', 1, null);
+    await pending; // hangs (test times out) if the fix regresses
+    // Subsequent publishes drop the frame instead of writing into the dead pipe.
+    await transport.publishAudio({ pcm, sampleRate: 48_000, channels: 1 });
+  });
+
+  it('disconnect escalates to SIGKILL when a child ignores SIGTERM past the grace period', async () => {
+    // A child that ignores SIGTERM and only dies on SIGKILL, exercising the
+    // 500 ms grace-timer escalation in disconnect().
+    class StubbornChild extends FakeChild {
+      override kill(signal?: NodeJS.Signals): boolean {
+        this.killed.push(signal ?? 'SIGTERM');
+        if (signal === 'SIGKILL') {
+          queueMicrotask(() => this.emit('exit', null, 'SIGKILL'));
+        }
+        return true;
+      }
+    }
+    vi.useFakeTimers();
+    try {
+      const stubborn: StubbornChild[] = [];
+      const spawnFn: SpawnFn = () => {
+        const child = new StubbornChild();
+        stubborn.push(child);
+        return child;
+      };
+      const transport = new SignalAudioTransport({
+        pulseServer: '/run/pulse/native',
+        inputDeviceName: 'signal_input_42',
+        outputDeviceName: 'signal_output_42',
+        logger: createSilentLogger(),
+        spawnFn,
+      });
+      await transport.connect();
+      const done = transport.disconnect();
+      await vi.advanceTimersByTimeAsync(500); // grace period elapses → SIGKILL
+      await done;
+      expect(stubborn).toHaveLength(2);
+      for (const child of stubborn) {
+        expect(child.killed).toEqual(['SIGTERM', 'SIGKILL']);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('notifyRemoteHangup fires principal_disconnected; local disconnect fires nothing', async () => {
     const { transport } = setup();
     const reasons: string[] = [];
