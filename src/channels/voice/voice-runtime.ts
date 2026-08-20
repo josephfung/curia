@@ -466,10 +466,14 @@ export class VoiceRuntime {
     const inboundSampleRate = transport.inboundSampleRate ?? DEFAULT_INBOUND_SAMPLE_RATE;
     const publishSampleRate = transport.publishSampleRate ?? DEFAULT_PUBLISH_SAMPLE_RATE;
 
-    await transport.connect();
-
     let stt: SttSession | undefined;
     try {
+      // connect() lives inside the try (not before it) so a rejection here
+      // still reaches the catch below and calls transport.disconnect() —
+      // otherwise a transport that partially connects (e.g. one of two
+      // spawned child processes) before throwing would never be reaped.
+      await transport.connect();
+
       stt = await this.config.stt.startSession({
         sampleRate: inboundSampleRate,
         onError: err => {

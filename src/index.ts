@@ -1969,10 +1969,13 @@ async function main(): Promise<void> {
 
   // Signal voice calls (#1672): bridge signal-cli callEvents into VoiceRuntime.
   // Dark by default — requires the flag, the Signal RPC client, the voice
-  // runtime, and the shared Pulse socket path.
+  // runtime, the shared Pulse socket path, AND the Signal channel toggle
+  // (channelShouldStart), same as every other adapter gates its egress.
+  // Without this last check a disabled/uninstalled Signal channel could
+  // still answer and bridge voice calls.
   let signalCallBridge: SignalCallBridge | undefined;
   if (config.signalVoiceCallsEnabled) {
-    if (signalRpcClient && voiceRuntimeRef && config.signalPulseSocketPath) {
+    if (signalRpcClient && voiceRuntimeRef && config.signalPulseSocketPath && channelShouldStart.has('signal')) {
       signalCallBridge = new SignalCallBridge({
         bus,
         logger,
@@ -1991,6 +1994,7 @@ async function main(): Promise<void> {
           hasSignalRpc: !!signalRpcClient,
           hasVoiceRuntime: !!voiceRuntimeRef,
           hasPulseSocket: !!config.signalPulseSocketPath,
+          hasSignalChannel: channelShouldStart.has('signal'),
         },
         'SIGNAL_VOICE_CALLS_ENABLED is set but prerequisites are missing; Signal voice calls disabled',
       );

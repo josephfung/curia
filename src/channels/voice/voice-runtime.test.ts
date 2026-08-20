@@ -1415,4 +1415,33 @@ describe('transport override (#1672)', () => {
       }),
     ).rejects.toThrow(/agentToken/);
   });
+
+  it('reaps (disconnects) a transport whose connect() rejects instead of leaking it', async () => {
+    // connect() throwing must still route through the catch block's
+    // transport.disconnect() call — a transport that connect()s partially
+    // (e.g. one of two subprocesses spawned) before throwing must not be
+    // left running forever.
+    class RejectsOnConnect extends FakeAudioTransport {
+      override async connect(): Promise<void> {
+        throw new Error('pulseaudio device not found');
+      }
+    }
+    const llm = new FakeStreamProvider([]);
+    const provided = new RejectsOnConnect();
+    const { runtime } = makeRuntime({ llm });
+
+    await expect(
+      runtime.startSession({
+        sessionId: 'sess-connect-fail',
+        conversationId: 'voice:sess-connect-fail',
+        roomName: 'signal-call:43',
+        caller: principalCaller(),
+        transport: provided,
+        openingGreeting: false,
+      }),
+    ).rejects.toThrow(/pulseaudio device not found/);
+
+    expect(runtime.activeSessionCount).toBe(0);
+    expect(provided.disconnectCount).toBe(1);
+  });
 });
