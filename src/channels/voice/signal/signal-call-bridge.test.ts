@@ -741,6 +741,69 @@ describe('SignalCallBridge', () => {
     expect(rpc.rejectCall).not.toHaveBeenCalledWith(callA);
   });
 
+  // Prod bug (2026-08-20): signal-cli re-emits RINGING_INCOMING for the SAME
+  // call while it rings. The busy check treated the repeat as a competing call
+  // and rejected it — tearing down the very call being answered. A duplicate
+  // for a call already in flight must be ignored (no reject), not busy-rejected.
+  it('ignores a duplicate RINGING_INCOMING for the same call still resolving (no self-reject)', async () => {
+    let resolveFirst!: (v: InboundSenderContext) => void;
+    let resolveCalls = 0;
+    const resolveImpl = async (): Promise<InboundSenderContext> => {
+      resolveCalls += 1;
+      if (resolveCalls === 1) {
+        // Hold the first handler open in its resolve await so the duplicate
+        // lands while the callId is still in `ringing` (not yet pending).
+        return new Promise<InboundSenderContext>(resolve => {
+          resolveFirst = resolve;
+        });
+      }
+      return resolvedSenderContext();
+    };
+    const { bridge, rpc, startSession } = setup({ resolveImpl });
+    bridge.start();
+    const callId = 110n;
+
+    // Two RINGING_INCOMING for the SAME callId, back-to-back in one tick —
+    // the second arrives before the first's resolve settles.
+    rpc.emit('callEvent', ringingEvent(callId));
+    rpc.emit('callEvent', ringingEvent(callId));
+
+    // The duplicate must NOT have been rejected — it's the same call.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(rpc.rejectCall).not.toHaveBeenCalled();
+
+    // The one real handler proceeds: accept exactly once, then CONNECTED
+    // starts a session — proving the call survived the duplicate.
+    resolveFirst(resolvedSenderContext());
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callId));
+    expect(rpc.acceptCall).toHaveBeenCalledTimes(1);
+
+    rpc.emit('callEvent', connectedEvent(callId));
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+    expect(rpc.rejectCall).not.toHaveBeenCalled();
+  });
+
+  it('ignores a duplicate RINGING_INCOMING for a call already pending accept (no self-reject)', async () => {
+    const { bridge, rpc, startSession } = setup();
+    bridge.start();
+    const callId = 111n;
+
+    // First ring is accepted and sits in `pending` awaiting CONNECTED.
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.acceptCall).toHaveBeenCalledWith(callId));
+
+    // signal-cli re-emits RINGING for the same call before CONNECTED — must be
+    // ignored, not busy-rejected (which would hang up the accepted call).
+    rpc.emit('callEvent', ringingEvent(callId));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(rpc.rejectCall).not.toHaveBeenCalled();
+    expect(rpc.acceptCall).toHaveBeenCalledTimes(1);
+
+    // The call still connects normally.
+    rpc.emit('callEvent', connectedEvent(callId));
+    await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(1));
+  });
+
   // I1: ENDED arriving in the window between `active` being assigned and
   // `startSession` resolving must not orphan a runtime session — the
   // teardown has to happen AFTER startSession registers it, not before.
