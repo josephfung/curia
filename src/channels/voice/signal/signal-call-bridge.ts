@@ -103,6 +103,22 @@ export class SignalCallBridge {
     this.buildTransport = config.createTransport ?? (opts => new SignalAudioTransport(opts));
   }
 
+  /**
+   * Attach a rejection handler to a fire-and-forget promise. Every detached
+   * `rejectCall`/`hangupCall`/`endSession` in this class is best-effort, but a
+   * bare `void promise` would turn a rejection into an unhandled rejection and
+   * terminate the process — the outer handler wrappers don't cover promises
+   * that were deliberately not awaited. Route all of them through this.
+   */
+  private fireAndLog(promise: Promise<unknown>, what: string, callId?: bigint): void {
+    promise.catch((err: unknown) => {
+      this.log.warn(
+        { err, what, ...(callId !== undefined ? { callId: callId.toString() } : {}) },
+        'Best-effort Signal call operation failed',
+      );
+    });
+  }
+
   /** Subscribe to call events. Idempotent — a second call is a no-op. */
   start(): void {
     if (this.started) return;
@@ -158,7 +174,7 @@ export class SignalCallBridge {
     // Only one call may be in flight at a time — a second ring while one is
     // active (or mid-accept, i.e. still pending) is rejected as busy.
     if (this.active !== null || this.pending.size > 0) {
-      void this.config.rpcClient.rejectCall(ev.callId);
+      this.fireAndLog(this.config.rpcClient.rejectCall(ev.callId), 'rejectCall', ev.callId);
       this.log.info({ callId: ev.callId.toString(), reason: 'busy' }, 'Rejecting incoming Signal call');
       return;
     }
@@ -169,7 +185,7 @@ export class SignalCallBridge {
       logger: this.log,
     });
     if (!result.ok) {
-      void this.config.rpcClient.rejectCall(ev.callId);
+      this.fireAndLog(this.config.rpcClient.rejectCall(ev.callId), 'rejectCall', ev.callId);
       this.log.info({ callId: ev.callId.toString(), reason: result.reason }, 'Rejecting incoming Signal call');
       return;
     }
@@ -184,20 +200,35 @@ export class SignalCallBridge {
   }
 
   private async handleConnected(ev: SignalCallEvent): Promise<void> {
+    // Redundant CONNECTED for the already-active call: after a mid-call
+    // network blip RingRTC recovers via RECONNECTING → CONNECTED for the SAME
+    // live callId. That is not a protocol surprise — treating it as one (and
+    // hanging up) would kill a healthy call. No-op.
+    if (this.active?.callId === ev.callId) {
+      this.log.debug({ callId: ev.callId.toString() }, 'Redundant CONNECTED for the active Signal call; ignoring');
+      return;
+    }
+
     const caller = this.pending.get(ev.callId);
     if (!caller) {
       // CONNECTED without a prior accept from us is a protocol surprise —
       // never start a session (and thus never answer) without having run it
       // through the answer policy above.
       this.log.warn({ callId: ev.callId.toString() }, 'CONNECTED for a Signal call with no pending accept — hanging up');
-      void this.config.rpcClient.hangupCall(ev.callId);
+      this.fireAndLog(this.config.rpcClient.hangupCall(ev.callId), 'hangupCall', ev.callId);
       return;
     }
-    this.pending.delete(ev.callId);
+    // NOTE: pending.delete is deferred until `active` is set (or an error path
+    // cleans up below). While the store/bus awaits are in flight neither
+    // `active` nor `pending` would otherwise show this call, and a concurrent
+    // RINGING_INCOMING would slip past the busy check and be accepted —
+    // keeping the entry in `pending` preserves the one-call-at-a-time
+    // invariant through the whole setup sequence.
 
     if (!ev.inputDeviceName || !ev.outputDeviceName) {
       this.log.error({ callId: ev.callId.toString() }, 'CONNECTED missing PulseAudio device names — hanging up');
-      void this.config.rpcClient.hangupCall(ev.callId);
+      this.pending.delete(ev.callId);
+      this.fireAndLog(this.config.rpcClient.hangupCall(ev.callId), 'hangupCall', ev.callId);
       return;
     }
 
@@ -205,39 +236,49 @@ export class SignalCallBridge {
     const conversationId = `voice:${sessionId}`;
     const roomName = `signal-call:${ev.callId.toString()}`;
 
-    const session = await this.config.sessionStore.create({
-      id: sessionId,
-      conversationId,
-      livekitRoom: roomName,
-      principalContactId: UUID_RE.test(caller.contactId) ? caller.contactId : undefined,
-      metadata: {
-        channel: 'signal',
-        callerNumber: ev.number,
-        callId: ev.callId.toString(),
-        tier: caller.tier,
-      },
-    });
-
-    await this.config.bus.publish('channel', createVoiceSessionStarted({
-      sessionId: session.id,
-      conversationId: session.conversationId,
-      livekitRoom: session.livekitRoom,
-    }));
-
-    const transport = this.buildTransport({
-      pulseServer: this.config.pulseServer,
-      inputDeviceName: ev.inputDeviceName,
-      outputDeviceName: ev.outputDeviceName,
-      logger: this.log,
-    });
-
-    const capTimer = setTimeout(() => {
-      void this.enforceCap();
-    }, this.maxCallSeconds * 1000);
-
-    this.active = { callId: ev.callId, sessionId, transport, capTimer, caller };
-
+    // Everything from the row insert onward runs inside one guarded region:
+    // any throw after this point (store insert, bus publish, transport build,
+    // runtime start) must leave clean state — RTC hung up, the row (if it was
+    // created) ended, and active/pending cleared. Otherwise the RTC call
+    // stays connected with no audio while the bridge believes it is idle.
+    let rowCreated = false;
     try {
+      const session = await this.config.sessionStore.create({
+        id: sessionId,
+        conversationId,
+        livekitRoom: roomName,
+        principalContactId: UUID_RE.test(caller.contactId) ? caller.contactId : undefined,
+        metadata: {
+          channel: 'signal',
+          callerNumber: ev.number,
+          callId: ev.callId.toString(),
+          tier: caller.tier,
+        },
+      });
+      rowCreated = true;
+
+      await this.config.bus.publish('channel', createVoiceSessionStarted({
+        sessionId: session.id,
+        conversationId: session.conversationId,
+        livekitRoom: session.livekitRoom,
+      }));
+
+      const transport = this.buildTransport({
+        pulseServer: this.config.pulseServer,
+        inputDeviceName: ev.inputDeviceName,
+        outputDeviceName: ev.outputDeviceName,
+        logger: this.log,
+      });
+
+      const capTimer = setTimeout(() => {
+        this.fireAndLog(this.enforceCap(), 'enforceCap', ev.callId);
+      }, this.maxCallSeconds * 1000);
+
+      this.active = { callId: ev.callId, sessionId, transport, capTimer, caller };
+      // The call is now visible as `active`, so it may leave `pending`
+      // without opening the busy-check race window described above.
+      this.pending.delete(ev.callId);
+
       await this.config.voiceRuntime.startSession({
         sessionId,
         conversationId,
@@ -249,22 +290,28 @@ export class SignalCallBridge {
     } catch (err) {
       this.log.error(
         { err, sessionId, callId: ev.callId.toString() },
-        'VoiceRuntime failed to start a Signal call session — ending it',
+        'Failed to start a Signal call session — ending it',
       );
-      // Mirrors voice-adapter.ts:158-168: the row (and pending capTimer) already
-      // exist, so a start failure must be matched with a full teardown rather
-      // than left dangling.
-      if (this.active?.capTimer) clearTimeout(this.active.capTimer);
-      this.active = null;
+      // Mirrors voice-adapter.ts:158-168, extended to cover pre-startSession
+      // throws too: whatever partial state exists must be torn down.
+      this.pending.delete(ev.callId);
+      if (this.active?.callId === ev.callId) {
+        if (this.active.capTimer) clearTimeout(this.active.capTimer);
+        this.active = null;
+      }
       try {
         await this.config.rpcClient.hangupCall(ev.callId);
       } catch (hangupErr) {
-        this.log.error({ err: hangupErr, callId: ev.callId.toString() }, 'hangupCall failed after runtime start failure');
+        this.log.error({ err: hangupErr, callId: ev.callId.toString() }, 'hangupCall failed after session start failure');
       }
-      try {
-        await this.config.voiceRuntime.endSession(sessionId, 'runtime_start_failed');
-      } catch (endErr) {
-        this.log.error({ err: endErr, sessionId }, 'endSession failed after runtime start failure');
+      // Only end a session that actually got a row — endSession before the
+      // insert would be a no-op anyway, but skipping it keeps logs honest.
+      if (rowCreated) {
+        try {
+          await this.config.voiceRuntime.endSession(sessionId, 'runtime_start_failed');
+        } catch (endErr) {
+          this.log.error({ err: endErr, sessionId }, 'endSession failed after session start failure');
+        }
       }
     }
   }
@@ -280,7 +327,7 @@ export class SignalCallBridge {
       // is already 'ended'), so calling it here even though notifyRemoteHangup
       // should already trigger teardown costs nothing and covers a transport
       // that (for whatever reason) doesn't fire onClose.
-      void this.config.voiceRuntime.endSession(sessionId, 'remote_hangup');
+      this.fireAndLog(this.config.voiceRuntime.endSession(sessionId, 'remote_hangup'), 'endSession(remote_hangup)', ev.callId);
       this.active = null;
       return;
     }
@@ -301,21 +348,28 @@ export class SignalCallBridge {
     if (!this.active) return;
     const { callId, sessionId } = this.active;
     this.log.info({ callId: callId.toString(), sessionId }, 'Signal call hit the max-duration cap; hanging up');
-    void this.config.rpcClient.hangupCall(callId);
-    void this.config.voiceRuntime.endSession(sessionId, 'max_duration');
+    this.fireAndLog(this.config.rpcClient.hangupCall(callId), 'hangupCall(max_duration)', callId);
+    this.fireAndLog(this.config.voiceRuntime.endSession(sessionId, 'max_duration'), 'endSession(max_duration)', callId);
     this.active = null;
   }
 
   private handleDisconnected(): void {
+    // Drop any accepted-but-never-connected calls: their CONNECTED will never
+    // arrive on a dead socket, and a callId stuck in `pending` would make the
+    // busy check reject every future call until restart — wedging the channel.
+    // (Reconnect + resubscribe is automatic — Task 2; nothing to hang up over
+    // a socket that no longer exists.)
+    if (this.pending.size > 0) {
+      const droppedCallIds = [...this.pending.keys()].map(id => id.toString());
+      this.pending.clear();
+      this.log.info({ droppedCallIds }, 'Signal RPC socket disconnected; dropping pending calls');
+    }
+
     if (!this.active) return;
-    const { sessionId, capTimer } = this.active;
+    const { callId, sessionId, capTimer } = this.active;
     if (capTimer) clearTimeout(capTimer);
     this.log.error({ sessionId }, 'Signal RPC socket disconnected mid-call; ending voice session');
-    void this.config.voiceRuntime.endSession(sessionId, 'rpc_disconnected');
+    this.fireAndLog(this.config.voiceRuntime.endSession(sessionId, 'rpc_disconnected'), 'endSession(rpc_disconnected)', callId);
     this.active = null;
-    // No need to touch `pending` here — reconnect is automatic (Task 2) and
-    // any pending-but-not-yet-connected call's fate is decided by the next
-    // callEvent (or simply times out on the signal-cli side); there is no
-    // socket left to reject/hangup it over right now.
   }
 }
