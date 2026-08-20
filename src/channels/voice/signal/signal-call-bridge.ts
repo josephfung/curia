@@ -75,6 +75,24 @@ export class SignalCallBridge {
   private active: ActiveCall | null = null;
   /** Accepted-but-not-yet-CONNECTED calls, keyed by callId. */
   private readonly pending = new Map<bigint, VoiceCallerContext>();
+  /**
+   * Reentrance guard for handleConnected's setup sequence. The active-callId
+   * short-circuit only protects once `active` is assigned, and pending.delete
+   * is deferred until then — so two CONNECTED events for the same callId
+   * arriving before the first handler's first await resolves (fast
+   * CONNECTED→RECONNECTING→CONNECTED flap, or duplicate delivery) would both
+   * run the full setup: two session rows and an orphaned transport for one
+   * call. Entries live only for the duration of one setup (cleared in its
+   * finally). Deliberately NOT part of the busy check — `pending` already
+   * covers the whole setup window there.
+   */
+  private readonly connecting = new Set<bigint>();
+  /**
+   * callIds whose ENDED arrived while their setup was still in flight (in
+   * `connecting`). handleConnected re-checks this after its awaits and aborts
+   * instead of starting a session for a call that already hung up.
+   */
+  private readonly endedDuringSetup = new Set<bigint>();
 
   private started = false;
 
@@ -208,6 +226,15 @@ export class SignalCallBridge {
       this.log.debug({ callId: ev.callId.toString() }, 'Redundant CONNECTED for the active Signal call; ignoring');
       return;
     }
+    // Same-tick duplicate: a second CONNECTED can land before the first
+    // handler's first await resolves — `active` is still null then, so the
+    // short-circuit above misses it, and `pending` still holds the entry
+    // (deletion is deferred), so without this guard both would run the full
+    // setup (double row, orphaned transport).
+    if (this.connecting.has(ev.callId)) {
+      this.log.debug({ callId: ev.callId.toString() }, 'Duplicate CONNECTED while session setup is in flight; ignoring');
+      return;
+    }
 
     const caller = this.pending.get(ev.callId);
     if (!caller) {
@@ -241,6 +268,9 @@ export class SignalCallBridge {
     // runtime start) must leave clean state — RTC hung up, the row (if it was
     // created) ended, and active/pending cleared. Otherwise the RTC call
     // stays connected with no audio while the bridge believes it is idle.
+    // Added to `connecting` BEFORE the first await (same-tick duplicate
+    // CONNECTED guard); removed in the finally.
+    this.connecting.add(ev.callId);
     let rowCreated = false;
     try {
       const session = await this.config.sessionStore.create({
@@ -262,6 +292,22 @@ export class SignalCallBridge {
         conversationId: session.conversationId,
         livekitRoom: session.livekitRoom,
       }));
+
+      // The caller may have hung up while the row/publish awaits were in
+      // flight (handleEnded flags it here — the call was neither `active`
+      // nor still meaningfully pending from its point of view). Don't start
+      // a session for a dead call: end the row we just created and stop.
+      // No hangupCall needed — the remote side already ended the call.
+      if (this.endedDuringSetup.has(ev.callId)) {
+        this.log.info({ callId: ev.callId.toString(), sessionId }, 'Signal call ended during session setup; aborting start');
+        this.pending.delete(ev.callId);
+        try {
+          await this.config.voiceRuntime.endSession(sessionId, 'remote_hangup');
+        } catch (endErr) {
+          this.log.error({ err: endErr, sessionId }, 'endSession failed after mid-setup hangup');
+        }
+        return;
+      }
 
       const transport = this.buildTransport({
         pulseServer: this.config.pulseServer,
@@ -313,6 +359,12 @@ export class SignalCallBridge {
           this.log.error({ err: endErr, sessionId }, 'endSession failed after session start failure');
         }
       }
+    } finally {
+      // The setup window is over — whichever way it exited (active set, error
+      // cleanup, or mid-setup hangup abort), the reentrance guard and any
+      // ENDED-during-setup flag for this callId must not outlive it.
+      this.connecting.delete(ev.callId);
+      this.endedDuringSetup.delete(ev.callId);
     }
   }
 
@@ -330,6 +382,13 @@ export class SignalCallBridge {
       this.fireAndLog(this.config.voiceRuntime.endSession(sessionId, 'remote_hangup'), 'endSession(remote_hangup)', ev.callId);
       this.active = null;
       return;
+    }
+
+    // Flag a hangup that lands while handleConnected's setup awaits are in
+    // flight — the setup re-checks this after its awaits and aborts instead
+    // of starting a session for a call that is already over.
+    if (this.connecting.has(ev.callId)) {
+      this.endedDuringSetup.add(ev.callId);
     }
 
     if (this.pending.delete(ev.callId)) {
