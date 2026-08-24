@@ -191,8 +191,8 @@ describe('buildCcPreamble', () => {
     expect(result).not.toContain('+');
   });
 
-  it('counts filtered-out (empty-after-sanitize) recipients in the omitted total', () => {
-    // '\n\r' sanitizes to empty and should be counted as omitted
+  it('does not count filtered-out (empty-after-sanitize) recipients in the omitted total', () => {
+    // '\n\r' sanitizes to empty and should not be counted as omitted
     const result = buildCcPreamble(
       makeMeta({ primaryRecipientEmails: ['\n\r', 'alice@example.com'] }),
       'curia',
@@ -200,6 +200,20 @@ describe('buildCcPreamble', () => {
     );
 
     expect(result).toContain('alice@example.com');
+    expect(result).not.toContain('+');
+  });
+
+  it('does not show +N more when 12 addresses have 2 empty and 10 valid', () => {
+    const recipients = ['\n\r', '\n\r\n', ...Array.from({ length: 10 }, (_, i) => `user${i}@example.com`)];
+    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: recipients }), 'curia', 'msg-abc123');
+
+    expect(result).not.toContain('+');
+  });
+
+  it('shows +1 more when 11 valid addresses are provided', () => {
+    const recipients = Array.from({ length: 11 }, (_, i) => `user${i}@example.com`);
+    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: recipients }), 'curia', 'msg-abc123');
+
     expect(result).toContain('+1 more');
   });
 
