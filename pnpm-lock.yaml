@@ -119,8 +119,8 @@ importers:
         specifier: ^8.4.0
         version: 8.4.0
       openai:
-        specifier: ^7.3.0
-        version: 7.3.0(@aws-sdk/credential-provider-node@3.972.78)(@smithy/signature-v4@5.6.12)(ws@8.21.3)(zod@4.4.3)
+        specifier: ^7.4.0
+        version: 7.4.0(@aws-sdk/credential-provider-node@3.972.78)(@smithy/signature-v4@5.6.12)(ws@8.21.3)(zod@4.4.3)
       openredaction:
         specifier: ^1.1.5
         version: 1.1.5(express@5.2.1)(pdf-parse@2.4.5)(react@19.2.8)
@@ -4404,8 +4404,8 @@ packages:
       zod:
         optional: true
 
-  openai@7.3.0:
-    resolution: {integrity: sha512-FLnIAkDEP3grs+BSDpqxEWVR37yG97/hs95lajF8SnHuA5nqtssh0uJVXbPhODNEoZqar+nEd+fIeGJgwoLUmg==}
+  openai@7.4.0:
+    resolution: {integrity: sha512-+C9Muit5x8j9R8ej8ZzVgKcrVDtqFqTy9gxFdov0EItLgU68zrJtF9ZeT0cyqJQW9S3PCJkdFgADtRGquRBtew==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
@@ -9937,7 +9937,7 @@ snapshots:
       ws: 8.21.3
       zod: 4.4.3
 
-  openai@7.3.0(@aws-sdk/credential-provider-node@3.972.78)(@smithy/signature-v4@5.6.12)(ws@8.21.3)(zod@4.4.3):
+  openai@7.4.0(@aws-sdk/credential-provider-node@3.972.78)(@smithy/signature-v4@5.6.12)(ws@8.21.3)(zod@4.4.3):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.78
       '@smithy/signature-v4': 5.6.12
