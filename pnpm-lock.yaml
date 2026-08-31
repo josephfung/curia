@@ -77,8 +77,8 @@ importers:
         specifier: ^2.2.0
         version: 2.2.0
       cron-parser:
-        specifier: ^5.7.0
-        version: 5.7.0
+        specifier: ^5.10.0
+        version: 5.10.0
       cytoscape:
         specifier: ^3.34.0
         version: 3.34.0
@@ -2873,8 +2873,8 @@ packages:
   cose-base@2.2.0:
     resolution: {integrity: sha512-AzlgcsCbUMymkADOJtQm3wO9S3ltPfYOFD5033keQn9NJzIbtnZj+UdBJe7DYml/8TdbtHJW3j58SOnKhWY/5g==}
 
-  cron-parser@5.7.0:
-    resolution: {integrity: sha512-iSpDHpwwW/GhIg4JVODYlWUEpMNSimaHvqOhHpOz1W+Y97z1lL1nf+dpcF17cNwFRpTtKN9devgi1fxflp3Phw==}
+  cron-parser@5.10.0:
+    resolution: {integrity: sha512-izNAxJyRWUP8ljBoDSub5WyrVOUlT4SLGShswE7eoRBpp6QUsSycYxLBMJlbshgPBMcPT/nrfgjNY2918ayv2A==}
     engines: {node: '>=18'}
 
   cronstrue@3.24.0:
@@ -8286,7 +8286,7 @@ snapshots:
     dependencies:
       layout-base: 2.0.1
 
-  cron-parser@5.7.0:
+  cron-parser@5.10.0:
     dependencies:
       luxon: 3.7.2
 
