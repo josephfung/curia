@@ -123,13 +123,14 @@ export function buildCcPreamble(
   // from the Nylas To-field (attacker-controlled) and is injected into
   // taskContent after the injection scanner has already run on payload.content.
   // Without sanitization a crafted address could bypass Layer 1.
-  const sanitizedRecipients = meta.primaryRecipientEmails
+  const nonEmptyRecipients = meta.primaryRecipientEmails
     .map((addr) => sanitizeEmailField(addr))
-    .filter((addr) => addr.length > 0)
-    .slice(0, MAX_RECIPIENTS_IN_PREAMBLE);
+    .filter((addr) => addr.length > 0);
+  const sanitizedRecipients = nonEmptyRecipients.slice(0, MAX_RECIPIENTS_IN_PREAMBLE);
 
-  // Count items dropped by the empty-string filter or by the 10-item cap.
-  const omittedCount = Math.max(0, meta.primaryRecipientEmails.length - sanitizedRecipients.length);
+  // Only count valid addresses omitted by the display cap — empty/sanitized-away
+  // addresses must not inflate "+N more".
+  const omittedCount = Math.max(0, nonEmptyRecipients.length - sanitizedRecipients.length);
 
   // Only append "+N more" when there are named recipients to precede it —
   // "unknown recipients, +3 more" is misleading when every address was stripped.
