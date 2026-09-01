@@ -1435,6 +1435,25 @@ describe('ContactService', () => {
       expect((await service.listDedupExclusionPairKeys()).size).toBe(0);
     });
 
+    it('warns when merging a pair that carries a recorded exclusion', async () => {
+      // The ruling is about to be discarded by the merge. That is allowed (a human is
+      // confirming), but it must not be silent.
+      const warn = vi.fn();
+      const loggedService = ContactService.createInMemory(
+        entityMemory,
+        undefined,
+        { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() } as never,
+      );
+
+      const primary = await loggedService.createContact({ displayName: 'Warn Primary', source: 'test' });
+      const secondary = await loggedService.createContact({ displayName: 'Warn Secondary', source: 'test' });
+      await loggedService.addDedupExclusion(primary.id, secondary.id, 'ceo');
+
+      await loggedService.mergeContacts(primary.id, secondary.id, false);
+
+      expect(warn.mock.calls.some(([, msg]) => String(msg).includes('recorded dedup exclusion'))).toBe(true);
+    });
+
     it('collapses duplicate exclusions when both sides excluded the same contact', async () => {
       const primary = await service.createContact({ displayName: 'Alice Smith', source: 'test' });
       const secondary = await service.createContact({ displayName: 'Alice Smith', source: 'test' });

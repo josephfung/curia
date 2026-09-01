@@ -360,6 +360,65 @@ describe('runDedup — unit', () => {
     expect(listExclusionPairKeysMock).toHaveBeenCalledOnce();
   });
 
+  it('honours an exclusion inherited through an earlier merge in the same run', async () => {
+    // Regression: excludedPairKeys is a snapshot taken before the O(n²) loop, but the
+    // loop merges, and a merge re-points the secondary's exclusion rows onto the
+    // survivor. c1/c2 merge structurally (exact name), which moves the CEO's (c2, c3)
+    // ruling to (c1, c3). If the snapshot is not updated to match, the (c1, c3) pair
+    // misses the check and is auto-merged — silently overriding the ruling.
+    listExclusionPairKeysMock.mockResolvedValue(new Set(['c2:c3']));
+
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Seth Berman' }),
+      makeContact({ id: 'c2', displayName: 'seth berman' }),
+      makeContact({ id: 'c3', displayName: 'Seth  Berman' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, opts);
+
+    // c1/c2 merged (c1 is primary — lower id, neither has a KG node).
+    expect(mergeMock).toHaveBeenCalledExactlyOnceWith('c1', 'c2');
+    // c1/c3 inherited the exclusion and must NOT have merged.
+    expect(result.skippedExcludedCount).toBe(1);
+    expect(result.mergedCount).toBe(1);
+  });
+
+  it('mirrors the merge re-point in dry-run so the preview matches a real run', async () => {
+    listExclusionPairKeysMock.mockResolvedValue(new Set(['c2:c3']));
+
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Seth Berman' }),
+      makeContact({ id: 'c2', displayName: 'seth berman' }),
+      makeContact({ id: 'c3', displayName: 'Seth  Berman' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, { ...opts, dryRun: true });
+
+    expect(mergeMock).not.toHaveBeenCalled();
+    expect(result.wouldMergeCount).toBe(1);
+    expect(result.skippedExcludedCount).toBe(1);
+  });
+
+  it('drops the exclusion between the two merged contacts from the snapshot', async () => {
+    // The CEO earlier ruled c1 ≠ c2, but they are now being merged (structural proof
+    // beats the stale ruling only because the pair is not in the snapshot — here it IS,
+    // so the pair must be skipped, not merged).
+    listExclusionPairKeysMock.mockResolvedValue(new Set(['c1:c2']));
+
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Seth Berman' }),
+      makeContact({ id: 'c2', displayName: 'seth berman' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, opts);
+
+    expect(mergeMock).not.toHaveBeenCalled();
+    expect(result.skippedExcludedCount).toBe(1);
+  });
+
   it('aborts the sweep when the exclusion load fails, rather than merging blind', async () => {
     // Fail closed: an empty exclusion set would auto-merge pairs the CEO ruled apart.
     listExclusionPairKeysMock.mockRejectedValue(new Error('exclusion table unavailable'));

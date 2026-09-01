@@ -19,7 +19,9 @@ CREATE TABLE contact_dedup_exclusions (
   decided_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   -- Provenance only (agent memory-write source key, or 'ceo'). Deliberately not a
   -- decision enum: this table records exclusions, never merge outcomes (#1625).
-  decided_by   TEXT        NOT NULL,
+  -- Non-empty: NOT NULL alone would let a blank source through, and provenance is the
+  -- only audit trail a row carries.
+  decided_by   TEXT        NOT NULL CHECK (decided_by <> ''),
   PRIMARY KEY (contact_a_id, contact_b_id),
   -- Normalized ordered pair: exactly one row can exist per unordered pair, so
   -- "is this pair excluded?" is a single indexed lookup with no OR-of-two-orders.
@@ -88,6 +90,65 @@ WHERE holder.id <> other.id
 -- collapse into a single row; the earliest fact dates the decision.
 GROUP BY LEAST(holder.id, other.id), GREATEST(holder.id, other.id)
 ON CONFLICT (contact_a_id, contact_b_id) DO NOTHING;
+
+-- Report legacy facts the backfill could NOT carry over. Without this the migration is
+-- green whether it recovered 40 of 40 rulings or 12 of 40, and the first symptom of a
+-- partial recovery is a dedup review task for a pair the CEO settled months ago.
+--
+-- The likeliest cause is the one this whole change is about: a holder contact whose
+-- kg_node_id was NULLed by an idx_contacts_kg_node_unique collision after its exclusion
+-- fact was written no longer joins to its own fact, so the same-display-name population
+-- is also the population most likely to lose history here. The fact nodes are left in
+-- place, so anything reported below can still be recovered by hand.
+--
+-- The resolution join is deliberately repeated rather than approximated by "does any
+-- exclusion row mention this contact" — that shortcut counts a fact as recovered when
+-- an unrelated pair involving the same contact made it across, which under-reports
+-- exactly the loss this warning exists to surface. Both mirrored facts of one pair
+-- resolve, so a fully-recovered dataset has total = resolved.
+DO $$
+DECLARE
+  total_facts    INT;
+  resolved_facts INT;
+BEGIN
+  SELECT count(*) INTO total_facts
+  FROM kg_nodes AS fact
+  WHERE fact.type = 'fact'
+    AND fact.properties ->> 'attribute' = 'dedup_exclusion';
+
+  SELECT count(DISTINCT ef.fact_id) INTO resolved_facts
+  FROM (
+    SELECT
+      fact.id                             AS fact_id,
+      (fact.properties ->> 'value')::uuid AS other_contact_id
+    FROM kg_nodes AS fact
+    WHERE fact.type = 'fact'
+      AND fact.properties ->> 'attribute' = 'dedup_exclusion'
+      AND fact.properties ->> 'value' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    -- OFFSET 0 is an optimization fence: it stops the subquery being pulled up into the
+    -- joins below, which would let the planner reach the ::uuid cast before the regex.
+    OFFSET 0
+  ) AS ef
+  JOIN kg_edges AS edge
+    ON edge.source_node_id = ef.fact_id OR edge.target_node_id = ef.fact_id
+  JOIN kg_nodes AS entity
+    ON entity.id = CASE WHEN edge.source_node_id = ef.fact_id
+                        THEN edge.target_node_id
+                        ELSE edge.source_node_id END
+    AND entity.type <> 'fact'
+  JOIN contacts AS holder
+    ON holder.kg_node_id = entity.id
+  JOIN contacts AS other
+    ON other.id = ef.other_contact_id
+  WHERE holder.id <> other.id;
+
+  IF total_facts > resolved_facts THEN
+    RAISE WARNING 'migration 084: % of % legacy dedup_exclusion fact(s) could NOT be backfilled (holder contact has no kg_node_id link, counterparty deleted, or malformed value). Those CEO rulings are absent from contact_dedup_exclusions; the fact nodes are preserved for manual recovery.',
+      total_facts - resolved_facts, total_facts;
+  ELSE
+    RAISE NOTICE 'migration 084: all % legacy dedup_exclusion fact(s) backfilled.', total_facts;
+  END IF;
+END $$;
 -- <<< END BACKFILL
 
 -- Rollback:
