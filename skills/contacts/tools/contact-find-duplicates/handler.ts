@@ -5,15 +5,12 @@
 // This is the scheduled-scan entry point: it files tasks (rather than returning
 // a raw list) so a single run never floods the agent context or causes a timeout.
 //
-// Idempotency: pairs that already have an open 'dedup' task, or that have a
-// dedup_exclusion KG fact in either direction, are skipped and counted in the
-// summary. This makes repeated weekly runs safe to run without accumulating
-// duplicate tasks.
+// Idempotency: pairs that already have an open 'dedup' task, or that have a row
+// in contact_dedup_exclusions, are skipped and counted in the summary. This makes
+// repeated weekly runs safe to run without accumulating duplicate tasks.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { DuplicatePair, TaskOriginator } from '../../../../src/contacts/types.js';
-import type { KgNode } from '../../../../src/memory/types.js';
-import { hasExclusion } from '../../../../src/contacts/dedup-exclusions.js';
 import {
   canonicalPairKey,
   dedupPairTag,
@@ -65,22 +62,17 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
         error: 'contact-find-duplicates: taskRepo not available — declare "taskRepo" in capabilities.',
       };
     }
-    if (!ctx.entityMemory) {
-      return {
-        success: false,
-        error: 'contact-find-duplicates: entityMemory not available — declare "entityMemory" in capabilities.',
-      };
-    }
 
     // Capture as local variables so closures below don't need non-null assertions.
     const taskRepo = ctx.taskRepo;
-    const entityMemory = ctx.entityMemory;
+    const contactService = ctx.contactService;
 
     ctx.log.info({ minScore, maxTasks }, 'contact-find-duplicates: starting scan');
 
     // -- Setup phase: failures here abort the scan entirely before any writes --
     let pairs: DuplicatePair[];
     let existingPairKeys: Set<string>;
+    let excludedPairKeys: Set<string>;
     try {
       // Fetch all pairs at the base floor (0.7) then filter to the requested threshold.
       // This avoids changing the ContactService/DedupService interface for a per-call
@@ -118,6 +110,12 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
           unparseable++;
         }
       }
+      // Load every exclusion once instead of one lookup per pair. The table holds one
+      // row per pair the CEO has ruled on — small by construction, and a failure here
+      // aborts the scan (below) rather than silently re-filing excluded pairs.
+      excludedPairKeys = await contactService.listDedupExclusionPairKeys();
+      ctx.log.info({ exclusions: excludedPairKeys.size }, 'contact-find-duplicates: loaded dedup exclusions');
+
       if (unparseable > 0) {
         // Dedup-tagged tasks without parseable contact IDs (manually created, old format,
         // or truncated description) are invisible to the idempotency check — those pairs
@@ -130,21 +128,9 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ctx.log.error({ err }, 'contact-find-duplicates: setup phase failed (findDuplicates or listTasks)');
+      ctx.log.error({ err }, 'contact-find-duplicates: setup phase failed (findDuplicates, listTasks, or exclusion load)');
       return { success: false, error: `Failed to scan for duplicates: ${message}` };
     }
-
-    // Memoize KG fact lookups for the duration of the run — a contact that appears
-    // in multiple pairs would otherwise re-fetch its facts each time. Exclusion
-    // facts are permanent and not written by this skill, so caching is safe.
-    const factsCache = new Map<string, KgNode[]>();
-    const cachedGetFacts = async (nodeId: string): Promise<KgNode[]> => {
-      const cached = factsCache.get(nodeId);
-      if (cached !== undefined) return cached;
-      const facts = await entityMemory.getFacts(nodeId);
-      factsCache.set(nodeId, facts);
-      return facts;
-    };
 
     let filed = 0;
     let skippedExisting = 0;
@@ -161,28 +147,9 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
         continue;
       }
 
-      // Exclusion check is isolated from task filing: a transient getFacts failure
-      // should increment failed and skip the pair (same as a task-filing failure),
-      // but logging a distinct message lets operators tell the two apart.
-      let excluded: boolean;
-      try {
-        excluded = await hasExclusion({
-          contactAId: pair.contactA.id,
-          contactBId: pair.contactB.id,
-          kgNodeIdA: pair.contactA.kgNodeId,
-          kgNodeIdB: pair.contactB.kgNodeId,
-          getFacts: cachedGetFacts,
-        });
-      } catch (exclusionErr) {
-        failed++;
-        ctx.log.error(
-          { exclusionErr, contactAId: pair.contactA.id, contactBId: pair.contactB.id },
-          'contact-find-duplicates: exclusion check failed — skipping pair, may re-surface next sweep',
-        );
-        continue;
-      }
-
-      if (excluded) {
+      // canonicalPairKey matches the order-independent key listDedupExclusionPairKeys
+      // returns, so a pair excluded in either direction is caught here.
+      if (excludedPairKeys.has(key)) {
         skippedExcluded++;
         continue;
       }

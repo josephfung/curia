@@ -11,7 +11,8 @@
 //   3. Principal-involving pair → task created (no merge), even if structural
 //   4. Excluded pair → skipped (no merge, no task)
 //   5. Dry-run mode → no writes of any kind (no merges, no tasks)
-// writeExclusion/hasExclusion unit tests live in src/contacts/dedup-exclusions.test.ts
+// Exclusion pair-normalization unit tests live in src/contacts/dedup-exclusions.test.ts;
+// the table itself is covered by tests/integration/contact-dedup-exclusions.test.ts.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Contact, ChannelIdentity } from '../src/contacts/types.js';
@@ -85,7 +86,7 @@ function makeIdentity(
 describe('runDedup — unit', () => {
   let mergeMock: ReturnType<typeof vi.fn>;
   let createTaskMock: ReturnType<typeof vi.fn>;
-  let getFactsMock: ReturnType<typeof vi.fn>;
+  let listExclusionPairKeysMock: ReturnType<typeof vi.fn>;
   let opts: DedupRunOptions;
 
   beforeEach(() => {
@@ -97,14 +98,14 @@ describe('runDedup — unit', () => {
       mergedAt: new Date(),
     });
     createTaskMock = vi.fn().mockResolvedValue({ id: 'task-1', title: 'test' });
-    getFactsMock = vi.fn().mockResolvedValue([]);
+    listExclusionPairKeysMock = vi.fn().mockResolvedValue(new Set<string>());
 
     opts = {
       dryRun: false,
       mergeContacts: mergeMock,
       createTask: createTaskMock,
-      // storeFact is not part of DedupRunOptions (F6)
-      getFacts: getFactsMock,
+      // The sweep only READS exclusions — it never records them (F6, #1625).
+      listExclusionPairKeys: listExclusionPairKeysMock,
     };
   });
 
@@ -294,26 +295,8 @@ describe('runDedup — unit', () => {
   // Test 4: excluded pair → skipped
   // -------------------------------------------------------------------------
 
-  it('skips pairs that have a dedup_exclusion fact', async () => {
-    // getFactsMock returns an exclusion fact for c1's KG node naming c2
-    getFactsMock.mockImplementation(async (kgNodeId: string) => {
-      if (kgNodeId === 'kg-c1') {
-        return [{
-          id: 'fn-excl',
-          type: 'fact',
-          label: 'dedup_exclusion: c2',
-          properties: { attribute: 'dedup_exclusion', value: 'c2' },
-          aliases: [],
-          embedding: null,
-          confidence: 1.0,
-          sensitivity: 'internal',
-          decayClass: 'permanent',
-          source: 'contacts-dedup',
-          temporal: { createdAt: new Date(), lastConfirmedAt: new Date() },
-        }];
-      }
-      return [];
-    });
+  it('skips pairs with a recorded exclusion', async () => {
+    listExclusionPairKeysMock.mockResolvedValue(new Set(['c1:c2']));
 
     const contacts: Contact[] = [
       makeContact({ id: 'c1', displayName: 'Frank Lee', kgNodeId: 'kg-c1' }),
@@ -328,29 +311,15 @@ describe('runDedup — unit', () => {
     expect(result.skippedExcludedCount).toBe(1);
   });
 
-  it('skips pairs where exclusion is recorded on contactB side', async () => {
-    getFactsMock.mockImplementation(async (kgNodeId: string) => {
-      if (kgNodeId === 'kg-c2') {
-        return [{
-          id: 'fn-excl',
-          type: 'fact',
-          label: 'dedup_exclusion: c1',
-          properties: { attribute: 'dedup_exclusion', value: 'c1' },
-          aliases: [],
-          embedding: null,
-          confidence: 1.0,
-          sensitivity: 'internal',
-          decayClass: 'permanent',
-          source: 'contacts-dedup',
-          temporal: { createdAt: new Date(), lastConfirmedAt: new Date() },
-        }];
-      }
-      return [];
-    });
+  it('skips excluded pairs when NEITHER contact has a kg_node_id (#1623 regression)', async () => {
+    // The KG-fact implementation could not hold an exclusion for this pair at all —
+    // same-display-name contacts deliberately carry kg_node_id = NULL. The table has
+    // no node prerequisite, so the sweep must now honour the exclusion.
+    listExclusionPairKeysMock.mockResolvedValue(new Set(['c1:c2']));
 
     const contacts: Contact[] = [
-      makeContact({ id: 'c1', displayName: 'Grace Park' }),
-      makeContact({ id: 'c2', displayName: 'grace park', kgNodeId: 'kg-c2' }),
+      makeContact({ id: 'c1', displayName: 'Seth Berman' }),
+      makeContact({ id: 'c2', displayName: 'seth berman' }),
     ];
     const identityMap = new Map<string, ChannelIdentity[]>();
 
@@ -358,6 +327,51 @@ describe('runDedup — unit', () => {
 
     expect(mergeMock).not.toHaveBeenCalled();
     expect(result.skippedExcludedCount).toBe(1);
+  });
+
+  it('honours an exclusion regardless of the order the pair is scanned in', async () => {
+    // The stored key is always ordered ascending; the sweep visits (c1, c2) but the
+    // exclusion could just as well have been recorded as (c2, c1).
+    listExclusionPairKeysMock.mockResolvedValue(new Set(['c1:c2']));
+
+    const contacts: Contact[] = [
+      makeContact({ id: 'c2', displayName: 'Grace Park', kgNodeId: 'kg-c2' }),
+      makeContact({ id: 'c1', displayName: 'grace park' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    const result = await runDedup(contacts, identityMap, opts);
+
+    expect(mergeMock).not.toHaveBeenCalled();
+    expect(result.skippedExcludedCount).toBe(1);
+  });
+
+  it('loads exclusions once per run, not once per pair', async () => {
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Ann One' }),
+      makeContact({ id: 'c2', displayName: 'ann one' }),
+      makeContact({ id: 'c3', displayName: 'Bea Two' }),
+      makeContact({ id: 'c4', displayName: 'bea two' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    await runDedup(contacts, identityMap, opts);
+
+    expect(listExclusionPairKeysMock).toHaveBeenCalledOnce();
+  });
+
+  it('aborts the sweep when the exclusion load fails, rather than merging blind', async () => {
+    // Fail closed: an empty exclusion set would auto-merge pairs the CEO ruled apart.
+    listExclusionPairKeysMock.mockRejectedValue(new Error('exclusion table unavailable'));
+
+    const contacts: Contact[] = [
+      makeContact({ id: 'c1', displayName: 'Frank Lee' }),
+      makeContact({ id: 'c2', displayName: 'frank lee' }),
+    ];
+    const identityMap = new Map<string, ChannelIdentity[]>();
+
+    await expect(runDedup(contacts, identityMap, opts)).rejects.toThrow('exclusion table unavailable');
+    expect(mergeMock).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------
@@ -389,11 +403,10 @@ describe('runDedup — unit', () => {
     // is verified by reading the dedup-contacts.ts source — it's a documentation check
     // rather than a runtime assertion).
     //
-    // Trigger an error by making getFacts throw on the only structural pair.
-    getFactsMock.mockRejectedValue(new Error('DB error'));
-
+    // Trigger an error inside the per-pair guard: classifyPair normalizes the display
+    // name, so a contact with no name at all throws there.
     const contacts: Contact[] = [
-      makeContact({ id: 'c1', displayName: 'Dry Run Test', kgNodeId: 'kg-c1' }),
+      makeContact({ id: 'c1', displayName: null as unknown as string, kgNodeId: 'kg-c1' }),
       makeContact({ id: 'c2', displayName: 'dry run test', kgNodeId: 'kg-c2' }),
     ];
     const identityMap = new Map<string, ChannelIdentity[]>();
@@ -511,22 +524,13 @@ describe('runDedup — unit', () => {
   // F4: errors during exclusion check / classify must fail closed
   // -------------------------------------------------------------------------
 
-  it('skips pair and increments errorCount when getFacts throws, and continues to the next pair', async () => {
-    // c1 and c2 share an exact name — would normally be structural.
-    // But getFacts throws a DB error when checking exclusions for c1/c2.
+  it('skips pair and increments errorCount when classification throws, and continues to the next pair', async () => {
+    // c1 has no display name, so classifyPair throws while normalizing it.
     // F4: must fail closed (no merge, no task), increment errorCount, and continue.
-    // c3 and c4 also share an exact name — should still be processed (no error on that pair).
-    getFactsMock.mockImplementation(async (kgNodeId: string) => {
-      // c1 has a kg_node_id; trigger the error only on that node
-      if (kgNodeId === 'kg-c1') {
-        throw new Error('DB connection error');
-      }
-      return [];
-    });
-
+    // c3 and c4 share an exact name — they must still be processed.
     const contacts: Contact[] = [
-      makeContact({ id: 'c1', displayName: 'Marco Polo', kgNodeId: 'kg-c1' }),
-      makeContact({ id: 'c2', displayName: 'marco polo' }), // structural — exact name; getFacts throws
+      makeContact({ id: 'c1', displayName: null as unknown as string, kgNodeId: 'kg-c1' }),
+      makeContact({ id: 'c2', displayName: 'marco polo' }),
       makeContact({ id: 'c3', displayName: 'Anna Pavlova' }),
       makeContact({ id: 'c4', displayName: 'anna pavlova' }), // structural — exact name; no error
     ];
@@ -534,21 +538,15 @@ describe('runDedup — unit', () => {
 
     const result = await runDedup(contacts, identityMap, opts);
 
-    // The c1/c2 pair errored — must not have merged and must have incremented errorCount
-    // The c3/c4 pair had no error — must have merged
-    expect(result.errorCount).toBe(1);
-    // At least the c3/c4 pair merged (the sweep continued after c1/c2 error)
+    // Every pair involving c1 errors (c1/c2, c1/c3, c1/c4) — all fail closed.
+    expect(result.errorCount).toBe(3);
+    // The c3/c4 pair had no error — the sweep continued and merged it.
     expect(result.mergedCount).toBeGreaterThanOrEqual(1);
 
-    // Verify the c1/c2 pair specifically: mergeContacts must never have been called
-    // with c1 or c2 as arguments (fail closed — no merge on the errored pair)
+    // Verify no pair involving c1 was ever merged (fail closed).
     const mergeCallArgs = mergeMock.mock.calls.map((call) => [call[0] as string, call[1] as string]);
-    const c1c2WasMerged = mergeCallArgs.some(
-      ([primary, secondary]) =>
-        (primary === 'c1' || primary === 'c2') &&
-        (secondary === 'c1' || secondary === 'c2'),
-    );
-    expect(c1c2WasMerged).toBe(false);
+    const c1WasMerged = mergeCallArgs.some(([primary, secondary]) => primary === 'c1' || secondary === 'c1');
+    expect(c1WasMerged).toBe(false);
   });
 
   // -------------------------------------------------------------------------
