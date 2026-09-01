@@ -17,6 +17,7 @@ import type {
   SlackPostMessageResult,
   SlackUserInfo,
 } from './types.js';
+import { MAX_VOICE_NOTE_BYTES } from '../inbound-voice-note.js';
 
 export interface SlackClientConfig {
   botToken: string;
@@ -29,6 +30,36 @@ export interface SlackClientEvents {
   disconnected: [];
   /** kind distinguishes DM / mention / thread reply / reaction for the converter. */
   event: [event: SlackInboundEvent, kind: SlackInboundKind];
+}
+
+/** Timeout for Slack private-file downloads — STT's 60s bound does not cover this hop. */
+const FILE_DOWNLOAD_TIMEOUT_MS = 15_000;
+
+export class SlackFileDownloadError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message?: string) {
+    super(message ?? `Slack file download failed with HTTP ${status}`);
+    this.name = 'SlackFileDownloadError';
+    this.status = status;
+  }
+}
+
+function assertSlackFileUrl(url: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('Slack file download refused: invalid URL');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Slack file download refused: URL must be https');
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host !== 'files.slack.com' && !host.endsWith('.files.slack.com')) {
+    throw new Error('Slack file download refused: URL host is not files.slack.com');
+  }
+  return parsed;
 }
 
 export class SlackClient extends EventEmitter {
@@ -239,10 +270,15 @@ export class SlackClient extends EventEmitter {
   /**
    * Download a Slack-hosted file. Private URLs require the bot token as a
    * Bearer Authorization header — they are not publicly fetchable (#1600).
+   *
+   * Host is asserted to `files.slack.com` before the token is attached.
+   * Bounded by `FILE_DOWNLOAD_TIMEOUT_MS` and `MAX_VOICE_NOTE_BYTES`.
    */
   async downloadFile(url: string): Promise<Uint8Array> {
+    assertSlackFileUrl(url);
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${this.botToken}` },
+      signal: AbortSignal.timeout(FILE_DOWNLOAD_TIMEOUT_MS),
     });
     if (!response.ok) {
       try {
@@ -250,11 +286,26 @@ export class SlackClient extends EventEmitter {
       } catch {
         // Best-effort drain so undici does not pin the socket on error paths.
       }
-      throw new Error(`Slack file download failed with HTTP ${response.status}`);
+      throw new SlackFileDownloadError(response.status);
+    }
+    const contentLengthHeader = response.headers.get('content-length');
+    if (contentLengthHeader) {
+      const contentLength = Number(contentLengthHeader);
+      if (Number.isFinite(contentLength) && contentLength > MAX_VOICE_NOTE_BYTES) {
+        try {
+          await response.body?.cancel();
+        } catch {
+          // Best-effort drain so undici does not pin the socket on error paths.
+        }
+        throw new Error('Slack file download refused: content-length exceeds voice-note cap');
+      }
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength === 0) {
       throw new Error('Slack file download returned empty body');
+    }
+    if (bytes.byteLength > MAX_VOICE_NOTE_BYTES) {
+      throw new Error('Slack file download refused: body exceeds voice-note cap');
     }
     return bytes;
   }

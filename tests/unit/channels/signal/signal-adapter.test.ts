@@ -555,8 +555,9 @@ describe('SignalAdapter', () => {
       });
     }
 
-    async function startWithSpeech(stt: FakeSttProvider): Promise<SignalAdapter> {
+    async function startWithSpeech(stt: FakeSttProvider, contact = makeMockContactService({ contactId: 'c1', tier: 'known' })): Promise<SignalAdapter> {
       await adapter.stop();
+      contactService = contact;
       const speech = new SpeechMediaService({
         stt,
         tts: new FakeTtsProvider(),
@@ -615,7 +616,7 @@ describe('SignalAdapter', () => {
       expect(event.payload.content).toContain("couldn't make that out");
     });
 
-    it('surfaces transcription error type and message instead of dropping', async () => {
+    it('surfaces transcription failure in metadata with a user-safe body', async () => {
       const stt = new FakeSttProvider({
         fileError: new SttHttpError(401, 'Deepgram STT request failed with HTTP 401'),
       });
@@ -630,11 +631,113 @@ describe('SignalAdapter', () => {
       const event = published[0] as {
         payload: { content: string; metadata: Record<string, unknown> };
       };
-      expect(event.payload.content).toContain('AUTH_FAILURE');
-      expect(event.payload.content).toContain('401');
+      expect(event.payload.content).toContain("couldn't process that voice note");
+      expect(event.payload.content).not.toContain('AUTH_FAILURE');
+      expect(event.payload.content).not.toContain('Deepgram');
       expect(event.payload.metadata.transcriptionError).toEqual(
         expect.objectContaining({ type: 'AUTH_FAILURE', retryable: false }),
       );
+    });
+
+    it('does not download or transcribe voice notes from unknown 1:1 senders', async () => {
+      const stt = new FakeSttProvider({ fileTranscript: { text: 'secret' } });
+      await startWithSpeech(stt, makeMockContactService()); // unknown tier
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      rpcClient.simulateMessage(makeVoiceEnvelope());
+      await new Promise((r) => setTimeout(r, 30));
+      expect(published).toHaveLength(0);
+      expect(rpcClient.getAttachment).not.toHaveBeenCalled();
+      expect(stt.fileRequests).toHaveLength(0);
+    });
+
+    it('rejects oversized voice notes before getAttachment', async () => {
+      const stt = new FakeSttProvider({ fileTranscript: { text: 'nope' } });
+      await startWithSpeech(stt);
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      rpcClient.simulateMessage(makeEnvelope({
+        dataMessage: {
+          timestamp: 1700000000000,
+          message: null,
+          expiresInSeconds: 0,
+          viewOnce: false,
+          attachments: [{
+            id: 'att-huge',
+            contentType: 'audio/ogg',
+            size: 6 * 1024 * 1024,
+            isVoiceNote: true,
+          }],
+        },
+      }));
+      await vi.waitFor(() => expect(published).toHaveLength(1));
+      const event = published[0] as {
+        payload: { content: string; metadata: Record<string, unknown> };
+      };
+      expect(event.payload.content).toContain('voice note too long to transcribe');
+      expect(rpcClient.getAttachment).not.toHaveBeenCalled();
+      expect(event.payload.metadata.transcriptionError).toEqual(
+        expect.objectContaining({ type: 'VALIDATION_ERROR', retryable: false }),
+      );
+    });
+
+    it('falls back to sourceUuid when sourceNumber is empty', async () => {
+      const stt = new FakeSttProvider({ fileTranscript: { text: 'aci sender' } });
+      rpcClient.getAttachment.mockResolvedValue(AUDIO);
+      await startWithSpeech(stt);
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      rpcClient.simulateMessage(makeEnvelope({
+        source: '',
+        sourceNumber: '',
+        sourceUuid: 'aci-uuid-1',
+        dataMessage: {
+          timestamp: 1700000000000,
+          message: null,
+          expiresInSeconds: 0,
+          viewOnce: false,
+          attachments: [{
+            id: 'att-voice',
+            contentType: 'audio/ogg',
+            size: 4,
+            isVoiceNote: true,
+          }],
+        },
+      }));
+      await vi.waitFor(() => expect(published).toHaveLength(1));
+      expect(rpcClient.getAttachment).toHaveBeenCalledWith({
+        id: 'att-voice',
+        recipient: 'aci-uuid-1',
+        groupId: undefined,
+      });
+    });
+
+    it('notes when a second voice note is not transcribed', async () => {
+      const stt = new FakeSttProvider({ fileTranscript: { text: 'first' } });
+      rpcClient.getAttachment.mockResolvedValue(AUDIO);
+      await startWithSpeech(stt);
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      rpcClient.simulateMessage(makeEnvelope({
+        dataMessage: {
+          timestamp: 1700000000000,
+          message: null,
+          expiresInSeconds: 0,
+          viewOnce: false,
+          attachments: [
+            { id: 'att-1', contentType: 'audio/ogg', size: 4, isVoiceNote: true },
+            { id: 'att-2', contentType: 'audio/ogg', size: 4, isVoiceNote: true },
+          ],
+        },
+      }));
+      await vi.waitFor(() => expect(published).toHaveLength(1));
+      const event = published[0] as { payload: { content: string } };
+      expect(event.payload.content).toContain('first');
+      expect(event.payload.content).toContain('1 more voice note not transcribed');
     });
 
     it('degrades to existing text behavior when speechMediaService is unset', async () => {

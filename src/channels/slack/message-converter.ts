@@ -1,8 +1,8 @@
 // src/channels/slack/message-converter.ts
 //
 // Converts Slack Events API payloads into a normalized inbound shape for the
-// SlackAdapter. Returns null for noise: bots, subtypes (except file_share), edits,
-// empty text with no audio file, and channel messages outside an active Curia thread.
+// SlackAdapter. Returns null for noise: bots, subtypes (except audio file_share),
+// edits, empty text with no audio file, and channel messages outside an active Curia thread.
 
 import type {
   SlackInboundEvent,
@@ -104,17 +104,18 @@ export function slackThreadKey(channel: string, threadTs: string): string {
   return `${channel}:${threadTs}`;
 }
 
+function hasSlackAudio(files: SlackFile[] | undefined): boolean {
+  return !!findFirstSlackAudioFile(files);
+}
+
 function isIgnorableMessage(event: SlackMessageEvent): boolean {
   // Bot messages / automation — never treat as human inbound.
   if (event.bot_id || event.bot_profile) return true;
   // Subtypes: message_changed, message_deleted, channel_join, bot_message, etc.
-  // Plain user messages (no subtype) and file_share (voice notes, #1600) are accepted.
-  if (event.subtype && event.subtype !== 'file_share') return true;
+  // file_share is accepted only when it carries audio (voice notes, #1600) —
+  // a PDF/screenshot upload with a caption must not become inbound.
+  if (event.subtype && !(event.subtype === 'file_share' && hasSlackAudio(event.files))) return true;
   return false;
-}
-
-function hasSlackAudio(files: SlackFile[] | undefined): boolean {
-  return !!findFirstSlackAudioFile(files);
 }
 
 function copyFiles(files: SlackFile[] | undefined): SlackFile[] | undefined {
@@ -219,7 +220,7 @@ export function convertSlackEvent(
   if (mention.bot_id) return null;
   if (!mention.user || (botUserId && mention.user === botUserId)) return null;
 
-  const rawContent = mention.text?.trim() ?? '';
+  const rawContent = mention.text.trim();
   if (!rawContent && !hasSlackAudio(mention.files)) return null;
   const content = rawContent ? decodeSlackText(rawContent, { botUserId }) : '';
 

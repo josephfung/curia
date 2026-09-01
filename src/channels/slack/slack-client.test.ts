@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SlackClient } from './slack-client.js';
+import { SlackClient, SlackFileDownloadError } from './slack-client.js';
 import { createSilentLogger } from '../../logger.js';
+import { MAX_VOICE_NOTE_BYTES } from '../inbound-voice-note.js';
 
 describe('SlackClient.downloadFile', () => {
   const originalFetch = globalThis.fetch;
@@ -10,13 +11,19 @@ describe('SlackClient.downloadFile', () => {
     vi.restoreAllMocks();
   });
 
-  it('sends the bot token as a Bearer Authorization header', async () => {
-    const audio = new Uint8Array([1, 2, 9]);
+  function mockOkFetch(audio: Uint8Array, contentLength?: string) {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
+      headers: { get: (name: string) => (name.toLowerCase() === 'content-length' ? contentLength ?? null : null) },
       arrayBuffer: async () => audio.buffer,
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
+
+  it('sends the bot token as a Bearer Authorization header with a timeout', async () => {
+    const audio = new Uint8Array([1, 2, 9]);
+    const fetchMock = mockOkFetch(audio);
 
     const client = new SlackClient({
       botToken: 'xoxb-test-token',
@@ -28,11 +35,26 @@ describe('SlackClient.downloadFile', () => {
     expect(bytes).toEqual(audio);
     expect(fetchMock).toHaveBeenCalledWith(url, {
       headers: { Authorization: 'Bearer xoxb-test-token' },
+      signal: expect.any(AbortSignal),
     });
     await client.disconnect();
   });
 
-  it('throws on a non-OK response', async () => {
+  it('refuses to send the bot token to a non-Slack host', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const client = new SlackClient({
+      botToken: 'xoxb-test-token',
+      appToken: 'xapp-test-token',
+      logger: createSilentLogger(),
+    });
+    await expect(client.downloadFile('https://evil.example/file'))
+      .rejects.toThrow('URL host is not files.slack.com');
+    expect(fetchMock).not.toHaveBeenCalled();
+    await client.disconnect();
+  });
+
+  it('throws SlackFileDownloadError on a non-OK response', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -44,7 +66,25 @@ describe('SlackClient.downloadFile', () => {
       appToken: 'xapp-test-token',
       logger: createSilentLogger(),
     });
-    await expect(client.downloadFile('https://files.slack.com/x')).rejects.toThrow('HTTP 401');
+    await expect(client.downloadFile('https://files.slack.com/x'))
+      .rejects.toBeInstanceOf(SlackFileDownloadError);
+    await client.disconnect();
+  });
+
+  it('refuses a content-length over the voice-note cap', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => String(MAX_VOICE_NOTE_BYTES + 1) },
+      body: { cancel: async () => undefined },
+    }) as unknown as typeof fetch;
+
+    const client = new SlackClient({
+      botToken: 'xoxb-test-token',
+      appToken: 'xapp-test-token',
+      logger: createSilentLogger(),
+    });
+    await expect(client.downloadFile('https://files.slack.com/x'))
+      .rejects.toThrow('content-length exceeds voice-note cap');
     await client.disconnect();
   });
 });

@@ -26,9 +26,12 @@ import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
 import type { SpeechMediaService } from '../../speech/index.js';
 import {
+  countAudioAttachments,
   findFirstAudioAttachment,
+  isVoiceNoteOversize,
   resolveVoiceNoteInbound,
   voiceNoteDownloadFailure,
+  voiceNoteTooLarge,
 } from '../inbound-voice-note.js';
 
 export interface SignalAdapterConfig {
@@ -239,7 +242,11 @@ export class SignalAdapter implements Channel {
     // Audio attachments are downloaded and transcribed into ordinary inbound
     // content. STT unavailable → existing text path (audio-only messages drop).
     const { content: inboundContent, metadata: inboundMetadata } =
-      await this.resolveInboundContent(converted);
+      await this.resolveInboundContent(converted, {
+        // 1:1: only known senders trigger download + paid STT. Groups already
+        // passed Step 0 trust; unknown 1:1 senders degrade like STT-disabled.
+        allowStt: metadata.isGroup || isKnownSender,
+      });
     if (inboundContent === null) {
       this.log.debug(
         { senderId, hasAttachments: !!metadata.attachments?.length },
@@ -457,10 +464,12 @@ export class SignalAdapter implements Channel {
 
   /**
    * Transcribe a Signal audio attachment when SpeechMediaService is configured.
-   * Returns null content when there is nothing to publish (audio-only + STT off).
+   * Returns null content when there is nothing to publish (audio-only + STT off
+   * / untrusted 1:1 sender).
    */
   private async resolveInboundContent(
     converted: NonNullable<ReturnType<typeof convertSignalEnvelope>>,
+    opts: { allowStt: boolean },
   ): Promise<{
     content: string | null;
     metadata: typeof converted.metadata & Record<string, unknown>;
@@ -470,32 +479,66 @@ export class SignalAdapter implements Channel {
     const metadata: typeof converted.metadata & Record<string, unknown> = {
       ...converted.metadata,
     };
+    const skippedAudioCount = Math.max(0, countAudioAttachments(converted.metadata.attachments) - 1);
 
-    if (!audio || !speech) {
+    if (!audio || !speech || !opts.allowStt) {
       if (!converted.content) {
         return { content: null, metadata };
       }
       return { content: converted.content, metadata };
     }
 
-    let resolved;
-    try {
-      const bytes = await this.config.rpcClient.getAttachment({
-        id: audio.id,
-        recipient: converted.metadata.isGroup ? undefined : converted.senderId,
-        groupId: converted.metadata.groupId,
-      });
-      const result = await speech.transcribe({
-        audio: bytes,
-        contentType: audio.contentType,
-      });
-      resolved = resolveVoiceNoteInbound({ originalText: converted.content, result });
-    } catch (err) {
-      this.log.warn(
-        { err, attachmentId: audio.id, senderId: converted.senderId },
-        'Signal voice note download failed',
+    if (skippedAudioCount > 0) {
+      this.log.info(
+        { attachmentId: audio.id, skippedAudioCount, senderId: converted.senderId },
+        'Signal voice note: extra audio attachments not transcribed',
       );
-      resolved = voiceNoteDownloadFailure(converted.content, err);
+    }
+
+    let resolved;
+    if (isVoiceNoteOversize(audio.size)) {
+      this.log.warn(
+        { attachmentId: audio.id, size: audio.size, senderId: converted.senderId },
+        'Signal voice note exceeds size cap — skipping download',
+      );
+      resolved = voiceNoteTooLarge(converted.content, audio.size, skippedAudioCount);
+    } else {
+      try {
+        const recipient = converted.metadata.isGroup
+          ? undefined
+          : (converted.senderId || converted.metadata.sourceUuid);
+        const bytes = await this.config.rpcClient.getAttachment({
+          id: audio.id,
+          recipient,
+          groupId: converted.metadata.groupId,
+        });
+        const result = await speech.transcribe({
+          audio: bytes,
+          contentType: audio.contentType,
+        });
+        if (!result.ok) {
+          this.log.error(
+            {
+              errorType: result.error.type,
+              retryable: result.error.retryable,
+              status: result.error.context.status,
+              senderId: converted.senderId,
+            },
+            'Signal voice note transcription failed',
+          );
+        }
+        resolved = resolveVoiceNoteInbound({
+          originalText: converted.content,
+          result,
+          skippedAudioCount,
+        });
+      } catch (err) {
+        this.log.warn(
+          { err, attachmentId: audio.id, senderId: converted.senderId },
+          'Signal voice note download failed',
+        );
+        resolved = voiceNoteDownloadFailure(converted.content, err, skippedAudioCount);
+      }
     }
 
     metadata.transcribedFromAudio = true;

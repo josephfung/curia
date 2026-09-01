@@ -7,10 +7,13 @@ import {
   findFirstSlackAudioFile,
   isAudioContentType,
   isSlackAudioFile,
+  isVoiceNoteOversize,
+  MAX_VOICE_NOTE_BYTES,
   resolveVoiceNoteInbound,
   slackFileContentType,
   slackFileDownloadUrl,
   voiceNoteDownloadFailure,
+  voiceNoteTooLarge,
 } from './inbound-voice-note.js';
 
 describe('isAudioContentType', () => {
@@ -92,26 +95,52 @@ describe('resolveVoiceNoteInbound', () => {
     expect(resolved.content).toContain("couldn't make that out");
   });
 
-  it('surfaces error type and message on transcription failure', () => {
+  it('surfaces a user-safe body on transcription failure and keeps the error in metadata', () => {
     const error = classifyError(new SttHttpError(429, 'rate limited'), 'stt:deepgram');
     const resolved = resolveVoiceNoteInbound({
       originalText: '',
       result: { ok: false, error },
     });
-    expect(resolved.content).toContain('RATE_LIMIT');
-    expect(resolved.content).toContain('rate limited');
+    expect(resolved.content).toContain("couldn't process that voice note");
+    expect(resolved.content).not.toContain('RATE_LIMIT');
+    expect(resolved.content).not.toContain('rate limited');
     expect(resolved.transcriptionError).toEqual({
       type: 'RATE_LIMIT',
       message: error.message,
       retryable: true,
     });
   });
+
+  it('appends a skip note when extra audio attachments are not transcribed', () => {
+    const resolved = resolveVoiceNoteInbound({
+      originalText: '',
+      result: { ok: true, value: { text: 'hello' } },
+      skippedAudioCount: 1,
+    });
+    expect(resolved.content).toContain('1 more voice note not transcribed');
+  });
 });
 
 describe('voiceNoteDownloadFailure', () => {
-  it('surfaces the download error without dropping', () => {
+  it('keeps a user-safe body and puts the raw error in metadata', () => {
     const resolved = voiceNoteDownloadFailure('', new Error('socket closed'));
-    expect(resolved.content).toContain('Voice note download failed: socket closed');
+    expect(resolved.content).toContain("couldn't process that voice note");
+    expect(resolved.content).not.toContain('socket closed');
     expect(resolved.content).toContain(TRANSCRIBED_FROM_AUDIO_TAG);
+    expect(resolved.transcriptionError).toEqual({
+      type: 'UNKNOWN',
+      message: 'socket closed',
+      retryable: true,
+    });
+  });
+});
+
+describe('isVoiceNoteOversize / voiceNoteTooLarge', () => {
+  it('rejects attachments above the shared cap', () => {
+    expect(isVoiceNoteOversize(MAX_VOICE_NOTE_BYTES)).toBe(false);
+    expect(isVoiceNoteOversize(MAX_VOICE_NOTE_BYTES + 1)).toBe(true);
+    const resolved = voiceNoteTooLarge('', MAX_VOICE_NOTE_BYTES + 1);
+    expect(resolved.content).toContain('voice note too long to transcribe');
+    expect(resolved.transcriptionError?.type).toBe('VALIDATION_ERROR');
   });
 });

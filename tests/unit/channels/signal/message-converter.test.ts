@@ -43,6 +43,7 @@ describe('convertSignalEnvelope', () => {
     expect(result!.metadata.groupId).toBeUndefined();
     expect(result!.metadata.signalTimestamp).toBe(1700000000000);
     expect(result!.metadata.sourceName).toBe('Alice');
+    expect(result!.metadata.sourceUuid).toBe('uuid-123');
   });
 
   it('converts a group text message', () => {
