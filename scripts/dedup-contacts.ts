@@ -764,9 +764,11 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
         noTasks,
 
         // ContactService.mergeContacts handles: identity dedup (resolves the unique-email
-        // constraint violation the old UPDATE would have caused), kg_node_id repointing,
-        // contact_calendars reattachment, golden-record field consolidation, and deletion
-        // of the loser row — all in a single transaction.
+        // constraint violation the old UPDATE would have caused), auth-override and
+        // dedup-exclusion re-pointing, golden-record field consolidation, and deletion of
+        // the loser row — all in one transaction since #1695. The KG entity merge it
+        // attempts first is best-effort and sits outside that transaction, and the loser's
+        // contact_calendars rows cascade away with the row rather than being reattached.
         mergeContacts: (primaryId, secondaryId) => contactService.mergeContacts(primaryId, secondaryId, false),
 
         // TaskRepo.createTask publishes task.created and handles progress/error_budget cols.
