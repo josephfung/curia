@@ -19,9 +19,10 @@ CREATE TABLE contact_dedup_exclusions (
   decided_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   -- Provenance only (agent memory-write source key, or 'ceo'). Deliberately not a
   -- decision enum: this table records exclusions, never merge outcomes (#1625).
-  -- Non-empty: NOT NULL alone would let a blank source through, and provenance is the
-  -- only audit trail a row carries.
-  decided_by   TEXT        NOT NULL CHECK (decided_by <> ''),
+  -- Non-blank: NOT NULL alone would let '' through, and a bare <> '' would still let
+  -- '   ' through. Provenance is the only audit trail a row carries, and the row is
+  -- written once and never revisited.
+  decided_by   TEXT        NOT NULL CHECK (btrim(decided_by) <> ''),
   PRIMARY KEY (contact_a_id, contact_b_id),
   -- Normalized ordered pair: exactly one row can exist per unordered pair, so
   -- "is this pair excluded?" is a single indexed lookup with no OR-of-two-orders.

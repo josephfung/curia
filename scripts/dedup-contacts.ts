@@ -68,7 +68,8 @@ export interface DedupRunResult {
   skippedAboveMaxScoreCount: number;
   /** Number of would-be review tasks suppressed by --no-tasks or the --max-tasks cap. */
   suppressedTaskCount: number;
-  /** Number of errors during merge/task-create operations. */
+  /** Number of pairs that failed and were skipped fail-closed. Three sources:
+   *  pair classification, contact merge, and review-task creation. */
   errorCount: number;
 }
 

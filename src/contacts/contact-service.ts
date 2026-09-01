@@ -1574,8 +1574,10 @@ export class ContactService {
    * generates the most duplicate proposals (#1623).
    *
    * @param decidedBy Provenance for the decision — an agent memory-write source key,
-   *                  or an operator/CEO identifier for manual excludes.
+   *                  or an operator/CEO identifier for manual excludes. Must be non-blank:
+   *                  it is the row's only audit trail and the row is never revisited.
    * @throws InvalidExclusionPairError when either ID is not a UUID or both are the same contact.
+   * @throws ContactValidationError when decidedBy is blank.
    * @throws ContactNotFoundError when either contact does not exist.
    */
   async addDedupExclusion(
@@ -1584,6 +1586,14 @@ export class ContactService {
     decidedBy: string,
   ): Promise<{ pair: ExclusionPair; created: boolean }> {
     const pair = normalizeExclusionPair(contactAId, contactBId);
+
+    // Reject blank provenance here rather than letting the CHECK constraint do it, so
+    // direct callers (ops scripts, future console routes) get a named error instead of a
+    // raw constraint violation. Store the trimmed value so ' ceo ' and 'ceo' are one source.
+    const provenance = decidedBy.trim();
+    if (provenance === '') {
+      throw new ContactValidationError('decidedBy is required — a dedup exclusion must record who decided it');
+    }
 
     // Check existence up front so callers get ContactNotFoundError rather than an
     // opaque FK violation from Postgres.
@@ -1594,9 +1604,9 @@ export class ContactService {
     if (!a) throw new ContactNotFoundError(pair.contactAId);
     if (!b) throw new ContactNotFoundError(pair.contactBId);
 
-    const created = await this.backend.addDedupExclusion(pair, decidedBy);
+    const created = await this.backend.addDedupExclusion(pair, provenance);
     this.logger?.info(
-      { contactAId: pair.contactAId, contactBId: pair.contactBId, decidedBy, created },
+      { contactAId: pair.contactAId, contactBId: pair.contactBId, decidedBy: provenance, created },
       created ? 'contacts: dedup exclusion recorded' : 'contacts: dedup exclusion already present',
     );
     return { pair, created };

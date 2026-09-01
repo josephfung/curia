@@ -13,6 +13,9 @@ import { ContactNotFoundError } from '../../../../src/contacts/types.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Postgres SQLSTATE for undefined_table — migration 084 has not been applied. */
+const PG_UNDEFINED_TABLE = '42P01';
+
 export class ContactDedupExcludeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const input = ctx.input as Record<string, unknown>;
@@ -84,7 +87,11 @@ export class ContactDedupExcludeHandler implements ToolHandler {
       // 084 not applied — possible when the app image leads the DB) or contactService
       // predates this tool. Both look exactly like a DB blip in a generic message, and the
       // agent prompt tells the agent to retry — which would loop forever. Say so instead.
-      const tableMissing = /relation "contact_dedup_exclusions" does not exist/i.test(message);
+      //
+      // Detected by Postgres SQLSTATE 42P01 (undefined_table), not by matching the error
+      // text: the message is localised and version-dependent, and the repo rule is to
+      // branch on structured codes rather than strings.
+      const tableMissing = (err as { code?: string }).code === PG_UNDEFINED_TABLE;
       if (tableMissing || err instanceof TypeError) {
         return {
           success: false,
