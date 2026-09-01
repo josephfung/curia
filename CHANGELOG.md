@@ -48,6 +48,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Signal inbound** — ACI-only senders keep a non-empty sender and conversation identity. (#1600)
 - **Slack file download** — abort streamed bodies once they exceed the voice-note size cap. (#1600)
+- **Contact merge** — the write sequence runs in one transaction; a failed merge rolls back whole instead of stranding identities, auth overrides and dedup exclusions on the survivor. (#1695)
 - **Signal voice calls** — duplicate `RINGING_INCOMING` for one call no longer self-rejects it as busy. (#1672)
 - **Scheduler runtime errors** — fallback `agent.response(isError)` paths now always emit paired `agent.error`. (#1647)
 - **MCP health probe** — liveness uses `ping()` not `listTools()`, ending a ~145 MB/hr validator leak. (#1663)

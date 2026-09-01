@@ -201,14 +201,16 @@ interface ContactServiceBackend {
   /**
    * Re-point all channel identities from fromContactId → toContactId.
    * Identities that would violate UNIQUE(channel, channelIdentifier) are deleted.
+   * Pass `client` to enlist in a caller's transaction (mergeContacts does — #1695).
    */
-  reattachIdentities(fromContactId: string, toContactId: string): Promise<void>;
+  reattachIdentities(fromContactId: string, toContactId: string, client?: DbPoolClient): Promise<void>;
 
   /**
    * Re-point active auth overrides from fromContactId → toContactId.
    * If primary already has an override for the same permission, secondary's is discarded.
+   * Pass `client` to enlist in a caller's transaction (#1695).
    */
-  reattachAuthOverrides(fromContactId: string, toContactId: string): Promise<void>;
+  reattachAuthOverrides(fromContactId: string, toContactId: string, client?: DbPoolClient): Promise<void>;
 
   // -- Dedup exclusions (#1625, ADR-039) --
 
@@ -235,12 +237,13 @@ interface ContactServiceBackend {
    * decision leaving the ledger, and it must be visible to an operator, not only
    * explained in a comment.
    */
-  reattachDedupExclusions(fromContactId: string, toContactId: string): Promise<ReattachExclusionsResult>;
+  reattachDedupExclusions(fromContactId: string, toContactId: string, client?: DbPoolClient): Promise<ReattachExclusionsResult>;
 
   /**
    * Delete a contact by ID. Call only after FK-referenced rows have been re-pointed.
+   * Pass `client` to enlist in a caller's transaction (#1695).
    */
-  deleteContact(id: string): Promise<void>;
+  deleteContact(id: string, client?: DbPoolClient): Promise<void>;
 
   /**
    * Update scoring-owned fields on a contact. Uses atomic increments for message
@@ -1486,52 +1489,66 @@ export class ContactService {
       }
     }
 
+    // The whole write sequence runs on one client inside one transaction (#1695).
+    // Before that it was five independent pool queries, so a failure part-way could
+    // leave the secondary alive with its identities, auth overrides and CEO dedup
+    // rulings already re-pointed onto the survivor — the next sweep would then see the
+    // secondary again with none of its "not the same person" rulings attached.
+    //
+    // Deliberately outside the transaction: the KG mergeEntities call above (a different
+    // store, documented as best-effort) and the notifications below, which must describe
+    // committed state only.
+    let exclusions: ReattachExclusionsResult;
     try {
-      await this.backend.reattachIdentities(secondaryId, primaryId);
-      await this.backend.reattachAuthOverrides(secondaryId, primaryId);
-      // Exclusions the secondary held move to the survivor, renormalized into stored
-      // pair order. The exclusion between the merging pair itself (if any) is dropped:
-      // merging is the decision that they ARE the same person (#1625, ADR-039).
-      const exclusions = await this.backend.reattachDedupExclusions(secondaryId, primaryId);
-      if (exclusions.dropped > 0) {
-        // A dropped row is a CEO ruling leaving the ledger. Both causes are expected and
-        // benign, but an operator asking "why was this pair re-proposed months later"
-        // needs the event in the log, not only in a code comment.
-        this.logger?.info(
-          { primaryId, secondaryId, ...exclusions },
-          'contacts: dedup exclusions dropped during merge (superseded by the merge, or already held by the survivor)',
-        );
-      }
+      exclusions = await this.backend.withTransaction(async (client) => {
+        await this.backend.reattachIdentities(secondaryId, primaryId, client);
+        await this.backend.reattachAuthOverrides(secondaryId, primaryId, client);
+        // Exclusions the secondary held move to the survivor, renormalized into stored
+        // pair order. The exclusion between the merging pair itself (if any) is dropped:
+        // merging is the decision that they ARE the same person (#1625, ADR-039).
+        const reattached = await this.backend.reattachDedupExclusions(secondaryId, primaryId, client);
 
-      // Write the golden record fields onto the primary contact. The surviving tier
-      // is computed by computeGoldenRecord (blocked-on-either-side wins; else higher
-      // TIER_RANK) — the single source of survivorship truth. Rationale: tier
-      // represents a CEO grant (e.g. the CEO explicitly trusted a secondary contact).
-      // Merging should never silently downgrade that grant — losing a 'trusted' tier
-      // because the primary happened to be 'known' is incorrect, especially since
-      // #944's dedup calls mergeContacts. A 'blocked' tier on either side always wins
-      // so a merge can never un-block a contact.
-      const updatedPrimary: Contact = {
-        ...primary,
-        displayName: goldenRecord.displayName,
-        role: goldenRecord.role,
-        notes: goldenRecord.notes,
-        tier: goldenRecord.tier,
-        updatedAt: new Date(),
-      };
-      await this.backend.updateContact(updatedPrimary);
-      await this.backend.deleteContact(secondaryId);
+        // Write the golden record fields onto the primary contact. The surviving tier
+        // is computed by computeGoldenRecord (blocked-on-either-side wins; else higher
+        // TIER_RANK) — the single source of survivorship truth. Rationale: tier
+        // represents a CEO grant (e.g. the CEO explicitly trusted a secondary contact).
+        // Merging should never silently downgrade that grant — losing a 'trusted' tier
+        // because the primary happened to be 'known' is incorrect, especially since
+        // #944's dedup calls mergeContacts. A 'blocked' tier on either side always wins
+        // so a merge can never un-block a contact.
+        const updatedPrimary: Contact = {
+          ...primary,
+          displayName: goldenRecord.displayName,
+          role: goldenRecord.role,
+          notes: goldenRecord.notes,
+          tier: goldenRecord.tier,
+          updatedAt: new Date(),
+        };
+        await this.backend.updateContact(updatedPrimary, client);
+        await this.backend.deleteContact(secondaryId, client);
+        return reattached;
+      });
     } catch (err) {
-      // Not a transaction: these are sequential pool queries. If a later write fails, the
-      // secondary can survive with its dedup exclusions already re-pointed away, so the
-      // next sweep sees it again with its rulings gone. Name that explicitly — "partial
-      // state" alone does not tell an operator what to go and check. Wrapping the whole
-      // sequence in one transaction is tracked separately (#1695).
+      // One transaction, so the failure rolled the whole sequence back: both contacts,
+      // their identities, auth overrides and exclusion rows are exactly as they were and
+      // the merge can simply be retried. The KG node merge above is the one thing not
+      // covered — it may already have collapsed the two nodes.
       this.logger?.error(
         { err, primaryId, secondaryId },
-        'Contact merge write failed — DB may be in partial state; the secondary may survive with its dedup exclusions already moved (#1625). Verify contact_dedup_exclusions before re-running the sweep.',
+        'Contact merge rolled back — no contact rows changed; a KG node merge may already have been applied (#1695)',
       );
       throw err;
+    }
+
+    if (exclusions.dropped > 0) {
+      // A dropped row is a CEO ruling leaving the ledger. Both causes are expected and
+      // benign, but an operator asking "why was this pair re-proposed months later"
+      // needs the event in the log, not only in a code comment. Logged after commit so
+      // a rolled-back merge never claims rulings were dropped.
+      this.logger?.info(
+        { primaryId, secondaryId, ...exclusions },
+        'contacts: dedup exclusions dropped during merge (superseded by the merge, or already held by the survivor)',
+      );
     }
 
     const mergedAt = new Date();
@@ -2424,9 +2441,10 @@ class PostgresContactBackend implements ContactServiceBackend {
     return this.rowToCalendar(row);
   }
 
-  async reattachIdentities(fromContactId: string, toContactId: string): Promise<void> {
+  async reattachIdentities(fromContactId: string, toContactId: string, client?: DbPoolClient): Promise<void> {
+    const q = client ?? this.pool;
     // Delete identities that would conflict with the primary's existing ones
-    await this.pool.query(
+    await q.query(
       `DELETE FROM contact_channel_identities
        WHERE contact_id = $1
          AND (channel, channel_identifier) IN (
@@ -2436,14 +2454,15 @@ class PostgresContactBackend implements ContactServiceBackend {
          )`,
       [fromContactId, toContactId],
     );
-    await this.pool.query(
+    await q.query(
       `UPDATE contact_channel_identities SET contact_id = $1 WHERE contact_id = $2`,
       [toContactId, fromContactId],
     );
   }
 
-  async reattachAuthOverrides(fromContactId: string, toContactId: string): Promise<void> {
-    await this.pool.query(
+  async reattachAuthOverrides(fromContactId: string, toContactId: string, client?: DbPoolClient): Promise<void> {
+    const q = client ?? this.pool;
+    await q.query(
       `DELETE FROM contact_auth_overrides
        WHERE contact_id = $1
          AND revoked_at IS NULL
@@ -2455,7 +2474,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     );
     // Only re-point active (non-revoked) rows; revoked rows stay on the secondary
     // and will be effectively deleted when the secondary contact is deleted.
-    await this.pool.query(
+    await q.query(
       `UPDATE contact_auth_overrides SET contact_id = $1 WHERE contact_id = $2 AND revoked_at IS NULL`,
       [toContactId, fromContactId],
     );
@@ -2494,7 +2513,8 @@ class PostgresContactBackend implements ContactServiceBackend {
     }));
   }
 
-  async reattachDedupExclusions(fromContactId: string, toContactId: string): Promise<ReattachExclusionsResult> {
+  async reattachDedupExclusions(fromContactId: string, toContactId: string, client?: DbPoolClient): Promise<ReattachExclusionsResult> {
+    const q = client ?? this.pool;
     // Copy the loser's exclusions onto the survivor, renormalizing each pair with
     // LEAST/GREATEST so the ordered-pair CHECK still holds after the swap.
     //
@@ -2504,7 +2524,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     //
     // ON CONFLICT DO NOTHING drops rows the survivor already holds for the same
     // counterparty; the survivor's own decided_at / decided_by provenance wins.
-    const moved = await this.pool.query(
+    const moved = await q.query(
       `INSERT INTO contact_dedup_exclusions (contact_a_id, contact_b_id, decided_at, decided_by)
        SELECT LEAST($1::uuid, other), GREATEST($1::uuid, other), decided_at, decided_by
        FROM (
@@ -2523,7 +2543,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     // Delete the loser's rows explicitly rather than relying on the FK cascade that
     // fires when the secondary contact row is deleted — reattach must leave a
     // consistent table even when called outside the merge write sequence.
-    const removed = await this.pool.query(
+    const removed = await q.query(
       `DELETE FROM contact_dedup_exclusions
        WHERE contact_a_id = $1::uuid OR contact_b_id = $1::uuid
        RETURNING contact_a_id`,
@@ -2540,9 +2560,9 @@ class PostgresContactBackend implements ContactServiceBackend {
     };
   }
 
-  async deleteContact(id: string): Promise<void> {
+  async deleteContact(id: string, client?: DbPoolClient): Promise<void> {
     this.logger.debug({ contactId: id }, 'contacts: deleting contact');
-    await this.pool.query(`DELETE FROM contacts WHERE id = $1`, [id]);
+    await (client ?? this.pool).query(`DELETE FROM contacts WHERE id = $1`, [id]);
   }
 
   // -- Row mapping helpers --
@@ -3019,7 +3039,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return null;
   }
 
-  async reattachIdentities(fromContactId: string, toContactId: string): Promise<void> {
+  async reattachIdentities(fromContactId: string, toContactId: string, _client?: DbPoolClient): Promise<void> {
     // Build set of channel:channelIdentifier keys already owned by the primary
     const primaryKeys = new Set<string>();
     for (const identity of this.identities.values()) {
@@ -3041,7 +3061,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     }
   }
 
-  async reattachAuthOverrides(fromContactId: string, toContactId: string): Promise<void> {
+  async reattachAuthOverrides(fromContactId: string, toContactId: string, _client?: DbPoolClient): Promise<void> {
     // Build set of permissions already held (active) by the primary
     const primaryPerms = new Set<string>();
     for (const override of this.overrides.values()) {
@@ -3080,7 +3100,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return [...this.dedupExclusions.values()].map(row => row.pair);
   }
 
-  async reattachDedupExclusions(fromContactId: string, toContactId: string): Promise<ReattachExclusionsResult> {
+  async reattachDedupExclusions(fromContactId: string, toContactId: string, _client?: DbPoolClient): Promise<ReattachExclusionsResult> {
     let removed = 0;
     let moved = 0;
 
@@ -3115,7 +3135,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
     return { removed, moved, dropped: removed - moved };
   }
 
-  async deleteContact(id: string): Promise<void> {
+  async deleteContact(id: string, _client?: DbPoolClient): Promise<void> {
     this.contacts.delete(id);
     // Cascade-delete related rows, matching Postgres ON DELETE CASCADE behavior.
     // Without this, deleted contacts leave dangling identities/overrides in the in-memory

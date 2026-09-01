@@ -143,8 +143,10 @@ facts pointing at deleted contact ids.
 **Sharp edge this introduces.** A merge now rewrites exclusion rows, so any caller holding
 a cached view of the exclusion set must reconcile after merging or it will act on a stale
 snapshot — `scripts/dedup-contacts.ts` loads the set once and patches it after each merge
-for exactly this reason. `mergeContacts` is also still a non-transactional sequence of
-writes, and CEO rulings now move inside that window; making it atomic is tracked as #1695.
+for exactly this reason. CEO rulings also move inside `mergeContacts`' write sequence,
+which was a non-transactional run of pool queries when this ADR was written; #1695 closed
+that by running the whole sequence in one transaction, so a failed merge no longer leaves
+rulings re-pointed onto a survivor that was never written.
 
 **Harder / accepted trade-offs.** Exclusions no longer surface in entity-context assembly
 or KG queries — an agent asking "what do we know about this contact" will not see them.
@@ -168,5 +170,5 @@ tracked in **#1694**. It must not be treated as resolved by this change.
 - #1625 (this change), #1623 (the incident), PR #1624 (interim `multiValued` fix)
 - #1027 / PR #1040 (original decline → exclusion wiring)
 - #1694 (KG same-name node identity — still open)
-- #1695 (`mergeContacts` write sequence is not transactional — still open)
+- #1695 (`mergeContacts` write sequence made transactional — closed)
 - ADR-028 (shared, unbound agent memory) for the surrounding memory-governance model

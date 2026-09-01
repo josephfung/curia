@@ -1485,6 +1485,90 @@ describe('ContactService', () => {
     });
   });
 
+  // -- Merge transactionality (#1695) --
+
+  describe('mergeContacts transaction', () => {
+    /**
+     * The slice of the backend the transaction tests stub or observe. Reaching into the
+     * private field is the only way to see which client each write received — the whole
+     * point of #1695 is that all five run on one client.
+     */
+    interface MergeBackend {
+      withTransaction<T>(fn: (client?: unknown) => Promise<T>): Promise<T>;
+      reattachIdentities(from: string, to: string, client?: unknown): Promise<void>;
+      reattachAuthOverrides(from: string, to: string, client?: unknown): Promise<void>;
+      reattachDedupExclusions(from: string, to: string, client?: unknown): Promise<unknown>;
+      updateContact(contact: Contact, client?: unknown): Promise<void>;
+      deleteContact(id: string, client?: unknown): Promise<void>;
+    }
+
+    const backendOf = (svc: ContactService): MergeBackend =>
+      (svc as unknown as { backend: MergeBackend }).backend;
+
+    it('runs every merge write on the client withTransaction handed it', async () => {
+      const primary = await service.createContact({ displayName: 'Tx Primary', source: 'test' });
+      const secondary = await service.createContact({ displayName: 'Tx Secondary', source: 'test' });
+
+      const backend = backendOf(service);
+      // The in-memory backend runs the callback with no client, so stand one in. What is
+      // being proven is the threading: whatever withTransaction supplies must reach all
+      // five writes, otherwise a write would run on the pool outside the transaction.
+      const client = { marker: 'tx-client' };
+      const withTransaction = vi.spyOn(backend, 'withTransaction')
+        .mockImplementation(fn => fn(client));
+      const reattachIdentities = vi.spyOn(backend, 'reattachIdentities');
+      const reattachAuthOverrides = vi.spyOn(backend, 'reattachAuthOverrides');
+      const reattachDedupExclusions = vi.spyOn(backend, 'reattachDedupExclusions');
+      const updateContact = vi.spyOn(backend, 'updateContact');
+      const deleteContact = vi.spyOn(backend, 'deleteContact');
+
+      await service.mergeContacts(primary.id, secondary.id, false);
+
+      expect(withTransaction).toHaveBeenCalledTimes(1);
+      expect(reattachIdentities).toHaveBeenCalledWith(secondary.id, primary.id, client);
+      expect(reattachAuthOverrides).toHaveBeenCalledWith(secondary.id, primary.id, client);
+      expect(reattachDedupExclusions).toHaveBeenCalledWith(secondary.id, primary.id, client);
+      expect(updateContact).toHaveBeenCalledWith(expect.objectContaining({ id: primary.id }), client);
+      expect(deleteContact).toHaveBeenCalledWith(secondary.id, client);
+    });
+
+    it('does not fire onContactMerged or onIdentitiesChanged when a merge write fails', async () => {
+      // Both notifications describe committed state — a rolled-back merge must publish
+      // neither, or downstream consumers act on a merge that never happened.
+      const onContactMerged = vi.fn();
+      const onIdentitiesChanged = vi.fn();
+      const svc = ContactService.createInMemory(entityMemory, { onContactMerged, onIdentitiesChanged });
+
+      const primary = await svc.createContact({ displayName: 'Rollback Primary', source: 'test' });
+      const secondary = await svc.createContact({ displayName: 'Rollback Secondary', source: 'test' });
+
+      vi.spyOn(backendOf(svc), 'deleteContact')
+        .mockRejectedValue(new Error('forced delete failure'));
+
+      await expect(svc.mergeContacts(primary.id, secondary.id, false))
+        .rejects.toThrow('forced delete failure');
+
+      expect(onContactMerged).not.toHaveBeenCalled();
+      expect(onIdentitiesChanged).not.toHaveBeenCalled();
+    });
+
+    it('propagates the failure out of the transaction rather than returning a merge result', async () => {
+      const svc = ContactService.createInMemory(entityMemory);
+      const primary = await svc.createContact({ displayName: 'Throw Primary', source: 'test' });
+      const secondary = await svc.createContact({ displayName: 'Throw Secondary', source: 'test' });
+
+      const backend = backendOf(svc);
+      vi.spyOn(backend, 'updateContact').mockRejectedValue(new Error('forced update failure'));
+      const deleteContact = vi.spyOn(backend, 'deleteContact');
+
+      await expect(svc.mergeContacts(primary.id, secondary.id, false))
+        .rejects.toThrow('forced update failure');
+
+      // The sequence aborts at the failing write — the delete never runs.
+      expect(deleteContact).not.toHaveBeenCalled();
+    });
+  });
+
 });
 
 describe('EntityMemory.mergeEntities', () => {
